@@ -65,6 +65,7 @@ describe('createCDPTransport', () => {
 		server = await createCdpTestServer()
 		const transport = createCDPTransport({ url: server.wsUrl })
 		await transport.start()
+		await expect(transport.send('{}')).resolves.toBeUndefined()
 		await transport.close()
 	})
 })

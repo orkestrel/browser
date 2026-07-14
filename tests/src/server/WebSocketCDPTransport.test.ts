@@ -24,6 +24,7 @@ describe('WebSocketCDPTransport', () => {
 		server = await createCdpTestServer()
 		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
 		await transport.start()
+		await expect(transport.send('{}')).resolves.toBeUndefined()
 		await transport.close()
 	})
 
@@ -76,7 +77,7 @@ describe('WebSocketCDPTransport', () => {
 
 	it('send() throws when the transport is not started', async () => {
 		const transport = new WebSocketCDPTransport({ url: 'ws://localhost:1/cdp' })
-		await expect(transport.send('{}')).rejects.toThrow()
+		await expect(transport.send('{}')).rejects.toThrow('WebSocket CDP transport is not open')
 	})
 
 	it('close() is a no-op when never started', async () => {
@@ -86,7 +87,7 @@ describe('WebSocketCDPTransport', () => {
 
 	it('start() rejects when connecting to an unreachable port', async () => {
 		const transport = new WebSocketCDPTransport({ url: 'ws://localhost:19990/cdp', timeout: 200 })
-		await expect(transport.start()).rejects.toThrow()
+		await expect(transport.start()).rejects.toThrow(/WebSocket CDP connection (failed|timed out)/)
 	})
 
 	it('start() opens a fresh socket each call (reconnect support)', async () => {

@@ -225,7 +225,7 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 
 		activeSocket = socket
 		sockets.add(socket)
-		let buffer = head.length > 0 ? Buffer.from(head) : Buffer.alloc(0)
+		let buffer: Buffer<ArrayBufferLike> = head.length > 0 ? Buffer.from(head) : Buffer.alloc(0)
 
 		socket.on('data', (chunk: Buffer) => {
 			buffer = Buffer.concat([buffer, chunk])

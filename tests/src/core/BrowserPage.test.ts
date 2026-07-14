@@ -88,9 +88,10 @@ describe('BrowserPage', () => {
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
 				const pending = page.navigate('https://slow.example', { timeout: 20 })
-				const assertion = expect(pending).rejects.toThrow('Navigation timeout')
-				await vi.advanceTimersByTimeAsync(25)
-				await assertion
+				await Promise.all([
+					expect(pending).rejects.toThrow('Navigation timeout'),
+					vi.advanceTimersByTimeAsync(25),
+				])
 			} finally {
 				vi.useRealTimers()
 			}
@@ -211,9 +212,10 @@ describe('BrowserPage', () => {
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
 				const pending = page.click('#missing', { timeout: 20 })
-				const assertion = expect(pending).rejects.toSatisfy(isBrowserSelectorError)
-				await vi.advanceTimersByTimeAsync(150)
-				await assertion
+				await Promise.all([
+					expect(pending).rejects.toSatisfy(isBrowserSelectorError),
+					vi.advanceTimersByTimeAsync(150),
+				])
 			} finally {
 				vi.useRealTimers()
 			}

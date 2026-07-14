@@ -81,9 +81,10 @@ describe('CDPClient', () => {
 				await timedClient.connect()
 
 				const pending = timedClient.send('Never.replies')
-				const assertion = expect(pending).rejects.toThrow('timed out')
-				await vi.advanceTimersByTimeAsync(25)
-				await assertion
+				await Promise.all([
+					expect(pending).rejects.toThrow('timed out'),
+					vi.advanceTimersByTimeAsync(25),
+				])
 			} finally {
 				vi.useRealTimers()
 			}
