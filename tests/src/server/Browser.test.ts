@@ -27,7 +27,7 @@ import { createCdpTestServer, createFakeBrowserProcess } from '../../setupServer
 import type { CDPTestServerInterface } from '../../setupServer.js'
 import { waitForDelay } from '../../setup.js'
 
-const REAL_BROWSER_EXECUTABLE = findSystemBrowser()
+const REAL_BROWSER_EXECUTABLE = findSystemBrowser()?.executable
 
 // Container-safe launch flags: needed when running headless Chromium as root
 // (the common case in CI/sandboxed containers) — sandboxing requires a
@@ -402,7 +402,7 @@ describe('Browser launch path', () => {
 		expect(browser.status).toBe('error')
 	})
 
-	it('disconnect() on a launched session rejects with coded BrowserConnectionError and destroy() still cleans up', async () => {
+	it('disconnect() on an ephemeral launched session rejects with coded BrowserConnectionError and destroy() still cleans up', async () => {
 		const fake = createFakeBrowserProcess({ serveCdp: true })
 		const browser = createBrowser({
 			executable: fake.executable,
@@ -413,12 +413,13 @@ describe('Browser launch path', () => {
 
 		await browser.connect()
 		expect(browser.status).toBe('connected')
+		expect(browser.connection).toBe('launch')
 
 		const pid = await fake.pid()
 
 		await expect(browser.disconnect()).rejects.toThrow(BrowserConnectionError)
 		await expect(browser.disconnect()).rejects.toThrow(
-			'Cannot disconnect() a browser process launched by this instance — use destroy() to release it',
+			'Cannot disconnect() an ephemeral launch — no persistent profile to reattach to; ephemeral launches must use destroy() to release it',
 		)
 		expect(browser.connected).toBe(true)
 
@@ -427,6 +428,111 @@ describe('Browser launch path', () => {
 
 		await waitForDelay(100)
 		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+	})
+
+	it('connect() with a requested engine and no matching installed browser rejects with the engine in context', async () => {
+		const browser = createBrowser({
+			cdp: { port: UNUSED_PORT },
+			engine: 'edge',
+			timeout: 2000,
+		})
+
+		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		await expect(browser.connect()).rejects.toMatchObject({ context: { engine: 'edge' } })
+	})
+
+	it('disconnect() on a persistent (profile-backed) launch releases the process without killing it, allowing reattachment', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const profileDir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-profile-'))
+		const port = 20_002
+
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			profile: profileDir,
+			cdp: { port },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+		expect(browser.connection).toBe('persistent')
+
+		const pid = await fake.pid()
+
+		await expect(browser.disconnect()).resolves.toBeUndefined()
+		expect(browser.connected).toBe(false)
+
+		// The process must survive disconnect() — a persistent launch is
+		// released, not killed.
+		expect(() => process.kill(pid, 0)).not.toThrow()
+
+		// Reattach via CDP discovery on the same port.
+		const reattached = createBrowser({ cdp: { port }, timeout: 5000 })
+		await reattached.connect()
+		expect(reattached.status).toBe('connected')
+		expect(reattached.connected).toBe(true)
+		expect(reattached.connection).toBe('cdp')
+
+		// Destroying the reattached (CDP-discovered) session must not kill the
+		// underlying process — only the original launch owns it.
+		await reattached.destroy()
+		expect(reattached.connected).toBe(false)
+		expect(() => process.kill(pid, 0)).not.toThrow()
+
+		process.kill(pid, 'SIGKILL')
+		await waitForDelay(100)
+		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+
+		rmSync(profileDir, { recursive: true, force: true })
+	})
+})
+
+describe('Browser pid', () => {
+	it('is undefined before connecting', () => {
+		const browser = createBrowser()
+		expect(browser.pid).toBeUndefined()
+	})
+
+	it('is undefined for a CDP-attached connection', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+		const browser = createBrowser({ cdp: { port: server.port } })
+
+		await browser.connect()
+		expect(browser.pid).toBeUndefined()
+
+		await browser.destroy()
+	})
+
+	it('returns the launched process pid', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_011 },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		const pid = await fake.pid()
+		expect(browser.pid).toBe(pid)
+
+		await browser.destroy()
+	})
+
+	it('is undefined after destroy()', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_012 },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		await browser.destroy()
+		expect(browser.pid).toBeUndefined()
 	})
 })
 
