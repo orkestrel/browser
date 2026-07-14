@@ -26,10 +26,12 @@ async function createConnectedClient(): Promise<{
 function scriptSelectorPresent(transport: CDPTestTransportInterface, selector: string): void {
 	scriptEvaluate(
 		transport,
-		(expression) => expression.includes('querySelector') && expression.includes('!== null'),
+		(expression) =>
+			expression.includes('querySelector') &&
+			expression.includes('!== null') &&
+			expression.includes(JSON.stringify(selector)),
 		true,
 	)
-	void selector
 }
 
 // === BrowserPage
@@ -95,6 +97,43 @@ describe('BrowserPage', () => {
 			} finally {
 				vi.useRealTimers()
 			}
+		})
+
+		it('subscribes to Page.domContentEventFired and resolves for the domcontentloaded condition', async () => {
+			const { client, transport } = await createConnectedClient()
+			transport.onSend('Page.navigate', (message) => {
+				transport.reply(message.id, {})
+				transport.event('Page.domContentEventFired', {}, message.sessionId)
+			})
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/',
+			)
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await page.navigate('https://example.com', { condition: 'domcontentloaded' })
+
+			expect(page.url).toBe('https://example.com/')
+		})
+
+		it('resolves navigate() when loadEventFired arrives BEFORE the Page.navigate reply', async () => {
+			const { client, transport } = await createConnectedClient()
+			transport.onSend('Page.navigate', (message) => {
+				// Fire the load event first, then reply to the navigate request —
+				// exercises the pre-subscription guarantee (subscribe before send).
+				transport.event('Page.loadEventFired', {}, message.sessionId)
+				transport.reply(message.id, {})
+			})
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/',
+			)
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await expect(page.navigate('https://example.com')).resolves.toBeUndefined()
+			expect(page.url).toBe('https://example.com/')
 		})
 
 		it('leaves no dangling timer and no unhandled rejection when Page.navigate fails', async () => {

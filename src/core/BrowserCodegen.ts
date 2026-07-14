@@ -102,10 +102,6 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	}
 
 	clear(): void {
-		if (this.#actions.length === 0) {
-			this.#emitter.emit('clear')
-			return
-		}
 		this.#actions = []
 		this.#emitter.emit('clear')
 	}

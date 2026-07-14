@@ -201,6 +201,67 @@ describe('BrowserContext', () => {
 			const sent = transport.sent.find((m) => m.method === 'Emulation.setDeviceMetricsOverride')
 			expect(sent?.params).toEqual({ width: 400, height: 300, deviceScaleFactor: 1, mobile: false })
 		})
+
+		it('sync([]) on a context holding pages closes all pages and empties pages()', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptAttach(transport)
+			replyOk(transport, 'Target.closeTarget')
+
+			const context = new BrowserContext(client)
+			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
+			expect(context.pages()).toHaveLength(2)
+
+			await context.sync([])
+
+			expect(context.pages()).toHaveLength(0)
+			expect(transport.sent.filter((m) => m.method === 'Target.closeTarget')).toHaveLength(2)
+		})
+
+		it('reflects new insertion order after a removed target is re-added in a later sync', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptAttach(transport)
+			replyOk(transport, 'Target.closeTarget')
+
+			const context = new BrowserContext(client)
+			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
+			const originalT2 = context.page(1)
+
+			// Remove t1 — t2 is kept, unaffected
+			await context.sync([createTarget({ id: 't2' })])
+			expect(context.pages()).toHaveLength(1)
+			expect(context.page(0)).toBe(originalT2)
+
+			// Re-add t1 after t2 — insertion order places it LAST, not back at index 0
+			await context.sync([createTarget({ id: 't2' }), createTarget({ id: 't1' })])
+
+			expect(context.pages()).toHaveLength(2)
+			expect(context.page(0)).toBe(originalT2)
+			expect(context.page(1)).not.toBe(originalT2)
+		})
+
+		it('skips a target whose Page.enable/Runtime.enable rejects mid-attach, leaving the map uncorrupted', async () => {
+			const { client, transport } = await createConnectedClient()
+
+			transport.onSend('Target.attachToTarget', (message) => {
+				const targetId = message.params?.['targetId']
+				const sessionId = targetId === 't1' ? 'session-bad' : 'session-good'
+				transport.reply(message.id, { sessionId })
+			})
+			transport.onSend('Page.enable', (message) => {
+				if (message.sessionId === 'session-bad') {
+					transport.fail(message.id, 'boom')
+				} else {
+					transport.reply(message.id, {})
+				}
+			})
+			replyOk(transport, 'Runtime.enable')
+
+			const context = new BrowserContext(client)
+			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
+
+			expect(context.pages()).toHaveLength(1)
+			expect(context.page(0)?.closed).toBe(false)
+		})
 	})
 
 	describe('close()', () => {

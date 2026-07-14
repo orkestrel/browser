@@ -137,8 +137,25 @@ export class Browser implements BrowserInterface {
 
 	disconnect(): void {
 		if (this.#destroyed || this.#status !== 'connected') return
+
+		// disconnect() is CDP-only (see BrowserInterface remarks) — a session
+		// launched by this instance owns a live browser process, and detaching
+		// from it here would strand that process. Callers must use destroy().
+		if (this.#process !== undefined) {
+			throw new BrowserConnectionError(
+				'Cannot disconnect() a browser process launched by this instance — use destroy() to release it',
+				{ connection: this.#connection },
+			)
+		}
+
 		this.#unbindTransport()
 		this.#unbindProcess()
+
+		const client = this.#client
+		if (client !== undefined) {
+			void client.close().catch(() => undefined)
+		}
+
 		this.#reset()
 		this.#emitter.emit('disconnect')
 		this.#emitter.emit('idle')
@@ -260,6 +277,7 @@ export class Browser implements BrowserInterface {
 		this.#contexts = []
 		this.#status = 'disconnected'
 		this.#connection = undefined
+		this.#client = undefined
 	}
 
 	/**

@@ -204,7 +204,11 @@ export class CDPClient implements CDPClientInterface {
 		if (this.#connecting !== undefined) {
 			this.#closeRequested = true
 			await this.#connecting.catch(() => undefined)
-			return
+			// The in-flight attempt may have already flipped #connected to
+			// true before observing #closeRequested (race between the
+			// attempt's final steps and #closeRequested being set here).
+			// Fall through to the normal connected-close path instead of
+			// returning early, or the close would be silently lost.
 		}
 
 		if (!this.#connected) return

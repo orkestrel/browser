@@ -223,6 +223,41 @@ describe('CDPClient', () => {
 			transport.event('Page.loadEventFired', { timestamp: 1 })
 			expect(recorder.count).toBe(1)
 		})
+
+		it('keeps a session-scoped subscription registered across close()/reconnect()', async () => {
+			await client.connect()
+			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
+			client.subscribe('Runtime.bindingCalled', recorder.handler, 'session-a')
+
+			await client.reconnect()
+
+			transport.event('Runtime.bindingCalled', { payload: 'x' }, 'session-a')
+			expect(recorder.count).toBe(1)
+		})
+	})
+
+	describe('message framing', () => {
+		it('ignores a response frame with an unknown/expired id without throwing', async () => {
+			await client.connect()
+
+			expect(() => transport.reply(9999, { ok: true })).not.toThrow()
+
+			// Client stays functional afterward
+			replyOk(transport, 'Target.getTargets', { targetInfos: [] })
+			const result = await client.send('Target.getTargets')
+			expect(result).toEqual({ targetInfos: [] })
+		})
+
+		it('ignores a non-JSON text frame per the framing contract', async () => {
+			await client.connect()
+
+			expect(() => transport.emitter.emit('message', 'not json {')).not.toThrow()
+
+			// Client stays functional afterward
+			replyOk(transport, 'Target.getTargets', { targetInfos: [] })
+			const result = await client.send('Target.getTargets')
+			expect(result).toEqual({ targetInfos: [] })
+		})
 	})
 
 	describe('close()', () => {
