@@ -29,12 +29,10 @@ Launch or connect to a browser and drive a page from Node:
 import { createBrowser } from '@orkestrel/browser/server'
 
 const browser = createBrowser()
-await browser.launch()
-const context = await browser.context()
-const page = await context.page()
-await page.navigate('https://example.com')
+await browser.connect()
+const page = await browser.create({ url: 'https://example.com' })
 await page.click('#submit')
-await page.screenshot('example.png')
+await page.screenshot({ path: 'example.png' })
 await browser.destroy()
 ```
 

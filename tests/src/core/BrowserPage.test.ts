@@ -385,6 +385,62 @@ describe('BrowserPage', () => {
 				thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined,
 			).toBe(3500000)
 		})
+
+		it('maps an oversized innerText result to a coded BrowserResultLimitError', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
+			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), '<p></p>')
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/',
+			)
+			transport.onSend('Runtime.evaluate', (message) => {
+				const expression = message.params?.['expression']
+				if (typeof expression === 'string' && expression.includes('innerText')) {
+					transport.reply(message.id, {
+						exceptionDetails: {
+							exception: {
+								description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}4200000`,
+							},
+						},
+					})
+				}
+			})
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			const thrown: unknown = await page.content().catch((caught: unknown) => caught)
+
+			expect(isBrowserResultLimitError(thrown)).toBe(true)
+			expect(
+				thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined,
+			).toBe(4200000)
+		})
+
+		it('sends the innerText expression wrapped in the result-limit guard', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
+			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), '<p></p>')
+			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'text')
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/',
+			)
+
+			let sentTextExpression: string | undefined
+			transport.onSend('Runtime.evaluate', (message) => {
+				const expression = message.params?.['expression']
+				if (typeof expression === 'string' && expression.includes('innerText')) {
+					sentTextExpression = expression
+				}
+			})
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await page.content()
+
+			expect(sentTextExpression).toContain(BROWSER_RESULT_LIMIT_SENTINEL_PREFIX)
+		})
 	})
 
 	describe('screenshot()', () => {

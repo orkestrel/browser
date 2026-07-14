@@ -176,7 +176,7 @@ import { createBrowser } from '@src/server'
 const browser = createBrowser({ cdp: { port: 9222 } })
 const discovery = await browser.discover() // passive probe, no side effects
 await browser.connect() // reuses discovery.endpoint if found, else launches
-const ctx = browser.context() // the default context (created lazily on `create`)
+const ctx = browser.context() // the default context (created lazily on `create()`, or eagerly if connect() discovers existing pages)
 await browser.destroy() // closes the process and releases resources
 ```
 
@@ -207,7 +207,7 @@ await browser.destroy() // closes the process and releases resources
 | `BROWSER_NOT_FOUND_RESULT`        | const | Sentinel `BrowserDiscoveryResult` returned by discovery when no browser is reachable.                                                                                 |
 | `BROWSER_LAUNCH_ARGS`             | const | Frozen flags always passed to a launched browser process, alongside the caller's own.                                                                                 |
 | `BROWSER_HEADLESS_ARG`            | const | `'--headless=new'` — flag enabling headless mode on a launched browser process.                                                                                       |
-| `BROWSER_KILL_GRACE_MS`           | const | `3000` — grace period after SIGTERM before a launched process is escalated to SIGKILL.                                                                                |
+| `BROWSER_KILL_GRACE_MS`           | const | `3000` — grace period after SIGTERM before a launched process is escalated to SIGKILL. `close()` can apply this grace period twice in the worst case (once waiting for exit after CDP `Browser.close`, again via the SIGTERM→SIGKILL path if that wait times out). |
 | `BROWSER_PORT_PROBE_TIMEOUT_MS`   | const | `200` — bound for the `discover: false` port-occupancy probe before launching (short, since it only needs to detect an already-listening CDP endpoint).               |
 | `BROWSER_TRANSPORT_LOSS_DEFER_MS` | const | `50` — brief defer applied once when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event first say over the diagnosis.    |
 | `BROWSER_ENV_PATH_KEYS`           | const | Frozen list of env vars checked (in order) for an explicit browser executable path override (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`).                            |
@@ -250,7 +250,7 @@ try {
 
 | API                       | Kind     | Summary                                                                                                                                                                                                                                                                  |
 | ------------------------- | -------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `findSystemBrowsers`      | function | Enumerate every Chrome/Chromium/Edge executable discoverable (env override → well-known install paths → PATH probe → Playwright browser stores), deduplicated by normalized path; each entry classified into a `SystemBrowser`, optionally narrowed by `options.engine`. |
+| `findSystemBrowsers`      | function | Enumerate every Chrome/Chromium/Edge executable discoverable (env override → well-known install paths → PATH probe → Playwright browser stores), deduplicated by normalized path; each entry classified into a `SystemBrowser`, optionally narrowed by `options.engine` — unclassifiable executables default to engine `'chromium'` rather than being dropped. |
 | `findSystemBrowser`       | function | The first entry of `findSystemBrowsers`; may return `undefined`.                                                                                                                                                                                                         |
 | `parseBrowserEngine`      | function | Classify an executable path/name into a `BrowserEngine` by case-insensitive hint (edge → chromium → chrome); may return `undefined`.                                                                                                                                     |
 | `normalizeExecutablePath` | function | Normalize an executable path for cross-source deduplication (case-insensitive on Windows).                                                                                                                                                                               |
@@ -338,7 +338,7 @@ if (found !== undefined) {
 | `SystemBrowser`                | type      | `{ executable: string; engine: BrowserEngine }` — one discovered browser executable, as returned by `findSystemBrowsers`/`findSystemBrowser`.                                                                                                                                                                                    |
 | `BrowserCdpOptions`            | interface | `{ port?: number; host?: string; endpoint?: string; discover?: boolean }` — CDP connection configuration (`host` defaults to `BROWSER_DEFAULT_HOST`; `discover` defaults to `true` — `false` skips passive discovery, probes the port, and rejects if something is already listening there instead of silently attaching to it). |
 | `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; error: [error]; destroy: [] }`.                                                                                                                                                                                          |
-| `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args?; engine? }` — options for `createBrowser` (`engine` prefers a browser engine for discovery when launching; ignored when `executable` is given).                                                                                              |
+| `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args?; engine? }` — options for `createBrowser` (`engine` prefers a browser engine for discovery when launching; ignored once `connect()` launches a process — before that, the `engine` getter may still reflect the supplied `engine` option even if `executable` is also set).                                                                                              |
 | `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `connected` / `pid` data members + `discover` / `connect` / `disconnect` / `context` / `contexts` / `create` / `destroy` / `close` methods.                                                                                                                                     |
 | `WebSocketCDPTransportOptions` | interface | `{ url: string; timeout?: number }` — options for creating a WebSocketCDPTransport.                                                                                                                                                                                                                                              |
 
@@ -359,7 +359,7 @@ The text pipe a `CDPClientInterface` sends and receives JSON-RPC frames over.
 | Method  | Returns         | Behavior                                               |
 | ------- | --------------- | ------------------------------------------------------ |
 | `start` | `Promise<void>` | Open the underlying connection.                        |
-| `send`  | `Promise<void>` | Write one raw text frame to the connection.            |
+| `send`  | `Promise<void>` | Write one raw text frame to the connection. Throws a plain `Error('WebSocket CDP transport is not open')` (not a coded `BrowserConnectionError`) if called before `start()` or after `close()`. |
 | `close` | `Promise<void>` | Close the underlying connection and release resources. |
 
 ```ts
@@ -413,7 +413,7 @@ accessor pattern (`page(index?)` / `pages()`).
 | `page`   | `BrowserPageInterface \| undefined` | One page by index, or the first page.                                                                 |
 | `pages`  | `readonly BrowserPageInterface[]`   | All pages in creation order.                                                                          |
 | `create` | `Promise<BrowserPageInterface>`     | Open a new page in this context.                                                                      |
-| `sync`   | `Promise<void>`                     | Synchronize pages from the given CDP targets (server discovers the targets, core never fetches them). |
+| `sync`   | `Promise<void>`                     | Synchronize pages from the given CDP targets (server discovers the targets, core never fetches them). Performs a destructive diff, not an additive merge: pages whose target id is missing from `targets` are closed and dropped; pages present in `targets` but not yet tracked are attached and added. |
 | `close`  | `Promise<void>`                     | Close the context and all its pages.                                                                  |
 
 ```ts
@@ -431,13 +431,13 @@ Abstraction over a single browser page or frame.
 | Method       | Returns                              | Behavior                                                                  |
 | ------------ | ------------------------------------ | ------------------------------------------------------------------------- |
 | `title`      | `Promise<string>`                    | Resolve the document title.                                               |
-| `navigate`   | `Promise<void>`                      | Go to a URL and wait for the specified load condition (default `'load'`). |
-| `content`    | `Promise<BrowserContentResult>`      | Extract page URL, title, HTML, and visible text.                          |
+| `navigate`   | `Promise<void>`                      | Go to a URL and wait for the specified load condition (default `'load'`). The `timeout` bounds the entire call (CDP send + load-event wait combined, not summed); on failure the pending load wait is canceled and a best-effort `Page.stopLoading` (capped at `BROWSER_STOP_LOADING_TIMEOUT_MS`) is issued before the original error is rethrown. |
+| `content`    | `Promise<BrowserContentResult>`      | Extract page URL, title, HTML, and visible text. Both the HTML (`outerHTML`) and text (`innerText`) sub-evaluations are guarded by `BROWSER_RESULT_LIMIT`/`guardEvaluateExpression` — title and url are not size-guarded. |
 | `screenshot` | `Promise<BrowserScreenshotResult>`   | Capture a PNG or JPEG image of the page.                                  |
 | `click`      | `Promise<void>`                      | Click an element matching the selector.                                   |
-| `fill`       | `Promise<void>`                      | Type text into an input element.                                          |
+| `fill`       | `Promise<void>`                      | Type text into an input element. Supports `contenteditable` elements (sets `textContent`, dispatches `input` only) in addition to standard inputs/textareas (sets `value`, dispatches `input` and `change`). |
 | `select`     | `Promise<void>`                      | Choose option(s) in a `<select>` element.                                 |
-| `evaluate`   | `Promise<unknown>`                   | Execute a JavaScript expression in the page context.                      |
+| `evaluate`   | `Promise<unknown>`                   | Execute a JavaScript expression in the page context. Result is guarded against exceeding `BROWSER_RESULT_LIMIT`; an oversized result rejects with `BrowserResultLimitError` rather than returning a value. |
 | `wait`       | `Promise<void>`                      | Wait for an element matching the selector to appear.                      |
 | `frame`      | `Promise<BrowserFrame \| undefined>` | Look up a frame by name or URL in the page's flattened frame tree.        |
 | `frames`     | `Promise<readonly BrowserFrame[]>`   | List the page's flattened frame tree, main frame first.                   |
@@ -465,7 +465,7 @@ replayable script.
 
 | Method    | Returns                                    | Behavior                                         |
 | --------- | ------------------------------------------ | ------------------------------------------------ |
-| `start`   | `Promise<void>`                            | Begin recording on the page's session.           |
+| `start`   | `Promise<void>`                            | Begin recording on the page's session. Calling `start()` after `destroy()` is a silent no-op — a destroyed `BrowserCodegenInterface` cannot be restarted; a new recorder must be obtained via `page.codegen()`. |
 | `stop`    | `Promise<readonly BrowserCodegenAction[]>` | Stop recording and return the captured actions.  |
 | `actions` | `readonly BrowserCodegenAction[]`          | Current normalized action list.                  |
 | `script`  | `string`                                   | Compile the captured actions into a script.      |
@@ -489,19 +489,19 @@ passive discovery on `cdp.port` → launch a new process.
 
 | Method       | Returns                                | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
 | ------------ | -------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `discover`   | `Promise<BrowserDiscoveryResult>`      | Passive CDP probe, no side effects.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `discover`   | `Promise<BrowserDiscoveryResult>`      | Passive CDP probe — does not change connection state or launch/attach anything, but emits a `discover` event with the result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `connect`    | `Promise<void>`                        | Establish a connection using the strategy above (endpoint → discovery → launch). Idempotent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
 | `disconnect` | `Promise<void>`                        | Detach the client-side connection and release it — the remote browser keeps running. For `'cdp'` and `'persistent'` (profile-backed launch) connections this closes the client and releases the process WITHOUT killing it, so a persistent session can be reattached later via CDP discovery on the same port. Rejects with `BrowserConnectionError` for `'launch'` (ephemeral, no profile) connections — use `destroy()` instead. An external disconnect (transport loss while the owned process stays alive, or the owned process exiting on its own) drives the same released/disconnected state automatically, preceded by a coded `error`; transport loss (process still alive) is resumable — `connect()` on the SAME instance can reattach afterward. |
 | `context`    | `BrowserContextInterface \| undefined` | One context by index, or the first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
 | `contexts`   | `readonly BrowserContextInterface[]`   | All contexts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
 | `create`     | `Promise<BrowserPageInterface>`        | Shortcut to open a page in the default context.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
 | `destroy`    | `Promise<void>`                        | Release local resources. On an owned (`'launch'`/`'persistent'`) browser this closes pages/contexts then kills the process (SIGTERM, escalating to SIGKILL). On a `'cdp'`-attached browser this is a LOCAL DETACH ONLY — no remote close is sent, since other clients may share those targets. Idempotent.                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| `close`      | `Promise<void>`                        | Graceful REMOTE shutdown: best-effort sends CDP `Browser.close` (whether attached or owned), and when owned also awaits the process's exit (escalating to a kill only if it doesn't exit in time), then performs the same local cleanup as `destroy()`. Use this to shut down a browser this instance doesn't own but wants to terminate anyway.                                                                                                                                                                                                                                                                                                                                                                                                              |
+| `close`      | `Promise<void>`                        | Graceful REMOTE shutdown: best-effort sends CDP `Browser.close` (whether attached or owned), and when owned also awaits the process's exit (escalating to a kill only if it doesn't exit in time), then closes every tracked context/page (sending remote `Target.closeTarget`/`disposeBrowserContext` regardless of ownership — unlike `destroy()`, which skips remote context/page closes on a non-owned CDP-attached browser) before releasing the CDP client. Use this to shut down a browser this instance doesn't own but wants to terminate anyway.                                                                                                                                                                                                                                                                                                              |
 
 ```ts
 import { createBrowser } from '@src/server'
 
-const browser = createBrowser({ cdp: { port: 9222 } })
+const browser = createBrowser({ profile: './profile', cdp: { port: 9222 } })
 browser.emitter.on('connect', (mode) => log(mode))
 await browser.connect()
 const page = await browser.create({ url: 'https://example.com' })
@@ -535,8 +535,10 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    given; the server supplies `createScreenshotWriter` (an `fs`-backed
    implementation) via `Browser`.
 5. **Server owns the connection lifecycle.** `Browser.connect()` tries, in
-   order: an explicit `cdp.endpoint`; a passive probe of `localhost:{cdp.port}`
-   (`discover()`); then launching a new browser process with raw-CDP flags
+   order: an explicit `cdp.endpoint`; a passive probe of
+   `{cdp.host}:{cdp.port}` (defaulting to `127.0.0.1:{cdp.port}` via
+   `BROWSER_DEFAULT_HOST`) (`discover()`); then launching a new browser
+   process with raw-CDP flags
    (`findSystemBrowser` / `launchBrowserProcess` / `waitForCdpReady`). A
    found existing browser is preferred over a fresh launch. `engine` is
    classified via `parseBrowserEngine` (explicit `executable`) or the
@@ -572,14 +574,19 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    `BrowserDestroyedError` (server) narrow connection-lifecycle faults. Each
    ships an `is*` type guard.
 8. **Oversized evaluate/content results fail clean, never crash the session.**
-   `BrowserPage.evaluate()` and `.content()` wrap their expression with
-   `guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT)`, which
-   stringifies the in-page result and throws a
-   `BROWSER_RESULT_LIMIT: <length>` sentinel error before an oversized result
-   could overflow the CDP transport frame; `BrowserPage` recognizes that
+   `BrowserPage.evaluate()` wraps its expression with
+   `guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT)`, and
+   `.content()` wraps BOTH its HTML (`outerHTML`) and visible-text
+   (`innerText`) sub-evaluations the same way — only `title` and `url` are
+   NOT size-guarded. The guard stringifies the in-page result and throws a
+   `BROWSER_RESULT_LIMIT_SENTINEL_PREFIX` (`[[ORKESTREL_BROWSER_RESULT_LIMIT]]`)
+   followed by the serialized length before an oversized result could
+   overflow the CDP transport frame; `BrowserPage` recognizes that
    sentinel (`BROWSER_RESULT_LIMIT_PATTERN`) and rejects with a coded
    `BrowserResultLimitError` instead — the underlying CDP connection and
-   browser process are unaffected.
+   browser process are unaffected. The crash-safety guarantee therefore
+   applies to `evaluate()` and to both the HTML and text fields of
+   `.content()`.
 9. **Codegen normalizes and compiles deterministically.**
    `normalizeCodegenActions` collapses consecutive `fill`s on the same
    selector to the latest value (including `contenteditable` fills, captured
@@ -616,11 +623,17 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
     the process is owned or merely CDP-attached) and only escalates to the
     same kill sequence if an owned process fails to exit within the grace
     period — the graceful path for shutting down a browser this instance may
-    not own. `BrowserInterface.connected` is a pure, derived getter
+    not own. In the worst case an owned, unresponsive process makes `close()`
+    apply `BROWSER_KILL_GRACE_MS` twice: once waiting for exit after
+    `Browser.close`, and again (via the same SIGTERM→SIGKILL path as
+    `destroy()`) if that first wait times out. `BrowserInterface.connected` is a pure, derived getter
     (`status === 'connected'`) — never separately tracked state.
-    `BrowserInterface.pid` is the launched process's id (`ChildProcess.pid`),
-    undefined when this instance never launched or no longer owns one (a CDP
-    attach, or after a `'persistent'` session's `disconnect()` released it).
+    `BrowserInterface.pid` is the launched process's id (`ChildProcess.pid`);
+    it stays readable (the last-known pid) across a `'persistent'` session's
+    `disconnect()` and only becomes `undefined` after `destroy()`/`close()` or
+    an observed process exit — never on `disconnect()` alone. It is
+    `undefined` from the start on a plain CDP attach (`connection === 'cdp'`),
+    which never owns a process.
 
 ## Patterns
 
@@ -700,9 +713,8 @@ before falling back to the kill-escalation `destroy()` uses:
 const reattached = createBrowser({ cdp: { port } })
 await reattached.connect() // discovers the still-running browser over CDP
 
-await reattached.close() // asks the remote browser to shut down and waits for it
-// the browser process has now exited — a further connect() on this
-// instance throws BrowserDestroyedError, same as after destroy()
+await reattached.close() // best-effort CDP Browser.close; since this instance never owned the process, it does NOT wait for the remote exit
+// a further connect() on this instance throws BrowserDestroyedError, same as after destroy()
 ```
 
 ### Drive the core client directly over an injected transport

@@ -118,7 +118,12 @@ export class BrowserPage implements BrowserPageInterface {
 			this.#evaluate(
 				guardEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
 			),
-			this.#evaluate('document.body ? document.body.innerText : ""'),
+			this.#evaluate(
+				guardEvaluateExpression(
+					'document.body ? document.body.innerText : ""',
+					BROWSER_RESULT_LIMIT,
+				),
+			),
 			this.#evaluate('location.href'),
 		])
 
