@@ -78,17 +78,20 @@ await client.close()
 | ---------------------- | ----- | -------------- | ------------------------ | ------------------------------------------------------------------------ |
 | `BrowserError`         | class | `Error`        | `BROWSER_ERROR`          | Base error for all browser automation operations (`code` + `context`).   |
 | `BrowserSelectorError` | class | `BrowserError` | `BROWSER_SELECTOR_ERROR` | A selector-based lookup or wait timed out without the element appearing. |
+| `CDPError`             | class | `BrowserError` | `BROWSER_CDP_ERROR`      | A CDP request received an error response from the remote endpoint (context carries `method` / CDP `code` / `message` / `data`). |
 
 | Guard                    | Kind     | Narrows to             |
 | ------------------------ | -------- | ---------------------- |
 | `isBrowserError`         | function | `BrowserError`         |
 | `isBrowserSelectorError` | function | `BrowserSelectorError` |
+| `isCDPError`             | function | `CDPError`             |
 
 ```ts
 try {
 	await page.wait('#missing')
 } catch (error) {
 	if (isBrowserSelectorError(error)) log(error.code)
+	else if (isCDPError(error)) log(error.code, error.context)
 	else if (isBrowserError(error)) log(error.code)
 }
 ```
@@ -142,6 +145,7 @@ const script = compileCodegenScript(actions, { language: 'typescript' })
 | `BrowserCodegenLanguage`      | type      | `'javascript' \| 'typescript'` — target language for a compiled codegen script.                                                                                                         |
 | `BrowserCodegenScriptOptions` | interface | `{ language?: BrowserCodegenLanguage }` — options for compiling recorded actions into a script (default `'javascript'`).                                                                |
 | `BrowserCodegenInterface`     | interface | `emitter` / `started` data members + `start` / `stop` / `actions` / `script` / `clear` / `destroy` methods.                                                                             |
+| `BrowserFrame`                | type      | `{ id: string; parent?: string; name?: string; url: string }` — one frame in a page's frame tree, as reported by CDP `Page.getFrameTree`.                                              |
 | `BrowserPageInterface`        | interface | `url` / `closed` data members + `title` / `navigate` / `content` / `screenshot` / `click` / `fill` / `select` / `evaluate` / `wait` / `frame` / `frames` / `codegen` / `close` methods. |
 | `BrowserContextInterface`     | interface | `id` data member + `page` / `pages` / `create` / `sync` / `close` methods.                                                                                                              |
 
@@ -180,12 +184,14 @@ await browser.destroy() // closes the process and releases resources
 | Constant                   | Kind  | Value                                                                                           |
 | -------------------------- | ----- | ----------------------------------------------------------------------------------------------- |
 | `BROWSER_DEFAULT_CDP_PORT` | const | `9222` — default CDP port probed for an existing browser and used for launches.                 |
+| `BROWSER_DEFAULT_HOST`     | const | `'127.0.0.1'` — default host probed/launched on (avoids `localhost` resolving to `::1`).        |
 | `BROWSER_CDP_PROTOCOL`     | const | `'http'` — protocol prefix for CDP discovery requests.                                          |
 | `BROWSER_CDP_VERSION_PATH` | const | `'/json/version'` — path appended to the CDP host to fetch version metadata.                    |
 | `BROWSER_CDP_LIST_PATH`    | const | `'/json/list'` — path appended to the CDP host to list open targets.                            |
 | `BROWSER_NOT_FOUND_RESULT` | const | Sentinel `BrowserDiscoveryResult` returned by discovery when no browser is reachable.           |
 | `BROWSER_LAUNCH_ARGS`      | const | Frozen flags always passed to a launched browser process, alongside the caller's own.           |
 | `BROWSER_HEADLESS_ARG`     | const | `'--headless=new'` — flag enabling headless mode on a launched browser process.                 |
+| `BROWSER_KILL_GRACE_MS`    | const | `3000` — grace period after SIGTERM before a launched process is escalated to SIGKILL.          |
 | `BROWSER_EXECUTABLE_PATHS` | const | Frozen record of well-known Chrome/Chromium/Edge executable paths, keyed by `process.platform`. |
 | `BROWSER_EXECUTABLE_NAMES` | const | Frozen list of command names probed on PATH when no well-known executable path exists.          |
 
@@ -251,7 +257,7 @@ if (executable !== undefined) {
 | `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'` — how the browser connection was established.                                                                                          |
 | `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'` — lifecycle status of a browser wrapper.                                                              |
 | `BrowserDiscoveryResult`       | interface | `{ found: boolean; endpoint?; browser?; connection? }` — result of passive browser discovery.                                                                              |
-| `BrowserCdpOptions`            | interface | `{ port?: number; endpoint?: string }` — CDP connection configuration.                                                                                                     |
+| `BrowserCdpOptions`            | interface | `{ port?: number; host?: string; endpoint?: string }` — CDP connection configuration (`host` defaults to `BROWSER_DEFAULT_HOST`).                                          |
 | `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; error: [error]; destroy: [] }`.                                    |
 | `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args? }` — options for `createBrowser`.                                                      |
 | `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `connected` data members + `discover` / `connect` / `disconnect` / `context` / `contexts` / `create` / `destroy` methods. |
@@ -290,7 +296,11 @@ Frames JSON-RPC-shaped CDP method calls and events over an injected
 `CDPTransportInterface`. `connect` starts the transport and begins
 dispatching; `send` issues a CDP method call (optionally session-scoped);
 `subscribe` / `unsubscribe` register or remove a handler for a CDP event
-(optionally session-scoped).
+(optionally session-scoped). Subscriptions are client-level registrations,
+not connection-level state — they survive `close()` and a subsequent
+`reconnect()` / `connect()`, and resume firing once reconnected. Calling
+`close()` while a `connect()` is still in flight rejects that in-flight
+connect attempt.
 
 | Method        | Returns            | Behavior                                                                                          |
 | ------------- | ------------------ | ------------------------------------------------------------------------------------------------- |
@@ -350,8 +360,8 @@ Abstraction over a single browser page or frame.
 | `select`     | `Promise<void>`                     | Choose option(s) in a `<select>` element.                                 |
 | `evaluate`   | `Promise<unknown>`                  | Execute a JavaScript expression in the page context.                      |
 | `wait`       | `Promise<void>`                     | Wait for an element matching the selector to appear.                      |
-| `frame`      | `BrowserPageInterface \| undefined` | Look up a child frame by name.                                            |
-| `frames`     | `readonly BrowserPageInterface[]`   | List all child frames.                                                    |
+| `frame`      | `Promise<BrowserFrame \| undefined>`| Look up a frame by name or URL in the page's flattened frame tree.        |
+| `frames`     | `Promise<readonly BrowserFrame[]>`  | List the page's flattened frame tree, main frame first.                   |
 | `codegen`    | `Promise<BrowserCodegenInterface>`  | Start (or return the existing) action recorder for this page.             |
 | `close`      | `Promise<void>`                     | Close the page.                                                           |
 
@@ -364,8 +374,8 @@ await page.select('#lang', ['en'])
 const content = await page.content()
 const result = await page.evaluate('document.title')
 const shot = await page.screenshot({ full: true, type: 'png' })
-const child = page.frame('checkout') // BrowserPageInterface | undefined
-const children = page.frames() // readonly BrowserPageInterface[]
+const child = await page.frame('checkout') // BrowserFrame | undefined
+const children = await page.frames() // readonly BrowserFrame[]
 await page.close()
 ```
 
@@ -483,7 +493,14 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
     debugger URL, races the connection attempt against `timeout`
     (default `BROWSER_DEFAULT_TIMEOUT_MS`), and bridges the socket's
     `message` / `close` / `error` events onto its `CDPTransportEventMap`
-    emitter unchanged (no framing of its own).
+    emitter unchanged (no framing of its own). `start()` rejects with a
+    `BrowserConnectionError` (URL in `context`) on socket error, non-open
+    close, or timeout — never a bare error.
+11. **`Browser.destroy()` escalates SIGTERM → SIGKILL.** A launched process
+    is sent `SIGTERM`; if it has not exited after `BROWSER_KILL_GRACE_MS`, it
+    is force-killed with `SIGKILL`. `BrowserInterface.connected` is a pure,
+    derived getter (`status === 'connected'`) — never separately tracked
+    state.
 
 ## Patterns
 
