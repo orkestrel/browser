@@ -3,6 +3,9 @@ import type { Socket } from 'node:net'
 import type { CDPTarget } from '@src/core'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
+import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 // === Server-only test helpers (AGENTS §16.1 — node:* allowed here)
 
@@ -140,6 +143,8 @@ export interface CDPTestServerInterface {
 	fail(id: number, message: string): void
 	/** Push a CDP event frame over the active WebSocket. */
 	event(method: string, params?: Readonly<Record<string, unknown>>, sessionId?: string): void
+	/** When enabled, `/json/version` accepts the request and never responds (simulates a hung endpoint). */
+	hang(enabled: boolean): void
 	/** Close the HTTP server and any open sockets. */
 	close(): Promise<void>
 }
@@ -155,10 +160,12 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 	let targets: readonly CDPTarget[] = []
 	let activeSocket: Socket | undefined
 	const sockets = new Set<Socket>()
+	let hangVersion = false
 
 	const server: HTTPServer = createServer((req, res) => {
 		const url = req.url ?? ''
 		if (url.startsWith('/json/version')) {
+			if (hangVersion) return
 			res.writeHead(200, { 'content-type': 'application/json' })
 			res.end(JSON.stringify({ webSocketDebuggerUrl: wsUrlFor(), Browser: 'Test/1.0' }))
 			return
@@ -283,12 +290,111 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 			if (sessionId !== undefined) frame['sessionId'] = sessionId
 			sendFrame(frame)
 		},
+		hang(enabled: boolean): void {
+			hangVersion = enabled
+		},
 		async close(): Promise<void> {
 			for (const socket of sockets) socket.destroy()
 			sockets.clear()
 			await new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()))
 			})
+		},
+	}
+}
+
+// === Fake browser process (real spawned executable, no mocks)
+
+/** A real, spawned stand-in "browser" process for exercising Browser's launch path. */
+export interface FakeBrowserProcessInterface {
+	/** Absolute path to the spawnable script (used as `BrowserOptions.executable`). */
+	readonly executable: string
+	/** Reads the PID the process wrote at startup (polls briefly if not yet written). */
+	pid(): Promise<number>
+}
+
+/**
+ * Write and chmod a small, real Node script that stands in for a browser
+ * executable in `Browser`'s launch path — no mocking of `child_process`.
+ *
+ * @param options - `serveCdp` runs a minimal real HTTP+WebSocket CDP endpoint
+ * (parses `--remote-debugging-port=` from its own argv); `ignoreSigterm`
+ * traps SIGTERM so only SIGKILL can terminate it. With neither option the
+ * process just idles (never serves CDP) — useful for launch-failure/abort
+ * scenarios.
+ * @returns A {@link FakeBrowserProcessInterface}
+ */
+export function createFakeBrowserProcess(
+	options: { readonly serveCdp?: boolean; readonly ignoreSigterm?: boolean } = {},
+): FakeBrowserProcessInterface {
+	const dir = mkdtempSync(join(tmpdir(), 'scsr-fake-browser-'))
+	const scriptPath = join(dir, 'fake-browser.js')
+	const pidFile = join(dir, 'pid.txt')
+
+	const lines: string[] = [
+		'#!/usr/bin/env node',
+		`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
+	]
+
+	if (options.ignoreSigterm === true) {
+		lines.push("process.on('SIGTERM', () => {})")
+	}
+
+	if (options.serveCdp === true) {
+		lines.push(
+			[
+				"const http = require('http')",
+				"const crypto = require('crypto')",
+				"const portArg = process.argv.find((a) => a.startsWith('--remote-debugging-port='))",
+				"const port = Number(portArg.split('=')[1])",
+				"const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'",
+				'const server = http.createServer((req, res) => {',
+				"\tif (req.url.startsWith('/json/version')) {",
+				"\t\tres.writeHead(200, { 'content-type': 'application/json' })",
+				"\t\tres.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:' + port + '/cdp', Browser: 'Fake/1.0' }))",
+				'\t\treturn',
+				'\t}',
+				"\tif (req.url.startsWith('/json/list')) {",
+				"\t\tres.writeHead(200, { 'content-type': 'application/json' })",
+				"\t\tres.end('[]')",
+				'\t\treturn',
+				'\t}',
+				'\tres.writeHead(404)',
+				'\tres.end()',
+				'})',
+				"server.on('upgrade', (req, socket) => {",
+				"\tconst key = req.headers['sec-websocket-key']",
+				'\tconst accept = crypto.createHash(\'sha1\').update(key + GUID).digest(\'base64\')',
+				'\tsocket.write(',
+				"\t\t'HTTP/1.1 101 Switching Protocols\\r\\n' +",
+				"\t\t\t'Upgrade: websocket\\r\\n' +",
+				"\t\t\t'Connection: Upgrade\\r\\n' +",
+				'\t\t\t`Sec-WebSocket-Accept: ${accept}\\r\\n\\r\\n`,',
+				'\t)',
+				'})',
+				"server.listen(port, '127.0.0.1')",
+			].join('\n'),
+		)
+	} else {
+		lines.push('setInterval(() => {}, 1000)')
+	}
+
+	writeFileSync(scriptPath, `${lines.join('\n')}\n`)
+	chmodSync(scriptPath, 0o755)
+
+	return {
+		executable: scriptPath,
+		async pid(): Promise<number> {
+			for (let attempt = 0; attempt < 50; attempt++) {
+				try {
+					const contents = readFileSync(pidFile, 'utf8').trim()
+					if (contents.length > 0) return Number(contents)
+				} catch {
+					// Not written yet
+				}
+				await new Promise((resolve) => setTimeout(resolve, 20))
+			}
+			throw new Error(`Fake browser process never wrote its pid to ${pidFile}`)
 		},
 	}
 }

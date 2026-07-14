@@ -5,6 +5,9 @@ import type { BrowserDiscoveryResult } from './types.js'
 /** Default CDP port probed for an existing browser and used for launches. */
 export const BROWSER_DEFAULT_CDP_PORT = 9222
 
+/** Default host probed for an existing browser and used for launches (avoids `localhost` resolving to `::1` when Chromium binds `127.0.0.1`). */
+export const BROWSER_DEFAULT_HOST = '127.0.0.1'
+
 /** Protocol prefix for CDP discovery requests. */
 export const BROWSER_CDP_PROTOCOL = 'http'
 
@@ -32,6 +35,9 @@ export const BROWSER_LAUNCH_ARGS: readonly string[] = Object.freeze([
 
 /** Flag enabling headless mode on a launched browser process. */
 export const BROWSER_HEADLESS_ARG = '--headless=new'
+
+/** Grace period after SIGTERM before a launched process is escalated to SIGKILL during teardown. */
+export const BROWSER_KILL_GRACE_MS = 3_000
 
 /** Well-known Chrome/Chromium/Edge executable paths, keyed by `process.platform`. */
 export const BROWSER_EXECUTABLE_PATHS: Readonly<Record<string, readonly string[]>> = Object.freeze({

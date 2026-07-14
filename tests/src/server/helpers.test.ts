@@ -45,6 +45,20 @@ describe('waitForCdpReady', () => {
 	it('throws when the endpoint never becomes ready before the timeout', async () => {
 		await expect(waitForCdpReady(19_992, 100)).rejects.toThrow(/did not become ready/)
 	})
+
+	it('respects the deadline against a hanging endpoint', async () => {
+		server = await createCdpTestServer()
+		server.hang(true)
+		const start = Date.now()
+		await expect(waitForCdpReady(server.port, 150)).rejects.toThrow(/did not become ready/)
+		expect(Date.now() - start).toBeLessThan(1000)
+	})
+
+	it('honors an explicit host', async () => {
+		server = await createCdpTestServer()
+		const url = await waitForCdpReady(server.port, 2000, '127.0.0.1')
+		expect(url).toBe(server.wsUrl)
+	})
 })
 
 describe('fetchCdpTargets', () => {
@@ -69,6 +83,15 @@ describe('fetchCdpTargets', () => {
 		const targets = await fetchCdpTargets(server.port, 2000)
 
 		expect(targets).toEqual([{ id: 't2', type: 'page', title: '', url: '' }])
+	})
+
+	it('honors an explicit host', async () => {
+		server = await createCdpTestServer()
+		server.list([{ id: 't3', type: 'page', title: '', url: '' }])
+
+		const targets = await fetchCdpTargets(server.port, 2000, '127.0.0.1')
+
+		expect(targets).toEqual([{ id: 't3', type: 'page', title: '', url: '' }])
 	})
 })
 

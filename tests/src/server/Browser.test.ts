@@ -7,15 +7,17 @@
  * Chromium binary are `it.todo()`.
  */
 
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
 	createBrowser,
 	BrowserDestroyedError,
 	BrowserNotConnectedError,
 	BrowserConnectionError,
+	BROWSER_KILL_GRACE_MS,
 } from '@src/server'
-import { createCdpTestServer } from '../../setupServer.js'
+import { createCdpTestServer, createFakeBrowserProcess } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
+import { waitForDelay } from '../../setup.js'
 
 // === Test scaffolding
 
@@ -532,5 +534,136 @@ describe('Browser events', () => {
 		const browser = createBrowser()
 		browser.emitter.once('disconnect', () => {})
 		expect(browser.emitter.count('disconnect')).toBe(1)
+	})
+})
+
+// === external-disconnect detection (design-1)
+
+describe('Browser external-disconnect detection', () => {
+	it('connected reads are side-effect-free while healthy', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+		let disconnectCount = 0
+		const browser = createBrowser({ cdp: { port: server.port }, on: { disconnect: () => disconnectCount++ } })
+		await browser.connect()
+
+		for (let i = 0; i < 20; i++) {
+			expect(browser.connected).toBe(true)
+		}
+		expect(disconnectCount).toBe(0)
+		expect(browser.status).toBe('connected')
+
+		await browser.destroy()
+	})
+
+	it('transport close triggers exactly one disconnect without reading .connected', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+		let disconnectCount = 0
+		const browser = createBrowser({ cdp: { port: server.port }, on: { disconnect: () => disconnectCount++ } })
+		await browser.connect()
+
+		await server.close()
+		server = undefined
+		await waitForDelay(50)
+
+		expect(disconnectCount).toBe(1)
+		expect(browser.status).toBe('disconnected')
+
+		await browser.destroy()
+	})
+})
+
+// === abort mid-connect (robustness-3) leaves no orphaned process
+
+describe('Browser abort mid-connect', () => {
+	it('rejects promptly and leaves no live process', async () => {
+		const fake = createFakeBrowserProcess()
+		const controller = new AbortController()
+		const browser = createBrowser({
+			executable: fake.executable,
+			cdp: { port: 19_998 },
+			timeout: 5000,
+			signal: controller.signal,
+		})
+
+		const connectPromise = browser.connect()
+		const pid = await fake.pid()
+		controller.abort()
+
+		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
+
+		await waitForDelay(100)
+		expect(() => process.kill(pid, 0)).toThrow()
+	})
+})
+
+// === post-spawn connect failure (lifecycle-1) kills the spawned process
+
+describe('Browser post-spawn connect failure', () => {
+	it('kills the spawned process when CDP never becomes ready', async () => {
+		const fake = createFakeBrowserProcess()
+		const browser = createBrowser({
+			executable: fake.executable,
+			cdp: { port: 19_999 },
+			timeout: 150,
+		})
+
+		const connectPromise = browser.connect()
+		const pid = await fake.pid()
+
+		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
+
+		await waitForDelay(100)
+		expect(() => process.kill(pid, 0)).toThrow()
+	})
+})
+
+// === destroy() kill escalation (lifecycle-6)
+
+describe('Browser destroy() kill escalation', () => {
+	it('escalates to SIGKILL when the launched process ignores SIGTERM', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true, ignoreSigterm: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			cdp: { port: 20_000 },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+
+		const pid = await fake.pid()
+		expect(() => process.kill(pid, 0)).not.toThrow()
+
+		vi.useFakeTimers()
+		try {
+			const destroyPromise = browser.destroy()
+			await vi.advanceTimersByTimeAsync(BROWSER_KILL_GRACE_MS + 100)
+			await destroyPromise
+		} finally {
+			vi.useRealTimers()
+		}
+
+		await waitForDelay(100)
+		expect(() => process.kill(pid, 0)).toThrow()
+	}, 15_000)
+})
+
+// === host option (robustness-7)
+
+describe('Browser host option', () => {
+	it('honors an explicit host for discovery and connection', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+		const browser = createBrowser({ cdp: { port: server.port, host: '127.0.0.1' } })
+
+		const discovery = await browser.discover()
+		expect(discovery.found).toBe(true)
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+
+		await browser.destroy()
 	})
 })

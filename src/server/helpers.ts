@@ -12,6 +12,7 @@ import {
 	BROWSER_EXECUTABLE_NAMES,
 	BROWSER_LAUNCH_ARGS,
 	BROWSER_HEADLESS_ARG,
+	BROWSER_DEFAULT_HOST,
 } from './constants.js'
 
 // === Discovery helpers
@@ -78,17 +79,26 @@ export function launchBrowserProcess(
  *
  * @param port - Port the browser exposes its CDP endpoint on
  * @param timeout - Maximum time to wait in milliseconds
+ * @param host - Host the browser exposes its CDP endpoint on (default `127.0.0.1`)
  * @returns The browser's WebSocket debugger URL
  *
  * @throws When the endpoint does not become ready before the timeout
  */
-export async function waitForCdpReady(port: number, timeout: number): Promise<string> {
-	const url = `${BROWSER_CDP_PROTOCOL}://localhost:${port}${BROWSER_CDP_VERSION_PATH}`
+export async function waitForCdpReady(
+	port: number,
+	timeout: number,
+	host: string = BROWSER_DEFAULT_HOST,
+): Promise<string> {
+	const url = `${BROWSER_CDP_PROTOCOL}://${host}:${port}${BROWSER_CDP_VERSION_PATH}`
 	const deadline = Date.now() + timeout
 
 	while (Date.now() < deadline) {
+		const remaining = Math.max(0, deadline - Date.now())
+		const controller = new AbortController()
+		const timer = setTimeout(() => controller.abort(), remaining)
+
 		try {
-			const response = await fetch(url)
+			const response = await fetch(url, { signal: controller.signal })
 			if (response.ok) {
 				const info: unknown = await response.json()
 				if (isRecord(info) && isString(info['webSocketDebuggerUrl'])) {
@@ -97,6 +107,8 @@ export async function waitForCdpReady(port: number, timeout: number): Promise<st
 			}
 		} catch {
 			// Not ready yet — keep polling
+		} finally {
+			clearTimeout(timer)
 		}
 
 		await new Promise((resolve) => setTimeout(resolve, BROWSER_WAIT_POLL_INTERVAL_MS))
@@ -110,20 +122,20 @@ export async function waitForCdpReady(port: number, timeout: number): Promise<st
  *
  * @param port - Port the browser exposes its CDP endpoint on
  * @param timeout - Request timeout in milliseconds
+ * @param host - Host the browser exposes its CDP endpoint on (default `127.0.0.1`)
  * @returns Normalized CDP targets
  */
 export async function fetchCdpTargets(
 	port: number,
 	timeout: number,
+	host: string = BROWSER_DEFAULT_HOST,
 ): Promise<readonly CDPTarget[]> {
-	const url = `${BROWSER_CDP_PROTOCOL}://localhost:${port}${BROWSER_CDP_LIST_PATH}`
+	const url = `${BROWSER_CDP_PROTOCOL}://${host}:${port}${BROWSER_CDP_LIST_PATH}`
+	const controller = new AbortController()
+	const timer = setTimeout(() => controller.abort(), timeout)
 
 	try {
-		const controller = new AbortController()
-		const timer = setTimeout(() => controller.abort(), timeout)
-
 		const response = await fetch(url, { signal: controller.signal })
-		clearTimeout(timer)
 
 		if (!response.ok) return []
 
@@ -146,5 +158,7 @@ export async function fetchCdpTargets(
 		return targets
 	} catch {
 		return []
+	} finally {
+		clearTimeout(timer)
 	}
 }

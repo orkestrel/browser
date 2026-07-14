@@ -41,10 +41,13 @@ export interface BrowserDiscoveryResult {
  *
  * @remarks
  * - `port` — port number to probe for an existing CDP endpoint (default `9222`)
+ * - `host` — host to probe/launch on (default `127.0.0.1`; avoids `localhost`
+ *   resolving to `::1` when Chromium binds `127.0.0.1`)
  * - `endpoint` — explicit CDP WebSocket URL; when provided, skips discovery
  */
 export interface BrowserCdpOptions {
 	readonly port?: number
+	readonly host?: string
 	readonly endpoint?: string
 }
 
