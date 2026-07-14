@@ -74,10 +74,10 @@ await client.close()
 
 #### Errors
 
-| Error                  | Kind  | Extends        | Code                     | Summary                                                                  |
-| ---------------------- | ----- | -------------- | ------------------------ | ------------------------------------------------------------------------ |
-| `BrowserError`         | class | `Error`        | `BROWSER_ERROR`          | Base error for all browser automation operations (`code` + `context`).   |
-| `BrowserSelectorError` | class | `BrowserError` | `BROWSER_SELECTOR_ERROR` | A selector-based lookup or wait timed out without the element appearing. |
+| Error                  | Kind  | Extends        | Code                     | Summary                                                                                                                         |
+| ---------------------- | ----- | -------------- | ------------------------ | ------------------------------------------------------------------------------------------------------------------------------- |
+| `BrowserError`         | class | `Error`        | `BROWSER_ERROR`          | Base error for all browser automation operations (`code` + `context`).                                                          |
+| `BrowserSelectorError` | class | `BrowserError` | `BROWSER_SELECTOR_ERROR` | A selector-based lookup or wait timed out without the element appearing.                                                        |
 | `CDPError`             | class | `BrowserError` | `BROWSER_CDP_ERROR`      | A CDP request received an error response from the remote endpoint (context carries `method` / CDP `code` / `message` / `data`). |
 
 | Guard                    | Kind     | Narrows to             |
@@ -145,7 +145,7 @@ const script = compileCodegenScript(actions, { language: 'typescript' })
 | `BrowserCodegenLanguage`      | type      | `'javascript' \| 'typescript'` — target language for a compiled codegen script.                                                                                                         |
 | `BrowserCodegenScriptOptions` | interface | `{ language?: BrowserCodegenLanguage }` — options for compiling recorded actions into a script (default `'javascript'`).                                                                |
 | `BrowserCodegenInterface`     | interface | `emitter` / `started` data members + `start` / `stop` / `actions` / `script` / `clear` / `destroy` methods.                                                                             |
-| `BrowserFrame`                | type      | `{ id: string; parent?: string; name?: string; url: string }` — one frame in a page's frame tree, as reported by CDP `Page.getFrameTree`.                                              |
+| `BrowserFrame`                | type      | `{ id: string; parent?: string; name?: string; url: string }` — one frame in a page's frame tree, as reported by CDP `Page.getFrameTree`.                                               |
 | `BrowserPageInterface`        | interface | `url` / `closed` data members + `title` / `navigate` / `content` / `screenshot` / `click` / `fill` / `select` / `evaluate` / `wait` / `frame` / `frames` / `codegen` / `close` methods. |
 | `BrowserContextInterface`     | interface | `id` data member + `page` / `pages` / `create` / `sync` / `close` methods.                                                                                                              |
 
@@ -349,21 +349,21 @@ await ctx?.close()
 
 Abstraction over a single browser page or frame.
 
-| Method       | Returns                             | Behavior                                                                  |
-| ------------ | ----------------------------------- | ------------------------------------------------------------------------- |
-| `title`      | `Promise<string>`                   | Resolve the document title.                                               |
-| `navigate`   | `Promise<void>`                     | Go to a URL and wait for the specified load condition (default `'load'`). |
-| `content`    | `Promise<BrowserContentResult>`     | Extract page URL, title, HTML, and visible text.                          |
-| `screenshot` | `Promise<BrowserScreenshotResult>`  | Capture a PNG or JPEG image of the page.                                  |
-| `click`      | `Promise<void>`                     | Click an element matching the selector.                                   |
-| `fill`       | `Promise<void>`                     | Type text into an input element.                                          |
-| `select`     | `Promise<void>`                     | Choose option(s) in a `<select>` element.                                 |
-| `evaluate`   | `Promise<unknown>`                  | Execute a JavaScript expression in the page context.                      |
-| `wait`       | `Promise<void>`                     | Wait for an element matching the selector to appear.                      |
-| `frame`      | `Promise<BrowserFrame \| undefined>`| Look up a frame by name or URL in the page's flattened frame tree.        |
-| `frames`     | `Promise<readonly BrowserFrame[]>`  | List the page's flattened frame tree, main frame first.                   |
-| `codegen`    | `Promise<BrowserCodegenInterface>`  | Start (or return the existing) action recorder for this page.             |
-| `close`      | `Promise<void>`                     | Close the page.                                                           |
+| Method       | Returns                              | Behavior                                                                  |
+| ------------ | ------------------------------------ | ------------------------------------------------------------------------- |
+| `title`      | `Promise<string>`                    | Resolve the document title.                                               |
+| `navigate`   | `Promise<void>`                      | Go to a URL and wait for the specified load condition (default `'load'`). |
+| `content`    | `Promise<BrowserContentResult>`      | Extract page URL, title, HTML, and visible text.                          |
+| `screenshot` | `Promise<BrowserScreenshotResult>`   | Capture a PNG or JPEG image of the page.                                  |
+| `click`      | `Promise<void>`                      | Click an element matching the selector.                                   |
+| `fill`       | `Promise<void>`                      | Type text into an input element.                                          |
+| `select`     | `Promise<void>`                      | Choose option(s) in a `<select>` element.                                 |
+| `evaluate`   | `Promise<unknown>`                   | Execute a JavaScript expression in the page context.                      |
+| `wait`       | `Promise<void>`                      | Wait for an element matching the selector to appear.                      |
+| `frame`      | `Promise<BrowserFrame \| undefined>` | Look up a frame by name or URL in the page's flattened frame tree.        |
+| `frames`     | `Promise<readonly BrowserFrame[]>`   | List the page's flattened frame tree, main frame first.                   |
+| `codegen`    | `Promise<BrowserCodegenInterface>`   | Start (or return the existing) action recorder for this page.             |
+| `close`      | `Promise<void>`                      | Close the page.                                                           |
 
 ```ts
 await page.navigate('https://example.com')

@@ -160,7 +160,10 @@ export class BrowserContext implements BrowserContextInterface {
 					}
 				}
 
-				this.#pages.set(target.id, new BrowserPage(this.#client, target.id, sessionId, this.#writer))
+				this.#pages.set(
+					target.id,
+					new BrowserPage(this.#client, target.id, sessionId, this.#writer),
+				)
 			} catch {
 				// Skip targets we cannot attach to
 			}

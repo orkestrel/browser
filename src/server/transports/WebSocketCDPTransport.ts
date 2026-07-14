@@ -24,7 +24,13 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	readonly #url: string
 	readonly #timeout: number
 	#socket: WebSocket | undefined
-	#connecting: { readonly socket: WebSocket; readonly timer: ReturnType<typeof setTimeout>; readonly reject: (error: unknown) => void } | undefined
+	#connecting:
+		| {
+				readonly socket: WebSocket
+				readonly timer: ReturnType<typeof setTimeout>
+				readonly reject: (error: unknown) => void
+		  }
+		| undefined
 
 	constructor(options: WebSocketCDPTransportOptions) {
 		this.#emitter = new Emitter()
@@ -47,10 +53,14 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 
 			const timer = setTimeout(() => {
 				socket.close()
-				settle(() => reject(new BrowserConnectionError(
-					`WebSocket CDP connection to ${this.#url} timed out after ${this.#timeout}ms`,
-					{ url: this.#url, timeout: this.#timeout },
-				)))
+				settle(() =>
+					reject(
+						new BrowserConnectionError(
+							`WebSocket CDP connection to ${this.#url} timed out after ${this.#timeout}ms`,
+							{ url: this.#url, timeout: this.#timeout },
+						),
+					),
+				)
 			}, this.#timeout)
 
 			const onOpen = (): void => {
@@ -60,10 +70,14 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 
 			const onError = (event: ErrorEvent): void => {
 				clearTimeout(timer)
-				settle(() => reject(new BrowserConnectionError(
-					`WebSocket CDP connection to ${this.#url} failed: ${event.message || event.type}`,
-					{ url: this.#url },
-				)))
+				settle(() =>
+					reject(
+						new BrowserConnectionError(
+							`WebSocket CDP connection to ${this.#url} failed: ${event.message || event.type}`,
+							{ url: this.#url },
+						),
+					),
+				)
 			}
 
 			socket.addEventListener('open', onOpen, { once: true })
@@ -94,10 +108,12 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 			clearTimeout(connecting.timer)
 			this.#connecting = undefined
 			connecting.socket.close()
-			connecting.reject(new BrowserConnectionError(
-				`WebSocket CDP connection to ${this.#url} was closed before it finished connecting`,
-				{ url: this.#url },
-			))
+			connecting.reject(
+				new BrowserConnectionError(
+					`WebSocket CDP connection to ${this.#url} was closed before it finished connecting`,
+					{ url: this.#url },
+				),
+			)
 			return
 		}
 

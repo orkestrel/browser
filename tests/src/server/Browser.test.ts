@@ -544,7 +544,10 @@ describe('Browser external-disconnect detection', () => {
 		server = await createCdpTestServer()
 		server.list([])
 		let disconnectCount = 0
-		const browser = createBrowser({ cdp: { port: server.port }, on: { disconnect: () => disconnectCount++ } })
+		const browser = createBrowser({
+			cdp: { port: server.port },
+			on: { disconnect: () => disconnectCount++ },
+		})
 		await browser.connect()
 
 		for (let i = 0; i < 20; i++) {
@@ -560,7 +563,10 @@ describe('Browser external-disconnect detection', () => {
 		server = await createCdpTestServer()
 		server.list([])
 		let disconnectCount = 0
-		const browser = createBrowser({ cdp: { port: server.port }, on: { disconnect: () => disconnectCount++ } })
+		const browser = createBrowser({
+			cdp: { port: server.port },
+			on: { disconnect: () => disconnectCount++ },
+		})
 		await browser.connect()
 
 		await server.close()

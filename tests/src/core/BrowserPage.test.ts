@@ -110,9 +110,9 @@ describe('BrowserPage', () => {
 				replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
-				await expect(
-					page.navigate('https://bad.example', { timeout: 20 }),
-				).rejects.toSatisfy(isBrowserError)
+				await expect(page.navigate('https://bad.example', { timeout: 20 })).rejects.toSatisfy(
+					isBrowserError,
+				)
 
 				// The load-wait timer must be cancelled, not left armed
 				expect(vi.getTimerCount()).toBe(0)
@@ -336,10 +336,20 @@ describe('BrowserPage', () => {
 					frame: { id: 'main-1', url: 'https://example.com/' },
 					childFrames: [
 						{
-							frame: { id: 'child-1', parentId: 'main-1', name: 'child-frame', url: 'https://example.com/child' },
+							frame: {
+								id: 'child-1',
+								parentId: 'main-1',
+								name: 'child-frame',
+								url: 'https://example.com/child',
+							},
 							childFrames: [
 								{
-									frame: { id: 'grandchild-1', parentId: 'child-1', name: '', url: 'https://example.com/grandchild' },
+									frame: {
+										id: 'grandchild-1',
+										parentId: 'child-1',
+										name: '',
+										url: 'https://example.com/grandchild',
+									},
 								},
 							],
 						},

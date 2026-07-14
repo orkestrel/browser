@@ -364,7 +364,7 @@ export function createFakeBrowserProcess(
 				'})',
 				"server.on('upgrade', (req, socket) => {",
 				"\tconst key = req.headers['sec-websocket-key']",
-				'\tconst accept = crypto.createHash(\'sha1\').update(key + GUID).digest(\'base64\')',
+				"\tconst accept = crypto.createHash('sha1').update(key + GUID).digest('base64')",
 				'\tsocket.write(',
 				"\t\t'HTTP/1.1 101 Switching Protocols\\r\\n' +",
 				"\t\t\t'Upgrade: websocket\\r\\n' +",

@@ -124,7 +124,9 @@ describe('WebSocketCDPTransport', () => {
 	it('start() rejects when connecting to an unreachable port', async () => {
 		const url = 'ws://localhost:19990/cdp'
 		const transport = new WebSocketCDPTransport({ url, timeout: 200 })
-		await expect(transport.start()).rejects.toThrow(new RegExp(`WebSocket CDP connection to ${url} (failed|timed out)`))
+		await expect(transport.start()).rejects.toThrow(
+			new RegExp(`WebSocket CDP connection to ${url} (failed|timed out)`),
+		)
 
 		try {
 			await transport.start()
