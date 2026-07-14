@@ -3,7 +3,7 @@ import type { Socket } from 'node:net'
 import type { CDPTarget } from '@src/core'
 import { createServer } from 'node:http'
 import { createHash } from 'node:crypto'
-import { mkdtempSync, writeFileSync, chmodSync, readFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -309,15 +309,20 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 
 /** A real, spawned stand-in "browser" process for exercising Browser's launch path. */
 export interface FakeBrowserProcessInterface {
-	/** Absolute path to the spawnable script (used as `BrowserOptions.executable`). */
+	/** The Node executable path (used as `BrowserOptions.executable`) — spawnable identically on every platform. */
 	readonly executable: string
+	/** Launch args (used as `BrowserOptions.args`) — must precede any CDP flags `launchBrowserProcess` appends. */
+	readonly args: readonly string[]
 	/** Reads the PID the process wrote at startup (polls briefly if not yet written). */
 	pid(): Promise<number>
 }
 
 /**
- * Write and chmod a small, real Node script that stands in for a browser
- * executable in `Browser`'s launch path — no mocking of `child_process`.
+ * Write a small, real Node script that stands in for a browser executable in
+ * `Browser`'s launch path — no mocking of `child_process`. The script is
+ * spawned as `node <script> <cdp-flags...>` (via `executable`/`args`) rather
+ * than executed directly, so it is spawnable identically on Windows/macOS/Linux
+ * (a directly-spawned shebang script is not portable to Windows).
  *
  * @param options - `serveCdp` runs a minimal real HTTP+WebSocket CDP endpoint
  * (parses `--remote-debugging-port=` from its own argv); `ignoreSigterm`
@@ -329,12 +334,13 @@ export interface FakeBrowserProcessInterface {
 export function createFakeBrowserProcess(
 	options: { readonly serveCdp?: boolean; readonly ignoreSigterm?: boolean } = {},
 ): FakeBrowserProcessInterface {
-	const dir = mkdtempSync(join(tmpdir(), 'scsr-fake-browser-'))
+	const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-fake-'))
 	const scriptPath = join(dir, 'fake-browser.js')
 	const pidFile = join(dir, 'pid.txt')
 
+	// No shebang: the script is spawned via `node <script>`, never executed
+	// directly, so it needs no execute bit and no shebang line.
 	const lines: string[] = [
-		'#!/usr/bin/env node',
 		`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
 	]
 
@@ -382,10 +388,10 @@ export function createFakeBrowserProcess(
 	}
 
 	writeFileSync(scriptPath, `${lines.join('\n')}\n`)
-	chmodSync(scriptPath, 0o755)
 
 	return {
-		executable: scriptPath,
+		executable: process.execPath,
+		args: [scriptPath],
 		async pid(): Promise<number> {
 			for (let attempt = 0; attempt < 50; attempt++) {
 				try {

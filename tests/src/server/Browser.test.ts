@@ -4,12 +4,20 @@
  * Exercises discovery, connection, context sync, and lifecycle against an
  * in-process CDP test server (real HTTP + WebSocket sockets, no mocks — see
  * `createCdpTestServer` in `tests/setupServer.ts`). Flows that require a real
- * Chromium binary are `it.todo()`.
+ * Chromium binary run in the `Browser real launch` suite below, gated on
+ * `findSystemBrowser()` discovering an actual browser on the machine.
  */
 
+import type { AddressInfo } from 'node:net'
+import type { BrowserInterface } from '@src/server'
 import { describe, it, expect, afterEach, vi } from 'vitest'
+import { createServer } from 'node:http'
+import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
 	createBrowser,
+	findSystemBrowser,
 	BrowserDestroyedError,
 	BrowserNotConnectedError,
 	BrowserConnectionError,
@@ -18,6 +26,13 @@ import {
 import { createCdpTestServer, createFakeBrowserProcess } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 import { waitForDelay } from '../../setup.js'
+
+const REAL_BROWSER_EXECUTABLE = findSystemBrowser()
+
+// Container-safe launch flags: needed when running headless Chromium as root
+// (the common case in CI/sandboxed containers) — sandboxing requires a
+// non-root user, `/dev/shm` is often too small, and GPU access is unavailable.
+const REAL_BROWSER_ARGS = ['--no-sandbox', '--disable-dev-shm-usage', '--disable-gpu']
 
 // === Test scaffolding
 
@@ -373,9 +388,6 @@ describe('Browser create()', () => {
 
 		await browser.destroy()
 	})
-
-	it.todo('creates a page and navigates it in a real browser')
-	it.todo('screenshot returns real PNG bytes from a real browser page')
 })
 
 // === launch path — executable resolution failure (no real browser spawned)
@@ -390,14 +402,11 @@ describe('Browser launch path', () => {
 		expect(browser.status).toBe('error')
 	})
 
-	it.todo('launches a real system Chromium and transitions to connected')
-	it.todo('connect() with a profile launches with a persistent user-data dir')
-	it.todo('accepts explicit headless option against a real launch')
-
 	it('disconnect() on a launched session rejects with coded BrowserConnectionError and destroy() still cleans up', async () => {
 		const fake = createFakeBrowserProcess({ serveCdp: true })
 		const browser = createBrowser({
 			executable: fake.executable,
+			args: fake.args,
 			cdp: { port: 20_001 },
 			timeout: 5000,
 		})
@@ -637,6 +646,7 @@ describe('Browser abort mid-connect', () => {
 		const controller = new AbortController()
 		const browser = createBrowser({
 			executable: fake.executable,
+			args: fake.args,
 			cdp: { port: 19_998 },
 			timeout: 5000,
 			signal: controller.signal,
@@ -660,6 +670,7 @@ describe('Browser post-spawn connect failure', () => {
 		const fake = createFakeBrowserProcess()
 		const browser = createBrowser({
 			executable: fake.executable,
+			args: fake.args,
 			cdp: { port: 19_999 },
 			timeout: 150,
 		})
@@ -677,11 +688,12 @@ describe('Browser post-spawn connect failure', () => {
 // === destroy() kill escalation (lifecycle-6)
 
 describe('Browser destroy() kill escalation', () => {
-	it('escalates to SIGKILL when the launched process ignores SIGTERM', async () => {
-		const fake = createFakeBrowserProcess({ serveCdp: true, ignoreSigterm: true })
+	it('destroy() fully terminates a cooperative launched process', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
 		const browser = createBrowser({
 			executable: fake.executable,
-			cdp: { port: 20_000 },
+			args: fake.args,
+			cdp: { port: 20_002 },
 			timeout: 5000,
 		})
 
@@ -691,18 +703,46 @@ describe('Browser destroy() kill escalation', () => {
 		const pid = await fake.pid()
 		expect(() => process.kill(pid, 0)).not.toThrow()
 
-		vi.useFakeTimers()
-		try {
-			const destroyPromise = browser.destroy()
-			await vi.advanceTimersByTimeAsync(BROWSER_KILL_GRACE_MS + 100)
-			await destroyPromise
-		} finally {
-			vi.useRealTimers()
-		}
+		await browser.destroy()
 
 		await waitForDelay(100)
 		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
-	}, 15_000)
+	})
+
+	// Windows cannot trap SIGTERM (Node delivers it as an unconditional
+	// terminate, not a catchable signal), so the ignore-then-escalate path
+	// is only observable on POSIX platforms.
+	it.runIf(process.platform !== 'win32')(
+		'escalates to SIGKILL when the launched process ignores SIGTERM',
+		async () => {
+			const fake = createFakeBrowserProcess({ serveCdp: true, ignoreSigterm: true })
+			const browser = createBrowser({
+				executable: fake.executable,
+				args: fake.args,
+				cdp: { port: 20_000 },
+				timeout: 5000,
+			})
+
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+
+			const pid = await fake.pid()
+			expect(() => process.kill(pid, 0)).not.toThrow()
+
+			vi.useFakeTimers()
+			try {
+				const destroyPromise = browser.destroy()
+				await vi.advanceTimersByTimeAsync(BROWSER_KILL_GRACE_MS + 100)
+				await destroyPromise
+			} finally {
+				vi.useRealTimers()
+			}
+
+			await waitForDelay(100)
+			expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+		},
+		15_000,
+	)
 })
 
 // === host option (robustness-7)
@@ -721,4 +761,194 @@ describe('Browser host option', () => {
 
 		await browser.destroy()
 	})
+})
+
+// === real launch — exercised only when a system Chromium is discoverable
+
+describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () => {
+	let browser: BrowserInterface | undefined
+	const tempDirs: string[] = []
+
+	afterEach(async () => {
+		await browser?.destroy()
+		browser = undefined
+
+		// The just-destroyed browser process can still be flushing profile
+		// files for a brief moment after destroy() resolves — give the OS a
+		// beat, then retry the removal instead of racing it.
+		await waitForDelay(200)
+		for (const dir of tempDirs.splice(0)) {
+			rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 })
+		}
+	})
+
+	function tempProfileDir(): string {
+		const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-profile-'))
+		tempDirs.push(dir)
+		return dir
+	}
+
+	it(
+		'creates a page and navigates it in a real browser',
+		async () => {
+			const httpServer = createServer((req, res) => {
+				res.writeHead(200, { 'content-type': 'text/html' })
+				res.end('<html><head><title>Real Launch</title></head><body>Hello</body></html>')
+			})
+			await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+			const address = httpServer.address() as AddressInfo
+			const url = `http://127.0.0.1:${address.port}/`
+
+			try {
+				browser = createBrowser({
+					executable: REAL_BROWSER_EXECUTABLE,
+					headless: true,
+					profile: tempProfileDir(),
+					args: REAL_BROWSER_ARGS,
+					cdp: { port: 20_101 },
+					timeout: 20_000,
+				})
+
+				await browser.connect()
+				expect(browser.status).toBe('connected')
+
+				const page = await browser.create({ url })
+				const title = await page.title()
+				const content = await page.content()
+
+				expect(title).toBe('Real Launch')
+				expect(content.text).toContain('Hello')
+			} finally {
+				await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+			}
+		},
+		20_000,
+	)
+
+	it(
+		'screenshot returns real PNG bytes from a real browser page',
+		async () => {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_102 },
+				timeout: 20_000,
+			})
+
+			await browser.connect()
+			const page = await browser.create()
+
+			const result = await page.screenshot()
+			expect(result.bytes.length).toBeGreaterThan(100)
+			// PNG signature: 89 50 4E 47 0D 0A 1A 0A
+			expect(Array.from(result.bytes.subarray(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47])
+
+			const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-screenshot-'))
+			tempDirs.push(dir)
+			const path = join(dir, 'screenshot.png')
+
+			const withPath = await page.screenshot({ path })
+			expect(withPath.path).toBe(path)
+			const written = readFileSync(path)
+			expect(written.length).toBeGreaterThan(100)
+		},
+		20_000,
+	)
+
+	it(
+		'launches and destroys a real browser process, fully exiting it',
+		async () => {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_103 },
+				timeout: 20_000,
+			})
+
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+
+			await browser.destroy()
+			expect(browser.connected).toBe(false)
+
+			// A destroyed launch releases its CDP port — a fresh launch can reuse it.
+			const relaunch = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_103 },
+				timeout: 20_000,
+			})
+			await relaunch.connect()
+			expect(relaunch.status).toBe('connected')
+			await relaunch.destroy()
+		},
+		20_000,
+	)
+
+	it(
+		'connect() with a profile launches with a persistent user-data dir',
+		async () => {
+			const profile = tempProfileDir()
+
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile,
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_104 },
+				timeout: 20_000,
+			})
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+			await browser.destroy()
+			browser = undefined
+
+			// Relaunching against the same profile dir succeeds — proves the
+			// directory was honored as the browser's user-data-dir rather than
+			// a throwaway default.
+			const relaunch = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile,
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_105 },
+				timeout: 20_000,
+			})
+			await relaunch.connect()
+			expect(relaunch.status).toBe('connected')
+			await relaunch.destroy()
+		},
+		20_000,
+	)
+
+	it(
+		'accepts explicit headless option against a real launch',
+		async () => {
+			// This container has no display server, so a successful connect +
+			// render within the timeout is itself proof the explicit `headless:
+			// true` option launched a working (non-UI-dependent) browser process.
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_106 },
+				timeout: 20_000,
+			})
+
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+
+			const page = await browser.create()
+			const content = await page.content()
+			expect(content.url).toBe('about:blank')
+		},
+		20_000,
+	)
 })

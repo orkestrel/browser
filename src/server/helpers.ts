@@ -185,11 +185,16 @@ export function launchBrowserProcess(
 	profile?: string,
 	extra?: readonly string[],
 ): ChildProcess {
-	const args: string[] = [`--remote-debugging-port=${port}`, ...BROWSER_LAUNCH_ARGS]
+	// Caller-supplied args come FIRST so a script path (e.g. `node <script>`,
+	// used to spawn a Node stand-in executable cross-platform in tests) lands
+	// as an early positional argv entry ahead of the CDP flags below —
+	// Chromium itself accepts flags in any order, so production is unaffected.
+	const args: string[] = []
+	if (extra !== undefined) args.push(...extra)
+	args.push(`--remote-debugging-port=${port}`, ...BROWSER_LAUNCH_ARGS)
 
 	if (headless) args.push(BROWSER_HEADLESS_ARG)
 	if (profile !== undefined) args.push(`--user-data-dir=${profile}`)
-	if (extra !== undefined) args.push(...extra)
 
 	return spawn(executable, args, { stdio: 'ignore' })
 }
