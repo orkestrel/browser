@@ -1,0 +1,468 @@
+# Browser
+
+> A lightweight Chrome DevTools Protocol (CDP) automation layer, split into an
+> environment-agnostic **core** and a Node **server** runtime. **Core**
+> (`@orkestrel/browser`) is pure logic over an injected `CDPTransportInterface`
+> — no `WebSocket`, no `node:*`, no filesystem — so it runs identically in
+> Node or a browser: `CDPClient` frames JSON-RPC-shaped CDP messages over the
+> transport, `BrowserContext` / `BrowserPage` model a CDP browser context and
+> its pages, `BrowserCodegen` records page interactions for later script
+> compilation. **Server** (`@orkestrel/browser/server`) supplies the missing
+> environment pieces: `WebSocketCDPTransport` (a Node `WebSocket`-backed CDP
+> transport), `Browser` (discovery → connect → launch lifecycle, spawning a
+> real Chromium-family process when nothing is already listening), and a
+> filesystem-backed screenshot writer. Source:
+> [`src/core`](../../src/core) (via `@src/core`) +
+> [`src/server`](../../src/server) (via `@src/server`).
+
+## Surface
+
+Server quickstart — connect to (or launch) a browser, open a page, drive it:
+
+```ts
+import { createBrowser } from '@src/server'
+
+const browser = createBrowser({ headless: true })
+await browser.connect() // CDP endpoint discovery → connect, else launch
+const page = await browser.create({ url: 'https://example.com' })
+await page.click('#accept')
+const shot = await page.screenshot({ path: './out.png' })
+await browser.destroy()
+```
+
+Core quickstart — drive the CDP client directly over any transport that
+satisfies `CDPTransportInterface`:
+
+```ts
+import { createCDPClient } from '@src/core'
+
+const client = createCDPClient({ transport }) // transport: CDPTransportInterface
+await client.connect()
+const targets = await client.send('Target.getTargets')
+await client.close()
+```
+
+### Core
+
+#### Factories
+
+| API              | Kind     | Summary                                                                        |
+| ---------------- | -------- | ------------------------------------------------------------------------------- |
+| `createCDPClient` | function | Create a `CDPClientInterface` bound to the given `CDPTransportInterface`. |
+
+#### Entities
+
+| API              | Kind  | Summary                                                                                                                   |
+| ---------------- | ----- | --------------------------------------------------------------------------------------------------------------------------- |
+| `CDPClient`      | class | Lightweight CDP client over a `CDPTransportInterface` — JSON-RPC framing, `connect` / `send` / `subscribe` / `close`. |
+| `BrowserContext` | class | Isolated browser session over a CDP browser context — manages its `BrowserPage`s (`page` / `pages` / `create` / `sync`). |
+| `BrowserPage`    | class | A single browser page or frame — navigation, content extraction, screenshot, element interaction, codegen.               |
+| `BrowserCodegen` | class | Records page interactions (navigate/click/fill/select) via CDP bindings, for later compilation into a replayable script. |
+
+#### Constants
+
+| Constant                        | Kind  | Value                                                                                      |
+| -------------------------------- | ----- | -------------------------------------------------------------------------------------------- |
+| `BROWSER_DEFAULT_TIMEOUT_MS`      | const | `30000` — default timeout for connection, requests, and navigation.                       |
+| `BROWSER_WAIT_POLL_INTERVAL_MS`   | const | `100` — poll interval (ms) while waiting for a selector to appear.                        |
+| `BROWSER_DEFAULT_VIEWPORT_WIDTH`  | const | `1280` — default viewport width in pixels.                                                |
+| `BROWSER_DEFAULT_VIEWPORT_HEIGHT` | const | `720` — default viewport height in pixels.                                                |
+| `BROWSER_CODEGEN_BINDING_NAME`    | const | `'__orkestrelBrowserCodegen'` — name of the CDP runtime binding the recorder script calls. |
+| `BROWSER_CODEGEN_SOURCE`          | const | The in-page recorder script source injected via CDP to capture click/fill/select actions. |
+
+#### Errors
+
+| Error                 | Extends       | Code                     | Summary                                                            |
+| --------------------- | ------------- | ------------------------ | -------------------------------------------------------------------- |
+| `BrowserError`        | `Error`       | `BROWSER_ERROR`          | Base error for all browser automation operations (`code` + `context`). |
+| `BrowserSelectorError` | `BrowserError` | `BROWSER_SELECTOR_ERROR` | A selector-based lookup or wait timed out without the element appearing. |
+
+| Guard                     | Narrows to             |
+| -------------------------- | ------------------------ |
+| `isBrowserError`           | `BrowserError`           |
+| `isBrowserSelectorError`   | `BrowserSelectorError`   |
+
+#### Helpers
+
+| API                          | Kind     | Summary                                                                                                       |
+| ----------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------- |
+| `decodeBase64`                | function | Decode a base64-encoded string into raw bytes (pure JS, no `Buffer`/`atob` — runs identically Node/browser). |
+| `normalizeCodegenActions`     | function | Collapse consecutive `fill` actions on the same selector into the latest value.                               |
+| `parseCodegenActionPayload`   | function | Parse a codegen binding payload string into a typed `BrowserCodegenAction`, or `undefined` if malformed.      |
+| `readCodegenNavigateAction`   | function | Derive a `navigate` codegen action from a `Page.frameNavigated` CDP event (top-level frame only).             |
+| `compileCodegenScript`        | function | Compile recorded codegen actions into a replayable JavaScript or TypeScript script.                            |
+
+#### Types
+
+| Type                          | Kind      | Shape                                                                                                                                    |
+| ------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CDPTransportEventMap`         | type      | `{ message: [data: string]; close: []; error: [error: unknown] }` — the transport's observable surface.                                |
+| `CDPTransportInterface`        | interface | `emitter` data member + `start` / `send` / `close` methods — the dumb text pipe a `CDPClientInterface` sends/receives JSON-RPC frames over. |
+| `CDPClientOptions`             | interface | `{ transport: CDPTransportInterface; timeout?: number }` — options for `createCDPClient`.                                              |
+| `CDPHandler`                   | type      | `(params: Readonly<Record<string, unknown>>) => void` — handler invoked for a subscribed CDP event.                                     |
+| `CDPTarget`                    | interface | `{ id: string; type: string; title: string; url: string }` — one entry of the CDP `Target.getTargets` result.                           |
+| `CDPClientInterface`           | interface | `connected` data member + `connect` / `reconnect` / `send` / `subscribe` / `unsubscribe` / `close` methods.                             |
+| `ScreenshotWriterInterface`    | interface | `write(path, data)` — pluggable sink for persisting screenshot bytes to a path; core never touches a filesystem directly.                |
+| `BrowserViewport`              | interface | `{ width: number; height: number }` — viewport dimensions for a browser page.                                                           |
+| `BrowserWaitUntil`             | type      | `'load' \| 'domcontentloaded' \| 'networkidle' \| 'commit'` — page load condition for navigation.                                       |
+| `BrowserPageOptions`           | interface | `{ url?; viewport?; timeout? }` — options for creating a browser page.                                                                  |
+| `BrowserNavigationOptions`     | interface | `{ condition?: BrowserWaitUntil; timeout? }` — options for page navigation (default `'load'`).                                          |
+| `BrowserActionOptions`         | interface | `{ timeout? }` — options for element interaction (click, fill, select, wait).                                                            |
+| `BrowserScreenshotOptions`     | interface | `{ path?; full?; type?: 'png' \| 'jpeg'; quality? }` — options for taking a page screenshot.                                            |
+| `BrowserContentResult`         | interface | `{ url: string; title: string; html: string; text: string }` — result of page content extraction.                                       |
+| `BrowserScreenshotResult`      | interface | `{ bytes: Uint8Array; path: string \| undefined }` — result of a page screenshot.                                                       |
+| `BrowserCodegenAction`         | type      | Discriminated union — `navigate` / `click` / `fill` / `select` — one recorded browser action.                                            |
+| `BrowserCodegenEventMap`       | type      | `{ start: []; stop: [actions]; action: [action]; clear: [] }` — the observable surface of a `BrowserCodegenInterface`.                   |
+| `BrowserCodegenOptions`        | interface | `{ on?: EmitterHooks<BrowserCodegenEventMap> }` — options for creating a BrowserCodegen recorder.                                       |
+| `BrowserCodegenLanguage`       | type      | `'javascript' \| 'typescript'` — target language for a compiled codegen script.                                                          |
+| `BrowserCodegenScriptOptions`  | interface | `{ language?: BrowserCodegenLanguage }` — options for compiling recorded actions into a script (default `'javascript'`).                |
+| `BrowserCodegenInterface`      | interface | `emitter` / `started` data members + `start` / `stop` / `actions` / `script` / `clear` / `destroy` methods.                             |
+| `BrowserPageInterface`         | interface | `url` / `closed` data members + `title` / `navigate` / `content` / `screenshot` / `click` / `fill` / `select` / `evaluate` / `wait` / `frame` / `frames` / `codegen` / `close` methods. |
+| `BrowserContextInterface`      | interface | `id` data member + `page` / `pages` / `create` / `sync` / `close` methods.                                                              |
+
+### Server
+
+Server-side connection lifecycle — discover an already-running browser via
+CDP, connect to it, or launch a fresh Chromium-family process:
+
+```ts
+import { createBrowser } from '@src/server'
+
+const browser = createBrowser({ cdp: { port: 9222 } })
+const discovery = await browser.discover() // passive probe, no side effects
+await browser.connect() // reuses discovery.endpoint if found, else launches
+const ctx = browser.context() // the default context (created lazily on `create`)
+await browser.destroy() // closes the process and releases resources
+```
+
+#### Factories
+
+| API                      | Kind     | Summary                                                                                             |
+| ------------------------- | -------- | ------------------------------------------------------------------------------------------------------ |
+| `createBrowser`           | function | Create a raw-CDP `BrowserInterface` façade with discovery, connection, and lifecycle management.  |
+| `createCDPTransport`      | function | Create a Node `WebSocket`-backed `CDPTransportInterface` for the given CDP debugger URL.           |
+| `createScreenshotWriter`  | function | Create a filesystem-backed `ScreenshotWriterInterface` that persists bytes via `node:fs/promises`. |
+
+#### Entities
+
+| API                     | Kind  | Summary                                                                                                              |
+| ------------------------ | ----- | ------------------------------------------------------------------------------------------------------------------------ |
+| `Browser`               | class | Browser wrapper with discovery, connection management, and lifecycle control (discover → connect → launch).       |
+| `WebSocketCDPTransport` | class | Node `WebSocket`-backed `CDPTransportInterface` — connects to a CDP WebSocket debugger URL.                        |
+
+#### Constants
+
+| Constant                       | Kind  | Value                                                                                    |
+| -------------------------------- | ----- | ----------------------------------------------------------------------------------------- |
+| `BROWSER_DEFAULT_CDP_PORT`        | const | `9222` — default CDP port probed for an existing browser and used for launches.        |
+| `BROWSER_CDP_PROTOCOL`            | const | `'http'` — protocol prefix for CDP discovery requests.                                  |
+| `BROWSER_CDP_VERSION_PATH`        | const | `'/json/version'` — path appended to the CDP host to fetch version metadata.            |
+| `BROWSER_CDP_LIST_PATH`          | const | `'/json/list'` — path appended to the CDP host to list open targets.                    |
+| `BROWSER_NOT_FOUND_RESULT`       | const | Sentinel `BrowserDiscoveryResult` returned by discovery when no browser is reachable.    |
+| `BROWSER_LAUNCH_ARGS`            | const | Frozen flags always passed to a launched browser process, alongside the caller's own.   |
+| `BROWSER_HEADLESS_ARG`           | const | `'--headless=new'` — flag enabling headless mode on a launched browser process.          |
+| `BROWSER_EXECUTABLE_PATHS`       | const | Frozen record of well-known Chrome/Chromium/Edge executable paths, keyed by `process.platform`. |
+| `BROWSER_EXECUTABLE_NAMES`      | const | Frozen list of command names probed on PATH when no well-known executable path exists.  |
+
+#### Errors
+
+| Error                        | Extends       | Code                             | Summary                                                                          |
+| ----------------------------- | ------------- | ---------------------------------- | ----------------------------------------------------------------------------------- |
+| `BrowserConnectionError`      | `BrowserError` | `BROWSER_CONNECTION_ERROR`         | A CDP connection, discovery, or launch attempt failed.                          |
+| `BrowserNotConnectedError`    | `BrowserError` | `BROWSER_NOT_CONNECTED_ERROR`      | An operation requiring an active connection was attempted while disconnected.  |
+| `BrowserDestroyedError`       | `BrowserError` | `BROWSER_DESTROYED_ERROR`          | An operation was attempted after the Browser was destroyed.                    |
+
+| Guard                          | Narrows to                |
+| -------------------------------- | --------------------------- |
+| `isBrowserConnectionError`       | `BrowserConnectionError`    |
+| `isBrowserNotConnectedError`     | `BrowserNotConnectedError`  |
+| `isBrowserDestroyedError`        | `BrowserDestroyedError`     |
+
+#### Helpers
+
+| API                    | Kind     | Summary                                                                                                    |
+| ------------------------ | -------- | --------------------------------------------------------------------------------------------------------------- |
+| `findSystemBrowser`      | function | Locate a Chrome/Chromium/Edge executable on this machine (well-known paths, then PATH probe); may return `undefined`. |
+| `launchBrowserProcess`   | function | Launch a browser process with raw-CDP debugging flags; returns the spawned `ChildProcess`.               |
+| `waitForCdpReady`        | function | Poll a browser's CDP version endpoint until it responds or the timeout elapses; returns the debugger URL. |
+| `fetchCdpTargets`        | function | Fetch and normalize the current CDP target list from a browser's `/json/list` endpoint.                    |
+
+#### Types
+
+| Type                          | Kind      | Shape                                                                                                                                |
+| ------------------------------ | --------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `BrowserEngine`                | type      | `'chromium'` — the supported browser engine (raw CDP targets Chromium-family browsers only).                                       |
+| `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'` — how the browser connection was established.                                                   |
+| `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'` — lifecycle status of a browser wrapper.                       |
+| `BrowserDiscoveryResult`       | interface | `{ found: boolean; endpoint?; browser?; connection? }` — result of passive browser discovery.                                       |
+| `BrowserCdpOptions`            | interface | `{ port?: number; endpoint?: string }` — CDP connection configuration.                                                              |
+| `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; error: [error]; destroy: [] }`. |
+| `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args? }` — options for `createBrowser`.               |
+| `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `connected` data members + `discover` / `connect` / `disconnect` / `context` / `contexts` / `create` / `destroy` methods. |
+| `WebSocketCDPTransportOptions` | interface | `{ url: string; timeout?: number }` — options for creating a WebSocketCDPTransport.                                                 |
+
+## Methods
+
+The public methods of the layer's behavioral interfaces — every call-signature
+member listed (their `readonly` data members stay Surface rows). Each
+implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
+`CDPClientInterface`, `BrowserContext` ↔ `BrowserContextInterface`,
+`BrowserPage` ↔ `BrowserPageInterface`, `BrowserCodegen` ↔
+`BrowserCodegenInterface`, `Browser` ↔ `BrowserInterface`,
+`WebSocketCDPTransport` ↔ `CDPTransportInterface`.
+
+#### `CDPTransportInterface`
+
+The text pipe a `CDPClientInterface` sends and receives JSON-RPC frames over.
+
+| Method  | Returns         | Behavior                                                          |
+| ------- | --------------- | -------------------------------------------------------------------- |
+| `start` | `Promise<void>` | Open the underlying connection.                                  |
+| `send`  | `Promise<void>` | Write one raw text frame to the connection.                      |
+| `close` | `Promise<void>` | Close the underlying connection and release resources.           |
+
+```ts
+transport.emitter.on('message', (data) => log(data))
+await transport.start()
+await transport.send('{"id":1,"method":"Target.getTargets"}')
+await transport.close()
+```
+
+#### `CDPClientInterface`
+
+Frames JSON-RPC-shaped CDP method calls and events over an injected
+`CDPTransportInterface`. `connect` starts the transport and begins
+dispatching; `send` issues a CDP method call (optionally session-scoped);
+`subscribe` / `unsubscribe` register or remove a handler for a CDP event
+(optionally session-scoped).
+
+| Method        | Returns            | Behavior                                                                                             |
+| -------------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `connect`      | `Promise<void>`    | Start the transport and begin dispatching. Idempotent.                                              |
+| `reconnect`    | `Promise<void>`    | Close and re-establish the transport.                                                                |
+| `send`         | `Promise<unknown>` | Issue a CDP method call with optional params, optionally scoped to a session; rejects on timeout.   |
+| `subscribe`    | `void`             | Register a handler for a CDP event, optionally session-scoped.                                       |
+| `unsubscribe`  | `void`             | Remove a handler for a CDP event, optionally session-scoped.                                          |
+| `close`        | `Promise<void>`    | Tear down the transport and reject all pending requests.                                             |
+
+```ts
+import { createCDPClient } from '@src/core'
+
+const client = createCDPClient({ transport })
+await client.connect()
+const targets = await client.send('Target.getTargets')
+client.subscribe('Target.targetCreated', (params) => log(params))
+await client.close()
+```
+
+#### `BrowserContextInterface`
+
+An isolated browser session over a CDP browser context; follows the manager
+accessor pattern (`page(index?)` / `pages()`).
+
+| Method   | Returns                             | Behavior                                                                                     |
+| -------- | ------------------------------------ | ------------------------------------------------------------------------------------------------- |
+| `page`   | `BrowserPageInterface \| undefined` | One page by index, or the first page.                                                        |
+| `pages`  | `readonly BrowserPageInterface[]`   | All pages in creation order.                                                                  |
+| `create` | `Promise<BrowserPageInterface>`     | Open a new page in this context.                                                             |
+| `sync`   | `Promise<void>`                     | Synchronize pages from the given CDP targets (server discovers the targets, core never fetches them). |
+| `close`  | `Promise<void>`                     | Close the context and all its pages.                                                         |
+
+```ts
+const ctx = browser.context()
+const page = await ctx?.create({ url: 'https://example.com' })
+await ctx?.close()
+```
+
+#### `BrowserPageInterface`
+
+Abstraction over a single browser page or frame.
+
+| Method       | Returns                              | Behavior                                                                             |
+| ------------ | ------------------------------------- | ------------------------------------------------------------------------------------- |
+| `title`      | `Promise<string>`                    | Resolve the document title.                                                          |
+| `navigate`   | `Promise<void>`                      | Go to a URL and wait for the specified load condition (default `'load'`).            |
+| `content`    | `Promise<BrowserContentResult>`      | Extract page URL, title, HTML, and visible text.                                     |
+| `screenshot` | `Promise<BrowserScreenshotResult>`   | Capture a PNG or JPEG image of the page.                                             |
+| `click`      | `Promise<void>`                      | Click an element matching the selector.                                              |
+| `fill`       | `Promise<void>`                      | Type text into an input element.                                                     |
+| `select`     | `Promise<void>`                      | Choose option(s) in a `<select>` element.                                            |
+| `evaluate`   | `Promise<unknown>`                   | Execute a JavaScript expression in the page context.                                 |
+| `wait`       | `Promise<void>`                      | Wait for an element matching the selector to appear.                                 |
+| `frame`      | `BrowserPageInterface \| undefined` | Look up a child frame by name.                                                        |
+| `frames`     | `readonly BrowserPageInterface[]`    | List all child frames.                                                                |
+| `codegen`    | `Promise<BrowserCodegenInterface>`   | Start (or return the existing) action recorder for this page.                        |
+| `close`      | `Promise<void>`                      | Close the page.                                                                       |
+
+```ts
+await page.navigate('https://example.com')
+await page.click('#submit')
+await page.fill('#name', 'Ada')
+await page.select('#lang', ['en'])
+const content = await page.content()
+const shot = await page.screenshot({ full: true, type: 'png' })
+await page.close()
+```
+
+#### `BrowserCodegenInterface`
+
+Records page interactions as a session runs, for later compilation into a
+replayable script.
+
+| Method    | Returns                              | Behavior                                                             |
+| --------- | -------------------------------------- | ------------------------------------------------------------------------ |
+| `start`   | `Promise<void>`                       | Begin recording on the page's session.                              |
+| `stop`    | `Promise<readonly BrowserCodegenAction[]>` | Stop recording and return the captured actions.                |
+| `actions` | `readonly BrowserCodegenAction[]`     | Current normalized action list.                                     |
+| `script`  | `string`                              | Compile the captured actions into a script.                         |
+| `clear`   | `void`                                 | Reset the captured action list.                                     |
+| `destroy` | `Promise<void>`                       | Tear down the recorder and detach CDP listeners.                    |
+
+```ts
+const codegen = await page.codegen()
+await page.click('#next')
+const actions = await codegen.stop()
+const script = codegen.script({ language: 'typescript' })
+await codegen.destroy()
+```
+
+#### `BrowserInterface`
+
+Browser wrapper with discovery, connection management, and lifecycle control.
+Connection strategy (executed by `connect()`): explicit `cdp.endpoint` →
+passive discovery on `cdp.port` → launch a new process.
+
+| Method       | Returns                                  | Behavior                                                                                       |
+| ------------ | ------------------------------------------ | --------------------------------------------------------------------------------------------------- |
+| `discover`   | `Promise<BrowserDiscoveryResult>`        | Passive CDP probe, no side effects.                                                            |
+| `connect`    | `Promise<void>`                          | Establish a connection using the strategy above (endpoint → discovery → launch). Idempotent.  |
+| `disconnect` | `void`                                    | Detach from the browser WITHOUT closing it (CDP only).                                        |
+| `context`    | `BrowserContextInterface \| undefined`   | One context by index, or the first.                                                            |
+| `contexts`   | `readonly BrowserContextInterface[]`     | All contexts.                                                                                   |
+| `create`     | `Promise<BrowserPageInterface>`          | Shortcut to open a page in the default context.                                                |
+| `destroy`    | `Promise<void>`                          | Close the browser process and release all resources.                                           |
+
+```ts
+import { createBrowser } from '@src/server'
+
+const browser = createBrowser({ cdp: { port: 9222 } })
+browser.emitter.on('connect', (mode) => log(mode))
+await browser.connect()
+const page = await browser.create({ url: 'https://example.com' })
+await browser.destroy()
+```
+
+## Contract
+
+These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `browser.md`:
+
+1. **DOC ↔ SOURCE bijection.** Every `function` / `class` / `const` /
+   `interface` / `type` / error row in the `### Core` and `### Server`
+   `## Surface` tables is a real export of the browser layer (`src/core` or
+   `src/server`), and every export of either appears as a Surface row —
+   exhaustive, both directions.
+2. **Core is environment-agnostic.** `src/core` imports only
+   `@orkestrel/emitter` and `@orkestrel/contract` — no `node:*`, no
+   `WebSocket`, no filesystem. Every CDP method call and event flows through
+   the injected `CDPTransportInterface`; core never assumes a runtime.
+3. **The transport is a dumb text pipe.** `CDPTransportInterface` does no
+   JSON framing of its own — `CDPClient` owns request/response correlation
+   (`id`), timeout handling, and event dispatch (global + session-scoped
+   subscriptions) over the transport's raw `message` / `close` / `error`
+   events.
+4. **Screenshots never touch a filesystem in core.** `BrowserPage.screenshot`
+   accepts an optional `ScreenshotWriterInterface` (injected via
+   `BrowserContext`) and calls `write(path, bytes)` only when a `path` is
+   given; the server supplies `createScreenshotWriter` (an `fs`-backed
+   implementation) via `Browser`.
+5. **Server owns the connection lifecycle.** `Browser.connect()` tries, in
+   order: an explicit `cdp.endpoint`; a passive probe of `localhost:{cdp.port}`
+   (`discover()`); then launching a new browser process with raw-CDP flags
+   (`findSystemBrowser` / `launchBrowserProcess` / `waitForCdpReady`). A
+   found existing browser is preferred over a fresh launch.
+6. **Lifecycle events are observable, never inferred from state polling.**
+   `BrowserInterface.emitter` fires `idle` / `discover` / `connect` /
+   `disconnect` / `launch` / `page` / `error` / `destroy`; `BrowserCodegenInterface.emitter`
+   fires `start` / `stop` / `action` / `clear`. Both isolate a listener throw
+   via `@orkestrel/emitter`'s emitter, never a domain event.
+7. **Errors carry a machine-readable `code` + optional `context`.**
+   `BrowserError` (core) is the base; `BrowserSelectorError` (core) narrows a
+   selector timeout; `BrowserConnectionError` / `BrowserNotConnectedError` /
+   `BrowserDestroyedError` (server) narrow connection-lifecycle faults. Each
+   ships an `is*` type guard.
+8. **Codegen normalizes and compiles deterministically.**
+   `normalizeCodegenActions` collapses consecutive `fill`s on the same
+   selector to the latest value; `compileCodegenScript` emits one
+   `page.<action>(...)` statement per normalized action, `'javascript'`
+   (bare `async function run(page) {...}`) or `'typescript'`
+   (`import('@orkestrel/browser').BrowserPageInterface`-typed) per
+   `BrowserCodegenScriptOptions.language` (default `'javascript'`).
+9. **DOC ↔ SOURCE method bijection.** The `## Methods` tables list exactly
+   the public methods of each behavioral interface — `CDPTransportInterface`,
+   `CDPClientInterface`, `BrowserContextInterface`, `BrowserPageInterface`,
+   `BrowserCodegenInterface`, `BrowserInterface` — exhaustive, both
+   directions, and each implementing class (`WebSocketCDPTransport`,
+   `CDPClient`, `BrowserContext`, `BrowserPage`, `BrowserCodegen`, `Browser`)
+   exposes the same public methods, no more. The remaining exports add no
+   behavioral interface with methods (the factories, `decodeBase64` /
+   `parseCodegenActionPayload` / `readCodegenNavigateAction` /
+   `compileCodegenScript` / `findSystemBrowser` / `launchBrowserProcess` /
+   `waitForCdpReady` / `fetchCdpTargets` are functions; the options
+   interfaces / event maps / results / `CDPTarget` / `BrowserViewport` are
+   data bags), so they contribute no `## Methods` row.
+10. **The WebSocket CDP transport is a thin bridge (`src/server`).**
+    `WebSocketCDPTransport` connects a Node `WebSocket` to the given CDP
+    debugger URL, races the connection attempt against `timeout`
+    (default `BROWSER_DEFAULT_TIMEOUT_MS`), and bridges the socket's
+    `message` / `close` / `error` events onto its `CDPTransportEventMap`
+    emitter unchanged (no framing of its own).
+
+## Patterns
+
+### Automate a page end-to-end
+
+```ts
+import { createBrowser } from '@src/server'
+
+const browser = createBrowser({ headless: true })
+await browser.connect()
+
+const page = await browser.create({ url: 'https://example.com' })
+await page.fill('#search', 'orkestrel')
+await page.click('#submit')
+await page.wait('#results')
+const content = await page.content()
+
+await browser.destroy()
+```
+
+### Record and replay interactions with codegen
+
+```ts
+const page = await browser.create({ url: 'https://example.com' })
+const codegen = await page.codegen()
+
+await page.click('#menu')
+await page.fill('#search', 'orkestrel')
+
+const actions = await codegen.stop()
+const script = codegen.script({ language: 'typescript' })
+await codegen.destroy()
+```
+
+### Drive the core client directly over an injected transport
+
+Useful when embedding in a non-Node environment, or in a test with a fake
+transport that satisfies `CDPTransportInterface`.
+
+```ts
+import { createCDPClient } from '@src/core'
+
+const client = createCDPClient({ transport: myTransport })
+await client.connect()
+
+const result = await client.send('Page.navigate', { url: 'https://example.com' })
+client.subscribe('Page.frameNavigated', (params) => log(params))
+
+await client.close()
+```
