@@ -128,6 +128,16 @@ describe('BrowserContext', () => {
 	})
 
 	describe('sync()', () => {
+		it('seeds the reattached page url from the target immediately, before any navigate/content call', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptAttach(transport)
+
+			const context = new BrowserContext(client)
+			await context.sync([createTarget({ id: 't1', url: 'https://example.com/reattached' })])
+
+			expect(context.page(0)?.url).toBe('https://example.com/reattached')
+		})
+
 		it('replaces pages with the given page-type targets', async () => {
 			const { client, transport } = await createConnectedClient()
 			scriptAttach(transport)

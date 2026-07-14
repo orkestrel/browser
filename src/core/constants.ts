@@ -13,6 +13,24 @@ export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
 /** Default timeout in milliseconds for browser connection, requests, and navigation. */
 export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
 
+/**
+ * Maximum serialized-character length for an `evaluate()`/`content()` result,
+ * enforced IN-PAGE before the result is returned to CDP.
+ *
+ * @remarks
+ * A `Runtime.evaluate` result above this size, once framed as a CDP JSON
+ * response, overflows the native WebSocket inbound frame limit and closes
+ * the whole CDP connection — a page-level failure with no clean error. The
+ * cap is enforced by stringifying the candidate result in-page and throwing
+ * a recognizable `BROWSER_RESULT_LIMIT: <length>` error before the oversized
+ * frame is ever produced, so the caller gets a coded error instead of a
+ * dropped connection.
+ */
+export const BROWSER_RESULT_LIMIT = 3_000_000
+
+/** Matches the in-page `BROWSER_RESULT_LIMIT: <length>` sentinel error message. */
+export const BROWSER_RESULT_LIMIT_PATTERN = /BROWSER_RESULT_LIMIT: (\d+)/
+
 /** Poll interval in milliseconds while waiting for a selector to appear. */
 export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
 
@@ -96,7 +114,14 @@ export const BROWSER_CODEGEN_SOURCE = `(() => {
 		'input',
 		(event) => {
 			const target = event.target
-			if (!target || target.nodeType !== 1 || typeof target.value !== 'string') return
+			if (!target || target.nodeType !== 1) return
+
+			if (target.isContentEditable) {
+				send({ action: 'fill', selector: selectorFor(target), value: target.textContent || '' })
+				return
+			}
+
+			if (typeof target.value !== 'string') return
 			const tag = target.tagName
 			if (tag === 'TEXTAREA') {
 				send({ action: 'fill', selector: selectorFor(target), value: target.value })

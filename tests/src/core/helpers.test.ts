@@ -9,6 +9,7 @@ import {
 	parseCodegenActionPayload,
 	readCodegenNavigateAction,
 	compileCodegenScript,
+	guardEvaluateExpression,
 } from '@src/core'
 import type { BrowserCodegenAction } from '@src/core'
 import { PNG_BASE64, JPEG_BASE64 } from '../../setup.js'
@@ -166,6 +167,66 @@ describe('parseCodegenActionPayload', () => {
 				JSON.stringify({ action: 'select', selector: '#a', values: ['x', 1] }),
 			),
 		).toBeUndefined()
+	})
+})
+
+describe('guardEvaluateExpression', () => {
+	it('wraps the expression and embeds the limit in the thrown sentinel message', () => {
+		const wrapped = guardEvaluateExpression('1 + 1', 100)
+		expect(wrapped).toContain('1 + 1')
+		expect(wrapped).toContain('JSON.stringify(r)')
+		expect(wrapped).toContain("throw new Error('BROWSER_RESULT_LIMIT: ' + s.length)")
+		expect(wrapped).toContain('s.length > 100')
+	})
+
+	it('returns the original value when the serialized result is within the limit', () => {
+		const wrapped = guardEvaluateExpression('({ a: 1 })', 1000)
+		const run = new Function(`return ${wrapped}`) as () => unknown
+		expect(run()).toEqual({ a: 1 })
+	})
+
+	it('throws the BROWSER_RESULT_LIMIT sentinel when the serialized result exceeds the limit', () => {
+		const wrapped = guardEvaluateExpression('"x".repeat(50)', 10)
+		const run = new Function(`return ${wrapped}`) as () => unknown
+		expect(() => run()).toThrow(/BROWSER_RESULT_LIMIT: \d+/)
+	})
+
+	it('does not throw for a non-serializable (undefined) result even over a tiny limit', () => {
+		const wrapped = guardEvaluateExpression('undefined', 0)
+		const run = new Function(`return ${wrapped}`) as () => unknown
+		expect(run()).toBeUndefined()
+	})
+})
+
+describe('contenteditable fill — parse/normalize/compile pipeline', () => {
+	it('flows a contenteditable fill binding payload through parse, normalize, and compile unchanged in shape', () => {
+		const payload = JSON.stringify({ action: 'fill', selector: '#editor', value: 'hello world' })
+		const parsed = parseCodegenActionPayload(payload)
+		expect(parsed).toEqual({ action: 'fill', selector: '#editor', value: 'hello world' })
+
+		const normalized = normalizeCodegenActions(parsed !== undefined ? [parsed] : [])
+		expect(normalized).toEqual([{ action: 'fill', selector: '#editor', value: 'hello world' }])
+
+		const script = compileCodegenScript(normalized)
+		expect(script).toContain(`await page.fill("#editor", "hello world")`)
+	})
+
+	it('collapses consecutive contenteditable-originated fill payloads to the latest value', () => {
+		const payloads = [
+			{ action: 'fill', selector: '#editor', value: 'h' },
+			{ action: 'fill', selector: '#editor', value: 'he' },
+			{ action: 'fill', selector: '#editor', value: 'hello' },
+		].map((entry) => JSON.stringify(entry))
+
+		const parsed = payloads
+			.map((payload) => parseCodegenActionPayload(payload))
+			.filter((action): action is BrowserCodegenAction => action !== undefined)
+
+		const normalized = normalizeCodegenActions(parsed)
+		expect(normalized).toEqual([{ action: 'fill', selector: '#editor', value: 'hello' }])
+
+		const script = compileCodegenScript(normalized)
+		expect(script).toContain(`await page.fill("#editor", "hello")`)
 	})
 })
 

@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createCDPClient } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
-import { isCDPError, CDPError } from '@src/core'
+import {
+	isCDPError,
+	CDPError,
+	isCDPConnectionError,
+	isCDPTimeoutError,
+	CDPConnectionError,
+	CDPTimeoutError,
+} from '@src/core'
 import { createCDPTransport, createRecorder, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
@@ -114,6 +121,19 @@ describe('CDPClient', () => {
 			await expect(client.send('Target.getTargets')).rejects.toThrow('not connected')
 		})
 
+		it('rejects with a coded CDPConnectionError when not connected', async () => {
+			const thrown: unknown = await client
+				.send('Target.getTargets')
+				.catch((caught: unknown) => caught)
+			expect(isCDPConnectionError(thrown)).toBe(true)
+			expect(thrown instanceof CDPConnectionError ? thrown.code : undefined).toBe(
+				'BROWSER_CDP_CONNECTION_ERROR',
+			)
+			expect(thrown instanceof CDPConnectionError ? thrown.context?.['method'] : undefined).toBe(
+				'Target.getTargets',
+			)
+		})
+
 		it('times out a pending request', async () => {
 			vi.useFakeTimers()
 			try {
@@ -125,6 +145,45 @@ describe('CDPClient', () => {
 					expect(pending).rejects.toThrow('timed out'),
 					vi.advanceTimersByTimeAsync(25),
 				])
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
+		it('rejects a timed-out request with a coded CDPTimeoutError carrying method/timeout', async () => {
+			vi.useFakeTimers()
+			try {
+				const timedClient = createCDPClient({ transport, timeout: 20 })
+				await timedClient.connect()
+
+				const pending = timedClient.send('Never.replies').catch((caught: unknown) => caught)
+				await vi.advanceTimersByTimeAsync(25)
+				const thrown = await pending
+
+				expect(isCDPTimeoutError(thrown)).toBe(true)
+				expect(thrown instanceof CDPTimeoutError ? thrown.context?.['method'] : undefined).toBe(
+					'Never.replies',
+				)
+				expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
+		it('uses a per-call timeout that overrides the client-wide default', async () => {
+			vi.useFakeTimers()
+			try {
+				const longClient = createCDPClient({ transport, timeout: 10_000 })
+				await longClient.connect()
+
+				const pending = longClient
+					.send('Never.replies', undefined, undefined, 20)
+					.catch((caught: unknown) => caught)
+				await vi.advanceTimersByTimeAsync(25)
+				const thrown = await pending
+
+				expect(isCDPTimeoutError(thrown)).toBe(true)
+				expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
 			} finally {
 				vi.useRealTimers()
 			}
@@ -271,6 +330,19 @@ describe('CDPClient', () => {
 			expect(client.connected).toBe(false)
 		})
 
+		it('rejects pending requests with a coded CDPConnectionError on close', async () => {
+			await client.connect()
+			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
+
+			await client.close()
+
+			const thrown = await pending
+			expect(isCDPConnectionError(thrown)).toBe(true)
+			expect(thrown instanceof CDPConnectionError ? thrown.code : undefined).toBe(
+				'BROWSER_CDP_CONNECTION_ERROR',
+			)
+		})
+
 		it('is idempotent when not connected', async () => {
 			await expect(client.close()).resolves.toBeUndefined()
 		})
@@ -281,13 +353,27 @@ describe('CDPClient', () => {
 			expect(client.connected).toBe(false)
 		})
 
+		it('rejects pending requests with a coded CDPConnectionError when the transport emits close', async () => {
+			await client.connect()
+			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
+
+			transport.closeRemote()
+
+			const thrown = await pending
+			expect(isCDPConnectionError(thrown)).toBe(true)
+		})
+
 		it('closes the transport and rejects the in-flight connect() when close() races connect()', async () => {
-			const connecting = client.connect()
+			const connecting = client.connect().catch((caught: unknown) => caught)
 			const closing = client.close()
 
-			await expect(connecting).rejects.toThrow('CDP client was closed while connecting')
+			const thrown = await connecting
 			await closing
 
+			expect(isCDPConnectionError(thrown)).toBe(true)
+			expect(thrown instanceof CDPConnectionError ? thrown.message : undefined).toBe(
+				'CDP client was closed while connecting',
+			)
 			expect(client.connected).toBe(false)
 			expect(transport.closed).toBe(true)
 		})

@@ -42,6 +42,28 @@ export function decodeBase64(text: string): Uint8Array {
 }
 
 /**
+ * Wrap a `Runtime.evaluate` expression so the IN-PAGE code stringifies its
+ * own result and throws a recognizable error before an oversized result
+ * would overflow the CDP transport frame.
+ *
+ * @remarks
+ * A result whose `JSON.stringify` length exceeds `limit` throws
+ * `Error('BROWSER_RESULT_LIMIT: <length>')` inside the page instead of being
+ * returned — the caller maps that sentinel to a coded
+ * {@link BrowserResultLimitError}. A non-serializable result (`undefined`,
+ * a function, a symbol) makes `JSON.stringify` return `undefined`, so the
+ * length check is skipped and today's undefined-passthrough behavior is
+ * unchanged.
+ *
+ * @param expression - The candidate JavaScript expression to evaluate
+ * @param limit - Maximum serialized-character length (see {@link BROWSER_RESULT_LIMIT})
+ * @returns The wrapped, guarded expression
+ */
+export function guardEvaluateExpression(expression: string, limit: number): string {
+	return `(() => { const r = (${expression}); const s = JSON.stringify(r); if (typeof s === 'string' && s.length > ${limit}) throw new Error('BROWSER_RESULT_LIMIT: ' + s.length); return r })()`
+}
+
+/**
  * Normalize a raw list of recorded codegen actions.
  *
  * @remarks

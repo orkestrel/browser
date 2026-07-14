@@ -48,6 +48,39 @@ export class CDPError extends BrowserError {
 	}
 }
 
+/**
+ * A CDP request could not be sent or completed because the client was not in
+ * a connectable state (not connected, closed while connecting, or the
+ * connection dropped mid-request).
+ */
+export class CDPConnectionError extends BrowserError {
+	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
+		super(message, 'BROWSER_CDP_CONNECTION_ERROR', context)
+		this.name = 'CDPConnectionError'
+	}
+}
+
+/**
+ * A pending CDP request was not answered within its timeout window.
+ */
+export class CDPTimeoutError extends BrowserError {
+	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
+		super(message, 'BROWSER_CDP_TIMEOUT_ERROR', context)
+		this.name = 'CDPTimeoutError'
+	}
+}
+
+/**
+ * An `evaluate()`/`content()` result exceeded {@link BROWSER_RESULT_LIMIT}
+ * and was rejected in-page before it could overflow the CDP transport frame.
+ */
+export class BrowserResultLimitError extends BrowserError {
+	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
+		super(message, 'BROWSER_RESULT_LIMIT_ERROR', context)
+		this.name = 'BrowserResultLimitError'
+	}
+}
+
 // === Browser type guards
 
 /**
@@ -78,4 +111,34 @@ export function isBrowserSelectorError(value: unknown): value is BrowserSelector
  */
 export function isCDPError(value: unknown): value is CDPError {
 	return value instanceof CDPError
+}
+
+/**
+ * Narrow an unknown value to CDPConnectionError.
+ *
+ * @param value - Value to check
+ * @returns True when value is a CDPConnectionError instance
+ */
+export function isCDPConnectionError(value: unknown): value is CDPConnectionError {
+	return value instanceof CDPConnectionError
+}
+
+/**
+ * Narrow an unknown value to CDPTimeoutError.
+ *
+ * @param value - Value to check
+ * @returns True when value is a CDPTimeoutError instance
+ */
+export function isCDPTimeoutError(value: unknown): value is CDPTimeoutError {
+	return value instanceof CDPTimeoutError
+}
+
+/**
+ * Narrow an unknown value to BrowserResultLimitError.
+ *
+ * @param value - Value to check
+ * @returns True when value is a BrowserResultLimitError instance
+ */
+export function isBrowserResultLimitError(value: unknown): value is BrowserResultLimitError {
+	return value instanceof BrowserResultLimitError
 }

@@ -5,7 +5,7 @@ import type {
 	CDPTransportInterface,
 } from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
-import { CDPError } from './errors.js'
+import { CDPConnectionError, CDPError, CDPTimeoutError } from './errors.js'
 import { isRecord, isString } from '@orkestrel/contract'
 
 // === CDPClient
@@ -72,7 +72,7 @@ export class CDPClient implements CDPClientInterface {
 			if (this.#closeRequested) {
 				this.#closeRequested = false
 				await this.#transport.close()
-				throw new CDPError('CDP client was closed while connecting', {
+				throw new CDPConnectionError('CDP client was closed while connecting', {
 					method: 'connect',
 				})
 			}
@@ -106,9 +106,10 @@ export class CDPClient implements CDPClientInterface {
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
 		sessionId?: string,
+		timeout?: number,
 	): Promise<unknown> {
 		if (!this.#connected) {
-			throw new Error('CDP client is not connected')
+			throw new CDPConnectionError('CDP client is not connected', { method })
 		}
 
 		const id = this.#nextId()
@@ -122,12 +123,18 @@ export class CDPClient implements CDPClientInterface {
 		}
 
 		const serialized = JSON.stringify(message)
+		const effectiveTimeout = timeout ?? this.#timeout
 
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.#pending.delete(id)
-				reject(new Error(`CDP request timed out: ${method}`))
-			}, this.#timeout)
+				reject(
+					new CDPTimeoutError(`CDP request timed out: ${method}`, {
+						method,
+						timeout: effectiveTimeout,
+					}),
+				)
+			}, effectiveTimeout)
 
 			this.#pending.set(id, { method, resolve, reject, timer })
 
@@ -218,7 +225,7 @@ export class CDPClient implements CDPClientInterface {
 		// Reject all pending requests
 		for (const [id, entry] of this.#pending) {
 			clearTimeout(entry.timer)
-			entry.reject(new Error('CDP connection closed'))
+			entry.reject(new CDPConnectionError('CDP connection closed', { method: entry.method }))
 			this.#pending.delete(id)
 		}
 
@@ -238,7 +245,7 @@ export class CDPClient implements CDPClientInterface {
 		// Reject all pending requests
 		for (const [id, entry] of this.#pending) {
 			clearTimeout(entry.timer)
-			entry.reject(new Error('CDP connection closed'))
+			entry.reject(new CDPConnectionError('CDP connection closed', { method: entry.method }))
 			this.#pending.delete(id)
 		}
 	}
@@ -247,7 +254,12 @@ export class CDPClient implements CDPClientInterface {
 		if (!this.#connected) {
 			for (const [id, entry] of this.#pending) {
 				clearTimeout(entry.timer)
-				entry.reject(new Error(`CDP connection failed: ${String(error)}`))
+				entry.reject(
+					new CDPConnectionError(`CDP connection failed: ${String(error)}`, {
+						method: entry.method,
+						error,
+					}),
+				)
 				this.#pending.delete(id)
 			}
 		}

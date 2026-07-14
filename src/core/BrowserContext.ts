@@ -95,7 +95,7 @@ export class BrowserContext implements BrowserContextInterface {
 			)
 		}
 
-		const page = new BrowserPage(this.#client, targetId, sessionId, this.#writer)
+		const page = new BrowserPage(this.#client, targetId, sessionId, this.#writer, options?.url)
 
 		// Navigate if url was provided
 		if (options?.url !== undefined && options.url !== 'about:blank') {
@@ -162,7 +162,7 @@ export class BrowserContext implements BrowserContextInterface {
 
 				this.#pages.set(
 					target.id,
-					new BrowserPage(this.#client, target.id, sessionId, this.#writer),
+					new BrowserPage(this.#client, target.id, sessionId, this.#writer, target.url),
 				)
 			} catch {
 				// Skip targets we cannot attach to

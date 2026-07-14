@@ -1,5 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { BrowserPage, createCDPClient, isBrowserError, isBrowserSelectorError } from '@src/core'
+import {
+	BrowserPage,
+	createCDPClient,
+	isBrowserError,
+	isBrowserSelectorError,
+	isBrowserResultLimitError,
+	isCDPTimeoutError,
+	BrowserResultLimitError,
+	BROWSER_RESULT_LIMIT,
+} from '@src/core'
 import type { CDPClientInterface } from '@src/core'
 import {
 	createCDPTransport,
@@ -37,6 +46,30 @@ function scriptSelectorPresent(transport: CDPTestTransportInterface, selector: s
 // === BrowserPage
 
 describe('BrowserPage', () => {
+	describe('url seeding', () => {
+		it('reports a seeded url immediately, before any navigate()/content() call', async () => {
+			const { client } = await createConnectedClient()
+
+			const page = new BrowserPage(
+				client,
+				'target-1',
+				'session-1',
+				undefined,
+				'https://example.com/reattached',
+			)
+
+			expect(page.url).toBe('https://example.com/reattached')
+		})
+
+		it('defaults to about:blank when no url is seeded', async () => {
+			const { client } = await createConnectedClient()
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			expect(page.url).toBe('about:blank')
+		})
+	})
+
 	describe('title()', () => {
 		it('returns the document title', async () => {
 			const { client, transport } = await createConnectedClient()
@@ -136,6 +169,29 @@ describe('BrowserPage', () => {
 			expect(page.url).toBe('https://example.com/')
 		})
 
+		it('bounds the Page.navigate send itself with the per-call timeout, not the client default', async () => {
+			vi.useFakeTimers()
+			try {
+				const transport = createCDPTransport()
+				// Client-wide default is large — only the per-call navigate timeout
+				// should bound this request.
+				const client = createCDPClient({ transport, timeout: 10_000 })
+				await client.connect()
+				// Page.navigate is never replied to — the send itself must time out.
+
+				const page = new BrowserPage(client, 'target-1', 'session-1')
+				const pending = page.navigate('https://slow.example', { timeout: 20 })
+				const outcome = pending.catch((caught: unknown) => caught)
+
+				await vi.advanceTimersByTimeAsync(25)
+				const thrown = await outcome
+
+				expect(isCDPTimeoutError(thrown)).toBe(true)
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
 		it('leaves no dangling timer and no unhandled rejection when Page.navigate fails', async () => {
 			vi.useFakeTimers()
 			const unhandled: unknown[] = []
@@ -190,6 +246,35 @@ describe('BrowserPage', () => {
 			expect(result.html).toBe('<p>Hello World</p>')
 			expect(result.text).toBe('Hello World')
 			expect(result.url).toBe('https://example.com/page')
+		})
+
+		it('maps an oversized outerHTML result to a coded BrowserResultLimitError', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
+			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'text')
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/',
+			)
+			transport.onSend('Runtime.evaluate', (message) => {
+				const expression = message.params?.['expression']
+				if (typeof expression === 'string' && expression.includes('outerHTML')) {
+					transport.reply(message.id, {
+						exceptionDetails: {
+							exception: { description: 'Uncaught Error: BROWSER_RESULT_LIMIT: 3500000' },
+						},
+					})
+				}
+			})
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			const thrown: unknown = await page.content().catch((caught: unknown) => caught)
+
+			expect(isBrowserResultLimitError(thrown)).toBe(true)
+			expect(thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined).toBe(
+				3500000,
+			)
 		})
 	})
 
@@ -300,6 +385,26 @@ describe('BrowserPage', () => {
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await expect(page.fill('#name', 'hello world')).resolves.toBeUndefined()
 		})
+
+		it('sends a contenteditable-aware expression that sets textContent when isContentEditable', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptSelectorPresent(transport, '#editable')
+			scriptEvaluate(transport, (expression) => expression.includes('el.value ='), undefined)
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await page.fill('#editable', 'hello world')
+
+			const fillCall = transport.sent.find(
+				(m) =>
+					m.method === 'Runtime.evaluate' &&
+					typeof m.params?.['expression'] === 'string' &&
+					(m.params['expression'] as string).includes('el.value ='),
+			)
+			const expression = fillCall?.params?.['expression']
+			expect(typeof expression).toBe('string')
+			expect(expression as string).toContain('isContentEditable')
+			expect(expression as string).toContain('el.textContent =')
+		})
 	})
 
 	describe('select()', () => {
@@ -316,7 +421,7 @@ describe('BrowserPage', () => {
 	describe('evaluate()', () => {
 		it('returns the evaluated value', async () => {
 			const { client, transport } = await createConnectedClient()
-			scriptEvaluate(transport, (expression) => expression === '1 + 1', 2)
+			scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			expect(await page.evaluate('1 + 1')).toBe(2)
@@ -332,6 +437,48 @@ describe('BrowserPage', () => {
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await expect(page.evaluate('x')).rejects.toSatisfy(isBrowserError)
+		})
+
+		it('wraps the expression with the result-size guard using BROWSER_RESULT_LIMIT', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await page.evaluate('1 + 1')
+
+			const sent = transport.sent.find(
+				(m) =>
+					m.method === 'Runtime.evaluate' &&
+					typeof m.params?.['expression'] === 'string' &&
+					(m.params['expression'] as string).includes('1 + 1'),
+			)
+			expect(sent?.params?.['expression']).toContain('BROWSER_RESULT_LIMIT')
+			expect(sent?.params?.['expression']).toContain(String(BROWSER_RESULT_LIMIT))
+		})
+
+		it('maps an oversized result exception to a coded BrowserResultLimitError with length/limit context', async () => {
+			const { client, transport } = await createConnectedClient()
+			transport.onSend('Runtime.evaluate', (message) => {
+				transport.reply(message.id, {
+					exceptionDetails: {
+						exception: {
+							description:
+								'Uncaught Error: BROWSER_RESULT_LIMIT: 4200000\n    at <anonymous>:1:100',
+						},
+					},
+				})
+			})
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			const thrown: unknown = await page.evaluate('bigObject').catch((caught: unknown) => caught)
+
+			expect(isBrowserResultLimitError(thrown)).toBe(true)
+			expect(thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined).toBe(
+				4200000,
+			)
+			expect(thrown instanceof BrowserResultLimitError ? thrown.context?.['limit'] : undefined).toBe(
+				BROWSER_RESULT_LIMIT,
+			)
 		})
 	})
 

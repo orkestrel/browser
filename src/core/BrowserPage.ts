@@ -12,9 +12,14 @@ import type {
 	ScreenshotWriterInterface,
 } from './types.js'
 import { BrowserCodegen } from './BrowserCodegen.js'
-import { BrowserError, BrowserSelectorError } from './errors.js'
-import { BROWSER_DEFAULT_TIMEOUT_MS, BROWSER_WAIT_POLL_INTERVAL_MS } from './constants.js'
-import { decodeBase64 } from './helpers.js'
+import { BrowserError, BrowserResultLimitError, BrowserSelectorError } from './errors.js'
+import {
+	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_RESULT_LIMIT,
+	BROWSER_RESULT_LIMIT_PATTERN,
+	BROWSER_WAIT_POLL_INTERVAL_MS,
+} from './constants.js'
+import { decodeBase64, guardEvaluateExpression } from './helpers.js'
 import { isRecord, isString } from '@orkestrel/contract'
 
 // === BrowserPage
@@ -34,11 +39,13 @@ export class BrowserPage implements BrowserPageInterface {
 		targetId: string,
 		sessionId: string,
 		writer?: ScreenshotWriterInterface,
+		url?: string,
 	) {
 		this.#client = client
 		this.#targetId = targetId
 		this.#sessionId = sessionId
 		this.#writer = writer
+		if (url !== undefined) this.#url = url
 
 		// Subscribe to external close detection (browser-level event, global subscription)
 		this.#destroyHandler = (params) => {
@@ -80,7 +87,12 @@ export class BrowserPage implements BrowserPageInterface {
 		)
 
 		try {
-			const result: unknown = await this.#client.send('Page.navigate', { url }, this.#sessionId)
+			const result: unknown = await this.#client.send(
+				'Page.navigate',
+				{ url },
+				this.#sessionId,
+				timeout,
+			)
 
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
@@ -101,7 +113,9 @@ export class BrowserPage implements BrowserPageInterface {
 	async content(): Promise<BrowserContentResult> {
 		const [title, html, text, currentUrl] = await Promise.all([
 			this.#evaluate('document.title'),
-			this.#evaluate('document.documentElement.outerHTML'),
+			this.#evaluate(
+				guardEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
+			),
 			this.#evaluate('document.body ? document.body.innerText : ""'),
 			this.#evaluate('location.href'),
 		])
@@ -181,9 +195,14 @@ export class BrowserPage implements BrowserPageInterface {
                 const el = document.querySelector(${JSON.stringify(selector)});
                 if (!el) throw new Error('Element not found: ' + ${JSON.stringify(selector)});
                 el.focus();
-                el.value = ${JSON.stringify(value)};
-                el.dispatchEvent(new Event('input', { bubbles: true }));
-                el.dispatchEvent(new Event('change', { bubbles: true }));
+                if (el.isContentEditable) {
+                    el.textContent = ${JSON.stringify(value)};
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                } else {
+                    el.value = ${JSON.stringify(value)};
+                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                }
             })()`,
 		)
 	}
@@ -210,7 +229,7 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	async evaluate(expression: string): Promise<unknown> {
-		return this.#evaluate(expression)
+		return this.#evaluate(guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT))
 	}
 
 	async wait(selector: string, options?: BrowserActionOptions): Promise<void> {
@@ -308,7 +327,15 @@ export class BrowserPage implements BrowserPageInterface {
 		if (isRecord(result['exceptionDetails'])) {
 			const details = result['exceptionDetails']
 			if (isRecord(details['exception']) && isString(details['exception']['description'])) {
-				throw new BrowserError(details['exception']['description'])
+				const description = details['exception']['description']
+				const limitMatch = BROWSER_RESULT_LIMIT_PATTERN.exec(description)
+				if (limitMatch !== null) {
+					throw new BrowserResultLimitError('Evaluation result exceeds BROWSER_RESULT_LIMIT', {
+						length: Number(limitMatch[1]),
+						limit: BROWSER_RESULT_LIMIT,
+					})
+				}
+				throw new BrowserError(description)
 			}
 			throw new BrowserError('JavaScript evaluation failed')
 		}

@@ -66,7 +66,9 @@ export interface CDPTarget {
  * - `connected` — true while the transport is active
  * - `connect` — start the transport and begin dispatching
  * - `reconnect` — close and re-establish the transport
- * - `send` — issue a CDP method call, optionally session-scoped
+ * - `send` — issue a CDP method call, optionally session-scoped, optionally
+ *   bounded by a per-call timeout that overrides the client-wide default for
+ *   this one request
  * - `subscribe` / `unsubscribe` — register/remove a handler for a CDP event,
  *   optionally session-scoped
  * - `close` — tear down the transport and reject all pending requests
@@ -79,6 +81,7 @@ export interface CDPClientInterface {
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
 		sessionId?: string,
+		timeout?: number,
 	): Promise<unknown>
 	subscribe(method: string, handler: CDPHandler, sessionId?: string): void
 	unsubscribe(method: string, handler: CDPHandler, sessionId?: string): void
@@ -129,7 +132,8 @@ export interface BrowserPageOptions {
  *
  * @remarks
  * - `condition` — page load condition to wait for (default `'load'`)
- * - `timeout` — navigation timeout in milliseconds
+ * - `timeout` — bounds the whole navigate call (the `Page.navigate` send
+ *   itself plus the load-event wait), in milliseconds
  */
 export interface BrowserNavigationOptions {
 	readonly condition?: BrowserWaitUntil
@@ -285,7 +289,9 @@ export type BrowserFrame = {
  * Abstraction over a single browser page or frame.
  *
  * @remarks
- * - `url` — current URL
+ * - `url` — current URL; when the page was constructed with a seeded url
+ *   (e.g. reattaching to an existing CDP target), reports that url
+ *   immediately, before any `navigate()`/`content()` call refreshes it
  * - `closed` — true after `close()` is called
  * - `title` — resolve the document title
  * - `navigate` — go to a URL and wait for the specified load condition
