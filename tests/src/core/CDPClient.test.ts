@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createCDPClient } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
-import { isCDPError } from '@src/core'
+import { isCDPError, CDPError } from '@src/core'
 import { createCDPTransport, createRecorder, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
@@ -83,18 +83,12 @@ describe('CDPClient', () => {
 				)
 			})
 
-			try {
-				await client.send('Bad.method')
-				expect.unreachable('expected send() to reject')
-			} catch (thrown) {
-				expect(isCDPError(thrown)).toBe(true)
-				if (isCDPError(thrown)) {
-					expect(thrown.context?.['method']).toBe('Bad.method')
-					expect(thrown.context?.['code']).toBe(-32000)
-					expect(thrown.context?.['message']).toBe('boom')
-					expect(thrown.context?.['data']).toBe('extra')
-				}
-			}
+			const thrown: unknown = await client.send('Bad.method').catch((caught: unknown) => caught)
+			expect(isCDPError(thrown)).toBe(true)
+			expect(thrown instanceof CDPError ? thrown.context?.['method'] : undefined).toBe('Bad.method')
+			expect(thrown instanceof CDPError ? thrown.context?.['code'] : undefined).toBe(-32000)
+			expect(thrown instanceof CDPError ? thrown.context?.['message'] : undefined).toBe('boom')
+			expect(thrown instanceof CDPError ? thrown.context?.['data'] : undefined).toBe('extra')
 		})
 
 		it('rejects immediately without leaking a pending timer when params are not serializable', async () => {
@@ -104,12 +98,13 @@ describe('CDPClient', () => {
 				const circular: Record<string, unknown> = {}
 				circular['self'] = circular
 
-				const rejection = expect(client.send('Bad.method', circular)).rejects.toThrow()
+				const sent = client.send('Bad.method', circular)
+				sent.catch(() => undefined)
 
 				// Advance well past the timeout window — if a pending entry leaked,
 				// this would trigger a second, late timeout rejection.
 				await vi.advanceTimersByTimeAsync(10_000)
-				await rejection
+				await expect(sent).rejects.toThrow('Converting circular structure to JSON')
 			} finally {
 				vi.useRealTimers()
 			}
@@ -255,7 +250,7 @@ describe('CDPClient', () => {
 			const connecting = client.connect()
 			const closing = client.close()
 
-			await expect(connecting).rejects.toThrow()
+			await expect(connecting).rejects.toThrow('CDP client was closed while connecting')
 			await closing
 
 			expect(client.connected).toBe(false)

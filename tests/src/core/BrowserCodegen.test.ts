@@ -90,7 +90,7 @@ describe('BrowserCodegen', () => {
 			})
 
 			const codegen = new BrowserCodegen(client, SESSION_ID)
-			await expect(codegen.start()).rejects.toThrow()
+			await expect(codegen.start()).rejects.toThrow('boom')
 			expect(codegen.started).toBe(false)
 
 			// No subscriptions should remain armed after the failed start

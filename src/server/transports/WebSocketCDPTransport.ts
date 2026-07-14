@@ -1,6 +1,7 @@
 import type { CDPTransportEventMap, CDPTransportInterface } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { WebSocketCDPTransportOptions } from '../types.js'
+import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from '@src/core'
 import { BrowserConnectionError } from '../errors.js'
@@ -68,12 +69,12 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 				settle(resolve)
 			}
 
-			const onError = (event: ErrorEvent): void => {
+			const onError = (event: Event): void => {
 				clearTimeout(timer)
 				settle(() =>
 					reject(
 						new BrowserConnectionError(
-							`WebSocket CDP connection to ${this.#url} failed: ${event.message || event.type}`,
+							`WebSocket CDP connection to ${this.#url} failed: ${this.#detail(event)}`,
 							{ url: this.#url },
 						),
 					),
@@ -133,6 +134,13 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	}
 
 	// === Private helpers
+
+	#detail(event: Event): string {
+		if (isRecord(event) && isString(event['message']) && event['message'].length > 0) {
+			return event['message']
+		}
+		return event.type
+	}
 
 	#bind(socket: WebSocket): void {
 		socket.addEventListener('message', (event) => {

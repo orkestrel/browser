@@ -600,7 +600,7 @@ describe('Browser abort mid-connect', () => {
 		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
 
 		await waitForDelay(100)
-		expect(() => process.kill(pid, 0)).toThrow()
+		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
 	})
 })
 
@@ -621,7 +621,7 @@ describe('Browser post-spawn connect failure', () => {
 		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
 
 		await waitForDelay(100)
-		expect(() => process.kill(pid, 0)).toThrow()
+		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
 	})
 })
 
@@ -652,7 +652,7 @@ describe('Browser destroy() kill escalation', () => {
 		}
 
 		await waitForDelay(100)
-		expect(() => process.kill(pid, 0)).toThrow()
+		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
 	}, 15_000)
 })
 

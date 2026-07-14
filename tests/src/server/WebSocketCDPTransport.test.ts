@@ -128,13 +128,10 @@ describe('WebSocketCDPTransport', () => {
 			new RegExp(`WebSocket CDP connection to ${url} (failed|timed out)`),
 		)
 
-		try {
-			await transport.start()
-			expect.unreachable()
-		} catch (error) {
-			expect(isBrowserConnectionError(error)).toBe(true)
-			expect((error as Error).message).toContain(url)
-		}
+		const error: unknown = await transport.start().catch((caught: unknown) => caught)
+		expect(isBrowserConnectionError(error)).toBe(true)
+		expect(error).toBeInstanceOf(Error)
+		expect(error instanceof Error ? error.message : '').toContain(url)
 	})
 
 	it('close() aborts a connection still in flight and settles start() as rejected', async () => {
