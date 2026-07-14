@@ -1,0 +1,36 @@
+/**
+ * Worker thread fixture: slow processor with progress reporting.
+ * Demonstrates execution.report, execution.data, and execution.signal.
+ *
+ * Reads execution.data.delayMs for configurable processing time.
+ * Reports progress at 0%, 50%, and 100%.
+ * Returns context multiplied by execution.data.multiplier (default 1).
+ *
+ * Published consumers would import directly:
+ *   import { exposeNodeWorker } from 'keepalive'
+ */
+import { exposeNodeWorker } from '../../src/workers/expose.ts'
+
+exposeNodeWorker<number, number, { readonly delayMs?: number; readonly multiplier?: number }>(
+	async (context, execution) => {
+		const delayMs = execution.data.delayMs ?? 300
+		const multiplier = execution.data.multiplier ?? 1
+		const half = Math.floor(delayMs / 2)
+
+		execution.report({ percent: 0, stage: 'starting' })
+
+		await new Promise<void>((resolve) => setTimeout(resolve, half))
+
+		if (execution.signal.aborted) {
+			throw new Error('Aborted during processing')
+		}
+
+		execution.report({ percent: 50, stage: 'processing' })
+
+		await new Promise<void>((resolve) => setTimeout(resolve, delayMs - half))
+
+		execution.report({ percent: 100, stage: 'done' })
+
+		return context * multiplier
+	},
+)

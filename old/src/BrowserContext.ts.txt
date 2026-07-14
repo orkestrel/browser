@@ -1,0 +1,77 @@
+/**
+ * BrowserContext
+ *
+ * Wraps a Playwright BrowserContext behind the BrowserContextInterface.
+ * Each context has independent cookies, storage, and cache — equivalent
+ * to an incognito window. Pages created within a context share its session.
+ */
+
+import type {
+	PlaywrightContextLike,
+	BrowserContextInterface,
+	BrowserPageInterface,
+	BrowserPageOptions,
+} from '../types.js'
+import { BrowserError } from '../errors.js'
+import { isPlaywrightContextLike } from '../helpers.js'
+import { BrowserPage } from './BrowserPage.js'
+
+// === BrowserContext
+
+export class BrowserContext implements BrowserContextInterface {
+	#context: PlaywrightContextLike
+	#pages: BrowserPage[] = []
+
+	constructor(context: unknown) {
+		if (!isPlaywrightContextLike(context)) {
+			throw new BrowserError('Invalid context target: missing required Playwright methods')
+		}
+		this.#context = context
+		this.#syncPages()
+	}
+
+	// === Public API
+
+	page(index?: number): BrowserPageInterface | undefined {
+		this.#syncPages()
+		const i = index ?? 0
+		if (i < 0 || i >= this.#pages.length) return undefined
+		return this.#pages[i]
+	}
+
+	pages(): readonly BrowserPageInterface[] {
+		this.#syncPages()
+		return [...this.#pages]
+	}
+
+	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
+		const raw = await this.#context.newPage()
+		const page = new BrowserPage(raw, false)
+		this.#pages.push(page)
+
+		if (options?.url !== undefined) {
+			await page.navigate(options.url, {
+				timeout: options?.timeout,
+			})
+		}
+
+		return page
+	}
+
+	async close(): Promise<void> {
+		await this.#context.close()
+		this.#pages = []
+	}
+
+	// === Private helpers
+
+	#syncPages(): void {
+		const rawPages = this.#context.pages()
+		// Rebuild internal list from current Playwright pages
+		const synced: BrowserPage[] = []
+		for (const raw of rawPages) {
+			synced.push(new BrowserPage(raw, false))
+		}
+		this.#pages = synced
+	}
+}

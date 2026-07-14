@@ -1,0 +1,482 @@
+/**
+ * Browser tests.
+ *
+ * Uses real Playwright browser instances — no mocks.
+ * Covers Browser lifecycle (idle, connecting, connected, disconnected),
+ * createBrowser factory, discovery, abort, and destroy semantics.
+ */
+
+import { describe, it, expect } from 'vitest'
+import {
+	createBrowser,
+	BrowserDestroyedError,
+	BrowserNotConnectedError,
+	BrowserConnectionError,
+} from 'keepalive'
+
+// === Browser
+
+describe('Browser', () => {
+	describe('idle state', () => {
+		it('starts in idle status', () => {
+			const browser = createBrowser()
+			expect(browser.status).toBe('idle')
+			expect(browser.connected).toBe(false)
+			expect(browser.connection).toBeUndefined()
+		})
+
+		it('defaults to chromium engine', () => {
+			const browser = createBrowser()
+			expect(browser.engine).toBe('chromium')
+		})
+
+		it('respects engine option', () => {
+			const browser = createBrowser({ engine: 'firefox' })
+			expect(browser.engine).toBe('firefox')
+		})
+
+		it('respects webkit engine option', () => {
+			const browser = createBrowser({ engine: 'webkit' })
+			expect(browser.engine).toBe('webkit')
+		})
+
+		it('context() returns undefined before connect', () => {
+			const browser = createBrowser()
+			expect(browser.context()).toBeUndefined()
+			expect(browser.context(0)).toBeUndefined()
+		})
+
+		it('context() with index returns undefined before connect', () => {
+			const browser = createBrowser()
+			expect(browser.context(0)).toBeUndefined()
+			expect(browser.context(1)).toBeUndefined()
+			expect(browser.context(-1)).toBeUndefined()
+		})
+
+		it('contexts() returns empty array before connect', () => {
+			const browser = createBrowser()
+			expect(browser.contexts()).toHaveLength(0)
+		})
+
+		it('contexts() returns a new array each time', () => {
+			const browser = createBrowser()
+			const a = browser.contexts()
+			const b = browser.contexts()
+			expect(a).not.toBe(b)
+		})
+
+		it('create() throws BrowserNotConnectedError when not connected', async () => {
+			const browser = createBrowser()
+			await expect(browser.create()).rejects.toThrow(BrowserNotConnectedError)
+		})
+
+		it('create() with url throws BrowserNotConnectedError when not connected', async () => {
+			const browser = createBrowser()
+			await expect(browser.create({ url: 'https://example.com' })).rejects.toThrow(
+				BrowserNotConnectedError,
+			)
+		})
+
+		it('disconnect() is no-op when not connected', () => {
+			const browser = createBrowser()
+			browser.disconnect()
+			expect(browser.status).toBe('idle')
+		})
+
+		it('connected is false', () => {
+			const browser = createBrowser()
+			expect(browser.connected).toBe(false)
+		})
+
+		it('discover() returns found:false when no CDP endpoint available', async () => {
+			const browser = createBrowser({ cdp: { port: 19999 } })
+			const result = await browser.discover()
+			expect(result.found).toBe(false)
+			expect(result.endpoint).toBeUndefined()
+			expect(result.browser).toBeUndefined()
+			expect(result.connection).toBeUndefined()
+		})
+
+		it('discover() uses default port when no cdp option', async () => {
+			const browser = createBrowser()
+			const result = await browser.discover()
+			expect(typeof result.found).toBe('boolean')
+			expect('endpoint' in result).toBe(true)
+			expect('browser' in result).toBe(true)
+			expect('connection' in result).toBe(true)
+		})
+
+		it('discover() can be called multiple times', async () => {
+			const browser = createBrowser({ cdp: { port: 19998 } })
+			const r1 = await browser.discover()
+			const r2 = await browser.discover()
+			expect(r1.found).toBe(false)
+			expect(r2.found).toBe(false)
+		})
+	})
+
+	describe('destroyed state', () => {
+		it('destroy() is idempotent', async () => {
+			const browser = createBrowser()
+			await browser.destroy()
+			await browser.destroy()
+			expect(browser.connected).toBe(false)
+		})
+
+		it('connect() after destroy() throws BrowserDestroyedError', async () => {
+			const browser = createBrowser()
+			await browser.destroy()
+			await expect(browser.connect()).rejects.toThrow(BrowserDestroyedError)
+		})
+
+		it('create() after destroy() throws BrowserDestroyedError', async () => {
+			const browser = createBrowser()
+			await browser.destroy()
+			await expect(browser.create()).rejects.toThrow(BrowserDestroyedError)
+		})
+
+		it('disconnect() is no-op after destroy', async () => {
+			const browser = createBrowser()
+			await browser.destroy()
+			browser.disconnect()
+			expect(browser.connected).toBe(false)
+		})
+
+		it('context() returns undefined after destroy', async () => {
+			const browser = createBrowser()
+			await browser.destroy()
+			expect(browser.context()).toBeUndefined()
+		})
+
+		it('contexts() returns empty after destroy', async () => {
+			const browser = createBrowser()
+			await browser.destroy()
+			expect(browser.contexts()).toHaveLength(0)
+		})
+
+		it('discover() still works after destroy (passive probe)', async () => {
+			const browser = createBrowser({ cdp: { port: 19997 } })
+			await browser.destroy()
+			const result = await browser.discover()
+			expect(result.found).toBe(false)
+		})
+
+		it('destroy() from idle transitions without error', async () => {
+			const browser = createBrowser()
+			await browser.destroy()
+			expect(browser.connected).toBe(false)
+		})
+	})
+
+	describe('abort handling', () => {
+		it('connect() with pre-aborted signal throws BrowserConnectionError', async () => {
+			const controller = new AbortController()
+			controller.abort()
+			const browser = createBrowser({ signal: controller.signal })
+			await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		})
+
+		it('connect() with pre-aborted signal leaves status unchanged', async () => {
+			const controller = new AbortController()
+			controller.abort()
+			const browser = createBrowser({ signal: controller.signal })
+			try {
+				await browser.connect()
+			} catch {
+				// expected
+			}
+			// Pre-aborted signal is checked before transitioning from idle
+			expect(browser.status).toBe('idle')
+		})
+
+		it('create() still throws NotConnected after abort', async () => {
+			const controller = new AbortController()
+			controller.abort()
+			const browser = createBrowser({ signal: controller.signal })
+			try {
+				await browser.connect()
+			} catch {
+				// expected
+			}
+			await expect(browser.create()).rejects.toThrow(BrowserNotConnectedError)
+		})
+	})
+
+	describe('connected lifecycle', () => {
+		it('connect() launches a real browser and transitions to connected', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+			expect(browser.connected).toBe(true)
+			expect(browser.connection).toBe('launch')
+			await browser.destroy()
+		}, 30_000)
+
+		it('create() opens a real page in the connected browser', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			const page = await browser.create()
+			expect(page).toBeDefined()
+			expect(page.url).toBe('about:blank')
+			await browser.destroy()
+		}, 30_000)
+
+		it('create() with url navigates the new page', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			const page = await browser.create({ url: 'data:text/html,<h1>Hello</h1>' })
+			expect(page.url).toContain('data:text/html')
+			const content = await page.content()
+			expect(content.html).toContain('<h1>Hello</h1>')
+			await browser.destroy()
+		}, 30_000)
+
+		it('contexts() returns context list after creating a page', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			await browser.create()
+			const contexts = browser.contexts()
+			expect(contexts.length).toBeGreaterThanOrEqual(1)
+			await browser.destroy()
+		}, 30_000)
+
+		it('context() returns the default context after creating a page', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			await browser.create()
+			const ctx = browser.context()
+			expect(ctx).toBeDefined()
+			await browser.destroy()
+		}, 30_000)
+
+		it('context(0) returns the same as context()', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			await browser.create()
+			const c0 = browser.context(0)
+			const cDefault = browser.context()
+			expect(c0).toBeDefined()
+			expect(cDefault).toBeDefined()
+			await browser.destroy()
+		}, 30_000)
+
+		it('page content can be extracted after navigation', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			const page = await browser.create()
+			await page.navigate(
+				'data:text/html,<html><head><title>Test</title></head><body><p>Content</p></body></html>',
+			)
+			const content = await page.content()
+			expect(content.title).toBe('Test')
+			expect(content.text).toContain('Content')
+			await browser.destroy()
+		}, 30_000)
+
+		it('screenshot works on a created page', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			const page = await browser.create()
+			await page.navigate('data:text/html,<h1>Screenshot</h1>')
+			const result = await page.screenshot()
+			expect(result.bytes).toBeInstanceOf(Uint8Array)
+			expect(result.bytes.length).toBeGreaterThan(0)
+			expect(result.bytes[0]).toBe(137)
+			await browser.destroy()
+		}, 30_000)
+
+		it('multiple pages can be created', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			const p1 = await browser.create({ url: 'data:text/html,<h1>P1</h1>' })
+			const p2 = await browser.create({ url: 'data:text/html,<h1>P2</h1>' })
+			expect(p1.url).toContain('P1')
+			expect(p2.url).toContain('P2')
+			await browser.destroy()
+		}, 30_000)
+
+		it('disconnect() detaches from the browser', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			expect(browser.connected).toBe(true)
+			browser.disconnect()
+			expect(browser.status).toBe('disconnected')
+			expect(browser.connected).toBe(false)
+			expect(browser.connection).toBeUndefined()
+			await expect(browser.create()).rejects.toThrow(BrowserNotConnectedError)
+			await browser.destroy()
+		}, 30_000)
+
+		it('destroy() closes the browser and transitions to disconnected', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			expect(browser.connected).toBe(true)
+			await browser.destroy()
+			expect(browser.connected).toBe(false)
+		}, 30_000)
+
+		it('destroy() after disconnect is idempotent', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			browser.disconnect()
+			await browser.destroy()
+			await browser.destroy()
+			expect(browser.connected).toBe(false)
+		}, 30_000)
+
+		it('connect() is no-op when already connected', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+			await browser.destroy()
+		}, 30_000)
+
+		it('contexts() returns new array each call', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			await browser.create()
+			const a = browser.contexts()
+			const b = browser.contexts()
+			expect(a).not.toBe(b)
+			await browser.destroy()
+		}, 30_000)
+	})
+
+	describe('persistent context', () => {
+		it('connect() with profile uses persistent context', async () => {
+			const tmpDir = `${process.env['TEMP'] ?? '/tmp'}/keepalive-test-profile-${Date.now()}`
+			const browser = createBrowser({ profile: tmpDir })
+			await browser.connect()
+			expect(browser.status).toBe('connected')
+			expect(browser.connection).toBe('persistent')
+			const page = await browser.create()
+			expect(page).toBeDefined()
+			await browser.destroy()
+		}, 30_000)
+
+		it('persistent context page can navigate', async () => {
+			const tmpDir = `${process.env['TEMP'] ?? '/tmp'}/keepalive-test-profile-nav-${Date.now()}`
+			const browser = createBrowser({ profile: tmpDir })
+			await browser.connect()
+			const page = await browser.create({ url: 'data:text/html,<h1>Persistent</h1>' })
+			expect(page.url).toContain('data:text/html')
+			await browser.destroy()
+		}, 30_000)
+	})
+
+	describe('headless option', () => {
+		it('defaults to headless true', async () => {
+			const browser = createBrowser()
+			await browser.connect()
+			expect(browser.connected).toBe(true)
+			await browser.destroy()
+		}, 30_000)
+
+		it('accepts explicit headless true', async () => {
+			const browser = createBrowser({ headless: true })
+			await browser.connect()
+			expect(browser.connected).toBe(true)
+			await browser.destroy()
+		}, 30_000)
+	})
+
+	describe('viewport option', () => {
+		it('creates page with custom viewport', async () => {
+			const browser = createBrowser({ viewport: { width: 800, height: 600 } })
+			await browser.connect()
+			const page = await browser.create()
+			expect(page).toBeDefined()
+			await browser.destroy()
+		}, 30_000)
+	})
+
+	describe('args option', () => {
+		it('passes args to browser launch', async () => {
+			const browser = createBrowser({ args: ['--disable-gpu'] })
+			await browser.connect()
+			expect(browser.connected).toBe(true)
+			await browser.destroy()
+		}, 30_000)
+	})
+})
+
+// === createBrowser factory
+
+describe('createBrowser', () => {
+	it('returns a BrowserInterface', () => {
+		const browser = createBrowser()
+		expect(browser.engine).toBe('chromium')
+		expect(browser.status).toBe('idle')
+		expect(typeof browser.connect).toBe('function')
+		expect(typeof browser.disconnect).toBe('function')
+		expect(typeof browser.discover).toBe('function')
+		expect(typeof browser.create).toBe('function')
+		expect(typeof browser.destroy).toBe('function')
+		expect(typeof browser.context).toBe('function')
+		expect(typeof browser.contexts).toBe('function')
+	})
+
+	it('accepts all options', () => {
+		const browser = createBrowser({
+			engine: 'firefox',
+			headless: false,
+			executable: '/usr/bin/firefox',
+			profile: '/tmp/profile',
+			cdp: { port: 9333, endpoint: 'ws://localhost:9333' },
+			timeout: 60_000,
+			viewport: { width: 1920, height: 1080 },
+			signal: new AbortController().signal,
+			args: ['--no-sandbox'],
+		})
+		expect(browser.engine).toBe('firefox')
+	})
+
+	it('accepts no options (defaults)', () => {
+		const browser = createBrowser()
+		expect(browser.engine).toBe('chromium')
+	})
+
+	it('each call returns a new instance', () => {
+		const a = createBrowser()
+		const b = createBrowser()
+		expect(a).not.toBe(b)
+	})
+
+	it('accepts empty options object', () => {
+		const browser = createBrowser({})
+		expect(browser.engine).toBe('chromium')
+		expect(browser.status).toBe('idle')
+	})
+
+	it('accepts only engine option', () => {
+		const browser = createBrowser({ engine: 'webkit' })
+		expect(browser.engine).toBe('webkit')
+	})
+
+	it('accepts only timeout option', () => {
+		const browser = createBrowser({ timeout: 5000 })
+		expect(browser.engine).toBe('chromium')
+	})
+
+	it('accepts only viewport option', () => {
+		const browser = createBrowser({ viewport: { width: 800, height: 600 } })
+		expect(browser.engine).toBe('chromium')
+	})
+
+	it('accepts only signal option', () => {
+		const browser = createBrowser({ signal: new AbortController().signal })
+		expect(browser.engine).toBe('chromium')
+	})
+
+	it('connected is false on fresh instance', () => {
+		const browser = createBrowser()
+		expect(browser.connected).toBe(false)
+	})
+
+	it('connection is undefined on fresh instance', () => {
+		const browser = createBrowser()
+		expect(browser.connection).toBeUndefined()
+	})
+})

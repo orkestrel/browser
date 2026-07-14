@@ -1,0 +1,775 @@
+/**
+ * Browser Example
+ *
+ * Fully scripted browser automation demo powered by keepalive's Browser
+ * wrapper and Playwright. Demonstrates:
+ * - Two independent browser instances (chromium side by side)
+ * - Multiple pages per browser
+ * - Form filling, clicking, selecting, and submitting
+ * - Data extraction via evaluate() and content()
+ * - Continuing interaction on a live page after initial actions
+ * - Screenshots at each phase
+ * - Reactive terminal dashboard with live progress
+ *
+ * Usage:
+ *   npx tsx examples/browser.ts
+ *   npx tsx examples/browser.ts --headless false
+ */
+
+import type { Key } from 'node:readline'
+import type { BrowserPageInterface } from '../src/index.js'
+import { parseArgs } from 'node:util'
+import { writeFile, mkdir } from 'node:fs/promises'
+import { join } from 'node:path'
+import * as readline from 'node:readline'
+import {
+	batcher,
+	createSignal,
+	createCompute,
+	createWatch,
+	createScope,
+	createChannel,
+	createBrowser,
+} from '../src/index.js'
+
+// === ANSI
+
+const RESET = '\x1b[0m'
+const BOLD = '\x1b[1m'
+const DIM = '\x1b[2m'
+const RED = '\x1b[31m'
+const GREEN = '\x1b[32m'
+const YELLOW = '\x1b[33m'
+const BLUE = '\x1b[34m'
+const MAGENTA = '\x1b[35m'
+const CYAN = '\x1b[36m'
+const WHITE = '\x1b[37m'
+const BG_GREEN = '\x1b[42m'
+const BG_BLUE = '\x1b[44m'
+
+// === CLI Arguments
+
+const { values } = parseArgs({
+	options: {
+		headless: { type: 'string', default: 'true' },
+		output: { type: 'string', short: 'o', default: './tmp/browser-demo' },
+	},
+})
+
+const headless = values.headless !== 'false'
+const outputDir = values.output ?? './tmp/browser-demo'
+
+// === Reactive State
+
+const scope = createScope()
+const shuttingDown = createSignal(false)
+const demoRunning = createSignal(false)
+
+// Browser A state
+const browserAStatus = createSignal<string>('idle')
+const browserAPages = createSignal(0)
+
+// Browser B state
+const browserBStatus = createSignal<string>('idle')
+const browserBPages = createSignal(0)
+
+// Global stats
+const screenshotCount = createSignal(0)
+const extractionCount = createSignal(0)
+const actionCount = createSignal(0)
+const currentPhase = createSignal('Idle')
+
+// === Activity Log
+
+const MAX_LOG_ENTRIES = 20
+const logChannel = createChannel<string>()
+const logEntries = createSignal<readonly string[]>([])
+
+const unsubscribeLog = logChannel.subscribe((message) => {
+	const timestamp = new Date().toLocaleTimeString('en-US', { hour12: false })
+	const formatted = `${DIM}${timestamp}${RESET} ${message}`
+	logEntries.update((current) => {
+		const next = [...current, formatted]
+		return next.length > MAX_LOG_ENTRIES ? next.slice(next.length - MAX_LOG_ENTRIES) : next
+	})
+})
+
+scope.add(unsubscribeLog, logChannel)
+
+function log(message: string): void {
+	logChannel.send(message)
+}
+
+// === Delay helper
+
+function wait(ms: number): Promise<void> {
+	return new Promise((resolve) => setTimeout(resolve, ms))
+}
+
+// === Screenshot helper
+
+let screenshotId = 0
+
+async function screenshot(page: BrowserPageInterface, label: string, full = false): Promise<void> {
+	const result = await page.screenshot({ type: 'png', full })
+	screenshotId++
+	const filename = `${screenshotId}-${label}.png`
+	const filepath = join(outputDir, filename)
+	await mkdir(outputDir, { recursive: true })
+	await writeFile(filepath, result.bytes)
+	batcher.run(() => {
+		screenshotCount.update((n) => n + 1)
+		log(
+			`${MAGENTA}📷${RESET} ${DIM}${filename}${RESET} ${DIM}(${result.bytes.length} bytes${full ? ', full' : ''})${RESET}`,
+		)
+	})
+}
+
+// === Browser A & B
+
+const browserA = createBrowser({ headless, viewport: { width: 1280, height: 720 } })
+const browserB = createBrowser({ headless, viewport: { width: 1280, height: 720 } })
+
+function syncState(): void {
+	batcher.run(() => {
+		browserAStatus.set(browserA.status)
+		browserBStatus.set(browserB.status)
+	})
+}
+
+// === Dashboard
+
+function formatBrowserBadge(status: string): string {
+	switch (status) {
+		case 'connected':
+			return `${GREEN}● connected${RESET}`
+		case 'connecting':
+			return `${YELLOW}◌ connecting${RESET}`
+		case 'disconnected':
+			return `${RED}○ disconnected${RESET}`
+		default:
+			return `${DIM}○ idle${RESET}`
+	}
+}
+
+function formatActivityLog(): string {
+	const entries = logEntries.get()
+	if (entries.length === 0) return `    ${DIM}No activity yet${RESET}`
+	return entries.map((entry) => `  ${entry}`).join('\n')
+}
+
+const screen = createCompute(() => {
+	const phase = currentPhase.get()
+	const pagesA = browserAPages.get()
+	const pagesB = browserBPages.get()
+	const shots = screenshotCount.get()
+	const extracts = extractionCount.get()
+	const actions = actionCount.get()
+	const running = demoRunning.get()
+
+	return [
+		'',
+		`  ${BOLD}${CYAN}══════════════════════════════════════════════════════════════════${RESET}`,
+		`  ${BOLD}${CYAN}  KEEPALIVE — Browser Automation Demo${RESET}`,
+		`  ${BOLD}${CYAN}══════════════════════════════════════════════════════════════════${RESET}`,
+		'',
+		`  ${BOLD}${BLUE}── Browsers ──${RESET}`,
+		`  ${BOLD}Browser A:${RESET}  ${formatBrowserBadge(browserAStatus.get())}  ${DIM}pages:${RESET}${pagesA}`,
+		`  ${BOLD}Browser B:${RESET}  ${formatBrowserBadge(browserBStatus.get())}  ${DIM}pages:${RESET}${pagesB}`,
+		'',
+		`  ${BOLD}${BLUE}── Phase ──${RESET}  ${running ? `${YELLOW}▸ ${BOLD}${phase}${RESET}` : `${DIM}${phase}${RESET}`}`,
+		'',
+		`  ${BOLD}${BLUE}── Stats ──${RESET}`,
+		`  ${MAGENTA}📷${RESET} screenshots: ${BOLD}${shots}${RESET}    ${CYAN}🔍${RESET} extractions: ${BOLD}${extracts}${RESET}    ${GREEN}⚡${RESET} actions: ${BOLD}${actions}${RESET}`,
+		'',
+		`  ${BOLD}${BLUE}── Activity ──${RESET}`,
+		formatActivityLog(),
+		'',
+		`  ${BOLD}${BLUE}── Commands ──${RESET}`,
+		`  ${BOLD}d${RESET} Run full demo    ${BOLD}x${RESET} Exit`,
+		'',
+		`  ${DIM}> Press a key...${RESET}`,
+		'',
+	].join('\n')
+})
+
+scope.add(screen)
+
+const renderWatch = createWatch(
+	() => screen.get(),
+	(content) => {
+		if (shuttingDown.peek()) return
+		process.stdout.write('\x1Bc')
+		process.stdout.write(content)
+	},
+)
+
+scope.add(renderWatch)
+
+// === HTML Pages
+
+const FORM_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head><title>Contact Form</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#667eea,#764ba2);min-height:100vh;display:flex;align-items:center;justify-content:center}
+.card{background:#fff;border-radius:16px;padding:36px;width:460px;box-shadow:0 20px 60px rgba(0,0,0,.3)}
+h1{color:#333;margin-bottom:6px;font-size:22px}
+.sub{color:#888;margin-bottom:20px;font-size:13px}
+label{display:block;font-weight:600;margin-bottom:4px;color:#555;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+input,select,textarea{width:100%;padding:9px 12px;border:2px solid #e0e0e0;border-radius:8px;font-size:14px;margin-bottom:14px}
+textarea{height:60px;resize:none}
+.row{display:flex;gap:10px}
+.row>div{flex:1}
+button{background:linear-gradient(135deg,#667eea,#764ba2);color:#fff;border:none;padding:11px;border-radius:8px;font-size:15px;font-weight:600;cursor:pointer;width:100%;margin-top:4px}
+#result{margin-top:14px;padding:10px;background:#f0fdf4;border:2px solid #86efac;border-radius:8px;color:#166534;font-weight:600;text-align:center;display:none}
+#counter{margin-top:10px;text-align:center;color:#888;font-size:12px}
+</style></head>
+<body><div class="card">
+<h1>📝 Contact Form</h1>
+<p class="sub">Automated by keepalive</p>
+<label>Name</label><input id="name" placeholder="Your name" />
+<div class="row"><div><label>Email</label><input id="email" type="email" placeholder="you@example.com" /></div>
+<div><label>Role</label><select id="role"><option value="">Choose…</option><option value="dev">Developer</option><option value="design">Designer</option><option value="pm">Manager</option></select></div></div>
+<label>Message</label><textarea id="msg" placeholder="Say something…"></textarea>
+<button id="submit">Submit</button>
+<div id="result"></div>
+<div id="counter">Submissions: <span id="count">0</span></div>
+</div>
+<script>
+let n=0;
+document.getElementById('submit').addEventListener('click',()=>{
+  n++;
+  document.getElementById('count').textContent=n;
+  const name=document.getElementById('name').value;
+  const role=document.getElementById('role').value;
+  const r=document.getElementById('result');
+  r.style.display='block';
+  r.textContent='✅ #'+n+': '+name+' ('+role+')';
+  document.title='Submitted #'+n;
+});
+</script></div></body></html>`
+
+const DASHBOARD_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head><title>Team Dashboard</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:#0f172a;color:#e2e8f0;padding:32px}
+h1{color:#38bdf8;margin-bottom:4px}
+.sub{color:#64748b;margin-bottom:20px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:28px}
+.card{background:#1e293b;border-radius:12px;padding:18px}
+.card-label{color:#64748b;font-size:11px;text-transform:uppercase;margin-bottom:2px}
+.metric{font-size:28px;font-weight:700;color:#38bdf8}
+table{width:100%;border-collapse:collapse;background:#1e293b;border-radius:12px;overflow:hidden}
+th{background:#334155;padding:12px 14px;text-align:left;font-size:11px;text-transform:uppercase;letter-spacing:1px;color:#94a3b8}
+td{padding:10px 14px;border-top:1px solid #334155}
+.s{padding:3px 8px;border-radius:10px;font-size:11px;font-weight:600}
+.s-ok{background:#065f46;color:#6ee7b7}
+.s-warn{background:#78350f;color:#fbbf24}
+.s-err{background:#7f1d1d;color:#fca5a5}
+</style></head>
+<body>
+<h1>📊 Team Dashboard</h1>
+<p class="sub">Live data for extraction</p>
+<div class="grid">
+<div class="card"><div class="card-label">Members</div><div class="metric" id="m-members">12</div></div>
+<div class="card"><div class="card-label">Active</div><div class="metric" id="m-active">9</div></div>
+<div class="card"><div class="card-label">Tasks</div><div class="metric" id="m-tasks">247</div></div>
+<div class="card"><div class="card-label">Completion</div><div class="metric" id="m-rate">87%</div></div>
+</div>
+<table>
+<thead><tr><th>Name</th><th>Role</th><th>Status</th><th>Tasks</th></tr></thead>
+<tbody id="tbody">
+<tr><td>Alice Chen</td><td>Engineer</td><td><span class="s s-ok">Active</span></td><td>42</td></tr>
+<tr><td>Bob Smith</td><td>Designer</td><td><span class="s s-ok">Active</span></td><td>31</td></tr>
+<tr><td>Carol Wu</td><td>Manager</td><td><span class="s s-warn">Busy</span></td><td>58</td></tr>
+<tr><td>Dave Lee</td><td>Engineer</td><td><span class="s s-ok">Active</span></td><td>37</td></tr>
+<tr><td>Eve Patel</td><td>DevOps</td><td><span class="s s-err">Offline</span></td><td>19</td></tr>
+<tr><td>Frank Kim</td><td>Engineer</td><td><span class="s s-ok">Active</span></td><td>60</td></tr>
+</tbody>
+</table>
+</body></html>`
+
+const TODO_HTML = `<!DOCTYPE html>
+<html lang="en">
+<head><title>Todo App</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;background:linear-gradient(135deg,#1a1a2e,#16213e);min-height:100vh;display:flex;align-items:center;justify-content:center;color:#fff}
+.app{width:420px;background:#1e293b;border-radius:16px;padding:28px;box-shadow:0 20px 60px rgba(0,0,0,.4)}
+h1{font-size:20px;margin-bottom:16px;color:#38bdf8}
+.add{display:flex;gap:8px;margin-bottom:16px}
+.add input{flex:1;padding:8px 12px;border:2px solid #334155;border-radius:8px;background:#0f172a;color:#fff;font-size:14px}
+.add button{padding:8px 16px;border:none;border-radius:8px;background:#38bdf8;color:#0f172a;font-weight:600;cursor:pointer;font-size:14px}
+.item{display:flex;align-items:center;gap:10px;padding:10px;border-bottom:1px solid #334155}
+.item.done .text{text-decoration:line-through;opacity:.5}
+.check{width:20px;height:20px;border:2px solid #475569;border-radius:50%;cursor:pointer;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0}
+.check.checked{background:#38bdf8;border-color:#38bdf8;color:#0f172a}
+.text{flex:1;font-size:14px}
+.del{color:#ef4444;cursor:pointer;font-size:12px;opacity:.6}
+.del:hover{opacity:1}
+#stats{margin-top:12px;text-align:center;color:#64748b;font-size:12px}
+</style></head>
+<body><div class="app">
+<h1>✅ Todo List</h1>
+<div class="add"><input id="input" placeholder="Add a task…" /><button id="addBtn">Add</button></div>
+<div id="list"></div>
+<div id="stats">0 items</div>
+</div>
+<script>
+const items=[];
+function render(){
+  const el=document.getElementById('list');
+  el.innerHTML='';
+  items.forEach((it,i)=>{
+    const d=document.createElement('div');d.className='item'+(it.done?' done':'');
+    d.innerHTML='<div class="check'+(it.done?' checked':'')+'">✓</div><span class="text">'+it.text+'</span><span class="del">✕</span>';
+    d.querySelector('.check').onclick=()=>{it.done=!it.done;render()};
+    d.querySelector('.del').onclick=()=>{items.splice(i,1);render()};
+    el.appendChild(d);
+  });
+  const done=items.filter(x=>x.done).length;
+  document.getElementById('stats').textContent=items.length+' items, '+done+' done';
+  document.title='Todo ('+items.length+')';
+}
+function add(text){items.push({text,done:false});render()}
+document.getElementById('addBtn').addEventListener('click',()=>{
+  const v=document.getElementById('input').value.trim();
+  if(v){add(v);document.getElementById('input').value='';}
+});
+document.getElementById('input').addEventListener('keydown',e=>{
+  if(e.key==='Enter'){document.getElementById('addBtn').click();}
+});
+</script></div></body></html>`
+
+// === Demo Runner
+
+async function runDemo(): Promise<void> {
+	if (demoRunning.peek()) return
+	demoRunning.set(true)
+
+	const pagesA: BrowserPageInterface[] = []
+	const pagesB: BrowserPageInterface[] = []
+
+	try {
+		// ── Phase 1: Launch two browsers ──────────────────────────────────
+		batcher.run(() => {
+			currentPhase.set('1/6 — Launching browsers')
+			log(`${BG_BLUE}${WHITE}${BOLD} PHASE 1 ${RESET} Launching two browser instances`)
+		})
+
+		await Promise.all([browserA.connect(), browserB.connect()])
+		syncState()
+
+		batcher.run(() => {
+			log(`${GREEN}✓${RESET} Browser A: ${BOLD}${browserA.connection}${RESET}`)
+			log(`${GREEN}✓${RESET} Browser B: ${BOLD}${browserB.connection}${RESET}`)
+		})
+
+		await wait(300)
+
+		// ── Phase 2: Open pages across both browsers ──────────────────────
+		batcher.run(() => {
+			currentPhase.set('2/6 — Opening pages')
+			log(`${BG_BLUE}${WHITE}${BOLD} PHASE 2 ${RESET} Creating pages across both browsers`)
+		})
+
+		// Browser A: form + todos
+		const formPage = await browserA.create({
+			url: 'data:text/html,' + encodeURIComponent(FORM_HTML),
+		})
+		pagesA.push(formPage)
+		batcher.run(() => {
+			browserAPages.set(pagesA.length)
+			log(`${GREEN}+${RESET} A/page1: Contact Form`)
+		})
+		await wait(200)
+
+		const todoPage = await browserA.create({
+			url: 'data:text/html,' + encodeURIComponent(TODO_HTML),
+		})
+		pagesA.push(todoPage)
+		batcher.run(() => {
+			browserAPages.set(pagesA.length)
+			log(`${GREEN}+${RESET} A/page2: Todo App`)
+		})
+		await wait(200)
+
+		// Browser B: dashboard
+		const dashPage = await browserB.create({
+			url: 'data:text/html,' + encodeURIComponent(DASHBOARD_HTML),
+		})
+		pagesB.push(dashPage)
+		batcher.run(() => {
+			browserBPages.set(pagesB.length)
+			log(`${GREEN}+${RESET} B/page1: Team Dashboard`)
+		})
+		await wait(200)
+
+		// Screenshot each page
+		await screenshot(formPage, 'form-empty')
+		await screenshot(todoPage, 'todo-empty')
+		await screenshot(dashPage, 'dashboard')
+		await wait(300)
+
+		// ── Phase 3: Fill and submit the form ─────────────────────────────
+		batcher.run(() => {
+			currentPhase.set('3/6 — Form automation')
+			log(`${BG_BLUE}${WHITE}${BOLD} PHASE 3 ${RESET} Filling and submitting the contact form`)
+		})
+
+		batcher.run(() => {
+			actionCount.update((n) => n + 1)
+			log(`${CYAN}⌨${RESET} Filling name`)
+		})
+		await formPage.fill('#name', 'Alice Chen')
+		await wait(200)
+
+		batcher.run(() => {
+			actionCount.update((n) => n + 1)
+			log(`${CYAN}⌨${RESET} Filling email`)
+		})
+		await formPage.fill('#email', 'alice@keepalive.dev')
+		await wait(200)
+
+		batcher.run(() => {
+			actionCount.update((n) => n + 1)
+			log(`${CYAN}☑${RESET} Selecting role: Developer`)
+		})
+		await formPage.select('#role', ['dev'])
+		await wait(200)
+
+		batcher.run(() => {
+			actionCount.update((n) => n + 1)
+			log(`${CYAN}⌨${RESET} Filling message`)
+		})
+		await formPage.fill('#msg', 'Hello from keepalive browser automation! 🤖')
+		await wait(200)
+
+		await screenshot(formPage, 'form-filled')
+
+		batcher.run(() => {
+			actionCount.update((n) => n + 1)
+			log(`${CYAN}👆${RESET} Clicking submit`)
+		})
+		await formPage.click('#submit')
+		await wait(400)
+
+		// Read result
+		const submitResult = await formPage.evaluate('document.getElementById("result").textContent')
+		const submitTitle = await formPage.title()
+		batcher.run(() => {
+			extractionCount.update((n) => n + 1)
+			log(
+				`${GREEN}✓${RESET} Submission: ${BOLD}${submitResult}${RESET} — title: ${DIM}${submitTitle}${RESET}`,
+			)
+		})
+
+		await screenshot(formPage, 'form-submitted')
+		await wait(300)
+
+		// Submit again with different data to show continued interaction
+		batcher.run(() => log(`${YELLOW}↻${RESET} Re-filling form for second submission…`))
+		await formPage.fill('#name', 'Bob Smith')
+		await formPage.fill('#email', 'bob@keepalive.dev')
+		await formPage.select('#role', ['design'])
+		await formPage.fill('#msg', 'Second automated submission — proving page continuity')
+		batcher.run(() => {
+			actionCount.update((n) => n + 5)
+		})
+		await wait(200)
+
+		await formPage.click('#submit')
+		batcher.run(() => {
+			actionCount.update((n) => n + 1)
+		})
+		await wait(300)
+
+		const counter = await formPage.evaluate('document.getElementById("count").textContent')
+		batcher.run(() => {
+			extractionCount.update((n) => n + 1)
+			log(
+				`${GREEN}✓${RESET} Submission count on page: ${BOLD}${counter}${RESET} (page state persisted!)`,
+			)
+		})
+
+		await screenshot(formPage, 'form-resubmitted')
+
+		// ── Phase 4: Todos app interaction ─────────────────────────────────
+		batcher.run(() => {
+			currentPhase.set('4/6 — Todo app interaction')
+			log(`${BG_BLUE}${WHITE}${BOLD} PHASE 4 ${RESET} Adding and completing tasks in the todo app`)
+		})
+
+		const tasks = ['Write tests', 'Deploy v2', 'Code review', 'Update docs', 'Fix bug #42']
+		for (const task of tasks) {
+			await todoPage.fill('#input', task)
+			await todoPage.click('#addBtn')
+			batcher.run(() => {
+				actionCount.update((n) => n + 2)
+				log(`${GREEN}+${RESET} Added: ${task}`)
+			})
+			await wait(150)
+		}
+
+		await screenshot(todoPage, 'todo-filled')
+
+		// Complete some tasks by clicking their checkboxes
+		batcher.run(() => log(`${CYAN}☑${RESET} Completing first 3 tasks…`))
+		await todoPage.click('.item:nth-child(1) .check')
+		await wait(100)
+		await todoPage.click('.item:nth-child(2) .check')
+		await wait(100)
+		await todoPage.click('.item:nth-child(3) .check')
+		batcher.run(() => {
+			actionCount.update((n) => n + 3)
+		})
+		await wait(200)
+
+		// Delete one task
+		batcher.run(() => log(`${RED}✕${RESET} Deleting last task…`))
+		await todoPage.click('.item:nth-child(5) .del')
+		batcher.run(() => {
+			actionCount.update((n) => n + 1)
+		})
+		await wait(200)
+
+		const todoStats = await todoPage.evaluate('document.getElementById("stats").textContent')
+		const todoTitle = await todoPage.title()
+		batcher.run(() => {
+			extractionCount.update((n) => n + 1)
+			log(`${GREEN}✓${RESET} Todo: ${BOLD}${todoStats}${RESET} — title: ${DIM}${todoTitle}${RESET}`)
+		})
+
+		await screenshot(todoPage, 'todo-completed')
+		await wait(300)
+
+		// ── Phase 5: Extract data from the dashboard ──────────────────────
+		batcher.run(() => {
+			currentPhase.set('5/6 — Dashboard extraction')
+			log(
+				`${BG_BLUE}${WHITE}${BOLD} PHASE 5 ${RESET} Extracting structured data from the dashboard`,
+			)
+		})
+
+		// Extract metrics
+		const metrics = await dashPage.evaluate(`
+            Array.from(document.querySelectorAll('.card')).map(c => ({
+                label: (c.querySelector('.card-label') || {}).textContent || '',
+                value: (c.querySelector('.metric') || {}).textContent || ''
+            }))
+        `)
+
+		if (Array.isArray(metrics)) {
+			batcher.run(() => {
+				extractionCount.update((n) => n + 1)
+				log(`${BLUE}📊${RESET} Dashboard metrics:`)
+			})
+			for (const m of metrics) {
+				const metric = m as { label: string; value: string }
+				batcher.run(() => log(`  ${CYAN}${metric.label}:${RESET} ${BOLD}${metric.value}${RESET}`))
+			}
+		}
+		await wait(200)
+
+		// Extract table rows
+		const rows = await dashPage.evaluate(`
+            Array.from(document.querySelectorAll('#tbody tr')).map(row => ({
+                name: (row.cells[0] || {}).textContent || '',
+                role: (row.cells[1] || {}).textContent || '',
+                status: (row.querySelector('.s') || {}).textContent || '',
+                tasks: (row.cells[3] || {}).textContent || ''
+            }))
+        `)
+
+		if (Array.isArray(rows)) {
+			batcher.run(() => {
+				extractionCount.update((n) => n + 1)
+				log(`${BLUE}📋${RESET} Team members:`)
+			})
+			for (const r of rows) {
+				const row = r as { name: string; role: string; status: string; tasks: string }
+				const color = row.status === 'Active' ? GREEN : row.status === 'Busy' ? YELLOW : RED
+				batcher.run(() => {
+					log(
+						`  ${DIM}│${RESET} ${BOLD}${row.name}${RESET} ${DIM}(${row.role})${RESET} ${color}${row.status}${RESET} — ${row.tasks} tasks`,
+					)
+				})
+			}
+		}
+		await wait(200)
+
+		// Extract full page content
+		const dashContent = await dashPage.content()
+		batcher.run(() => {
+			extractionCount.update((n) => n + 1)
+			log(
+				`${GREEN}✓${RESET} Extracted ${BOLD}${dashContent.html.length}${RESET} HTML chars, ${BOLD}${dashContent.text.length}${RESET} text chars`,
+			)
+		})
+
+		await screenshot(dashPage, 'dashboard-data', true)
+
+		// Open a second page in Browser B to show multi-page-per-browser
+		const dashPage2 = await browserB.create({
+			url: 'data:text/html,' + encodeURIComponent(FORM_HTML),
+		})
+		pagesB.push(dashPage2)
+		batcher.run(() => {
+			browserBPages.set(pagesB.length)
+			log(`${GREEN}+${RESET} B/page2: Second form in Browser B`)
+		})
+
+		// Quick fill on the second browser's form
+		await dashPage2.fill('#name', 'Cross-Browser')
+		await dashPage2.fill('#email', 'multi@keepalive.dev')
+		await dashPage2.select('#role', ['pm'])
+		await dashPage2.fill('#msg', 'This form lives in Browser B alongside the dashboard')
+		await dashPage2.click('#submit')
+		batcher.run(() => {
+			actionCount.update((n) => n + 5)
+			log(`${GREEN}✓${RESET} Browser B form submitted from a different browser instance`)
+		})
+		await screenshot(dashPage2, 'browser-b-form')
+		await wait(300)
+
+		// ── Phase 6: Continued interaction & teardown ─────────────────────
+		batcher.run(() => {
+			currentPhase.set('6/6 — Continued interaction & teardown')
+			log(`${BG_BLUE}${WHITE}${BOLD} PHASE 6 ${RESET} Proving page continuity then tearing down`)
+		})
+
+		// Go back to the todos page and add one more task
+		batcher.run(() => log(`${YELLOW}↻${RESET} Returning to todo page (Browser A, page 2)…`))
+		await todoPage.fill('#input', 'Final task added after phase 4!')
+		await todoPage.click('#addBtn')
+		batcher.run(() => {
+			actionCount.update((n) => n + 2)
+		})
+		await wait(200)
+
+		const finalTodoStats = await todoPage.evaluate('document.getElementById("stats").textContent')
+		batcher.run(() => {
+			extractionCount.update((n) => n + 1)
+			log(
+				`${GREEN}✓${RESET} Final todo: ${BOLD}${finalTodoStats}${RESET} — page state preserved across phases`,
+			)
+		})
+
+		await screenshot(todoPage, 'todo-final')
+
+		// Summary
+		batcher.run(() => {
+			log('')
+			log(`${BG_GREEN}${WHITE}${BOLD} COMPLETE ${RESET} Demo finished!`)
+			log(
+				`  ${DIM}Browser A:${RESET} ${pagesA.length} pages  ${DIM}Browser B:${RESET} ${pagesB.length} pages`,
+			)
+			log(`  ${DIM}Screenshots saved to:${RESET} ${BOLD}${outputDir}${RESET}`)
+		})
+
+		// Destroy both browsers
+		await Promise.all([browserA.destroy(), browserB.destroy()])
+		syncState()
+		batcher.run(() => {
+			browserAPages.set(0)
+			browserBPages.set(0)
+			currentPhase.set('Done ✓')
+			log(`${GREEN}✓${RESET} Both browsers destroyed`)
+		})
+	} catch (thrown) {
+		const msg = thrown instanceof Error ? thrown.message : String(thrown)
+		batcher.run(() => log(`${RED}✗${RESET} Demo error: ${msg}`))
+
+		// Clean up on error
+		try {
+			await browserA.destroy()
+		} catch {
+			/* swallow */
+		}
+		try {
+			await browserB.destroy()
+		} catch {
+			/* swallow */
+		}
+		syncState()
+	} finally {
+		demoRunning.set(false)
+	}
+}
+
+// === Shutdown
+
+async function shutdown(): Promise<void> {
+	shuttingDown.set(true)
+
+	if (process.stdin.isTTY) {
+		process.stdin.setRawMode(false)
+	}
+	process.stdin.pause()
+	scope.destroy()
+
+	process.stdout.write('\x1Bc')
+	console.log(`\n  ${BOLD}Shutting down…${RESET}`)
+
+	const forceTimer = setTimeout(() => {
+		console.log(`  ${YELLOW}⚠${RESET} Forced exit`)
+		process.exit(1)
+	}, 5000)
+
+	try {
+		await browserA.destroy()
+	} catch {
+		/* already destroyed */
+	}
+	try {
+		await browserB.destroy()
+	} catch {
+		/* already destroyed */
+	}
+
+	clearTimeout(forceTimer)
+
+	console.log(`  ${GREEN}✓${RESET} Clean exit`)
+	console.log(
+		`  ${DIM}📷 ${screenshotCount.peek()} screenshots  🔍 ${extractionCount.peek()} extractions  ⚡ ${actionCount.peek()} actions${RESET}\n`,
+	)
+
+	process.exit(0)
+}
+
+// === Input handling (simple — no readline.createInterface, no memory leak)
+
+if (process.stdin.isTTY) {
+	process.stdin.setRawMode(true)
+}
+readline.emitKeypressEvents(process.stdin)
+process.stdin.resume()
+
+process.stdin.on('keypress', (_str: string | undefined, key: Key) => {
+	const name = key.name?.toLowerCase() ?? _str?.toLowerCase()
+
+	if ((key.ctrl === true && key.name === 'c') || name === 'x') {
+		void shutdown()
+		return
+	}
+
+	if (name === 'd') {
+		void runDemo()
+	}
+})
+
+// === Startup
+
+process.stdout.write('\x1Bc')
+process.stdout.write(screen.peek())
+
+batcher.run(() => {
+	log(`${DIM}Keepalive Browser Demo — headless:${headless}  output:${outputDir}${RESET}`)
+	log(
+		`${DIM}Press ${BOLD}d${RESET}${DIM} to run the full demo, ${BOLD}x${RESET}${DIM} to exit${RESET}`,
+	)
+})

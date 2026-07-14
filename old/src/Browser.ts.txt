@@ -1,0 +1,432 @@
+/**
+ * Browser
+ *
+ * Playwright wrapper with CDP discovery, fallback launch, lifecycle
+ * management, and composition with Pool/Worker. Dynamically imports
+ * Playwright so the main bundle stays zero-dependency.
+ */
+
+import type {
+	BrowserOptions,
+	BrowserEngine,
+	BrowserStatus,
+	BrowserConnection,
+	BrowserInterface,
+	BrowserContextInterface,
+	BrowserPageInterface,
+	BrowserPageOptions,
+	BrowserDiscoveryResult,
+	PlaywrightEngineLike,
+	PlaywrightBrowserLike,
+	PlaywrightContextLike,
+} from '../types.js'
+import {
+	BrowserError,
+	BrowserConnectionError,
+	BrowserNotConnectedError,
+	BrowserDestroyedError,
+} from '../errors.js'
+import { isRecord, isPlaywrightBrowserLike, isPlaywrightEngineLike } from '../helpers.js'
+import {
+	BROWSER_DEFAULT_CDP_PORT,
+	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_CDP_VERSION_PATH,
+	BROWSER_CDP_PROTOCOL,
+} from '../constants.js'
+import { BrowserContext } from './BrowserContext.js'
+
+// === Browser
+
+export class Browser implements BrowserInterface {
+	#options: BrowserOptions
+	#engine: BrowserEngine
+	#status: BrowserStatus = 'idle'
+	#connection: BrowserConnection | undefined
+	#browser: PlaywrightBrowserLike | undefined
+	#persistentContext: PlaywrightContextLike | undefined
+	#contexts: BrowserContext[] = []
+	#destroyed = false
+
+	constructor(options?: BrowserOptions) {
+		this.#options = options ?? {}
+		this.#engine = this.#options.engine ?? 'chromium'
+	}
+
+	// === Property accessors
+
+	get engine(): BrowserEngine {
+		return this.#engine
+	}
+
+	get status(): BrowserStatus {
+		return this.#status
+	}
+
+	get connection(): BrowserConnection | undefined {
+		return this.#connection
+	}
+
+	get connected(): boolean {
+		return this.#status === 'connected'
+	}
+
+	// === Discovery
+
+	async discover(): Promise<BrowserDiscoveryResult> {
+		return this.#discoverCdp()
+	}
+
+	// === Connection
+
+	async connect(): Promise<void> {
+		if (this.#destroyed) {
+			throw new BrowserDestroyedError()
+		}
+		if (this.#status === 'connected') return
+
+		if (this.#options.signal?.aborted) {
+			throw new BrowserConnectionError('Connection aborted')
+		}
+
+		this.#status = 'connecting'
+
+		try {
+			const pw = await this.#importPlaywright()
+			const engineLauncher = this.#resolveEngine(pw)
+
+			// Step 1: explicit CDP endpoint
+			const cdpEndpoint = this.#options.cdp?.endpoint
+			if (cdpEndpoint !== undefined) {
+				await this.#connectCdp(engineLauncher, cdpEndpoint)
+				return
+			}
+
+			// Step 2: passive CDP discovery
+			if (this.#options.signal?.aborted) {
+				throw new BrowserConnectionError('Connection aborted')
+			}
+			const discovery = await this.#discoverCdp()
+			if (discovery.found && discovery.endpoint !== undefined) {
+				await this.#connectCdp(engineLauncher, discovery.endpoint)
+				return
+			}
+
+			// Step 3: persistent context with profile
+			if (this.#options.signal?.aborted) {
+				throw new BrowserConnectionError('Connection aborted')
+			}
+			if (this.#options.profile !== undefined) {
+				await this.#launchPersistent(engineLauncher)
+				return
+			}
+
+			// Step 4: fresh launch
+			if (this.#options.signal?.aborted) {
+				throw new BrowserConnectionError('Connection aborted')
+			}
+			await this.#launch(engineLauncher)
+		} catch (thrown) {
+			this.#status = 'error'
+			if (thrown instanceof BrowserError) throw thrown
+			const message = thrown instanceof Error ? thrown.message : String(thrown)
+			throw new BrowserConnectionError(message)
+		}
+	}
+
+	// === Disconnection
+
+	disconnect(): void {
+		if (this.#destroyed) return
+		if (this.#status !== 'connected') return
+
+		// CDP connections: just detach, leaving the browser running
+		// Launch/persistent connections: disconnect is a no-op (use destroy instead)
+		if (this.#connection === 'cdp' && this.#browser !== undefined) {
+			// Playwright CDPBrowser has a disconnect() method — call close()
+			// but for CDP it only detaches without killing the browser
+			// We cannot call close() since that would close the browser we don't own
+			// Instead just clear our reference
+		}
+
+		this.#browser = undefined
+		this.#persistentContext = undefined
+		this.#contexts = []
+		this.#status = 'disconnected'
+		this.#connection = undefined
+	}
+
+	// === Context management
+
+	context(index?: number): BrowserContextInterface | undefined {
+		this.#syncContexts()
+		const i = index ?? 0
+		if (i < 0 || i >= this.#contexts.length) return undefined
+		return this.#contexts[i]
+	}
+
+	contexts(): readonly BrowserContextInterface[] {
+		this.#syncContexts()
+		return [...this.#contexts]
+	}
+
+	// === Page creation shortcut
+
+	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#status !== 'connected') throw new BrowserNotConnectedError()
+
+		// For persistent contexts, use the persistent context directly
+		if (this.#persistentContext !== undefined) {
+			const ctx = new BrowserContext(this.#persistentContext)
+			return ctx.create(options)
+		}
+
+		// Get or create the default context
+		this.#syncContexts()
+		let ctx = this.#contexts[0]
+		if (ctx === undefined) {
+			if (this.#browser === undefined) throw new BrowserNotConnectedError()
+			const viewportOpts: Record<string, unknown> = {}
+			if (this.#options.viewport !== undefined) {
+				viewportOpts['viewport'] = {
+					width: this.#options.viewport.width,
+					height: this.#options.viewport.height,
+				}
+			}
+			const rawContext = await this.#browser.newContext(viewportOpts)
+			ctx = new BrowserContext(rawContext)
+			this.#contexts.push(ctx)
+		}
+		return ctx.create(options)
+	}
+
+	// === Lifecycle
+
+	async destroy(): Promise<void> {
+		if (this.#destroyed) return
+		this.#destroyed = true
+
+		try {
+			// Close all contexts
+			for (const ctx of this.#contexts) {
+				try {
+					await ctx.close()
+				} catch {
+					// Swallow errors during teardown
+				}
+			}
+			this.#contexts = []
+
+			// For CDP connections, don't close the browser we didn't launch
+			if (this.#connection === 'cdp') {
+				this.#browser = undefined
+				this.#persistentContext = undefined
+				this.#status = 'disconnected'
+				this.#connection = undefined
+				return
+			}
+
+			// Close persistent context
+			if (this.#persistentContext !== undefined) {
+				try {
+					await this.#persistentContext.close()
+				} catch {
+					// Swallow
+				}
+				this.#persistentContext = undefined
+			}
+
+			// Close launched browser
+			if (this.#browser !== undefined) {
+				try {
+					await this.#browser.close()
+				} catch {
+					// Swallow
+				}
+				this.#browser = undefined
+			}
+		} finally {
+			this.#status = 'disconnected'
+			this.#connection = undefined
+		}
+	}
+
+	// === Private helpers
+
+	async #importPlaywright(): Promise<Record<string, unknown>> {
+		try {
+			const pw: unknown = await import('playwright')
+			if (!isRecord(pw)) {
+				throw new BrowserConnectionError('playwright module did not return a valid object')
+			}
+			return pw
+		} catch (thrown) {
+			if (thrown instanceof BrowserError) throw thrown
+			throw new BrowserConnectionError(
+				'playwright is required for browser automation. Install it with: npm install playwright',
+			)
+		}
+	}
+
+	#resolveEngine(pw: Record<string, unknown>): PlaywrightEngineLike {
+		const engine: unknown = pw[this.#engine]
+		if (!isPlaywrightEngineLike(engine)) {
+			throw new BrowserError(`Playwright engine '${this.#engine}' not available`)
+		}
+		return engine
+	}
+
+	async #discoverCdp(): Promise<BrowserDiscoveryResult> {
+		const port = this.#options.cdp?.port ?? BROWSER_DEFAULT_CDP_PORT
+		const url = `${BROWSER_CDP_PROTOCOL}://localhost:${port}${BROWSER_CDP_VERSION_PATH}`
+
+		try {
+			const timeout = this.#options.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+			const controller = new AbortController()
+			const timer = setTimeout(() => controller.abort(), timeout)
+
+			const response = await fetch(url, { signal: controller.signal })
+			clearTimeout(timer)
+
+			if (!response.ok) {
+				return { found: false, endpoint: undefined, browser: undefined, connection: undefined }
+			}
+
+			const info: unknown = await response.json()
+			if (!isRecord(info)) {
+				return { found: false, endpoint: undefined, browser: undefined, connection: undefined }
+			}
+
+			const endpoint =
+				typeof info['webSocketDebuggerUrl'] === 'string' ? info['webSocketDebuggerUrl'] : undefined
+			const browserName = typeof info['Browser'] === 'string' ? info['Browser'] : undefined
+
+			return {
+				found: endpoint !== undefined,
+				endpoint,
+				browser: browserName,
+				connection: endpoint !== undefined ? 'cdp' : undefined,
+			}
+		} catch {
+			return { found: false, endpoint: undefined, browser: undefined, connection: undefined }
+		}
+	}
+
+	async #connectCdp(engine: PlaywrightEngineLike, endpoint: string): Promise<void> {
+		const timeout = this.#options.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		const browser = await engine.connectOverCDP(endpoint, { timeout })
+		if (!isPlaywrightBrowserLike(browser)) {
+			throw new BrowserConnectionError('CDP connection returned invalid browser object')
+		}
+		this.#browser = browser
+		this.#connection = 'cdp'
+		this.#status = 'connected'
+		this.#syncContexts()
+	}
+
+	async #launch(engine: PlaywrightEngineLike): Promise<void> {
+		const opts: Record<string, unknown> = {
+			headless: this.#options.headless ?? true,
+		}
+		if (this.#options.executable !== undefined) {
+			opts['executablePath'] = this.#options.executable
+		}
+		if (this.#options.args !== undefined) {
+			opts['args'] = [...this.#options.args]
+		}
+		if (this.#options.timeout !== undefined) {
+			opts['timeout'] = this.#options.timeout
+		}
+
+		try {
+			const browser = await engine.launch(opts)
+			if (!isPlaywrightBrowserLike(browser)) {
+				throw new BrowserConnectionError('Launch returned invalid browser object')
+			}
+			this.#browser = browser
+			this.#connection = 'launch'
+			this.#status = 'connected'
+		} catch (thrown) {
+			// Attempt auto-install fallback
+			if (this.#isBrowserNotFoundError(thrown)) {
+				await this.#installAndLaunch(engine, opts)
+			} else {
+				throw thrown
+			}
+		}
+	}
+
+	async #launchPersistent(engine: PlaywrightEngineLike): Promise<void> {
+		const profile = this.#options.profile
+		if (profile === undefined) {
+			throw new BrowserError('Profile path is required for persistent launch')
+		}
+
+		const opts: Record<string, unknown> = {
+			headless: this.#options.headless ?? true,
+		}
+		if (this.#options.executable !== undefined) {
+			opts['executablePath'] = this.#options.executable
+		}
+		if (this.#options.args !== undefined) {
+			opts['args'] = [...this.#options.args]
+		}
+		if (this.#options.viewport !== undefined) {
+			opts['viewport'] = {
+				width: this.#options.viewport.width,
+				height: this.#options.viewport.height,
+			}
+		}
+		if (this.#options.timeout !== undefined) {
+			opts['timeout'] = this.#options.timeout
+		}
+
+		const context = await engine.launchPersistentContext(profile, opts)
+		this.#persistentContext = context
+		this.#connection = 'persistent'
+		this.#status = 'connected'
+	}
+
+	async #installAndLaunch(
+		engine: PlaywrightEngineLike,
+		opts: Record<string, unknown>,
+	): Promise<void> {
+		try {
+			const { execSync } = await import('node:child_process')
+			execSync(`npx playwright install ${this.#engine}`, { stdio: 'pipe' })
+			const browser = await engine.launch(opts)
+			if (!isPlaywrightBrowserLike(browser)) {
+				throw new BrowserConnectionError('Launch returned invalid browser object after install')
+			}
+			this.#browser = browser
+			this.#connection = 'launch'
+			this.#status = 'connected'
+		} catch (thrown) {
+			const message = thrown instanceof Error ? thrown.message : String(thrown)
+			throw new BrowserConnectionError(
+				`Playwright browser not found and auto-install failed. Run: npx playwright install ${this.#engine}\n${message}`,
+			)
+		}
+	}
+
+	#isBrowserNotFoundError(thrown: unknown): boolean {
+		if (!(thrown instanceof Error)) return false
+		const lower = thrown.message.toLowerCase()
+		return (
+			lower.includes("executable doesn't exist") ||
+			lower.includes('browser is not installed') ||
+			lower.includes('no such file or directory') ||
+			lower.includes('browsertype.launch')
+		)
+	}
+
+	#syncContexts(): void {
+		if (this.#browser === undefined) return
+		const rawContexts = this.#browser.contexts()
+		const synced: BrowserContext[] = []
+		for (const raw of rawContexts) {
+			synced.push(new BrowserContext(raw))
+		}
+		this.#contexts = synced
+	}
+}

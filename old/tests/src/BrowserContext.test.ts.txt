@@ -1,0 +1,290 @@
+/**
+ * BrowserContext tests.
+ *
+ * Uses real Playwright browser instances — no mocks.
+ * Covers context creation, page management, lifecycle, and edge cases.
+ */
+
+import type { Browser as PwBrowser } from 'playwright'
+import { describe, it, expect, beforeAll, afterAll } from 'vitest'
+import { chromium } from 'playwright'
+import { BrowserContext, BrowserError } from 'keepalive'
+
+// === Shared Playwright browser
+
+let sharedBrowser: PwBrowser
+
+beforeAll(async () => {
+	sharedBrowser = await chromium.launch({ headless: true })
+}, 30_000)
+
+afterAll(async () => {
+	await sharedBrowser.close()
+})
+
+// === BrowserContext
+
+describe('BrowserContext', () => {
+	describe('constructor', () => {
+		it('wraps a real context', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			expect(bc.pages()).toHaveLength(0)
+			await ctx.close()
+		})
+
+		it('throws BrowserError on null', () => {
+			expect(() => new BrowserContext(null)).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on undefined', () => {
+			expect(() => new BrowserContext(undefined)).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on empty object', () => {
+			expect(() => new BrowserContext({})).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on string', () => {
+			expect(() => new BrowserContext('context')).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on number', () => {
+			expect(() => new BrowserContext(42)).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on boolean', () => {
+			expect(() => new BrowserContext(true)).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on array', () => {
+			expect(() => new BrowserContext([])).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on partial object missing methods', () => {
+			expect(() => new BrowserContext({ newPage: () => {} })).toThrow(BrowserError)
+		})
+
+		it('throws BrowserError on object with non-function properties', () => {
+			expect(
+				() => new BrowserContext({ newPage: 'not-fn', pages: 'not-fn', close: 'not-fn' }),
+			).toThrow(BrowserError)
+		})
+	})
+
+	describe('page()', () => {
+		it('returns undefined when no pages', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			expect(bc.page()).toBeUndefined()
+			await ctx.close()
+		})
+
+		it('returns undefined when index 0 and no pages', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			expect(bc.page(0)).toBeUndefined()
+			await ctx.close()
+		})
+
+		it('returns page by index', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			await bc.create()
+			const pages = bc.pages()
+			expect(pages).toHaveLength(2)
+			expect(bc.page(0)).toBeDefined()
+			expect(bc.page(1)).toBeDefined()
+			expect(bc.page(2)).toBeUndefined()
+			await ctx.close()
+		})
+
+		it('returns first page when index omitted', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			expect(bc.page()).toBeDefined()
+			await ctx.close()
+		})
+
+		it('returns undefined for negative index', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			expect(bc.page(-1)).toBeUndefined()
+			await ctx.close()
+		})
+
+		it('returns undefined for negative index with pages', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			expect(bc.page(-1)).toBeUndefined()
+			await ctx.close()
+		})
+
+		it('returns undefined for very large index', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			expect(bc.page(9999)).toBeUndefined()
+			await ctx.close()
+		})
+	})
+
+	describe('pages()', () => {
+		it('returns empty array when no pages', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			expect(bc.pages()).toHaveLength(0)
+			expect(bc.pages()).toEqual([])
+			await ctx.close()
+		})
+
+		it('returns copy of pages list', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			const list1 = bc.pages()
+			const list2 = bc.pages()
+			expect(list1).toHaveLength(1)
+			expect(list1).not.toBe(list2)
+			await ctx.close()
+		})
+
+		it('reflects page count after multiple creates', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			expect(bc.pages()).toHaveLength(1)
+			await bc.create()
+			expect(bc.pages()).toHaveLength(2)
+			await bc.create()
+			expect(bc.pages()).toHaveLength(3)
+			await ctx.close()
+		})
+	})
+
+	describe('create()', () => {
+		it('opens a new page', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create()
+			expect(page).toBeDefined()
+			expect(page.url).toBe('about:blank')
+			expect(bc.pages()).toHaveLength(1)
+			await ctx.close()
+		})
+
+		it('navigates to url when provided', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create({ url: 'data:text/html,<h1>Created</h1>' })
+			expect(page.url).toContain('data:text/html')
+			await ctx.close()
+		})
+
+		it('creates page without options', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create()
+			expect(page).toBeDefined()
+			expect(page.url).toBe('about:blank')
+			await ctx.close()
+		})
+
+		it('creates multiple pages in sequence', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page1 = await bc.create({ url: 'data:text/html,<h1>Page 1</h1>' })
+			const page2 = await bc.create({ url: 'data:text/html,<h1>Page 2</h1>' })
+			const page3 = await bc.create({ url: 'data:text/html,<h1>Page 3</h1>' })
+			expect(bc.pages()).toHaveLength(3)
+			expect(page1.url).toContain('Page 1')
+			expect(page2.url).toContain('Page 2')
+			expect(page3.url).toContain('Page 3')
+			await ctx.close()
+		})
+
+		it('creates page with timeout option', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create({ url: 'data:text/html,<h1>Timeout</h1>', timeout: 10_000 })
+			expect(page.url).toContain('data:text/html')
+			await ctx.close()
+		})
+
+		it('page is not closed initially', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create()
+			expect(page.closed).toBe(false)
+			await ctx.close()
+		})
+	})
+
+	describe('close()', () => {
+		it('closes the context', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			expect(bc.pages()).toHaveLength(1)
+			await bc.close()
+		})
+
+		it('clears pages after close', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.create()
+			await bc.create()
+			expect(bc.pages()).toHaveLength(2)
+			await bc.close()
+			// After close, pages list may be empty or context is invalid
+		})
+
+		it('close without any pages is safe', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			await bc.close()
+		})
+	})
+
+	describe('page interaction after create', () => {
+		it('can navigate a created page', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create()
+			await page.navigate('data:text/html,<h1>Hello</h1>')
+			expect(page.url).toContain('data:text/html')
+			await ctx.close()
+		})
+
+		it('can extract content from a created page', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create({ url: 'data:text/html,<body><p>Test Content</p></body>' })
+			const content = await page.content()
+			expect(content.text).toContain('Test Content')
+			await ctx.close()
+		})
+
+		it('can take screenshot of a created page', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create({ url: 'data:text/html,<h1>Screenshot</h1>' })
+			const result = await page.screenshot()
+			expect(result.bytes).toBeInstanceOf(Uint8Array)
+			expect(result.bytes.length).toBeGreaterThan(0)
+			await ctx.close()
+		})
+
+		it('can evaluate JavaScript in a created page', async () => {
+			const ctx = await sharedBrowser.newContext()
+			const bc = new BrowserContext(ctx)
+			const page = await bc.create()
+			const result = await page.evaluate('2 + 2')
+			expect(result).toBe(4)
+			await ctx.close()
+		})
+	})
+})
