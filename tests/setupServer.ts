@@ -365,7 +365,7 @@ export function createFakeBrowserProcess(
 				"server.on('error', (e) => { console.error('fake-browser listen error: ' + e.message); process.exit(12) })",
 				"server.listen(port, '127.0.0.1', () => { require('fs').writeFileSync(" +
 					JSON.stringify(portFile) +
-					", String(port)) })",
+					', String(port)) })',
 			].join('\n'),
 		)
 	}

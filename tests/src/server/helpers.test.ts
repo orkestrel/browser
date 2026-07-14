@@ -104,7 +104,15 @@ describe('findSystemBrowser', () => {
 			process.platform === 'win32'
 				? join(store, 'chromium-1194', 'chrome-win', 'chrome.exe')
 				: process.platform === 'darwin'
-					? join(store, 'chromium-1194', 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium')
+					? join(
+							store,
+							'chromium-1194',
+							'chrome-mac',
+							'Chromium.app',
+							'Contents',
+							'MacOS',
+							'Chromium',
+						)
 					: join(store, 'chromium-1194', 'chrome-linux', 'chrome')
 		mkdirSync(dirname(binary), { recursive: true })
 		writeFileSync(binary, '')
