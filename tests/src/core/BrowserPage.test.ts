@@ -370,8 +370,8 @@ describe('BrowserPage', () => {
 					transport.reply(message.id, {
 						exceptionDetails: {
 							exception: {
-							description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}3500000`,
-						},
+								description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}3500000`,
+							},
 						},
 					})
 				}

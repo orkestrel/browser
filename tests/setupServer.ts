@@ -412,7 +412,7 @@ export function createFakeBrowserProcess(
 	// Orphan watchdog: if the parent (test runner) is hard-aborted, this
 	// process is reparented to init (ppid 1) — self-exit instead of leaking
 	// across subsequent test runs.
-	lines.push("setInterval(() => { if (process.ppid === 1) process.exit(0) }, 500)")
+	lines.push('setInterval(() => { if (process.ppid === 1) process.exit(0) }, 500)')
 
 	if (options.serveCdp === true) {
 		lines.push(
