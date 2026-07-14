@@ -1,6 +1,6 @@
 import type { BrowserCodegenAction, BrowserCodegenScriptOptions } from './types.js'
 import { isRecord, isString } from '@orkestrel/contract'
-import { BASE64_LOOKUP } from './constants.js'
+import { BASE64_LOOKUP, BROWSER_RESULT_LIMIT_SENTINEL_PREFIX } from './constants.js'
 
 /**
  * Decode a base64-encoded string into raw bytes.
@@ -55,12 +55,18 @@ export function decodeBase64(text: string): Uint8Array {
  * length check is skipped and today's undefined-passthrough behavior is
  * unchanged.
  *
+ * The expression is placed on its own line inside the wrapper (rather than
+ * inline with the guard code) so a trailing `//` line comment in the
+ * expression cannot swallow the closing guard syntax that follows it.
+ *
  * @param expression - The candidate JavaScript expression to evaluate
  * @param limit - Maximum serialized-character length (see {@link BROWSER_RESULT_LIMIT})
  * @returns The wrapped, guarded expression
  */
 export function guardEvaluateExpression(expression: string, limit: number): string {
-	return `(() => { const r = (${expression}); const s = JSON.stringify(r); if (typeof s === 'string' && s.length > ${limit}) throw new Error('BROWSER_RESULT_LIMIT: ' + s.length); return r })()`
+	return `(() => { const r = (
+${expression}
+); const s = JSON.stringify(r); if (typeof s === 'string' && s.length > ${limit}) throw new Error(${JSON.stringify(BROWSER_RESULT_LIMIT_SENTINEL_PREFIX)} + s.length); return r })()`
 }
 
 /**

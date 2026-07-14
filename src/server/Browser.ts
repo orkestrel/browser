@@ -413,6 +413,7 @@ export class Browser implements BrowserInterface {
 	 * `error` (cause: process exit) before `disconnect`.
 	 */
 	#handleProcessExit(): void {
+		if (this.#destroyed) return
 		if (this.#status !== 'connected') return
 
 		this.#unbindTransport()
@@ -443,6 +444,7 @@ export class Browser implements BrowserInterface {
 	 * `error` (cause: connection loss) before `disconnect`.
 	 */
 	#handleTransportLoss(deferred = false): void {
+		if (this.#destroyed) return
 		if (this.#status !== 'connected') return
 
 		const process = this.#process
@@ -461,6 +463,20 @@ export class Browser implements BrowserInterface {
 			// becomes a no-op via the #status guard above. Only ever defers once.
 			setTimeout(() => this.#handleTransportLoss(true), BROWSER_TRANSPORT_LOSS_DEFER_MS)
 			return
+		}
+
+		if (process !== undefined && process.pid !== undefined) {
+			// The 'exit' event may still not have reached us even after the
+			// defer (a slow-to-reap libuv tick) — re-verify liveness directly
+			// via signal 0 so a genuinely dead process routes through the
+			// process-exit cleanup path (clearing #process) instead of being
+			// left stranded as a resumable owned process.
+			try {
+				process.kill(0)
+			} catch {
+				this.#handleProcessExit()
+				return
+			}
 		}
 
 		this.#unbindTransport()

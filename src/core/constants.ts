@@ -18,21 +18,59 @@ export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
  * enforced IN-PAGE before the result is returned to CDP.
  *
  * @remarks
- * A `Runtime.evaluate` result above this size, once framed as a CDP JSON
- * response, overflows the native WebSocket inbound frame limit and closes
- * the whole CDP connection — a page-level failure with no clean error. The
- * cap is enforced by stringifying the candidate result in-page and throwing
- * a recognizable `BROWSER_RESULT_LIMIT: <length>` error before the oversized
- * frame is ever produced, so the caller gets a coded error instead of a
- * dropped connection.
+ * This counts UTF-16 STRING LENGTH (`String#length`), not transport BYTES —
+ * the actual CDP frame is UTF-8 encoded (up to 3 bytes/char for common
+ * multibyte content) and carries additional JSON/CDP framing overhead on top
+ * of the raw content. A `Runtime.evaluate` result above this size, once
+ * framed as a CDP JSON response, overflows the native WebSocket inbound frame
+ * limit and closes the whole CDP connection — a page-level failure with no
+ * clean error. The limit is set well under the observed ~3-4MB transport
+ * ceiling (rather than at it) to leave headroom for the length-vs-bytes gap
+ * and framing overhead. The cap is enforced by stringifying the candidate
+ * result in-page and throwing a recognizable sentinel error (see
+ * {@link BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}) before the oversized frame is
+ * ever produced, so the caller gets a coded error instead of a dropped
+ * connection.
  */
-export const BROWSER_RESULT_LIMIT = 3_000_000
+export const BROWSER_RESULT_LIMIT = 2_500_000
 
-/** Matches the in-page `BROWSER_RESULT_LIMIT: <length>` sentinel error message. */
-export const BROWSER_RESULT_LIMIT_PATTERN = /BROWSER_RESULT_LIMIT: (\d+)/
+/**
+ * Distinctive prefix for the in-page result-limit sentinel error, immediately
+ * followed by the serialized length.
+ *
+ * @remarks
+ * Deliberately unlikely to appear in a page's own thrown error text (unlike
+ * a plain `BROWSER_RESULT_LIMIT: ` label), so {@link BROWSER_RESULT_LIMIT_PATTERN}
+ * can distinguish the guard's own throw from a page error that merely
+ * mentions similar text.
+ */
+export const BROWSER_RESULT_LIMIT_SENTINEL_PREFIX = '[[ORKESTREL_BROWSER_RESULT_LIMIT]]'
+
+/**
+ * Matches the in-page result-limit sentinel error message, anchored
+ * immediately after the `Error: ` (optionally `Uncaught Error: `) prefix that
+ * Chromium prepends to a thrown error's description — so the guard's own
+ * throw is recognized only at the message START, not wherever the substring
+ * happens to occur.
+ */
+export const BROWSER_RESULT_LIMIT_PATTERN = new RegExp(
+	`(?:Uncaught )?Error: \\[\\[ORKESTREL_BROWSER_RESULT_LIMIT\\]\\](\\d+)`,
+)
 
 /** Poll interval in milliseconds while waiting for a selector to appear. */
 export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
+
+/**
+ * Bound (in milliseconds) on the best-effort `Page.stopLoading` call issued
+ * after a failed `navigate()`.
+ *
+ * @remarks
+ * A wedged renderer can make the underlying CDP call hang for the full
+ * per-call timeout; capping it to a small fixed bound keeps a navigate
+ * failure's total latency close to the original timeout instead of doubling
+ * it. Best-effort only — never masks the original navigate error.
+ */
+export const BROWSER_STOP_LOADING_TIMEOUT_MS = 1_000
 
 /** Default viewport width in pixels. */
 export const BROWSER_DEFAULT_VIEWPORT_WIDTH = 1280

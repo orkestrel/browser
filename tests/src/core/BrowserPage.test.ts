@@ -8,6 +8,8 @@ import {
 	isCDPTimeoutError,
 	BrowserResultLimitError,
 	BROWSER_RESULT_LIMIT,
+	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
+	BROWSER_STOP_LOADING_TIMEOUT_MS,
 } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
 import {
@@ -270,6 +272,32 @@ describe('BrowserPage', () => {
 			)
 		}, 10_000)
 
+		it('bounds the best-effort Page.stopLoading to a short cap instead of the full per-call timeout', async () => {
+			vi.useFakeTimers()
+			try {
+				const { client, transport } = await createConnectedClient()
+				replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
+				// Page.stopLoading is never replied to — a wedged renderer must not
+				// be able to stretch the failure path out to the full per-call timeout.
+				transport.onSend('Page.stopLoading', () => {
+					// intentionally no reply
+				})
+
+				const page = new BrowserPage(client, 'target-1', 'session-1')
+				const pending = page.navigate('https://bad.example', { timeout: 30_000 })
+				const outcome = pending.catch((caught: unknown) => caught)
+
+				// Advance well past the short stopLoading cap but far short of the
+				// full 30s per-call timeout — the failure must already be settled.
+				await vi.advanceTimersByTimeAsync(BROWSER_STOP_LOADING_TIMEOUT_MS + 50)
+				const thrown = await outcome
+
+				expect(isBrowserError(thrown)).toBe(true)
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
 		it('leaves no dangling timer and no unhandled rejection when Page.navigate fails', async () => {
 			vi.useFakeTimers()
 			const unhandled: unknown[] = []
@@ -341,7 +369,9 @@ describe('BrowserPage', () => {
 				if (typeof expression === 'string' && expression.includes('outerHTML')) {
 					transport.reply(message.id, {
 						exceptionDetails: {
-							exception: { description: 'Uncaught Error: BROWSER_RESULT_LIMIT: 3500000' },
+							exception: {
+							description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}3500000`,
+						},
 						},
 					})
 				}
@@ -541,8 +571,7 @@ describe('BrowserPage', () => {
 				transport.reply(message.id, {
 					exceptionDetails: {
 						exception: {
-							description:
-								'Uncaught Error: BROWSER_RESULT_LIMIT: 4200000\n    at <anonymous>:1:100',
+							description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}4200000\n    at <anonymous>:1:100`,
 						},
 					},
 				})

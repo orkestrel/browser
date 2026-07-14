@@ -22,6 +22,7 @@ import {
 	BrowserNotConnectedError,
 	BrowserConnectionError,
 	BROWSER_KILL_GRACE_MS,
+	BROWSER_TRANSPORT_LOSS_DEFER_MS,
 } from '@src/server'
 import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError, compileCodegenScript } from '@src/core'
 import { createCdpTestServer, createFakeBrowserProcess } from '../../setupServer.js'
@@ -752,21 +753,90 @@ describe('Browser external-disconnect detection', () => {
 	})
 
 	it('transport close triggers exactly one disconnect without reading .connected', async () => {
-		server = await createCdpTestServer()
-		server.list([])
+		const testServer = await createCdpTestServer()
+		server = testServer
+		testServer.list([])
 		let disconnectCount = 0
 		const browser = createBrowser({
-			cdp: { port: server.port },
+			cdp: { port: testServer.port },
 			on: { disconnect: () => disconnectCount++ },
 		})
 		await browser.connect()
 
-		await server.close()
+		await testServer.close()
 		server = undefined
 		await waitForDelay(50)
 
 		expect(disconnectCount).toBe(1)
 		expect(browser.status).toBe('disconnected')
+		// An external transport loss must never send a remote Browser.close —
+		// close() shuts down the shared remote ONLY on an explicit user call.
+		expect(testServer.received.some((m) => m.method === 'Browser.close')).toBe(false)
+
+		await browser.destroy()
+	})
+
+	it('does not emit a spurious error/disconnect when destroy() runs during the transport-loss defer window', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		let errorCount = 0
+		let disconnectCount = 0
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_040 },
+			timeout: 5000,
+			on: {
+				error: () => errorCount++,
+				disconnect: () => disconnectCount++,
+			},
+		})
+
+		await browser.connect()
+
+		// Drop the transport (process stays alive) then IMMEDIATELY destroy —
+		// destroy() sets #destroyed synchronously, so the deferred transport-loss
+		// handler (or an in-flight immediate one) must become a no-op instead of
+		// emitting its own error/disconnect on top of destroy()'s teardown.
+		await fake.dropSocket()
+		await browser.destroy()
+
+		// Wait past the transport-loss defer window so any stray deferred
+		// handler gets a chance to fire (and would be caught here if it did).
+		await waitForDelay(BROWSER_TRANSPORT_LOSS_DEFER_MS + 100)
+
+		expect(errorCount).toBe(0)
+		expect(disconnectCount).toBe(0)
+		expect(browser.connected).toBe(false)
+	})
+
+	it('cleans up and permits reconnecting on the same instance when the process is already dead by the time a transport-loss defer resolves', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_041 },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		const pid = await fake.pid()
+
+		// Drop the transport, then kill the process outright — regardless of
+		// whether Node's own 'exit' event races ahead of the transport-loss
+		// defer, the end state must be a fully cleared #process (no stranded
+		// dead process) so the SAME instance can relaunch.
+		await fake.dropSocket()
+		process.kill(pid, 'SIGKILL')
+
+		await waitForDelay(BROWSER_TRANSPORT_LOSS_DEFER_MS + 200)
+
+		expect(browser.status).toBe('disconnected')
+		expect(browser.pid).toBeUndefined()
+
+		// A stranded dead #process must not block a fresh #launch with the
+		// "already active" error.
+		await expect(browser.connect()).resolves.toBeUndefined()
+		expect(browser.connected).toBe(true)
 
 		await browser.destroy()
 	})
@@ -857,12 +927,27 @@ describe('Browser destroy()/close() matrix', () => {
 
 		const closeTargetCalls = server.received.filter((m) => m.method === 'Target.closeTarget')
 		expect(closeTargetCalls).toHaveLength(0)
+		// destroy() must NEVER send a remote Browser.close — it is a local
+		// detach/teardown only; Browser.close is sent EXCLUSIVELY by close().
+		expect(server.received.some((m) => m.method === 'Browser.close')).toBe(false)
 
 		// The server (standing in for "another client's shared browser") stays usable.
 		const other = createBrowser({ cdp: { port: server.port } })
 		await other.connect()
 		expect(other.connected).toBe(true)
 		await other.destroy()
+	})
+
+	it('disconnect() on an attached session sends no Browser.close', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+
+		const browser = createBrowser({ cdp: { port: server.port } })
+		await browser.connect()
+		await browser.disconnect()
+
+		expect(server.received.some((m) => m.method === 'Browser.close')).toBe(false)
+		expect(browser.connected).toBe(false)
 	})
 
 	it('close() on an attached session sends Browser.close and cleans up locally', async () => {

@@ -71,8 +71,10 @@ await client.close()
 | `BROWSER_CODEGEN_SOURCE`          | const | The in-page recorder script source injected via CDP to capture click/fill/select actions (a `contenteditable` fill is captured via `input` events same as inputs/textareas).                                     |
 | `BASE64_CHARS`                    | const | The 64-character base64 alphabet used to build the decode lookup table.                                                                                                                                          |
 | `BASE64_LOOKUP`                   | const | Frozen character → 6-bit value lookup table derived from `BASE64_CHARS`.                                                                                                                                         |
-| `BROWSER_RESULT_LIMIT`            | const | `3_000_000` — maximum serialized-character length for an `evaluate()`/`content()` result, enforced in-page before the result reaches CDP (an oversized result would otherwise overflow the CDP transport frame). |
-| `BROWSER_RESULT_LIMIT_PATTERN`    | const | Regex matching the in-page `BROWSER_RESULT_LIMIT: <length>` sentinel error message.                                                                                                                              |
+| `BROWSER_RESULT_LIMIT`            | const | `2_500_000` — maximum serialized-character length (UTF-16, not transport bytes) for an `evaluate()`/`content()` result, enforced in-page before the result reaches CDP (kept well under the ~3-4MB transport ceiling for UTF-8/framing headroom). |
+| `BROWSER_RESULT_LIMIT_SENTINEL_PREFIX` | const | `'[[ORKESTREL_BROWSER_RESULT_LIMIT]]'` — distinctive prefix for the in-page result-limit sentinel error, immediately followed by the serialized length. |
+| `BROWSER_RESULT_LIMIT_PATTERN`    | const | Regex anchored on `(?:Uncaught )?Error: [[ORKESTREL_BROWSER_RESULT_LIMIT]](\d+)`, recognizing only the guard's own sentinel throw (not a page error that merely mentions similar text). |
+| `BROWSER_STOP_LOADING_TIMEOUT_MS` | const | `1_000` — short cap (ms) on the best-effort `Page.stopLoading` call issued after a failed `navigate()`, so a wedged renderer cannot stretch the failure path out to the full per-call timeout. |
 
 #### Errors
 

@@ -10,6 +10,8 @@ import {
 	readCodegenNavigateAction,
 	compileCodegenScript,
 	guardEvaluateExpression,
+	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
+	BROWSER_RESULT_LIMIT_PATTERN,
 } from '@src/core'
 import type { BrowserCodegenAction } from '@src/core'
 import { PNG_BASE64, JPEG_BASE64 } from '../../setup.js'
@@ -175,7 +177,9 @@ describe('guardEvaluateExpression', () => {
 		const wrapped = guardEvaluateExpression('1 + 1', 100)
 		expect(wrapped).toContain('1 + 1')
 		expect(wrapped).toContain('JSON.stringify(r)')
-		expect(wrapped).toContain("throw new Error('BROWSER_RESULT_LIMIT: ' + s.length)")
+		expect(wrapped).toContain(
+			`throw new Error(${JSON.stringify(BROWSER_RESULT_LIMIT_SENTINEL_PREFIX)} + s.length)`,
+		)
 		expect(wrapped).toContain('s.length > 100')
 	})
 
@@ -185,16 +189,44 @@ describe('guardEvaluateExpression', () => {
 		expect(run()).toEqual({ a: 1 })
 	})
 
-	it('throws the BROWSER_RESULT_LIMIT sentinel when the serialized result exceeds the limit', () => {
+	it('throws the sentinel error when the serialized result exceeds the limit', () => {
 		const wrapped = guardEvaluateExpression('"x".repeat(50)', 10)
 		const run = new Function(`return ${wrapped}`) as () => unknown
-		expect(() => run()).toThrow(/BROWSER_RESULT_LIMIT: \d+/)
+		expect(() => run()).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
 	})
 
 	it('does not throw for a non-serializable (undefined) result even over a tiny limit', () => {
 		const wrapped = guardEvaluateExpression('undefined', 0)
 		const run = new Function(`return ${wrapped}`) as () => unknown
 		expect(run()).toBeUndefined()
+	})
+
+	it('places the expression on its own line so a trailing line comment cannot swallow the closing guard syntax', () => {
+		const wrapped = guardEvaluateExpression('1 + 1 // a trailing comment', 1000)
+		// Must still parse: a single-line wrapper would have the `// comment`
+		// consume everything after it on that line, including the guard tail.
+		const run = new Function(`return ${wrapped}`) as () => unknown
+		expect(run()).toBe(2)
+	})
+
+	it('still enforces the limit when the expression ends with a line comment', () => {
+		const wrapped = guardEvaluateExpression('"x".repeat(50) // trailing comment', 10)
+		const run = new Function(`return ${wrapped}`) as () => unknown
+		expect(() => run()).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
+	})
+
+	it('does not misclassify a page-thrown error whose message merely contains the sentinel-like substring', () => {
+		// A page's own error text containing "BROWSER_RESULT_LIMIT: <n>" (the
+		// OLD unanchored substring) must not match the anchored, distinctively
+		// prefixed pattern used to recognize the guard's own throw.
+		const pageDescription = 'Uncaught Error: my message says BROWSER_RESULT_LIMIT: 5 right here'
+		expect(BROWSER_RESULT_LIMIT_PATTERN.exec(pageDescription)).toBeNull()
+	})
+
+	it('recognizes the real guard throw via the anchored, distinctive pattern', () => {
+		const description = `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}4200000\n    at <anonymous>:1:100`
+		const match = BROWSER_RESULT_LIMIT_PATTERN.exec(description)
+		expect(match?.[1]).toBe('4200000')
 	})
 })
 

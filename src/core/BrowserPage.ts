@@ -17,6 +17,7 @@ import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	BROWSER_RESULT_LIMIT,
 	BROWSER_RESULT_LIMIT_PATTERN,
+	BROWSER_STOP_LOADING_TIMEOUT_MS,
 	BROWSER_WAIT_POLL_INTERVAL_MS,
 } from './constants.js'
 import { decodeBase64, guardEvaluateExpression } from './helpers.js'
@@ -103,7 +104,7 @@ export class BrowserPage implements BrowserPageInterface {
 			if (!outcome.ok) throw outcome.error
 		} catch (error) {
 			wait.cancel()
-			await this.#stopLoading(timeout)
+			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
 			throw error
 		}
 
@@ -312,9 +313,11 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	// Best-effort: tells Chromium to abandon an in-flight navigation so the
-	// renderer is not left wedged behind it. Bounded by the same per-call
-	// timeout as the navigate() attempt that failed; any failure here is
-	// swallowed so it never masks the original navigate error.
+	// renderer is not left wedged behind it. Bounded by a short cap (see
+	// BROWSER_STOP_LOADING_TIMEOUT_MS) rather than the full per-call timeout,
+	// so a wedged renderer cannot add up to the whole timeout to the failure
+	// path; any failure here is swallowed so it never masks the original
+	// navigate error.
 	async #stopLoading(timeout: number): Promise<void> {
 		try {
 			await this.#client.send('Page.stopLoading', undefined, this.#sessionId, timeout)
