@@ -7,16 +7,52 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
-import { WebSocketCDPTransport } from '@src/server'
+import { createServer as createNetServer } from 'node:net'
+import type { Server as NetServer } from 'node:net'
+import { WebSocketCDPTransport, isBrowserConnectionError } from '@src/server'
 import { createCdpTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 import { createRecorder, waitForDelay } from '../../setup.js'
 
 let server: CDPTestServerInterface | undefined
+let stallServer: NetServer | undefined
+let stallSockets: Set<import('node:net').Socket> | undefined
+
+/**
+ * Start a raw TCP server that accepts connections but never completes the
+ * WebSocket upgrade handshake — the client socket stays stuck in
+ * `CONNECTING` for as long as the caller holds it open.
+ *
+ * @returns The `ws://` URL of the stalling server
+ */
+async function createStallServer(): Promise<string> {
+	const sockets = new Set<import('node:net').Socket>()
+	const net = createNetServer((socket) => {
+		sockets.add(socket)
+		socket.on('error', () => {})
+		socket.on('close', () => sockets.delete(socket))
+	})
+	stallServer = net
+	stallSockets = sockets
+
+	await new Promise<void>((resolve) => net.listen(0, '127.0.0.1', resolve))
+	const address = net.address()
+	const port = typeof address === 'object' && address !== null ? address.port : 0
+	return `ws://127.0.0.1:${port}/cdp`
+}
 
 afterEach(async () => {
 	await server?.close()
 	server = undefined
+
+	if (stallServer !== undefined) {
+		const net = stallServer
+		const sockets = stallSockets
+		stallServer = undefined
+		stallSockets = undefined
+		if (sockets !== undefined) for (const socket of sockets) socket.destroy()
+		await new Promise<void>((resolve) => net.close(() => resolve()))
+	}
 })
 
 describe('WebSocketCDPTransport', () => {
@@ -86,8 +122,33 @@ describe('WebSocketCDPTransport', () => {
 	})
 
 	it('start() rejects when connecting to an unreachable port', async () => {
-		const transport = new WebSocketCDPTransport({ url: 'ws://localhost:19990/cdp', timeout: 200 })
-		await expect(transport.start()).rejects.toThrow(/WebSocket CDP connection (failed|timed out)/)
+		const url = 'ws://localhost:19990/cdp'
+		const transport = new WebSocketCDPTransport({ url, timeout: 200 })
+		await expect(transport.start()).rejects.toThrow(new RegExp(`WebSocket CDP connection to ${url} (failed|timed out)`))
+
+		try {
+			await transport.start()
+			expect.unreachable()
+		} catch (error) {
+			expect(isBrowserConnectionError(error)).toBe(true)
+			expect((error as Error).message).toContain(url)
+		}
+	})
+
+	it('close() aborts a connection still in flight and settles start() as rejected', async () => {
+		const url = await createStallServer()
+		const transport = new WebSocketCDPTransport({ url, timeout: 5000 })
+
+		const started = transport.start()
+		await waitForDelay(20)
+		await transport.close()
+
+		await expect(started).rejects.toSatisfy((error: unknown) => isBrowserConnectionError(error))
+		await expect(started).rejects.toThrow(url)
+
+		// no socket survived — send() still reports not-open, and close() stays idempotent
+		await expect(transport.send('{}')).rejects.toThrow('WebSocket CDP transport is not open')
+		await expect(transport.close()).resolves.toBeUndefined()
 	})
 
 	it('start() opens a fresh socket each call (reconnect support)', async () => {

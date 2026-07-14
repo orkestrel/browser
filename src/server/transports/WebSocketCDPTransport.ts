@@ -3,6 +3,7 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import type { WebSocketCDPTransportOptions } from '../types.js'
 import { Emitter } from '@orkestrel/emitter'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from '@src/core'
+import { BrowserConnectionError } from '../errors.js'
 
 // === WebSocketCDPTransport
 
@@ -23,6 +24,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	readonly #url: string
 	readonly #timeout: number
 	#socket: WebSocket | undefined
+	#connecting: { readonly socket: WebSocket; readonly timer: ReturnType<typeof setTimeout>; readonly reject: (error: unknown) => void } | undefined
 
 	constructor(options: WebSocketCDPTransportOptions) {
 		this.#emitter = new Emitter()
@@ -38,23 +40,40 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 		const socket = new WebSocket(this.#url)
 
 		await new Promise<void>((resolve, reject) => {
+			const settle = (fn: () => void): void => {
+				this.#connecting = undefined
+				fn()
+			}
+
 			const timer = setTimeout(() => {
 				socket.close()
-				reject(new Error(`WebSocket CDP connection timed out after ${this.#timeout}ms`))
+				settle(() => reject(new BrowserConnectionError(
+					`WebSocket CDP connection to ${this.#url} timed out after ${this.#timeout}ms`,
+					{ url: this.#url, timeout: this.#timeout },
+				)))
 			}, this.#timeout)
 
 			const onOpen = (): void => {
 				clearTimeout(timer)
-				resolve()
+				settle(resolve)
 			}
 
-			const onError = (event: Event): void => {
+			const onError = (event: ErrorEvent): void => {
 				clearTimeout(timer)
-				reject(new Error(`WebSocket CDP connection failed: ${String(event)}`))
+				settle(() => reject(new BrowserConnectionError(
+					`WebSocket CDP connection to ${this.#url} failed: ${event.message || event.type}`,
+					{ url: this.#url },
+				)))
 			}
 
 			socket.addEventListener('open', onOpen, { once: true })
 			socket.addEventListener('error', onError, { once: true })
+
+			this.#connecting = {
+				socket,
+				timer,
+				reject: (error) => settle(() => reject(error)),
+			}
 		})
 
 		this.#socket = socket
@@ -70,6 +89,18 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	}
 
 	async close(): Promise<void> {
+		const connecting = this.#connecting
+		if (connecting !== undefined) {
+			clearTimeout(connecting.timer)
+			this.#connecting = undefined
+			connecting.socket.close()
+			connecting.reject(new BrowserConnectionError(
+				`WebSocket CDP connection to ${this.#url} was closed before it finished connecting`,
+				{ url: this.#url },
+			))
+			return
+		}
+
 		const socket = this.#socket
 		if (socket === undefined) return
 		if (socket.readyState === WebSocket.CLOSED) {
