@@ -1,6 +1,7 @@
 import type {
 	BrowserCodegenInterface,
 	BrowserCodegenOptions,
+	BrowserFrame,
 	BrowserPageInterface,
 	BrowserNavigationOptions,
 	BrowserActionOptions,
@@ -217,16 +218,19 @@ export class BrowserPage implements BrowserPageInterface {
 		await this.#waitForSelector(selector, timeout)
 	}
 
-	frame(name: string): BrowserPageInterface | undefined {
-		// Frame support requires Page.getFrameTree and session attachment
-		// For MVP, frames are not supported via direct CDP
-		void name
-		return undefined
+	async frame(name: string): Promise<BrowserFrame | undefined> {
+		const frames = await this.frames()
+		return frames.find((frame) => frame.name === name || frame.url === name)
 	}
 
-	frames(): readonly BrowserPageInterface[] {
-		// For MVP, frames are not enumerated via direct CDP
-		return []
+	async frames(): Promise<readonly BrowserFrame[]> {
+		const result: unknown = await this.#client.send('Page.getFrameTree', undefined, this.#sessionId)
+
+		if (!isRecord(result) || !isRecord(result['frameTree'])) return []
+
+		const frames: BrowserFrame[] = []
+		this.#flattenFrameTree(result['frameTree'], frames)
+		return frames
 	}
 
 	async codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface> {
@@ -263,6 +267,29 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	// === Private helpers
+
+	#flattenFrameTree(node: Readonly<Record<string, unknown>>, out: BrowserFrame[]): void {
+		const frame = node['frame']
+
+		if (isRecord(frame) && isString(frame['id']) && isString(frame['url'])) {
+			const parent = frame['parentId']
+			const name = frame['name']
+
+			out.push({
+				id: frame['id'],
+				...(isString(parent) ? { parent } : {}),
+				...(isString(name) && name !== '' ? { name } : {}),
+				url: frame['url'],
+			})
+		}
+
+		const children = node['childFrames']
+		if (Array.isArray(children)) {
+			for (const child of children) {
+				if (isRecord(child)) this.#flattenFrameTree(child, out)
+			}
+		}
+	}
 
 	async #evaluate(expression: string): Promise<unknown> {
 		const result: unknown = await this.#client.send(

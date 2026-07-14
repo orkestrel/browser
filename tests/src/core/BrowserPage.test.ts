@@ -330,16 +330,72 @@ describe('BrowserPage', () => {
 	})
 
 	describe('frame() / frames()', () => {
-		it('returns undefined for any frame name', async () => {
-			const { client } = await createConnectedClient()
+		function scriptFrameTree(transport: CDPTestTransportInterface): void {
+			replyOk(transport, 'Page.getFrameTree', {
+				frameTree: {
+					frame: { id: 'main-1', url: 'https://example.com/' },
+					childFrames: [
+						{
+							frame: { id: 'child-1', parentId: 'main-1', name: 'child-frame', url: 'https://example.com/child' },
+							childFrames: [
+								{
+									frame: { id: 'grandchild-1', parentId: 'child-1', name: '', url: 'https://example.com/grandchild' },
+								},
+							],
+						},
+					],
+				},
+			})
+		}
+
+		it('flattens the frame tree main-first with parent/name/url mapping', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptFrameTree(transport)
+
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			expect(page.frame('does-not-exist')).toBeUndefined()
+			const frames = await page.frames()
+
+			expect(frames).toEqual([
+				{ id: 'main-1', url: 'https://example.com/' },
+				{ id: 'child-1', parent: 'main-1', name: 'child-frame', url: 'https://example.com/child' },
+				{ id: 'grandchild-1', parent: 'child-1', url: 'https://example.com/grandchild' },
+			])
 		})
 
-		it('returns an empty frame list', async () => {
-			const { client } = await createConnectedClient()
+		it('finds a frame by name', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptFrameTree(transport)
+
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			expect(page.frames()).toEqual([])
+			const frame = await page.frame('child-frame')
+
+			expect(frame?.id).toBe('child-1')
+		})
+
+		it('finds a frame by url', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptFrameTree(transport)
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			const frame = await page.frame('https://example.com/grandchild')
+
+			expect(frame?.id).toBe('grandchild-1')
+		})
+
+		it('returns undefined when no frame matches', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptFrameTree(transport)
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			expect(await page.frame('does-not-exist')).toBeUndefined()
+		})
+
+		it('returns an empty frame list on a malformed reply', async () => {
+			const { client, transport } = await createConnectedClient()
+			replyOk(transport, 'Page.getFrameTree', {})
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			expect(await page.frames()).toEqual([])
 		})
 	})
 

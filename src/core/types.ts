@@ -266,6 +266,22 @@ export interface BrowserCodegenInterface {
 // === Browser page
 
 /**
+ * One frame in a page's frame tree, as reported by CDP `Page.getFrameTree`.
+ *
+ * @remarks
+ * - `id` — the frame's CDP frame id
+ * - `parent` — the parent frame's id, undefined for the main frame
+ * - `name` — the frame's `name`/`id` HTML attribute, undefined when not set
+ * - `url` — the frame's current URL
+ */
+export type BrowserFrame = {
+	readonly id: string
+	readonly parent?: string
+	readonly name?: string
+	readonly url: string
+}
+
+/**
  * Abstraction over a single browser page or frame.
  *
  * @remarks
@@ -280,8 +296,8 @@ export interface BrowserCodegenInterface {
  * - `select` — choose option(s) in a `<select>` element
  * - `evaluate` — execute a JavaScript expression in the page context
  * - `wait` — wait for an element matching the selector to appear
- * - `frame` — look up a child frame by name
- * - `frames` — list all child frames
+ * - `frame` — look up a frame by name or URL in the page's flattened frame tree
+ * - `frames` — list the page's flattened frame tree, main frame first
  * - `codegen` — start (or return the existing) action recorder for this page
  * - `close` — close the page
  */
@@ -297,8 +313,8 @@ export interface BrowserPageInterface {
 	select(selector: string, values: readonly string[], options?: BrowserActionOptions): Promise<void>
 	evaluate(expression: string): Promise<unknown>
 	wait(selector: string, options?: BrowserActionOptions): Promise<void>
-	frame(name: string): BrowserPageInterface | undefined
-	frames(): readonly BrowserPageInterface[]
+	frame(name: string): Promise<BrowserFrame | undefined>
+	frames(): Promise<readonly BrowserFrame[]>
 	codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface>
 	close(): Promise<void>
 }
