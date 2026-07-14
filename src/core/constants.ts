@@ -1,0 +1,95 @@
+// === Browser
+
+/** Default timeout in milliseconds for browser connection, requests, and navigation. */
+export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
+
+/** Poll interval in milliseconds while waiting for a selector to appear. */
+export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
+
+/** Default viewport width in pixels. */
+export const BROWSER_DEFAULT_VIEWPORT_WIDTH = 1280
+
+/** Default viewport height in pixels. */
+export const BROWSER_DEFAULT_VIEWPORT_HEIGHT = 720
+
+// === Browser codegen
+
+/** Name of the CDP runtime binding the codegen recorder script calls into. */
+export const BROWSER_CODEGEN_BINDING_NAME = '__orkestrelBrowserCodegen'
+
+/**
+ * In-page recorder script injected via `Page.addScriptToEvaluateOnNewDocument`
+ * and `Runtime.evaluate`.
+ *
+ * @remarks
+ * Attaches capturing-phase listeners for `click`, `input` (fill), and
+ * `change` (select) on `document`, builds a stable CSS selector for the
+ * target element, and forwards each action to the CDP binding
+ * ({@link BROWSER_CODEGEN_BINDING_NAME}) as a JSON string payload. Guarded to
+ * install exactly once per document (`window[name]` sentinel) so repeated
+ * injection on every new document is idempotent.
+ */
+export const BROWSER_CODEGEN_SOURCE = `(() => {
+	const bindingName = ${JSON.stringify(BROWSER_CODEGEN_BINDING_NAME)}
+	if (window[bindingName + '__installed']) return
+	window[bindingName + '__installed'] = true
+
+	const selectorFor = (el) => {
+		if (el.id) return '#' + el.id
+		const parts = []
+		let node = el
+		while (node && node.nodeType === 1 && parts.length < 8) {
+			let part = node.tagName.toLowerCase()
+			if (node.classList && node.classList.length > 0) {
+				part += '.' + Array.from(node.classList).join('.')
+			}
+			const parent = node.parentElement
+			if (parent) {
+				const siblings = Array.from(parent.children).filter((c) => c.tagName === node.tagName)
+				if (siblings.length > 1) {
+					part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')'
+				}
+			}
+			parts.unshift(part)
+			node = parent
+		}
+		return parts.join(' > ')
+	}
+
+	const send = (payload) => {
+		if (typeof window[bindingName] === 'function') {
+			window[bindingName](JSON.stringify(payload))
+		}
+	}
+
+	document.addEventListener(
+		'click',
+		(event) => {
+			const target = event.target
+			if (!target || target.nodeType !== 1) return
+			send({ action: 'click', selector: selectorFor(target) })
+		},
+		true,
+	)
+
+	document.addEventListener(
+		'input',
+		(event) => {
+			const target = event.target
+			if (!target || target.nodeType !== 1 || typeof target.value !== 'string') return
+			send({ action: 'fill', selector: selectorFor(target), value: target.value })
+		},
+		true,
+	)
+
+	document.addEventListener(
+		'change',
+		(event) => {
+			const target = event.target
+			if (!target || target.tagName !== 'SELECT') return
+			const values = Array.from(target.selectedOptions || []).map((option) => option.value)
+			send({ action: 'select', selector: selectorFor(target), values })
+		},
+		true,
+	)
+})()`
