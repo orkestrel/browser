@@ -110,6 +110,7 @@ describe('BrowserPage', () => {
 		it('throws a BrowserError when navigation returns errorText', async () => {
 			const { client, transport } = await createConnectedClient()
 			replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
+			replyOk(transport, 'Page.stopLoading', {})
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await expect(page.navigate('https://bad.example')).rejects.toSatisfy(isBrowserError)
@@ -120,6 +121,7 @@ describe('BrowserPage', () => {
 			try {
 				const { client, transport } = await createConnectedClient()
 				replyOk(transport, 'Page.navigate', {})
+				replyOk(transport, 'Page.stopLoading', {})
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
 				const pending = page.navigate('https://slow.example', { timeout: 20 })
@@ -178,6 +180,7 @@ describe('BrowserPage', () => {
 				const client = createCDPClient({ transport, timeout: 10_000 })
 				await client.connect()
 				// Page.navigate is never replied to — the send itself must time out.
+				replyOk(transport, 'Page.stopLoading', {})
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
 				const pending = page.navigate('https://slow.example', { timeout: 20 })
@@ -192,6 +195,81 @@ describe('BrowserPage', () => {
 			}
 		})
 
+		it('sends a best-effort Page.stopLoading after a load-wait timeout, and a subsequent evaluate() still works', async () => {
+			vi.useFakeTimers()
+			try {
+				const { client, transport } = await createConnectedClient()
+				replyOk(transport, 'Page.navigate', {})
+				replyOk(transport, 'Page.stopLoading', {})
+
+				const page = new BrowserPage(client, 'target-1', 'session-1')
+				const pending = page.navigate('https://slow.example', { timeout: 20 })
+				await Promise.all([
+					expect(pending).rejects.toThrow('Navigation timeout'),
+					vi.advanceTimersByTimeAsync(25),
+				])
+
+				expect(transport.sent.some((m) => m.method === 'Page.stopLoading')).toBe(true)
+
+				scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
+				expect(await page.evaluate('1 + 1')).toBe(2)
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
+		it('sends a best-effort Page.stopLoading when navigation returns errorText, and a subsequent evaluate() still works', async () => {
+			const { client, transport } = await createConnectedClient()
+			replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
+			replyOk(transport, 'Page.stopLoading', {})
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await expect(page.navigate('https://bad.example')).rejects.toSatisfy(isBrowserError)
+
+			expect(transport.sent.some((m) => m.method === 'Page.stopLoading')).toBe(true)
+
+			scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
+			expect(await page.evaluate('1 + 1')).toBe(2)
+		})
+
+		it('sends a best-effort Page.stopLoading when the Page.navigate send itself times out', async () => {
+			vi.useFakeTimers()
+			try {
+				const transport = createCDPTransport()
+				const client = createCDPClient({ transport, timeout: 10_000 })
+				await client.connect()
+				replyOk(transport, 'Page.stopLoading', {})
+				// Page.navigate is never replied to — the send itself must time out.
+
+				const page = new BrowserPage(client, 'target-1', 'session-1')
+				const pending = page.navigate('https://slow.example', { timeout: 20 })
+				const outcome = pending.catch((caught: unknown) => caught)
+
+				await vi.advanceTimersByTimeAsync(25)
+				const thrown = await outcome
+
+				expect(isCDPTimeoutError(thrown)).toBe(true)
+				expect(transport.sent.some((m) => m.method === 'Page.stopLoading')).toBe(true)
+			} finally {
+				vi.useRealTimers()
+			}
+		})
+
+		it('does not let a failing Page.stopLoading mask the original navigate error', async () => {
+			const { client, transport } = await createConnectedClient()
+			replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
+			// Page.stopLoading is never replied to — its own send times out and
+			// rejects, which must be swallowed rather than surfacing to the caller.
+			transport.onSend('Page.stopLoading', () => {
+				// intentionally no reply
+			})
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await expect(page.navigate('https://bad.example', { timeout: 30 })).rejects.toSatisfy(
+				isBrowserError,
+			)
+		}, 10_000)
+
 		it('leaves no dangling timer and no unhandled rejection when Page.navigate fails', async () => {
 			vi.useFakeTimers()
 			const unhandled: unknown[] = []
@@ -203,6 +281,7 @@ describe('BrowserPage', () => {
 			try {
 				const { client, transport } = await createConnectedClient()
 				replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
+				replyOk(transport, 'Page.stopLoading', {})
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
 				await expect(page.navigate('https://bad.example', { timeout: 20 })).rejects.toSatisfy(
