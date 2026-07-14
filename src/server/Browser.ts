@@ -6,55 +6,38 @@ import type {
 	BrowserStatus,
 	BrowserConnection,
 	BrowserInterface,
-	BrowserContextInterface,
-	BrowserPageInterface,
-	BrowserPageOptions,
 	BrowserDiscoveryResult,
-} from '../types.js'
-import {
-	BrowserConnectionError,
-	BrowserNotConnectedError,
-	BrowserDestroyedError,
-} from '../errors.js'
-import {
-	BROWSER_DEFAULT_CDP_PORT,
-	BROWSER_DEFAULT_TIMEOUT_MS,
-	BROWSER_CDP_VERSION_PATH,
-	BROWSER_CDP_PROTOCOL,
-	BROWSER_NOT_FOUND_RESULT,
-} from '../constants.js'
-import {
-	findSystemBrowser,
-	launchBrowserProcess,
-	waitForCdpReady,
-	fetchCdpTargets,
-} from '../helpers.js'
-import { BrowserContext } from './BrowserContext.js'
-import type { EmitterInterface } from '@scsr/core'
-import { isRecord, isString, Emitter } from '@scsr/core'
-import { CDPClient } from './CDPClient'
+} from './types.js'
+import type { BrowserContextInterface, BrowserPageInterface, BrowserPageOptions } from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import { isRecord, isString } from '@orkestrel/contract'
+import { Emitter } from '@orkestrel/emitter'
+import { CDPClient, BrowserContext, BROWSER_DEFAULT_TIMEOUT_MS } from '@src/core'
+import { BrowserConnectionError, BrowserNotConnectedError, BrowserDestroyedError } from './errors.js'
+import { BROWSER_DEFAULT_CDP_PORT, BROWSER_CDP_VERSION_PATH, BROWSER_CDP_PROTOCOL } from './constants.js'
+import { findSystemBrowser, launchBrowserProcess, waitForCdpReady, fetchCdpTargets } from './helpers.js'
+import { createCDPTransport, createScreenshotWriter } from './factories.js'
 
 // === Browser
 
 export class Browser implements BrowserInterface {
+	readonly #emitter: Emitter<BrowserEventMap>
 	#options: BrowserOptions
 	#engine: BrowserEngine
 	#status: BrowserStatus = 'idle'
 	#connection: BrowserConnection | undefined
-	#client: CDPClient
+	#client: CDPClient | undefined
 	#process: ChildProcess | undefined
 	#cdpPort: number
 	#contexts: BrowserContext[] = []
 	#destroyed = false
-
-	readonly #emitter: Emitter<BrowserEventMap>
 
 	constructor(options?: BrowserOptions) {
 		this.#emitter = new Emitter({ on: options?.on })
 		this.#options = options ?? {}
 		this.#engine = 'chromium'
 		this.#cdpPort = this.#options.cdp?.port ?? BROWSER_DEFAULT_CDP_PORT
-		this.#client = new CDPClient(this.#options.timeout)
+
 		// Emit idle after construction to signal browser is ready for connection
 		queueMicrotask(() => this.#emitter.emit('idle'))
 	}
@@ -79,7 +62,7 @@ export class Browser implements BrowserInterface {
 
 	get connected(): boolean {
 		// Detect stale connection: process exited or WebSocket closed externally
-		if (this.#status === 'connected' && !this.#client.connected) {
+		if (this.#status === 'connected' && this.#client?.connected !== true) {
 			this.#handleExternalDisconnect()
 		}
 		return this.#status === 'connected'
@@ -155,12 +138,12 @@ export class Browser implements BrowserInterface {
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
 		if (this.#destroyed) throw new BrowserDestroyedError()
-		if (this.#status !== 'connected') throw new BrowserNotConnectedError()
+		if (this.#status !== 'connected' || this.#client === undefined) throw new BrowserNotConnectedError()
 
 		// Get or create the default context
 		let ctx = this.#contexts[0]
 		if (ctx === undefined) {
-			ctx = new BrowserContext(this.#client, this.#cdpPort, undefined, this.#options.viewport)
+			ctx = new BrowserContext(this.#client, undefined, this.#options.viewport, createScreenshotWriter())
 			this.#contexts.push(ctx)
 		}
 		const page = await ctx.create(options)
@@ -185,14 +168,7 @@ export class Browser implements BrowserInterface {
 			}
 			this.#contexts = []
 
-			// Close CDP client
-			try {
-				await this.#client.close()
-			} catch {
-				// Swallow
-			}
-
-			// Kill launched browser process
+			// Kill launched browser process, then close CDP client (§13 order)
 			if (this.#process !== undefined) {
 				try {
 					this.#process.kill()
@@ -200,6 +176,15 @@ export class Browser implements BrowserInterface {
 					// Swallow
 				}
 				this.#process = undefined
+			}
+
+			if (this.#client !== undefined) {
+				try {
+					await this.#client.close()
+				} catch {
+					// Swallow
+				}
+				this.#client = undefined
 			}
 		} finally {
 			this.#status = 'disconnected'
@@ -257,14 +242,12 @@ export class Browser implements BrowserInterface {
 			const response = await fetch(url, { signal: controller.signal })
 			clearTimeout(timer)
 
-			if (!response.ok) return BROWSER_NOT_FOUND_RESULT
+			if (!response.ok) return this.#notFoundResult()
 
 			const info: unknown = await response.json()
-			if (!isRecord(info)) return BROWSER_NOT_FOUND_RESULT
+			if (!isRecord(info)) return this.#notFoundResult()
 
-			const endpoint = isString(info['webSocketDebuggerUrl'])
-				? info['webSocketDebuggerUrl']
-				: undefined
+			const endpoint = isString(info['webSocketDebuggerUrl']) ? info['webSocketDebuggerUrl'] : undefined
 			const browserName = isString(info['Browser']) ? info['Browser'] : undefined
 
 			return {
@@ -274,12 +257,20 @@ export class Browser implements BrowserInterface {
 				connection: endpoint !== undefined ? 'cdp' : undefined,
 			}
 		} catch {
-			return BROWSER_NOT_FOUND_RESULT
+			return this.#notFoundResult()
 		}
 	}
 
+	#notFoundResult(): BrowserDiscoveryResult {
+		return { found: false, endpoint: undefined, browser: undefined, connection: undefined }
+	}
+
 	async #connectCdp(endpoint: string): Promise<void> {
-		await this.#client.connect(endpoint)
+		const transport = createCDPTransport({ url: endpoint, timeout: this.#timeout() })
+		const client = new CDPClient({ transport, timeout: this.#timeout() })
+		await client.connect()
+
+		this.#client = client
 		this.#connection = 'cdp'
 		this.#status = 'connected'
 
@@ -293,9 +284,7 @@ export class Browser implements BrowserInterface {
 		const executable = this.#options.executable ?? findSystemBrowser()
 
 		if (executable === undefined) {
-			throw new BrowserConnectionError(
-				'No Chromium browser found. Install Chrome, Edge, or Chromium.',
-			)
+			throw new BrowserConnectionError('No Chromium browser found. Install Chrome, Edge, or Chromium.')
 		}
 
 		const headless = this.#options.headless ?? true
@@ -308,8 +297,11 @@ export class Browser implements BrowserInterface {
 		const wsUrl = await this.#waitForLaunch(this.#process)
 
 		// Connect to the browser via CDP
-		await this.#client.connect(wsUrl)
+		const transport = createCDPTransport({ url: wsUrl, timeout: this.#timeout() })
+		const client = new CDPClient({ transport, timeout: this.#timeout() })
+		await client.connect()
 
+		this.#client = client
 		this.#connection = profile !== undefined ? 'persistent' : 'launch'
 		this.#status = 'connected'
 
@@ -368,11 +360,18 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #syncContexts(): Promise<void> {
+		if (this.#client === undefined) return
+
 		const targets = await fetchCdpTargets(this.#cdpPort, this.#timeout())
 		const pageTargets = targets.filter((t) => t.type === 'page')
 
 		if (pageTargets.length > 0 && this.#contexts.length === 0) {
-			const ctx = new BrowserContext(this.#client, this.#cdpPort, undefined, this.#options.viewport)
+			const ctx = new BrowserContext(
+				this.#client,
+				undefined,
+				this.#options.viewport,
+				createScreenshotWriter(),
+			)
 			await ctx.sync(pageTargets)
 			this.#contexts.push(ctx)
 		}
