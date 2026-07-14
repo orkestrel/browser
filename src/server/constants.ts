@@ -39,6 +39,12 @@ export const BROWSER_HEADLESS_ARG = '--headless=new'
 /** Grace period after SIGTERM before a launched process is escalated to SIGKILL during teardown. */
 export const BROWSER_KILL_GRACE_MS = 3_000
 
+/** Bound for the `discover: false` port-occupancy probe before launching — short, since it only needs to detect an already-listening CDP endpoint, not perform full discovery. */
+export const BROWSER_PORT_PROBE_TIMEOUT_MS = 200
+
+/** Brief defer applied once when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event (which libuv may reap slightly later than the socket close) first say over the diagnosis. */
+export const BROWSER_TRANSPORT_LOSS_DEFER_MS = 50
+
 /** Environment variables checked (in order) for an explicit browser executable path override. */
 export const BROWSER_ENV_PATH_KEYS: readonly string[] = Object.freeze([
 	'PLAYWRIGHT_EXECUTABLE_PATH',

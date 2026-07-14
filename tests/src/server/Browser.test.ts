@@ -494,6 +494,33 @@ describe('Browser pid', () => {
 		expect(browser.pid).toBeUndefined()
 	})
 
+	it('remains readable after a persistent disconnect-release, cleared by destroy()', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const profileDir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-profile-'))
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			profile: profileDir,
+			cdp: { port: 20_013 },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		const pid = await fake.pid()
+		expect(browser.pid).toBe(pid)
+
+		await browser.disconnect()
+		expect(browser.connected).toBe(false)
+		expect(browser.pid).toBe(pid)
+
+		await browser.destroy()
+		expect(browser.pid).toBeUndefined()
+
+		process.kill(pid, 'SIGKILL')
+		await waitForDelay(100)
+		rmSync(profileDir, { recursive: true, force: true })
+	})
+
 	it('is undefined for a CDP-attached connection', async () => {
 		server = await createCdpTestServer()
 		server.list([])
@@ -742,6 +769,196 @@ describe('Browser external-disconnect detection', () => {
 
 		await browser.destroy()
 	})
+
+	it('transport loss while the owned process stays alive does not kill it, and the same instance reattaches', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		let disconnectCount = 0
+		let lastError: unknown
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_020 },
+			timeout: 5000,
+			on: {
+				disconnect: () => disconnectCount++,
+				error: (error) => (lastError = error),
+			},
+		})
+
+		await browser.connect()
+		expect(browser.connection).toBe('launch')
+		const pid = await fake.pid()
+
+		await fake.dropSocket()
+		await waitForDelay(100)
+
+		expect(disconnectCount).toBe(1)
+		expect(browser.status).toBe('disconnected')
+		expect(lastError).toBeInstanceOf(BrowserConnectionError)
+		expect((lastError as { context?: { cause?: string } }).context?.cause).toBe('connection-loss')
+		expect(() => process.kill(pid, 0)).not.toThrow()
+
+		await browser.connect()
+		expect(browser.connected).toBe(true)
+		expect(browser.connection).toBe('cdp')
+
+		await browser.destroy()
+		await waitForDelay(100)
+		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+	})
+
+	it('an observed process exit cleans up without attempting a kill, coded error then disconnect', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		let disconnectCount = 0
+		let lastError: unknown
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_021 },
+			timeout: 5000,
+			on: {
+				disconnect: () => disconnectCount++,
+				error: (error) => (lastError = error),
+			},
+		})
+
+		await browser.connect()
+		const pid = await fake.pid()
+
+		process.kill(pid, 'SIGKILL')
+		await waitForDelay(150)
+
+		expect(disconnectCount).toBe(1)
+		expect(browser.status).toBe('disconnected')
+		expect(lastError).toBeInstanceOf(BrowserConnectionError)
+		expect((lastError as { context?: { cause?: string } }).context?.cause).toBe('process-exit')
+		expect(browser.pid).toBeUndefined()
+
+		await browser.destroy()
+	})
+})
+
+// === destroy()/close() lifecycle matrix (design-2, design-3)
+
+describe('Browser destroy()/close() matrix', () => {
+	it('destroy() on a CDP-attached browser sends no Target.closeTarget, and the server stays usable', async () => {
+		server = await createCdpTestServer()
+		server.list([{ id: 'target-1', type: 'page', title: 'Existing', url: 'about:blank' }])
+		server.autoReply('Target.attachToTarget', { sessionId: 'session-1' })
+		server.autoReply('Page.enable', {})
+		server.autoReply('Runtime.enable', {})
+
+		const browser = createBrowser({ cdp: { port: server.port } })
+		await browser.connect()
+		expect(browser.contexts()).toHaveLength(1)
+
+		await browser.destroy()
+
+		const closeTargetCalls = server.received.filter((m) => m.method === 'Target.closeTarget')
+		expect(closeTargetCalls).toHaveLength(0)
+
+		// The server (standing in for "another client's shared browser") stays usable.
+		const other = createBrowser({ cdp: { port: server.port } })
+		await other.connect()
+		expect(other.connected).toBe(true)
+		await other.destroy()
+	})
+
+	it('close() on an attached session sends Browser.close and cleans up locally', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+		server.autoReply('Browser.close', {})
+
+		const browser = createBrowser({ cdp: { port: server.port } })
+		await browser.connect()
+
+		await browser.close()
+
+		const closeCalls = server.received.filter((m) => m.method === 'Browser.close')
+		expect(closeCalls).toHaveLength(1)
+		expect(browser.connected).toBe(false)
+		await expect(browser.connect()).rejects.toThrow(BrowserDestroyedError)
+	})
+
+	it('close() on an owned session results in the process exiting', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_022 },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		const pid = await fake.pid()
+
+		await browser.close()
+
+		await waitForDelay(200)
+		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+		expect(browser.connected).toBe(false)
+	})
+})
+
+// === constructor engine seeding (design-5)
+
+describe('Browser constructor engine seeding', () => {
+	it('seeds engine from options.engine when provided', () => {
+		const browser = createBrowser({ engine: 'edge' })
+		expect(browser.engine).toBe('edge')
+	})
+
+	it('options.engine takes precedence over the executable-derived engine', () => {
+		const browser = createBrowser({ engine: 'edge', executable: '/usr/bin/google-chrome' })
+		expect(browser.engine).toBe('edge')
+	})
+
+	it('falls back to parsing the executable when options.engine is absent', () => {
+		const browser = createBrowser({ executable: '/usr/bin/google-chrome' })
+		expect(browser.engine).toBe('chrome')
+	})
+
+	it('defaults to chromium when neither options.engine nor executable is given', () => {
+		const browser = createBrowser()
+		expect(browser.engine).toBe('chromium')
+	})
+})
+
+// === discover: false (design-6)
+
+describe('Browser cdp.discover option', () => {
+	it('rejects with a coded error naming the occupied port and does not attach', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+
+		const browser = createBrowser({
+			cdp: { port: server.port, discover: false },
+			timeout: 2000,
+		})
+
+		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		await expect(
+			createBrowser({ cdp: { port: server.port, discover: false }, timeout: 2000 }).connect(),
+		).rejects.toMatchObject({ context: { port: server.port } })
+		expect(browser.connected).toBe(false)
+		expect(browser.connection).toBeUndefined()
+	})
+
+	it('launches directly when the port is free', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: 20_023, discover: false },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+		expect(browser.connection).toBe('launch')
+
+		await browser.destroy()
+	})
 })
 
 // === abort mid-connect (robustness-3) leaves no orphaned process
@@ -799,7 +1016,7 @@ describe('Browser destroy() kill escalation', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_002 },
+			cdp: { port: 20_005 },
 			timeout: 5000,
 		})
 

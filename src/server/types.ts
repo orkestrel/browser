@@ -85,11 +85,18 @@ export type SystemBrowser = {
  * - `host` — host to probe/launch on (default `127.0.0.1`; avoids `localhost`
  *   resolving to `::1` when Chromium binds `127.0.0.1`)
  * - `endpoint` — explicit CDP WebSocket URL; when provided, skips discovery
+ * - `discover` — whether `connect()` passively probes for an existing browser
+ *   before launching (default `true`); set `false` to skip discovery and go
+ *   straight to launch — a short probe of `port` still runs first and rejects
+ *   with a coded error naming the occupied port if something is already
+ *   listening there, so a demanded fresh launch never silently attaches to a
+ *   stranger browser
  */
 export interface BrowserCdpOptions {
 	readonly port?: number
 	readonly host?: string
 	readonly endpoint?: string
+	readonly discover?: boolean
 }
 
 /**
@@ -99,7 +106,9 @@ export interface BrowserCdpOptions {
  * - `idle` — no active connection (initial state, or after disconnect)
  * - `discover` — passive CDP probe completed
  * - `connect` — a connection was established, carrying the mode used
- * - `disconnect` — the connection was detached (browser process kept alive)
+ * - `disconnect` — the connection was detached — either explicitly, or after
+ *   an external disconnect (process exit or transport loss); always preceded
+ *   by a coded `error` describing the cause
  * - `launch` — a new browser process was launched, carrying the engine
  * - `page` — a new page was created via the `create()` shortcut
  * - `error` — a connection or launch fault
@@ -170,8 +179,21 @@ export interface BrowserOptions {
  *   (no kill, no exit listener) so the browser stays alive for later
  *   reattachment via CDP discovery on the same port. Rejects with the coded
  *   `BrowserConnectionError` for `'launch'` (ephemeral, no profile) sessions —
- *   use `destroy()` instead.
- * - `destroy` — close the browser process and release all resources
+ *   use `destroy()` instead. An external disconnect (transport loss while the
+ *   owned process is still alive, or the owned process exiting on its own)
+ *   drives this same released/disconnected state automatically, preceded by
+ *   a coded `error` — `connect()` on the same instance can reattach afterward.
+ * - `destroy` — release local resources. On an owned (`'launch'`/`'persistent'`)
+ *   browser this closes pages/contexts, then kills the process (SIGTERM,
+ *   escalating to SIGKILL). On a `'cdp'`-attached browser this is a LOCAL
+ *   DETACH ONLY — the client is closed and local context/page objects are
+ *   dropped WITHOUT sending any remote close to the browser, since other
+ *   clients may share those targets. Idempotent.
+ * - `close` — graceful REMOTE shutdown: best-effort sends CDP `Browser.close`
+ *   (works whether attached or owned), and when owned also awaits the
+ *   process's exit (escalating to a kill only if it doesn't exit in time),
+ *   then performs the same local cleanup as `destroy()`. Use this to shut
+ *   down a browser this instance doesn't own but wants to terminate anyway.
  *
  * **Page management:**
  * - `context(index?)` → one context or first
@@ -184,6 +206,14 @@ export interface BrowserInterface {
 	readonly status: BrowserStatus
 	readonly connection: BrowserConnection | undefined
 	readonly connected: boolean
+	/**
+	 * The process this instance launched, if any, while it is believed alive.
+	 *
+	 * @remarks
+	 * Remains readable after a persistent disconnect-release (the process
+	 * keeps running, detached from this instance) until `destroy()` or an
+	 * observed process exit clears it.
+	 */
 	readonly pid: number | undefined
 	discover(): Promise<BrowserDiscoveryResult>
 	connect(): Promise<void>
@@ -192,6 +222,7 @@ export interface BrowserInterface {
 	contexts(): readonly BrowserContextInterface[]
 	create(options?: BrowserPageOptions): Promise<BrowserPageInterface>
 	destroy(): Promise<void>
+	close(): Promise<void>
 }
 
 // === WebSocket CDP transport

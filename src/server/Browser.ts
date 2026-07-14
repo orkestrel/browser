@@ -29,6 +29,8 @@ import {
 	BROWSER_CDP_VERSION_PATH,
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_KILL_GRACE_MS,
+	BROWSER_PORT_PROBE_TIMEOUT_MS,
+	BROWSER_TRANSPORT_LOSS_DEFER_MS,
 } from './constants.js'
 import {
 	findSystemBrowser,
@@ -56,14 +58,16 @@ export class Browser implements BrowserInterface {
 	#destroyed = false
 	#transportUnbind: (() => void) | undefined
 	#processUnbind: (() => void) | undefined
+	#lastPid: number | undefined
 
 	constructor(options?: BrowserOptions) {
 		this.#emitter = new Emitter({ on: options?.on })
 		this.#options = options ?? {}
 		this.#engine =
-			this.#options.executable !== undefined
+			this.#options.engine ??
+			(this.#options.executable !== undefined
 				? (parseBrowserEngine(this.#options.executable) ?? 'chromium')
-				: 'chromium'
+				: 'chromium')
 		this.#cdpPort = this.#options.cdp?.port ?? BROWSER_DEFAULT_CDP_PORT
 		this.#cdpHost = this.#options.cdp?.host ?? BROWSER_DEFAULT_HOST
 
@@ -94,7 +98,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	get pid(): number | undefined {
-		return this.#process?.pid
+		return this.#process?.pid ?? this.#lastPid
 	}
 
 	// === Discovery
@@ -123,12 +127,21 @@ export class Browser implements BrowserInterface {
 			}
 
 			// Step 2: passive CDP discovery (connect to existing browser if available)
-			this.#assertNotAborted()
-			const discovery = await this.#raceAbort(this.#discoverCdp())
-			if (discovery.found && discovery.endpoint !== undefined) {
-				this.#engine = browserToEngine(discovery.browser ?? '')
-				await this.#connectCdp(discovery.endpoint)
-				return
+			const discover = this.#options.cdp?.discover ?? true
+			if (discover) {
+				this.#assertNotAborted()
+				const discovery = await this.#raceAbort(this.#discoverCdp())
+				if (discovery.found && discovery.endpoint !== undefined) {
+					this.#engine = browserToEngine(discovery.browser ?? '')
+					await this.#connectCdp(discovery.endpoint)
+					return
+				}
+			} else {
+				// Discovery explicitly disabled — the caller demanded a fresh
+				// launch with a specific profile/engine, so a stray listener on
+				// the port must reject loudly rather than being silently attached to.
+				this.#assertNotAborted()
+				await this.#raceAbort(this.#assertPortFree())
 			}
 
 			// Step 3: launch system browser with CDP
@@ -175,6 +188,9 @@ export class Browser implements BrowserInterface {
 
 		// Release ownership of a launched process WITHOUT killing it, so a
 		// 'persistent' session's browser stays alive for later reattachment.
+		// The pid stays readable on this instance until destroy() or an
+		// observed process exit clears it.
+		if (this.#process?.pid !== undefined) this.#lastPid = this.#process.pid
 		this.#process = undefined
 
 		this.#reset()
@@ -227,12 +243,17 @@ export class Browser implements BrowserInterface {
 			this.#unbindTransport()
 			this.#unbindProcess()
 
-			// Close all managed contexts
-			for (const ctx of this.#contexts) {
-				try {
-					await ctx.close()
-				} catch {
-					// Swallow errors during teardown
+			// Owned (launch/persistent) browsers close their pages/contexts
+			// normally. A CDP-attached browser is a LOCAL DETACH ONLY — other
+			// clients may share those targets, so no remote close is sent.
+			const owned = this.#process !== undefined
+			if (owned) {
+				for (const ctx of this.#contexts) {
+					try {
+						await ctx.close()
+					} catch {
+						// Swallow errors during teardown
+					}
 				}
 			}
 			this.#contexts = []
@@ -252,6 +273,81 @@ export class Browser implements BrowserInterface {
 		} finally {
 			this.#status = 'disconnected'
 			this.#connection = undefined
+			this.#lastPid = undefined
+			this.#emitter.emit('destroy')
+			this.#emitter.destroy()
+		}
+	}
+
+	/**
+	 * Gracefully shut down the remote browser, whether this instance owns its
+	 * process or merely attached to it via CDP.
+	 *
+	 * @remarks
+	 * Sends CDP `Browser.close` best-effort; on an owned browser also awaits
+	 * the process's exit (bounded by the kill-escalation grace period,
+	 * escalating to a kill only if it does not exit in time). Ends in the
+	 * same local-cleanup state as `destroy()`.
+	 */
+	async close(): Promise<void> {
+		if (this.#destroyed) return
+		this.#destroyed = true
+
+		try {
+			this.#unbindTransport()
+			this.#unbindProcess()
+
+			const client = this.#client
+			if (client !== undefined) {
+				try {
+					await client.send('Browser.close')
+				} catch {
+					// Best-effort — the remote may not support it or may already be gone
+				}
+			}
+
+			const process = this.#process
+			if (process !== undefined) {
+				const exited = new Promise<void>((resolve) => {
+					process.once('exit', () => resolve())
+				})
+
+				let timer: ReturnType<typeof setTimeout> | undefined
+				const timedOut = await Promise.race([
+					exited.then(() => false),
+					new Promise<boolean>((resolve) => {
+						timer = setTimeout(() => resolve(true), BROWSER_KILL_GRACE_MS)
+					}),
+				])
+				if (timer !== undefined) clearTimeout(timer)
+
+				// Browser.close already asked nicely — escalate only if the
+				// process failed to exit within the bound.
+				if (timedOut) await this.#terminate(process)
+				this.#process = undefined
+			}
+
+			for (const ctx of this.#contexts) {
+				try {
+					await ctx.close()
+				} catch {
+					// Swallow errors during teardown
+				}
+			}
+			this.#contexts = []
+
+			if (client !== undefined) {
+				try {
+					await client.close()
+				} catch {
+					// Swallow
+				}
+				this.#client = undefined
+			}
+		} finally {
+			this.#status = 'disconnected'
+			this.#connection = undefined
+			this.#lastPid = undefined
 			this.#emitter.emit('destroy')
 			this.#emitter.destroy()
 		}
@@ -311,31 +407,83 @@ export class Browser implements BrowserInterface {
 	}
 
 	/**
-	 * Handle external disconnect — browser process exited or WebSocket closed
-	 * without Browser.disconnect() being called. Cleans up orphaned state
-	 * so the next connect() call can start fresh.
+	 * Handle the owned process exiting on its own (not via destroy()/close()).
+	 * The process is already gone — no kill is attempted. Cleans up orphaned
+	 * state so the next connect() call can start fresh, and emits a coded
+	 * `error` (cause: process exit) before `disconnect`.
 	 */
-	#handleExternalDisconnect(): void {
+	#handleProcessExit(): void {
+		if (this.#status !== 'connected') return
+
 		this.#unbindTransport()
 		this.#unbindProcess()
 
-		if (this.#process !== undefined) {
-			try {
-				this.#process.kill()
-			} catch {
-				// Process may already be dead
-			}
-			this.#process = undefined
-		}
+		const client = this.#client
+		this.#process = undefined
+		this.#lastPid = undefined
 		this.#reset()
+
+		if (client !== undefined) client.close().catch(() => undefined)
+
+		this.#emitter.emit(
+			'error',
+			new BrowserConnectionError('The browser process exited unexpectedly', {
+				cause: 'process-exit',
+			}),
+		)
 		this.#emitter.emit('disconnect')
 		this.#emitter.emit('idle')
 	}
 
-	/** Subscribe to the CDP transport's close/error events for deterministic external-disconnect detection. */
+	/**
+	 * Handle a transport close/error while the owned process (if any) is
+	 * still alive, or the connection is CDP-attached. Never kills the
+	 * process — only the local client is reset, so the SAME instance can
+	 * reconnect (e.g. rediscover on the port and reattach). Emits a coded
+	 * `error` (cause: connection loss) before `disconnect`.
+	 */
+	#handleTransportLoss(deferred = false): void {
+		if (this.#status !== 'connected') return
+
+		const process = this.#process
+		if (process !== undefined && (process.exitCode !== null || process.signalCode !== null)) {
+			// The owned process is already dead — this IS a process exit, not
+			// merely a lost connection.
+			this.#handleProcessExit()
+			return
+		}
+
+		if (process !== undefined && !deferred) {
+			// A killed owned process's sockets can close before its 'exit'
+			// event is reaped by libuv — defer briefly so an already-pending
+			// 'exit' (handled by #handleProcessExit via the bound listener)
+			// gets first say over what really happened; if it wins, this call
+			// becomes a no-op via the #status guard above. Only ever defers once.
+			setTimeout(() => this.#handleTransportLoss(true), BROWSER_TRANSPORT_LOSS_DEFER_MS)
+			return
+		}
+
+		this.#unbindTransport()
+
+		const client = this.#client
+		this.#reset()
+
+		if (client !== undefined) client.close().catch(() => undefined)
+
+		this.#emitter.emit(
+			'error',
+			new BrowserConnectionError('The CDP transport connection was lost', {
+				cause: 'connection-loss',
+			}),
+		)
+		this.#emitter.emit('disconnect')
+		this.#emitter.emit('idle')
+	}
+
+	/** Subscribe to the CDP transport's close/error events for deterministic transport-loss detection. */
 	#bindTransport(transport: CDPTransportInterface): void {
-		const onClose = (): void => this.#handleExternalDisconnect()
-		const onError = (): void => this.#handleExternalDisconnect()
+		const onClose = (): void => this.#handleTransportLoss()
+		const onError = (): void => this.#handleTransportLoss()
 		transport.emitter.on('close', onClose)
 		transport.emitter.on('error', onError)
 		this.#transportUnbind = () => {
@@ -349,9 +497,9 @@ export class Browser implements BrowserInterface {
 		this.#transportUnbind = undefined
 	}
 
-	/** Subscribe to a launched process's exit event for deterministic external-disconnect detection. */
+	/** Subscribe to a launched process's exit event for deterministic process-exit detection. */
 	#bindProcess(process: ChildProcess): void {
-		const onExit = (): void => this.#handleExternalDisconnect()
+		const onExit = (): void => this.#handleProcessExit()
 		process.once('exit', onExit)
 		this.#processUnbind = () => process.off('exit', onExit)
 	}
@@ -399,6 +547,37 @@ export class Browser implements BrowserInterface {
 
 	#notFoundResult(): BrowserDiscoveryResult {
 		return { found: false, endpoint: undefined, browser: undefined, connection: undefined }
+	}
+
+	/**
+	 * Reject when something is already listening on the configured CDP port —
+	 * used ahead of a `discover: false` launch, so a caller demanding a fresh
+	 * browser never silently attaches to a stranger already on that port.
+	 */
+	async #assertPortFree(): Promise<void> {
+		const occupied = await this.#probePort()
+		if (occupied) {
+			throw new BrowserConnectionError(
+				`Port ${this.#cdpPort} on ${this.#cdpHost} is already occupied by another CDP endpoint`,
+				{ port: this.#cdpPort, host: this.#cdpHost },
+			)
+		}
+	}
+
+	/** Very short probe of the CDP version endpoint — just enough to detect an occupied port, not full discovery. */
+	async #probePort(): Promise<boolean> {
+		const url = `${BROWSER_CDP_PROTOCOL}://${this.#cdpHost}:${this.#cdpPort}${BROWSER_CDP_VERSION_PATH}`
+		const controller = new AbortController()
+		const timer = setTimeout(() => controller.abort(), BROWSER_PORT_PROBE_TIMEOUT_MS)
+
+		try {
+			const response = await fetch(url, { signal: controller.signal })
+			return response.ok
+		} catch {
+			return false
+		} finally {
+			clearTimeout(timer)
+		}
 	}
 
 	async #connectCdp(endpoint: string): Promise<void> {

@@ -315,6 +315,12 @@ export interface FakeBrowserProcessInterface {
 	readonly args: readonly string[]
 	/** Reads the PID the process wrote at startup (polls briefly if not yet written). */
 	pid(): Promise<number>
+	/**
+	 * Sever the active CDP WebSocket socket (via `SIGUSR2`) while leaving the
+	 * process itself alive — simulates a transport-loss without a process exit.
+	 * Only meaningful when constructed with `serveCdp: true`.
+	 */
+	dropSocket(): Promise<void>
 }
 
 /**
@@ -356,6 +362,7 @@ export function createFakeBrowserProcess(
 				"const portArg = process.argv.find((a) => a.startsWith('--remote-debugging-port='))",
 				"const port = Number(portArg.split('=')[1])",
 				"const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'",
+				'let activeSocket = null',
 				'const server = http.createServer((req, res) => {',
 				"\tif (req.url.startsWith('/json/version')) {",
 				"\t\tres.writeHead(200, { 'content-type': 'application/json' })",
@@ -379,13 +386,66 @@ export function createFakeBrowserProcess(
 				"\t\t\t'Connection: Upgrade\\r\\n' +",
 				'\t\t\t`Sec-WebSocket-Accept: ${accept}\\r\\n\\r\\n`,',
 				'\t)',
+				'\tactiveSocket = socket',
+				'\tlet buffer = Buffer.alloc(0)',
 				"\tsocket.on('data', (chunk) => {",
-				'\t\tif (chunk.length >= 2 && (chunk[0] & 0x0f) === 0x8) {',
-				'\t\t\tsocket.end(Buffer.from([0x88, 0x00]))',
+				'\t\tbuffer = Buffer.concat([buffer, chunk])',
+				'\t\tfor (;;) {',
+				'\t\t\tif (buffer.length < 2) break',
+				'\t\t\tconst first = buffer[0]',
+				'\t\t\tconst second = buffer[1]',
+				'\t\t\tconst opcode = first & 0x0f',
+				'\t\t\tif (opcode === 0x8) {',
+				'\t\t\t\tsocket.end(Buffer.from([0x88, 0x00]))',
+				'\t\t\t\tbuffer = buffer.subarray(2)',
+				'\t\t\t\tcontinue',
+				'\t\t\t}',
+				'\t\t\tconst masked = (second & 0x80) !== 0',
+				'\t\t\tlet length = second & 0x7f',
+				'\t\t\tlet offset = 2',
+				'\t\t\tif (length === 126) {',
+				'\t\t\t\tif (buffer.length < 4) break',
+				'\t\t\t\tlength = buffer.readUInt16BE(2)',
+				'\t\t\t\toffset = 4',
+				'\t\t\t} else if (length === 127) {',
+				'\t\t\t\tif (buffer.length < 10) break',
+				'\t\t\t\tlength = Number(buffer.readBigUInt64BE(2))',
+				'\t\t\t\toffset = 10',
+				'\t\t\t}',
+				'\t\t\tlet mask',
+				'\t\t\tif (masked) {',
+				'\t\t\t\tif (buffer.length < offset + 4) break',
+				'\t\t\t\tmask = buffer.subarray(offset, offset + 4)',
+				'\t\t\t\toffset += 4',
+				'\t\t\t}',
+				'\t\t\tif (buffer.length < offset + length) break',
+				'\t\t\tconst payload = Buffer.from(buffer.subarray(offset, offset + length))',
+				'\t\t\tif (mask) {',
+				'\t\t\t\tfor (let i = 0; i < payload.length; i++) payload[i] = payload[i] ^ mask[i % 4]',
+				'\t\t\t}',
+				'\t\t\tbuffer = buffer.subarray(offset + length)',
+				'\t\t\ttry {',
+				'\t\t\t\tconst msg = JSON.parse(payload.toString(\'utf8\'))',
+				"\t\t\t\tif (msg.method === 'Browser.close') {",
+				'\t\t\t\t\tconst body = Buffer.from(JSON.stringify({ id: msg.id, result: {} }), \'utf8\')',
+				'\t\t\t\t\tconst len = body.length',
+				'\t\t\t\t\tlet header',
+				'\t\t\t\t\tif (len < 126) header = Buffer.from([0x81, len])',
+				'\t\t\t\t\telse { header = Buffer.alloc(4); header[0] = 0x81; header[1] = 126; header.writeUInt16BE(len, 2) }',
+				'\t\t\t\t\tsocket.write(Buffer.concat([header, body]))',
+				'\t\t\t\t\tsetImmediate(() => process.exit(0))',
+				'\t\t\t\t}',
+				'\t\t\t} catch {}',
 				'\t\t}',
+				'\t})',
+				"\tsocket.on('close', () => {",
+				'\t\tif (activeSocket === socket) activeSocket = null',
 				'\t})',
 				'})',
 				"server.listen(port, '127.0.0.1')",
+				"process.on('SIGUSR2', () => {",
+				'\tif (activeSocket) activeSocket.destroy()',
+				'})',
 			].join('\n'),
 		)
 	} else {
@@ -408,6 +468,10 @@ export function createFakeBrowserProcess(
 				await new Promise((resolve) => setTimeout(resolve, 20))
 			}
 			throw new Error(`Fake browser process never wrote its pid to ${pidFile}`)
+		},
+		async dropSocket(): Promise<void> {
+			const target = await this.pid()
+			process.kill(target, 'SIGUSR2')
 		},
 	}
 }
