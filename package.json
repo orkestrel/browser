@@ -79,7 +79,8 @@
 	},
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.1",
-		"@orkestrel/emitter": "^0.0.1"
+		"@orkestrel/emitter": "^0.0.1",
+		"@orkestrel/websocket": "^0.0.1"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.9",

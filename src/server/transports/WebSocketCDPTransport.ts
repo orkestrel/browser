@@ -1,33 +1,52 @@
 import type { CDPTransportEventMap, CDPTransportInterface } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { WebSocketCDPTransportOptions } from '../types.js'
-import { isRecord, isString } from '@orkestrel/contract'
+import type { IncomingMessage } from 'node:http'
+import type { Duplex } from 'node:stream'
+import { randomBytes } from 'node:crypto'
+import { request as httpRequest } from 'node:http'
+import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
+import {
+	computeWebSocketAccept,
+	createNodeWebSocket,
+	WEBSOCKET_READY_OPEN,
+	WEBSOCKET_VERSION,
+} from '@orkestrel/websocket'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from '@src/core'
 import { BrowserConnectionError } from '../errors.js'
 
 // === WebSocketCDPTransport
 
 /**
- * Node `WebSocket`-backed {@link CDPTransportInterface} — the dumb text pipe
- * a {@link import('@src/core').CDPClientInterface} sends and receives
+ * `@orkestrel/websocket`-backed {@link CDPTransportInterface} — the dumb text
+ * pipe a {@link import('@src/core').CDPClientInterface} sends and receives
  * JSON-RPC frames over.
  *
  * @remarks
- * Uses the Node ≥24 native `WebSocket` global directly — no hand-rolled
- * upgrade handshake. `start()` opens a fresh socket (safe to call again
- * after `close()` — a new `WebSocket` is created each time, which is what
- * `CDPClient.reconnect()` depends on). CDP frames are text-only, so
- * `message` always carries a `string`.
+ * `start()` hand-rolls the RFC 6455 client handshake: it opens a `node:http`
+ * `GET` carrying `Connection: Upgrade` / `Upgrade: websocket` / a random
+ * `Sec-WebSocket-Key` / `Sec-WebSocket-Version`, awaits the client `'upgrade'`
+ * event, and validates `Sec-WebSocket-Accept === computeWebSocketAccept(key)`
+ * — a mismatch (or a connection/request error, or a timeout) rejects `start()`
+ * with a coded {@link BrowserConnectionError} and cleans up the socket. On
+ * success it wraps the raw upgraded socket in `createNodeWebSocket({ socket,
+ * head })` (CLIENT mode — no `key` — so outgoing frames are masked per RFC
+ * 6455 §5.3) and bridges its `message`/`close`/`error` events onto this
+ * transport's emitter. `start()` opens a fresh socket each call (safe to call
+ * again after `close()` — a new request/socket/NodeWebSocket triple is
+ * created every time, which is what `CDPClient.reconnect()` depends on). CDP
+ * frames are text-only, so `message` always carries a `string`.
  */
 export class WebSocketCDPTransport implements CDPTransportInterface {
 	readonly #emitter: Emitter<CDPTransportEventMap>
 	readonly #url: string
 	readonly #timeout: number
-	#socket: WebSocket | undefined
+	#socket: NodeWebSocketInterface | undefined
 	#connecting:
 		| {
-				readonly socket: WebSocket
+				readonly abort: () => void
 				readonly timer: ReturnType<typeof setTimeout>
 				readonly reject: (error: unknown) => void
 		  }
@@ -44,16 +63,17 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	}
 
 	async start(): Promise<void> {
-		const socket = new WebSocket(this.#url)
+		const url = new URL(this.#url)
+		const key = randomBytes(16).toString('base64')
 
-		await new Promise<void>((resolve, reject) => {
+		const ws = await new Promise<NodeWebSocketInterface>((resolve, reject) => {
 			const settle = (fn: () => void): void => {
 				this.#connecting = undefined
 				fn()
 			}
 
 			const timer = setTimeout(() => {
-				socket.close()
+				request.destroy()
 				settle(() =>
 					reject(
 						new BrowserConnectionError(
@@ -64,40 +84,77 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 				)
 			}, this.#timeout)
 
-			const onOpen = (): void => {
-				clearTimeout(timer)
-				settle(resolve)
-			}
+			const request = httpRequest({
+				hostname: url.hostname,
+				port: url.port.length > 0 ? Number(url.port) : 80,
+				path: `${url.pathname}${url.search}`,
+				headers: {
+					Connection: 'Upgrade',
+					Upgrade: 'websocket',
+					'Sec-WebSocket-Key': key,
+					'Sec-WebSocket-Version': WEBSOCKET_VERSION,
+				},
+			})
 
-			const onError = (event: Event): void => {
+			request.on('upgrade', (response: IncomingMessage, socket: Duplex, head: Buffer) => {
 				clearTimeout(timer)
+				const accept = response.headers['sec-websocket-accept']
+				if (!isString(accept) || accept !== computeWebSocketAccept(key)) {
+					socket.destroy()
+					settle(() =>
+						reject(
+							new BrowserConnectionError(
+								`WebSocket CDP connection to ${this.#url} failed: Sec-WebSocket-Accept mismatch`,
+								{ url: this.#url },
+							),
+						),
+					)
+					return
+				}
+				settle(() => resolve(createNodeWebSocket({ socket, head })))
+			})
+
+			request.on('response', (response) => {
+				clearTimeout(timer)
+				response.resume()
 				settle(() =>
 					reject(
 						new BrowserConnectionError(
-							`WebSocket CDP connection to ${this.#url} failed: ${this.#detail(event)}`,
+							`WebSocket CDP connection to ${this.#url} failed: upgrade declined with status ${response.statusCode ?? 0}`,
 							{ url: this.#url },
 						),
 					),
 				)
-			}
+			})
 
-			socket.addEventListener('open', onOpen, { once: true })
-			socket.addEventListener('error', onError, { once: true })
+			request.on('error', (error) => {
+				clearTimeout(timer)
+				settle(() =>
+					reject(
+						new BrowserConnectionError(
+							`WebSocket CDP connection to ${this.#url} failed: ${error.message}`,
+							{ url: this.#url },
+						),
+					),
+				)
+			})
 
 			this.#connecting = {
-				socket,
+				abort: () => request.destroy(),
 				timer,
 				reject: (error) => settle(() => reject(error)),
 			}
+
+			request.end()
 		})
 
-		this.#socket = socket
-		this.#bind(socket)
+		this.#socket = ws
+		this.#bind(ws)
 	}
 
 	async send(data: string): Promise<void> {
 		const socket = this.#socket
-		if (socket === undefined || socket.readyState !== WebSocket.OPEN) {
+		if (socket === undefined || socket.readyState !== WEBSOCKET_READY_OPEN) {
 			throw new Error('WebSocket CDP transport is not open')
 		}
 		socket.send(data)
@@ -108,7 +165,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 		if (connecting !== undefined) {
 			clearTimeout(connecting.timer)
 			this.#connecting = undefined
-			connecting.socket.close()
+			connecting.abort()
 			connecting.reject(
 				new BrowserConnectionError(
 					`WebSocket CDP connection to ${this.#url} was closed before it finished connecting`,
@@ -120,40 +177,27 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 
 		const socket = this.#socket
 		if (socket === undefined) return
-		if (socket.readyState === WebSocket.CLOSED) {
-			this.#socket = undefined
-			return
-		}
+		this.#socket = undefined
 
 		await new Promise<void>((resolve) => {
-			socket.addEventListener('close', () => resolve(), { once: true })
+			socket.emitter.on('close', () => resolve())
 			socket.close()
 		})
-
-		this.#socket = undefined
 	}
 
 	// === Private helpers
 
-	#detail(event: Event): string {
-		if (isRecord(event) && isString(event['message']) && event['message'].length > 0) {
-			return event['message']
-		}
-		return event.type
-	}
-
-	#bind(socket: WebSocket): void {
-		socket.addEventListener('message', (event) => {
-			const data = typeof event.data === 'string' ? event.data : String(event.data)
+	#bind(ws: NodeWebSocketInterface): void {
+		ws.emitter.on('message', (data) => {
 			this.#emitter.emit('message', data)
 		})
 
-		socket.addEventListener('close', () => {
+		ws.emitter.on('close', () => {
 			this.#emitter.emit('close')
 		})
 
-		socket.addEventListener('error', (event) => {
-			this.#emitter.emit('error', event)
+		ws.emitter.on('error', (error) => {
+			this.#emitter.emit('error', error)
 		})
 	}
 }

@@ -2,8 +2,8 @@
  * WebSocketCDPTransport tests.
  *
  * Drives the transport against a real in-process WebSocket server
- * (`createCdpTestServer`, tests/setupServer.ts) — no mocks of the WebSocket
- * client itself.
+ * (`createCdpTestServer`, tests/setupServer.ts) — no mocks of the underlying
+ * `@orkestrel/websocket` client itself.
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
@@ -20,8 +20,8 @@ let stallSockets: Set<import('node:net').Socket> | undefined
 
 /**
  * Start a raw TCP server that accepts connections but never completes the
- * WebSocket upgrade handshake — the client socket stays stuck in
- * `CONNECTING` for as long as the caller holds it open.
+ * WebSocket upgrade handshake — the client socket stays stuck connecting for
+ * as long as the caller holds it open.
  *
  * @returns The `ws://` URL of the stalling server
  */
@@ -64,7 +64,7 @@ describe('WebSocketCDPTransport', () => {
 		await transport.close()
 	})
 
-	it('send() delivers a frame the server receives', async () => {
+	it('send() delivers a frame the server receives (masked client frame decoded correctly)', async () => {
 		server = await createCdpTestServer()
 		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
 		await transport.start()
@@ -160,6 +160,22 @@ describe('WebSocketCDPTransport', () => {
 		await transport.send(JSON.stringify({ id: 1, method: 'Reconnect.check' }))
 		await waitForDelay(20)
 		expect(server.received.some((m) => m.method === 'Reconnect.check')).toBe(true)
+
+		await transport.close()
+	})
+
+	it('round-trips a large (~5 MB) text frame intact', async () => {
+		server = await createCdpTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
+		await transport.start()
+
+		const large = 'x'.repeat(5 * 1024 * 1024)
+		await transport.send(JSON.stringify({ id: 1, method: 'Large.frame', params: { large } }))
+		await waitForDelay(100)
+
+		expect(server.received).toHaveLength(1)
+		expect(server.received[0]?.method).toBe('Large.frame')
+		expect(server.received[0]?.params?.['large']).toBe(large)
 
 		await transport.close()
 	})

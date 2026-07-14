@@ -40,6 +40,13 @@ helpers), not anything sourced in this repo; it is kept here so a reader of
 the parity suite can see the primitives it is built from without leaving
 this guide set.
 
+[`src/websocket.md`](src/websocket.md) is a byte-identical mirror of the guide
+for `@orkestrel/websocket` — a runtime dependency, the `NodeWebSocketInterface`
+transport primitive `WebSocketCDPTransport` is built from (the dumb text pipe
+a CDP client sends and receives JSON-RPC frames over). It documents **that
+package's** surface, not anything sourced in this repo; it is kept here for
+the same reason.
+
 ## See also
 
 - [`AGENTS.md`](../AGENTS.md) — the rules; §22 documentation-as-contracts.
