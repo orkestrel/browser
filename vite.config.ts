@@ -14,8 +14,8 @@ const resolve = {
 	),
 }
 
-// Base: shared resolve + build defaults + src:server tests.
-export const srcServer = (config?: UserConfig): UserConfig =>
+// Base: shared resolve + build defaults + src:core tests.
+export const srcCore = (config?: UserConfig): UserConfig =>
 	mergeConfig(
 		{
 			resolve,
@@ -23,21 +23,11 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 				emptyOutDir: true,
 				sourcemap: true,
 				minify: false,
-				lib: {
-					entry: resolveWorkspacePath('src/server/index.ts'),
-					formats: ['es', 'cjs'],
-					fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
-				},
-				outDir: 'dist/src/server',
-				target: 'node24',
-				rolldownOptions: {
-					external: (id: string) => id.startsWith('node:') || id.startsWith('@orkestrel/'),
-				},
 			},
 			test: {
-				name: { label: 'src:server', color: 'red' },
-				include: ['tests/src/server/**/*.test.ts'],
-				setupFiles: ['./tests/setup.ts', './tests/setupServer.ts'],
+				name: { label: 'src:core', color: 'magenta' },
+				include: ['tests/src/core/**/*.test.ts'],
+				setupFiles: ['./tests/setup.ts'],
 				environment: 'node',
 				browser: { enabled: false },
 			},
@@ -45,11 +35,10 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 		config ?? {},
 	)
 
-// Extends srcServer: the guides-parity suite. Node env — it reads the real
-// guides/*.md and the documented source modules off disk — but resolves like
-// server tests.
+// Extends srcCore: the guides-parity suite. Node env — it reads the real
+// guides/*.md and the documented source modules off disk — but resolves like core tests.
 export const guides = (config?: UserConfig): UserConfig =>
-	srcServer(
+	srcCore(
 		mergeConfig(
 			{
 				test: {
@@ -62,9 +51,59 @@ export const guides = (config?: UserConfig): UserConfig =>
 		),
 	)
 
+// Extends srcCore: server-only library (`src/server`, the Node adapters over
+// the environment-agnostic CDP core — a WebSocket CDP transport, browser
+// process launch/discovery via child_process and fetch, a filesystem
+// screenshot writer, and the `Browser` façade). Builds a dual ESM+CJS lib for
+// Node and runs its tests in the node environment. Externalizes `node:*` (so
+// `node:child_process` and friends are never bundled) AND declared
+// `@orkestrel/*` deps AND `@src/core` → the sibling `dist/src/core` build
+// (format-aware: `../core/index.js` for the ESM output, `../core/index.cjs`
+// for the CJS output), exactly as core ships dual-format. Build-only — the
+// test project resolves `@src/core` from source through the shared `resolve` alias.
+export const srcServer = (config?: UserConfig): UserConfig =>
+	srcCore(
+		mergeConfig(
+			{
+				build: {
+					lib: {
+						entry: resolveWorkspacePath('src/server/index.ts'),
+						formats: ['es', 'cjs'],
+						fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
+					},
+					outDir: 'dist/src/server',
+					target: 'node24',
+					rolldownOptions: {
+						external: (id: string) =>
+							id === '@src/core' || id.startsWith('node:') || id.startsWith('@orkestrel/'),
+						output: [
+							{
+								format: 'es',
+								entryFileNames: 'index.js',
+								paths: { '@src/core': '../core/index.js' },
+							},
+							{
+								format: 'cjs',
+								entryFileNames: 'index.cjs',
+								paths: { '@src/core': '../core/index.cjs' },
+							},
+						],
+					},
+				},
+				test: {
+					name: { label: 'src:server', color: 'red' },
+					include: ['tests/src/server/**/*.test.ts'],
+					exclude: ['tests/src/core/**/*.test.ts'],
+					setupFiles: ['./tests/setup.ts', './tests/setupServer.ts'],
+				},
+			},
+			config ?? {},
+		),
+	)
+
 export default defineConfig({
 	resolve,
 	test: {
-		projects: [srcServer, guides],
+		projects: [srcCore, srcServer, guides],
 	},
 })

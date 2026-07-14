@@ -1,38 +1,69 @@
-# @orkestrel/sqlite
+# @orkestrel/browser
 
-A typed, synchronous SQLite wrapper for the `@orkestrel` line — a thin skin
-over Node's built-in `node:sqlite` (`DatabaseSync` / `StatementSync`) giving
-prepared statements, transactions, and pragmas, with a single runtime
-dependency: `@orkestrel/contract`, used for its boundary narrowing.
-
-`node:sqlite` is experimental on current Node versions — importing this
-package emits an `ExperimentalWarning` at runtime until Node stabilizes the
-module.
+A typed [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
+browser automation library for the `@orkestrel` line. The environment-agnostic
+core (`src/core` — `CDPClient` speaking the CDP wire protocol over an injected
+`CDPTransportInterface`, plus `BrowserContext`, `BrowserPage`, and
+`BrowserCodegen`) never touches `node:*` or the DOM; the Node runtime (`src/server`)
+adapts it with a `WebSocketCDPTransport`, browser process launch/discovery
+(`node:child_process` + `fetch`), a filesystem screenshot writer, and the
+`Browser` façade that ties launch → context → page together. Part of the
+`@orkestrel` line.
 
 ## Install
 
 ```sh
-npm install @orkestrel/sqlite
+npm install @orkestrel/browser
 ```
 
 ## Requirements
 
-- Node.js >= 24
-- `node:sqlite` (Node's built-in SQLite module)
-- Server-only — no CommonJS/browser split, single Node-native surface
+- Node.js >= 24 for the server surface (the core surface is environment-agnostic)
+- ESM and CommonJS builds ship for both the core and server entry points
 
-## Status
+## Usage
 
-Pre-release. The public API documented in
-[`guides/src/sqlite.md`](https://github.com/orkestrel/sqlite/blob/main/guides/src/sqlite.md)
-is implemented and covered by tests, but the package has not yet reached a
-stable `1.0` release.
+Launch or connect to a browser and drive a page from Node:
+
+```ts
+import { createBrowser } from '@orkestrel/browser/server'
+
+const browser = createBrowser()
+await browser.launch()
+const context = await browser.context()
+const page = await context.page()
+await page.navigate('https://example.com')
+await page.click('#submit')
+await page.screenshot('example.png')
+await browser.destroy()
+```
+
+Drive the same protocol from any environment by injecting your own transport
+over the environment-agnostic core:
+
+```ts
+import { CDPClient } from '@orkestrel/browser'
+import type { CDPTransportInterface } from '@orkestrel/browser'
+
+const transport: CDPTransportInterface = /* your injected transport */
+const client = new CDPClient({ transport })
+await client.connect()
+const result = await client.send('Page.navigate', { url: 'https://example.com' })
+```
+
+## Guide
+
+For the full surface — the CDP dispatch core, the `BrowserContext` /
+`BrowserPage` / `BrowserCodegen` entities, the server transports, and usage
+patterns — see [`guides/src/browser.md`](guides/src/browser.md).
 
 ## Package
 
-Published as a single Node-only surface per the `exports` field in
-`package.json` — one `.` entry backed by a CommonJS build of `src/server`
-(required by `node:sqlite`'s CJS-only shape at this Node version).
+Published with two entry points per the `exports` field in `package.json`:
+the environment-agnostic core (`.`) — `CDPClient`, `BrowserContext`,
+`BrowserPage`, `BrowserCodegen`, `createCDPClient`, `CDPTransportInterface` —
+and the Node-only server surface (`./server`) — `Browser`, `createBrowser`,
+`createCDPTransport`, `createScreenshotWriter`, `WebSocketCDPTransport`.
 
 ## License
 
