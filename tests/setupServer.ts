@@ -2,10 +2,31 @@ import type { IncomingMessage, Server as HTTPServer } from 'node:http'
 import type { Socket } from 'node:net'
 import type { CDPTarget } from '@src/core'
 import { createServer } from 'node:http'
+import { createServer as createNetServer } from 'node:net'
 import { createHash } from 'node:crypto'
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+
+/**
+ * Reserve a free localhost port by binding an ephemeral server to port 0 and
+ * immediately closing it — avoids hardcoded test ports colliding across
+ * parallel/aborted runs.
+ *
+ * @returns A currently-free TCP port number
+ */
+export async function reservePort(): Promise<number> {
+	const probe = createNetServer()
+	const port = await new Promise<number>((resolve, reject) => {
+		probe.on('error', reject)
+		probe.listen(0, '127.0.0.1', () => {
+			const address = probe.address()
+			resolve(isRecord(address) && typeof address['port'] === 'number' ? address['port'] : 0)
+		})
+	})
+	await new Promise<void>((resolve) => probe.close(() => resolve()))
+	return port
+}
 
 // === Server-only test helpers (AGENTS §16.1 — node:* allowed here)
 
@@ -105,7 +126,8 @@ function decodeFrame(buffer: Buffer): DecodedFrame | undefined {
 	return { opcode, payload, rest }
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+/** Type guard for a plain (non-array, non-null) object — shared across server-only test helpers/fixtures. */
+export function isRecord(value: unknown): value is Record<string, unknown> {
 	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
@@ -307,6 +329,39 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 
 // === Fake browser process (real spawned executable, no mocks)
 
+/** A registered fake-browser fixture, tracked for guaranteed teardown. */
+interface RegisteredFakeBrowser {
+	readonly pidFile: string
+	readonly dir: string
+}
+
+const registeredFakeBrowsers: RegisteredFakeBrowser[] = []
+
+/**
+ * Guaranteed teardown safety net for every fake browser process created via
+ * `createFakeBrowserProcess` — SIGKILLs any still-alive registered pid
+ * (tolerating a not-yet-written pid file or an already-dead process) and
+ * clears the registry. Wire into a top-level `afterEach` alongside each
+ * test's own explicit kills.
+ */
+export async function destroyFakeBrowsers(): Promise<void> {
+	for (const fixture of registeredFakeBrowsers.splice(0)) {
+		let pid: number | undefined
+		try {
+			const contents = readFileSync(fixture.pidFile, 'utf8').trim()
+			if (contents.length > 0) pid = Number(contents)
+		} catch {
+			// pid file never written — nothing to kill
+		}
+		if (pid === undefined) continue
+		try {
+			process.kill(pid, 'SIGKILL')
+		} catch {
+			// already dead (ESRCH) — nothing to do
+		}
+	}
+}
+
 /** A real, spawned stand-in "browser" process for exercising Browser's launch path. */
 export interface FakeBrowserProcessInterface {
 	/** The Node executable path (used as `BrowserOptions.executable`) — spawnable identically on every platform. */
@@ -353,6 +408,11 @@ export function createFakeBrowserProcess(
 	if (options.ignoreSigterm === true) {
 		lines.push("process.on('SIGTERM', () => {})")
 	}
+
+	// Orphan watchdog: if the parent (test runner) is hard-aborted, this
+	// process is reparented to init (ppid 1) — self-exit instead of leaking
+	// across subsequent test runs.
+	lines.push("setInterval(() => { if (process.ppid === 1) process.exit(0) }, 500)")
 
 	if (options.serveCdp === true) {
 		lines.push(
@@ -442,17 +502,18 @@ export function createFakeBrowserProcess(
 				'\t\tif (activeSocket === socket) activeSocket = null',
 				'\t})',
 				'})',
+				"server.on('error', (e) => { console.error('fake-browser listen error: ' + e.message); process.exit(12) })",
 				"server.listen(port, '127.0.0.1')",
 				"process.on('SIGUSR2', () => {",
 				'\tif (activeSocket) activeSocket.destroy()',
 				'})',
 			].join('\n'),
 		)
-	} else {
-		lines.push('setInterval(() => {}, 1000)')
 	}
 
 	writeFileSync(scriptPath, `${lines.join('\n')}\n`)
+
+	registeredFakeBrowsers.push({ pidFile, dir })
 
 	return {
 		executable: process.execPath,

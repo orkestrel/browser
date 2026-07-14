@@ -8,10 +8,11 @@
  * `findSystemBrowser()` discovering an actual browser on the machine.
  */
 
-import type { AddressInfo } from 'node:net'
+import type { AddressInfo, Socket as NetSocket } from 'node:net'
 import type { BrowserInterface } from '@src/server'
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createServer } from 'node:http'
+import { createServer as createNetServer, createConnection } from 'node:net'
 import { mkdtempSync, rmSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -25,7 +26,13 @@ import {
 	BROWSER_TRANSPORT_LOSS_DEFER_MS,
 } from '@src/server'
 import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError, compileCodegenScript } from '@src/core'
-import { createCdpTestServer, createFakeBrowserProcess } from '../../setupServer.js'
+import {
+	createCdpTestServer,
+	createFakeBrowserProcess,
+	reservePort,
+	destroyFakeBrowsers,
+	isRecord,
+} from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 import { waitForDelay } from '../../setup.js'
 
@@ -43,6 +50,9 @@ let server: CDPTestServerInterface | undefined
 afterEach(async () => {
 	await server?.close()
 	server = undefined
+	// Safety net — SIGKILLs any fake browser process a failed/aborted test
+	// left running, in addition to each test's own explicit kills.
+	await destroyFakeBrowsers()
 })
 
 // A port nothing is listening on — used for "no CDP endpoint reachable" cases.
@@ -409,7 +419,7 @@ describe('Browser launch path', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_001 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 		})
 
@@ -446,7 +456,7 @@ describe('Browser launch path', () => {
 	it('disconnect() on a persistent (profile-backed) launch releases the process without killing it, allowing reattachment', async () => {
 		const fake = createFakeBrowserProcess({ serveCdp: true })
 		const profileDir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-profile-'))
-		const port = 20_002
+		const port = await reservePort()
 
 		const browser = createBrowser({
 			executable: fake.executable,
@@ -503,7 +513,7 @@ describe('Browser pid', () => {
 			executable: fake.executable,
 			args: fake.args,
 			profile: profileDir,
-			cdp: { port: 20_013 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 		})
 
@@ -539,7 +549,7 @@ describe('Browser pid', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_011 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 		})
 
@@ -555,7 +565,7 @@ describe('Browser pid', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_012 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 		})
 
@@ -783,7 +793,7 @@ describe('Browser external-disconnect detection', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_040 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 			on: {
 				error: () => errorCount++,
@@ -814,7 +824,7 @@ describe('Browser external-disconnect detection', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_041 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 		})
 
@@ -848,7 +858,7 @@ describe('Browser external-disconnect detection', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_020 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 			on: {
 				disconnect: () => disconnectCount++,
@@ -885,7 +895,7 @@ describe('Browser external-disconnect detection', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_021 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 			on: {
 				disconnect: () => disconnectCount++,
@@ -971,7 +981,7 @@ describe('Browser destroy()/close() matrix', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_022 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 		})
 
@@ -1035,7 +1045,7 @@ describe('Browser cdp.discover option', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_023, discover: false },
+			cdp: { port: await reservePort(), discover: false },
 			timeout: 5000,
 		})
 
@@ -1102,7 +1112,7 @@ describe('Browser destroy() kill escalation', () => {
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
-			cdp: { port: 20_005 },
+			cdp: { port: await reservePort() },
 			timeout: 5000,
 		})
 
@@ -1128,7 +1138,7 @@ describe('Browser destroy() kill escalation', () => {
 			const browser = createBrowser({
 				executable: fake.executable,
 				args: fake.args,
-				cdp: { port: 20_000 },
+				cdp: { port: await reservePort() },
 				timeout: 5000,
 			})
 
@@ -1212,7 +1222,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 				headless: true,
 				profile: tempProfileDir(),
 				args: REAL_BROWSER_ARGS,
-				cdp: { port: 20_101 },
+				cdp: { port: await reservePort() },
 				timeout: 20_000,
 			})
 
@@ -1236,7 +1246,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			headless: true,
 			profile: tempProfileDir(),
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_102 },
+			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
 
@@ -1259,12 +1269,13 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	}, 20_000)
 
 	it('launches and destroys a real browser process, fully exiting it', async () => {
+		const port = await reservePort()
 		browser = createBrowser({
 			executable: REAL_BROWSER_EXECUTABLE,
 			headless: true,
 			profile: tempProfileDir(),
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_103 },
+			cdp: { port },
 			timeout: 20_000,
 		})
 
@@ -1280,7 +1291,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			headless: true,
 			profile: tempProfileDir(),
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_103 },
+			cdp: { port },
 			timeout: 20_000,
 		})
 		await relaunch.connect()
@@ -1296,7 +1307,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			headless: true,
 			profile,
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_104 },
+			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
 		await browser.connect()
@@ -1312,7 +1323,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			headless: true,
 			profile,
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_105 },
+			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
 		await relaunch.connect()
@@ -1329,7 +1340,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			headless: true,
 			profile: tempProfileDir(),
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_106 },
+			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
 
@@ -1349,7 +1360,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			headless: true,
 			profile: tempProfileDir(),
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_110 },
+			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
 
@@ -1386,7 +1397,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 				headless: true,
 				profile: tempProfileDir(),
 				args: REAL_BROWSER_ARGS,
-				cdp: { port: 20_111 },
+				cdp: { port: await reservePort() },
 				timeout: 20_000,
 			})
 
@@ -1418,7 +1429,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
 		const address = httpServer.address() as AddressInfo
 		const url = `http://127.0.0.1:${address.port}/`
-		const port = 20_112
+		const port = await reservePort()
 		let launched: BrowserInterface | undefined
 		let reattached: BrowserInterface | undefined
 
@@ -1454,17 +1465,123 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		}
 	}, 20_000)
 
-	// Transport-loss resumability against a REAL Chromium process would require
-	// severing the CDP WebSocket at the OS level without touching the browser
-	// process — not reproducible portably from a test without risking killing
-	// the real browser. The behavior (transport loss while the owned process
-	// stays alive does not kill it, and the same instance can reconnect) is
-	// already exercised live against a real spawned process substitute in
-	// "Browser external-disconnect detection" above; documented here as
-	// intentionally deferred for the real-Chromium suite.
-	it.todo(
-		'transport-loss resumability against a real Chromium process — covered by the deterministic fake-process suite above',
-	)
+	it('transport-loss resumability against a real Chromium process, proxied over a raw TCP pipe', async () => {
+		const cdpPort = await reservePort()
+		const proxyPort = await reservePort()
+
+		// A real Chromium rejects a CDP WebSocket upgrade whose Host header
+		// doesn't match an allowed origin — since the raw TCP proxy forwards
+		// the client's Host header (127.0.0.1:proxyPort) unmodified to
+		// Chromium (which is listening as 127.0.0.1:cdpPort), Chromium must be
+		// told to allow it explicitly.
+		const owner = createBrowser({
+			executable: REAL_BROWSER_EXECUTABLE,
+			headless: true,
+			profile: tempProfileDir(),
+			args: [...REAL_BROWSER_ARGS, '--remote-allow-origins=*'],
+			cdp: { port: cdpPort },
+			timeout: 20_000,
+		})
+
+		let proxyServer: ReturnType<typeof createNetServer> | undefined
+		let proxied: BrowserInterface | undefined
+		const pipedSockets = new Set<NetSocket>()
+
+		function startProxy(targetHost: string, targetPort: number): Promise<void> {
+			proxyServer = createNetServer((client) => {
+				pipedSockets.add(client)
+				const upstream = createConnection({ host: targetHost, port: targetPort })
+				pipedSockets.add(upstream)
+				client.pipe(upstream)
+				upstream.pipe(client)
+				client.on('error', () => {})
+				upstream.on('error', () => {})
+				client.on('close', () => pipedSockets.delete(client))
+				upstream.on('close', () => pipedSockets.delete(upstream))
+			})
+			return new Promise<void>((resolve, reject) => {
+				const listening = proxyServer
+				if (listening === undefined) {
+					reject(new Error('proxy server not created'))
+					return
+				}
+				listening.on('error', reject)
+				listening.listen(proxyPort, '127.0.0.1', resolve)
+			})
+		}
+
+		function stopProxy(): Promise<void> {
+			for (const socket of pipedSockets) socket.destroy()
+			pipedSockets.clear()
+			const listening = proxyServer
+			proxyServer = undefined
+			if (listening === undefined) return Promise.resolve()
+			return new Promise<void>((resolve) => listening.close(() => resolve()))
+		}
+
+		try {
+			await owner.connect()
+			expect(owner.status).toBe('connected')
+			const ownerPid = owner.pid
+			expect(ownerPid).toBeDefined()
+
+			const versionResponse = await fetch(`http://127.0.0.1:${cdpPort}/json/version`)
+			const versionJson: unknown = await versionResponse.json()
+			const webSocketDebuggerUrl =
+				isRecord(versionJson) && typeof versionJson['webSocketDebuggerUrl'] === 'string'
+					? versionJson['webSocketDebuggerUrl']
+					: undefined
+			expect(webSocketDebuggerUrl).toBeDefined()
+			const chromiumWsUrl = new URL(webSocketDebuggerUrl ?? '')
+
+			await startProxy(chromiumWsUrl.hostname, Number(chromiumWsUrl.port))
+			const proxiedEndpoint = `ws://127.0.0.1:${proxyPort}${chromiumWsUrl.pathname}`
+
+			let errorCount = 0
+			let disconnectCount = 0
+			proxied = createBrowser({
+				cdp: { endpoint: proxiedEndpoint },
+				timeout: 5000,
+				on: {
+					error: () => errorCount++,
+					disconnect: () => disconnectCount++,
+				},
+			})
+
+			await proxied.connect()
+			expect(proxied.connected).toBe(true)
+			expect(proxied.connection).toBe('cdp')
+			const page = await proxied.create()
+			expect(await page.evaluate('1 + 1')).toBe(2)
+
+			// Sever the transport: destroy every piped socket and close the
+			// proxy server — the browser process itself is untouched.
+			await stopProxy()
+			await waitForDelay(300)
+
+			expect(errorCount).toBe(1)
+			expect(disconnectCount).toBe(1)
+			expect(proxied.connected).toBe(false)
+
+			// Chromium (owned by `owner`) survives the transport loss.
+			const livePid = ownerPid ?? 0
+			expect(() => process.kill(livePid, 0)).not.toThrow()
+
+			// Rebuild the proxy on the SAME port so the proxied instance's
+			// frozen `cdp.endpoint` (still pointing at 127.0.0.1:proxyPort)
+			// resolves again — connect() on the same instance resumes.
+			await startProxy(chromiumWsUrl.hostname, Number(chromiumWsUrl.port))
+
+			await proxied.connect()
+			expect(proxied.connected).toBe(true)
+			const resumedPage = await proxied.create()
+			expect(await resumedPage.evaluate('2 + 2')).toBe(4)
+		} finally {
+			await proxied?.destroy()
+			await stopProxy()
+			await owner.destroy()
+		}
+	}, 20_000)
 
 	it('close() gracefully shuts down an owned real browser process', async () => {
 		browser = createBrowser({
@@ -1472,7 +1589,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			headless: true,
 			profile: tempProfileDir(),
 			args: REAL_BROWSER_ARGS,
-			cdp: { port: 20_113 },
+			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
 
@@ -1488,7 +1605,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	}, 20_000)
 
 	it('close() on a cdp-attached instance shuts down the shared real browser and the owner observes disconnect', async () => {
-		const port = 20_114
+		const port = await reservePort()
 		let owner: BrowserInterface | undefined
 		let second: BrowserInterface | undefined
 
@@ -1545,7 +1662,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 				headless: true,
 				profile: tempProfileDir(),
 				args: REAL_BROWSER_ARGS,
-				cdp: { port: 20_115 },
+				cdp: { port: await reservePort() },
 				timeout: 20_000,
 			})
 
@@ -1581,7 +1698,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 				headless: true,
 				profile: tempProfileDir(),
 				args: REAL_BROWSER_ARGS,
-				cdp: { port: 20_116 },
+				cdp: { port: await reservePort() },
 				timeout: 20_000,
 			})
 
