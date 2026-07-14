@@ -301,7 +301,8 @@ export function createFakeBrowserProcess(
 		// point: this script runs from a temp dir with no node_modules of its own,
 		// and it is spawned as plain CJS (matching the rest of this emitted
 		// script), so an ESM `import` cannot be used here.
-		const websocketEntry = '/home/user/browser/node_modules/@orkestrel/websocket/dist/src/server/index.cjs'
+		const websocketEntry =
+			'/home/user/browser/node_modules/@orkestrel/websocket/dist/src/server/index.cjs'
 		lines.push(
 			[
 				"const http = require('http')",
