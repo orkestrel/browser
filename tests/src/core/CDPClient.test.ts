@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createCDPClient } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
+import { isCDPError } from '@src/core'
 import { createCDPTransport, createRecorder, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
@@ -68,6 +69,50 @@ describe('CDPClient', () => {
 			transport.onSend('Bad.method', (message) => transport.fail(message.id, 'boom'))
 
 			await expect(client.send('Bad.method')).rejects.toThrow('boom')
+		})
+
+		it('rejects with a CDPError carrying method/code/message/data on a CDP error response', async () => {
+			await client.connect()
+			transport.onSend('Bad.method', (message) => {
+				transport.emitter.emit(
+					'message',
+					JSON.stringify({
+						id: message.id,
+						error: { code: -32000, message: 'boom', data: 'extra' },
+					}),
+				)
+			})
+
+			try {
+				await client.send('Bad.method')
+				expect.unreachable('expected send() to reject')
+			} catch (thrown) {
+				expect(isCDPError(thrown)).toBe(true)
+				if (isCDPError(thrown)) {
+					expect(thrown.context?.['method']).toBe('Bad.method')
+					expect(thrown.context?.['code']).toBe(-32000)
+					expect(thrown.context?.['message']).toBe('boom')
+					expect(thrown.context?.['data']).toBe('extra')
+				}
+			}
+		})
+
+		it('rejects immediately without leaking a pending timer when params are not serializable', async () => {
+			vi.useFakeTimers()
+			try {
+				await client.connect()
+				const circular: Record<string, unknown> = {}
+				circular['self'] = circular
+
+				const rejection = expect(client.send('Bad.method', circular)).rejects.toThrow()
+
+				// Advance well past the timeout window — if a pending entry leaked,
+				// this would trigger a second, late timeout rejection.
+				await vi.advanceTimersByTimeAsync(10_000)
+				await rejection
+			} finally {
+				vi.useRealTimers()
+			}
 		})
 
 		it('rejects when not connected', async () => {
@@ -148,6 +193,21 @@ describe('CDPClient', () => {
 
 			expect(recorder.count).toBe(0)
 		})
+
+		it('does not fire a handler subscribed re-entrantly during dispatch for the in-flight event', async () => {
+			await client.connect()
+			const lateRecorder = createRecorder<[Readonly<Record<string, unknown>>]>()
+
+			client.subscribe('Page.loadEventFired', () => {
+				client.subscribe('Page.loadEventFired', lateRecorder.handler)
+			})
+
+			transport.event('Page.loadEventFired', { timestamp: 1 })
+			expect(lateRecorder.count).toBe(0)
+
+			transport.event('Page.loadEventFired', { timestamp: 2 })
+			expect(lateRecorder.count).toBe(1)
+		})
 	})
 
 	describe('reconnect()', () => {
@@ -156,6 +216,17 @@ describe('CDPClient', () => {
 			await client.reconnect()
 			expect(client.connected).toBe(true)
 			expect(transport.started).toBe(true)
+		})
+
+		it('keeps subscriptions registered across close()/reconnect()', async () => {
+			await client.connect()
+			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
+			client.subscribe('Page.loadEventFired', recorder.handler)
+
+			await client.reconnect()
+
+			transport.event('Page.loadEventFired', { timestamp: 1 })
+			expect(recorder.count).toBe(1)
 		})
 	})
 
@@ -178,6 +249,17 @@ describe('CDPClient', () => {
 			await client.connect()
 			transport.closeRemote()
 			expect(client.connected).toBe(false)
+		})
+
+		it('closes the transport and rejects the in-flight connect() when close() races connect()', async () => {
+			const connecting = client.connect()
+			const closing = client.close()
+
+			await expect(connecting).rejects.toThrow()
+			await closing
+
+			expect(client.connected).toBe(false)
+			expect(transport.closed).toBe(true)
 		})
 	})
 })

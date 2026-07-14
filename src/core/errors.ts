@@ -33,6 +33,21 @@ export class BrowserSelectorError extends BrowserError {
 	}
 }
 
+/**
+ * A CDP request received an error response from the remote endpoint.
+ *
+ * @remarks
+ * Carries the originating `method` plus the CDP error's own `code`,
+ * `message`, and `data` (when present) in `context`, so callers can branch
+ * on the protocol-level error instead of parsing the message string.
+ */
+export class CDPError extends BrowserError {
+	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
+		super(message, 'BROWSER_CDP_ERROR', context)
+		this.name = 'CDPError'
+	}
+}
+
 // === Browser type guards
 
 /**
@@ -53,4 +68,14 @@ export function isBrowserError(value: unknown): value is BrowserError {
  */
 export function isBrowserSelectorError(value: unknown): value is BrowserSelectorError {
 	return value instanceof BrowserSelectorError
+}
+
+/**
+ * Narrow an unknown value to CDPError.
+ *
+ * @param value - Value to check
+ * @returns True when value is a CDPError instance
+ */
+export function isCDPError(value: unknown): value is CDPError {
+	return value instanceof CDPError
 }
