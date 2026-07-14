@@ -7,6 +7,7 @@ import { createServer as createNetServer } from 'node:net'
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createRequire } from 'node:module'
 import { createNodeWebSocket } from '@orkestrel/websocket'
 
 /**
@@ -251,9 +252,10 @@ export interface FakeBrowserProcessInterface {
 	/** Reads the PID the process wrote at startup (polls briefly if not yet written). */
 	pid(): Promise<number>
 	/**
-	 * Sever the active CDP WebSocket socket (via `SIGUSR2`) while leaving the
-	 * process itself alive — simulates a transport-loss without a process exit.
-	 * Only meaningful when constructed with `serveCdp: true`.
+	 * Sever the active CDP WebSocket socket (via an HTTP control request to the
+	 * fake's own server) while leaving the process itself alive — simulates a
+	 * transport-loss without a process exit. Only meaningful when constructed
+	 * with `serveCdp: true`.
 	 */
 	dropSocket(): Promise<void>
 }
@@ -278,6 +280,7 @@ export function createFakeBrowserProcess(
 	const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-fake-'))
 	const scriptPath = join(dir, 'fake-browser.js')
 	const pidFile = join(dir, 'pid.txt')
+	const portFile = join(dir, 'port.txt')
 
 	// No shebang: the script is spawned via `node <script>`, never executed
 	// directly, so it needs no execute bit and no shebang line.
@@ -292,17 +295,29 @@ export function createFakeBrowserProcess(
 	}
 
 	// Orphan watchdog: if the parent (test runner) is hard-aborted, this
-	// process is reparented to init (ppid 1) — self-exit instead of leaking
-	// across subsequent test runs.
-	lines.push('setInterval(() => { if (process.ppid === 1) process.exit(0) }, 500)')
+	// process is reparented to init (ppid 1 on POSIX) — self-exit instead of
+	// leaking across subsequent test runs. `process.kill(ppid, 0)` is a
+	// cross-platform (including Windows) liveness probe: it throws when the
+	// parent is gone even where reparenting never yields ppid 1.
+	lines.push(
+		[
+			'const __ppid = process.ppid',
+			'setInterval(() => {',
+			'\tif (process.ppid === 1) { process.exit(0); return }',
+			'\ttry { process.kill(__ppid, 0) } catch { process.exit(0) }',
+			'}, 500)',
+		].join('\n'),
+	)
 
 	if (options.serveCdp === true) {
-		// The @orkestrel/websocket package is required by its absolute .cjs entry
-		// point: this script runs from a temp dir with no node_modules of its own,
-		// and it is spawned as plain CJS (matching the rest of this emitted
+		// The @orkestrel/websocket package is required by its real installed
+		// .cjs entry point (resolved via `createRequire` at script-GENERATION
+		// time in this process, then embedded as a JSON-escaped string literal
+		// so it is valid on every platform including Windows backslash paths):
+		// this script runs from a temp dir with no node_modules of its own, and
+		// it is spawned as plain CJS (matching the rest of this emitted
 		// script), so an ESM `import` cannot be used here.
-		const websocketEntry =
-			'/home/user/browser/node_modules/@orkestrel/websocket/dist/src/server/index.cjs'
+		const websocketEntry = createRequire(import.meta.url).resolve('@orkestrel/websocket')
 		lines.push(
 			[
 				"const http = require('http')",
@@ -319,6 +334,12 @@ export function createFakeBrowserProcess(
 				"\tif (req.url.startsWith('/json/list')) {",
 				"\t\tres.writeHead(200, { 'content-type': 'application/json' })",
 				"\t\tres.end('[]')",
+				'\t\treturn',
+				'\t}',
+				"\tif (req.url.startsWith('/__drop')) {",
+				'\t\tif (activeWs) activeWs.destroy()',
+				'\t\tres.writeHead(204)',
+				'\t\tres.end()',
 				'\t\treturn',
 				'\t}',
 				'\tres.writeHead(404)',
@@ -342,10 +363,9 @@ export function createFakeBrowserProcess(
 				'\t})',
 				'})',
 				"server.on('error', (e) => { console.error('fake-browser listen error: ' + e.message); process.exit(12) })",
-				"server.listen(port, '127.0.0.1')",
-				"process.on('SIGUSR2', () => {",
-				'\tif (activeWs) activeWs.destroy()',
-				'})',
+				"server.listen(port, '127.0.0.1', () => { require('fs').writeFileSync(" +
+					JSON.stringify(portFile) +
+					", String(port)) })",
 			].join('\n'),
 		)
 	}
@@ -370,8 +390,23 @@ export function createFakeBrowserProcess(
 			throw new Error(`Fake browser process never wrote its pid to ${pidFile}`)
 		},
 		async dropSocket(): Promise<void> {
-			const target = await this.pid()
-			process.kill(target, 'SIGUSR2')
+			let dropPort: number | undefined
+			for (let attempt = 0; attempt < 50; attempt++) {
+				try {
+					const contents = readFileSync(portFile, 'utf8').trim()
+					if (contents.length > 0) {
+						dropPort = Number(contents)
+						break
+					}
+				} catch {
+					// Not written yet
+				}
+				await new Promise((resolve) => setTimeout(resolve, 20))
+			}
+			if (dropPort === undefined) {
+				throw new Error(`Fake browser process never wrote its listening port to ${portFile}`)
+			}
+			await fetch(`http://127.0.0.1:${dropPort}/__drop`)
 		},
 	}
 }

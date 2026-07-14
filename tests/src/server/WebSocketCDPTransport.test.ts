@@ -171,7 +171,14 @@ describe('WebSocketCDPTransport', () => {
 
 		const large = 'x'.repeat(5 * 1024 * 1024)
 		await transport.send(JSON.stringify({ id: 1, method: 'Large.frame', params: { large } }))
-		await waitForDelay(100)
+
+		// A large frame is reassembled from multiple chunks server-side; poll
+		// (bounded) instead of a fixed delay so this never races that
+		// reassembly, however long it happens to take.
+		const deadline = Date.now() + 3000
+		while (server.received.length === 0 && Date.now() < deadline) {
+			await waitForDelay(20)
+		}
 
 		expect(server.received).toHaveLength(1)
 		expect(server.received[0]?.method).toBe('Large.frame')

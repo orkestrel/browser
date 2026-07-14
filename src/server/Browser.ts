@@ -627,14 +627,14 @@ export class Browser implements BrowserInterface {
 			throw new BrowserConnectionError('A browser process is already active on this instance')
 		}
 
-		const requestedEngine = this.#options.engine
+		const requestedEngine = this.#options.engine ?? this.#options.browsers?.engine
 		let executable = this.#options.executable
 		let resolvedEngine: BrowserEngine | undefined
 
 		if (executable !== undefined) {
 			resolvedEngine = parseBrowserEngine(executable) ?? 'chromium'
 		} else {
-			const found = findSystemBrowser({ engine: requestedEngine })
+			const found = findSystemBrowser({ ...this.#options.browsers, engine: requestedEngine })
 			executable = found?.executable
 			resolvedEngine = found?.engine
 		}

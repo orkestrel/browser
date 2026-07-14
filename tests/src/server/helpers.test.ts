@@ -15,7 +15,7 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { join, dirname } from 'node:path'
 import {
 	findSystemBrowsers,
 	findSystemBrowser,
@@ -94,12 +94,19 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('resolves a versioned Chromium install inside a browser store', () => {
-		// Mirrors the current platform's store shape so this test is honest
-		// everywhere it runs (linux: chromium-<rev>/chrome-linux/chrome).
+		// Mirrors the current platform's store shape (per BROWSER_STORE_GLOBS in
+		// src/server/constants.ts) so this test is honest everywhere it runs:
+		// linux -> chromium-<rev>/chrome-linux/chrome
+		// darwin -> chromium-<rev>/chrome-mac/Chromium.app/Contents/MacOS/Chromium
+		// win32 -> chromium-<rev>/chrome-win/chrome.exe
 		const store = createTempDir()
-		const installDir = join(store, 'chromium-1194', 'chrome-linux')
-		mkdirSync(installDir, { recursive: true })
-		const binary = join(installDir, 'chrome')
+		const binary =
+			process.platform === 'win32'
+				? join(store, 'chromium-1194', 'chrome-win', 'chrome.exe')
+				: process.platform === 'darwin'
+					? join(store, 'chromium-1194', 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium')
+					: join(store, 'chromium-1194', 'chrome-linux', 'chrome')
+		mkdirSync(dirname(binary), { recursive: true })
 		writeFileSync(binary, '')
 
 		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [store] })

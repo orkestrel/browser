@@ -446,6 +446,10 @@ describe('Browser launch path', () => {
 		const browser = createBrowser({
 			cdp: { port: UNUSED_PORT },
 			engine: 'edge',
+			// Forces empty discovery deterministically — on a machine with a real
+			// Edge install, unconstrained discovery would find it and launch it
+			// instead of rejecting.
+			browsers: { env: {}, paths: [], names: [], stores: [] },
 			timeout: 2000,
 		})
 

@@ -140,7 +140,11 @@ export type BrowserEventMap = {
  * - `signal` — external AbortSignal for cancelling the connection attempt
  * - `args` — additional command-line flags passed to the launched browser process
  * - `engine` — preferred browser engine to launch; narrows system browser
- *   discovery to this engine (ignored when `executable` is given)
+ *   discovery to this engine (ignored when `executable` is given); takes
+ *   precedence over `browsers.engine`
+ * - `browsers` — candidate-source overrides consulted when `connect()` needs
+ *   to launch (same shape `findSystemBrowsers` takes); ignored when
+ *   `executable` is given, which bypasses discovery entirely
  */
 export interface BrowserOptions {
 	readonly on?: EmitterHooks<BrowserEventMap>
@@ -153,6 +157,7 @@ export interface BrowserOptions {
 	readonly signal?: AbortSignal
 	readonly args?: readonly string[]
 	readonly engine?: BrowserEngine
+	readonly browsers?: SystemBrowserOptions
 }
 
 /**
