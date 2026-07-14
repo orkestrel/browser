@@ -110,8 +110,8 @@ export interface BrowserViewport {
 	readonly height: number
 }
 
-/** Page load condition for navigation. */
-export type BrowserWaitUntil = 'load' | 'domcontentloaded' | 'networkidle' | 'commit'
+/** Page load condition for navigation — the CDP load event awaited by `navigate()`. */
+export type BrowserWaitUntil = 'load' | 'domcontentloaded'
 
 /**
  * Options for creating a browser page.
