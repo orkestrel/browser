@@ -69,7 +69,9 @@ export function findSystemBrowser(options?: SystemBrowserOptions): string | unde
 }
 
 /** Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file. */
-export function findEnvOverride(env: Readonly<Record<string, string | undefined>>): string | undefined {
+export function findEnvOverride(
+	env: Readonly<Record<string, string | undefined>>,
+): string | undefined {
 	for (const key of BROWSER_ENV_PATH_KEYS) {
 		const value = env[key]
 		if (value !== undefined && value.length > 0 && existsSync(value)) return value

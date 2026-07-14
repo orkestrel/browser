@@ -181,27 +181,27 @@ await browser.destroy() // closes the process and releases resources
 
 #### Constants
 
-| Constant                   | Kind  | Value                                                                                           |
-| -------------------------- | ----- | ----------------------------------------------------------------------------------------------- |
-| `BROWSER_DEFAULT_CDP_PORT` | const | `9222` — default CDP port probed for an existing browser and used for launches.                 |
-| `BROWSER_DEFAULT_HOST`     | const | `'127.0.0.1'` — default host probed/launched on (avoids `localhost` resolving to `::1`).        |
-| `BROWSER_CDP_PROTOCOL`     | const | `'http'` — protocol prefix for CDP discovery requests.                                          |
-| `BROWSER_CDP_VERSION_PATH` | const | `'/json/version'` — path appended to the CDP host to fetch version metadata.                    |
-| `BROWSER_CDP_LIST_PATH`    | const | `'/json/list'` — path appended to the CDP host to list open targets.                            |
-| `BROWSER_NOT_FOUND_RESULT` | const | Sentinel `BrowserDiscoveryResult` returned by discovery when no browser is reachable.           |
-| `BROWSER_LAUNCH_ARGS`      | const | Frozen flags always passed to a launched browser process, alongside the caller's own.           |
-| `BROWSER_HEADLESS_ARG`     | const | `'--headless=new'` — flag enabling headless mode on a launched browser process.                 |
-| `BROWSER_KILL_GRACE_MS`    | const | `3000` — grace period after SIGTERM before a launched process is escalated to SIGKILL.          |
-| `BROWSER_ENV_PATH_KEYS`         | const | Frozen list of env vars checked (in order) for an explicit browser executable path override (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`). |
-| `BROWSER_EXECUTABLE_PATHS`      | const | Frozen record of well-known Chrome/Chromium/Edge paths with no platform-specific root, keyed by `process.platform` (win32 is empty — see `BROWSER_WINDOWS_SUFFIXES`). |
-| `BROWSER_WINDOWS_SUFFIXES`      | const | Frozen list of Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root. |
-| `BROWSER_WINDOWS_ROOT_FALLBACKS`| const | Frozen record of fallback Windows install roots used when `PROGRAMFILES` / `PROGRAMFILES(X86)` are unset. |
-| `BROWSER_EXECUTABLE_NAMES`      | const | Frozen list of command names probed on PATH when no well-known executable path exists.          |
-| `BROWSER_STORE_ENV_KEY`         | const | `'PLAYWRIGHT_BROWSERS_PATH'` — env var naming an additional Playwright browser store base directory. |
-| `BROWSER_STORE_DEFAULT_DIRS`    | const | Frozen list of well-known Playwright browser store base directories (e.g. `/opt/pw-browsers`). |
-| `BROWSER_STORE_CACHE_DIRS`      | const | Frozen record of the per-OS default Playwright cache directory, relative to the home directory. |
-| `BROWSER_STORE_LINK_NAME`       | const | `'chromium'` — name of the top-level Chromium symlink/binary inside a browser store base.       |
-| `BROWSER_STORE_GLOBS`           | const | Frozen record of the glob pattern matching a versioned Chromium binary, keyed by `process.platform`. |
+| Constant                         | Kind  | Value                                                                                                                                                                 |
+| -------------------------------- | ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROWSER_DEFAULT_CDP_PORT`       | const | `9222` — default CDP port probed for an existing browser and used for launches.                                                                                       |
+| `BROWSER_DEFAULT_HOST`           | const | `'127.0.0.1'` — default host probed/launched on (avoids `localhost` resolving to `::1`).                                                                              |
+| `BROWSER_CDP_PROTOCOL`           | const | `'http'` — protocol prefix for CDP discovery requests.                                                                                                                |
+| `BROWSER_CDP_VERSION_PATH`       | const | `'/json/version'` — path appended to the CDP host to fetch version metadata.                                                                                          |
+| `BROWSER_CDP_LIST_PATH`          | const | `'/json/list'` — path appended to the CDP host to list open targets.                                                                                                  |
+| `BROWSER_NOT_FOUND_RESULT`       | const | Sentinel `BrowserDiscoveryResult` returned by discovery when no browser is reachable.                                                                                 |
+| `BROWSER_LAUNCH_ARGS`            | const | Frozen flags always passed to a launched browser process, alongside the caller's own.                                                                                 |
+| `BROWSER_HEADLESS_ARG`           | const | `'--headless=new'` — flag enabling headless mode on a launched browser process.                                                                                       |
+| `BROWSER_KILL_GRACE_MS`          | const | `3000` — grace period after SIGTERM before a launched process is escalated to SIGKILL.                                                                                |
+| `BROWSER_ENV_PATH_KEYS`          | const | Frozen list of env vars checked (in order) for an explicit browser executable path override (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`).                            |
+| `BROWSER_EXECUTABLE_PATHS`       | const | Frozen record of well-known Chrome/Chromium/Edge paths with no platform-specific root, keyed by `process.platform` (win32 is empty — see `BROWSER_WINDOWS_SUFFIXES`). |
+| `BROWSER_WINDOWS_SUFFIXES`       | const | Frozen list of Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root.                                                   |
+| `BROWSER_WINDOWS_ROOT_FALLBACKS` | const | Frozen record of fallback Windows install roots used when `PROGRAMFILES` / `PROGRAMFILES(X86)` are unset.                                                             |
+| `BROWSER_EXECUTABLE_NAMES`       | const | Frozen list of command names probed on PATH when no well-known executable path exists.                                                                                |
+| `BROWSER_STORE_ENV_KEY`          | const | `'PLAYWRIGHT_BROWSERS_PATH'` — env var naming an additional Playwright browser store base directory.                                                                  |
+| `BROWSER_STORE_DEFAULT_DIRS`     | const | Frozen list of well-known Playwright browser store base directories (e.g. `/opt/pw-browsers`).                                                                        |
+| `BROWSER_STORE_CACHE_DIRS`       | const | Frozen record of the per-OS default Playwright cache directory, relative to the home directory.                                                                       |
+| `BROWSER_STORE_LINK_NAME`        | const | `'chromium'` — name of the top-level Chromium symlink/binary inside a browser store base.                                                                             |
+| `BROWSER_STORE_GLOBS`            | const | Frozen record of the glob pattern matching a versioned Chromium binary, keyed by `process.platform`.                                                                  |
 
 #### Errors
 
@@ -229,19 +229,19 @@ try {
 
 #### Helpers
 
-| API                    | Kind     | Summary                                                                                                               |
-| ---------------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
+| API                    | Kind     | Summary                                                                                                                                              |
+| ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `findSystemBrowser`    | function | Locate a Chrome/Chromium/Edge executable (env override → well-known install paths → PATH probe → Playwright browser stores); may return `undefined`. |
-| `findEnvOverride`      | function | Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file.               |
-| `defaultInstallPaths`  | function | Build the default well-known install-path candidates for a platform, deriving Windows roots from env vars.            |
-| `windowsRoots`         | function | Derive Windows install roots from env vars, falling back to well-known literals when absent.                          |
-| `findInstallPath`      | function | Return the first candidate path that exists on disk.                                                                   |
-| `probePathNames`       | function | Probe PATH (`which`/`where`) for the first resolvable command name.                                                    |
-| `defaultStoreBases`    | function | Build the default Playwright browser store base directories to search for a managed Chromium.                         |
-| `findInStore`          | function | Search one store base for the top-level `chromium` link, else the highest-revision `chromium-*` install.               |
-| `launchBrowserProcess` | function | Launch a browser process with raw-CDP debugging flags; returns the spawned `ChildProcess`.                            |
-| `waitForCdpReady`      | function | Poll a browser's CDP version endpoint until it responds or the timeout elapses; returns the debugger URL.             |
-| `fetchCdpTargets`      | function | Fetch and normalize the current CDP target list from a browser's `/json/list` endpoint.                               |
+| `findEnvOverride`      | function | Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file.                                             |
+| `defaultInstallPaths`  | function | Build the default well-known install-path candidates for a platform, deriving Windows roots from env vars.                                           |
+| `windowsRoots`         | function | Derive Windows install roots from env vars, falling back to well-known literals when absent.                                                         |
+| `findInstallPath`      | function | Return the first candidate path that exists on disk.                                                                                                 |
+| `probePathNames`       | function | Probe PATH (`which`/`where`) for the first resolvable command name.                                                                                  |
+| `defaultStoreBases`    | function | Build the default Playwright browser store base directories to search for a managed Chromium.                                                        |
+| `findInStore`          | function | Search one store base for the top-level `chromium` link, else the highest-revision `chromium-*` install.                                             |
+| `launchBrowserProcess` | function | Launch a browser process with raw-CDP debugging flags; returns the spawned `ChildProcess`.                                                           |
+| `waitForCdpReady`      | function | Poll a browser's CDP version endpoint until it responds or the timeout elapses; returns the debugger URL.                                            |
+| `fetchCdpTargets`      | function | Fetch and normalize the current CDP target list from a browser's `/json/list` endpoint.                                                              |
 
 ```ts
 import {
@@ -284,18 +284,18 @@ if (executable !== undefined) {
 
 #### Types
 
-| Type                           | Kind      | Shape                                                                                                                                                                      |
-| ------------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BrowserEngine`                | type      | `'chromium'` — the supported browser engine (raw CDP targets Chromium-family browsers only).                                                                               |
-| `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'` — how the browser connection was established.                                                                                          |
-| `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'` — lifecycle status of a browser wrapper.                                                              |
-| `BrowserDiscoveryResult`       | interface | `{ found: boolean; endpoint?; browser?; connection? }` — result of passive browser discovery.                                                                              |
-| `SystemBrowserOptions`         | interface | `{ env?; paths?; names?; stores? }` — overrides for `findSystemBrowser`'s candidate sources (env-override keys/Windows roots, install paths, PATH-probe names, Playwright store base dirs); each field replaces its category's default, an explicit `[]`/`{}` disables it.       |
-| `BrowserCdpOptions`            | interface | `{ port?: number; host?: string; endpoint?: string }` — CDP connection configuration (`host` defaults to `BROWSER_DEFAULT_HOST`).                                          |
-| `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; error: [error]; destroy: [] }`.                                    |
-| `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args? }` — options for `createBrowser`.                                                      |
-| `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `connected` data members + `discover` / `connect` / `disconnect` / `context` / `contexts` / `create` / `destroy` methods. |
-| `WebSocketCDPTransportOptions` | interface | `{ url: string; timeout?: number }` — options for creating a WebSocketCDPTransport.                                                                                        |
+| Type                           | Kind      | Shape                                                                                                                                                                                                                                                                      |
+| ------------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BrowserEngine`                | type      | `'chromium'` — the supported browser engine (raw CDP targets Chromium-family browsers only).                                                                                                                                                                               |
+| `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'` — how the browser connection was established.                                                                                                                                                                                          |
+| `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'` — lifecycle status of a browser wrapper.                                                                                                                                                              |
+| `BrowserDiscoveryResult`       | interface | `{ found: boolean; endpoint?; browser?; connection? }` — result of passive browser discovery.                                                                                                                                                                              |
+| `SystemBrowserOptions`         | interface | `{ env?; paths?; names?; stores? }` — overrides for `findSystemBrowser`'s candidate sources (env-override keys/Windows roots, install paths, PATH-probe names, Playwright store base dirs); each field replaces its category's default, an explicit `[]`/`{}` disables it. |
+| `BrowserCdpOptions`            | interface | `{ port?: number; host?: string; endpoint?: string }` — CDP connection configuration (`host` defaults to `BROWSER_DEFAULT_HOST`).                                                                                                                                          |
+| `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; error: [error]; destroy: [] }`.                                                                                                                                    |
+| `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args? }` — options for `createBrowser`.                                                                                                                                                      |
+| `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `connected` data members + `discover` / `connect` / `disconnect` / `context` / `contexts` / `create` / `destroy` methods.                                                                                                 |
+| `WebSocketCDPTransportOptions` | interface | `{ url: string; timeout?: number }` — options for creating a WebSocketCDPTransport.                                                                                                                                                                                        |
 
 ## Methods
 
