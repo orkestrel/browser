@@ -1272,9 +1272,9 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		const page = await browser.create()
 		const pid = browser.pid
 
-		await expect(
-			page.evaluate(`'x'.repeat(${BROWSER_RESULT_LIMIT + 100_000})`),
-		).rejects.toSatisfy(isBrowserResultLimitError)
+		await expect(page.evaluate(`'x'.repeat(${BROWSER_RESULT_LIMIT + 100_000})`)).rejects.toSatisfy(
+			isBrowserResultLimitError,
+		)
 
 		// The browser must survive the oversized result — no crashed session.
 		expect(browser.connected).toBe(true)
@@ -1287,7 +1287,9 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	it('content() on a huge DOM never crashes the session', async () => {
 		const httpServer = createServer((req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
-			res.end(`<html><body><div id="big">${'a'.repeat(BROWSER_RESULT_LIMIT + 500_000)}</div></body></html>`)
+			res.end(
+				`<html><body><div id="big">${'a'.repeat(BROWSER_RESULT_LIMIT + 500_000)}</div></body></html>`,
+			)
 		})
 		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
 		const address = httpServer.address() as AddressInfo
@@ -1466,9 +1468,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			const page = await browser.create()
 
 			const started = Date.now()
-			await expect(page.navigate(url, { timeout: 1500 })).rejects.toThrow(
-				'CDP request timed out',
-			)
+			await expect(page.navigate(url, { timeout: 1500 })).rejects.toThrow('CDP request timed out')
 			const elapsed = Date.now() - started
 			expect(elapsed).toBeLessThan(3000)
 
@@ -1484,9 +1484,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	it('records and replays a contenteditable fill via codegen on a real DOM', async () => {
 		const httpServer = createServer((req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
-			res.end(
-				'<html><body><div id="editable" contenteditable="true"></div></body></html>',
-			)
+			res.end('<html><body><div id="editable" contenteditable="true"></div></body></html>')
 		})
 		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
 		const address = httpServer.address() as AddressInfo

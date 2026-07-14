@@ -351,9 +351,9 @@ describe('BrowserPage', () => {
 			const thrown: unknown = await page.content().catch((caught: unknown) => caught)
 
 			expect(isBrowserResultLimitError(thrown)).toBe(true)
-			expect(thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined).toBe(
-				3500000,
-			)
+			expect(
+				thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined,
+			).toBe(3500000)
 		})
 	})
 
@@ -552,12 +552,12 @@ describe('BrowserPage', () => {
 			const thrown: unknown = await page.evaluate('bigObject').catch((caught: unknown) => caught)
 
 			expect(isBrowserResultLimitError(thrown)).toBe(true)
-			expect(thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined).toBe(
-				4200000,
-			)
-			expect(thrown instanceof BrowserResultLimitError ? thrown.context?.['limit'] : undefined).toBe(
-				BROWSER_RESULT_LIMIT,
-			)
+			expect(
+				thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined,
+			).toBe(4200000)
+			expect(
+				thrown instanceof BrowserResultLimitError ? thrown.context?.['limit'] : undefined,
+			).toBe(BROWSER_RESULT_LIMIT)
 		})
 	})
 
