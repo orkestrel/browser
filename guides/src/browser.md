@@ -202,6 +202,7 @@ await browser.destroy() // closes the process and releases resources
 | `BROWSER_STORE_CACHE_DIRS`       | const | Frozen record of the per-OS default Playwright cache directory, relative to the home directory.                                                                       |
 | `BROWSER_STORE_LINK_NAME`        | const | `'chromium'` — name of the top-level Chromium symlink/binary inside a browser store base.                                                                             |
 | `BROWSER_STORE_GLOBS`            | const | Frozen record of the glob pattern matching a versioned Chromium binary, keyed by `process.platform`.                                                                  |
+| `BROWSER_ENGINE_HINTS`           | const | Frozen record of case-insensitive substrings identifying an executable's engine, keyed by `BrowserEngine` (checked edge → chromium → chrome by `parseBrowserEngine`). |
 
 #### Errors
 
@@ -231,14 +232,22 @@ try {
 
 | API                    | Kind     | Summary                                                                                                                                              |
 | ---------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `findSystemBrowser`    | function | Locate a Chrome/Chromium/Edge executable (env override → well-known install paths → PATH probe → Playwright browser stores); may return `undefined`. |
+| `findSystemBrowsers`   | function | Enumerate every Chrome/Chromium/Edge executable discoverable (env override → well-known install paths → PATH probe → Playwright browser stores), deduplicated by normalized path; each entry classified into a `SystemBrowser`, optionally narrowed by `options.engine`. |
+| `findSystemBrowser`    | function | The first entry of `findSystemBrowsers`; may return `undefined`.                                                                                     |
+| `parseBrowserEngine`   | function | Classify an executable path/name into a `BrowserEngine` by case-insensitive hint (edge → chromium → chrome); may return `undefined`.                 |
+| `normalizeExecutablePath` | function | Normalize an executable path for cross-source deduplication (case-insensitive on Windows).                                                        |
+| `browserToEngine`      | function | Classify a `/json/version` `Browser` string into a `BrowserEngine` (`Edg/` → edge, `Chrome/` → chrome, else chromium).                               |
 | `findEnvOverride`      | function | Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file.                                             |
+| `findAllEnvOverrides`  | function | Check the env-override keys in order, returning every one that exists.                                                                                |
 | `defaultInstallPaths`  | function | Build the default well-known install-path candidates for a platform, deriving Windows roots from env vars.                                           |
 | `windowsRoots`         | function | Derive Windows install roots from env vars, falling back to well-known literals when absent.                                                         |
 | `findInstallPath`      | function | Return the first candidate path that exists on disk.                                                                                                 |
+| `findAllInstallPaths`  | function | Return every candidate path that exists on disk, in the given order.                                                                                  |
 | `probePathNames`       | function | Probe PATH (`which`/`where`) for the first resolvable command name.                                                                                  |
+| `probeAllPathNames`    | function | Probe PATH for every resolvable command name, in the given order.                                                                                     |
 | `defaultStoreBases`    | function | Build the default Playwright browser store base directories to search for a managed Chromium.                                                        |
 | `findInStore`          | function | Search one store base for the top-level `chromium` link, else the highest-revision `chromium-*` install.                                             |
+| `findAllInStore`       | function | Search one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first.                                     |
 | `launchBrowserProcess` | function | Launch a browser process with raw-CDP debugging flags; returns the spawned `ChildProcess`.                                                           |
 | `waitForCdpReady`      | function | Poll a browser's CDP version endpoint until it responds or the timeout elapses; returns the debugger URL.                                            |
 | `fetchCdpTargets`      | function | Fetch and normalize the current CDP target list from a browser's `/json/list` endpoint.                                                              |
@@ -247,14 +256,22 @@ try {
 import {
 	createCDPTransport,
 	createScreenshotWriter,
+	findSystemBrowsers,
 	findSystemBrowser,
+	parseBrowserEngine,
+	normalizeExecutablePath,
+	browserToEngine,
 	findEnvOverride,
+	findAllEnvOverrides,
 	defaultInstallPaths,
 	windowsRoots,
 	findInstallPath,
+	findAllInstallPaths,
 	probePathNames,
+	probeAllPathNames,
 	defaultStoreBases,
 	findInStore,
+	findAllInStore,
 	launchBrowserProcess,
 	waitForCdpReady,
 	fetchCdpTargets,
@@ -263,20 +280,29 @@ import {
 const transport = createCDPTransport({ url: 'ws://localhost:9222/devtools/browser/abc' })
 const writer = createScreenshotWriter()
 
-const executable = findSystemBrowser() // string | undefined
-// findSystemBrowser({ env: {}, paths: [], names: [], stores: [] }) — override any candidate source
+const browsers = findSystemBrowsers() // readonly SystemBrowser[]
+const found = findSystemBrowser() // SystemBrowser | undefined — first entry of findSystemBrowsers()
+// findSystemBrowsers({ env: {}, paths: [], names: [], stores: [], engine: 'edge' }) — override any candidate source, narrow by engine
 
-// findSystemBrowser's internal resolution steps, exposed for composition/testing:
+parseBrowserEngine('/usr/bin/msedge') // 'edge'
+normalizeExecutablePath('/usr/bin/Chrome', process.platform) // string — case-folded on win32 only
+browserToEngine('HeadlessChrome/120.0') // 'chrome' — classifies a /json/version Browser string
+
+// findSystemBrowsers's internal resolution steps, exposed for composition/testing:
 const env = process.env
 findEnvOverride(env) // string | undefined — PLAYWRIGHT_EXECUTABLE_PATH / CHROME_PATH
+findAllEnvOverrides(env) // readonly string[] — every matching override that exists
 const roots = windowsRoots(env) // readonly string[] — PROGRAMFILES / PROGRAMFILES(X86) / LOCALAPPDATA
 defaultInstallPaths('win32', env) // readonly string[] — well-known Chrome/Edge/Chromium paths
 findInstallPath(defaultInstallPaths(process.platform, env)) // string | undefined
+findAllInstallPaths(defaultInstallPaths(process.platform, env)) // readonly string[]
 probePathNames(['google-chrome'], process.platform) // string | undefined — which/where probe
+probeAllPathNames(['google-chrome', 'msedge'], process.platform) // readonly string[]
 const stores = defaultStoreBases(env, process.platform) // readonly string[]
 for (const store of stores) findInStore(store, process.platform) // string | undefined
-if (executable !== undefined) {
-	const child = launchBrowserProcess(executable, 9222, true)
+for (const store of stores) findAllInStore(store, process.platform) // readonly string[]
+if (found !== undefined) {
+	const child = launchBrowserProcess(found.executable, 9222, true)
 	const debuggerUrl = await waitForCdpReady(9222, 5000)
 	const targets = await fetchCdpTargets(9222, 5000)
 }
@@ -286,15 +312,16 @@ if (executable !== undefined) {
 
 | Type                           | Kind      | Shape                                                                                                                                                                                                                                                                      |
 | ------------------------------ | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BrowserEngine`                | type      | `'chromium'` — the supported browser engine (raw CDP targets Chromium-family browsers only).                                                                                                                                                                               |
+| `BrowserEngine`                | type      | `'chromium' \| 'chrome' \| 'edge'` — the supported browser engines (raw CDP targets Chromium-family browsers only).                                                                                                                                                         |
 | `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'` — how the browser connection was established.                                                                                                                                                                                          |
 | `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'` — lifecycle status of a browser wrapper.                                                                                                                                                              |
 | `BrowserDiscoveryResult`       | interface | `{ found: boolean; endpoint?; browser?; connection? }` — result of passive browser discovery.                                                                                                                                                                              |
-| `SystemBrowserOptions`         | interface | `{ env?; paths?; names?; stores? }` — overrides for `findSystemBrowser`'s candidate sources (env-override keys/Windows roots, install paths, PATH-probe names, Playwright store base dirs); each field replaces its category's default, an explicit `[]`/`{}` disables it. |
+| `SystemBrowserOptions`         | interface | `{ env?; paths?; names?; stores?; engine? }` — overrides for `findSystemBrowsers`'s candidate sources (env-override keys/Windows roots, install paths, PATH-probe names, Playwright store base dirs) plus an engine filter; each field replaces its category's default, an explicit `[]`/`{}` disables it. |
+| `SystemBrowser`                | type      | `{ executable: string; engine: BrowserEngine }` — one discovered browser executable, as returned by `findSystemBrowsers`/`findSystemBrowser`.                                                                                                                              |
 | `BrowserCdpOptions`            | interface | `{ port?: number; host?: string; endpoint?: string }` — CDP connection configuration (`host` defaults to `BROWSER_DEFAULT_HOST`).                                                                                                                                          |
 | `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; error: [error]; destroy: [] }`.                                                                                                                                    |
-| `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args? }` — options for `createBrowser`.                                                                                                                                                      |
-| `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `connected` data members + `discover` / `connect` / `disconnect` / `context` / `contexts` / `create` / `destroy` methods.                                                                                                 |
+| `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args?; engine? }` — options for `createBrowser` (`engine` prefers a browser engine for discovery when launching; ignored when `executable` is given).                                       |
+| `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `connected` / `pid` data members + `discover` / `connect` / `disconnect` / `context` / `contexts` / `create` / `destroy` methods.                                                                                         |
 | `WebSocketCDPTransportOptions` | interface | `{ url: string; timeout?: number }` — options for creating a WebSocketCDPTransport.                                                                                                                                                                                        |
 
 ## Methods
@@ -446,7 +473,7 @@ passive discovery on `cdp.port` → launch a new process.
 | ------------ | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `discover`   | `Promise<BrowserDiscoveryResult>`      | Passive CDP probe, no side effects.                                                                                                                                                                                                           |
 | `connect`    | `Promise<void>`                        | Establish a connection using the strategy above (endpoint → discovery → launch). Idempotent.                                                                                                                                                  |
-| `disconnect` | `Promise<void>`                        | Detach the client-side connection and release it (CDP only) — the remote browser keeps running. Rejects with `BrowserConnectionError` if this instance launched the session (a live process); use `destroy()` for a launched session instead. |
+| `disconnect` | `Promise<void>`                        | Detach the client-side connection and release it — the remote browser keeps running. For `'cdp'` and `'persistent'` (profile-backed launch) connections this closes the client and releases the process WITHOUT killing it, so a persistent session can be reattached later via CDP discovery on the same port. Rejects with `BrowserConnectionError` for `'launch'` (ephemeral, no profile) connections — use `destroy()` instead. |
 | `context`    | `BrowserContextInterface \| undefined` | One context by index, or the first.                                                                                                                                                                                                           |
 | `contexts`   | `readonly BrowserContextInterface[]`   | All contexts.                                                                                                                                                                                                                                 |
 | `create`     | `Promise<BrowserPageInterface>`        | Shortcut to open a page in the default context.                                                                                                                                                                                               |
@@ -460,7 +487,8 @@ browser.emitter.on('connect', (mode) => log(mode))
 await browser.connect()
 const page = await browser.create({ url: 'https://example.com' })
 const all = browser.contexts() // readonly BrowserContextInterface[]
-await browser.disconnect() // detach from CDP without closing the browser
+const pid = browser.pid // number | undefined — the launched process id, when this instance owns one
+await browser.disconnect() // detach without closing the browser (cdp/persistent only)
 await browser.destroy()
 ```
 
@@ -491,7 +519,17 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    order: an explicit `cdp.endpoint`; a passive probe of `localhost:{cdp.port}`
    (`discover()`); then launching a new browser process with raw-CDP flags
    (`findSystemBrowser` / `launchBrowserProcess` / `waitForCdpReady`). A
-   found existing browser is preferred over a fresh launch.
+   found existing browser is preferred over a fresh launch. `engine` is
+   classified via `parseBrowserEngine` (explicit `executable`) or the
+   discovered `SystemBrowser`'s engine (launch) or `browserToEngine` on the
+   discovered `/json/version` browser string (CDP discovery); `BrowserOptions.engine`
+   narrows `findSystemBrowser` discovery to a preferred engine when launching,
+   and the thrown `BrowserConnectionError` carries the requested `engine` in
+   `context` when no matching browser is found. A `disconnect()` on a
+   `'persistent'` (profile-backed) launch releases its process WITHOUT
+   killing it — the browser stays alive for reattachment via CDP discovery on
+   the same port; an ephemeral `'launch'` (no profile) instead rejects
+   `disconnect()`, since it has no reattachment path.
 6. **Lifecycle events are observable, never inferred from state polling.**
    `BrowserInterface.emitter` fires `idle` / `discover` / `connect` /
    `disconnect` / `launch` / `page` / `error` / `destroy`; `BrowserCodegenInterface.emitter`
@@ -534,7 +572,9 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
     is sent `SIGTERM`; if it has not exited after `BROWSER_KILL_GRACE_MS`, it
     is force-killed with `SIGKILL`. `BrowserInterface.connected` is a pure,
     derived getter (`status === 'connected'`) — never separately tracked
-    state.
+    state. `BrowserInterface.pid` is the launched process's id (`ChildProcess.pid`),
+    undefined when this instance never launched or no longer owns one (a CDP
+    attach, or after a `'persistent'` session's `disconnect()` released it).
 
 ## Patterns
 
@@ -568,6 +608,32 @@ const actions = await codegen.stop()
 const script = codegen.script({ language: 'typescript' })
 await codegen.destroy()
 ```
+
+### Reattach to a running session
+
+A `'persistent'` (profile-backed) launch survives `disconnect()` — the
+browser process keeps running, so a later `Browser` can reattach to it via
+CDP discovery on the same fixed port:
+
+```ts
+import { createBrowser } from '@src/server'
+
+const port = 9222
+const browser = createBrowser({ profile: './profile', cdp: { port } })
+await browser.connect() // launches (no browser yet listening on `port`)
+const pid = browser.pid // supervise this process externally if desired
+
+await browser.disconnect() // releases ownership WITHOUT killing the browser
+
+// ...later, in this process or another...
+const reattached = createBrowser({ cdp: { port } })
+await reattached.connect() // discovers the still-running browser over CDP
+await reattached.destroy() // now closes the browser process
+```
+
+An ephemeral launch (no `profile`) has no reattachment path — its
+`disconnect()` rejects with a coded `BrowserConnectionError`; use `destroy()`
+to release it instead.
 
 ### Drive the core client directly over an injected transport
 

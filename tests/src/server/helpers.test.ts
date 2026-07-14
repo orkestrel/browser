@@ -2,13 +2,14 @@
  * src/server/helpers.ts tests.
  *
  * `fetchCdpTargets` / `waitForCdpReady` are exercised against a real
- * in-process HTTP server (`createCdpTestServer`). `findSystemBrowser` is
- * exercised through its `SystemBrowserOptions` override bag with real
- * temp files/dirs (`node:fs`) so every assertion is deterministic across
- * machines — no mocking, no dependency on what happens to be installed.
- * `launchBrowserProcess` argument construction is verified by spawning the
- * real Node binary as a stand-in executable and reading `ChildProcess.spawnargs`
- * — the exact argv passed to the OS — never a mock of `child_process`.
+ * in-process HTTP server (`createCdpTestServer`). `findSystemBrowsers` /
+ * `findSystemBrowser` are exercised through their `SystemBrowserOptions`
+ * override bag with real temp files/dirs (`node:fs`) so every assertion is
+ * deterministic across machines — no mocking, no dependency on what happens
+ * to be installed. `launchBrowserProcess` argument construction is verified
+ * by spawning the real Node binary as a stand-in executable and reading
+ * `ChildProcess.spawnargs` — the exact argv passed to the OS — never a mock
+ * of `child_process`.
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
@@ -16,7 +17,9 @@ import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+	findSystemBrowsers,
 	findSystemBrowser,
+	parseBrowserEngine,
 	launchBrowserProcess,
 	waitForCdpReady,
 	fetchCdpTargets,
@@ -55,7 +58,7 @@ describe('findSystemBrowser', () => {
 
 		const found = findSystemBrowser({ env: {}, paths: [file], names: [], stores: [] })
 
-		expect(found).toBe(file)
+		expect(found).toEqual({ executable: file, engine: 'chrome' })
 	})
 
 	it('prefers an env override over a path candidate', () => {
@@ -72,7 +75,7 @@ describe('findSystemBrowser', () => {
 			stores: [],
 		})
 
-		expect(found).toBe(envFile)
+		expect(found?.executable).toBe(envFile)
 	})
 
 	it('falls through to CHROME_PATH when PLAYWRIGHT_EXECUTABLE_PATH is absent', () => {
@@ -87,7 +90,7 @@ describe('findSystemBrowser', () => {
 			stores: [],
 		})
 
-		expect(found).toBe(chromePathFile)
+		expect(found?.executable).toBe(chromePathFile)
 	})
 
 	it('resolves a versioned Chromium install inside a browser store', () => {
@@ -101,7 +104,7 @@ describe('findSystemBrowser', () => {
 
 		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [store] })
 
-		expect(found).toBe(binary)
+		expect(found).toEqual({ executable: binary, engine: 'chromium' })
 	})
 
 	it('resolves the top-level chromium link inside a browser store', () => {
@@ -111,7 +114,121 @@ describe('findSystemBrowser', () => {
 
 		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [store] })
 
-		expect(found).toBe(link)
+		expect(found).toEqual({ executable: link, engine: 'chromium' })
+	})
+})
+
+describe('findSystemBrowsers', () => {
+	it('returns an empty array when every candidate source is empty', () => {
+		expect(findSystemBrowsers({ env: {}, paths: [], names: [], stores: [] })).toEqual([])
+	})
+
+	it('returns every planted candidate in resolution-precedence order with classified engines', () => {
+		const dir = createTempDir()
+		const envFile = join(dir, 'msedge')
+		const pathFile = join(dir, 'google-chrome')
+		writeFileSync(envFile, '')
+		writeFileSync(pathFile, '')
+
+		const store = createTempDir()
+		const link = join(store, 'chromium')
+		writeFileSync(link, '')
+
+		const found = findSystemBrowsers({
+			env: { PLAYWRIGHT_EXECUTABLE_PATH: envFile },
+			paths: [pathFile],
+			names: [],
+			stores: [store],
+		})
+
+		expect(found).toEqual([
+			{ executable: envFile, engine: 'edge' },
+			{ executable: pathFile, engine: 'chrome' },
+			{ executable: link, engine: 'chromium' },
+		])
+	})
+
+	it('dedupes a candidate reachable via two sources by normalized path', () => {
+		const dir = createTempDir()
+		const shared = join(dir, 'chrome')
+		writeFileSync(shared, '')
+
+		const found = findSystemBrowsers({
+			env: { PLAYWRIGHT_EXECUTABLE_PATH: shared },
+			paths: [shared],
+			names: [],
+			stores: [],
+		})
+
+		expect(found).toEqual([{ executable: shared, engine: 'chrome' }])
+	})
+
+	it('narrows results to the requested engine', () => {
+		const dir = createTempDir()
+		const edgeFile = join(dir, 'msedge')
+		const chromeFile = join(dir, 'google-chrome')
+		writeFileSync(edgeFile, '')
+		writeFileSync(chromeFile, '')
+
+		const found = findSystemBrowsers({
+			env: {},
+			paths: [edgeFile, chromeFile],
+			names: [],
+			stores: [],
+			engine: 'edge',
+		})
+
+		expect(found).toEqual([{ executable: edgeFile, engine: 'edge' }])
+	})
+
+	it('returns an empty array when the engine filter matches nothing', () => {
+		const dir = createTempDir()
+		const chromeFile = join(dir, 'google-chrome')
+		writeFileSync(chromeFile, '')
+
+		const found = findSystemBrowsers({
+			env: {},
+			paths: [chromeFile],
+			names: [],
+			stores: [],
+			engine: 'edge',
+		})
+
+		expect(found).toEqual([])
+	})
+})
+
+describe('parseBrowserEngine', () => {
+	it('classifies msedge/microsoft-edge/edge hints as edge', () => {
+		expect(parseBrowserEngine('/usr/bin/msedge')).toBe('edge')
+		expect(parseBrowserEngine('/opt/microsoft-edge/microsoft-edge')).toBe('edge')
+		expect(parseBrowserEngine('C:\\Program Files\\Microsoft\\Edge\\Application\\msedge.exe')).toBe(
+			'edge',
+		)
+	})
+
+	it('classifies chromium/pw-browsers/chrome-linux/chrome-win/chrome-mac/chrome_headless hints as chromium', () => {
+		expect(parseBrowserEngine('/usr/bin/chromium')).toBe('chromium')
+		expect(parseBrowserEngine('/opt/pw-browsers/chromium-1194/chrome-linux/chrome')).toBe(
+			'chromium',
+		)
+		expect(parseBrowserEngine('chromium-1194/chrome-win/chrome.exe')).toBe('chromium')
+		expect(parseBrowserEngine('chromium-1194/chrome-mac/Chromium')).toBe('chromium')
+		expect(parseBrowserEngine('chrome_headless-shell')).toBe('chromium')
+	})
+
+	it('classifies google-chrome hints as chrome', () => {
+		expect(parseBrowserEngine('/usr/bin/google-chrome-stable')).toBe('chrome')
+		expect(parseBrowserEngine('/Applications/Google/Chrome.app/Contents/MacOS/Google Chrome')).toBe(
+			'chrome',
+		)
+		expect(parseBrowserEngine('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe')).toBe(
+			'chrome',
+		)
+	})
+
+	it('returns undefined for an unrecognizable executable', () => {
+		expect(parseBrowserEngine('/usr/bin/some-random-binary')).toBeUndefined()
 	})
 })
 

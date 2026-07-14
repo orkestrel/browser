@@ -32,6 +32,8 @@ import {
 } from './constants.js'
 import {
 	findSystemBrowser,
+	parseBrowserEngine,
+	browserToEngine,
 	launchBrowserProcess,
 	waitForCdpReady,
 	fetchCdpTargets,
@@ -58,7 +60,10 @@ export class Browser implements BrowserInterface {
 	constructor(options?: BrowserOptions) {
 		this.#emitter = new Emitter({ on: options?.on })
 		this.#options = options ?? {}
-		this.#engine = 'chromium'
+		this.#engine =
+			this.#options.executable !== undefined
+				? (parseBrowserEngine(this.#options.executable) ?? 'chromium')
+				: 'chromium'
 		this.#cdpPort = this.#options.cdp?.port ?? BROWSER_DEFAULT_CDP_PORT
 		this.#cdpHost = this.#options.cdp?.host ?? BROWSER_DEFAULT_HOST
 
@@ -86,6 +91,10 @@ export class Browser implements BrowserInterface {
 
 	get connected(): boolean {
 		return this.#status === 'connected'
+	}
+
+	get pid(): number | undefined {
+		return this.#process?.pid
 	}
 
 	// === Discovery
@@ -117,6 +126,7 @@ export class Browser implements BrowserInterface {
 			this.#assertNotAborted()
 			const discovery = await this.#raceAbort(this.#discoverCdp())
 			if (discovery.found && discovery.endpoint !== undefined) {
+				this.#engine = browserToEngine(discovery.browser ?? '')
 				await this.#connectCdp(discovery.endpoint)
 				return
 			}
@@ -138,12 +148,15 @@ export class Browser implements BrowserInterface {
 	async disconnect(): Promise<void> {
 		if (this.#destroyed || this.#status !== 'connected') return
 
-		// disconnect() is CDP-only (see BrowserInterface remarks) — a session
-		// launched by this instance owns a live browser process, and detaching
-		// from it here would strand that process. Callers must use destroy().
-		if (this.#process !== undefined) {
+		// An ephemeral 'launch' (no persistent profile) has no way to be
+		// reattached to later — detaching here would strand its process with
+		// no path back to it. Callers must use destroy() instead. A
+		// 'persistent' (profile-backed) launch IS reattachable (via CDP
+		// discovery on the same port), so it falls through to the same
+		// release-without-killing path as a 'cdp' connection.
+		if (this.#connection === 'launch') {
 			throw new BrowserConnectionError(
-				'Cannot disconnect() a browser process launched by this instance — use destroy() to release it',
+				'Cannot disconnect() an ephemeral launch — no persistent profile to reattach to; ephemeral launches must use destroy() to release it',
 				{ connection: this.#connection },
 			)
 		}
@@ -159,6 +172,10 @@ export class Browser implements BrowserInterface {
 				// Swallow — best-effort close on detach
 			}
 		}
+
+		// Release ownership of a launched process WITHOUT killing it, so a
+		// 'persistent' session's browser stays alive for later reattachment.
+		this.#process = undefined
 
 		this.#reset()
 		this.#emitter.emit('disconnect')
@@ -415,13 +432,26 @@ export class Browser implements BrowserInterface {
 			throw new BrowserConnectionError('A browser process is already active on this instance')
 		}
 
-		const executable = this.#options.executable ?? findSystemBrowser()
+		const requestedEngine = this.#options.engine
+		let executable = this.#options.executable
+		let resolvedEngine: BrowserEngine | undefined
+
+		if (executable !== undefined) {
+			resolvedEngine = parseBrowserEngine(executable) ?? 'chromium'
+		} else {
+			const found = findSystemBrowser({ engine: requestedEngine })
+			executable = found?.executable
+			resolvedEngine = found?.engine
+		}
 
 		if (executable === undefined) {
 			throw new BrowserConnectionError(
 				'No Chromium browser found. Install Chrome, Edge, or Chromium.',
+				requestedEngine !== undefined ? { engine: requestedEngine } : undefined,
 			)
 		}
+
+		this.#engine = resolvedEngine ?? 'chromium'
 
 		const headless = this.#options.headless ?? true
 		const profile = this.#options.profile

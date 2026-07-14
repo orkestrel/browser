@@ -1,4 +1,4 @@
-import type { BrowserDiscoveryResult } from './types.js'
+import type { BrowserDiscoveryResult, BrowserEngine } from './types.js'
 
 // === CDP discovery
 
@@ -104,6 +104,23 @@ export const BROWSER_STORE_CACHE_DIRS: Readonly<Record<string, string>> = Object
 
 /** Name of the top-level Chromium symlink/binary Playwright maintains inside a browser store base. */
 export const BROWSER_STORE_LINK_NAME = 'chromium'
+
+/**
+ * Case-insensitive substrings identifying an executable path/name's browser
+ * engine, checked by `parseBrowserEngine` in the order `edge` → `chromium` → `chrome`.
+ */
+export const BROWSER_ENGINE_HINTS: Readonly<Record<BrowserEngine, readonly string[]>> = Object.freeze({
+	edge: Object.freeze(['msedge', 'microsoft-edge', 'edge']),
+	chromium: Object.freeze([
+		'chromium',
+		'pw-browsers',
+		'chrome-linux',
+		'chrome-win',
+		'chrome-mac',
+		'chrome_headless',
+	]),
+	chrome: Object.freeze(['google-chrome', 'google/chrome', 'google\\chrome', 'chrome']),
+})
 
 /** Glob pattern (relative to a store base) matching a versioned Chromium binary, keyed by `process.platform`. */
 export const BROWSER_STORE_GLOBS: Readonly<Record<string, string>> = Object.freeze({

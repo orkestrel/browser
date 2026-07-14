@@ -9,7 +9,7 @@ import type {
 // === Browser shared
 
 /** Supported browser engine (raw CDP targets Chromium-family browsers only). */
-export type BrowserEngine = 'chromium'
+export type BrowserEngine = 'chromium' | 'chrome' | 'edge'
 
 /** How the browser connection was established. */
 export type BrowserConnection = 'cdp' | 'launch' | 'persistent'
@@ -37,12 +37,12 @@ export interface BrowserDiscoveryResult {
 }
 
 /**
- * Options overriding `findSystemBrowser`'s candidate sources.
+ * Options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources.
  *
  * @remarks
  * Each field replaces the default candidate list for its category — a field
  * left `undefined` falls back to the platform default, an explicit `[]` (or
- * empty `env`) disables that category entirely. Zero-arg `findSystemBrowser()`
+ * empty `env`) disables that category entirely. Zero-arg `findSystemBrowsers()`
  * uses full default resolution.
  *
  * - `env` — environment record consulted for both the override keys
@@ -55,12 +55,26 @@ export interface BrowserDiscoveryResult {
  * - `stores` — Playwright browser store base directories searched for a
  *   managed Chromium; defaults to `PLAYWRIGHT_BROWSERS_PATH`, the well-known
  *   store dirs, and the per-OS Playwright cache directory
+ * - `engine` — when set, narrows results to candidates classified as this engine
  */
 export interface SystemBrowserOptions {
 	readonly env?: Readonly<Record<string, string | undefined>>
 	readonly paths?: readonly string[]
 	readonly names?: readonly string[]
 	readonly stores?: readonly string[]
+	readonly engine?: BrowserEngine
+}
+
+/**
+ * One discovered browser executable on this machine.
+ *
+ * @remarks
+ * Returned by `findSystemBrowsers`/`findSystemBrowser` — pairs the resolved
+ * absolute executable path with its classified engine.
+ */
+export type SystemBrowser = {
+	readonly executable: string
+	readonly engine: BrowserEngine
 }
 
 /**
@@ -116,6 +130,8 @@ export type BrowserEventMap = {
  * - `viewport` — default viewport dimensions for new pages
  * - `signal` — external AbortSignal for cancelling the connection attempt
  * - `args` — additional command-line flags passed to the launched browser process
+ * - `engine` — preferred browser engine to launch; narrows system browser
+ *   discovery to this engine (ignored when `executable` is given)
  */
 export interface BrowserOptions {
 	readonly on?: EmitterHooks<BrowserEventMap>
@@ -127,6 +143,7 @@ export interface BrowserOptions {
 	readonly viewport?: BrowserViewport
 	readonly signal?: AbortSignal
 	readonly args?: readonly string[]
+	readonly engine?: BrowserEngine
 }
 
 /**
@@ -147,9 +164,13 @@ export interface BrowserOptions {
  * **Lifecycle:**
  * - `discover` — passive CDP probe, no side effects
  * - `connect` — establish connection using the strategy above
- * - `disconnect` — detach from the browser WITHOUT closing it (CDP only);
- *   rejects with the coded `BrowserConnectionError` for sessions launched by
- *   this instance (use `destroy()` instead)
+ * - `disconnect` — detach from the browser. For `'cdp'` and `'persistent'`
+ *   connections this closes the client WITHOUT killing the browser process —
+ *   a `'persistent'` (profile-backed) launch releases ownership of its process
+ *   (no kill, no exit listener) so the browser stays alive for later
+ *   reattachment via CDP discovery on the same port. Rejects with the coded
+ *   `BrowserConnectionError` for `'launch'` (ephemeral, no profile) sessions —
+ *   use `destroy()` instead.
  * - `destroy` — close the browser process and release all resources
  *
  * **Page management:**
@@ -163,6 +184,7 @@ export interface BrowserInterface {
 	readonly status: BrowserStatus
 	readonly connection: BrowserConnection | undefined
 	readonly connected: boolean
+	readonly pid: number | undefined
 	discover(): Promise<BrowserDiscoveryResult>
 	connect(): Promise<void>
 	disconnect(): Promise<void>

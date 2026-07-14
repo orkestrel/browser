@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { CDPTarget } from '@src/core'
-import type { SystemBrowserOptions } from './types.js'
+import type { SystemBrowserOptions, SystemBrowser, BrowserEngine } from './types.js'
 import { existsSync, globSync } from 'node:fs'
 import { win32 as pathWin32, posix as pathPosix } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
@@ -20,6 +20,7 @@ import {
 	BROWSER_STORE_CACHE_DIRS,
 	BROWSER_STORE_LINK_NAME,
 	BROWSER_STORE_GLOBS,
+	BROWSER_ENGINE_HINTS,
 	BROWSER_LAUNCH_ARGS,
 	BROWSER_HEADLESS_ARG,
 	BROWSER_DEFAULT_HOST,
@@ -28,55 +29,121 @@ import {
 // === Discovery helpers
 
 /**
- * Locate a Chrome/Chromium/Edge executable on this machine.
+ * Enumerate every Chrome/Chromium/Edge executable discoverable on this
+ * machine, deduplicated by normalized absolute path.
  *
  * @remarks
- * Resolution precedence (first match wins):
- * 1. `PLAYWRIGHT_EXECUTABLE_PATH`, then `CHROME_PATH` — an explicit
- *    environment override, when set and the file exists
+ * Resolution precedence (candidates appended in this order):
+ * 1. `PLAYWRIGHT_EXECUTABLE_PATH`, then `CHROME_PATH` — explicit environment
+ *    overrides that exist on disk
  * 2. Well-known platform install locations (Chrome, Edge, Chromium); Windows
  *    roots are derived from `PROGRAMFILES` / `PROGRAMFILES(X86)` / `LOCALAPPDATA`
  * 3. PATH probe for known command names (`which` on POSIX, `where` on Windows)
  * 4. Playwright-managed browser stores (`PLAYWRIGHT_BROWSERS_PATH`, `/opt/pw-browsers`,
  *    and the per-OS Playwright cache directory) — the top-level `chromium`
- *    link/binary, else the highest-revision `chromium-*` install found
+ *    link/binary, then the highest-revision `chromium-*` install found
+ *
+ * Each candidate is classified into a {@link BrowserEngine} via
+ * `parseBrowserEngine` (unclassifiable candidates default to `'chromium'`),
+ * and `options.engine` (when given) narrows the result to that engine.
  *
  * @param options - Overrides for the candidate sources; see {@link SystemBrowserOptions}
- * @returns Absolute path to a browser executable, or undefined
+ * @returns Every discovered browser, in resolution-precedence order
  */
-export function findSystemBrowser(options?: SystemBrowserOptions): string | undefined {
+export function findSystemBrowsers(options?: SystemBrowserOptions): readonly SystemBrowser[] {
 	const platform = process.platform
 	const env = options?.env ?? process.env
 
-	const envOverride = findEnvOverride(env)
-	if (envOverride !== undefined) return envOverride
+	const candidates: string[] = []
+
+	candidates.push(...findAllEnvOverrides(env))
 
 	const paths = options?.paths ?? defaultInstallPaths(platform, env)
-	const installPath = findInstallPath(paths)
-	if (installPath !== undefined) return installPath
+	candidates.push(...findAllInstallPaths(paths))
 
 	const names = options?.names ?? BROWSER_EXECUTABLE_NAMES
-	const pathBinary = probePathNames(names, platform)
-	if (pathBinary !== undefined) return pathBinary
+	candidates.push(...probeAllPathNames(names, platform))
 
 	const stores = options?.stores ?? defaultStoreBases(env, platform)
 	for (const store of stores) {
-		const found = findInStore(store, platform)
-		if (found !== undefined) return found
+		candidates.push(...findAllInStore(store, platform))
 	}
 
+	const seen = new Set<string>()
+	const browsers: SystemBrowser[] = []
+
+	for (const executable of candidates) {
+		const key = normalizeExecutablePath(executable, platform)
+		if (seen.has(key)) continue
+		seen.add(key)
+
+		const engine = parseBrowserEngine(executable) ?? 'chromium'
+		if (options?.engine !== undefined && engine !== options.engine) continue
+
+		browsers.push({ executable, engine })
+	}
+
+	return browsers
+}
+
+/**
+ * Locate a Chrome/Chromium/Edge executable on this machine — the first entry
+ * of {@link findSystemBrowsers}.
+ *
+ * @param options - Overrides for the candidate sources; see {@link SystemBrowserOptions}
+ * @returns The first discovered browser, or undefined
+ */
+export function findSystemBrowser(options?: SystemBrowserOptions): SystemBrowser | undefined {
+	return findSystemBrowsers(options)[0]
+}
+
+/**
+ * Classify an executable path/name into a {@link BrowserEngine} by
+ * case-insensitive hint, checked in the order edge → chromium → chrome.
+ *
+ * @param executable - Executable path or command name to classify
+ * @returns The classified engine, or undefined when no hint matches
+ */
+export function parseBrowserEngine(executable: string): BrowserEngine | undefined {
+	const lower = executable.toLowerCase()
+	const order: readonly BrowserEngine[] = ['edge', 'chromium', 'chrome']
+	for (const engine of order) {
+		const hints = BROWSER_ENGINE_HINTS[engine]
+		if (hints.some((hint) => lower.includes(hint))) return engine
+	}
 	return undefined
+}
+
+/** Normalize an executable path for cross-source deduplication (case-insensitive on Windows). */
+export function normalizeExecutablePath(path: string, platform: string): string {
+	const normalized = platform === 'win32' ? pathWin32.normalize(path) : pathPosix.normalize(path)
+	return platform === 'win32' ? normalized.toLowerCase() : normalized
+}
+
+/** Classify a `/json/version` `Browser` string into a {@link BrowserEngine} (`Edg/` → edge, `Chrome/` → chrome, else chromium). */
+export function browserToEngine(browser: string): BrowserEngine {
+	if (browser.includes('Edg/')) return 'edge'
+	if (browser.includes('Chrome/')) return 'chrome'
+	return 'chromium'
 }
 
 /** Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file. */
 export function findEnvOverride(
 	env: Readonly<Record<string, string | undefined>>,
 ): string | undefined {
+	return findAllEnvOverrides(env)[0]
+}
+
+/** Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order, returning every one that exists. */
+export function findAllEnvOverrides(
+	env: Readonly<Record<string, string | undefined>>,
+): readonly string[] {
+	const found: string[] = []
 	for (const key of BROWSER_ENV_PATH_KEYS) {
 		const value = env[key]
-		if (value !== undefined && value.length > 0 && existsSync(value)) return value
+		if (value !== undefined && value.length > 0 && existsSync(value)) found.push(value)
 	}
-	return undefined
+	return found
 }
 
 /** Build the default well-known install-path candidates for a platform, deriving Windows roots from env vars. */
@@ -109,23 +176,31 @@ export function windowsRoots(env: Readonly<Record<string, string | undefined>>):
 
 /** Return the first candidate path that exists on disk. */
 export function findInstallPath(paths: readonly string[]): string | undefined {
-	for (const path of paths) {
-		if (existsSync(path)) return path
-	}
-	return undefined
+	return findAllInstallPaths(paths)[0]
+}
+
+/** Return every candidate path that exists on disk, in the given order. */
+export function findAllInstallPaths(paths: readonly string[]): readonly string[] {
+	return paths.filter((path) => existsSync(path))
 }
 
 /** Probe PATH (`which`/`where`) for the first resolvable command name. */
 export function probePathNames(names: readonly string[], platform: string): string | undefined {
+	return probeAllPathNames(names, platform)[0]
+}
+
+/** Probe PATH (`which`/`where`) for every resolvable command name, in the given order. */
+export function probeAllPathNames(names: readonly string[], platform: string): readonly string[] {
 	const finder = platform === 'win32' ? 'where' : 'which'
+	const found: string[] = []
 	for (const name of names) {
 		const result = spawnSync(finder, [name], { stdio: 'pipe' })
 		if (result.status === 0) {
 			const output = result.stdout.toString('utf-8').trim().split('\n')[0]
-			if (output !== undefined && output.length > 0) return output
+			if (output !== undefined && output.length > 0) found.push(output)
 		}
 	}
-	return undefined
+	return found
 }
 
 /** Build the default Playwright browser store base directories to search for a managed Chromium. */
@@ -154,20 +229,26 @@ export function defaultStoreBases(
 
 /** Search one store base for the top-level `chromium` link, else the highest-revision `chromium-*` install. */
 export function findInStore(base: string, platform: string): string | undefined {
+	return findAllInStore(base, platform)[0]
+}
+
+/** Search one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first. */
+export function findAllInStore(base: string, platform: string): readonly string[] {
 	const joiner = platform === 'win32' ? pathWin32.join : pathPosix.join
+	const found: string[] = []
 
 	const linkPath = joiner(base, BROWSER_STORE_LINK_NAME)
-	if (existsSync(linkPath)) return linkPath
+	if (existsSync(linkPath)) found.push(linkPath)
 
 	const glob = BROWSER_STORE_GLOBS[platform]
-	if (glob === undefined) return undefined
+	if (glob === undefined) return found
 
 	const pattern = `${base.replaceAll('\\', '/')}/${glob}`
 	const matches = globSync(pattern).filter((match) => existsSync(match))
-	if (matches.length === 0) return undefined
-
 	matches.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
-	return matches[0]
+	found.push(...matches)
+
+	return found
 }
 
 /**
