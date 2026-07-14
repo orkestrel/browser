@@ -53,22 +53,29 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		this.#client.subscribe('Runtime.bindingCalled', this.#onBindingCalled, this.#sessionId)
 		this.#client.subscribe('Page.frameNavigated', this.#onFrameNavigated, this.#sessionId)
 
-		await this.#client.send('Runtime.enable', undefined, this.#sessionId)
-		await this.#client.send(
-			'Runtime.addBinding',
-			{ name: BROWSER_CODEGEN_BINDING_NAME },
-			this.#sessionId,
-		)
-		await this.#client.send(
-			'Page.addScriptToEvaluateOnNewDocument',
-			{ source: BROWSER_CODEGEN_SOURCE },
-			this.#sessionId,
-		)
-		await this.#client.send(
-			'Runtime.evaluate',
-			{ expression: BROWSER_CODEGEN_SOURCE, awaitPromise: true },
-			this.#sessionId,
-		)
+		try {
+			await this.#client.send('Runtime.enable', undefined, this.#sessionId)
+			await this.#client.send(
+				'Runtime.addBinding',
+				{ name: BROWSER_CODEGEN_BINDING_NAME },
+				this.#sessionId,
+			)
+			await this.#client.send(
+				'Page.addScriptToEvaluateOnNewDocument',
+				{ source: BROWSER_CODEGEN_SOURCE },
+				this.#sessionId,
+			)
+			await this.#client.send(
+				'Runtime.evaluate',
+				{ expression: BROWSER_CODEGEN_SOURCE, awaitPromise: true },
+				this.#sessionId,
+			)
+		} catch (error) {
+			this.#client.unsubscribe('Runtime.bindingCalled', this.#onBindingCalled, this.#sessionId)
+			this.#client.unsubscribe('Page.frameNavigated', this.#onFrameNavigated, this.#sessionId)
+			this.#started = false
+			throw error
+		}
 
 		this.#emitter.emit('start')
 	}

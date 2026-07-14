@@ -145,6 +145,7 @@ describe('BrowserContext', () => {
 		it('discards previously synced pages on the next sync', async () => {
 			const { client, transport } = await createConnectedClient()
 			scriptAttach(transport)
+			replyOk(transport, 'Target.closeTarget')
 
 			const context = new BrowserContext(client)
 			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
@@ -161,6 +162,32 @@ describe('BrowserContext', () => {
 			await context.sync([createTarget({ id: 't1' })])
 
 			expect(context.pages()).toHaveLength(0)
+		})
+
+		it('closes pages for targets no longer present and preserves kept pages', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptAttach(transport)
+			replyOk(transport, 'Target.closeTarget')
+
+			const context = new BrowserContext(client)
+			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
+			const kept = context.page(0)
+
+			const attachCountBefore = transport.sent.filter(
+				(m) => m.method === 'Target.attachToTarget',
+			).length
+
+			await context.sync([createTarget({ id: 't1' })])
+
+			expect(context.pages()).toHaveLength(1)
+			expect(context.page(0)).toBe(kept)
+			expect(transport.sent.some((m) => m.method === 'Target.closeTarget')).toBe(true)
+
+			// The kept target must not be re-attached
+			const attachCountAfter = transport.sent.filter(
+				(m) => m.method === 'Target.attachToTarget',
+			).length
+			expect(attachCountAfter).toBe(attachCountBefore)
 		})
 
 		it('applies the configured viewport to each synced page', async () => {

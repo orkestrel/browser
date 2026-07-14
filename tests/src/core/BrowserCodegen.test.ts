@@ -73,6 +73,42 @@ describe('BrowserCodegen', () => {
 
 			expect(transport.sent.length).toBe(before)
 		})
+
+		it('unsubscribes everything armed and allows a retry after a failed start()', async () => {
+			const transport = createCDPTransport()
+			const client = createCDPClient({ transport })
+			await client.connect()
+
+			let enableCalls = 0
+			transport.onSend('Runtime.enable', (message) => {
+				enableCalls += 1
+				if (enableCalls === 1) {
+					transport.fail(message.id, 'boom')
+				} else {
+					transport.reply(message.id, {})
+				}
+			})
+
+			const codegen = new BrowserCodegen(client, SESSION_ID)
+			await expect(codegen.start()).rejects.toThrow()
+			expect(codegen.started).toBe(false)
+
+			// No subscriptions should remain armed after the failed start
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#x' }),
+				SESSION_ID,
+			)
+			expect(codegen.actions()).toEqual([])
+
+			// A retry must succeed cleanly
+			replyOk(transport, 'Runtime.addBinding')
+			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
+			replyOk(transport, 'Runtime.evaluate')
+
+			await codegen.start()
+			expect(codegen.started).toBe(true)
+		})
 	})
 
 	describe('action capture', () => {

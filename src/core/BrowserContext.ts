@@ -17,7 +17,7 @@ export class BrowserContext implements BrowserContextInterface {
 	#id: string | undefined
 	#viewport: BrowserViewport | undefined
 	#writer: ScreenshotWriterInterface | undefined
-	#pages: BrowserPage[] = []
+	#pages: Map<string, BrowserPage> = new Map()
 
 	constructor(
 		client: CDPClientInterface,
@@ -41,11 +41,12 @@ export class BrowserContext implements BrowserContextInterface {
 
 	page(index?: number): BrowserPageInterface | undefined {
 		const i = index ?? 0
-		return i >= 0 && i < this.#pages.length ? this.#pages[i] : undefined
+		const values = [...this.#pages.values()]
+		return i >= 0 && i < values.length ? values[i] : undefined
 	}
 
 	pages(): readonly BrowserPageInterface[] {
-		return [...this.#pages]
+		return [...this.#pages.values()]
 	}
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
@@ -101,16 +102,29 @@ export class BrowserContext implements BrowserContextInterface {
 			await page.navigate(options.url, { timeout: options.timeout })
 		}
 
-		this.#pages.push(page)
+		this.#pages.set(targetId, page)
 		return page
 	}
 
 	async sync(targets: readonly CDPTarget[]): Promise<void> {
 		const pageTargets = targets.filter((t) => t.type === 'page')
+		const targetIds = new Set(pageTargets.map((t) => t.id))
 
-		this.#pages = []
+		// Close and drop pages whose targets are no longer present
+		for (const [id, page] of this.#pages) {
+			if (targetIds.has(id)) continue
+			try {
+				await page.close()
+			} catch {
+				// Swallow errors during teardown of a removed target
+			}
+			this.#pages.delete(id)
+		}
 
+		// Attach only to targets we don't already have a page for
 		for (const target of pageTargets) {
+			if (this.#pages.has(target.id)) continue
+
 			try {
 				// Attach to existing target
 				const attachResult: unknown = await this.#client.send('Target.attachToTarget', {
@@ -146,7 +160,7 @@ export class BrowserContext implements BrowserContextInterface {
 					}
 				}
 
-				this.#pages.push(new BrowserPage(this.#client, target.id, sessionId, this.#writer))
+				this.#pages.set(target.id, new BrowserPage(this.#client, target.id, sessionId, this.#writer))
 			} catch {
 				// Skip targets we cannot attach to
 			}
@@ -154,14 +168,14 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async close(): Promise<void> {
-		for (const page of this.#pages) {
+		for (const page of this.#pages.values()) {
 			try {
 				await page.close()
 			} catch {
 				// Swallow errors during teardown
 			}
 		}
-		this.#pages = []
+		this.#pages.clear()
 
 		// Dispose real CDP browser context if we have one
 		if (this.#id !== undefined) {

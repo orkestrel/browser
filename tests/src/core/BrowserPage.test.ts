@@ -96,6 +96,36 @@ describe('BrowserPage', () => {
 				vi.useRealTimers()
 			}
 		})
+
+		it('leaves no dangling timer and no unhandled rejection when Page.navigate fails', async () => {
+			vi.useFakeTimers()
+			const unhandled: unknown[] = []
+			const onUnhandled = (reason: unknown): void => {
+				unhandled.push(reason)
+			}
+			process.on('unhandledRejection', onUnhandled)
+
+			try {
+				const { client, transport } = await createConnectedClient()
+				replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
+
+				const page = new BrowserPage(client, 'target-1', 'session-1')
+				await expect(
+					page.navigate('https://bad.example', { timeout: 20 }),
+				).rejects.toSatisfy(isBrowserError)
+
+				// The load-wait timer must be cancelled, not left armed
+				expect(vi.getTimerCount()).toBe(0)
+
+				// Advance well past the original timeout — nothing should fire/reject unobserved
+				await vi.advanceTimersByTimeAsync(50)
+				await Promise.resolve()
+				expect(unhandled).toEqual([])
+			} finally {
+				process.off('unhandledRejection', onUnhandled)
+				vi.useRealTimers()
+			}
+		})
 	})
 
 	describe('content()', () => {
@@ -273,6 +303,29 @@ describe('BrowserPage', () => {
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await expect(page.wait('#target')).resolves.toBeUndefined()
+		})
+	})
+
+	describe('selector escaping', () => {
+		it('safely embeds a selector with embedded quotes and backslashes into the evaluate expression', async () => {
+			const { client, transport } = await createConnectedClient()
+			scriptEvaluate(transport, (expression) => expression.includes('!== null'), true)
+			scriptEvaluate(transport, (expression) => expression.includes('el.click()'), undefined)
+
+			const selector = String.raw`div[data-x='a"b\c']`
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await expect(page.click(selector)).resolves.toBeUndefined()
+
+			const clickCall = transport.sent.find(
+				(m) =>
+					m.method === 'Runtime.evaluate' &&
+					typeof m.params?.['expression'] === 'string' &&
+					(m.params['expression'] as string).includes('el.click()'),
+			)
+			expect(clickCall).toBeDefined()
+			const expression = clickCall?.params?.['expression']
+			expect(typeof expression).toBe('string')
+			expect(expression as string).toContain(JSON.stringify(selector))
 		})
 	})
 

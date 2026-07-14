@@ -70,17 +70,28 @@ export class BrowserPage implements BrowserPageInterface {
 		const condition = options?.condition ?? 'load'
 
 		// Set up load event listener before navigating
-		const loadPromise = this.#waitForLoadEvent(condition, timeout)
+		const wait = this.#waitForLoadEvent(condition, timeout)
 
-		// Navigate
-		const result: unknown = await this.#client.send('Page.navigate', { url }, this.#sessionId)
+		// Never let wait.promise reject unobserved — convert to an outcome
+		const waitOutcome = wait.promise.then(
+			() => ({ ok: true as const }),
+			(error: unknown) => ({ ok: false as const, error }),
+		)
 
-		if (isRecord(result) && isString(result['errorText'])) {
-			throw new BrowserError(`Navigation failed: ${result['errorText']}`)
+		try {
+			const result: unknown = await this.#client.send('Page.navigate', { url }, this.#sessionId)
+
+			if (isRecord(result) && isString(result['errorText'])) {
+				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
+			}
+
+			// Wait for the load condition
+			const outcome = await waitOutcome
+			if (!outcome.ok) throw outcome.error
+		} catch (error) {
+			wait.cancel()
+			throw error
 		}
-
-		// Wait for the load condition
-		await loadPromise
 
 		const currentUrl = await this.#evaluate('location.href')
 		this.#url = typeof currentUrl === 'string' ? currentUrl : url
@@ -157,7 +168,7 @@ export class BrowserPage implements BrowserPageInterface {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		await this.#waitForSelector(selector, timeout)
 		await this.#evaluate(
-			`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.scrollIntoView({ block: 'center' }); el.click(); } else { throw new Error('Element not found: ${selector.replace(/'/g, "\\'")}'); } })()`,
+			`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.scrollIntoView({ block: 'center' }); el.click(); } else { throw new Error('Element not found: ' + ${JSON.stringify(selector)}); } })()`,
 		)
 	}
 
@@ -167,7 +178,7 @@ export class BrowserPage implements BrowserPageInterface {
 		await this.#evaluate(
 			`(() => {
                 const el = document.querySelector(${JSON.stringify(selector)});
-                if (!el) throw new Error('Element not found: ${selector.replace(/'/g, "\\'")}');
+                if (!el) throw new Error('Element not found: ' + ${JSON.stringify(selector)});
                 el.focus();
                 el.value = ${JSON.stringify(value)};
                 el.dispatchEvent(new Event('input', { bubbles: true }));
@@ -187,7 +198,7 @@ export class BrowserPage implements BrowserPageInterface {
 		await this.#evaluate(
 			`(() => {
                 const el = document.querySelector(${JSON.stringify(selector)});
-                if (!el) throw new Error('Element not found: ${selector.replace(/'/g, "\\'")}');
+                if (!el) throw new Error('Element not found: ' + ${JSON.stringify(selector)});
                 const vals = ${valuesJson};
                 for (const opt of el.options) {
                     opt.selected = vals.includes(opt.value);
@@ -300,21 +311,28 @@ export class BrowserPage implements BrowserPageInterface {
 		throw new BrowserSelectorError(`Timeout waiting for selector: ${selector}`)
 	}
 
-	#waitForLoadEvent(condition: string, timeout: number): Promise<void> {
-		return new Promise<void>((resolve, reject) => {
-			const timer = setTimeout(() => {
+	#waitForLoadEvent(
+		condition: string,
+		timeout: number,
+	): { promise: Promise<void>; cancel: () => void } {
+		const eventName =
+			condition === 'domcontentloaded' ? 'Page.domContentEventFired' : 'Page.loadEventFired'
+
+		let settled = false
+		let timer: ReturnType<typeof setTimeout>
+		let handler: () => void
+
+		const promise = new Promise<void>((resolve, reject) => {
+			timer = setTimeout(() => {
+				if (settled) return
+				settled = true
 				this.#client.unsubscribe(eventName, handler, this.#sessionId)
 				reject(new BrowserError(`Navigation timeout after ${timeout}ms`))
 			}, timeout)
 
-			const eventName =
-				condition === 'domcontentloaded'
-					? 'Page.domContentEventFired'
-					: condition === 'networkidle'
-						? 'Page.loadEventFired'
-						: 'Page.loadEventFired'
-
-			const handler = (): void => {
+			handler = (): void => {
+				if (settled) return
+				settled = true
 				clearTimeout(timer)
 				this.#client.unsubscribe(eventName, handler, this.#sessionId)
 				resolve()
@@ -322,5 +340,14 @@ export class BrowserPage implements BrowserPageInterface {
 
 			this.#client.subscribe(eventName, handler, this.#sessionId)
 		})
+
+		const cancel = (): void => {
+			if (settled) return
+			settled = true
+			clearTimeout(timer)
+			this.#client.unsubscribe(eventName, handler, this.#sessionId)
+		}
+
+		return { promise, cancel }
 	}
 }
