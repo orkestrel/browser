@@ -1,8 +1,8 @@
 import type { BrowserCodegenAction, BrowserCodegenScriptOptions } from './types.js'
 import { isRecord, isString } from '@orkestrel/contract'
 
-const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
+export const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
 	Object.fromEntries(BASE64_CHARS.split('').map((char, index) => [char, index])),
 )
 

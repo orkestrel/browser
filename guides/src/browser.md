@@ -69,18 +69,29 @@ await client.close()
 | `BROWSER_DEFAULT_VIEWPORT_HEIGHT` | const | `720` — default viewport height in pixels.                                                 |
 | `BROWSER_CODEGEN_BINDING_NAME`    | const | `'__orkestrelBrowserCodegen'` — name of the CDP runtime binding the recorder script calls. |
 | `BROWSER_CODEGEN_SOURCE`          | const | The in-page recorder script source injected via CDP to capture click/fill/select actions.  |
+| `BASE64_CHARS`                    | const | The 64-character base64 alphabet used to build the decode lookup table.                    |
+| `BASE64_LOOKUP`                   | const | Frozen character → 6-bit value lookup table derived from `BASE64_CHARS`.                   |
 
 #### Errors
 
-| Error                  | Extends        | Code                     | Summary                                                                  |
-| ---------------------- | -------------- | ------------------------ | ------------------------------------------------------------------------ |
-| `BrowserError`         | `Error`        | `BROWSER_ERROR`          | Base error for all browser automation operations (`code` + `context`).   |
-| `BrowserSelectorError` | `BrowserError` | `BROWSER_SELECTOR_ERROR` | A selector-based lookup or wait timed out without the element appearing. |
+| Error                  | Kind  | Extends        | Code                     | Summary                                                                  |
+| ---------------------- | ----- | -------------- | ------------------------ | ------------------------------------------------------------------------ |
+| `BrowserError`         | class | `Error`        | `BROWSER_ERROR`          | Base error for all browser automation operations (`code` + `context`).   |
+| `BrowserSelectorError` | class | `BrowserError` | `BROWSER_SELECTOR_ERROR` | A selector-based lookup or wait timed out without the element appearing. |
 
-| Guard                    | Narrows to             |
-| ------------------------ | ---------------------- |
-| `isBrowserError`         | `BrowserError`         |
-| `isBrowserSelectorError` | `BrowserSelectorError` |
+| Guard                    | Kind     | Narrows to             |
+| ------------------------ | -------- | ---------------------- |
+| `isBrowserError`         | function | `BrowserError`         |
+| `isBrowserSelectorError` | function | `BrowserSelectorError` |
+
+```ts
+try {
+	await page.wait('#missing')
+} catch (error) {
+	if (isBrowserSelectorError(error)) log(error.code)
+	else if (isBrowserError(error)) log(error.code)
+}
+```
 
 #### Helpers
 
@@ -91,6 +102,20 @@ await client.close()
 | `parseCodegenActionPayload` | function | Parse a codegen binding payload string into a typed `BrowserCodegenAction`, or `undefined` if malformed.     |
 | `readCodegenNavigateAction` | function | Derive a `navigate` codegen action from a `Page.frameNavigated` CDP event (top-level frame only).            |
 | `compileCodegenScript`      | function | Compile recorded codegen actions into a replayable JavaScript or TypeScript script.                          |
+
+```ts
+import {
+	normalizeCodegenActions,
+	parseCodegenActionPayload,
+	readCodegenNavigateAction,
+	compileCodegenScript,
+} from '@src/core'
+
+const actions = normalizeCodegenActions(rawActions)
+const action = parseCodegenActionPayload(payload) // BrowserCodegenAction | undefined
+const navigate = readCodegenNavigateAction(frameNavigatedParams)
+const script = compileCodegenScript(actions, { language: 'typescript' })
+```
 
 #### Types
 
@@ -166,17 +191,27 @@ await browser.destroy() // closes the process and releases resources
 
 #### Errors
 
-| Error                      | Extends        | Code                          | Summary                                                                       |
-| -------------------------- | -------------- | ----------------------------- | ----------------------------------------------------------------------------- |
-| `BrowserConnectionError`   | `BrowserError` | `BROWSER_CONNECTION_ERROR`    | A CDP connection, discovery, or launch attempt failed.                        |
-| `BrowserNotConnectedError` | `BrowserError` | `BROWSER_NOT_CONNECTED_ERROR` | An operation requiring an active connection was attempted while disconnected. |
-| `BrowserDestroyedError`    | `BrowserError` | `BROWSER_DESTROYED_ERROR`     | An operation was attempted after the Browser was destroyed.                   |
+| Error                      | Kind  | Extends        | Code                          | Summary                                                                       |
+| -------------------------- | ----- | -------------- | ----------------------------- | ----------------------------------------------------------------------------- |
+| `BrowserConnectionError`   | class | `BrowserError` | `BROWSER_CONNECTION_ERROR`    | A CDP connection, discovery, or launch attempt failed.                        |
+| `BrowserNotConnectedError` | class | `BrowserError` | `BROWSER_NOT_CONNECTED_ERROR` | An operation requiring an active connection was attempted while disconnected. |
+| `BrowserDestroyedError`    | class | `BrowserError` | `BROWSER_DESTROYED_ERROR`     | An operation was attempted after the Browser was destroyed.                   |
 
-| Guard                        | Narrows to                 |
-| ---------------------------- | -------------------------- |
-| `isBrowserConnectionError`   | `BrowserConnectionError`   |
-| `isBrowserNotConnectedError` | `BrowserNotConnectedError` |
-| `isBrowserDestroyedError`    | `BrowserDestroyedError`    |
+| Guard                        | Kind     | Narrows to                 |
+| ---------------------------- | -------- | -------------------------- |
+| `isBrowserConnectionError`   | function | `BrowserConnectionError`   |
+| `isBrowserNotConnectedError` | function | `BrowserNotConnectedError` |
+| `isBrowserDestroyedError`    | function | `BrowserDestroyedError`    |
+
+```ts
+try {
+	await browser.connect()
+} catch (error) {
+	if (isBrowserConnectionError(error)) log(error.code)
+	else if (isBrowserNotConnectedError(error)) log(error.code)
+	else if (isBrowserDestroyedError(error)) log(error.code)
+}
+```
 
 #### Helpers
 
@@ -186,6 +221,27 @@ await browser.destroy() // closes the process and releases resources
 | `launchBrowserProcess` | function | Launch a browser process with raw-CDP debugging flags; returns the spawned `ChildProcess`.                            |
 | `waitForCdpReady`      | function | Poll a browser's CDP version endpoint until it responds or the timeout elapses; returns the debugger URL.             |
 | `fetchCdpTargets`      | function | Fetch and normalize the current CDP target list from a browser's `/json/list` endpoint.                               |
+
+```ts
+import {
+	createCDPTransport,
+	createScreenshotWriter,
+	findSystemBrowser,
+	launchBrowserProcess,
+	waitForCdpReady,
+	fetchCdpTargets,
+} from '@src/server'
+
+const transport = createCDPTransport({ url: 'ws://localhost:9222/devtools/browser/abc' })
+const writer = createScreenshotWriter()
+
+const executable = findSystemBrowser() // string | undefined
+if (executable !== undefined) {
+	const child = launchBrowserProcess(executable, 9222, true)
+	const debuggerUrl = await waitForCdpReady(9222, 5000)
+	const targets = await fetchCdpTargets(9222, 5000)
+}
+```
 
 #### Types
 
@@ -251,7 +307,10 @@ import { createCDPClient } from '@src/core'
 const client = createCDPClient({ transport })
 await client.connect()
 const targets = await client.send('Target.getTargets')
-client.subscribe('Target.targetCreated', (params) => log(params))
+const onCreated = (params) => log(params)
+client.subscribe('Target.targetCreated', onCreated)
+client.unsubscribe('Target.targetCreated', onCreated)
+await client.reconnect()
 await client.close()
 ```
 
@@ -271,6 +330,8 @@ accessor pattern (`page(index?)` / `pages()`).
 ```ts
 const ctx = browser.context()
 const page = await ctx?.create({ url: 'https://example.com' })
+const all = ctx?.pages() // readonly BrowserPageInterface[]
+await ctx?.sync(targets) // reconcile pages from discovered CDP targets
 await ctx?.close()
 ```
 
@@ -296,11 +357,15 @@ Abstraction over a single browser page or frame.
 
 ```ts
 await page.navigate('https://example.com')
+const heading = await page.title()
 await page.click('#submit')
 await page.fill('#name', 'Ada')
 await page.select('#lang', ['en'])
 const content = await page.content()
+const result = await page.evaluate('document.title')
 const shot = await page.screenshot({ full: true, type: 'png' })
+const child = page.frame('checkout') // BrowserPageInterface | undefined
+const children = page.frames() // readonly BrowserPageInterface[]
 await page.close()
 ```
 
@@ -323,6 +388,7 @@ const codegen = await page.codegen()
 await page.click('#next')
 const actions = await codegen.stop()
 const script = codegen.script({ language: 'typescript' })
+codegen.clear() // reset the captured action list
 await codegen.destroy()
 ```
 
@@ -349,6 +415,8 @@ const browser = createBrowser({ cdp: { port: 9222 } })
 browser.emitter.on('connect', (mode) => log(mode))
 await browser.connect()
 const page = await browser.create({ url: 'https://example.com' })
+const all = browser.contexts() // readonly BrowserContextInterface[]
+browser.disconnect() // detach from CDP without closing the browser
 await browser.destroy()
 ```
 
