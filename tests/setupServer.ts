@@ -1,12 +1,13 @@
 import type { IncomingMessage, Server as HTTPServer } from 'node:http'
 import type { Socket } from 'node:net'
 import type { CDPTarget } from '@src/core'
+import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import { createServer } from 'node:http'
 import { createServer as createNetServer } from 'node:net'
-import { createHash } from 'node:crypto'
 import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { createNodeWebSocket } from '@orkestrel/websocket'
 
 /**
  * Reserve a free localhost port by binding an ephemeral server to port 0 and
@@ -29,102 +30,6 @@ export async function reservePort(): Promise<number> {
 }
 
 // === Server-only test helpers (AGENTS §16.1 — node:* allowed here)
-
-/** WebSocket handshake GUID (RFC 6455 §1.3). */
-const WS_GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
-
-// === Minimal RFC 6455 frame codec (server side, text frames only)
-
-/**
- * Encode a UTF-8 text payload as a single unmasked server→client WebSocket frame.
- *
- * @param payload - The frame payload as a Buffer
- * @returns The encoded frame bytes
- */
-function encodeFrame(payload: Buffer): Buffer {
-	const length = payload.length
-	let header: Buffer
-
-	if (length < 126) {
-		header = Buffer.from([0x81, length])
-	} else if (length < 65536) {
-		header = Buffer.alloc(4)
-		header[0] = 0x81
-		header[1] = 126
-		header.writeUInt16BE(length, 2)
-	} else {
-		header = Buffer.alloc(10)
-		header[0] = 0x81
-		header[1] = 127
-		header.writeBigUInt64BE(BigInt(length), 2)
-	}
-
-	return Buffer.concat([header, payload])
-}
-
-interface DecodedFrame {
-	readonly opcode: number
-	readonly payload: Buffer
-	readonly rest: Buffer
-}
-
-/** WebSocket close frame opcode (RFC 6455 §5.5.1). */
-const WS_OPCODE_CLOSE = 0x8
-
-/** Encode an empty unmasked server→client WebSocket close frame. */
-function encodeCloseFrame(): Buffer {
-	return Buffer.from([0x88, 0x00])
-}
-
-/**
- * Decode the first complete masked client→server WebSocket text frame from
- * a buffer, if one is fully present.
- *
- * @param buffer - Accumulated bytes received from the socket so far
- * @returns The decoded payload and remaining buffer, or undefined when incomplete
- */
-function decodeFrame(buffer: Buffer): DecodedFrame | undefined {
-	if (buffer.length < 2) return undefined
-
-	const first = buffer[0]
-	const second = buffer[1]
-	if (first === undefined || second === undefined) return undefined
-
-	const opcode = first & 0x0f
-	const masked = (second & 0x80) !== 0
-	let length = second & 0x7f
-	let offset = 2
-
-	if (length === 126) {
-		if (buffer.length < 4) return undefined
-		length = buffer.readUInt16BE(2)
-		offset = 4
-	} else if (length === 127) {
-		if (buffer.length < 10) return undefined
-		length = Number(buffer.readBigUInt64BE(2))
-		offset = 10
-	}
-
-	let mask: Buffer | undefined
-	if (masked) {
-		if (buffer.length < offset + 4) return undefined
-		mask = buffer.subarray(offset, offset + 4)
-		offset += 4
-	}
-
-	if (buffer.length < offset + length) return undefined
-
-	const payload = Buffer.from(buffer.subarray(offset, offset + length))
-	if (mask !== undefined) {
-		for (let i = 0; i < payload.length; i++) {
-			const maskByte = mask[i % 4] ?? 0
-			payload[i] = (payload[i] ?? 0) ^ maskByte
-		}
-	}
-
-	const rest = Buffer.from(buffer.subarray(offset + length))
-	return { opcode, payload, rest }
-}
 
 /** Type guard for a plain (non-array, non-null) object — shared across server-only test helpers/fixtures. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
@@ -182,8 +87,8 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 	const received: CDPServerReceived[] = []
 	const autoReplies = new Map<string, unknown | CDPServerReplyHandler>()
 	let targets: readonly CDPTarget[] = []
-	let activeSocket: Socket | undefined
-	const sockets = new Set<Socket>()
+	let activeWs: NodeWebSocketInterface | undefined
+	const sockets = new Set<NodeWebSocketInterface>()
 	let hangVersion = false
 
 	const server: HTTPServer = createServer((req, res) => {
@@ -208,8 +113,8 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 	}
 
 	function sendFrame(data: Record<string, unknown>): void {
-		if (activeSocket === undefined) return
-		activeSocket.write(encodeFrame(Buffer.from(JSON.stringify(data), 'utf8')))
+		if (activeWs === undefined) return
+		activeWs.send(JSON.stringify(data))
 	}
 
 	function handleMessage(text: string): void {
@@ -240,40 +145,15 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 			return
 		}
 
-		const accept = createHash('sha1')
-			.update(key + WS_GUID)
-			.digest('base64')
+		const ws = createNodeWebSocket({ socket, key, head })
+		activeWs = ws
+		sockets.add(ws)
 
-		socket.write(
-			'HTTP/1.1 101 Switching Protocols\r\n' +
-				'Upgrade: websocket\r\n' +
-				'Connection: Upgrade\r\n' +
-				`Sec-WebSocket-Accept: ${accept}\r\n\r\n`,
-		)
+		ws.emitter.on('message', (text) => handleMessage(text))
 
-		activeSocket = socket
-		sockets.add(socket)
-		let buffer: Buffer<ArrayBufferLike> = head.length > 0 ? Buffer.from(head) : Buffer.alloc(0)
-
-		socket.on('data', (chunk: Buffer) => {
-			buffer = Buffer.concat([buffer, chunk])
-			for (;;) {
-				const decoded = decodeFrame(buffer)
-				if (decoded === undefined) break
-				buffer = decoded.rest
-
-				if (decoded.opcode === WS_OPCODE_CLOSE) {
-					socket.end(encodeCloseFrame())
-					continue
-				}
-
-				handleMessage(decoded.payload.toString('utf8'))
-			}
-		})
-
-		socket.on('close', () => {
-			sockets.delete(socket)
-			if (activeSocket === socket) activeSocket = undefined
+		ws.emitter.on('close', () => {
+			sockets.delete(ws)
+			if (activeWs === ws) activeWs = undefined
 		})
 	})
 
@@ -318,7 +198,7 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 			hangVersion = enabled
 		},
 		async close(): Promise<void> {
-			for (const socket of sockets) socket.destroy()
+			for (const ws of sockets) ws.destroy()
 			sockets.clear()
 			await new Promise<void>((resolve, reject) => {
 				server.close((error) => (error ? reject(error) : resolve()))
@@ -401,7 +281,9 @@ export function createFakeBrowserProcess(
 
 	// No shebang: the script is spawned via `node <script>`, never executed
 	// directly, so it needs no execute bit and no shebang line.
+	const crashLogPath = join(dir, 'crash.log')
 	const lines: string[] = [
+		`process.on('uncaughtException', (e) => { try { require('fs').appendFileSync(${JSON.stringify(crashLogPath)}, String(e && e.stack)) } catch {} ; process.exit(1) })`,
 		`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
 	]
 
@@ -415,14 +297,18 @@ export function createFakeBrowserProcess(
 	lines.push('setInterval(() => { if (process.ppid === 1) process.exit(0) }, 500)')
 
 	if (options.serveCdp === true) {
+		// The @orkestrel/websocket package is required by its absolute .cjs entry
+		// point: this script runs from a temp dir with no node_modules of its own,
+		// and it is spawned as plain CJS (matching the rest of this emitted
+		// script), so an ESM `import` cannot be used here.
+		const websocketEntry = '/home/user/browser/node_modules/@orkestrel/websocket/dist/src/server/index.cjs'
 		lines.push(
 			[
 				"const http = require('http')",
-				"const crypto = require('crypto')",
+				`const { createNodeWebSocket } = require(${JSON.stringify(websocketEntry)})`,
 				"const portArg = process.argv.find((a) => a.startsWith('--remote-debugging-port='))",
 				"const port = Number(portArg.split('=')[1])",
-				"const GUID = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'",
-				'let activeSocket = null',
+				'let activeWs = null',
 				'const server = http.createServer((req, res) => {',
 				"\tif (req.url.startsWith('/json/version')) {",
 				"\t\tres.writeHead(200, { 'content-type': 'application/json' })",
@@ -437,75 +323,27 @@ export function createFakeBrowserProcess(
 				'\tres.writeHead(404)',
 				'\tres.end()',
 				'})',
-				"server.on('upgrade', (req, socket) => {",
+				"server.on('upgrade', (req, socket, head) => {",
 				"\tconst key = req.headers['sec-websocket-key']",
-				"\tconst accept = crypto.createHash('sha1').update(key + GUID).digest('base64')",
-				'\tsocket.write(',
-				"\t\t'HTTP/1.1 101 Switching Protocols\\r\\n' +",
-				"\t\t\t'Upgrade: websocket\\r\\n' +",
-				"\t\t\t'Connection: Upgrade\\r\\n' +",
-				'\t\t\t`Sec-WebSocket-Accept: ${accept}\\r\\n\\r\\n`,',
-				'\t)',
-				'\tactiveSocket = socket',
-				'\tlet buffer = Buffer.alloc(0)',
-				"\tsocket.on('data', (chunk) => {",
-				'\t\tbuffer = Buffer.concat([buffer, chunk])',
-				'\t\tfor (;;) {',
-				'\t\t\tif (buffer.length < 2) break',
-				'\t\t\tconst first = buffer[0]',
-				'\t\t\tconst second = buffer[1]',
-				'\t\t\tconst opcode = first & 0x0f',
-				'\t\t\tif (opcode === 0x8) {',
-				'\t\t\t\tsocket.end(Buffer.from([0x88, 0x00]))',
-				'\t\t\t\tbuffer = buffer.subarray(2)',
-				'\t\t\t\tcontinue',
+				'\tconst ws = createNodeWebSocket({ socket, key, head })',
+				'\tactiveWs = ws',
+				"\tws.emitter.on('message', (text) => {",
+				'\t\ttry {',
+				'\t\t\tconst msg = JSON.parse(text)',
+				"\t\t\tif (msg.method === 'Browser.close') {",
+				'\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: {} }))',
+				'\t\t\t\tsetImmediate(() => process.exit(0))',
 				'\t\t\t}',
-				'\t\t\tconst masked = (second & 0x80) !== 0',
-				'\t\t\tlet length = second & 0x7f',
-				'\t\t\tlet offset = 2',
-				'\t\t\tif (length === 126) {',
-				'\t\t\t\tif (buffer.length < 4) break',
-				'\t\t\t\tlength = buffer.readUInt16BE(2)',
-				'\t\t\t\toffset = 4',
-				'\t\t\t} else if (length === 127) {',
-				'\t\t\t\tif (buffer.length < 10) break',
-				'\t\t\t\tlength = Number(buffer.readBigUInt64BE(2))',
-				'\t\t\t\toffset = 10',
-				'\t\t\t}',
-				'\t\t\tlet mask',
-				'\t\t\tif (masked) {',
-				'\t\t\t\tif (buffer.length < offset + 4) break',
-				'\t\t\t\tmask = buffer.subarray(offset, offset + 4)',
-				'\t\t\t\toffset += 4',
-				'\t\t\t}',
-				'\t\t\tif (buffer.length < offset + length) break',
-				'\t\t\tconst payload = Buffer.from(buffer.subarray(offset, offset + length))',
-				'\t\t\tif (mask) {',
-				'\t\t\t\tfor (let i = 0; i < payload.length; i++) payload[i] = payload[i] ^ mask[i % 4]',
-				'\t\t\t}',
-				'\t\t\tbuffer = buffer.subarray(offset + length)',
-				'\t\t\ttry {',
-				"\t\t\t\tconst msg = JSON.parse(payload.toString('utf8'))",
-				"\t\t\t\tif (msg.method === 'Browser.close') {",
-				"\t\t\t\t\tconst body = Buffer.from(JSON.stringify({ id: msg.id, result: {} }), 'utf8')",
-				'\t\t\t\t\tconst len = body.length',
-				'\t\t\t\t\tlet header',
-				'\t\t\t\t\tif (len < 126) header = Buffer.from([0x81, len])',
-				'\t\t\t\t\telse { header = Buffer.alloc(4); header[0] = 0x81; header[1] = 126; header.writeUInt16BE(len, 2) }',
-				'\t\t\t\t\tsocket.write(Buffer.concat([header, body]))',
-				'\t\t\t\t\tsetImmediate(() => process.exit(0))',
-				'\t\t\t\t}',
-				'\t\t\t} catch {}',
-				'\t\t}',
+				'\t\t} catch {}',
 				'\t})',
-				"\tsocket.on('close', () => {",
-				'\t\tif (activeSocket === socket) activeSocket = null',
+				"\tws.emitter.on('close', () => {",
+				'\t\tif (activeWs === ws) activeWs = null',
 				'\t})',
 				'})',
 				"server.on('error', (e) => { console.error('fake-browser listen error: ' + e.message); process.exit(12) })",
 				"server.listen(port, '127.0.0.1')",
 				"process.on('SIGUSR2', () => {",
-				'\tif (activeSocket) activeSocket.destroy()',
+				'\tif (activeWs) activeWs.destroy()',
 				'})',
 			].join('\n'),
 		)
