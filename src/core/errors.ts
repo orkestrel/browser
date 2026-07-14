@@ -11,7 +11,11 @@ export class BrowserError extends Error {
 	readonly code: string
 	readonly context: Readonly<Record<string, unknown>> | undefined
 
-	constructor(message: string, code = 'BROWSER_ERROR', context?: Readonly<Record<string, unknown>>) {
+	constructor(
+		message: string,
+		code = 'BROWSER_ERROR',
+		context?: Readonly<Record<string, unknown>>,
+	) {
 		super(message)
 		this.name = 'BrowserError'
 		this.code = code

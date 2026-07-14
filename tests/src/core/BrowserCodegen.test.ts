@@ -28,7 +28,9 @@ async function createStartedCodegen(): Promise<{
 	return { client, transport, codegen }
 }
 
-function bindingPayload(payload: Readonly<Record<string, unknown>>): Readonly<Record<string, unknown>> {
+function bindingPayload(
+	payload: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
 	return { name: '__orkestrelBrowserCodegen', payload: JSON.stringify(payload) }
 }
 
@@ -41,7 +43,9 @@ describe('BrowserCodegen', () => {
 
 			expect(codegen.started).toBe(true)
 			expect(transport.sent.some((m) => m.method === 'Runtime.addBinding')).toBe(true)
-			expect(transport.sent.some((m) => m.method === 'Page.addScriptToEvaluateOnNewDocument')).toBe(true)
+			expect(transport.sent.some((m) => m.method === 'Page.addScriptToEvaluateOnNewDocument')).toBe(
+				true,
+			)
 		})
 
 		it('emits start exactly once', async () => {
@@ -75,7 +79,11 @@ describe('BrowserCodegen', () => {
 		it('records a click delivered through the binding', async () => {
 			const { transport, codegen } = await createStartedCodegen()
 
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#b' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#b' }),
+				SESSION_ID,
+			)
 
 			expect(codegen.actions()).toEqual([{ action: 'click', selector: '#b' }])
 		})
@@ -83,9 +91,21 @@ describe('BrowserCodegen', () => {
 		it('collapses consecutive fills on the same selector into the latest value', async () => {
 			const { transport, codegen } = await createStartedCodegen()
 
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'fill', selector: '#x', value: 'a' }), SESSION_ID)
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'fill', selector: '#x', value: 'ab' }), SESSION_ID)
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'fill', selector: '#x', value: 'abc' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'fill', selector: '#x', value: 'a' }),
+				SESSION_ID,
+			)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'fill', selector: '#x', value: 'ab' }),
+				SESSION_ID,
+			)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'fill', selector: '#x', value: 'abc' }),
+				SESSION_ID,
+			)
 
 			expect(codegen.actions()).toEqual([{ action: 'fill', selector: '#x', value: 'abc' }])
 		})
@@ -94,7 +114,11 @@ describe('BrowserCodegen', () => {
 			const { transport, codegen } = await createStartedCodegen()
 
 			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'unknown' }), SESSION_ID)
-			transport.event('Runtime.bindingCalled', { name: '__orkestrelBrowserCodegen', payload: 'not json' }, SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				{ name: '__orkestrelBrowserCodegen', payload: 'not json' },
+				SESSION_ID,
+			)
 
 			expect(codegen.actions()).toEqual([])
 		})
@@ -102,7 +126,11 @@ describe('BrowserCodegen', () => {
 		it('ignores binding calls for a different binding name', async () => {
 			const { transport, codegen } = await createStartedCodegen()
 
-			transport.event('Runtime.bindingCalled', { name: 'someOtherBinding', payload: JSON.stringify({ action: 'click', selector: '#x' }) }, SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				{ name: 'someOtherBinding', payload: JSON.stringify({ action: 'click', selector: '#x' }) },
+				SESSION_ID,
+			)
 
 			expect(codegen.actions()).toEqual([])
 		})
@@ -110,7 +138,11 @@ describe('BrowserCodegen', () => {
 		it('records a navigate action for a main-frame navigation', async () => {
 			const { transport, codegen } = await createStartedCodegen()
 
-			transport.event('Page.frameNavigated', { frame: { url: 'https://example.com/next' } }, SESSION_ID)
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { url: 'https://example.com/next' } },
+				SESSION_ID,
+			)
 
 			expect(codegen.actions()).toEqual([{ action: 'navigate', url: 'https://example.com/next' }])
 		})
@@ -132,7 +164,11 @@ describe('BrowserCodegen', () => {
 			const recorder = createRecorder<[unknown]>()
 			codegen.emitter.on('action', recorder.handler)
 
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#a' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#a' }),
+				SESSION_ID,
+			)
 
 			expect(recorder.count).toBe(1)
 		})
@@ -141,17 +177,25 @@ describe('BrowserCodegen', () => {
 	describe('script()', () => {
 		it('compiles recorded actions to JavaScript by default', async () => {
 			const { transport, codegen } = await createStartedCodegen()
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#x' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#x' }),
+				SESSION_ID,
+			)
 
 			const script = codegen.script()
 
 			expect(script).toContain('async function run(page) {')
-			expect(script).toContain("await page.click(\"#x\")")
+			expect(script).toContain('await page.click("#x")')
 		})
 
 		it('compiles recorded actions to TypeScript when requested', async () => {
 			const { transport, codegen } = await createStartedCodegen()
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#x' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#x' }),
+				SESSION_ID,
+			)
 
 			const script = codegen.script({ language: 'typescript' })
 
@@ -165,7 +209,11 @@ describe('BrowserCodegen', () => {
 			const recorder = createRecorder<[]>()
 			codegen.emitter.on('clear', recorder.handler)
 
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#x' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#x' }),
+				SESSION_ID,
+			)
 			expect(codegen.actions()).toHaveLength(1)
 
 			codegen.clear()
@@ -188,7 +236,11 @@ describe('BrowserCodegen', () => {
 	describe('stop()', () => {
 		it('detaches listeners and returns the snapshot', async () => {
 			const { transport, codegen } = await createStartedCodegen()
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#a' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#a' }),
+				SESSION_ID,
+			)
 
 			const snapshot = await codegen.stop()
 
@@ -200,7 +252,11 @@ describe('BrowserCodegen', () => {
 			const { transport, codegen } = await createStartedCodegen()
 			await codegen.stop()
 
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#b' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#b' }),
+				SESSION_ID,
+			)
 
 			expect(codegen.actions()).toEqual([])
 		})
@@ -220,7 +276,11 @@ describe('BrowserCodegen', () => {
 	describe('destroy()', () => {
 		it('stops the recorder, clears the log, and destroys the emitter', async () => {
 			const { transport, codegen } = await createStartedCodegen()
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'click', selector: '#x' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				bindingPayload({ action: 'click', selector: '#x' }),
+				SESSION_ID,
+			)
 
 			await codegen.destroy()
 

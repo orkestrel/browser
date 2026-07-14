@@ -1,4 +1,9 @@
-import type { CDPTarget, CDPTransportEventMap, CDPTransportInterface, ScreenshotWriterInterface } from '@src/core'
+import type {
+	CDPTarget,
+	CDPTransportEventMap,
+	CDPTransportInterface,
+	ScreenshotWriterInterface,
+} from '@src/core'
 import { Emitter } from '@orkestrel/emitter'
 
 // === Test recorder (AGENTS §16.1)
@@ -167,7 +172,11 @@ export function createCDPTransport(): CDPTestTransportInterface {
  * @param method - The CDP method to auto-reply to
  * @param result - The result value to resolve with
  */
-export function replyOk(transport: CDPTestTransportInterface, method: string, result: unknown = {}): void {
+export function replyOk(
+	transport: CDPTestTransportInterface,
+	method: string,
+	result: unknown = {},
+): void {
 	transport.onSend(method, (message) => transport.reply(message.id, result))
 }
 

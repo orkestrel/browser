@@ -13,9 +13,22 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { CDPClient, BrowserContext, BROWSER_DEFAULT_TIMEOUT_MS } from '@src/core'
-import { BrowserConnectionError, BrowserNotConnectedError, BrowserDestroyedError } from './errors.js'
-import { BROWSER_DEFAULT_CDP_PORT, BROWSER_CDP_VERSION_PATH, BROWSER_CDP_PROTOCOL } from './constants.js'
-import { findSystemBrowser, launchBrowserProcess, waitForCdpReady, fetchCdpTargets } from './helpers.js'
+import {
+	BrowserConnectionError,
+	BrowserNotConnectedError,
+	BrowserDestroyedError,
+} from './errors.js'
+import {
+	BROWSER_DEFAULT_CDP_PORT,
+	BROWSER_CDP_VERSION_PATH,
+	BROWSER_CDP_PROTOCOL,
+} from './constants.js'
+import {
+	findSystemBrowser,
+	launchBrowserProcess,
+	waitForCdpReady,
+	fetchCdpTargets,
+} from './helpers.js'
 import { createCDPTransport, createScreenshotWriter } from './factories.js'
 
 // === Browser
@@ -138,12 +151,18 @@ export class Browser implements BrowserInterface {
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
 		if (this.#destroyed) throw new BrowserDestroyedError()
-		if (this.#status !== 'connected' || this.#client === undefined) throw new BrowserNotConnectedError()
+		if (this.#status !== 'connected' || this.#client === undefined)
+			throw new BrowserNotConnectedError()
 
 		// Get or create the default context
 		let ctx = this.#contexts[0]
 		if (ctx === undefined) {
-			ctx = new BrowserContext(this.#client, undefined, this.#options.viewport, createScreenshotWriter())
+			ctx = new BrowserContext(
+				this.#client,
+				undefined,
+				this.#options.viewport,
+				createScreenshotWriter(),
+			)
 			this.#contexts.push(ctx)
 		}
 		const page = await ctx.create(options)
@@ -247,7 +266,9 @@ export class Browser implements BrowserInterface {
 			const info: unknown = await response.json()
 			if (!isRecord(info)) return this.#notFoundResult()
 
-			const endpoint = isString(info['webSocketDebuggerUrl']) ? info['webSocketDebuggerUrl'] : undefined
+			const endpoint = isString(info['webSocketDebuggerUrl'])
+				? info['webSocketDebuggerUrl']
+				: undefined
 			const browserName = isString(info['Browser']) ? info['Browser'] : undefined
 
 			return {
@@ -284,7 +305,9 @@ export class Browser implements BrowserInterface {
 		const executable = this.#options.executable ?? findSystemBrowser()
 
 		if (executable === undefined) {
-			throw new BrowserConnectionError('No Chromium browser found. Install Chrome, Edge, or Chromium.')
+			throw new BrowserConnectionError(
+				'No Chromium browser found. Install Chrome, Edge, or Chromium.',
+			)
 		}
 
 		const headless = this.#options.headless ?? true

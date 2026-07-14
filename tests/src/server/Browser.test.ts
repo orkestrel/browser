@@ -335,7 +335,10 @@ describe('Browser create()', () => {
 		server.autoReply('Emulation.setDeviceMetricsOverride', {})
 		server.autoReply('Target.closeTarget', {})
 
-		const browser = createBrowser({ cdp: { port: server.port }, viewport: { width: 800, height: 600 } })
+		const browser = createBrowser({
+			cdp: { port: server.port },
+			viewport: { width: 800, height: 600 },
+		})
 		await browser.connect()
 		await browser.create()
 
@@ -501,7 +504,10 @@ describe('Browser events', () => {
 
 	it('emits discover event', async () => {
 		let discovered = false
-		const browser = createBrowser({ cdp: { port: UNUSED_PORT }, on: { discover: () => (discovered = true) } })
+		const browser = createBrowser({
+			cdp: { port: UNUSED_PORT },
+			on: { discover: () => (discovered = true) },
+		})
 		await browser.discover()
 		expect(discovered).toBe(true)
 	})

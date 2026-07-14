@@ -4,16 +4,16 @@ A dual-axis index into this repository's guides — by concept, and by directory
 
 ## By concept
 
-| Concept | Spec                                | Source                                                    | Tests                                                                            |
-| ------- | ------------------------------------ | ---------------------------------------------------------- | ---------------------------------------------------------------------------------- |
+| Concept | Spec                               | Source                                                   | Tests                                                                            |
+| ------- | ---------------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
 | Browser | [`src/browser.md`](src/browser.md) | [`src/core`](../src/core), [`src/server`](../src/server) | [`tests/src/core`](../tests/src/core), [`tests/src/server`](../tests/src/server) |
 
 ## By directory
 
-| Directory    | Guide                                |
-| ------------ | -------------------------------------- |
-| `src/core`   | [`src/browser.md`](src/browser.md)   |
-| `src/server` | [`src/browser.md`](src/browser.md)   |
+| Directory    | Guide                              |
+| ------------ | ---------------------------------- |
+| `src/core`   | [`src/browser.md`](src/browser.md) |
+| `src/server` | [`src/browser.md`](src/browser.md) |
 
 ## Dependency reference
 

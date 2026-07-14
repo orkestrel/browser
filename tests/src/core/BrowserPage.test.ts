@@ -1,7 +1,14 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { BrowserPage, createCDPClient, isBrowserError, isBrowserSelectorError } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
-import { createCDPTransport, createScreenshotWriter, replyOk, scriptEvaluate, JPEG_BASE64, PNG_BASE64 } from '../../setup.js'
+import {
+	createCDPTransport,
+	createScreenshotWriter,
+	replyOk,
+	scriptEvaluate,
+	JPEG_BASE64,
+	PNG_BASE64,
+} from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
 // === Helpers
@@ -17,7 +24,11 @@ async function createConnectedClient(): Promise<{
 }
 
 function scriptSelectorPresent(transport: CDPTestTransportInterface, selector: string): void {
-	scriptEvaluate(transport, (expression) => expression.includes('querySelector') && expression.includes('!== null'), true)
+	scriptEvaluate(
+		transport,
+		(expression) => expression.includes('querySelector') && expression.includes('!== null'),
+		true,
+	)
 	void selector
 }
 
@@ -49,7 +60,11 @@ describe('BrowserPage', () => {
 				transport.reply(message.id, {})
 				transport.event('Page.loadEventFired', {}, message.sessionId)
 			})
-			scriptEvaluate(transport, (expression) => expression === 'location.href', 'https://example.com/')
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/',
+			)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await page.navigate('https://example.com')
@@ -86,9 +101,17 @@ describe('BrowserPage', () => {
 		it('returns url, title, html, and text', async () => {
 			const { client, transport } = await createConnectedClient()
 			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Content Test')
-			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), '<p>Hello World</p>')
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('outerHTML'),
+				'<p>Hello World</p>',
+			)
 			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'Hello World')
-			scriptEvaluate(transport, (expression) => expression === 'location.href', 'https://example.com/page')
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/page',
+			)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			const result = await page.content()

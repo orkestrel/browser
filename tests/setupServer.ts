@@ -197,7 +197,10 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 
 		if (autoReplies.has(method)) {
 			const scripted = autoReplies.get(method)
-			const result = typeof scripted === 'function' ? (scripted as CDPServerReplyHandler)(params ?? {}) : scripted
+			const result =
+				typeof scripted === 'function'
+					? (scripted as CDPServerReplyHandler)(params ?? {})
+					: scripted
 			sendFrame({ id, result })
 		}
 	}

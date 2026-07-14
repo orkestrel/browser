@@ -11,7 +11,12 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
-import { findSystemBrowser, launchBrowserProcess, waitForCdpReady, fetchCdpTargets } from '@src/server'
+import {
+	findSystemBrowser,
+	launchBrowserProcess,
+	waitForCdpReady,
+	fetchCdpTargets,
+} from '@src/server'
 import { createCdpTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
@@ -75,7 +80,9 @@ describe('launchBrowserProcess', () => {
 
 	it('includes the debugging-port and headless flags', () => {
 		const port = 19_994
-		const process = launchBrowserProcess(globalThis.process.execPath, port, true, undefined, ['--extra-flag'])
+		const process = launchBrowserProcess(globalThis.process.execPath, port, true, undefined, [
+			'--extra-flag',
+		])
 		try {
 			expect(process.spawnargs).toContain(`--remote-debugging-port=${port}`)
 			expect(process.spawnargs).toContain('--headless=new')
@@ -97,7 +104,12 @@ describe('launchBrowserProcess', () => {
 	})
 
 	it('includes a user-data-dir flag when a profile is given', () => {
-		const process = launchBrowserProcess(globalThis.process.execPath, 19_996, false, '/tmp/test-profile')
+		const process = launchBrowserProcess(
+			globalThis.process.execPath,
+			19_996,
+			false,
+			'/tmp/test-profile',
+		)
 		try {
 			expect(process.spawnargs).toContain('--user-data-dir=/tmp/test-profile')
 		} finally {

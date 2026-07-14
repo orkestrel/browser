@@ -101,7 +101,12 @@ describe('BrowserContext', () => {
 			await context.create({ viewport: { width: 1024, height: 768 } })
 
 			const sent = transport.sent.find((m) => m.method === 'Emulation.setDeviceMetricsOverride')
-			expect(sent?.params).toEqual({ width: 1024, height: 768, deviceScaleFactor: 1, mobile: false })
+			expect(sent?.params).toEqual({
+				width: 1024,
+				height: 768,
+				deviceScaleFactor: 1,
+				mobile: false,
+			})
 		})
 
 		it('throws when target creation fails to return a targetId', async () => {

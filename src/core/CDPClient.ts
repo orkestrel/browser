@@ -1,4 +1,9 @@
-import type { CDPClientInterface, CDPClientOptions, CDPHandler, CDPTransportInterface } from './types.js'
+import type {
+	CDPClientInterface,
+	CDPClientOptions,
+	CDPHandler,
+	CDPTransportInterface,
+} from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { isRecord, isString } from '@orkestrel/contract'
 

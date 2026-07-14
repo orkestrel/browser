@@ -112,7 +112,10 @@ export async function waitForCdpReady(port: number, timeout: number): Promise<st
  * @param timeout - Request timeout in milliseconds
  * @returns Normalized CDP targets
  */
-export async function fetchCdpTargets(port: number, timeout: number): Promise<readonly CDPTarget[]> {
+export async function fetchCdpTargets(
+	port: number,
+	timeout: number,
+): Promise<readonly CDPTarget[]> {
 	const url = `${BROWSER_CDP_PROTOCOL}://localhost:${port}${BROWSER_CDP_LIST_PATH}`
 
 	try {
