@@ -135,7 +135,7 @@ export class Browser implements BrowserInterface {
 
 	// === Disconnection
 
-	disconnect(): void {
+	async disconnect(): Promise<void> {
 		if (this.#destroyed || this.#status !== 'connected') return
 
 		// disconnect() is CDP-only (see BrowserInterface remarks) — a session
@@ -153,7 +153,11 @@ export class Browser implements BrowserInterface {
 
 		const client = this.#client
 		if (client !== undefined) {
-			void client.close().catch(() => undefined)
+			try {
+				await client.close()
+			} catch {
+				// Swallow — best-effort close on detach
+			}
 		}
 
 		this.#reset()

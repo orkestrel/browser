@@ -133,6 +133,8 @@ export interface CDPTestServerInterface {
 	readonly url: string
 	readonly wsUrl: string
 	readonly received: readonly CDPServerReceived[]
+	/** Count of currently open WebSocket sockets (for close-propagation assertions). */
+	readonly sockets: number
 	/** Set the targets returned by `/json/list` (drives `fetchCdpTargets`/`syncContexts`). */
 	list(targets: readonly CDPTarget[]): void
 	/** Script an automatic reply for every request matching `method`. */
@@ -269,6 +271,9 @@ export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
 		},
 		get received(): readonly CDPServerReceived[] {
 			return received
+		},
+		get sockets(): number {
+			return sockets.size
 		},
 		list(next: readonly CDPTarget[]): void {
 			targets = next

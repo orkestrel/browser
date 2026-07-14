@@ -120,7 +120,9 @@ export interface BrowserOptions {
  * **Lifecycle:**
  * - `discover` — passive CDP probe, no side effects
  * - `connect` — establish connection using the strategy above
- * - `disconnect` — detach from the browser WITHOUT closing it (CDP only)
+ * - `disconnect` — detach from the browser WITHOUT closing it (CDP only);
+ *   rejects with the coded `BrowserConnectionError` for sessions launched by
+ *   this instance (use `destroy()` instead)
  * - `destroy` — close the browser process and release all resources
  *
  * **Page management:**
@@ -136,7 +138,7 @@ export interface BrowserInterface {
 	readonly connected: boolean
 	discover(): Promise<BrowserDiscoveryResult>
 	connect(): Promise<void>
-	disconnect(): void
+	disconnect(): Promise<void>
 	context(index?: number): BrowserContextInterface | undefined
 	contexts(): readonly BrowserContextInterface[]
 	create(options?: BrowserPageOptions): Promise<BrowserPageInterface>

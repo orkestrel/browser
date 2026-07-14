@@ -74,9 +74,9 @@ describe('Browser idle state', () => {
 		await expect(browser.create()).rejects.toThrow(BrowserNotConnectedError)
 	})
 
-	it('disconnect() is no-op when not connected', () => {
+	it('disconnect() is no-op when not connected', async () => {
 		const browser = createBrowser()
-		browser.disconnect()
+		await browser.disconnect()
 		expect(browser.status).toBe('idle')
 	})
 
@@ -142,7 +142,7 @@ describe('Browser destroyed state', () => {
 	it('disconnect() is no-op after destroy', async () => {
 		const browser = createBrowser()
 		await browser.destroy()
-		browser.disconnect()
+		await browser.disconnect()
 		expect(browser.connected).toBe(false)
 	})
 
@@ -239,7 +239,7 @@ describe('Browser connect() via CDP discovery', () => {
 
 		await browser.connect()
 		expect(browser.connected).toBe(true)
-		browser.disconnect()
+		await browser.disconnect()
 		expect(browser.status).toBe('disconnected')
 		expect(browser.connected).toBe(false)
 		expect(browser.connection).toBeUndefined()
@@ -254,8 +254,31 @@ describe('Browser connect() via CDP discovery', () => {
 		const browser = createBrowser({ cdp: { port: server.port } })
 
 		await browser.connect()
-		browser.disconnect()
+		await browser.disconnect()
 		expect(browser.connected).toBe(false)
+
+		await browser.connect()
+		expect(browser.connected).toBe(true)
+
+		await browser.destroy()
+	})
+
+	it('disconnect() awaits the underlying socket close before resolving', async () => {
+		server = await createCdpTestServer()
+		server.list([])
+		const browser = createBrowser({ cdp: { port: server.port } })
+
+		await browser.connect()
+		expect(server.sockets).toBe(1)
+
+		await browser.disconnect()
+
+		let waited = 0
+		while (server.sockets > 0 && waited < 500) {
+			await waitForDelay(10)
+			waited += 10
+		}
+		expect(server.sockets).toBe(0)
 
 		await browser.connect()
 		expect(browser.connected).toBe(true)
@@ -370,6 +393,32 @@ describe('Browser launch path', () => {
 	it.todo('launches a real system Chromium and transitions to connected')
 	it.todo('connect() with a profile launches with a persistent user-data dir')
 	it.todo('accepts explicit headless option against a real launch')
+
+	it('disconnect() on a launched session rejects with coded BrowserConnectionError and destroy() still cleans up', async () => {
+		const fake = createFakeBrowserProcess({ serveCdp: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			cdp: { port: 20_001 },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+
+		const pid = await fake.pid()
+
+		await expect(browser.disconnect()).rejects.toThrow(BrowserConnectionError)
+		await expect(browser.disconnect()).rejects.toThrow(
+			'Cannot disconnect() a browser process launched by this instance — use destroy() to release it',
+		)
+		expect(browser.connected).toBe(true)
+
+		await browser.destroy()
+		expect(browser.connected).toBe(false)
+
+		await waitForDelay(100)
+		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+	})
 })
 
 // === destroy ordering
@@ -398,7 +447,7 @@ describe('Browser destroy() ordering', () => {
 		server.list([])
 		const browser = createBrowser({ cdp: { port: server.port } })
 		await browser.connect()
-		browser.disconnect()
+		await browser.disconnect()
 		await browser.destroy()
 		await browser.destroy()
 		expect(browser.connected).toBe(false)
@@ -498,7 +547,7 @@ describe('Browser events', () => {
 		const initialCount = idleCount
 
 		await browser.connect()
-		browser.disconnect()
+		await browser.disconnect()
 
 		expect(idleCount).toBeGreaterThan(initialCount)
 		await browser.destroy()
