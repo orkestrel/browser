@@ -408,15 +408,15 @@ Browser wrapper with discovery, connection management, and lifecycle control.
 Connection strategy (executed by `connect()`): explicit `cdp.endpoint` →
 passive discovery on `cdp.port` → launch a new process.
 
-| Method       | Returns                                | Behavior                                                                                     |
-| ------------ | -------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `discover`   | `Promise<BrowserDiscoveryResult>`      | Passive CDP probe, no side effects.                                                          |
-| `connect`    | `Promise<void>`                        | Establish a connection using the strategy above (endpoint → discovery → launch). Idempotent. |
-| `disconnect` | `Promise<void>`                       | Detach the client-side connection and release it (CDP only) — the remote browser keeps running. Rejects with `BrowserConnectionError` if this instance launched the session (a live process); use `destroy()` for a launched session instead. |
-| `context`    | `BrowserContextInterface \| undefined` | One context by index, or the first.                                                          |
-| `contexts`   | `readonly BrowserContextInterface[]`   | All contexts.                                                                                |
-| `create`     | `Promise<BrowserPageInterface>`        | Shortcut to open a page in the default context.                                              |
-| `destroy`    | `Promise<void>`                        | Close the browser process and release all resources.                                         |
+| Method       | Returns                                | Behavior                                                                                                                                                                                                                                      |
+| ------------ | -------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discover`   | `Promise<BrowserDiscoveryResult>`      | Passive CDP probe, no side effects.                                                                                                                                                                                                           |
+| `connect`    | `Promise<void>`                        | Establish a connection using the strategy above (endpoint → discovery → launch). Idempotent.                                                                                                                                                  |
+| `disconnect` | `Promise<void>`                        | Detach the client-side connection and release it (CDP only) — the remote browser keeps running. Rejects with `BrowserConnectionError` if this instance launched the session (a live process); use `destroy()` for a launched session instead. |
+| `context`    | `BrowserContextInterface \| undefined` | One context by index, or the first.                                                                                                                                                                                                           |
+| `contexts`   | `readonly BrowserContextInterface[]`   | All contexts.                                                                                                                                                                                                                                 |
+| `create`     | `Promise<BrowserPageInterface>`        | Shortcut to open a page in the default context.                                                                                                                                                                                               |
+| `destroy`    | `Promise<void>`                        | Close the browser process and release all resources.                                                                                                                                                                                          |
 
 ```ts
 import { createBrowser } from '@src/server'

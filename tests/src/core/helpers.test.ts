@@ -218,13 +218,15 @@ describe('compileCodegenScript', () => {
 
 	it('emits a TypeScript-typed page parameter only when language is typescript', () => {
 		const script = compileCodegenScript(actions, { language: 'typescript' })
-		expect(script.startsWith(`async function run(page: import('@orkestrel/browser').BrowserPageInterface): Promise<void> {`)).toBe(true)
+		expect(
+			script.startsWith(
+				`async function run(page: import('@orkestrel/browser').BrowserPageInterface): Promise<void> {`,
+			),
+		).toBe(true)
 	})
 
 	it('embeds a selector containing quotes safely via JSON-safe quoting', () => {
-		const withQuote: BrowserCodegenAction[] = [
-			{ action: 'click', selector: `div[data-x="y"]` },
-		]
+		const withQuote: BrowserCodegenAction[] = [{ action: 'click', selector: `div[data-x="y"]` }]
 		const script = compileCodegenScript(withQuote)
 		const expectedLine = `\tawait page.click(${JSON.stringify(`div[data-x="y"]`)})`
 		expect(script).toContain(expectedLine)
