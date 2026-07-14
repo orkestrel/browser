@@ -1,10 +1,6 @@
 import type { BrowserCodegenAction, BrowserCodegenScriptOptions } from './types.js'
 import { isRecord, isString } from '@orkestrel/contract'
-
-export const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
-export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
-	Object.fromEntries(BASE64_CHARS.split('').map((char, index) => [char, index])),
-)
+import { BASE64_LOOKUP } from './constants.js'
 
 /**
  * Decode a base64-encoded string into raw bytes.
@@ -151,8 +147,9 @@ export function readCodegenNavigateAction(
  * @remarks
  * Emits one statement per action against a `page` object shaped like
  * {@link BrowserPageInterface} (`page.navigate(...)`, `page.click(...)`, …).
- * `language` selects `await`-free JavaScript or `await`-using TypeScript
- * async-function output (default `'javascript'`).
+ * Both target languages emit an `async function run(page)` body whose
+ * statements are `await`-ed; `language` only toggles whether the `page`
+ * parameter carries a TypeScript type annotation (default `'javascript'`).
  *
  * @param actions - Normalized actions to compile
  * @param options - Compilation options (target language)

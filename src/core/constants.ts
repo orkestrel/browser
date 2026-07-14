@@ -1,3 +1,13 @@
+// === Base64
+
+/** Base64 alphabet, index-ordered, used to build {@link BASE64_LOOKUP}. */
+export const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
+
+/** Base64 character to 6-bit value lookup table, derived from {@link BASE64_CHARS}. */
+export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze(
+	Object.fromEntries(BASE64_CHARS.split('').map((char, index) => [char, index])),
+)
+
 // === Browser
 
 /** Default timeout in milliseconds for browser connection, requests, and navigation. */
@@ -35,13 +45,13 @@ export const BROWSER_CODEGEN_SOURCE = `(() => {
 	window[bindingName + '__installed'] = true
 
 	const selectorFor = (el) => {
-		if (el.id) return '#' + el.id
+		if (el.id) return '#' + CSS.escape(el.id)
 		const parts = []
 		let node = el
 		while (node && node.nodeType === 1 && parts.length < 8) {
 			let part = node.tagName.toLowerCase()
 			if (node.classList && node.classList.length > 0) {
-				part += '.' + Array.from(node.classList).join('.')
+				part += '.' + Array.from(node.classList).map((cls) => CSS.escape(cls)).join('.')
 			}
 			const parent = node.parentElement
 			if (parent) {
@@ -72,12 +82,29 @@ export const BROWSER_CODEGEN_SOURCE = `(() => {
 		true,
 	)
 
+	const fillableTypes = new Set([
+		'text',
+		'search',
+		'url',
+		'tel',
+		'email',
+		'password',
+		'number',
+	])
+
 	document.addEventListener(
 		'input',
 		(event) => {
 			const target = event.target
 			if (!target || target.nodeType !== 1 || typeof target.value !== 'string') return
-			send({ action: 'fill', selector: selectorFor(target), value: target.value })
+			const tag = target.tagName
+			if (tag === 'TEXTAREA') {
+				send({ action: 'fill', selector: selectorFor(target), value: target.value })
+				return
+			}
+			if (tag === 'INPUT' && fillableTypes.has((target.type || 'text').toLowerCase())) {
+				send({ action: 'fill', selector: selectorFor(target), value: target.value })
+			}
 		},
 		true,
 	)
