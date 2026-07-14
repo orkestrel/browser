@@ -129,7 +129,7 @@ export class Browser implements BrowserInterface {
 			this.#emitter.emit('error', thrown)
 			if (thrown instanceof BrowserConnectionError) throw thrown
 			const message = thrown instanceof Error ? thrown.message : String(thrown)
-			throw new BrowserConnectionError(message)
+			throw new BrowserConnectionError(message, { executable: this.#options.executable })
 		}
 	}
 
@@ -257,8 +257,11 @@ export class Browser implements BrowserInterface {
 		if (signal === undefined) return promise
 		if (signal.aborted) throw new BrowserConnectionError('Connection aborted')
 
+		let abortWon = false
+
 		return await new Promise<T>((resolve, reject) => {
 			const onAbort = (): void => {
+				abortWon = true
 				cleanup()
 				reject(new BrowserConnectionError('Connection aborted'))
 			}
@@ -274,6 +277,12 @@ export class Browser implements BrowserInterface {
 					reject(error)
 				},
 			)
+		}).catch((error: unknown) => {
+			// When the abort signal wins the race, `promise` is still in
+			// flight — attach an observer so its eventual rejection doesn't
+			// surface as an unhandled rejection once nobody is listening.
+			if (abortWon) promise.catch(() => undefined)
+			throw error
 		})
 	}
 
@@ -426,7 +435,7 @@ export class Browser implements BrowserInterface {
 
 		try {
 			// Wait for the CDP endpoint to be available
-			const wsUrl = await this.#raceAbort(this.#waitForLaunch(process))
+			const wsUrl = await this.#raceAbort(this.#waitForLaunch(process, executable, extra))
 
 			// Connect to the browser via CDP
 			transport = createCDPTransport({ url: wsUrl, timeout: this.#timeout() })
@@ -458,7 +467,13 @@ export class Browser implements BrowserInterface {
 		}
 	}
 
-	async #waitForLaunch(process: ChildProcess): Promise<string> {
+	async #waitForLaunch(
+		process: ChildProcess,
+		executable: string,
+		args?: readonly string[],
+	): Promise<string> {
+		const context = { executable, args }
+
 		return await new Promise((resolve, reject) => {
 			let settled = false
 
@@ -471,11 +486,13 @@ export class Browser implements BrowserInterface {
 			}
 
 			const onError = (error: Error): void => {
-				finish(() => reject(new BrowserConnectionError(error.message)))
+				finish(() => reject(new BrowserConnectionError(error.message, context)))
 			}
 
 			const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-				finish(() => reject(new BrowserConnectionError(this.#formatLaunchExit(code, signal))))
+				finish(() =>
+					reject(new BrowserConnectionError(this.#formatLaunchExit(code, signal), context)),
+				)
 			}
 
 			process.once('error', onError)
@@ -487,7 +504,7 @@ export class Browser implements BrowserInterface {
 				},
 				(error: unknown) => {
 					const message = error instanceof Error ? error.message : String(error)
-					finish(() => reject(new BrowserConnectionError(message)))
+					finish(() => reject(new BrowserConnectionError(message, context)))
 				},
 			)
 		})

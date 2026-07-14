@@ -192,8 +192,16 @@ await browser.destroy() // closes the process and releases resources
 | `BROWSER_LAUNCH_ARGS`      | const | Frozen flags always passed to a launched browser process, alongside the caller's own.           |
 | `BROWSER_HEADLESS_ARG`     | const | `'--headless=new'` — flag enabling headless mode on a launched browser process.                 |
 | `BROWSER_KILL_GRACE_MS`    | const | `3000` — grace period after SIGTERM before a launched process is escalated to SIGKILL.          |
-| `BROWSER_EXECUTABLE_PATHS` | const | Frozen record of well-known Chrome/Chromium/Edge executable paths, keyed by `process.platform`. |
-| `BROWSER_EXECUTABLE_NAMES` | const | Frozen list of command names probed on PATH when no well-known executable path exists.          |
+| `BROWSER_ENV_PATH_KEYS`         | const | Frozen list of env vars checked (in order) for an explicit browser executable path override (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`). |
+| `BROWSER_EXECUTABLE_PATHS`      | const | Frozen record of well-known Chrome/Chromium/Edge paths with no platform-specific root, keyed by `process.platform` (win32 is empty — see `BROWSER_WINDOWS_SUFFIXES`). |
+| `BROWSER_WINDOWS_SUFFIXES`      | const | Frozen list of Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root. |
+| `BROWSER_WINDOWS_ROOT_FALLBACKS`| const | Frozen record of fallback Windows install roots used when `PROGRAMFILES` / `PROGRAMFILES(X86)` are unset. |
+| `BROWSER_EXECUTABLE_NAMES`      | const | Frozen list of command names probed on PATH when no well-known executable path exists.          |
+| `BROWSER_STORE_ENV_KEY`         | const | `'PLAYWRIGHT_BROWSERS_PATH'` — env var naming an additional Playwright browser store base directory. |
+| `BROWSER_STORE_DEFAULT_DIRS`    | const | Frozen list of well-known Playwright browser store base directories (e.g. `/opt/pw-browsers`). |
+| `BROWSER_STORE_CACHE_DIRS`      | const | Frozen record of the per-OS default Playwright cache directory, relative to the home directory. |
+| `BROWSER_STORE_LINK_NAME`       | const | `'chromium'` — name of the top-level Chromium symlink/binary inside a browser store base.       |
+| `BROWSER_STORE_GLOBS`           | const | Frozen record of the glob pattern matching a versioned Chromium binary, keyed by `process.platform`. |
 
 #### Errors
 
@@ -223,7 +231,14 @@ try {
 
 | API                    | Kind     | Summary                                                                                                               |
 | ---------------------- | -------- | --------------------------------------------------------------------------------------------------------------------- |
-| `findSystemBrowser`    | function | Locate a Chrome/Chromium/Edge executable on this machine (well-known paths, then PATH probe); may return `undefined`. |
+| `findSystemBrowser`    | function | Locate a Chrome/Chromium/Edge executable (env override → well-known install paths → PATH probe → Playwright browser stores); may return `undefined`. |
+| `findEnvOverride`      | function | Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file.               |
+| `defaultInstallPaths`  | function | Build the default well-known install-path candidates for a platform, deriving Windows roots from env vars.            |
+| `windowsRoots`         | function | Derive Windows install roots from env vars, falling back to well-known literals when absent.                          |
+| `findInstallPath`      | function | Return the first candidate path that exists on disk.                                                                   |
+| `probePathNames`       | function | Probe PATH (`which`/`where`) for the first resolvable command name.                                                    |
+| `defaultStoreBases`    | function | Build the default Playwright browser store base directories to search for a managed Chromium.                         |
+| `findInStore`          | function | Search one store base for the top-level `chromium` link, else the highest-revision `chromium-*` install.               |
 | `launchBrowserProcess` | function | Launch a browser process with raw-CDP debugging flags; returns the spawned `ChildProcess`.                            |
 | `waitForCdpReady`      | function | Poll a browser's CDP version endpoint until it responds or the timeout elapses; returns the debugger URL.             |
 | `fetchCdpTargets`      | function | Fetch and normalize the current CDP target list from a browser's `/json/list` endpoint.                               |
@@ -233,6 +248,13 @@ import {
 	createCDPTransport,
 	createScreenshotWriter,
 	findSystemBrowser,
+	findEnvOverride,
+	defaultInstallPaths,
+	windowsRoots,
+	findInstallPath,
+	probePathNames,
+	defaultStoreBases,
+	findInStore,
 	launchBrowserProcess,
 	waitForCdpReady,
 	fetchCdpTargets,
@@ -242,6 +264,17 @@ const transport = createCDPTransport({ url: 'ws://localhost:9222/devtools/browse
 const writer = createScreenshotWriter()
 
 const executable = findSystemBrowser() // string | undefined
+// findSystemBrowser({ env: {}, paths: [], names: [], stores: [] }) — override any candidate source
+
+// findSystemBrowser's internal resolution steps, exposed for composition/testing:
+const env = process.env
+findEnvOverride(env) // string | undefined — PLAYWRIGHT_EXECUTABLE_PATH / CHROME_PATH
+const roots = windowsRoots(env) // readonly string[] — PROGRAMFILES / PROGRAMFILES(X86) / LOCALAPPDATA
+defaultInstallPaths('win32', env) // readonly string[] — well-known Chrome/Edge/Chromium paths
+findInstallPath(defaultInstallPaths(process.platform, env)) // string | undefined
+probePathNames(['google-chrome'], process.platform) // string | undefined — which/where probe
+const stores = defaultStoreBases(env, process.platform) // readonly string[]
+for (const store of stores) findInStore(store, process.platform) // string | undefined
 if (executable !== undefined) {
 	const child = launchBrowserProcess(executable, 9222, true)
 	const debuggerUrl = await waitForCdpReady(9222, 5000)
@@ -257,6 +290,7 @@ if (executable !== undefined) {
 | `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'` — how the browser connection was established.                                                                                          |
 | `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'` — lifecycle status of a browser wrapper.                                                              |
 | `BrowserDiscoveryResult`       | interface | `{ found: boolean; endpoint?; browser?; connection? }` — result of passive browser discovery.                                                                              |
+| `SystemBrowserOptions`         | interface | `{ env?; paths?; names?; stores? }` — overrides for `findSystemBrowser`'s candidate sources (env-override keys/Windows roots, install paths, PATH-probe names, Playwright store base dirs); each field replaces its category's default, an explicit `[]`/`{}` disables it.       |
 | `BrowserCdpOptions`            | interface | `{ port?: number; host?: string; endpoint?: string }` — CDP connection configuration (`host` defaults to `BROWSER_DEFAULT_HOST`).                                          |
 | `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; error: [error]; destroy: [] }`.                                    |
 | `BrowserOptions`               | interface | `{ on?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args? }` — options for `createBrowser`.                                                      |

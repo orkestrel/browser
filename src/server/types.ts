@@ -37,6 +37,33 @@ export interface BrowserDiscoveryResult {
 }
 
 /**
+ * Options overriding `findSystemBrowser`'s candidate sources.
+ *
+ * @remarks
+ * Each field replaces the default candidate list for its category — a field
+ * left `undefined` falls back to the platform default, an explicit `[]` (or
+ * empty `env`) disables that category entirely. Zero-arg `findSystemBrowser()`
+ * uses full default resolution.
+ *
+ * - `env` — environment record consulted for both the override keys
+ *   (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) and Windows install roots
+ *   (`PROGRAMFILES`, `PROGRAMFILES(X86)`, `LOCALAPPDATA`); defaults to `process.env`
+ * - `paths` — candidate install paths checked in order; defaults to the
+ *   platform's well-known Chrome/Edge/Chromium locations
+ * - `names` — command names probed on PATH (`which`/`where`); defaults to
+ *   `BROWSER_EXECUTABLE_NAMES`
+ * - `stores` — Playwright browser store base directories searched for a
+ *   managed Chromium; defaults to `PLAYWRIGHT_BROWSERS_PATH`, the well-known
+ *   store dirs, and the per-OS Playwright cache directory
+ */
+export interface SystemBrowserOptions {
+	readonly env?: Readonly<Record<string, string | undefined>>
+	readonly paths?: readonly string[]
+	readonly names?: readonly string[]
+	readonly stores?: readonly string[]
+}
+
+/**
  * CDP (Chrome DevTools Protocol) connection configuration.
  *
  * @remarks

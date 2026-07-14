@@ -3,14 +3,18 @@
  *
  * `fetchCdpTargets` / `waitForCdpReady` are exercised against a real
  * in-process HTTP server (`createCdpTestServer`). `findSystemBrowser` is
- * exercised as-is — this container ships no Chrome/Chromium/Edge, so the
- * absent-browser path is the real, natural behavior (no mocking).
+ * exercised through its `SystemBrowserOptions` override bag with real
+ * temp files/dirs (`node:fs`) so every assertion is deterministic across
+ * machines — no mocking, no dependency on what happens to be installed.
  * `launchBrowserProcess` argument construction is verified by spawning the
  * real Node binary as a stand-in executable and reading `ChildProcess.spawnargs`
  * — the exact argv passed to the OS — never a mock of `child_process`.
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
 	findSystemBrowser,
 	launchBrowserProcess,
@@ -21,17 +25,93 @@ import { createCdpTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
+const tempDirs: string[] = []
 
 afterEach(async () => {
 	await server?.close()
 	server = undefined
+
+	for (const dir of tempDirs.splice(0)) {
+		rmSync(dir, { recursive: true, force: true })
+	}
 })
 
+function createTempDir(): string {
+	const dir = mkdtempSync(join(tmpdir(), 'browser-test-'))
+	tempDirs.push(dir)
+	return dir
+}
+
 describe('findSystemBrowser', () => {
-	it('returns undefined when no known browser executable is installed', () => {
-		// This test container ships no Chrome/Chromium/Edge — the real,
-		// unmocked absent-browser path.
-		expect(findSystemBrowser()).toBeUndefined()
+	it('returns undefined when every candidate source is empty', () => {
+		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [] })
+		expect(found).toBeUndefined()
+	})
+
+	it('returns a planted path candidate when it exists', () => {
+		const dir = createTempDir()
+		const file = join(dir, 'chrome')
+		writeFileSync(file, '')
+
+		const found = findSystemBrowser({ env: {}, paths: [file], names: [], stores: [] })
+
+		expect(found).toBe(file)
+	})
+
+	it('prefers an env override over a path candidate', () => {
+		const dir = createTempDir()
+		const envFile = join(dir, 'env-chrome')
+		const pathFile = join(dir, 'path-chrome')
+		writeFileSync(envFile, '')
+		writeFileSync(pathFile, '')
+
+		const found = findSystemBrowser({
+			env: { PLAYWRIGHT_EXECUTABLE_PATH: envFile },
+			paths: [pathFile],
+			names: [],
+			stores: [],
+		})
+
+		expect(found).toBe(envFile)
+	})
+
+	it('falls through to CHROME_PATH when PLAYWRIGHT_EXECUTABLE_PATH is absent', () => {
+		const dir = createTempDir()
+		const chromePathFile = join(dir, 'chrome-path-chrome')
+		writeFileSync(chromePathFile, '')
+
+		const found = findSystemBrowser({
+			env: { CHROME_PATH: chromePathFile },
+			paths: [],
+			names: [],
+			stores: [],
+		})
+
+		expect(found).toBe(chromePathFile)
+	})
+
+	it('resolves a versioned Chromium install inside a browser store', () => {
+		// Mirrors the current platform's store shape so this test is honest
+		// everywhere it runs (linux: chromium-<rev>/chrome-linux/chrome).
+		const store = createTempDir()
+		const installDir = join(store, 'chromium-1194', 'chrome-linux')
+		mkdirSync(installDir, { recursive: true })
+		const binary = join(installDir, 'chrome')
+		writeFileSync(binary, '')
+
+		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [store] })
+
+		expect(found).toBe(binary)
+	})
+
+	it('resolves the top-level chromium link inside a browser store', () => {
+		const store = createTempDir()
+		const link = join(store, 'chromium')
+		writeFileSync(link, '')
+
+		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [store] })
+
+		expect(found).toBe(link)
 	})
 })
 
