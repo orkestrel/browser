@@ -23,6 +23,7 @@ import {
 	BrowserConnectionError,
 	BROWSER_KILL_GRACE_MS,
 } from '@src/server'
+import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError, compileCodegenScript } from '@src/core'
 import { createCdpTestServer, createFakeBrowserProcess } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 import { waitForDelay } from '../../setup.js'
@@ -1253,5 +1254,282 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		const page = await browser.create()
 		const content = await page.content()
 		expect(content.url).toBe('about:blank')
+	}, 20_000)
+
+	// === hardening (real Chromium) — proves the audit's confirmed defects are fixed
+
+	it('an oversized evaluate() result rejects with a coded error and the session survives', async () => {
+		browser = createBrowser({
+			executable: REAL_BROWSER_EXECUTABLE,
+			headless: true,
+			profile: tempProfileDir(),
+			args: REAL_BROWSER_ARGS,
+			cdp: { port: 20_110 },
+			timeout: 20_000,
+		})
+
+		await browser.connect()
+		const page = await browser.create()
+		const pid = browser.pid
+
+		await expect(
+			page.evaluate(`'x'.repeat(${BROWSER_RESULT_LIMIT + 100_000})`),
+		).rejects.toSatisfy(isBrowserResultLimitError)
+
+		// The browser must survive the oversized result — no crashed session.
+		expect(browser.connected).toBe(true)
+		expect(await page.evaluate('1 + 1')).toBe(2)
+		expect(pid).toBeDefined()
+		const livePid = pid ?? 0
+		expect(() => process.kill(livePid, 0)).not.toThrow()
+	}, 20_000)
+
+	it('content() on a huge DOM never crashes the session', async () => {
+		const httpServer = createServer((req, res) => {
+			res.writeHead(200, { 'content-type': 'text/html' })
+			res.end(`<html><body><div id="big">${'a'.repeat(BROWSER_RESULT_LIMIT + 500_000)}</div></body></html>`)
+		})
+		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+		const address = httpServer.address() as AddressInfo
+		const url = `http://127.0.0.1:${address.port}/`
+
+		try {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_111 },
+				timeout: 20_000,
+			})
+
+			await browser.connect()
+			const page = await browser.create({ url })
+
+			let contentError: unknown
+			try {
+				await page.content()
+			} catch (error) {
+				contentError = error
+			}
+
+			// Either a clean result or a coded BrowserResultLimitError is
+			// acceptable — anything else (or a crashed session) is a failure.
+			expect(contentError === undefined || isBrowserResultLimitError(contentError)).toBe(true)
+			expect(browser.connected).toBe(true)
+			expect(await page.evaluate('1 + 1')).toBe(2)
+		} finally {
+			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+		}
+	}, 20_000)
+
+	it('reattaching over CDP reports the correct page url immediately, before navigate()/content()', async () => {
+		const httpServer = createServer((req, res) => {
+			res.writeHead(200, { 'content-type': 'text/html' })
+			res.end('<html><head><title>Reattach Fidelity</title></head><body>Hi</body></html>')
+		})
+		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+		const address = httpServer.address() as AddressInfo
+		const url = `http://127.0.0.1:${address.port}/`
+		const port = 20_112
+		let launched: BrowserInterface | undefined
+		let reattached: BrowserInterface | undefined
+
+		try {
+			launched = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port },
+				timeout: 20_000,
+			})
+
+			await launched.connect()
+			await launched.create({ url })
+			await launched.disconnect()
+
+			reattached = createBrowser({ cdp: { port }, timeout: 20_000 })
+			await reattached.connect()
+
+			// A headless launch already carries its own initial about:blank tab
+			// alongside the page this test created — find the one matching the
+			// served url rather than assuming a single page.
+			const pages = reattached.context()?.pages() ?? []
+			const target = pages.find((page) => page.url === url)
+			expect(target).toBeDefined()
+		} finally {
+			// Always terminate the shared real browser process — reattached.destroy()
+			// would only locally detach (cdp-attached), leaking the process.
+			if (reattached !== undefined) await reattached.close()
+			else if (launched !== undefined) await launched.destroy()
+			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+		}
+	}, 20_000)
+
+	// Transport-loss resumability against a REAL Chromium process would require
+	// severing the CDP WebSocket at the OS level without touching the browser
+	// process — not reproducible portably from a test without risking killing
+	// the real browser. The behavior (transport loss while the owned process
+	// stays alive does not kill it, and the same instance can reconnect) is
+	// already exercised live against a real spawned process substitute in
+	// "Browser external-disconnect detection" above; documented here as
+	// intentionally deferred for the real-Chromium suite.
+	it.todo(
+		'transport-loss resumability against a real Chromium process — covered by the deterministic fake-process suite above',
+	)
+
+	it('close() gracefully shuts down an owned real browser process', async () => {
+		browser = createBrowser({
+			executable: REAL_BROWSER_EXECUTABLE,
+			headless: true,
+			profile: tempProfileDir(),
+			args: REAL_BROWSER_ARGS,
+			cdp: { port: 20_113 },
+			timeout: 20_000,
+		})
+
+		await browser.connect()
+		const pid = browser.pid
+		expect(pid).toBeDefined()
+
+		await browser.close()
+		expect(browser.connected).toBe(false)
+
+		const livePid = pid ?? 0
+		expect(() => process.kill(livePid, 0)).toThrow('ESRCH')
+	}, 20_000)
+
+	it('close() on a cdp-attached instance shuts down the shared real browser and the owner observes disconnect', async () => {
+		const port = 20_114
+		let owner: BrowserInterface | undefined
+		let second: BrowserInterface | undefined
+
+		try {
+			owner = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port },
+				timeout: 20_000,
+			})
+
+			let ownerDisconnected = false
+			owner.emitter.on('disconnect', () => (ownerDisconnected = true))
+
+			await owner.connect()
+			const pid = owner.pid
+			expect(pid).toBeDefined()
+
+			second = createBrowser({ cdp: { port }, timeout: 20_000 })
+			await second.connect()
+			expect(second.connection).toBe('cdp')
+
+			await second.close()
+
+			// Give the real browser time to receive Browser.close, exit, and let
+			// the owner's process-exit listener observe it.
+			await waitForDelay(2000)
+
+			expect(ownerDisconnected).toBe(true)
+			expect(owner.connected).toBe(false)
+			const livePid = pid ?? 0
+			expect(() => process.kill(livePid, 0)).toThrow('ESRCH')
+		} finally {
+			// Safety net — no-op once close() has already torn everything down.
+			await owner?.destroy()
+			await second?.destroy()
+		}
+	}, 20_000)
+
+	it('navigate() with a per-call timeout rejects well under the client default and the session survives', async () => {
+		const httpServer = createServer((req) => {
+			// Never respond — simulates a hanging endpoint.
+			void req
+		})
+		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+		const address = httpServer.address() as AddressInfo
+		const url = `http://127.0.0.1:${address.port}/`
+
+		try {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_115 },
+				timeout: 20_000,
+			})
+
+			await browser.connect()
+			const page = await browser.create()
+
+			const started = Date.now()
+			await expect(page.navigate(url, { timeout: 1500 })).rejects.toThrow(
+				'CDP request timed out',
+			)
+			const elapsed = Date.now() - started
+			expect(elapsed).toBeLessThan(3000)
+
+			// The client-side timeout must not leave the session wedged — a
+			// subsequent call on the same page must still complete.
+			expect(browser.connected).toBe(true)
+			expect(await page.evaluate('1 + 1')).toBe(2)
+		} finally {
+			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+		}
+	}, 20_000)
+
+	it('records and replays a contenteditable fill via codegen on a real DOM', async () => {
+		const httpServer = createServer((req, res) => {
+			res.writeHead(200, { 'content-type': 'text/html' })
+			res.end(
+				'<html><body><div id="editable" contenteditable="true"></div></body></html>',
+			)
+		})
+		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+		const address = httpServer.address() as AddressInfo
+		const url = `http://127.0.0.1:${address.port}/`
+
+		try {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: tempProfileDir(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 20_116 },
+				timeout: 20_000,
+			})
+
+			await browser.connect()
+			const page = await browser.create({ url })
+
+			const codegen = await page.codegen()
+			await page.fill('#editable', 'hello world')
+			const actions = await codegen.stop()
+
+			const fillAction = actions.find(
+				(action) => action.action === 'fill' && action.selector === '#editable',
+			)
+			expect(fillAction).toBeDefined()
+			expect(fillAction && fillAction.action === 'fill' ? fillAction.value : undefined).toBe(
+				'hello world',
+			)
+
+			const script = compileCodegenScript(actions, { language: 'javascript' })
+
+			const freshPage = await browser.create({ url })
+			const factory = new Function(`return ${script}`)
+			const run = factory()
+			await run(freshPage)
+
+			const replayedText = await freshPage.evaluate(
+				"document.querySelector('#editable').textContent",
+			)
+			expect(replayedText).toBe('hello world')
+		} finally {
+			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+		}
 	}, 20_000)
 })
