@@ -20,7 +20,7 @@
 Server quickstart — connect to (or launch) a browser, open a page, drive it:
 
 ```ts
-import { createBrowser } from '@src/server'
+import { createBrowser } from '@orkestrel/browser/server'
 
 const browser = createBrowser({ headless: true })
 await browser.connect() // CDP endpoint discovery → connect, else launch
@@ -34,7 +34,7 @@ Core quickstart — drive the CDP client directly over any transport that
 satisfies `CDPTransportInterface`:
 
 ```ts
-import { createCDPClient } from '@src/core'
+import { createCDPClient } from '@orkestrel/browser'
 
 const client = createCDPClient({ transport }) // transport: CDPTransportInterface
 await client.connect()
@@ -127,7 +127,7 @@ import {
 	parseCodegenActionPayload,
 	readCodegenNavigateAction,
 	compileCodegenScript,
-} from '@src/core'
+} from '@orkestrel/browser'
 
 const guarded = guardEvaluateExpression('document.title', 3_000_000) // wrapped expression string
 const actions = normalizeCodegenActions(rawActions)
@@ -171,7 +171,7 @@ Server-side connection lifecycle — discover an already-running browser via
 CDP, connect to it, or launch a fresh Chromium-family process:
 
 ```ts
-import { createBrowser } from '@src/server'
+import { createBrowser } from '@orkestrel/browser/server'
 
 const browser = createBrowser({ cdp: { port: 9222 } })
 const discovery = await browser.discover() // passive probe, no side effects
@@ -293,7 +293,7 @@ import {
 	launchBrowserProcess,
 	waitForCdpReady,
 	fetchCdpTargets,
-} from '@src/server'
+} from '@orkestrel/browser/server'
 
 const transport = createCDPTransport({ url: 'ws://localhost:9222/devtools/browser/abc' })
 const writer = createScreenshotWriter()
@@ -391,7 +391,7 @@ connect attempt.
 | `close`       | `Promise<void>`    | Tear down the transport and reject all pending requests.                                                                                                                 |
 
 ```ts
-import { createCDPClient } from '@src/core'
+import { createCDPClient } from '@orkestrel/browser'
 
 const client = createCDPClient({ transport })
 await client.connect()
@@ -499,7 +499,7 @@ passive discovery on `cdp.port` → launch a new process.
 | `close`      | `Promise<void>`                        | Graceful REMOTE shutdown: best-effort sends CDP `Browser.close` (whether attached or owned), and when owned also awaits the process's exit (escalating to a kill only if it doesn't exit in time), then closes every tracked context/page (sending remote `Target.closeTarget`/`disposeBrowserContext` regardless of ownership — unlike `destroy()`, which skips remote context/page closes on a non-owned CDP-attached browser) before releasing the CDP client. Use this to shut down a browser this instance doesn't own but wants to terminate anyway.                                                                                                                                                                                                    |
 
 ```ts
-import { createBrowser } from '@src/server'
+import { createBrowser } from '@orkestrel/browser/server'
 
 const browser = createBrowser({ profile: './profile', cdp: { port: 9222 } })
 browser.emitter.on('connect', (mode) => log(mode))
@@ -641,7 +641,7 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
 ### Automate a page end-to-end
 
 ```ts
-import { createBrowser } from '@src/server'
+import { createBrowser } from '@orkestrel/browser/server'
 
 const browser = createBrowser({ headless: true })
 await browser.connect()
@@ -678,7 +678,7 @@ CDP discovery on the same fixed port. A reattached instance connects as
 remote close, since another client may still be using the browser:
 
 ```ts
-import { createBrowser } from '@src/server'
+import { createBrowser } from '@orkestrel/browser/server'
 
 const port = 9222
 const browser = createBrowser({ profile: './profile', cdp: { port } })
@@ -724,7 +724,7 @@ Useful when embedding in a non-Node environment, or in a test with a fake
 transport that satisfies `CDPTransportInterface`.
 
 ```ts
-import { createCDPClient } from '@src/core'
+import { createCDPClient } from '@orkestrel/browser'
 
 const client = createCDPClient({ transport: myTransport })
 await client.connect()
