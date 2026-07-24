@@ -262,6 +262,18 @@ describe('CDPClient', () => {
 			transport.event('Page.loadEventFired', { timestamp: 2 })
 			expect(lateRecorder.count).toBe(1)
 		})
+
+		it('isolates a throwing handler so sibling handlers still receive the event', async () => {
+			await client.connect()
+			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
+			client.subscribe('Page.loadEventFired', () => {
+				throw new Error('observer failed')
+			})
+			client.subscribe('Page.loadEventFired', recorder.handler)
+
+			expect(() => transport.event('Page.loadEventFired', { timestamp: 1 })).not.toThrow()
+			expect(recorder.count).toBe(1)
+		})
 	})
 
 	describe('reconnect()', () => {
@@ -361,6 +373,20 @@ describe('CDPClient', () => {
 
 			const thrown = await pending
 			expect(isCDPConnectionError(thrown)).toBe(true)
+		})
+
+		it('rejects pending requests and closes the transport after a transport error', async () => {
+			await client.connect()
+			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
+
+			transport.errorRemote(new Error('socket failed'))
+
+			const thrown = await pending
+			expect(isCDPConnectionError(thrown)).toBe(true)
+			expect(client.connected).toBe(false)
+
+			await client.close()
+			expect(transport.closed).toBe(true)
 		})
 
 		it('closes the transport and rejects the in-flight connect() when close() races connect()', async () => {

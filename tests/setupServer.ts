@@ -1,14 +1,16 @@
-import type { IncomingMessage, Server as HTTPServer } from 'node:http'
-import type { Socket } from 'node:net'
-import type { CDPTarget } from '@src/core'
+import type { IncomingMessage, Server as HTTPServer, ServerResponse } from 'node:http'
+import type { AddressInfo, Server as NetServer, Socket } from 'node:net'
+import type { Duplex } from 'node:stream'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import { createServer } from 'node:http'
-import { createServer as createNetServer } from 'node:net'
-import { mkdtempSync, writeFileSync, readFileSync } from 'node:fs'
+import { createConnection, createServer as createNetServer } from 'node:net'
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
+import { isRecord } from '@orkestrel/contract'
 import { createNodeWebSocket } from '@orkestrel/websocket'
+import { waitForCondition } from './setup.js'
 
 /**
  * Reserve a free localhost port by binding an ephemeral server to port 0 and
@@ -21,20 +23,184 @@ export async function reservePort(): Promise<number> {
 	const probe = createNetServer()
 	const port = await new Promise<number>((resolve, reject) => {
 		probe.on('error', reject)
-		probe.listen(0, '127.0.0.1', () => {
-			const address = probe.address()
-			resolve(isRecord(address) && typeof address['port'] === 'number' ? address['port'] : 0)
-		})
+		probe.listen(0, '127.0.0.1', () => resolve(readServerPort(probe)))
 	})
 	await new Promise<void>((resolve) => probe.close(() => resolve()))
 	return port
 }
 
+/** Read the bound TCP port or throw when the server has no address. */
+export function readServerPort(server: NetServer): number {
+	const address: AddressInfo | string | null = server.address()
+	if (typeof address !== 'object' || address === null) {
+		throw new Error('Test server did not bind a TCP port')
+	}
+	return address.port
+}
+
 // === Server-only test helpers (AGENTS §16.1 — node:* allowed here)
 
-/** Type guard for a plain (non-array, non-null) object — shared across server-only test helpers/fixtures. */
-export function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
+/**
+ * Whether a process currently accepts signal `0`.
+ *
+ * @param pid - Process identifier to probe
+ * @returns True while the process is alive
+ */
+export function isProcessAlive(pid: number): boolean {
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Wait until a process exits.
+ *
+ * @param pid - Process identifier to observe
+ * @param timeout - Maximum wait in milliseconds
+ * @returns A promise resolving after the process exits
+ */
+export function waitForProcessExit(pid: number, timeout = 5000): Promise<void> {
+	return waitForCondition(() => !isProcessAlive(pid), timeout, 50)
+}
+
+const registeredTempDirectories: string[] = []
+
+/** Create and register a temporary directory for deterministic test teardown. */
+export function createTempDirectory(prefix = 'orkestrel-browser-test-'): string {
+	const dir = mkdtempSync(join(tmpdir(), prefix))
+	registeredTempDirectories.push(dir)
+	return dir
+}
+
+/** Create and register a persistent-profile fixture directory. */
+export function createBrowserProfile(): string {
+	return createTempDirectory('orkestrel-browser-profile-')
+}
+
+/** Remove every registered test directory, retrying transient Windows locks. */
+export function destroyTempDirectories(): void {
+	for (const dir of registeredTempDirectories.splice(0)) {
+		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+	}
+}
+
+/** Raw TCP fixture that accepts connections without completing a handshake. */
+export interface StallServerInterface {
+	readonly endpoint: string
+	close(): Promise<void>
+}
+
+/** Start a raw TCP server that leaves every accepted connection open. */
+export async function createStallServer(): Promise<StallServerInterface> {
+	const server = new StallServer()
+	await server.start()
+	return server
+}
+
+/** Stateful implementation of the stalling TCP fixture. */
+export class StallServer implements StallServerInterface {
+	readonly #server: NetServer
+	readonly #sockets = new Set<Socket>()
+	#port: number | undefined
+	#closed = false
+
+	constructor() {
+		this.#server = createNetServer((socket) => {
+			this.#sockets.add(socket)
+			socket.on('error', () => undefined)
+			socket.on('close', () => this.#sockets.delete(socket))
+		})
+	}
+
+	get endpoint(): string {
+		if (this.#port === undefined) throw new Error('Stall server has not started')
+		return `ws://127.0.0.1:${this.#port}/cdp`
+	}
+
+	async start(): Promise<void> {
+		if (this.#port !== undefined) return
+		await new Promise<void>((resolve, reject) => {
+			this.#server.once('error', reject)
+			this.#server.listen(0, '127.0.0.1', resolve)
+		})
+		this.#server.removeAllListeners('error')
+		this.#port = readServerPort(this.#server)
+	}
+
+	async close(): Promise<void> {
+		if (this.#closed) return
+		this.#closed = true
+		for (const socket of this.#sockets) socket.destroy()
+		this.#sockets.clear()
+		await new Promise<void>((resolve, reject) => {
+			this.#server.close((error) => (error === undefined ? resolve() : reject(error)))
+		})
+	}
+}
+
+/** Restartable raw TCP proxy fixture used to sever and restore a connection. */
+export interface TCPProxyInterface {
+	start(host: string, port: number): Promise<void>
+	stop(): Promise<void>
+}
+
+/** Create a restartable TCP proxy bound to a fixed local port. */
+export function createTCPProxy(port: number): TCPProxyInterface {
+	return new TCPProxy(port)
+}
+
+/** Stateful implementation of the restartable TCP proxy fixture. */
+export class TCPProxy implements TCPProxyInterface {
+	readonly #port: number
+	readonly #sockets = new Set<Socket>()
+	#server: NetServer | undefined
+
+	constructor(port: number) {
+		this.#port = port
+	}
+
+	async start(host: string, port: number): Promise<void> {
+		if (this.#server !== undefined) throw new Error('TCP proxy is already started')
+
+		const server = createNetServer((client) => {
+			this.#sockets.add(client)
+			const upstream = createConnection({ host, port })
+			this.#sockets.add(upstream)
+			client.pipe(upstream)
+			upstream.pipe(client)
+			client.on('error', () => undefined)
+			upstream.on('error', () => undefined)
+			client.on('close', () => this.#sockets.delete(client))
+			upstream.on('close', () => this.#sockets.delete(upstream))
+		})
+		this.#server = server
+
+		try {
+			await new Promise<void>((resolve, reject) => {
+				server.once('error', reject)
+				server.listen(this.#port, '127.0.0.1', resolve)
+			})
+			server.removeAllListeners('error')
+		} catch (error) {
+			this.#server = undefined
+			throw error
+		}
+	}
+
+	async stop(): Promise<void> {
+		for (const socket of this.#sockets) socket.destroy()
+		this.#sockets.clear()
+
+		const server = this.#server
+		this.#server = undefined
+		if (server === undefined) return
+		await new Promise<void>((resolve, reject) => {
+			server.close((error) => (error === undefined ? resolve() : reject(error)))
+		})
+	}
 }
 
 // === In-process CDP test server (HTTP discovery endpoints + WS CDP transport)
@@ -59,14 +225,14 @@ export type CDPServerReplyHandler = (params: Readonly<Record<string, unknown>>) 
 export interface CDPTestServerInterface {
 	readonly port: number
 	readonly url: string
-	readonly wsUrl: string
+	readonly endpoint: string
 	readonly received: readonly CDPServerReceived[]
 	/** Count of currently open WebSocket sockets (for close-propagation assertions). */
 	readonly sockets: number
-	/** Set the targets returned by `/json/list` (drives `fetchCdpTargets`/`syncContexts`). */
-	list(targets: readonly CDPTarget[]): void
+	/** Set the targets returned by `/json/list` (drives `fetchCDPTargets`/`syncContexts`). */
+	list(targets: readonly unknown[]): void
 	/** Script an automatic reply for every request matching `method`. */
-	autoReply(method: string, result: unknown | CDPServerReplyHandler): void
+	script(method: string, result: unknown | CDPServerReplyHandler): void
 	/** Send a success reply for a specific request id over the active WebSocket. */
 	reply(id: number, result: unknown): void
 	/** Send an error reply for a specific request id over the active WebSocket. */
@@ -84,127 +250,177 @@ export interface CDPTestServerInterface {
  *
  * @returns A {@link CDPTestServerInterface}
  */
-export async function createCdpTestServer(): Promise<CDPTestServerInterface> {
-	const received: CDPServerReceived[] = []
-	const autoReplies = new Map<string, unknown | CDPServerReplyHandler>()
-	let targets: readonly CDPTarget[] = []
-	let activeWs: NodeWebSocketInterface | undefined
-	const sockets = new Set<NodeWebSocketInterface>()
-	let hangVersion = false
+export async function createCDPTestServer(): Promise<CDPTestServerInterface> {
+	const server = new CDPTestServer()
+	await server.start()
+	return server
+}
 
-	const server: HTTPServer = createServer((req, res) => {
-		const url = req.url ?? ''
-		if (url.startsWith('/json/version')) {
-			if (hangVersion) return
-			res.writeHead(200, { 'content-type': 'application/json' })
-			res.end(JSON.stringify({ webSocketDebuggerUrl: wsUrlFor(), Browser: 'Test/1.0' }))
-			return
-		}
-		if (url.startsWith('/json/list')) {
-			res.writeHead(200, { 'content-type': 'application/json' })
-			res.end(JSON.stringify(targets))
-			return
-		}
-		res.writeHead(404)
-		res.end()
-	})
+/** Real HTTP and WebSocket fixture implementing the test CDP surface. */
+export class CDPTestServer implements CDPTestServerInterface {
+	readonly #server: HTTPServer
+	readonly #received: CDPServerReceived[] = []
+	readonly #scripts = new Map<string, unknown | CDPServerReplyHandler>()
+	readonly #sockets = new Set<NodeWebSocketInterface>()
+	#targets: readonly unknown[] = []
+	#active: NodeWebSocketInterface | undefined
+	#port: number | undefined
+	#hanging = false
+	#closed = false
 
-	function wsUrlFor(): string {
-		return `ws://localhost:${port}/cdp`
+	constructor() {
+		this.#server = createServer((request, response) => this.#handle(request, response))
+		this.#server.on('upgrade', (request, socket, head) => {
+			this.#upgrade(request, socket, head)
+		})
 	}
 
-	function sendFrame(data: Record<string, unknown>): void {
-		if (activeWs === undefined) return
-		activeWs.send(JSON.stringify(data))
+	get port(): number {
+		if (this.#port === undefined) throw new Error('CDP test server has not started')
+		return this.#port
 	}
 
-	function handleMessage(text: string): void {
+	get url(): string {
+		return `http://localhost:${this.port}`
+	}
+
+	get endpoint(): string {
+		return `ws://localhost:${this.port}/cdp`
+	}
+
+	get received(): readonly CDPServerReceived[] {
+		return this.#received
+	}
+
+	get sockets(): number {
+		return this.#sockets.size
+	}
+
+	async start(): Promise<void> {
+		if (this.#port !== undefined) return
+		await new Promise<void>((resolve, reject) => {
+			this.#server.once('error', reject)
+			this.#server.listen(0, '127.0.0.1', resolve)
+		})
+		this.#server.removeAllListeners('error')
+
+		this.#port = readServerPort(this.#server)
+	}
+
+	list(targets: readonly unknown[]): void {
+		this.#targets = targets
+	}
+
+	script(method: string, result: unknown | CDPServerReplyHandler): void {
+		this.#scripts.set(method, result)
+	}
+
+	reply(id: number, result: unknown): void {
+		this.#send({ id, result })
+	}
+
+	fail(id: number, message: string): void {
+		this.#send({ id, error: { message } })
+	}
+
+	event(method: string, params?: Readonly<Record<string, unknown>>, sessionId?: string): void {
+		const frame: Record<string, unknown> = { method, params: params ?? {} }
+		if (sessionId !== undefined) frame['sessionId'] = sessionId
+		this.#send(frame)
+	}
+
+	hang(enabled: boolean): void {
+		this.#hanging = enabled
+	}
+
+	async close(): Promise<void> {
+		if (this.#closed) return
+		this.#closed = true
+		for (const socket of this.#sockets) socket.destroy()
+		this.#sockets.clear()
+
+		const closed = new Promise<void>((resolve, reject) => {
+			this.#server.close((error) => (error === undefined ? resolve() : reject(error)))
+		})
+		this.#server.closeAllConnections()
+		await closed
+	}
+
+	// === Private helpers
+
+	#handle(request: IncomingMessage, response: ServerResponse): void {
+		const url = request.url
+		if (url?.startsWith('/json/version') === true) {
+			if (this.#hanging) return
+			response.writeHead(200, { 'content-type': 'application/json' })
+			response.end(JSON.stringify({ webSocketDebuggerUrl: this.endpoint, Browser: 'Test/1.0' }))
+			return
+		}
+		if (url?.startsWith('/json/list') === true) {
+			response.writeHead(200, { 'content-type': 'application/json' })
+			response.end(JSON.stringify(this.#targets))
+			return
+		}
+		response.writeHead(404)
+		response.end()
+	}
+
+	#upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
+		const key = request.headers['sec-websocket-key']
+		if (typeof key !== 'string') {
+			socket.destroy()
+			return
+		}
+
+		const webSocket = createNodeWebSocket({ socket, key, head })
+		this.#active = webSocket
+		this.#sockets.add(webSocket)
+		webSocket.emitter.on('message', (text) => this.#message(text))
+		webSocket.emitter.on('close', () => {
+			this.#sockets.delete(webSocket)
+			if (this.#active === webSocket) this.#active = undefined
+		})
+	}
+
+	#message(text: string): void {
 		let parsed: unknown
 		try {
 			parsed = JSON.parse(text)
 		} catch {
 			return
 		}
-		if (!isRecord(parsed)) return
-
-		const id = typeof parsed['id'] === 'number' ? parsed['id'] : -1
-		const method = typeof parsed['method'] === 'string' ? parsed['method'] : ''
-		const params = isRecord(parsed['params']) ? parsed['params'] : undefined
-		received.push({ id, method, params })
-
-		if (autoReplies.has(method)) {
-			const scripted = autoReplies.get(method)
-			const result = typeof scripted === 'function' ? scripted(params ?? {}) : scripted
-			sendFrame({ id, result })
-		}
-	}
-
-	server.on('upgrade', (req: IncomingMessage, socket: Socket, head: Buffer) => {
-		const key = req.headers['sec-websocket-key']
-		if (typeof key !== 'string') {
-			socket.destroy()
+		if (
+			!isRecord(parsed) ||
+			typeof parsed['id'] !== 'number' ||
+			typeof parsed['method'] !== 'string'
+		) {
 			return
 		}
 
-		const ws = createNodeWebSocket({ socket, key, head })
-		activeWs = ws
-		sockets.add(ws)
+		const id = parsed['id']
+		const method = parsed['method']
+		const params = isRecord(parsed['params']) ? parsed['params'] : undefined
+		this.#received.push({ id, method, params })
 
-		ws.emitter.on('message', (text) => handleMessage(text))
+		if (method === 'Target.getTargets' && !this.#scripts.has(method)) {
+			const targetInfos = this.#targets.filter(isRecord).map((target) => ({
+				targetId: target['id'],
+				type: target['type'],
+				title: target['title'],
+				url: target['url'],
+			}))
+			this.#send({ id, result: { targetInfos } })
+			return
+		}
 
-		ws.emitter.on('close', () => {
-			sockets.delete(ws)
-			if (activeWs === ws) activeWs = undefined
-		})
-	})
+		if (!this.#scripts.has(method)) return
+		const scripted = this.#scripts.get(method)
+		const result = typeof scripted === 'function' ? scripted(params ?? {}) : scripted
+		this.#send({ id, result })
+	}
 
-	await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
-	const address = server.address()
-	const port = isRecord(address) && typeof address['port'] === 'number' ? address['port'] : 0
-
-	return {
-		get port(): number {
-			return port
-		},
-		get url(): string {
-			return `http://localhost:${port}`
-		},
-		get wsUrl(): string {
-			return wsUrlFor()
-		},
-		get received(): readonly CDPServerReceived[] {
-			return received
-		},
-		get sockets(): number {
-			return sockets.size
-		},
-		list(next: readonly CDPTarget[]): void {
-			targets = next
-		},
-		autoReply(method: string, result: unknown | CDPServerReplyHandler): void {
-			autoReplies.set(method, result)
-		},
-		reply(id: number, result: unknown): void {
-			sendFrame({ id, result })
-		},
-		fail(id: number, message: string): void {
-			sendFrame({ id, error: { message } })
-		},
-		event(method: string, params?: Readonly<Record<string, unknown>>, sessionId?: string): void {
-			const frame: Record<string, unknown> = { method, params: params ?? {} }
-			if (sessionId !== undefined) frame['sessionId'] = sessionId
-			sendFrame(frame)
-		},
-		hang(enabled: boolean): void {
-			hangVersion = enabled
-		},
-		async close(): Promise<void> {
-			for (const ws of sockets) ws.destroy()
-			sockets.clear()
-			await new Promise<void>((resolve, reject) => {
-				server.close((error) => (error ? reject(error) : resolve()))
-			})
-		},
+	#send(data: Record<string, unknown>): void {
+		this.#active?.send(JSON.stringify(data))
 	}
 }
 
@@ -234,12 +450,17 @@ export async function destroyFakeBrowsers(): Promise<void> {
 		} catch {
 			// pid file never written — nothing to kill
 		}
-		if (pid === undefined) continue
+		if (pid === undefined) {
+			rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+			continue
+		}
 		try {
 			process.kill(pid, 'SIGKILL')
 		} catch {
 			// already dead (ESRCH) — nothing to do
 		}
+		await waitForProcessExit(pid).catch(() => undefined)
+		rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 	}
 }
 
@@ -255,7 +476,7 @@ export interface FakeBrowserProcessInterface {
 	 * Sever the active CDP WebSocket socket (via an HTTP control request to the
 	 * fake's own server) while leaving the process itself alive — simulates a
 	 * transport-loss without a process exit. Only meaningful when constructed
-	 * with `serveCdp: true`.
+	 * with `serveCDP: true`.
 	 */
 	dropSocket(): Promise<void>
 }
@@ -267,15 +488,15 @@ export interface FakeBrowserProcessInterface {
  * than executed directly, so it is spawnable identically on Windows/macOS/Linux
  * (a directly-spawned shebang script is not portable to Windows).
  *
- * @param options - `serveCdp` runs a minimal real HTTP+WebSocket CDP endpoint
- * (parses `--remote-debugging-port=` from its own argv); `ignoreSigterm`
+ * @param options - `serveCDP` runs a minimal real HTTP+WebSocket CDP endpoint
+ * (parses `--remote-debugging-port=` from its own argv); `ignoreSIGTERM`
  * traps SIGTERM so only SIGKILL can terminate it. With neither option the
  * process just idles (never serves CDP) — useful for launch-failure/abort
  * scenarios.
  * @returns A {@link FakeBrowserProcessInterface}
  */
 export function createFakeBrowserProcess(
-	options: { readonly serveCdp?: boolean; readonly ignoreSigterm?: boolean } = {},
+	options: { readonly serveCDP?: boolean; readonly ignoreSIGTERM?: boolean } = {},
 ): FakeBrowserProcessInterface {
 	const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-fake-'))
 	const scriptPath = join(dir, 'fake-browser.js')
@@ -290,7 +511,7 @@ export function createFakeBrowserProcess(
 		`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
 	]
 
-	if (options.ignoreSigterm === true) {
+	if (options.ignoreSIGTERM === true) {
 		lines.push("process.on('SIGTERM', () => {})")
 	}
 
@@ -309,7 +530,7 @@ export function createFakeBrowserProcess(
 		].join('\n'),
 	)
 
-	if (options.serveCdp === true) {
+	if (options.serveCDP === true) {
 		// The @orkestrel/websocket package is required by its real installed
 		// .cjs entry point (resolved via `createRequire` at script-GENERATION
 		// time in this process, then embedded as a JSON-escaped string literal
@@ -324,7 +545,7 @@ export function createFakeBrowserProcess(
 				`const { createNodeWebSocket } = require(${JSON.stringify(websocketEntry)})`,
 				"const portArg = process.argv.find((a) => a.startsWith('--remote-debugging-port='))",
 				"const port = Number(portArg.split('=')[1])",
-				'let activeWs = null',
+				'let activeWS',
 				'const server = http.createServer((req, res) => {',
 				"\tif (req.url.startsWith('/json/version')) {",
 				"\t\tres.writeHead(200, { 'content-type': 'application/json' })",
@@ -337,7 +558,7 @@ export function createFakeBrowserProcess(
 				'\t\treturn',
 				'\t}',
 				"\tif (req.url.startsWith('/__drop')) {",
-				'\t\tif (activeWs) activeWs.destroy()',
+				'\t\tif (activeWS) activeWS.destroy()',
 				'\t\tres.writeHead(204)',
 				'\t\tres.end()',
 				'\t\treturn',
@@ -348,18 +569,20 @@ export function createFakeBrowserProcess(
 				"server.on('upgrade', (req, socket, head) => {",
 				"\tconst key = req.headers['sec-websocket-key']",
 				'\tconst ws = createNodeWebSocket({ socket, key, head })',
-				'\tactiveWs = ws',
+				'\tactiveWS = ws',
 				"\tws.emitter.on('message', (text) => {",
 				'\t\ttry {',
 				'\t\t\tconst msg = JSON.parse(text)',
 				"\t\t\tif (msg.method === 'Browser.close') {",
 				'\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: {} }))',
 				'\t\t\t\tsetImmediate(() => process.exit(0))',
+				"\t\t\t} else if (msg.method === 'Target.getTargets') {",
+				'\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: { targetInfos: [] } }))',
 				'\t\t\t}',
 				'\t\t} catch {}',
 				'\t})',
 				"\tws.emitter.on('close', () => {",
-				'\t\tif (activeWs === ws) activeWs = null',
+				'\t\tif (activeWS === ws) activeWS = undefined',
 				'\t})',
 				'})',
 				"server.on('error', (e) => { console.error('fake-browser listen error: ' + e.message); process.exit(12) })",

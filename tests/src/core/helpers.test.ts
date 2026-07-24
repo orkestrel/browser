@@ -14,7 +14,7 @@ import {
 	BROWSER_RESULT_LIMIT_PATTERN,
 } from '@src/core'
 import type { BrowserCodegenAction } from '@src/core'
-import { PNG_BASE64, JPEG_BASE64 } from '../../setup.js'
+import { evaluateJavaScript, JPEG_BASE64, PNG_BASE64 } from '../../setup.js'
 
 describe('decodeBase64', () => {
 	it('decodes a small literal to its exact bytes', () => {
@@ -185,34 +185,29 @@ describe('guardEvaluateExpression', () => {
 
 	it('returns the original value when the serialized result is within the limit', () => {
 		const wrapped = guardEvaluateExpression('({ a: 1 })', 1000)
-		const run = new Function(`return ${wrapped}`) as () => unknown
-		expect(run()).toEqual({ a: 1 })
+		expect(evaluateJavaScript(wrapped)).toEqual({ a: 1 })
 	})
 
 	it('throws the sentinel error when the serialized result exceeds the limit', () => {
 		const wrapped = guardEvaluateExpression('"x".repeat(50)', 10)
-		const run = new Function(`return ${wrapped}`) as () => unknown
-		expect(() => run()).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
+		expect(() => evaluateJavaScript(wrapped)).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
 	})
 
 	it('does not throw for a non-serializable (undefined) result even over a tiny limit', () => {
 		const wrapped = guardEvaluateExpression('undefined', 0)
-		const run = new Function(`return ${wrapped}`) as () => unknown
-		expect(run()).toBeUndefined()
+		expect(evaluateJavaScript(wrapped)).toBeUndefined()
 	})
 
 	it('places the expression on its own line so a trailing line comment cannot swallow the closing guard syntax', () => {
 		const wrapped = guardEvaluateExpression('1 + 1 // a trailing comment', 1000)
 		// Must still parse: a single-line wrapper would have the `// comment`
 		// consume everything after it on that line, including the guard tail.
-		const run = new Function(`return ${wrapped}`) as () => unknown
-		expect(run()).toBe(2)
+		expect(evaluateJavaScript(wrapped)).toBe(2)
 	})
 
 	it('still enforces the limit when the expression ends with a line comment', () => {
 		const wrapped = guardEvaluateExpression('"x".repeat(50) // trailing comment', 10)
-		const run = new Function(`return ${wrapped}`) as () => unknown
-		expect(() => run()).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
+		expect(() => evaluateJavaScript(wrapped)).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
 	})
 
 	it('does not misclassify a page-thrown error whose message merely contains the sentinel-like substring', () => {

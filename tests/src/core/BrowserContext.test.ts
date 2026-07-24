@@ -1,40 +1,20 @@
 import { describe, it, expect } from 'vitest'
-import { BrowserContext, createCDPClient } from '@src/core'
-import type { CDPClientInterface } from '@src/core'
-import { createCDPTransport, createTarget, replyOk } from '../../setup.js'
-import type { CDPTestTransportInterface } from '../../setup.js'
-
-// === Helpers
-
-async function createConnectedClient(): Promise<{
-	client: CDPClientInterface
-	transport: CDPTestTransportInterface
-}> {
-	const transport = createCDPTransport()
-	const client = createCDPClient({ transport })
-	await client.connect()
-	return { client, transport }
-}
-
-function scriptAttach(transport: CDPTestTransportInterface, sessionId = 'session-1'): void {
-	replyOk(transport, 'Target.attachToTarget', { sessionId })
-	replyOk(transport, 'Page.enable')
-	replyOk(transport, 'Runtime.enable')
-}
+import { BrowserContext } from '@src/core'
+import { createConnectedCDPClient, createTarget, replyOk, scriptCDPAttach } from '../../setup.js'
 
 // === BrowserContext
 
 describe('BrowserContext', () => {
 	describe('page() / pages()', () => {
 		it('returns undefined before any page exists', async () => {
-			const { client } = await createConnectedClient()
+			const { client } = await createConnectedCDPClient()
 			const context = new BrowserContext(client)
 			expect(context.page()).toBeUndefined()
 		})
 
 		it('returns undefined for an out-of-range index', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 
 			const context = new BrowserContext(client)
@@ -45,7 +25,7 @@ describe('BrowserContext', () => {
 		})
 
 		it('returns a fresh copy from pages() each call', async () => {
-			const { client } = await createConnectedClient()
+			const { client } = await createConnectedCDPClient()
 			const context = new BrowserContext(client)
 			expect(context.pages()).not.toBe(context.pages())
 		})
@@ -53,8 +33,8 @@ describe('BrowserContext', () => {
 
 	describe('create()', () => {
 		it('creates, attaches, and enables domains for a new page', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 
 			const context = new BrowserContext(client)
@@ -67,8 +47,8 @@ describe('BrowserContext', () => {
 		})
 
 		it('includes browserContextId when this context has a real id', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 
 			const context = new BrowserContext(client, 'ctx-1')
@@ -79,8 +59,8 @@ describe('BrowserContext', () => {
 		})
 
 		it('applies the viewport override for the new page', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 			replyOk(transport, 'Emulation.setDeviceMetricsOverride')
 
@@ -92,8 +72,8 @@ describe('BrowserContext', () => {
 		})
 
 		it('prefers the page-level viewport over the context default', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 			replyOk(transport, 'Emulation.setDeviceMetricsOverride')
 
@@ -110,7 +90,7 @@ describe('BrowserContext', () => {
 		})
 
 		it('throws when target creation fails to return a targetId', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.createTarget', {})
 
 			const context = new BrowserContext(client)
@@ -118,19 +98,39 @@ describe('BrowserContext', () => {
 		})
 
 		it('throws when attaching to the new target fails', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 			replyOk(transport, 'Target.attachToTarget', {})
+			replyOk(transport, 'Target.closeTarget')
 
 			const context = new BrowserContext(client)
 			await expect(context.create()).rejects.toThrow('Failed to attach to browser target')
+			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(true)
+		})
+
+		it('detaches the session and closes the target when domain setup fails', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
+			replyOk(transport, 'Target.attachToTarget', { sessionId: 'session-1' })
+			transport.onSend('Page.enable', (message) => transport.fail(message.id, 'enable failed'))
+			replyOk(transport, 'Target.detachFromTarget')
+			replyOk(transport, 'Target.closeTarget')
+
+			const context = new BrowserContext(client)
+			await expect(context.create()).rejects.toThrow('enable failed')
+
+			expect(transport.sent.some((message) => message.method === 'Target.detachFromTarget')).toBe(
+				true,
+			)
+			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(true)
+			expect(context.pages()).toEqual([])
 		})
 	})
 
 	describe('sync()', () => {
 		it('seeds the reattached page url from the target immediately, before any navigate/content call', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 
 			const context = new BrowserContext(client)
 			await context.sync([createTarget({ id: 't1', url: 'https://example.com/reattached' })])
@@ -139,8 +139,8 @@ describe('BrowserContext', () => {
 		})
 
 		it('replaces pages with the given page-type targets', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 
 			const context = new BrowserContext(client)
 			await context.sync([
@@ -153,9 +153,9 @@ describe('BrowserContext', () => {
 		})
 
 		it('discards previously synced pages on the next sync', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
-			replyOk(transport, 'Target.closeTarget')
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Target.detachFromTarget')
 
 			const context = new BrowserContext(client)
 			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
@@ -165,7 +165,7 @@ describe('BrowserContext', () => {
 		})
 
 		it('skips a target it cannot attach to', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.attachToTarget', {})
 
 			const context = new BrowserContext(client)
@@ -174,10 +174,10 @@ describe('BrowserContext', () => {
 			expect(context.pages()).toHaveLength(0)
 		})
 
-		it('closes pages for targets no longer present and preserves kept pages', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
-			replyOk(transport, 'Target.closeTarget')
+		it('detaches pages for targets no longer present and preserves kept pages', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Target.detachFromTarget')
 
 			const context = new BrowserContext(client)
 			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
@@ -191,7 +191,7 @@ describe('BrowserContext', () => {
 
 			expect(context.pages()).toHaveLength(1)
 			expect(context.page(0)).toBe(kept)
-			expect(transport.sent.some((m) => m.method === 'Target.closeTarget')).toBe(true)
+			expect(transport.sent.some((m) => m.method === 'Target.detachFromTarget')).toBe(true)
 
 			// The kept target must not be re-attached
 			const attachCountAfter = transport.sent.filter(
@@ -201,8 +201,8 @@ describe('BrowserContext', () => {
 		})
 
 		it('applies the configured viewport to each synced page', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 			replyOk(transport, 'Emulation.setDeviceMetricsOverride')
 
 			const context = new BrowserContext(client, undefined, { width: 400, height: 300 })
@@ -213,9 +213,9 @@ describe('BrowserContext', () => {
 		})
 
 		it('sync([]) on a context holding pages closes all pages and empties pages()', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
-			replyOk(transport, 'Target.closeTarget')
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Target.detachFromTarget')
 
 			const context = new BrowserContext(client)
 			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
@@ -224,13 +224,13 @@ describe('BrowserContext', () => {
 			await context.sync([])
 
 			expect(context.pages()).toHaveLength(0)
-			expect(transport.sent.filter((m) => m.method === 'Target.closeTarget')).toHaveLength(2)
+			expect(transport.sent.filter((m) => m.method === 'Target.detachFromTarget')).toHaveLength(2)
 		})
 
 		it('reflects new insertion order after a removed target is re-added in a later sync', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
-			replyOk(transport, 'Target.closeTarget')
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Target.detachFromTarget')
 
 			const context = new BrowserContext(client)
 			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
@@ -250,7 +250,7 @@ describe('BrowserContext', () => {
 		})
 
 		it('skips a target whose Page.enable/Runtime.enable rejects mid-attach, leaving the map uncorrupted', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 
 			transport.onSend('Target.attachToTarget', (message) => {
 				const targetId = message.params?.['targetId']
@@ -265,6 +265,7 @@ describe('BrowserContext', () => {
 				}
 			})
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Target.detachFromTarget')
 
 			const context = new BrowserContext(client)
 			await context.sync([createTarget({ id: 't1' }), createTarget({ id: 't2' })])
@@ -276,8 +277,8 @@ describe('BrowserContext', () => {
 
 	describe('close()', () => {
 		it('closes all pages and clears the list', async () => {
-			const { client, transport } = await createConnectedClient()
-			scriptAttach(transport)
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 			replyOk(transport, 'Target.closeTarget')
 
@@ -289,7 +290,7 @@ describe('BrowserContext', () => {
 		})
 
 		it('disposes the real CDP browser context when it has an id', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.disposeBrowserContext')
 
 			const context = new BrowserContext(client, 'ctx-1')
@@ -299,9 +300,39 @@ describe('BrowserContext', () => {
 		})
 
 		it('resolves without error when the id is undefined', async () => {
-			const { client } = await createConnectedClient()
+			const { client } = await createConnectedCDPClient()
 			const context = new BrowserContext(client)
 			await expect(context.close()).resolves.toBeUndefined()
+		})
+	})
+
+	describe('destroy()', () => {
+		it('detaches pages without closing targets or disposing the remote context', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
+			replyOk(transport, 'Target.detachFromTarget')
+			const context = new BrowserContext(client, 'ctx-1')
+			await context.create()
+
+			await context.destroy()
+
+			expect(context.pages()).toEqual([])
+			expect(transport.sent.some((message) => message.method === 'Target.detachFromTarget')).toBe(
+				true,
+			)
+			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(false)
+			expect(
+				transport.sent.some((message) => message.method === 'Target.disposeBrowserContext'),
+			).toBe(false)
+		})
+
+		it('rejects page creation after teardown', async () => {
+			const { client } = await createConnectedCDPClient()
+			const context = new BrowserContext(client)
+			await context.destroy()
+
+			await expect(context.create()).rejects.toThrow('Browser context is closed')
 		})
 	})
 })

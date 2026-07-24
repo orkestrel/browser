@@ -1,9 +1,12 @@
 import type {
+	CDPClientInterface,
 	CDPTarget,
 	CDPTransportEventMap,
 	CDPTransportInterface,
 	ScreenshotWriterInterface,
 } from '@src/core'
+import { BrowserCodegen, createCDPClient } from '@src/core'
+import { isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 // === Test recorder (AGENTS §16.1)
@@ -46,6 +49,43 @@ export function waitForDelay(ms = 0): Promise<void> {
 	return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
+/**
+ * Wait until `condition` becomes true, rejecting when `timeout` elapses.
+ *
+ * @param condition - The observable condition to check
+ * @param timeout - Maximum wait in milliseconds
+ * @param interval - Delay between checks in milliseconds
+ * @returns A promise resolving once the condition is true
+ */
+export async function waitForCondition(
+	condition: () => boolean,
+	timeout = 1000,
+	interval = 10,
+): Promise<void> {
+	const deadline = Date.now() + timeout
+	while (!condition()) {
+		if (Date.now() >= deadline) {
+			throw new Error(`Condition was not met within ${timeout}ms`)
+		}
+		await waitForDelay(interval)
+	}
+}
+
+/** Return a required fixture value while narrowing away `undefined`. */
+export function requireValue<T>(
+	value: T | undefined,
+	message = 'Required test value is missing',
+): T {
+	if (value === undefined) throw new Error(message)
+	return value
+}
+
+/** Evaluate a JavaScript expression fixture and expose its result as unknown. */
+export function evaluateJavaScript(expression: string): unknown {
+	const evaluator = new Function(`return (${expression})`)
+	return Reflect.apply(evaluator, undefined, [])
+}
+
 // === Fake CDP transport
 
 /** One JSON-RPC frame recorded by the fake transport's `send()`. */
@@ -64,7 +104,7 @@ export type CDPSentHandler = (message: CDPSentMessage) => void
  *
  * @remarks
  * `send()` records every frame in `sent` and invokes any handler registered
- * via `onSend` for that method (or `'*'` for all methods). Tests drive
+ * via `onSend` for that method. Tests drive
  * server-initiated behavior with `reply` / `fail` (correlate a response by
  * id) and `event` (push a CDP event frame), or use the `onSend` hook to
  * script a response the moment a matching request arrives.
@@ -81,8 +121,10 @@ export interface CDPTestTransportInterface extends CDPTransportInterface {
 	errorRemote(error: unknown): void
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-	return typeof value === 'object' && value !== null && !Array.isArray(value)
+/** A connected client and the transport used to drive it. */
+export interface ConnectedCDPFixture {
+	readonly client: CDPClientInterface
+	readonly transport: CDPTestTransportInterface
 }
 
 /**
@@ -97,15 +139,6 @@ export function createCDPTransport(): CDPTestTransportInterface {
 	const handlers = new Map<string, CDPSentHandler[]>()
 	let started = false
 	let closed = false
-
-	function registerHandler(method: string, handler: CDPSentHandler): void {
-		let list = handlers.get(method)
-		if (list === undefined) {
-			list = []
-			handlers.set(method, list)
-		}
-		list.push(handler)
-	}
 
 	return {
 		emitter,
@@ -126,8 +159,9 @@ export function createCDPTransport(): CDPTestTransportInterface {
 			const parsed: unknown = JSON.parse(data)
 			if (!isRecord(parsed)) return
 
-			const id = typeof parsed['id'] === 'number' ? parsed['id'] : -1
-			const method = typeof parsed['method'] === 'string' ? parsed['method'] : ''
+			if (typeof parsed['id'] !== 'number' || typeof parsed['method'] !== 'string') return
+			const id = parsed['id']
+			const method = parsed['method']
 			const params = isRecord(parsed['params']) ? parsed['params'] : undefined
 			const sessionId = typeof parsed['sessionId'] === 'string' ? parsed['sessionId'] : undefined
 			const message: CDPSentMessage = { id, method, params, sessionId }
@@ -135,14 +169,18 @@ export function createCDPTransport(): CDPTestTransportInterface {
 			sent.push(message)
 
 			for (const handler of handlers.get(method) ?? []) handler(message)
-			for (const handler of handlers.get('*') ?? []) handler(message)
 		},
 		async close(): Promise<void> {
 			closed = true
 			started = false
 		},
 		onSend(method: string, handler: CDPSentHandler): void {
-			registerHandler(method, handler)
+			let list = handlers.get(method)
+			if (list === undefined) {
+				list = []
+				handlers.set(method, list)
+			}
+			list.push(handler)
 		},
 		reply(id: number, result: unknown): void {
 			emitter.emit('message', JSON.stringify({ id, result }))
@@ -165,6 +203,18 @@ export function createCDPTransport(): CDPTestTransportInterface {
 }
 
 /**
+ * Create and connect a real CDP client over the in-memory test transport.
+ *
+ * @returns The connected client and its scriptable transport
+ */
+export async function createConnectedCDPClient(): Promise<ConnectedCDPFixture> {
+	const transport = createCDPTransport()
+	const client = createCDPClient({ transport })
+	await client.connect()
+	return { client, transport }
+}
+
+/**
  * Script an automatic success reply for the next (and every subsequent)
  * `send()` matching `method`, replying with `result`.
  *
@@ -178,6 +228,88 @@ export function replyOk(
 	result: unknown = {},
 ): void {
 	transport.onSend(method, (message) => transport.reply(message.id, result))
+}
+
+/** Script the target attach and required domain-enable handshake. */
+export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 'session-1'): void {
+	replyOk(transport, 'Target.attachToTarget', { sessionId: session })
+	replyOk(transport, 'Page.enable')
+	replyOk(transport, 'Runtime.enable')
+}
+
+/** Read a sent Runtime expression without a type assertion. */
+export function readCDPExpression(message: CDPSentMessage | undefined): string | undefined {
+	const expression = message?.params?.['expression']
+	return typeof expression === 'string' ? expression : undefined
+}
+
+/** Script a selector lookup that resolves as present. */
+export function scriptSelectorPresent(
+	transport: CDPTestTransportInterface,
+	selector: string,
+): void {
+	scriptEvaluate(
+		transport,
+		(expression) =>
+			expression.includes('querySelector') &&
+			expression.includes('!== null') &&
+			expression.includes(JSON.stringify(selector)),
+		true,
+	)
+}
+
+/** Script the nested frame tree shared by page frame tests. */
+export function scriptFrameTree(transport: CDPTestTransportInterface): void {
+	replyOk(transport, 'Page.getFrameTree', {
+		frameTree: {
+			frame: { id: 'main-1', url: 'https://example.com/' },
+			childFrames: [
+				{
+					frame: {
+						id: 'child-1',
+						parentId: 'main-1',
+						name: 'child-frame',
+						url: 'https://example.com/child',
+					},
+					childFrames: [
+						{
+							frame: {
+								id: 'grandchild-1',
+								parentId: 'child-1',
+								name: '',
+								url: 'https://example.com/grandchild',
+							},
+						},
+					],
+				},
+			],
+		},
+	})
+}
+
+/** A fully started codegen fixture. */
+export interface StartedCodegenFixture extends ConnectedCDPFixture {
+	readonly codegen: BrowserCodegen
+}
+
+/** Create a connected client with a started codegen recorder. */
+export async function createStartedCodegen(session = 'session-1'): Promise<StartedCodegenFixture> {
+	const { client, transport } = await createConnectedCDPClient()
+	replyOk(transport, 'Runtime.enable')
+	replyOk(transport, 'Runtime.addBinding')
+	replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
+	replyOk(transport, 'Runtime.evaluate')
+
+	const codegen = new BrowserCodegen(client, session)
+	await codegen.start()
+	return { client, transport, codegen }
+}
+
+/** Create the CDP payload delivered by the codegen binding. */
+export function createCodegenBindingPayload(
+	payload: Readonly<Record<string, unknown>>,
+): Readonly<Record<string, unknown>> {
+	return { name: '__orkestrelBrowserCodegen', payload: JSON.stringify(payload) }
 }
 
 /**

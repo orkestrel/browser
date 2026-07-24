@@ -1,4 +1,4 @@
-import type { BrowserDiscoveryResult, BrowserEngine } from './types.js'
+import type { BrowserEngine } from './types.js'
 
 // === CDP discovery
 
@@ -16,14 +16,6 @@ export const BROWSER_CDP_VERSION_PATH = '/json/version'
 
 /** Path appended to the CDP host to list open targets (pages, workers, etc). */
 export const BROWSER_CDP_LIST_PATH = '/json/list'
-
-/** Sentinel result returned by discovery when no browser is reachable. */
-export const BROWSER_NOT_FOUND_RESULT: BrowserDiscoveryResult = Object.freeze({
-	found: false,
-	endpoint: undefined,
-	browser: undefined,
-	connection: undefined,
-})
 
 // === Browser launch
 
@@ -44,6 +36,12 @@ export const BROWSER_PORT_PROBE_TIMEOUT_MS = 200
 
 /** Brief defer applied once when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event (which libuv may reap slightly later than the socket close) first say over the diagnosis. */
 export const BROWSER_TRANSPORT_LOSS_DEFER_MS = 50
+
+/** Machine-readable error-context cause for an owned browser process exiting. */
+export const BROWSER_PROCESS_EXIT_CAUSE = 'process-exit'
+
+/** Machine-readable error-context cause for a CDP transport disconnecting while its browser remains alive. */
+export const BROWSER_TRANSPORT_LOSS_CAUSE = 'transport-loss'
 
 /** Environment variables checked (in order) for an explicit browser executable path override. */
 export const BROWSER_ENV_PATH_KEYS: readonly string[] = Object.freeze([

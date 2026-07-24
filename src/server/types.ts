@@ -1,9 +1,10 @@
-import type { EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type {
 	BrowserContextInterface,
 	BrowserPageInterface,
 	BrowserPageOptions,
 	BrowserViewport,
+	CDPTransportEventMap,
 } from '@src/core'
 
 // === Browser shared
@@ -92,7 +93,7 @@ export type SystemBrowser = {
  *   listening there, so a demanded fresh launch never silently attaches to a
  *   stranger browser
  */
-export interface BrowserCdpOptions {
+export interface BrowserCDPOptions {
 	readonly port?: number
 	readonly host?: string
 	readonly endpoint?: string
@@ -130,6 +131,7 @@ export type BrowserEventMap = {
  *
  * @remarks
  * - `on` — initial event listeners wired at construction
+ * - `error` — observer error handler forwarded to the emitter
  * - `headless` — launch in headless mode (default `true`; ignored for CDP connections)
  * - `executable` — absolute path to a browser executable; when provided, skips
  *   system browser discovery and launches this binary directly
@@ -148,10 +150,11 @@ export type BrowserEventMap = {
  */
 export interface BrowserOptions {
 	readonly on?: EmitterHooks<BrowserEventMap>
+	readonly error?: EmitterErrorHandler
 	readonly headless?: boolean
 	readonly executable?: string
 	readonly profile?: string
-	readonly cdp?: BrowserCdpOptions
+	readonly cdp?: BrowserCDPOptions
 	readonly timeout?: number
 	readonly viewport?: BrowserViewport
 	readonly signal?: AbortSignal
@@ -178,22 +181,19 @@ export interface BrowserOptions {
  * **Lifecycle:**
  * - `discover` — passive CDP probe, no side effects
  * - `connect` — establish connection using the strategy above
- * - `disconnect` — detach from the browser. For `'cdp'` and `'persistent'`
- *   connections this closes the client WITHOUT killing the browser process —
- *   a `'persistent'` (profile-backed) launch releases ownership of its process
- *   (no kill, no exit listener) so the browser stays alive for later
- *   reattachment via CDP discovery on the same port. Rejects with the coded
- *   `BrowserConnectionError` for `'launch'` (ephemeral, no profile) sessions —
- *   use `destroy()` instead. An external disconnect (transport loss while the
- *   owned process is still alive, or the owned process exiting on its own)
- *   drives this same released/disconnected state automatically, preceded by
+ * - `adopt` — explicitly assume responsibility for terminating the connected
+ *   browser, including a browser this instance attached to over CDP
+ * - `disconnect` — detach from the browser. For attached CDP connections this
+ *   closes only the client. For owned launches and adopted connections, it
+ *   retains ownership and the endpoint so the same instance can reconnect
+ *   and remains responsible for eventual termination. An external disconnect
+ *   (transport loss while the owned process is still alive, or the owned
+ *   process exiting on its own) drives the disconnected state, preceded by
  *   a coded `error` — `connect()` on the same instance can reattach afterward.
- * - `destroy` — release local resources. On an owned (`'launch'`/`'persistent'`)
- *   browser this closes pages/contexts, then kills the process (SIGTERM,
- *   escalating to SIGKILL). On a `'cdp'`-attached browser this is a LOCAL
- *   DETACH ONLY — the client is closed and local context/page objects are
- *   dropped WITHOUT sending any remote close to the browser, since other
- *   clients may share those targets. Idempotent.
+ * - `destroy` — release local resources. On a launched browser this closes
+ *   pages/contexts, then kills and awaits the process. On an adopted browser
+ *   it sends `Browser.close`. On a merely attached browser this is a LOCAL
+ *   DETACH ONLY because other clients may share its targets. Idempotent.
  * - `close` — graceful REMOTE shutdown: best-effort sends CDP `Browser.close`
  *   (works whether attached or owned), and when owned also awaits the
  *   process's exit (escalating to a kill only if it doesn't exit in time),
@@ -210,18 +210,28 @@ export interface BrowserInterface {
 	readonly engine: BrowserEngine
 	readonly status: BrowserStatus
 	readonly connection: BrowserConnection | undefined
+	/**
+	 * Whether this instance is responsible for terminating the represented browser.
+	 *
+	 * @remarks
+	 * `true` for launched and explicitly adopted sessions, `false` for an
+	 * active attachment, and `undefined` when no session is represented.
+	 */
+	readonly owned: boolean | undefined
 	readonly connected: boolean
 	/**
 	 * The process this instance launched, if any, while it is believed alive.
 	 *
 	 * @remarks
-	 * Remains readable after a persistent disconnect-release (the process
-	 * keeps running, detached from this instance) until `destroy()` or an
+	 * Remains readable after a persistent disconnect (the process keeps
+	 * running, detached from the transport) until `destroy()` or an
 	 * observed process exit clears it.
 	 */
 	readonly pid: number | undefined
 	discover(): Promise<BrowserDiscoveryResult>
 	connect(): Promise<void>
+	/** Assume responsibility for terminating the currently connected browser. */
+	adopt(): void
 	disconnect(): Promise<void>
 	context(index?: number): BrowserContextInterface | undefined
 	contexts(): readonly BrowserContextInterface[]
@@ -236,10 +246,14 @@ export interface BrowserInterface {
  * Options for creating a WebSocketCDPTransport.
  *
  * @remarks
+ * - `on` — initial event listeners wired at construction
+ * - `error` — observer error handler forwarded to the emitter
  * - `url` — the CDP WebSocket debugger URL to connect to
  * - `timeout` — ms before the connection attempt fails (default from constants)
  */
 export interface WebSocketCDPTransportOptions {
+	readonly on?: EmitterHooks<CDPTransportEventMap>
+	readonly error?: EmitterErrorHandler
 	readonly url: string
 	readonly timeout?: number
 }

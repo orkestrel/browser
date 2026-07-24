@@ -11,7 +11,7 @@ import { mkdtemp, readFile, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createBrowser, createCDPTransport, createScreenshotWriter } from '@src/server'
-import { createCdpTestServer } from '../../setupServer.js'
+import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
@@ -62,8 +62,8 @@ describe('createCDPTransport', () => {
 	})
 
 	it('connects to a real in-process CDP WebSocket endpoint', async () => {
-		server = await createCdpTestServer()
-		const transport = createCDPTransport({ url: server.wsUrl })
+		server = await createCDPTestServer()
+		const transport = createCDPTransport({ url: server.endpoint })
 		await transport.start()
 		await expect(transport.send('{}')).resolves.toBeUndefined()
 		await transport.close()

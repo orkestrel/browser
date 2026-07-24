@@ -8,7 +8,7 @@
 
 ```ts
 import { createServer } from 'node:http'
-import { createNodeWebSocket } from '@src/server'
+import { createNodeWebSocket } from '@orkestrel/websocket'
 
 // A node:http server hands every upgrade request a raw socket; this wrapper takes it
 // from there. Passing the client's `sec-websocket-key` selects SERVER mode — the
@@ -102,7 +102,7 @@ The public methods of the behavioral interface — its `readonly` data members (
 | `send`    | `void`  | Frame `data` as a UTF-8 text frame and write it (masked in client mode, unmasked in server mode). No-op unless `readyState` is open.                                                                                                                                                           |
 | `ping`    | `void`  | Write a ping frame with an optional payload; the peer is expected to answer with a pong (surfaced as `pong`). No-op unless open.                                                                                                                                                               |
 | `close`   | `void`  | Start the closing handshake: move to `closing`, write a close frame (the 2-byte big-endian `code` — default `WEBSOCKET_CLOSE_NORMAL` — plus optional `reason`), and end the writable side. The final `close` event fires once the peer echoes or the socket ends. A second `close` is a no-op. |
-| `destroy` | `void`  | Abort immediately: detach the socket listeners, destroy the socket, emit a final `close`, and tear the emitter down. Idempotent — a hard stop, not a handshake.                                                                                                                                |
+| `destroy` | `void`  | Abort immediately: detach the wrapper's domain socket listeners, destroy the socket, emit a final `close`, and tear the emitter down. Idempotent — a hard stop, not a handshake.                                                                                                               |
 
 ## Contract
 
@@ -113,8 +113,8 @@ These invariants hold across `src/server` ↔ `websocket.md`:
 3. **The codec is pure and exhaustively pinned.** `computeWebSocketAccept` / `parseWebSocketFrame` / `encodeWebSocketFrame` are pure functions tested against RFC 6455's own worked byte vectors. `parseWebSocketFrame` returns `undefined` on an **incomplete** buffer (the caller accumulates across `data` chunks); `encode` and `parse` are exact inverses.
 4. **Server vs. client is the single `key` decision.** A `key` (the client's `Sec-WebSocket-Key`) selects SERVER mode: the wrapper writes the `101 Switching Protocols` handshake with `Sec-WebSocket-Accept: computeWebSocketAccept(key)` and sends **unmasked** frames. No `key` is CLIENT mode: no handshake is written and every outgoing frame is **masked** — RFC 6455 §5.3 mandates client→server masking, and the wrapper enforces it from this one flag, so you never set the mask bit by hand.
 5. **One accumulation buffer, drained frame by frame.** Incoming `data` chunks append to a buffer that is decoded with `parseWebSocketFrame` in a loop, slicing each frame's `consumed` bytes off the front and re-parsing until a partial frame remains. Dispatch by opcode: a data frame (text, binary, or a `0x00` continuation) buffers its fragments and emits one `message` (decoded UTF-8) at `fin`; a ping emits `ping` and is **auto-answered with a pong**; a pong emits `pong`; a close is echoed back (RFC 6455 §5.5.1), ends the socket, and emits the final `close`. A WebSocket message is therefore never assumed to be one `data` chunk — the buffer absorbs the split.
-6. **Observable, and a faulty listener can never sink the socket (§13).** The wrapper exposes a typed `emitter`; listener isolation is the emitter's job. Two error channels stay distinct: the map's `error` event is a **domain** fault — the underlying socket itself errored — whereas a listener that _throws_ is caught by the emitter and routed to its own `error` handler (the `error` constructor option, an `EmitterErrorHandler`), never re-entered as a domain event. A buggy observer is contained; the connection stays alive.
-7. **A malformed or over-limit peer fails the connection, never the process.** `measureWebSocketFrame` rejects a frame whose declared length exceeds `payload` (default `WEBSOCKET_MAX_PAYLOAD`) before its bytes are even buffered — this pre-buffer cap check applies uniformly on BOTH ingest paths, the ordinary `data` stream and any `head` bytes replayed at construction — and the same cap applies to a reassembled fragmented message's total size — either breach closes `WEBSOCKET_CLOSE_TOOBIG`. A text payload that fails `parseUTF8` closes `WEBSOCKET_CLOSE_INVALID`; a received close code that fails `isCloseCode` (the receivable set is `1000`–`1003`, `1007`–`1014`, `3000`–`4999` — extended past the strict RFC set to include the IANA-registered `1012`–`1014` interop codes) closes `WEBSOCKET_CLOSE_PROTOCOL`; a control frame (`WEBSOCKET_OPCODE_CLOSE` / `_PING` / `_PONG`) longer than `WEBSOCKET_CONTROL_MAXLEN` or fragmented (`fin: false`) closes `WEBSOCKET_CLOSE_PROTOCOL`; a nonzero `rsv` (an unnegotiated extension) closes `WEBSOCKET_CLOSE_PROTOCOL`; an unmasked client→server frame (`masked: false` expected `true`, or vice versa) closes `WEBSOCKET_CLOSE_PROTOCOL`. `close()` writes the close frame and starts a `WEBSOCKET_CLOSE_TIMEOUT_MS` (default, configurable via `timeout`) timer — the socket is torn down unconditionally if the peer never echoes, so a silent peer can never leak the handle open. A validation breach never risks the close frame itself: `#fail` detaches the socket listeners (the connection is protocol-dead), writes the close frame, then flushes it through `socket.end(callback)` — never a synchronous `destroy()`, which could discard a buffered close frame and leave the peer observing `1006` instead of the intended code — destroying only once the write buffer flushes, with an unref'd `WEBSOCKET_FAIL_TIMEOUT_MS` timer as the malicious-peer fallback.
+6. **Observable, and a faulty listener can never sink the socket (§13).** The wrapper exposes a typed `emitter`; listener isolation is the emitter's job. Two error channels stay distinct: the map's `error` event is a **domain** fault — the underlying socket itself errored — whereas a listener that _throws_ is caught by the emitter and routed to its own `error` handler (the `error` constructor option, an `EmitterErrorHandler`), never re-entered as a domain event. A buggy observer is contained; the connection stays alive. Every terminal path detaches only the wrapper's domain `data` / `close` / `error` listeners and leaves one durable no-op socket `error` sink, so a late peer RST cannot become an uncaught Node exception; caller-owned listeners remain untouched.
+7. **A malformed or over-limit peer fails the connection, never the process.** `measureWebSocketFrame` rejects a frame whose declared length exceeds `payload` (default `WEBSOCKET_MAX_PAYLOAD`) before its bytes are even buffered — this pre-buffer cap check applies uniformly on BOTH ingest paths, the ordinary `data` stream and any `head` bytes replayed at construction — and the same cap applies to a reassembled fragmented message's total size — either breach closes `WEBSOCKET_CLOSE_TOOBIG`. A text payload that fails `parseUTF8` closes `WEBSOCKET_CLOSE_INVALID`; a received close code that fails `isCloseCode` (the receivable set is `1000`–`1003`, `1007`–`1014`, `3000`–`4999` — extended past the strict RFC set to include the IANA-registered `1012`–`1014` interop codes) closes `WEBSOCKET_CLOSE_PROTOCOL`; a control frame (`WEBSOCKET_OPCODE_CLOSE` / `_PING` / `_PONG`) longer than `WEBSOCKET_CONTROL_MAXLEN` or fragmented (`fin: false`) closes `WEBSOCKET_CLOSE_PROTOCOL`; a nonzero `rsv` (an unnegotiated extension) closes `WEBSOCKET_CLOSE_PROTOCOL`; an unmasked client→server frame (`masked: false` expected `true`, or vice versa) closes `WEBSOCKET_CLOSE_PROTOCOL`. `close()` writes the close frame and starts a `WEBSOCKET_CLOSE_TIMEOUT_MS` (default, configurable via `timeout`) timer — the socket is torn down unconditionally if the peer never echoes, so a silent peer can never leak the handle open. A validation breach never risks the close frame itself: `#fail` detaches the wrapper's domain socket listeners and arms its terminal error sink (the connection is protocol-dead), writes the close frame, then flushes it through `socket.end(callback)` — never a synchronous `destroy()`, which could discard a buffered close frame and leave the peer observing `1006` instead of the intended code — destroying only once the write buffer flushes, with an unref'd `WEBSOCKET_FAIL_TIMEOUT_MS` timer as the malicious-peer fallback.
 8. **An `AbortSignal` is an external cancellation seam.** `signal` (composing with `@orkestrel/abort` / `@orkestrel/timeout`'s native `AbortSignal`s) tears the socket down via `destroy()` on abort — immediately after construction if already aborted, otherwise on the signal's `abort` event. The listener is removed on every terminal path (`#finish` and `destroy`) so a long-lived, shared signal never accumulates listeners from closed sockets.
 
 ## Patterns
@@ -124,7 +124,7 @@ These invariants hold across `src/server` ↔ `websocket.md`:
 The handle is fully driven through its `emitter` — attach as many observers as you like; a throw in one is isolated and never reaches the socket.
 
 ```ts
-import { createNodeWebSocket } from '@src/server'
+import { createNodeWebSocket } from '@orkestrel/websocket'
 
 server.on('upgrade', (request, socket, head) => {
 	const ws = createNodeWebSocket({
@@ -140,7 +140,7 @@ server.on('upgrade', (request, socket, head) => {
 ### Stream-decode frames across chunk boundaries
 
 ```ts
-import { parseWebSocketFrame } from '@src/server'
+import { parseWebSocketFrame } from '@orkestrel/websocket'
 
 let buffer = Buffer.alloc(0)
 socket.on('data', (chunk: Buffer) => {
@@ -157,7 +157,7 @@ socket.on('data', (chunk: Buffer) => {
 ### Encode a frame to the wire (server unmasked, client masked)
 
 ```ts
-import { encodeWebSocketFrame, WEBSOCKET_OPCODE_TEXT } from '@src/server'
+import { encodeWebSocketFrame, WEBSOCKET_OPCODE_TEXT } from '@orkestrel/websocket'
 
 socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'hello')) // server→client (unmasked)
 socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'hello', { masked: true })) // client→server
@@ -166,7 +166,7 @@ socket.write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'hello', { masked: true
 ### Compute the handshake accept token
 
 ```ts
-import { computeWebSocketAccept } from '@src/server'
+import { computeWebSocketAccept } from '@orkestrel/websocket'
 
 computeWebSocketAccept('dGhlIHNhbXBsZSBub25jZQ==') // 's3pPLMBiTxaQ9kYGzzhZRbK+xOo=' (RFC 6455 §1.3)
 ```
@@ -174,7 +174,7 @@ computeWebSocketAccept('dGhlIHNhbXBsZSBub25jZQ==') // 's3pPLMBiTxaQ9kYGzzhZRbK+x
 ### Keep a connection alive, and tear it down on demand
 
 ```ts
-import { createNodeWebSocket } from '@src/server'
+import { createNodeWebSocket } from '@orkestrel/websocket'
 
 const ws = createNodeWebSocket({ socket })
 ws.emitter.on('pong', () => console.log('peer is alive'))

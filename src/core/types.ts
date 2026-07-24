@@ -1,4 +1,4 @@
-import type { EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 
 // === CDP transport
 
@@ -224,9 +224,11 @@ export type BrowserCodegenEventMap = {
  *
  * @remarks
  * - `on` — initial event listeners wired at construction
+ * - `error` — observer error handler forwarded to the emitter
  */
 export interface BrowserCodegenOptions {
 	readonly on?: EmitterHooks<BrowserCodegenEventMap>
+	readonly error?: EmitterErrorHandler
 }
 
 /** Target language for a compiled codegen script. */
@@ -305,7 +307,8 @@ export type BrowserFrame = {
  * - `frame` — look up a frame by name or URL in the page's flattened frame tree
  * - `frames` — list the page's flattened frame tree, main frame first
  * - `codegen` — start (or return the existing) action recorder for this page
- * - `close` — close the page
+ * - `destroy` — release local resources and detach from the target
+ * - `close` — close the remote target and release local resources
  */
 export interface BrowserPageInterface {
 	readonly url: string
@@ -322,6 +325,7 @@ export interface BrowserPageInterface {
 	frame(name: string): Promise<BrowserFrame | undefined>
 	frames(): Promise<readonly BrowserFrame[]>
 	codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface>
+	destroy(): Promise<void>
 	close(): Promise<void>
 }
 
@@ -338,7 +342,8 @@ export interface BrowserPageInterface {
  * - `create` — open a new page in this context
  * - `sync` — synchronize pages from the given CDP targets (server discovers
  *   the targets; core never fetches them itself)
- * - `close` — close the context and all its pages
+ * - `destroy` — release local pages and detach their sessions
+ * - `close` — close remote pages and dispose the remote context
  */
 export interface BrowserContextInterface {
 	readonly id: string | undefined
@@ -346,5 +351,6 @@ export interface BrowserContextInterface {
 	pages(): readonly BrowserPageInterface[]
 	create(options?: BrowserPageOptions): Promise<BrowserPageInterface>
 	sync(targets: readonly CDPTarget[]): Promise<void>
+	destroy(): Promise<void>
 	close(): Promise<void>
 }

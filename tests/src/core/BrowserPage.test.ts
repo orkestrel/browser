@@ -11,46 +11,27 @@ import {
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
 } from '@src/core'
-import type { CDPClientInterface } from '@src/core'
 import {
 	createCDPTransport,
+	createConnectedCDPClient,
 	createScreenshotWriter,
+	readCDPExpression,
+	requireValue,
 	replyOk,
 	scriptEvaluate,
+	scriptFrameTree,
+	scriptSelectorPresent,
+	waitForCondition,
 	JPEG_BASE64,
 	PNG_BASE64,
 } from '../../setup.js'
-import type { CDPTestTransportInterface } from '../../setup.js'
-
-// === Helpers
-
-async function createConnectedClient(): Promise<{
-	client: CDPClientInterface
-	transport: CDPTestTransportInterface
-}> {
-	const transport = createCDPTransport()
-	const client = createCDPClient({ transport })
-	await client.connect()
-	return { client, transport }
-}
-
-function scriptSelectorPresent(transport: CDPTestTransportInterface, selector: string): void {
-	scriptEvaluate(
-		transport,
-		(expression) =>
-			expression.includes('querySelector') &&
-			expression.includes('!== null') &&
-			expression.includes(JSON.stringify(selector)),
-		true,
-	)
-}
 
 // === BrowserPage
 
 describe('BrowserPage', () => {
 	describe('url seeding', () => {
 		it('reports a seeded url immediately, before any navigate()/content() call', async () => {
-			const { client } = await createConnectedClient()
+			const { client } = await createConnectedCDPClient()
 
 			const page = new BrowserPage(
 				client,
@@ -64,7 +45,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('defaults to about:blank when no url is seeded', async () => {
-			const { client } = await createConnectedClient()
+			const { client } = await createConnectedCDPClient()
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 
@@ -74,25 +55,25 @@ describe('BrowserPage', () => {
 
 	describe('title()', () => {
 		it('returns the document title', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test Title')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			expect(await page.title()).toBe('Test Title')
 		})
 
-		it('returns empty string when the value is not a string', async () => {
-			const { client, transport } = await createConnectedClient()
+		it('rejects a malformed non-string title result', async () => {
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression === 'document.title', undefined)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			expect(await page.title()).toBe('')
+			await expect(page.title()).rejects.toSatisfy(isBrowserError)
 		})
 	})
 
 	describe('navigate()', () => {
 		it('updates the page url on success', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			transport.onSend('Page.navigate', (message) => {
 				transport.reply(message.id, {})
 				transport.event('Page.loadEventFired', {}, message.sessionId)
@@ -109,8 +90,22 @@ describe('BrowserPage', () => {
 			expect(page.url).toBe('https://example.com/')
 		})
 
+		it('rejects a malformed post-navigation url instead of substituting the requested url', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			transport.onSend('Page.navigate', (message) => {
+				transport.reply(message.id, {})
+				transport.event('Page.loadEventFired', {}, message.sessionId)
+			})
+			scriptEvaluate(transport, (expression) => expression === 'location.href', undefined)
+
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await expect(page.navigate('https://example.com')).rejects.toSatisfy(isBrowserError)
+			expect(page.url).toBe('about:blank')
+		})
+
 		it('throws a BrowserError when navigation returns errorText', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
 			replyOk(transport, 'Page.stopLoading', {})
 
@@ -121,7 +116,7 @@ describe('BrowserPage', () => {
 		it('rejects with a timeout error when the load event never fires', async () => {
 			vi.useFakeTimers()
 			try {
-				const { client, transport } = await createConnectedClient()
+				const { client, transport } = await createConnectedCDPClient()
 				replyOk(transport, 'Page.navigate', {})
 				replyOk(transport, 'Page.stopLoading', {})
 
@@ -137,7 +132,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('subscribes to Page.domContentEventFired and resolves for the domcontentloaded condition', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			transport.onSend('Page.navigate', (message) => {
 				transport.reply(message.id, {})
 				transport.event('Page.domContentEventFired', {}, message.sessionId)
@@ -155,7 +150,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('resolves navigate() when loadEventFired arrives BEFORE the Page.navigate reply', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			transport.onSend('Page.navigate', (message) => {
 				// Fire the load event first, then reply to the navigate request —
 				// exercises the pre-subscription guarantee (subscribe before send).
@@ -200,7 +195,7 @@ describe('BrowserPage', () => {
 		it('sends a best-effort Page.stopLoading after a load-wait timeout, and a subsequent evaluate() still works', async () => {
 			vi.useFakeTimers()
 			try {
-				const { client, transport } = await createConnectedClient()
+				const { client, transport } = await createConnectedCDPClient()
 				replyOk(transport, 'Page.navigate', {})
 				replyOk(transport, 'Page.stopLoading', {})
 
@@ -221,7 +216,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('sends a best-effort Page.stopLoading when navigation returns errorText, and a subsequent evaluate() still works', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
 			replyOk(transport, 'Page.stopLoading', {})
 
@@ -258,7 +253,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('does not let a failing Page.stopLoading mask the original navigate error', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
 			// Page.stopLoading is never replied to — its own send times out and
 			// rejects, which must be swallowed rather than surfacing to the caller.
@@ -275,7 +270,7 @@ describe('BrowserPage', () => {
 		it('bounds the best-effort Page.stopLoading to a short cap instead of the full per-call timeout', async () => {
 			vi.useFakeTimers()
 			try {
-				const { client, transport } = await createConnectedClient()
+				const { client, transport } = await createConnectedCDPClient()
 				replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
 				// Page.stopLoading is never replied to — a wedged renderer must not
 				// be able to stretch the failure path out to the full per-call timeout.
@@ -307,7 +302,7 @@ describe('BrowserPage', () => {
 			process.on('unhandledRejection', onUnhandled)
 
 			try {
-				const { client, transport } = await createConnectedClient()
+				const { client, transport } = await createConnectedCDPClient()
 				replyOk(transport, 'Page.navigate', { errorText: 'net::ERR_FAILED' })
 				replyOk(transport, 'Page.stopLoading', {})
 
@@ -332,7 +327,7 @@ describe('BrowserPage', () => {
 
 	describe('content()', () => {
 		it('returns url, title, html, and text', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Content Test')
 			scriptEvaluate(
 				transport,
@@ -355,8 +350,39 @@ describe('BrowserPage', () => {
 			expect(result.url).toBe('https://example.com/page')
 		})
 
+		it.each([{ field: 'title' }, { field: 'html' }, { field: 'text' }, { field: 'url' }])(
+			'rejects a malformed $field result instead of substituting a sentinel',
+			async ({ field }) => {
+				const { client, transport } = await createConnectedCDPClient()
+				scriptEvaluate(
+					transport,
+					(expression) => expression === 'document.title',
+					field === 'title' ? undefined : 'Title',
+				)
+				scriptEvaluate(
+					transport,
+					(expression) => expression.includes('outerHTML'),
+					field === 'html' ? undefined : '<p>Text</p>',
+				)
+				scriptEvaluate(
+					transport,
+					(expression) => expression.includes('innerText'),
+					field === 'text' ? undefined : 'Text',
+				)
+				scriptEvaluate(
+					transport,
+					(expression) => expression === 'location.href',
+					field === 'url' ? undefined : 'https://example.com/',
+				)
+
+				const page = new BrowserPage(client, 'target-1', 'session-1')
+
+				await expect(page.content()).rejects.toSatisfy(isBrowserError)
+			},
+		)
+
 		it('maps an oversized outerHTML result to a coded BrowserResultLimitError', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
 			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'text')
 			scriptEvaluate(
@@ -387,7 +413,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('maps an oversized innerText result to a coded BrowserResultLimitError', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
 			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), '<p></p>')
 			scriptEvaluate(
@@ -418,7 +444,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('sends the innerText expression wrapped in the result-limit guard', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
 			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), '<p></p>')
 			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'text')
@@ -445,7 +471,7 @@ describe('BrowserPage', () => {
 
 	describe('screenshot()', () => {
 		it('decodes PNG bytes by default with no writer', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -456,7 +482,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('decodes JPEG bytes and sends the requested format', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: JPEG_BASE64 })
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -468,7 +494,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('writes to the injected writer only when path is provided', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 			const writer = createScreenshotWriter()
 
@@ -477,12 +503,12 @@ describe('BrowserPage', () => {
 
 			expect(writer.calls).toHaveLength(1)
 			expect(writer.calls[0]?.path).toBe('/tmp/shot.png')
-			expect(Array.from(writer.calls[0]?.data ?? [])).toEqual(Array.from(result.bytes))
+			expect(Array.from(requireValue(writer.calls[0]).data)).toEqual(Array.from(result.bytes))
 			expect(result.path).toBe('/tmp/shot.png')
 		})
 
 		it('does not write when no path is given even with a writer', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 			const writer = createScreenshotWriter()
 
@@ -493,7 +519,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('requests a clip for full-page capture when dimensions resolve', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.getLayoutMetrics', { contentSize: { width: 1000, height: 2000 } })
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 
@@ -505,7 +531,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('throws a BrowserError when no data is returned', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', {})
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -515,7 +541,7 @@ describe('BrowserPage', () => {
 
 	describe('click()', () => {
 		it('clicks a present element', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptSelectorPresent(transport, '#btn')
 			scriptEvaluate(transport, (expression) => expression.includes('el.click()'), undefined)
 
@@ -526,7 +552,7 @@ describe('BrowserPage', () => {
 		it('throws BrowserSelectorError when the selector never appears', async () => {
 			vi.useFakeTimers()
 			try {
-				const { client, transport } = await createConnectedClient()
+				const { client, transport } = await createConnectedCDPClient()
 				scriptEvaluate(transport, (expression) => expression.includes('!== null'), false)
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -543,7 +569,7 @@ describe('BrowserPage', () => {
 
 	describe('fill()', () => {
 		it('sets an input value', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptSelectorPresent(transport, '#name')
 			scriptEvaluate(transport, (expression) => expression.includes('el.value ='), undefined)
 
@@ -552,7 +578,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('sends a contenteditable-aware expression that sets textContent when isContentEditable', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptSelectorPresent(transport, '#editable')
 			scriptEvaluate(transport, (expression) => expression.includes('el.value ='), undefined)
 
@@ -561,20 +587,17 @@ describe('BrowserPage', () => {
 
 			const fillCall = transport.sent.find(
 				(m) =>
-					m.method === 'Runtime.evaluate' &&
-					typeof m.params?.['expression'] === 'string' &&
-					(m.params['expression'] as string).includes('el.value ='),
+					m.method === 'Runtime.evaluate' && readCDPExpression(m)?.includes('el.value =') === true,
 			)
-			const expression = fillCall?.params?.['expression']
-			expect(typeof expression).toBe('string')
-			expect(expression as string).toContain('isContentEditable')
-			expect(expression as string).toContain('el.textContent =')
+			const expression = requireValue(readCDPExpression(fillCall))
+			expect(expression).toContain('isContentEditable')
+			expect(expression).toContain('el.textContent =')
 		})
 	})
 
 	describe('select()', () => {
 		it('selects the given values', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptSelectorPresent(transport, '#sel')
 			scriptEvaluate(transport, (expression) => expression.includes('opt.selected'), undefined)
 
@@ -585,7 +608,7 @@ describe('BrowserPage', () => {
 
 	describe('evaluate()', () => {
 		it('returns the evaluated value', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -593,7 +616,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('throws a BrowserError when the page reports an exception', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			transport.onSend('Runtime.evaluate', (message) => {
 				transport.reply(message.id, {
 					exceptionDetails: { exception: { description: 'ReferenceError: x is not defined' } },
@@ -605,24 +628,22 @@ describe('BrowserPage', () => {
 		})
 
 		it('wraps the expression with the result-size guard using BROWSER_RESULT_LIMIT', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await page.evaluate('1 + 1')
 
 			const sent = transport.sent.find(
-				(m) =>
-					m.method === 'Runtime.evaluate' &&
-					typeof m.params?.['expression'] === 'string' &&
-					(m.params['expression'] as string).includes('1 + 1'),
+				(m) => m.method === 'Runtime.evaluate' && readCDPExpression(m)?.includes('1 + 1') === true,
 			)
-			expect(sent?.params?.['expression']).toContain('BROWSER_RESULT_LIMIT')
-			expect(sent?.params?.['expression']).toContain(String(BROWSER_RESULT_LIMIT))
+			const expression = requireValue(readCDPExpression(sent))
+			expect(expression).toContain('BROWSER_RESULT_LIMIT')
+			expect(expression).toContain(String(BROWSER_RESULT_LIMIT))
 		})
 
 		it('maps an oversized result exception to a coded BrowserResultLimitError with length/limit context', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			transport.onSend('Runtime.evaluate', (message) => {
 				transport.reply(message.id, {
 					exceptionDetails: {
@@ -648,7 +669,7 @@ describe('BrowserPage', () => {
 
 	describe('wait()', () => {
 		it('resolves once the selector appears', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptSelectorPresent(transport, '#target')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -658,7 +679,7 @@ describe('BrowserPage', () => {
 
 	describe('selector escaping', () => {
 		it('safely embeds a selector with embedded quotes and backslashes into the evaluate expression', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptEvaluate(transport, (expression) => expression.includes('!== null'), true)
 			scriptEvaluate(transport, (expression) => expression.includes('el.click()'), undefined)
 
@@ -668,48 +689,17 @@ describe('BrowserPage', () => {
 
 			const clickCall = transport.sent.find(
 				(m) =>
-					m.method === 'Runtime.evaluate' &&
-					typeof m.params?.['expression'] === 'string' &&
-					(m.params['expression'] as string).includes('el.click()'),
+					m.method === 'Runtime.evaluate' && readCDPExpression(m)?.includes('el.click()') === true,
 			)
 			expect(clickCall).toBeDefined()
-			const expression = clickCall?.params?.['expression']
-			expect(typeof expression).toBe('string')
-			expect(expression as string).toContain(JSON.stringify(selector))
+			const expression = requireValue(readCDPExpression(clickCall))
+			expect(expression).toContain(JSON.stringify(selector))
 		})
 	})
 
 	describe('frame() / frames()', () => {
-		function scriptFrameTree(transport: CDPTestTransportInterface): void {
-			replyOk(transport, 'Page.getFrameTree', {
-				frameTree: {
-					frame: { id: 'main-1', url: 'https://example.com/' },
-					childFrames: [
-						{
-							frame: {
-								id: 'child-1',
-								parentId: 'main-1',
-								name: 'child-frame',
-								url: 'https://example.com/child',
-							},
-							childFrames: [
-								{
-									frame: {
-										id: 'grandchild-1',
-										parentId: 'child-1',
-										name: '',
-										url: 'https://example.com/grandchild',
-									},
-								},
-							],
-						},
-					],
-				},
-			})
-		}
-
 		it('flattens the frame tree main-first with parent/name/url mapping', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptFrameTree(transport)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -723,7 +713,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('finds a frame by name', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptFrameTree(transport)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -733,7 +723,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('finds a frame by url', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptFrameTree(transport)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -743,7 +733,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('returns undefined when no frame matches', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			scriptFrameTree(transport)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -751,7 +741,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('returns an empty frame list on a malformed reply', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.getFrameTree', {})
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -761,7 +751,7 @@ describe('BrowserPage', () => {
 
 	describe('codegen()', () => {
 		it('starts a recorder and returns the same instance on repeat calls', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Runtime.enable')
 			replyOk(transport, 'Runtime.addBinding')
 			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
@@ -778,7 +768,7 @@ describe('BrowserPage', () => {
 
 	describe('close()', () => {
 		it('marks the page closed and requests target closure', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.closeTarget')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -790,7 +780,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('is marked closed when the target is externally destroyed', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 
 			transport.event('Target.targetDestroyed', { targetId: 'target-1' })
@@ -798,8 +788,25 @@ describe('BrowserPage', () => {
 			expect(page.closed).toBe(true)
 		})
 
+		it('releases an active recorder when the target is externally destroyed', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Runtime.addBinding')
+			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
+			replyOk(transport, 'Runtime.evaluate')
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			const codegen = await page.codegen()
+
+			transport.event('Target.targetDestroyed', { targetId: 'target-1' })
+			await waitForCondition(() => !codegen.started)
+			await page.close()
+
+			expect(codegen.started).toBe(false)
+			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(false)
+		})
+
 		it('tears down an active codegen recorder before closing', async () => {
-			const { client, transport } = await createConnectedClient()
+			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Runtime.enable')
 			replyOk(transport, 'Runtime.addBinding')
 			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
@@ -811,6 +818,47 @@ describe('BrowserPage', () => {
 			await page.close()
 
 			expect(codegen.started).toBe(false)
+		})
+
+		it('shares one target closure across concurrent callers', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Target.closeTarget')
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await Promise.all([page.close(), page.close()])
+
+			expect(
+				transport.sent.filter((message) => message.method === 'Target.closeTarget'),
+			).toHaveLength(1)
+		})
+	})
+
+	describe('destroy()', () => {
+		it('detaches the local session without closing the remote target', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Target.detachFromTarget')
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await page.destroy()
+
+			expect(page.closed).toBe(true)
+			expect(transport.sent.some((message) => message.method === 'Target.detachFromTarget')).toBe(
+				true,
+			)
+			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(false)
+		})
+
+		it('rejects later operations without sending them to a detached session', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Target.detachFromTarget')
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await page.destroy()
+			const sent = transport.sent.length
+
+			await expect(page.title()).rejects.toSatisfy(isBrowserError)
+			await expect(page.codegen()).rejects.toSatisfy(isBrowserError)
+			expect(transport.sent).toHaveLength(sent)
 		})
 	})
 })

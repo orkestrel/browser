@@ -4,6 +4,7 @@ import type { SystemBrowserOptions, SystemBrowser, BrowserEngine } from './types
 import { existsSync, globSync } from 'node:fs'
 import { win32 as pathWin32, posix as pathPosix } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
+import { setTimeout as waitForTimeout } from 'node:timers/promises'
 import { isRecord, isString } from '@orkestrel/contract'
 import { BROWSER_WAIT_POLL_INTERVAL_MS } from '@src/core'
 import {
@@ -121,9 +122,9 @@ export function normalizeExecutablePath(path: string, platform: string): string 
 }
 
 /** Classify a `/json/version` `Browser` string into a {@link BrowserEngine} (`Edg/` → edge, `Chrome/` → chrome, else chromium). */
-export function browserToEngine(browser: string): BrowserEngine {
-	if (browser.includes('Edg/')) return 'edge'
-	if (browser.includes('Chrome/')) return 'chrome'
+export function browserToEngine(browser?: string): BrowserEngine {
+	if (browser?.includes('Edg/') === true) return 'edge'
+	if (browser?.includes('Chrome/') === true) return 'chrome'
 	return 'chromium'
 }
 
@@ -245,7 +246,7 @@ export function findAllInStore(base: string, platform: string): readonly string[
 
 	const pattern = `${base.replaceAll('\\', '/')}/${glob}`
 	const matches = globSync(pattern).filter((match) => existsSync(match))
-	matches.sort((a, b) => (a < b ? 1 : a > b ? -1 : 0))
+	matches.sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
 	found.push(...matches)
 
 	return found
@@ -292,34 +293,38 @@ export function launchBrowserProcess(
  *
  * @throws When the endpoint does not become ready before the timeout
  */
-export async function waitForCdpReady(
+export async function waitForCDPReady(
 	port: number,
 	timeout: number,
 	host: string = BROWSER_DEFAULT_HOST,
+	signal?: AbortSignal,
 ): Promise<string> {
 	const url = `${BROWSER_CDP_PROTOCOL}://${host}:${port}${BROWSER_CDP_VERSION_PATH}`
 	const deadline = Date.now() + timeout
 
 	while (Date.now() < deadline) {
+		signal?.throwIfAborted()
 		const remaining = Math.max(0, deadline - Date.now())
-		const controller = new AbortController()
-		const timer = setTimeout(() => controller.abort(), remaining)
+		const requestSignal =
+			signal === undefined
+				? AbortSignal.timeout(remaining)
+				: AbortSignal.any([signal, AbortSignal.timeout(remaining)])
 
 		try {
-			const response = await fetch(url, { signal: controller.signal })
+			const response = await fetch(url, { signal: requestSignal })
 			if (response.ok) {
 				const info: unknown = await response.json()
 				if (isRecord(info) && isString(info['webSocketDebuggerUrl'])) {
 					return info['webSocketDebuggerUrl']
 				}
 			}
-		} catch {
+		} catch (error) {
+			if (signal?.aborted === true) throw error
 			// Not ready yet — keep polling
-		} finally {
-			clearTimeout(timer)
 		}
 
-		await new Promise((resolve) => setTimeout(resolve, BROWSER_WAIT_POLL_INTERVAL_MS))
+		const delay = Math.min(BROWSER_WAIT_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()))
+		if (delay > 0) await waitForTimeout(delay, undefined, { signal })
 	}
 
 	throw new Error(`CDP endpoint on port ${port} did not become ready within ${timeout}ms`)
@@ -333,7 +338,7 @@ export async function waitForCdpReady(
  * @param host - Host the browser exposes its CDP endpoint on (default `127.0.0.1`)
  * @returns Normalized CDP targets
  */
-export async function fetchCdpTargets(
+export async function fetchCDPTargets(
 	port: number,
 	timeout: number,
 	host: string = BROWSER_DEFAULT_HOST,
@@ -353,13 +358,20 @@ export async function fetchCdpTargets(
 		const targets: CDPTarget[] = []
 		for (const entry of list) {
 			if (!isRecord(entry)) continue
-			if (!isString(entry['id']) || !isString(entry['type'])) continue
+			if (
+				!isString(entry['id']) ||
+				!isString(entry['type']) ||
+				!isString(entry['title']) ||
+				!isString(entry['url'])
+			) {
+				continue
+			}
 
 			targets.push({
 				id: entry['id'],
 				type: entry['type'],
-				title: isString(entry['title']) ? entry['title'] : '',
-				url: isString(entry['url']) ? entry['url'] : '',
+				title: entry['title'],
+				url: entry['url'],
 			})
 		}
 

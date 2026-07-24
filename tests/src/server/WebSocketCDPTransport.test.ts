@@ -2,75 +2,53 @@
  * WebSocketCDPTransport tests.
  *
  * Drives the transport against a real in-process WebSocket server
- * (`createCdpTestServer`, tests/setupServer.ts) — no mocks of the underlying
+ * (`createCDPTestServer`, tests/setupServer.ts) — no mocks of the underlying
  * `@orkestrel/websocket` client itself.
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
-import { createServer as createNetServer } from 'node:net'
-import type { Server as NetServer } from 'node:net'
 import { WebSocketCDPTransport, isBrowserConnectionError } from '@src/server'
-import { createCdpTestServer } from '../../setupServer.js'
-import type { CDPTestServerInterface } from '../../setupServer.js'
-import { createRecorder, waitForDelay } from '../../setup.js'
+import { createCDPTestServer, createStallServer } from '../../setupServer.js'
+import type { CDPTestServerInterface, StallServerInterface } from '../../setupServer.js'
+import { createRecorder, requireValue, waitForCondition } from '../../setup.js'
 
 let server: CDPTestServerInterface | undefined
-let stallServer: NetServer | undefined
-let stallSockets: Set<import('node:net').Socket> | undefined
-
-/**
- * Start a raw TCP server that accepts connections but never completes the
- * WebSocket upgrade handshake — the client socket stays stuck connecting for
- * as long as the caller holds it open.
- *
- * @returns The `ws://` URL of the stalling server
- */
-async function createStallServer(): Promise<string> {
-	const sockets = new Set<import('node:net').Socket>()
-	const net = createNetServer((socket) => {
-		sockets.add(socket)
-		socket.on('error', () => {})
-		socket.on('close', () => sockets.delete(socket))
-	})
-	stallServer = net
-	stallSockets = sockets
-
-	await new Promise<void>((resolve) => net.listen(0, '127.0.0.1', resolve))
-	const address = net.address()
-	const port = typeof address === 'object' && address !== null ? address.port : 0
-	return `ws://127.0.0.1:${port}/cdp`
-}
+let stall: StallServerInterface | undefined
 
 afterEach(async () => {
 	await server?.close()
 	server = undefined
-
-	if (stallServer !== undefined) {
-		const net = stallServer
-		const sockets = stallSockets
-		stallServer = undefined
-		stallSockets = undefined
-		if (sockets !== undefined) for (const socket of sockets) socket.destroy()
-		await new Promise<void>((resolve) => net.close(() => resolve()))
-	}
+	await stall?.close()
+	stall = undefined
 })
 
 describe('WebSocketCDPTransport', () => {
 	it('start() opens a real WebSocket connection', async () => {
-		server = await createCdpTestServer()
-		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
+		server = await createCDPTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.endpoint })
 		await transport.start()
 		await expect(transport.send('{}')).resolves.toBeUndefined()
 		await transport.close()
 	})
 
+	it('shares concurrent starts and keeps an open start idempotent', async () => {
+		server = await createCDPTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.endpoint })
+
+		await Promise.all([transport.start(), transport.start()])
+		await transport.start()
+
+		expect(server.sockets).toBe(1)
+		await transport.close()
+	})
+
 	it('send() delivers a frame the server receives (masked client frame decoded correctly)', async () => {
-		server = await createCdpTestServer()
-		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
+		server = await createCDPTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.endpoint })
 		await transport.start()
 
 		await transport.send(JSON.stringify({ id: 1, method: 'Test.method', params: { a: 1 } }))
-		await waitForDelay(20)
+		await waitForCondition(() => server?.received.length === 1)
 
 		expect(server.received).toHaveLength(1)
 		expect(server.received[0]?.method).toBe('Test.method')
@@ -80,27 +58,26 @@ describe('WebSocketCDPTransport', () => {
 	})
 
 	it('emits message events for server-pushed frames', async () => {
-		server = await createCdpTestServer()
-		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
+		server = await createCDPTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.endpoint })
 		const recorder = createRecorder<[string]>()
 		transport.emitter.on('message', recorder.handler)
 
 		await transport.start()
 		server.event('Test.event', { value: 42 })
-		await waitForDelay(20)
+		await waitForCondition(() => recorder.count === 1)
 
 		expect(recorder.count).toBe(1)
-		const [payload] = recorder.calls[0] ?? []
-		expect(payload).toBeDefined()
-		const parsed: unknown = JSON.parse(payload ?? '{}')
+		const [payload] = requireValue(recorder.calls[0])
+		const parsed: unknown = JSON.parse(payload)
 		expect(parsed).toMatchObject({ method: 'Test.event', params: { value: 42 } })
 
 		await transport.close()
 	})
 
 	it('emits close event when the server closes the socket', async () => {
-		server = await createCdpTestServer()
-		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
+		server = await createCDPTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.endpoint })
 		const recorder = createRecorder<[]>()
 		transport.emitter.on('close', recorder.handler)
 
@@ -121,6 +98,47 @@ describe('WebSocketCDPTransport', () => {
 		await expect(transport.close()).resolves.toBeUndefined()
 	})
 
+	it('close() resolves after the remote socket has already closed', async () => {
+		server = await createCDPTestServer()
+		const active = server
+		const transport = new WebSocketCDPTransport({ url: active.endpoint })
+		await transport.start()
+
+		await active.close()
+		server = undefined
+		await waitForCondition(() => active.sockets === 0)
+
+		await expect(transport.close()).resolves.toBeUndefined()
+	})
+
+	it('rejects non-WebSocket URL protocols with a coded error', async () => {
+		const transport = new WebSocketCDPTransport({ url: 'http://localhost/cdp' })
+		const error: unknown = await transport.start().catch((caught: unknown) => caught)
+
+		expect(isBrowserConnectionError(error)).toBe(true)
+	})
+
+	it('forwards emitter listener failures to the configured error handler', async () => {
+		server = await createCDPTestServer()
+		const errors = createRecorder<[unknown, string]>()
+		const transport = new WebSocketCDPTransport({
+			url: server.endpoint,
+			on: {
+				message: () => {
+					throw new Error('listener failed')
+				},
+			},
+			error: errors.handler,
+		})
+		await transport.start()
+
+		server.event('Test.event')
+		await waitForCondition(() => errors.count === 1)
+
+		expect(errors.calls[0]?.[1]).toBe('message')
+		await transport.close()
+	})
+
 	it('start() rejects when connecting to an unreachable port', async () => {
 		const url = 'ws://localhost:19990/cdp'
 		const transport = new WebSocketCDPTransport({ url, timeout: 200 })
@@ -131,15 +149,16 @@ describe('WebSocketCDPTransport', () => {
 		const error: unknown = await transport.start().catch((caught: unknown) => caught)
 		expect(isBrowserConnectionError(error)).toBe(true)
 		expect(error).toBeInstanceOf(Error)
-		expect(error instanceof Error ? error.message : '').toContain(url)
+		if (!(error instanceof Error)) throw new Error('Expected a connection error')
+		expect(error.message).toContain(url)
 	})
 
 	it('close() aborts a connection still in flight and settles start() as rejected', async () => {
-		const url = await createStallServer()
+		stall = await createStallServer()
+		const url = stall.endpoint
 		const transport = new WebSocketCDPTransport({ url, timeout: 5000 })
 
 		const started = transport.start()
-		await waitForDelay(20)
 		await transport.close()
 
 		await expect(started).rejects.toSatisfy((error: unknown) => isBrowserConnectionError(error))
@@ -151,22 +170,24 @@ describe('WebSocketCDPTransport', () => {
 	})
 
 	it('start() opens a fresh socket each call (reconnect support)', async () => {
-		server = await createCdpTestServer()
-		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
+		server = await createCDPTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.endpoint })
 		await transport.start()
 		await transport.close()
 		await transport.start()
 
 		await transport.send(JSON.stringify({ id: 1, method: 'Reconnect.check' }))
-		await waitForDelay(20)
+		await waitForCondition(
+			() => server?.received.some((message) => message.method === 'Reconnect.check') === true,
+		)
 		expect(server.received.some((m) => m.method === 'Reconnect.check')).toBe(true)
 
 		await transport.close()
 	})
 
 	it('round-trips a large (~5 MB) text frame intact', async () => {
-		server = await createCdpTestServer()
-		const transport = new WebSocketCDPTransport({ url: server.wsUrl })
+		server = await createCDPTestServer()
+		const transport = new WebSocketCDPTransport({ url: server.endpoint })
 		await transport.start()
 
 		const large = 'x'.repeat(5 * 1024 * 1024)
@@ -175,10 +196,7 @@ describe('WebSocketCDPTransport', () => {
 		// A large frame is reassembled from multiple chunks server-side; poll
 		// (bounded) instead of a fixed delay so this never races that
 		// reassembly, however long it happens to take.
-		const deadline = Date.now() + 3000
-		while (server.received.length === 0 && Date.now() < deadline) {
-			await waitForDelay(20)
-		}
+		await waitForCondition(() => server?.received.length === 1, 3000)
 
 		expect(server.received).toHaveLength(1)
 		expect(server.received[0]?.method).toBe('Large.frame')

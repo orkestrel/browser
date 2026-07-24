@@ -1,38 +1,14 @@
 import { describe, it, expect } from 'vitest'
 import { BrowserCodegen, createCDPClient } from '@src/core'
-import type { CDPClientInterface } from '@src/core'
-import { createCDPTransport, createRecorder, replyOk } from '../../setup.js'
-import type { CDPTestTransportInterface } from '../../setup.js'
+import {
+	createCDPTransport,
+	createCodegenBindingPayload,
+	createRecorder,
+	createStartedCodegen,
+	replyOk,
+} from '../../setup.js'
 
 const SESSION_ID = 'session-1'
-
-// === Helpers
-
-async function createStartedCodegen(): Promise<{
-	client: CDPClientInterface
-	transport: CDPTestTransportInterface
-	codegen: BrowserCodegen
-}> {
-	const transport = createCDPTransport()
-	const client = createCDPClient({ transport })
-	await client.connect()
-
-	replyOk(transport, 'Runtime.enable')
-	replyOk(transport, 'Runtime.addBinding')
-	replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
-	replyOk(transport, 'Runtime.evaluate')
-
-	const codegen = new BrowserCodegen(client, SESSION_ID)
-	await codegen.start()
-
-	return { client, transport, codegen }
-}
-
-function bindingPayload(
-	payload: Readonly<Record<string, unknown>>,
-): Readonly<Record<string, unknown>> {
-	return { name: '__orkestrelBrowserCodegen', payload: JSON.stringify(payload) }
-}
 
 // === BrowserCodegen
 
@@ -74,6 +50,55 @@ describe('BrowserCodegen', () => {
 			expect(transport.sent.length).toBe(before)
 		})
 
+		it('shares one in-flight start across concurrent callers', async () => {
+			const transport = createCDPTransport()
+			const client = createCDPClient({ transport })
+			await client.connect()
+			let enableId: number | undefined
+			transport.onSend('Runtime.enable', (message) => {
+				enableId = message.id
+			})
+			replyOk(transport, 'Runtime.addBinding')
+			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
+			replyOk(transport, 'Runtime.evaluate')
+
+			const codegen = new BrowserCodegen(client, SESSION_ID)
+			const first = codegen.start()
+			const second = codegen.start()
+			expect(codegen.started).toBe(false)
+			if (enableId === undefined) throw new Error('Runtime.enable was not sent')
+			transport.reply(enableId, {})
+
+			await Promise.all([first, second])
+			expect(codegen.started).toBe(true)
+			expect(transport.sent.filter((message) => message.method === 'Runtime.enable')).toHaveLength(
+				1,
+			)
+		})
+
+		it('forwards listener failures to the configured emitter error handler', async () => {
+			const transport = createCDPTransport()
+			const client = createCDPClient({ transport })
+			await client.connect()
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Runtime.addBinding')
+			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
+			replyOk(transport, 'Runtime.evaluate')
+			const errors = createRecorder<[unknown, string]>()
+			const codegen = new BrowserCodegen(client, SESSION_ID, {
+				on: {
+					start: () => {
+						throw new Error('listener failed')
+					},
+				},
+				error: errors.handler,
+			})
+
+			await expect(codegen.start()).resolves.toBeUndefined()
+			expect(errors.count).toBe(1)
+			expect(errors.calls[0]?.[1]).toBe('start')
+		})
+
 		it('unsubscribes everything armed and allows a retry after a failed start()', async () => {
 			const transport = createCDPTransport()
 			const client = createCDPClient({ transport })
@@ -96,7 +121,7 @@ describe('BrowserCodegen', () => {
 			// No subscriptions should remain armed after the failed start
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#x' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#x' }),
 				SESSION_ID,
 			)
 			expect(codegen.actions()).toEqual([])
@@ -117,7 +142,7 @@ describe('BrowserCodegen', () => {
 
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#b' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#b' }),
 				SESSION_ID,
 			)
 
@@ -129,17 +154,17 @@ describe('BrowserCodegen', () => {
 
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'fill', selector: '#x', value: 'a' }),
+				createCodegenBindingPayload({ action: 'fill', selector: '#x', value: 'a' }),
 				SESSION_ID,
 			)
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'fill', selector: '#x', value: 'ab' }),
+				createCodegenBindingPayload({ action: 'fill', selector: '#x', value: 'ab' }),
 				SESSION_ID,
 			)
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'fill', selector: '#x', value: 'abc' }),
+				createCodegenBindingPayload({ action: 'fill', selector: '#x', value: 'abc' }),
 				SESSION_ID,
 			)
 
@@ -149,7 +174,11 @@ describe('BrowserCodegen', () => {
 		it('drops malformed payloads', async () => {
 			const { transport, codegen } = await createStartedCodegen()
 
-			transport.event('Runtime.bindingCalled', bindingPayload({ action: 'unknown' }), SESSION_ID)
+			transport.event(
+				'Runtime.bindingCalled',
+				createCodegenBindingPayload({ action: 'unknown' }),
+				SESSION_ID,
+			)
 			transport.event(
 				'Runtime.bindingCalled',
 				{ name: '__orkestrelBrowserCodegen', payload: 'not json' },
@@ -202,7 +231,7 @@ describe('BrowserCodegen', () => {
 
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#a' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#a' }),
 				SESSION_ID,
 			)
 
@@ -215,7 +244,7 @@ describe('BrowserCodegen', () => {
 			const { transport, codegen } = await createStartedCodegen()
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#x' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#x' }),
 				SESSION_ID,
 			)
 
@@ -229,7 +258,7 @@ describe('BrowserCodegen', () => {
 			const { transport, codegen } = await createStartedCodegen()
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#x' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#x' }),
 				SESSION_ID,
 			)
 
@@ -247,7 +276,7 @@ describe('BrowserCodegen', () => {
 
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#x' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#x' }),
 				SESSION_ID,
 			)
 			expect(codegen.actions()).toHaveLength(1)
@@ -274,7 +303,7 @@ describe('BrowserCodegen', () => {
 			const { transport, codegen } = await createStartedCodegen()
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#a' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#a' }),
 				SESSION_ID,
 			)
 
@@ -290,7 +319,7 @@ describe('BrowserCodegen', () => {
 
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#b' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#b' }),
 				SESSION_ID,
 			)
 
@@ -314,7 +343,7 @@ describe('BrowserCodegen', () => {
 			const { transport, codegen } = await createStartedCodegen()
 			transport.event(
 				'Runtime.bindingCalled',
-				bindingPayload({ action: 'click', selector: '#x' }),
+				createCodegenBindingPayload({ action: 'click', selector: '#x' }),
 				SESSION_ID,
 			)
 

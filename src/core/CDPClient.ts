@@ -25,9 +25,9 @@ import { isRecord, isString } from '@orkestrel/contract'
  * continue to see ALL events for backwards compatibility.
  */
 export class CDPClient implements CDPClientInterface {
-	#transport: CDPTransportInterface
+	readonly #transport: CDPTransportInterface
 	#messageId = 0
-	#pending: Map<
+	readonly #pending: Map<
 		number,
 		{
 			method: string
@@ -36,12 +36,14 @@ export class CDPClient implements CDPClientInterface {
 			timer: ReturnType<typeof setTimeout>
 		}
 	> = new Map()
-	#subscriptions: Map<string, Set<CDPHandler>> = new Map()
-	#sessionSubscriptions: Map<string, Map<string, Set<CDPHandler>>> = new Map()
+	readonly #subscriptions: Map<string, Set<CDPHandler>> = new Map()
+	readonly #sessionSubscriptions: Map<string, Map<string, Set<CDPHandler>>> = new Map()
 	#connected = false
+	#active = false
 	#wired = false
-	#timeout: number
+	readonly #timeout: number
 	#connecting: Promise<void> | undefined
+	#closing: Promise<void> | undefined
 	#closeRequested = false
 
 	constructor(options: CDPClientOptions) {
@@ -54,37 +56,17 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	async connect(): Promise<void> {
+		if (this.#closing !== undefined) await this.#closing
 		if (this.#connected) return
 		if (this.#connecting !== undefined) return this.#connecting
 
 		this.#closeRequested = false
-
-		const attempt = (async (): Promise<void> => {
-			if (!this.#wired) {
-				this.#transport.emitter.on('message', (data) => this.#onMessage(data))
-				this.#transport.emitter.on('close', () => this.#onClose())
-				this.#transport.emitter.on('error', (error) => this.#onError(error))
-				this.#wired = true
-			}
-
-			await this.#transport.start()
-
-			if (this.#closeRequested) {
-				this.#closeRequested = false
-				await this.#transport.close()
-				throw new CDPConnectionError('CDP client was closed while connecting', {
-					method: 'connect',
-				})
-			}
-
-			this.#connected = true
-		})()
-
+		const attempt = this.#start()
 		this.#connecting = attempt
 		try {
 			await attempt
 		} finally {
-			this.#connecting = undefined
+			if (this.#connecting === attempt) this.#connecting = undefined
 		}
 	}
 
@@ -208,6 +190,50 @@ export class CDPClient implements CDPClientInterface {
 	 * transport is closed deterministically once `start()` resolves.
 	 */
 	async close(): Promise<void> {
+		const active = this.#closing
+		if (active !== undefined) {
+			await active
+			return
+		}
+
+		const attempt = this.#stop()
+		this.#closing = attempt
+		try {
+			await attempt
+		} finally {
+			if (this.#closing === attempt) this.#closing = undefined
+		}
+	}
+
+	// === Private helpers
+
+	async #start(): Promise<void> {
+		if (!this.#wired) {
+			this.#transport.emitter.on('message', (data) => this.#onMessage(data))
+			this.#transport.emitter.on('close', () => this.#onClose())
+			this.#transport.emitter.on('error', (error) => this.#onError(error))
+			this.#wired = true
+		}
+
+		await this.#transport.start()
+		this.#active = true
+
+		if (this.#closeRequested) {
+			this.#closeRequested = false
+			try {
+				await this.#transport.close()
+			} finally {
+				this.#active = false
+			}
+			throw new CDPConnectionError('CDP client was closed while connecting', {
+				method: 'connect',
+			})
+		}
+
+		this.#connected = true
+	}
+
+	async #stop(): Promise<void> {
 		if (this.#connecting !== undefined) {
 			this.#closeRequested = true
 			await this.#connecting.catch(() => undefined)
@@ -218,7 +244,7 @@ export class CDPClient implements CDPClientInterface {
 			// returning early, or the close would be silently lost.
 		}
 
-		if (!this.#connected) return
+		if (!this.#connected && !this.#active) return
 
 		this.#connected = false
 
@@ -229,10 +255,12 @@ export class CDPClient implements CDPClientInterface {
 			this.#pending.delete(id)
 		}
 
-		await this.#transport.close()
+		try {
+			await this.#transport.close()
+		} finally {
+			this.#active = false
+		}
 	}
-
-	// === Private helpers
 
 	#nextId(): number {
 		this.#messageId += 1
@@ -241,6 +269,7 @@ export class CDPClient implements CDPClientInterface {
 
 	#onClose(): void {
 		this.#connected = false
+		this.#active = false
 
 		// Reject all pending requests
 		for (const [id, entry] of this.#pending) {
@@ -251,17 +280,16 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	#onError(error: unknown): void {
-		if (!this.#connected) {
-			for (const [id, entry] of this.#pending) {
-				clearTimeout(entry.timer)
-				entry.reject(
-					new CDPConnectionError(`CDP connection failed: ${String(error)}`, {
-						method: entry.method,
-						error,
-					}),
-				)
-				this.#pending.delete(id)
-			}
+		this.#connected = false
+		for (const [id, entry] of this.#pending) {
+			clearTimeout(entry.timer)
+			entry.reject(
+				new CDPConnectionError(`CDP connection failed: ${String(error)}`, {
+					method: entry.method,
+					error,
+				}),
+			)
+			this.#pending.delete(id)
 		}
 	}
 
@@ -309,9 +337,7 @@ export class CDPClient implements CDPClientInterface {
 			// Fire global handlers (backwards compatible — see ALL events)
 			const globalHandlers = this.#subscriptions.get(method)
 			if (globalHandlers !== undefined) {
-				for (const handler of [...globalHandlers]) {
-					handler(params)
-				}
+				this.#dispatch(globalHandlers, params)
 			}
 
 			// Fire session-scoped handlers
@@ -321,11 +347,19 @@ export class CDPClient implements CDPClientInterface {
 				if (sessionMap !== undefined) {
 					const sessionHandlers = sessionMap.get(method)
 					if (sessionHandlers !== undefined) {
-						for (const handler of [...sessionHandlers]) {
-							handler(params)
-						}
+						this.#dispatch(sessionHandlers, params)
 					}
 				}
+			}
+		}
+	}
+
+	#dispatch(handlers: ReadonlySet<CDPHandler>, params: Readonly<Record<string, unknown>>): void {
+		for (const handler of [...handlers]) {
+			try {
+				handler(params)
+			} catch {
+				// One observer must not prevent sibling observers from receiving the event.
 			}
 		}
 	}

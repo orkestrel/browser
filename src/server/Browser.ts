@@ -1,44 +1,47 @@
 import type { ChildProcess } from 'node:child_process'
 import type {
-	BrowserEventMap,
-	BrowserOptions,
-	BrowserEngine,
-	BrowserStatus,
 	BrowserConnection,
-	BrowserInterface,
 	BrowserDiscoveryResult,
+	BrowserEngine,
+	BrowserEventMap,
+	BrowserInterface,
+	BrowserOptions,
+	BrowserStatus,
 } from './types.js'
 import type {
 	BrowserContextInterface,
 	BrowserPageInterface,
 	BrowserPageOptions,
+	CDPTarget,
 	CDPTransportInterface,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import { addAbortListener, once } from 'node:events'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { CDPClient, BrowserContext, BROWSER_DEFAULT_TIMEOUT_MS } from '@src/core'
+import { BrowserContext, BROWSER_DEFAULT_TIMEOUT_MS, CDPClient } from '@src/core'
 import {
 	BrowserConnectionError,
-	BrowserNotConnectedError,
 	BrowserDestroyedError,
+	BrowserNotConnectedError,
 } from './errors.js'
 import {
+	BROWSER_CDP_PROTOCOL,
+	BROWSER_CDP_VERSION_PATH,
 	BROWSER_DEFAULT_CDP_PORT,
 	BROWSER_DEFAULT_HOST,
-	BROWSER_CDP_VERSION_PATH,
-	BROWSER_CDP_PROTOCOL,
 	BROWSER_KILL_GRACE_MS,
 	BROWSER_PORT_PROBE_TIMEOUT_MS,
+	BROWSER_PROCESS_EXIT_CAUSE,
+	BROWSER_TRANSPORT_LOSS_CAUSE,
 	BROWSER_TRANSPORT_LOSS_DEFER_MS,
 } from './constants.js'
 import {
-	findSystemBrowser,
-	parseBrowserEngine,
 	browserToEngine,
+	findSystemBrowser,
 	launchBrowserProcess,
-	waitForCdpReady,
-	fetchCdpTargets,
+	parseBrowserEngine,
+	waitForCDPReady,
 } from './helpers.js'
 import { createCDPTransport, createScreenshotWriter } from './factories.js'
 
@@ -46,22 +49,29 @@ import { createCDPTransport, createScreenshotWriter } from './factories.js'
 
 export class Browser implements BrowserInterface {
 	readonly #emitter: Emitter<BrowserEventMap>
-	#options: BrowserOptions
+	readonly #options: BrowserOptions
+	readonly #abort = new AbortController()
+	readonly #cdpPort: number
+	readonly #cdpHost: string
 	#engine: BrowserEngine
 	#status: BrowserStatus = 'idle'
 	#connection: BrowserConnection | undefined
+	#owned: boolean | undefined
+	#endpoint: string | undefined
 	#client: CDPClient | undefined
 	#process: ChildProcess | undefined
-	#cdpPort: number
-	#cdpHost: string
 	#contexts: BrowserContext[] = []
 	#destroyed = false
-	#transportUnbind: (() => void) | undefined
-	#processUnbind: (() => void) | undefined
-	#lastPid: number | undefined
+	#connecting: Promise<void> | undefined
+	#disconnecting: Promise<void> | undefined
+	#shutdown: Promise<void> | undefined
+	#transport: CDPTransportInterface | undefined
+	#onTransportClose = (): void => this.#handleTransportLoss()
+	#onTransportError = (): void => this.#handleTransportLoss()
+	#onProcessExit = (): void => this.#handleProcessExit()
 
 	constructor(options?: BrowserOptions) {
-		this.#emitter = new Emitter({ on: options?.on })
+		this.#emitter = new Emitter({ on: options?.on, error: options?.error })
 		this.#options = options ?? {}
 		this.#engine =
 			this.#options.engine ??
@@ -71,15 +81,12 @@ export class Browser implements BrowserInterface {
 		this.#cdpPort = this.#options.cdp?.port ?? BROWSER_DEFAULT_CDP_PORT
 		this.#cdpHost = this.#options.cdp?.host ?? BROWSER_DEFAULT_HOST
 
-		// Emit idle after construction to signal browser is ready for connection
 		queueMicrotask(() => this.#emitter.emit('idle'))
 	}
 
 	get emitter(): EmitterInterface<BrowserEventMap> {
 		return this.#emitter
 	}
-
-	// === Property accessors
 
 	get engine(): BrowserEngine {
 		return this.#engine
@@ -93,112 +100,81 @@ export class Browser implements BrowserInterface {
 		return this.#connection
 	}
 
+	get owned(): boolean | undefined {
+		return this.#owned
+	}
+
 	get connected(): boolean {
 		return this.#status === 'connected'
 	}
 
 	get pid(): number | undefined {
-		return this.#process?.pid ?? this.#lastPid
+		return this.#process?.pid
 	}
 
-	// === Discovery
-
 	async discover(): Promise<BrowserDiscoveryResult> {
-		const result = await this.#discoverCdp()
+		const result = await this.#discoverCDP()
 		this.#emitter.emit('discover', result)
 		return result
 	}
 
-	// === Connection
-
 	async connect(): Promise<void> {
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#disconnecting !== undefined) await this.#disconnecting
 		if (this.#destroyed) throw new BrowserDestroyedError()
 		if (this.#status === 'connected') return
 
-		this.#assertNotAborted()
-		this.#status = 'connecting'
+		const active = this.#connecting
+		if (active !== undefined) {
+			await active
+			return
+		}
+
+		const attempt = this.#establish()
+		this.#connecting = attempt
 
 		try {
-			// Step 1: explicit CDP endpoint (highest priority — user explicitly specified)
-			const cdpEndpoint = this.#options.cdp?.endpoint
-			if (cdpEndpoint !== undefined) {
-				await this.#connectCdp(cdpEndpoint)
-				return
-			}
-
-			// Step 2: passive CDP discovery (connect to existing browser if available)
-			const discover = this.#options.cdp?.discover ?? true
-			if (discover) {
-				this.#assertNotAborted()
-				const discovery = await this.#raceAbort(this.#discoverCdp())
-				if (discovery.found && discovery.endpoint !== undefined) {
-					this.#engine = browserToEngine(discovery.browser ?? '')
-					await this.#connectCdp(discovery.endpoint)
-					return
-				}
-			} else {
-				// Discovery explicitly disabled — the caller demanded a fresh
-				// launch with a specific profile/engine, so a stray listener on
-				// the port must reject loudly rather than being silently attached to.
-				this.#assertNotAborted()
-				await this.#raceAbort(this.#assertPortFree())
-			}
-
-			// Step 3: launch system browser with CDP
-			this.#assertNotAborted()
-			await this.#launch()
-		} catch (thrown) {
-			this.#status = 'error'
-			this.#emitter.emit('error', thrown)
-			if (thrown instanceof BrowserConnectionError) throw thrown
-			const message = thrown instanceof Error ? thrown.message : String(thrown)
-			throw new BrowserConnectionError(message, { executable: this.#options.executable })
+			await attempt
+		} finally {
+			if (this.#connecting === attempt) this.#connecting = undefined
 		}
 	}
 
-	// === Disconnection
+	adopt(): void {
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (
+			this.#status !== 'connected' ||
+			this.#client === undefined ||
+			this.#endpoint === undefined
+		) {
+			throw new BrowserNotConnectedError()
+		}
+		this.#owned = true
+	}
 
 	async disconnect(): Promise<void> {
-		if (this.#destroyed || this.#status !== 'connected') return
+		if (this.#destroyed) return
 
-		// An ephemeral 'launch' (no persistent profile) has no way to be
-		// reattached to later — detaching here would strand its process with
-		// no path back to it. Callers must use destroy() instead. A
-		// 'persistent' (profile-backed) launch IS reattachable (via CDP
-		// discovery on the same port), so it falls through to the same
-		// release-without-killing path as a 'cdp' connection.
-		if (this.#connection === 'launch') {
-			throw new BrowserConnectionError(
-				'Cannot disconnect() an ephemeral launch — no persistent profile to reattach to; ephemeral launches must use destroy() to release it',
-				{ connection: this.#connection },
-			)
+		const active = this.#disconnecting
+		if (active !== undefined) {
+			await active
+			return
 		}
-
-		this.#unbindTransport()
-		this.#unbindProcess()
-
-		const client = this.#client
-		if (client !== undefined) {
-			try {
-				await client.close()
-			} catch {
-				// Swallow — best-effort close on detach
-			}
+		if (this.#connecting !== undefined) {
+			await this.#connecting.catch(() => undefined)
+			if (this.#destroyed) return
 		}
+		if (this.#status !== 'connected' || this.#client === undefined) return
 
-		// Release ownership of a launched process WITHOUT killing it, so a
-		// 'persistent' session's browser stays alive for later reattachment.
-		// The pid stays readable on this instance until destroy() or an
-		// observed process exit clears it.
-		if (this.#process?.pid !== undefined) this.#lastPid = this.#process.pid
-		this.#process = undefined
+		const attempt = this.#detach()
+		this.#disconnecting = attempt
 
-		this.#reset()
-		this.#emitter.emit('disconnect')
-		this.#emitter.emit('idle')
+		try {
+			await attempt
+		} finally {
+			if (this.#disconnecting === attempt) this.#disconnecting = undefined
+		}
 	}
-
-	// === Context management
 
 	context(index?: number): BrowserContextInterface | undefined {
 		const i = index ?? 0
@@ -210,267 +186,205 @@ export class Browser implements BrowserInterface {
 		return [...this.#contexts]
 	}
 
-	// === Page creation shortcut
-
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
 		if (this.#destroyed) throw new BrowserDestroyedError()
-		if (this.#status !== 'connected' || this.#client === undefined)
+		const client = this.#client
+		if (this.#status !== 'connected' || client === undefined) {
 			throw new BrowserNotConnectedError()
+		}
 
-		// Get or create the default context
-		let ctx = this.#contexts[0]
-		if (ctx === undefined) {
-			ctx = new BrowserContext(
-				this.#client,
+		let context = this.#contexts[0]
+		if (context === undefined) {
+			context = new BrowserContext(
+				client,
 				undefined,
 				this.#options.viewport,
 				createScreenshotWriter(),
 			)
-			this.#contexts.push(ctx)
+			this.#contexts.push(context)
 		}
-		const page = await ctx.create(options)
+
+		const page = await context.create(options)
 		this.#emitter.emit('page', page)
 		return page
 	}
 
-	// === Lifecycle
+	destroy(): Promise<void> {
+		const active = this.#shutdown
+		if (active !== undefined) return active
+		if (this.#destroyed) return Promise.resolve()
 
-	async destroy(): Promise<void> {
-		if (this.#destroyed) return
 		this.#destroyed = true
-
-		try {
-			this.#unbindTransport()
-			this.#unbindProcess()
-
-			// Owned (launch/persistent) browsers close their pages/contexts
-			// normally. A CDP-attached browser is a LOCAL DETACH ONLY — other
-			// clients may share those targets, so no remote close is sent.
-			const owned = this.#process !== undefined
-			if (owned) {
-				for (const ctx of this.#contexts) {
-					try {
-						await ctx.close()
-					} catch {
-						// Swallow errors during teardown
-					}
-				}
-			}
-			this.#contexts = []
-
-			// Kill launched browser process, then close CDP client (§13 order)
-			await this.#terminate(this.#process)
-			this.#process = undefined
-
-			if (this.#client !== undefined) {
-				try {
-					await this.#client.close()
-				} catch {
-					// Swallow
-				}
-				this.#client = undefined
-			}
-		} finally {
-			this.#status = 'disconnected'
-			this.#connection = undefined
-			this.#lastPid = undefined
-			this.#emitter.emit('destroy')
-			this.#emitter.destroy()
-		}
+		this.#abort.abort()
+		const shutdown = this.#destroyResources()
+		this.#shutdown = shutdown
+		return shutdown
 	}
 
-	/**
-	 * Gracefully shut down the remote browser, whether this instance owns its
-	 * process or merely attached to it via CDP.
-	 *
-	 * @remarks
-	 * Sends CDP `Browser.close` best-effort; on an owned browser also awaits
-	 * the process's exit (bounded by the kill-escalation grace period,
-	 * escalating to a kill only if it does not exit in time). Ends in the
-	 * same local-cleanup state as `destroy()`.
-	 */
-	async close(): Promise<void> {
-		if (this.#destroyed) return
+	close(): Promise<void> {
+		const active = this.#shutdown
+		if (active !== undefined) return active
+		if (this.#destroyed) return Promise.resolve()
+
 		this.#destroyed = true
-
-		try {
-			this.#unbindTransport()
-			this.#unbindProcess()
-
-			const client = this.#client
-			if (client !== undefined) {
-				try {
-					await client.send('Browser.close')
-				} catch {
-					// Best-effort — the remote may not support it or may already be gone
-				}
-			}
-
-			const process = this.#process
-			if (process !== undefined) {
-				const exited = new Promise<void>((resolve) => {
-					process.once('exit', () => resolve())
-				})
-
-				let timer: ReturnType<typeof setTimeout> | undefined
-				const timedOut = await Promise.race([
-					exited.then(() => false),
-					new Promise<boolean>((resolve) => {
-						timer = setTimeout(() => resolve(true), BROWSER_KILL_GRACE_MS)
-					}),
-				])
-				if (timer !== undefined) clearTimeout(timer)
-
-				// Browser.close already asked nicely — escalate only if the
-				// process failed to exit within the bound.
-				if (timedOut) await this.#terminate(process)
-				this.#process = undefined
-			}
-
-			for (const ctx of this.#contexts) {
-				try {
-					await ctx.close()
-				} catch {
-					// Swallow errors during teardown
-				}
-			}
-			this.#contexts = []
-
-			if (client !== undefined) {
-				try {
-					await client.close()
-				} catch {
-					// Swallow
-				}
-				this.#client = undefined
-			}
-		} finally {
-			this.#status = 'disconnected'
-			this.#connection = undefined
-			this.#lastPid = undefined
-			this.#emitter.emit('destroy')
-			this.#emitter.destroy()
-		}
+		this.#abort.abort()
+		const shutdown = this.#closeResources()
+		this.#shutdown = shutdown
+		return shutdown
 	}
 
 	// === Private helpers
 
-	#assertNotAborted(): void {
-		if (this.#options.signal?.aborted) {
-			throw new BrowserConnectionError('Connection aborted')
+	async #establish(): Promise<void> {
+		this.#assertNotAborted()
+		this.#status = 'connecting'
+
+		try {
+			if (this.#owned === true && this.#endpoint !== undefined) {
+				await this.#connectCDP(this.#endpoint)
+				return
+			}
+
+			const endpoint = this.#options.cdp?.endpoint
+			if (endpoint !== undefined) {
+				await this.#connectCDP(endpoint)
+				return
+			}
+
+			const discover = this.#options.cdp?.discover ?? true
+			if (discover) {
+				const discovery = await this.#raceAbort(this.#discoverCDP(this.#signal()))
+				if (discovery.found && discovery.endpoint !== undefined) {
+					this.#engine = browserToEngine(discovery.browser)
+					await this.#connectCDP(discovery.endpoint)
+					return
+				}
+			} else {
+				await this.#raceAbort(this.#assertPortFree())
+			}
+
+			this.#assertNotAborted()
+			await this.#launch()
+		} catch (error) {
+			if (this.#destroyed) throw new BrowserDestroyedError()
+
+			this.#status = 'error'
+			this.#emitter.emit('error', error)
+			if (error instanceof BrowserConnectionError) throw error
+
+			const message = error instanceof Error ? error.message : String(error)
+			throw new BrowserConnectionError(message, { executable: this.#options.executable })
 		}
 	}
 
-	/**
-	 * Race a promise against the connection's external AbortSignal (if any),
-	 * rejecting promptly with a coded BrowserConnectionError when it fires.
-	 */
-	async #raceAbort<T>(promise: Promise<T>): Promise<T> {
-		const signal = this.#options.signal
-		if (signal === undefined) return promise
-		if (signal.aborted) throw new BrowserConnectionError('Connection aborted')
-
-		let abortWon = false
-
-		return await new Promise<T>((resolve, reject) => {
-			const onAbort = (): void => {
-				abortWon = true
-				cleanup()
-				reject(new BrowserConnectionError('Connection aborted'))
-			}
-			const cleanup = (): void => signal.removeEventListener('abort', onAbort)
-			signal.addEventListener('abort', onAbort, { once: true })
-			promise.then(
-				(value) => {
-					cleanup()
-					resolve(value)
-				},
-				(error: unknown) => {
-					cleanup()
-					reject(error)
-				},
-			)
-		}).catch((error: unknown) => {
-			// When the abort signal wins the race, `promise` is still in
-			// flight — attach an observer so its eventual rejection doesn't
-			// surface as an unhandled rejection once nobody is listening.
-			if (abortWon) promise.catch(() => undefined)
-			throw error
-		})
-	}
-
-	#reset(): void {
-		this.#contexts = []
+	async #detach(): Promise<void> {
 		this.#status = 'disconnected'
 		this.#connection = undefined
-		this.#client = undefined
-	}
-
-	/**
-	 * Handle the owned process exiting on its own (not via destroy()/close()).
-	 * The process is already gone — no kill is attempted. Cleans up orphaned
-	 * state so the next connect() call can start fresh, and emits a coded
-	 * `error` (cause: process exit) before `disconnect`.
-	 */
-	#handleProcessExit(): void {
-		if (this.#destroyed) return
-		if (this.#status !== 'connected') return
-
 		this.#unbindTransport()
-		this.#unbindProcess()
 
 		const client = this.#client
-		this.#process = undefined
-		this.#lastPid = undefined
-		this.#reset()
+		this.#client = undefined
+		await this.#destroyContexts()
+		this.#contexts = []
 
-		if (client !== undefined) client.close().catch(() => undefined)
+		if (this.#owned !== true) {
+			this.#owned = undefined
+			this.#endpoint = undefined
+		}
 
-		this.#emitter.emit(
-			'error',
-			new BrowserConnectionError('The browser process exited unexpectedly', {
-				cause: 'process-exit',
-			}),
-		)
+		await this.#closeClient(client)
+		if (this.#destroyed) return
+
 		this.#emitter.emit('disconnect')
 		this.#emitter.emit('idle')
 	}
 
-	/**
-	 * Handle a transport close/error while the owned process (if any) is
-	 * still alive, or the connection is CDP-attached. Never kills the
-	 * process — only the local client is reset, so the SAME instance can
-	 * reconnect (e.g. rediscover on the port and reattach). Emits a coded
-	 * `error` (cause: connection loss) before `disconnect`.
-	 */
-	#handleTransportLoss(deferred = false): void {
+	#assertNotAborted(): void {
+		if (this.#signal().aborted) throw new BrowserConnectionError('Connection aborted')
+	}
+
+	#signal(): AbortSignal {
+		const external = this.#options.signal
+		return external === undefined
+			? this.#abort.signal
+			: AbortSignal.any([this.#abort.signal, external])
+	}
+
+	async #raceAbort<T>(promise: Promise<T>): Promise<T> {
+		const signal = this.#signal()
+		if (signal.aborted) throw new BrowserConnectionError('Connection aborted')
+
+		const aborted = Promise.withResolvers<never>()
+		const listener = addAbortListener(signal, () => {
+			aborted.reject(new BrowserConnectionError('Connection aborted'))
+		})
+
+		try {
+			return await Promise.race([promise, aborted.promise])
+		} finally {
+			listener[Symbol.dispose]()
+			void promise.catch(() => undefined)
+		}
+	}
+
+	#handleProcessExit(): void {
 		if (this.#destroyed) return
-		if (this.#status !== 'connected') return
+
+		const connected = this.#status === 'connected'
+		const client = this.#client
+		const contexts = this.#contexts
+		this.#unbindTransport()
+		this.#unbindProcess()
+		this.#process = undefined
+		this.#client = undefined
+		this.#contexts = []
+		this.#connection = undefined
+		this.#owned = undefined
+		this.#endpoint = undefined
+		if (connected) this.#status = 'disconnected'
+
+		void this.#destroyContextList(contexts)
+		void this.#closeClient(client)
+		this.#emitter.emit(
+			'error',
+			new BrowserConnectionError('The browser process exited unexpectedly', {
+				cause: BROWSER_PROCESS_EXIT_CAUSE,
+			}),
+		)
+
+		if (connected) {
+			this.#emitter.emit('disconnect')
+			this.#emitter.emit('idle')
+		}
+	}
+
+	#handleTransportLoss(): void {
+		if (this.#destroyed || this.#status !== 'connected') return
 
 		const process = this.#process
 		if (process !== undefined && (process.exitCode !== null || process.signalCode !== null)) {
-			// The owned process is already dead — this IS a process exit, not
-			// merely a lost connection.
 			this.#handleProcessExit()
 			return
 		}
 
-		if (process !== undefined && !deferred) {
-			// A killed owned process's sockets can close before its 'exit'
-			// event is reaped by libuv — defer briefly so an already-pending
-			// 'exit' (handled by #handleProcessExit via the bound listener)
-			// gets first say over what really happened; if it wins, this call
-			// becomes a no-op via the #status guard above. Only ever defers once.
-			setTimeout(() => this.#handleTransportLoss(true), BROWSER_TRANSPORT_LOSS_DEFER_MS)
+		if (process !== undefined) {
+			setTimeout(() => this.#confirmTransportLoss(), BROWSER_TRANSPORT_LOSS_DEFER_MS)
 			return
 		}
 
-		if (process !== undefined && process.pid !== undefined) {
-			// The 'exit' event may still not have reached us even after the
-			// defer (a slow-to-reap libuv tick) — re-verify liveness directly
-			// via signal 0 so a genuinely dead process routes through the
-			// process-exit cleanup path (clearing #process) instead of being
-			// left stranded as a resumable owned process.
+		this.#confirmTransportLoss()
+	}
+
+	#confirmTransportLoss(): void {
+		if (this.#destroyed || this.#status !== 'connected') return
+
+		const process = this.#process
+		if (process !== undefined && (process.exitCode !== null || process.signalCode !== null)) {
+			this.#handleProcessExit()
+			return
+		}
+
+		if (process?.pid !== undefined) {
 			try {
 				process.kill(0)
 			} catch {
@@ -479,100 +393,100 @@ export class Browser implements BrowserInterface {
 			}
 		}
 
-		this.#unbindTransport()
-
 		const client = this.#client
-		this.#reset()
+		const owned = this.#owned === true
+		const contexts = this.#contexts
+		this.#unbindTransport()
+		this.#client = undefined
+		this.#contexts = []
+		this.#connection = undefined
+		this.#status = 'disconnected'
 
-		if (client !== undefined) client.close().catch(() => undefined)
+		if (!owned) {
+			this.#owned = undefined
+			this.#endpoint = undefined
+		}
 
+		void this.#destroyContextList(contexts)
+		void this.#closeClient(client)
 		this.#emitter.emit(
 			'error',
 			new BrowserConnectionError('The CDP transport connection was lost', {
-				cause: 'connection-loss',
+				cause: BROWSER_TRANSPORT_LOSS_CAUSE,
 			}),
 		)
 		this.#emitter.emit('disconnect')
 		this.#emitter.emit('idle')
 	}
 
-	/** Subscribe to the CDP transport's close/error events for deterministic transport-loss detection. */
 	#bindTransport(transport: CDPTransportInterface): void {
-		const onClose = (): void => this.#handleTransportLoss()
-		const onError = (): void => this.#handleTransportLoss()
-		transport.emitter.on('close', onClose)
-		transport.emitter.on('error', onError)
-		this.#transportUnbind = () => {
-			transport.emitter.off('close', onClose)
-			transport.emitter.off('error', onError)
-		}
+		this.#unbindTransport()
+		this.#transport = transport
+		transport.emitter.on('close', this.#onTransportClose)
+		transport.emitter.on('error', this.#onTransportError)
 	}
 
 	#unbindTransport(): void {
-		this.#transportUnbind?.()
-		this.#transportUnbind = undefined
+		const transport = this.#transport
+		if (transport === undefined) return
+		transport.emitter.off('close', this.#onTransportClose)
+		transport.emitter.off('error', this.#onTransportError)
+		this.#transport = undefined
 	}
 
-	/** Subscribe to a launched process's exit event for deterministic process-exit detection. */
 	#bindProcess(process: ChildProcess): void {
-		const onExit = (): void => this.#handleProcessExit()
-		process.once('exit', onExit)
-		this.#processUnbind = () => process.off('exit', onExit)
+		this.#unbindProcess()
+		process.once('exit', this.#onProcessExit)
+		if (process.exitCode !== null || process.signalCode !== null) {
+			queueMicrotask(this.#onProcessExit)
+		}
 	}
 
 	#unbindProcess(): void {
-		this.#processUnbind?.()
-		this.#processUnbind = undefined
+		this.#process?.off('exit', this.#onProcessExit)
 	}
 
 	#timeout(): number {
 		return this.#options.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 	}
 
-	async #discoverCdp(): Promise<BrowserDiscoveryResult> {
-		const port = this.#cdpPort
-		const url = `${BROWSER_CDP_PROTOCOL}://${this.#cdpHost}:${port}${BROWSER_CDP_VERSION_PATH}`
-		const controller = new AbortController()
-		const timer = setTimeout(() => controller.abort(), this.#timeout())
+	async #discoverCDP(signal?: AbortSignal): Promise<BrowserDiscoveryResult> {
+		const url = `${BROWSER_CDP_PROTOCOL}://${this.#cdpHost}:${this.#cdpPort}${BROWSER_CDP_VERSION_PATH}`
+		const requestSignal =
+			signal === undefined
+				? AbortSignal.timeout(this.#timeout())
+				: AbortSignal.any([signal, AbortSignal.timeout(this.#timeout())])
 
 		try {
-			const response = await fetch(url, { signal: controller.signal })
-
-			if (!response.ok) return this.#notFoundResult()
+			const response = await fetch(url, { signal: requestSignal })
+			if (!response.ok) return this.#notFound()
 
 			const info: unknown = await response.json()
-			if (!isRecord(info)) return this.#notFoundResult()
+			if (!isRecord(info)) return this.#notFound()
 
 			const endpoint = isString(info['webSocketDebuggerUrl'])
 				? info['webSocketDebuggerUrl']
 				: undefined
-			const browserName = isString(info['Browser']) ? info['Browser'] : undefined
+			const browser = isString(info['Browser']) ? info['Browser'] : undefined
 
 			return {
 				found: endpoint !== undefined,
 				endpoint,
-				browser: browserName,
+				browser,
 				connection: endpoint !== undefined ? 'cdp' : undefined,
 			}
-		} catch {
-			return this.#notFoundResult()
-		} finally {
-			clearTimeout(timer)
+		} catch (error) {
+			if (signal?.aborted === true) throw error
+			return this.#notFound()
 		}
 	}
 
-	#notFoundResult(): BrowserDiscoveryResult {
+	#notFound(): BrowserDiscoveryResult {
 		return { found: false, endpoint: undefined, browser: undefined, connection: undefined }
 	}
 
-	/**
-	 * Reject when something is already listening on the configured CDP port —
-	 * used ahead of a `discover: false` launch, so a caller demanding a fresh
-	 * browser never silently attaches to a stranger already on that port.
-	 */
 	async #assertPortFree(): Promise<void> {
-		const occupied = await this.#probePort()
-		if (occupied) {
+		if (await this.#probePort()) {
 			throw new BrowserConnectionError(
 				`Port ${this.#cdpPort} on ${this.#cdpHost} is already occupied by another CDP endpoint`,
 				{ port: this.#cdpPort, host: this.#cdpHost },
@@ -580,44 +494,46 @@ export class Browser implements BrowserInterface {
 		}
 	}
 
-	/** Very short probe of the CDP version endpoint — just enough to detect an occupied port, not full discovery. */
 	async #probePort(): Promise<boolean> {
 		const url = `${BROWSER_CDP_PROTOCOL}://${this.#cdpHost}:${this.#cdpPort}${BROWSER_CDP_VERSION_PATH}`
-		const controller = new AbortController()
-		const timer = setTimeout(() => controller.abort(), BROWSER_PORT_PROBE_TIMEOUT_MS)
 
 		try {
-			const response = await fetch(url, { signal: controller.signal })
+			const response = await fetch(url, {
+				signal: AbortSignal.timeout(BROWSER_PORT_PROBE_TIMEOUT_MS),
+			})
 			return response.ok
 		} catch {
 			return false
-		} finally {
-			clearTimeout(timer)
 		}
 	}
 
-	async #connectCdp(endpoint: string): Promise<void> {
+	async #connectCDP(endpoint: string): Promise<void> {
 		const transport = createCDPTransport({ url: endpoint, timeout: this.#timeout() })
 		const client = new CDPClient({ transport, timeout: this.#timeout() })
+		const retained = this.#owned === true && this.#endpoint === endpoint
 
 		try {
 			await this.#raceAbort(client.connect())
 
 			this.#client = client
-			this.#connection = 'cdp'
+			this.#endpoint = endpoint
+			this.#connection = retained ? this.#retainedConnection() : 'cdp'
+			this.#owned = retained
 			this.#status = 'connected'
 			this.#bindTransport(transport)
 
-			// Sync existing targets as contexts
 			await this.#syncContexts()
-
-			this.#emitter.emit('connect', 'cdp')
+			this.#emitter.emit('connect', this.#connection)
 		} catch (error) {
-			try {
-				await client.close()
-			} catch {
-				// Swallow — best-effort cleanup of the failed attempt
+			this.#unbindTransport()
+			if (this.#client === client) this.#client = undefined
+			this.#contexts = []
+			this.#connection = undefined
+			if (!retained) {
+				this.#owned = undefined
+				this.#endpoint = undefined
 			}
+			await this.#closeClient(client)
 			throw error
 		}
 	}
@@ -642,52 +558,50 @@ export class Browser implements BrowserInterface {
 		if (executable === undefined) {
 			throw new BrowserConnectionError(
 				'No Chromium browser found. Install Chrome, Edge, or Chromium.',
-				requestedEngine !== undefined ? { engine: requestedEngine } : undefined,
+				requestedEngine === undefined ? undefined : { engine: requestedEngine },
 			)
 		}
 
 		this.#engine = resolvedEngine ?? 'chromium'
-
-		const headless = this.#options.headless ?? true
 		const profile = this.#options.profile
-		const extra = this.#options.args
-
-		const process = launchBrowserProcess(executable, this.#cdpPort, headless, profile, extra)
+		const process = launchBrowserProcess(
+			executable,
+			this.#cdpPort,
+			this.#options.headless ?? true,
+			profile,
+			this.#options.args,
+		)
 		this.#process = process
 
-		let transport: CDPTransportInterface | undefined
 		let client: CDPClient | undefined
 
 		try {
-			// Wait for the CDP endpoint to be available
-			const wsUrl = await this.#raceAbort(this.#waitForLaunch(process, executable, extra))
-
-			// Connect to the browser via CDP
-			transport = createCDPTransport({ url: wsUrl, timeout: this.#timeout() })
+			const endpoint = await this.#waitForLaunch(process, executable, this.#options.args)
+			const transport = createCDPTransport({ url: endpoint, timeout: this.#timeout() })
 			client = new CDPClient({ transport, timeout: this.#timeout() })
 			await this.#raceAbort(client.connect())
 
+			const connection = profile === undefined ? 'launch' : 'persistent'
 			this.#client = client
-			this.#connection = profile !== undefined ? 'persistent' : 'launch'
+			this.#endpoint = endpoint
+			this.#connection = connection
+			this.#owned = true
 			this.#status = 'connected'
 			this.#bindTransport(transport)
 			this.#bindProcess(process)
 
-			// Sync existing targets
 			await this.#syncContexts()
-
 			this.#emitter.emit('launch', this.#engine)
-			this.#emitter.emit('connect', this.#connection)
+			this.#emitter.emit('connect', connection)
 		} catch (error) {
-			if (client !== undefined) {
-				try {
-					await client.close()
-				} catch {
-					// Swallow — best-effort cleanup of the failed attempt
-				}
-			}
+			this.#unbindTransport()
+			this.#unbindProcess()
+			await this.#closeClient(client)
 			await this.#terminate(process)
 			this.#process = undefined
+			this.#client = undefined
+			this.#endpoint = undefined
+			this.#owned = undefined
 			throw error
 		}
 	}
@@ -698,109 +612,252 @@ export class Browser implements BrowserInterface {
 		args?: readonly string[],
 	): Promise<string> {
 		const context = { executable, args }
-
-		return await new Promise((resolve, reject) => {
-			let settled = false
-
-			const finish = (callback: () => void): void => {
-				if (settled) return
-				settled = true
-				process.off('error', onError)
-				process.off('exit', onExit)
-				callback()
-			}
-
-			const onError = (error: Error): void => {
-				finish(() => reject(new BrowserConnectionError(error.message, context)))
-			}
-
-			const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-				finish(() =>
-					reject(new BrowserConnectionError(this.#formatLaunchExit(code, signal), context)),
-				)
-			}
-
-			process.once('error', onError)
-			process.once('exit', onExit)
-
-			void waitForCdpReady(this.#cdpPort, this.#timeout(), this.#cdpHost).then(
-				(wsUrl) => {
-					finish(() => resolve(wsUrl))
-				},
-				(error: unknown) => {
-					const message = error instanceof Error ? error.message : String(error)
-					finish(() => reject(new BrowserConnectionError(message, context)))
-				},
-			)
+		const controller = new AbortController()
+		const signal = AbortSignal.any([controller.signal, this.#signal()])
+		const ready = waitForCDPReady(this.#cdpPort, this.#timeout(), this.#cdpHost, signal)
+		const exited = once(process, 'exit', { signal }).then((values) => {
+			const code = typeof values[0] === 'number' ? values[0] : null
+			const exitSignal = typeof values[1] === 'string' ? values[1] : null
+			throw new BrowserConnectionError(this.#formatLaunchExit(code, exitSignal), context)
 		})
+
+		try {
+			return await Promise.race([ready, exited])
+		} catch (error) {
+			if (error instanceof BrowserConnectionError) throw error
+			if (this.#signal().aborted) throw new BrowserConnectionError('Connection aborted', context)
+
+			const message = error instanceof Error ? error.message : String(error)
+			throw new BrowserConnectionError(message, context)
+		} finally {
+			controller.abort()
+			void ready.catch(() => undefined)
+			void exited.catch(() => undefined)
+		}
 	}
 
-	#formatLaunchExit(code: number | null, signal: NodeJS.Signals | null): string {
+	#formatLaunchExit(code: number | null, signal: string | null): string {
 		if (signal !== null) {
 			return `Browser process exited before CDP became ready (signal: ${signal})`
 		}
-
-		if (code !== null) {
-			return `Browser process exited before CDP became ready (code: ${code})`
-		}
-
+		if (code !== null) return `Browser process exited before CDP became ready (code: ${code})`
 		return 'Browser process exited before CDP became ready'
 	}
 
+	#retainedConnection(): BrowserConnection {
+		if (this.#process === undefined) return 'cdp'
+		return this.#options.profile === undefined ? 'launch' : 'persistent'
+	}
+
 	async #syncContexts(): Promise<void> {
-		if (this.#client === undefined) return
+		const client = this.#client
+		if (client === undefined) return
 
-		const targets = await fetchCdpTargets(this.#cdpPort, this.#timeout(), this.#cdpHost)
-		const pageTargets = targets.filter((t) => t.type === 'page')
+		let result: unknown
+		try {
+			result = await client.send('Target.getTargets')
+		} catch {
+			return
+		}
+		if (!isRecord(result) || !Array.isArray(result['targetInfos'])) return
 
-		if (pageTargets.length > 0 && this.#contexts.length === 0) {
-			const ctx = new BrowserContext(
-				this.#client,
-				undefined,
-				this.#options.viewport,
-				createScreenshotWriter(),
-			)
-			await ctx.sync(pageTargets)
-			this.#contexts.push(ctx)
+		const pages: CDPTarget[] = []
+		for (const target of result['targetInfos']) {
+			if (
+				!isRecord(target) ||
+				!isString(target['targetId']) ||
+				target['type'] !== 'page' ||
+				!isString(target['title']) ||
+				!isString(target['url'])
+			) {
+				continue
+			}
+			pages.push({
+				id: target['targetId'],
+				type: target['type'],
+				title: target['title'],
+				url: target['url'],
+			})
+		}
+		if (pages.length === 0 || this.#contexts.length > 0) return
+
+		const context = new BrowserContext(
+			client,
+			undefined,
+			this.#options.viewport,
+			createScreenshotWriter(),
+		)
+		await context.sync(pages)
+		this.#contexts.push(context)
+	}
+
+	async #destroyResources(): Promise<void> {
+		try {
+			await this.#settle()
+			this.#unbindTransport()
+			this.#unbindProcess()
+
+			const client = this.#client
+			if (this.#owned === true) {
+				await this.#closeContexts()
+				if (this.#process === undefined) await this.#closeRemote(client)
+			} else {
+				await this.#destroyContexts()
+			}
+			this.#contexts = []
+
+			await this.#terminate(this.#process)
+			this.#process = undefined
+			await this.#closeClient(client)
+			this.#client = undefined
+		} finally {
+			this.#finish()
 		}
 	}
 
-	/**
-	 * Terminate a browser process, escalating from SIGTERM to SIGKILL if it
-	 * does not exit within the grace period. Tolerates a process that has
-	 * already exited (ESRCH).
-	 */
-	async #terminate(process: ChildProcess | undefined): Promise<void> {
-		if (process === undefined) return
-		if (process.exitCode !== null || process.signalCode !== null) return
+	async #closeResources(): Promise<void> {
+		try {
+			await this.#settle()
+			this.#unbindTransport()
+			this.#unbindProcess()
 
-		const exited = new Promise<void>((resolve) => {
-			process.once('exit', () => resolve())
-		})
+			const client = this.#client
+			await this.#closeContexts()
+			this.#contexts = []
+			await this.#closeRemote(client)
+
+			const process = this.#process
+			if (process !== undefined) {
+				const exited = await this.#waitForProcessWithin(process, BROWSER_KILL_GRACE_MS)
+				if (!exited) await this.#terminate(process)
+			}
+			this.#process = undefined
+
+			await this.#closeClient(client)
+			this.#client = undefined
+		} finally {
+			this.#finish()
+		}
+	}
+
+	async #settle(): Promise<void> {
+		await this.#connecting?.catch(() => undefined)
+		await this.#disconnecting?.catch(() => undefined)
+	}
+
+	async #closeRemote(client: CDPClient | undefined): Promise<void> {
+		let remote = client
+		let temporary = false
+
+		if (remote === undefined && this.#owned === true && this.#endpoint !== undefined) {
+			const transport = createCDPTransport({
+				url: this.#endpoint,
+				timeout: this.#timeout(),
+			})
+			remote = new CDPClient({ transport, timeout: this.#timeout() })
+			try {
+				await remote.connect()
+				temporary = true
+			} catch {
+				await this.#closeClient(remote)
+				return
+			}
+		}
+
+		if (remote !== undefined) {
+			try {
+				await remote.send('Browser.close')
+			} catch {
+				// The remote may already be gone or close before acknowledging.
+			}
+		}
+
+		if (temporary) await this.#closeClient(remote)
+	}
+
+	async #closeContexts(): Promise<void> {
+		for (const context of this.#contexts) {
+			try {
+				await context.close()
+			} catch {
+				// Teardown is best-effort after the browser begins shutting down.
+			}
+		}
+	}
+
+	async #destroyContexts(): Promise<void> {
+		await this.#destroyContextList(this.#contexts)
+	}
+
+	async #destroyContextList(contexts: readonly BrowserContext[]): Promise<void> {
+		for (const context of contexts) {
+			try {
+				await context.destroy()
+			} catch {
+				// The transport may already be unavailable.
+			}
+		}
+	}
+
+	async #closeClient(client: CDPClient | undefined): Promise<void> {
+		if (client === undefined) return
+		try {
+			await client.close()
+		} catch {
+			// Teardown is best-effort after a connection fault.
+		}
+	}
+
+	async #waitForProcess(process: ChildProcess): Promise<void> {
+		if (process.exitCode !== null || process.signalCode !== null) return
+		await once(process, 'exit')
+	}
+
+	async #waitForProcessWithin(process: ChildProcess, timeout: number): Promise<boolean> {
+		if (process.exitCode !== null || process.signalCode !== null) return true
+
+		const signal = AbortSignal.timeout(timeout)
+		try {
+			await once(process, 'exit', { signal })
+			return true
+		} catch (error) {
+			if (signal.aborted) {
+				return process.exitCode !== null || process.signalCode !== null
+			}
+			throw error
+		}
+	}
+
+	async #terminate(process: ChildProcess | undefined): Promise<void> {
+		if (process === undefined || process.exitCode !== null || process.signalCode !== null) return
 
 		try {
 			process.kill('SIGTERM')
 		} catch {
-			// Already dead — tolerate ESRCH
 			return
 		}
 
-		let timer: ReturnType<typeof setTimeout> | undefined
-		const timedOut = await Promise.race([
-			exited.then(() => false),
-			new Promise<boolean>((resolve) => {
-				timer = setTimeout(() => resolve(true), BROWSER_KILL_GRACE_MS)
-			}),
-		])
-		if (timer !== undefined) clearTimeout(timer)
+		if (await this.#waitForProcessWithin(process, BROWSER_KILL_GRACE_MS)) return
 
-		if (timedOut) {
-			try {
-				process.kill('SIGKILL')
-			} catch {
-				// Already dead — tolerate ESRCH
-			}
-			await exited
+		try {
+			process.kill('SIGKILL')
+		} catch {
+			return
 		}
+		await this.#waitForProcess(process)
+	}
+
+	#finish(): void {
+		this.#unbindTransport()
+		this.#unbindProcess()
+		this.#status = 'disconnected'
+		this.#connection = undefined
+		this.#owned = undefined
+		this.#endpoint = undefined
+		this.#client = undefined
+		this.#process = undefined
+		this.#contexts = []
+		this.#emitter.emit('destroy')
+		this.#emitter.destroy()
 	}
 }

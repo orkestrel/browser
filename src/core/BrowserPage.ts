@@ -8,6 +8,7 @@ import type {
 	BrowserScreenshotOptions,
 	BrowserContentResult,
 	BrowserScreenshotResult,
+	BrowserWaitUntil,
 	CDPClientInterface,
 	ScreenshotWriterInterface,
 } from './types.js'
@@ -26,14 +27,27 @@ import { isRecord, isString } from '@orkestrel/contract'
 // === BrowserPage
 
 export class BrowserPage implements BrowserPageInterface {
-	#client: CDPClientInterface
-	#targetId: string
-	#sessionId: string
-	#writer: ScreenshotWriterInterface | undefined
+	readonly #client: CDPClientInterface
+	readonly #targetId: string
+	readonly #sessionId: string
+	readonly #writer: ScreenshotWriterInterface | undefined
 	#url = 'about:blank'
 	#closed = false
 	#codegen: BrowserCodegen | undefined
-	#destroyHandler: (params: Readonly<Record<string, unknown>>) => void
+	#codegenStart: Promise<BrowserCodegen> | undefined
+	#navigation: Promise<void> | undefined
+	#closing: Promise<void> | undefined
+	#releasing: Promise<void> | undefined
+	#loadEvent: string | undefined
+	#loadTimer: ReturnType<typeof setTimeout> | undefined
+	#loadResolve: (() => void) | undefined
+	#loadReject: ((error: unknown) => void) | undefined
+	#destroyHandler = (params: Readonly<Record<string, unknown>>): void => {
+		if (!isString(params['targetId']) || params['targetId'] !== this.#targetId) return
+		this.#closed = true
+		void this.#release().catch(() => undefined)
+	}
+	#loadHandler = (): void => this.#resolveLoad()
 
 	constructor(
 		client: CDPClientInterface,
@@ -49,11 +63,6 @@ export class BrowserPage implements BrowserPageInterface {
 		if (url !== undefined) this.#url = url
 
 		// Subscribe to external close detection (browser-level event, global subscription)
-		this.#destroyHandler = (params) => {
-			if (isString(params['targetId']) && params['targetId'] === this.#targetId) {
-				this.#closed = true
-			}
-		}
 		this.#client.subscribe('Target.targetDestroyed', this.#destroyHandler)
 	}
 
@@ -70,49 +79,29 @@ export class BrowserPage implements BrowserPageInterface {
 	// === Public API
 
 	async title(): Promise<string> {
+		this.#assertOpen()
 		const result = await this.#evaluate('document.title')
-		return typeof result === 'string' ? result : ''
+		return this.#requireString(result, 'Document title')
 	}
 
 	async navigate(url: string, options?: BrowserNavigationOptions): Promise<void> {
-		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
-		const condition = options?.condition ?? 'load'
-
-		// Set up load event listener before navigating
-		const wait = this.#waitForLoadEvent(condition, timeout)
-
-		// Never let wait.promise reject unobserved — convert to an outcome
-		const waitOutcome = wait.promise.then(
-			() => ({ ok: true as const }),
-			(error: unknown) => ({ ok: false as const, error }),
-		)
+		this.#assertOpen()
+		while (this.#navigation !== undefined) {
+			await this.#navigation.catch(() => undefined)
+		}
+		this.#assertOpen()
+		const navigation = this.#navigate(url, options)
+		this.#navigation = navigation
 
 		try {
-			const result: unknown = await this.#client.send(
-				'Page.navigate',
-				{ url },
-				this.#sessionId,
-				timeout,
-			)
-
-			if (isRecord(result) && isString(result['errorText'])) {
-				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
-			}
-
-			// Wait for the load condition
-			const outcome = await waitOutcome
-			if (!outcome.ok) throw outcome.error
-		} catch (error) {
-			wait.cancel()
-			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
-			throw error
+			await navigation
+		} finally {
+			if (this.#navigation === navigation) this.#navigation = undefined
 		}
-
-		const currentUrl = await this.#evaluate('location.href')
-		this.#url = typeof currentUrl === 'string' ? currentUrl : url
 	}
 
 	async content(): Promise<BrowserContentResult> {
+		this.#assertOpen()
 		const [title, html, text, currentUrl] = await Promise.all([
 			this.#evaluate('document.title'),
 			this.#evaluate(
@@ -127,19 +116,19 @@ export class BrowserPage implements BrowserPageInterface {
 			this.#evaluate('location.href'),
 		])
 
-		if (typeof currentUrl === 'string') {
-			this.#url = currentUrl
-		}
+		const url = this.#requireString(currentUrl, 'Document URL')
+		this.#url = url
 
 		return {
-			url: this.#url,
-			title: typeof title === 'string' ? title : '',
-			html: typeof html === 'string' ? html : '',
-			text: typeof text === 'string' ? text : '',
+			url,
+			title: this.#requireString(title, 'Document title'),
+			html: this.#requireString(html, 'Document HTML'),
+			text: this.#requireString(text, 'Document text'),
 		}
 	}
 
 	async screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult> {
+		this.#assertOpen()
 		const format = options?.type ?? 'png'
 		const params: Record<string, unknown> = { format }
 
@@ -157,10 +146,10 @@ export class BrowserPage implements BrowserPageInterface {
 
 			if (isRecord(metrics) && isRecord(metrics['contentSize'])) {
 				const contentSize = metrics['contentSize']
-				const width = typeof contentSize['width'] === 'number' ? contentSize['width'] : 0
-				const height = typeof contentSize['height'] === 'number' ? contentSize['height'] : 0
+				const width = contentSize['width']
+				const height = contentSize['height']
 
-				if (width > 0 && height > 0) {
+				if (typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) {
 					params['clip'] = { x: 0, y: 0, width, height, scale: 1 }
 					params['captureBeyondViewport'] = true
 				}
@@ -187,6 +176,7 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	async click(selector: string, options?: BrowserActionOptions): Promise<void> {
+		this.#assertOpen()
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		await this.#waitForSelector(selector, timeout)
 		await this.#evaluate(
@@ -195,6 +185,7 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	async fill(selector: string, value: string, options?: BrowserActionOptions): Promise<void> {
+		this.#assertOpen()
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		await this.#waitForSelector(selector, timeout)
 		await this.#evaluate(
@@ -219,6 +210,7 @@ export class BrowserPage implements BrowserPageInterface {
 		values: readonly string[],
 		options?: BrowserActionOptions,
 	): Promise<void> {
+		this.#assertOpen()
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		await this.#waitForSelector(selector, timeout)
 		const valuesJson = JSON.stringify([...values])
@@ -236,10 +228,12 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	async evaluate(expression: string): Promise<unknown> {
+		this.#assertOpen()
 		return this.#evaluate(guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT))
 	}
 
 	async wait(selector: string, options?: BrowserActionOptions): Promise<void> {
+		this.#assertOpen()
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		await this.#waitForSelector(selector, timeout)
 	}
@@ -250,6 +244,7 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	async frames(): Promise<readonly BrowserFrame[]> {
+		this.#assertOpen()
 		const result: unknown = await this.#client.send('Page.getFrameTree', undefined, this.#sessionId)
 
 		if (!isRecord(result) || !isRecord(result['frameTree'])) return []
@@ -260,39 +255,132 @@ export class BrowserPage implements BrowserPageInterface {
 	}
 
 	async codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface> {
+		this.#assertOpen()
 		if (this.#codegen !== undefined) return this.#codegen
+		const active = this.#codegenStart
+		if (active !== undefined) return await active
 
+		const attempt = this.#startCodegen(options)
+		this.#codegenStart = attempt
+		try {
+			return await attempt
+		} finally {
+			if (this.#codegenStart === attempt) this.#codegenStart = undefined
+		}
+	}
+
+	destroy(): Promise<void> {
+		const active = this.#closing
+		if (active !== undefined) return active
+
+		this.#closed = true
+		const closing = this.#destroy()
+		this.#closing = closing
+		return closing
+	}
+
+	close(): Promise<void> {
+		const active = this.#closing
+		if (active !== undefined) return active
+
+		if (this.#closed) {
+			const closing = this.#release()
+			this.#closing = closing
+			return closing
+		}
+
+		this.#closed = true
+		const closing = this.#close()
+		this.#closing = closing
+		return closing
+	}
+
+	// === Private helpers
+
+	async #navigate(url: string, options?: BrowserNavigationOptions): Promise<void> {
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		const condition = options?.condition ?? 'load'
+
+		const wait = this.#waitForLoadEvent(condition, timeout)
+		void wait.catch(() => undefined)
+
+		try {
+			const result: unknown = await this.#client.send(
+				'Page.navigate',
+				{ url },
+				this.#sessionId,
+				timeout,
+			)
+
+			if (isRecord(result) && isString(result['errorText'])) {
+				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
+			}
+
+			await wait
+		} catch (error) {
+			this.#cancelLoad()
+			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
+			throw error
+		}
+
+		const currentUrl = await this.#evaluate('location.href')
+		this.#url = this.#requireString(currentUrl, 'Navigation URL')
+	}
+
+	async #startCodegen(options?: BrowserCodegenOptions): Promise<BrowserCodegen> {
 		const codegen = new BrowserCodegen(this.#client, this.#sessionId, options)
 		await codegen.start()
+		if (this.#closed) {
+			await codegen.destroy()
+			throw new BrowserError('Browser page is closed')
+		}
 		this.#codegen = codegen
 		return codegen
 	}
 
-	async close(): Promise<void> {
-		if (this.#closed) return
-		this.#closed = true
-
-		// Tear down the recorder first so it can detach CDP listeners cleanly
-		if (this.#codegen !== undefined) {
-			try {
-				await this.#codegen.destroy()
-			} catch {
-				// Swallow recorder teardown errors during page close
-			}
-			this.#codegen = undefined
+	async #destroy(): Promise<void> {
+		await this.#release()
+		try {
+			await this.#client.send('Target.detachFromTarget', { sessionId: this.#sessionId })
+		} catch {
+			// The session may already be detached.
 		}
+	}
 
-		// Unsubscribe from external close detection before sending close command
-		this.#client.unsubscribe('Target.targetDestroyed', this.#destroyHandler)
+	async #close(): Promise<void> {
+		await this.#release()
 
 		try {
 			await this.#client.send('Target.closeTarget', { targetId: this.#targetId })
 		} catch {
-			// Target may already be closed
+			// The target may already be closed.
 		}
 	}
 
-	// === Private helpers
+	#release(): Promise<void> {
+		const active = this.#releasing
+		if (active !== undefined) return active
+
+		const release = this.#releaseResources()
+		this.#releasing = release
+		return release
+	}
+
+	async #releaseResources(): Promise<void> {
+		this.#cancelLoad()
+		await this.#codegenStart?.catch(() => undefined)
+
+		if (this.#codegen !== undefined) {
+			try {
+				await this.#codegen.destroy()
+			} catch {
+				// The recorder's session may already be unavailable.
+			}
+			this.#codegen = undefined
+		}
+
+		this.#client.unsubscribe('Target.targetDestroyed', this.#destroyHandler)
+	}
 
 	#flattenFrameTree(node: Readonly<Record<string, unknown>>, out: BrowserFrame[]): void {
 		const frame = node['frame']
@@ -386,43 +474,53 @@ export class BrowserPage implements BrowserPageInterface {
 		throw new BrowserSelectorError(`Timeout waiting for selector: ${selector}`)
 	}
 
-	#waitForLoadEvent(
-		condition: string,
-		timeout: number,
-	): { promise: Promise<void>; cancel: () => void } {
+	#waitForLoadEvent(condition: BrowserWaitUntil, timeout: number): Promise<void> {
 		const eventName =
 			condition === 'domcontentloaded' ? 'Page.domContentEventFired' : 'Page.loadEventFired'
+		const deferred = Promise.withResolvers<void>()
+		this.#loadEvent = eventName
+		this.#loadResolve = deferred.resolve
+		this.#loadReject = deferred.reject
+		this.#loadTimer = setTimeout(() => {
+			this.#rejectLoad(new BrowserError(`Navigation timeout after ${timeout}ms`))
+		}, timeout)
+		this.#client.subscribe(eventName, this.#loadHandler, this.#sessionId)
+		return deferred.promise
+	}
 
-		let settled = false
-		let timer: ReturnType<typeof setTimeout>
-		let handler: () => void
+	#resolveLoad(): void {
+		const resolve = this.#loadResolve
+		this.#clearLoad()
+		resolve?.()
+	}
 
-		const promise = new Promise<void>((resolve, reject) => {
-			timer = setTimeout(() => {
-				if (settled) return
-				settled = true
-				this.#client.unsubscribe(eventName, handler, this.#sessionId)
-				reject(new BrowserError(`Navigation timeout after ${timeout}ms`))
-			}, timeout)
+	#rejectLoad(error: unknown): void {
+		const reject = this.#loadReject
+		this.#clearLoad()
+		reject?.(error)
+	}
 
-			handler = (): void => {
-				if (settled) return
-				settled = true
-				clearTimeout(timer)
-				this.#client.unsubscribe(eventName, handler, this.#sessionId)
-				resolve()
-			}
+	#cancelLoad(): void {
+		this.#rejectLoad(new BrowserError('Navigation cancelled'))
+	}
 
-			this.#client.subscribe(eventName, handler, this.#sessionId)
-		})
-
-		const cancel = (): void => {
-			if (settled) return
-			settled = true
-			clearTimeout(timer)
-			this.#client.unsubscribe(eventName, handler, this.#sessionId)
+	#clearLoad(): void {
+		if (this.#loadTimer !== undefined) clearTimeout(this.#loadTimer)
+		if (this.#loadEvent !== undefined) {
+			this.#client.unsubscribe(this.#loadEvent, this.#loadHandler, this.#sessionId)
 		}
+		this.#loadEvent = undefined
+		this.#loadTimer = undefined
+		this.#loadResolve = undefined
+		this.#loadReject = undefined
+	}
 
-		return { promise, cancel }
+	#requireString(value: unknown, field: string): string {
+		if (typeof value === 'string') return value
+		throw new BrowserError(`${field} failed: no string value returned`)
+	}
+
+	#assertOpen(): void {
+		if (this.#closed) throw new BrowserError('Browser page is closed')
 	}
 }

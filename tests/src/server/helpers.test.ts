@@ -1,8 +1,8 @@
 /**
  * src/server/helpers.ts tests.
  *
- * `fetchCdpTargets` / `waitForCdpReady` are exercised against a real
- * in-process HTTP server (`createCdpTestServer`). `findSystemBrowsers` /
+ * `fetchCDPTargets` / `waitForCDPReady` are exercised against a real
+ * in-process HTTP server (`createCDPTestServer`). `findSystemBrowsers` /
  * `findSystemBrowser` are exercised through their `SystemBrowserOptions`
  * override bag with real temp files/dirs (`node:fs`) so every assertion is
  * deterministic across machines — no mocking, no dependency on what happens
@@ -13,37 +13,30 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join, dirname } from 'node:path'
 import {
 	findSystemBrowsers,
 	findSystemBrowser,
+	findAllInStore,
 	parseBrowserEngine,
 	launchBrowserProcess,
-	waitForCdpReady,
-	fetchCdpTargets,
+	waitForCDPReady,
+	fetchCDPTargets,
 } from '@src/server'
-import { createCdpTestServer } from '../../setupServer.js'
+import {
+	createCDPTestServer,
+	createTempDirectory,
+	destroyTempDirectories,
+} from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
-const tempDirs: string[] = []
-
 afterEach(async () => {
 	await server?.close()
 	server = undefined
-
-	for (const dir of tempDirs.splice(0)) {
-		rmSync(dir, { recursive: true, force: true })
-	}
+	destroyTempDirectories()
 })
-
-function createTempDir(): string {
-	const dir = mkdtempSync(join(tmpdir(), 'browser-test-'))
-	tempDirs.push(dir)
-	return dir
-}
 
 describe('findSystemBrowser', () => {
 	it('returns undefined when every candidate source is empty', () => {
@@ -52,7 +45,7 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('returns a planted path candidate when it exists', () => {
-		const dir = createTempDir()
+		const dir = createTempDirectory()
 		const file = join(dir, 'chrome')
 		writeFileSync(file, '')
 
@@ -62,7 +55,7 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('prefers an env override over a path candidate', () => {
-		const dir = createTempDir()
+		const dir = createTempDirectory()
 		const envFile = join(dir, 'env-chrome')
 		const pathFile = join(dir, 'path-chrome')
 		writeFileSync(envFile, '')
@@ -79,7 +72,7 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('falls through to CHROME_PATH when PLAYWRIGHT_EXECUTABLE_PATH is absent', () => {
-		const dir = createTempDir()
+		const dir = createTempDirectory()
 		const chromePathFile = join(dir, 'chrome-path-chrome')
 		writeFileSync(chromePathFile, '')
 
@@ -99,7 +92,7 @@ describe('findSystemBrowser', () => {
 		// linux -> chromium-<rev>/chrome-linux/chrome
 		// darwin -> chromium-<rev>/chrome-mac/Chromium.app/Contents/MacOS/Chromium
 		// win32 -> chromium-<rev>/chrome-win/chrome.exe
-		const store = createTempDir()
+		const store = createTempDirectory()
 		const binary =
 			process.platform === 'win32'
 				? join(store, 'chromium-1194', 'chrome-win', 'chrome.exe')
@@ -123,7 +116,7 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('resolves the top-level chromium link inside a browser store', () => {
-		const store = createTempDir()
+		const store = createTempDirectory()
 		const link = join(store, 'chromium')
 		writeFileSync(link, '')
 
@@ -139,13 +132,13 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('returns every planted candidate in resolution-precedence order with classified engines', () => {
-		const dir = createTempDir()
+		const dir = createTempDirectory()
 		const envFile = join(dir, 'msedge')
 		const pathFile = join(dir, 'google-chrome')
 		writeFileSync(envFile, '')
 		writeFileSync(pathFile, '')
 
-		const store = createTempDir()
+		const store = createTempDirectory()
 		const link = join(store, 'chromium')
 		writeFileSync(link, '')
 
@@ -164,7 +157,7 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('dedupes a candidate reachable via two sources by normalized path', () => {
-		const dir = createTempDir()
+		const dir = createTempDirectory()
 		const shared = join(dir, 'chrome')
 		writeFileSync(shared, '')
 
@@ -179,7 +172,7 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('narrows results to the requested engine', () => {
-		const dir = createTempDir()
+		const dir = createTempDirectory()
 		const edgeFile = join(dir, 'msedge')
 		const chromeFile = join(dir, 'google-chrome')
 		writeFileSync(edgeFile, '')
@@ -197,7 +190,7 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('returns an empty array when the engine filter matches nothing', () => {
-		const dir = createTempDir()
+		const dir = createTempDirectory()
 		const chromeFile = join(dir, 'google-chrome')
 		writeFileSync(chromeFile, '')
 
@@ -210,6 +203,33 @@ describe('findSystemBrowsers', () => {
 		})
 
 		expect(found).toEqual([])
+	})
+})
+
+describe('findAllInStore', () => {
+	it('orders multi-digit browser revisions numerically from newest to oldest', () => {
+		const store = createTempDirectory()
+		const binaries = ['99', '100'].map((revision) =>
+			process.platform === 'win32'
+				? join(store, `chromium-${revision}`, 'chrome-win', 'chrome.exe')
+				: process.platform === 'darwin'
+					? join(
+							store,
+							`chromium-${revision}`,
+							'chrome-mac',
+							'Chromium.app',
+							'Contents',
+							'MacOS',
+							'Chromium',
+						)
+					: join(store, `chromium-${revision}`, 'chrome-linux', 'chrome'),
+		)
+		for (const binary of binaries) {
+			mkdirSync(dirname(binary), { recursive: true })
+			writeFileSync(binary, '')
+		}
+
+		expect(findAllInStore(store, process.platform)).toEqual([...binaries].reverse())
 	})
 })
 
@@ -247,61 +267,84 @@ describe('parseBrowserEngine', () => {
 	})
 })
 
-describe('waitForCdpReady', () => {
+describe('waitForCDPReady', () => {
 	it('resolves the WebSocket debugger URL once the endpoint is ready', async () => {
-		server = await createCdpTestServer()
-		const url = await waitForCdpReady(server.port, 2000)
-		expect(url).toBe(server.wsUrl)
+		server = await createCDPTestServer()
+		const url = await waitForCDPReady(server.port, 2000)
+		expect(url).toBe(server.endpoint)
 	})
 
 	it('throws when the endpoint never becomes ready before the timeout', async () => {
-		await expect(waitForCdpReady(19_992, 100)).rejects.toThrow(/did not become ready/)
+		await expect(waitForCDPReady(19_992, 100)).rejects.toThrow(/did not become ready/)
 	})
 
 	it('respects the deadline against a hanging endpoint', async () => {
-		server = await createCdpTestServer()
+		server = await createCDPTestServer()
 		server.hang(true)
 		const start = Date.now()
-		await expect(waitForCdpReady(server.port, 150)).rejects.toThrow(/did not become ready/)
+		await expect(waitForCDPReady(server.port, 150)).rejects.toThrow(/did not become ready/)
 		expect(Date.now() - start).toBeLessThan(1000)
 	})
 
 	it('honors an explicit host', async () => {
-		server = await createCdpTestServer()
-		const url = await waitForCdpReady(server.port, 2000, '127.0.0.1')
-		expect(url).toBe(server.wsUrl)
+		server = await createCDPTestServer()
+		const url = await waitForCDPReady(server.port, 2000, '127.0.0.1')
+		expect(url).toBe(server.endpoint)
+	})
+
+	it('aborts an in-flight endpoint request promptly', async () => {
+		server = await createCDPTestServer()
+		server.hang(true)
+		const controller = new AbortController()
+		const start = Date.now()
+		const pending = waitForCDPReady(server.port, 5000, '127.0.0.1', controller.signal)
+
+		controller.abort()
+
+		await expect(pending).rejects.toThrow(/abort/i)
+		expect(Date.now() - start).toBeLessThan(1000)
 	})
 })
 
-describe('fetchCdpTargets', () => {
+describe('fetchCDPTargets', () => {
 	it('returns normalized targets from /json/list', async () => {
-		server = await createCdpTestServer()
+		server = await createCDPTestServer()
 		server.list([{ id: 't1', type: 'page', title: 'Home', url: 'https://example.com' }])
 
-		const targets = await fetchCdpTargets(server.port, 2000)
+		const targets = await fetchCDPTargets(server.port, 2000)
 
 		expect(targets).toEqual([{ id: 't1', type: 'page', title: 'Home', url: 'https://example.com' }])
 	})
 
 	it('returns an empty array when the endpoint is unreachable', async () => {
-		const targets = await fetchCdpTargets(19_993, 100)
+		const targets = await fetchCDPTargets(19_993, 100)
 		expect(targets).toEqual([])
 	})
 
 	it('accepts targets with empty title/url', async () => {
-		server = await createCdpTestServer()
+		server = await createCDPTestServer()
 		server.list([{ id: 't2', type: 'page', title: '', url: '' }])
 
-		const targets = await fetchCdpTargets(server.port, 2000)
+		const targets = await fetchCDPTargets(server.port, 2000)
 
 		expect(targets).toEqual([{ id: 't2', type: 'page', title: '', url: '' }])
 	})
 
+	it('skips targets missing required string fields instead of substituting sentinels', async () => {
+		server = await createCDPTestServer()
+		server.list([
+			{ id: 'missing-title', type: 'page', url: 'https://example.com' },
+			{ id: 'missing-url', type: 'page', title: 'Example' },
+		])
+
+		expect(await fetchCDPTargets(server.port, 2000)).toEqual([])
+	})
+
 	it('honors an explicit host', async () => {
-		server = await createCdpTestServer()
+		server = await createCDPTestServer()
 		server.list([{ id: 't3', type: 'page', title: '', url: '' }])
 
-		const targets = await fetchCdpTargets(server.port, 2000, '127.0.0.1')
+		const targets = await fetchCDPTargets(server.port, 2000, '127.0.0.1')
 
 		expect(targets).toEqual([{ id: 't3', type: 'page', title: '', url: '' }])
 	})

@@ -54,7 +54,7 @@ export const BROWSER_RESULT_LIMIT_SENTINEL_PREFIX = '[[ORKESTREL_BROWSER_RESULT_
  * happens to occur.
  */
 export const BROWSER_RESULT_LIMIT_PATTERN = new RegExp(
-	`(?:Uncaught )?Error: \\[\\[ORKESTREL_BROWSER_RESULT_LIMIT\\]\\](\\d+)`,
+	`^(?:Uncaught )?Error: \\[\\[ORKESTREL_BROWSER_RESULT_LIMIT\\]\\](\\d+)`,
 )
 
 /** Poll interval in milliseconds while waiting for a selector to appear. */
