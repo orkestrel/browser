@@ -1,0 +1,87 @@
+import type {
+	BrowserActionOptions,
+	BrowserFrameInterface,
+	BrowserKeyboardInterface,
+} from './types.js'
+import {
+	computeBrowserModifiers,
+	keyToBrowserInput,
+	parseBrowserChord,
+	validateBrowserActionOptions,
+} from './helpers.js'
+
+/**
+ * Trusted keyboard input through Chromium's CDP Input domain.
+ */
+export class BrowserKeyboard implements BrowserKeyboardInterface {
+	readonly #frame: BrowserFrameInterface
+	readonly #modifiers = new Set<string>()
+
+	constructor(frame: BrowserFrameInterface) {
+		this.#frame = frame
+	}
+
+	async down(value: string): Promise<void> {
+		const key = keyToBrowserInput(value)
+		const modifier = ['Alt', 'Control', 'Meta', 'Shift'].includes(key.key)
+		const modifiers = computeBrowserModifiers([...this.#modifiers, ...(modifier ? [key.key] : [])])
+		const text = modifiers === 0 || modifiers === 8 ? key.text : undefined
+		await this.#frame.send('Input.dispatchKeyEvent', {
+			type: 'keyDown',
+			key: key.key,
+			code: key.code,
+			text,
+			unmodifiedText: key.text,
+			windowsVirtualKeyCode: key.number,
+			nativeVirtualKeyCode: key.number,
+			modifiers,
+		})
+		if (modifier) this.#modifiers.add(key.key)
+	}
+
+	async up(value: string): Promise<void> {
+		const key = keyToBrowserInput(value)
+		try {
+			await this.#frame.send('Input.dispatchKeyEvent', {
+				type: 'keyUp',
+				key: key.key,
+				code: key.code,
+				windowsVirtualKeyCode: key.number,
+				nativeVirtualKeyCode: key.number,
+				modifiers: computeBrowserModifiers([...this.#modifiers]),
+			})
+		} finally {
+			this.#modifiers.delete(key.key)
+		}
+	}
+
+	async press(value: string, options?: BrowserActionOptions): Promise<void> {
+		validateBrowserActionOptions(options)
+		const chord = parseBrowserChord(value)
+		for (const modifier of chord.modifiers) await this.down(modifier)
+		try {
+			await this.down(chord.key)
+			if (options?.delay !== undefined && options.delay > 0) {
+				await new Promise((resolve) => setTimeout(resolve, options.delay))
+			}
+			await this.up(chord.key)
+		} finally {
+			for (const modifier of [...chord.modifiers].reverse()) await this.up(modifier)
+		}
+	}
+
+	async type(value: string, options?: BrowserActionOptions): Promise<void> {
+		validateBrowserActionOptions(options)
+		for (const character of value) {
+			await this.down(character)
+			await this.up(character)
+			if (options?.delay !== undefined && options.delay > 0) {
+				await new Promise((resolve) => setTimeout(resolve, options.delay))
+			}
+		}
+	}
+
+	async insert(value: string): Promise<void> {
+		await this.#frame.send('Input.insertText', { text: value })
+	}
+}

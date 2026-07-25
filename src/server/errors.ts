@@ -1,4 +1,5 @@
 import { BrowserError } from '@src/core'
+import { isInstance } from '@orkestrel/contract'
 
 // === Server browser errors
 
@@ -41,7 +42,7 @@ export class BrowserDestroyedError extends BrowserError {
  * @returns True when value is a BrowserConnectionError instance
  */
 export function isBrowserConnectionError(value: unknown): value is BrowserConnectionError {
-	return value instanceof BrowserConnectionError
+	return isInstance(value, BrowserConnectionError)
 }
 
 /**
@@ -51,7 +52,7 @@ export function isBrowserConnectionError(value: unknown): value is BrowserConnec
  * @returns True when value is a BrowserNotConnectedError instance
  */
 export function isBrowserNotConnectedError(value: unknown): value is BrowserNotConnectedError {
-	return value instanceof BrowserNotConnectedError
+	return isInstance(value, BrowserNotConnectedError)
 }
 
 /**
@@ -61,5 +62,5 @@ export function isBrowserNotConnectedError(value: unknown): value is BrowserNotC
  * @returns True when value is a BrowserDestroyedError instance
  */
 export function isBrowserDestroyedError(value: unknown): value is BrowserDestroyedError {
-	return value instanceof BrowserDestroyedError
+	return isInstance(value, BrowserDestroyedError)
 }

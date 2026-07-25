@@ -1,6 +1,7 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type {
 	BrowserContextInterface,
+	BrowserContextOptions,
 	BrowserPageInterface,
 	BrowserPageOptions,
 	BrowserViewport,
@@ -79,6 +80,19 @@ export type SystemBrowser = {
 }
 
 /**
+ * Resolved browser profile directory used for a Chromium-family launch.
+ *
+ * @remarks
+ * `temporary` is true only for an isolated profile created by
+ * {@link createBrowserProfile}; caller-supplied persistent profiles are
+ * never removed by the library.
+ */
+export interface BrowserProfileResult {
+	readonly path: string
+	readonly temporary: boolean
+}
+
+/**
  * CDP (Chrome DevTools Protocol) connection configuration.
  *
  * @remarks
@@ -122,6 +136,7 @@ export type BrowserEventMap = {
 	readonly disconnect: readonly []
 	readonly launch: readonly [engine: BrowserEngine]
 	readonly page: readonly [page: BrowserPageInterface]
+	readonly context: readonly [context: BrowserContextInterface]
 	readonly error: readonly [error: unknown]
 	readonly destroy: readonly []
 }
@@ -235,6 +250,7 @@ export interface BrowserInterface {
 	disconnect(): Promise<void>
 	context(index?: number): BrowserContextInterface | undefined
 	contexts(): readonly BrowserContextInterface[]
+	isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface>
 	create(options?: BrowserPageOptions): Promise<BrowserPageInterface>
 	destroy(): Promise<void>
 	close(): Promise<void>

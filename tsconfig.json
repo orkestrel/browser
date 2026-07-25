@@ -18,5 +18,5 @@
 			"@src/server": ["./src/server/index.ts"]
 		}
 	},
-	"exclude": ["node_modules", "dist", "tmp"]
+	"exclude": ["node_modules", "dist", "tmp", "old"]
 }

@@ -1,3 +1,5 @@
+import { isInstance } from '@orkestrel/contract'
+
 // === Browser errors
 
 /**
@@ -90,7 +92,7 @@ export class BrowserResultLimitError extends BrowserError {
  * @returns True when value is a BrowserError instance
  */
 export function isBrowserError(value: unknown): value is BrowserError {
-	return value instanceof BrowserError
+	return isInstance(value, BrowserError)
 }
 
 /**
@@ -100,7 +102,7 @@ export function isBrowserError(value: unknown): value is BrowserError {
  * @returns True when value is a BrowserSelectorError instance
  */
 export function isBrowserSelectorError(value: unknown): value is BrowserSelectorError {
-	return value instanceof BrowserSelectorError
+	return isInstance(value, BrowserSelectorError)
 }
 
 /**
@@ -110,7 +112,7 @@ export function isBrowserSelectorError(value: unknown): value is BrowserSelector
  * @returns True when value is a CDPError instance
  */
 export function isCDPError(value: unknown): value is CDPError {
-	return value instanceof CDPError
+	return isInstance(value, CDPError)
 }
 
 /**
@@ -120,7 +122,7 @@ export function isCDPError(value: unknown): value is CDPError {
  * @returns True when value is a CDPConnectionError instance
  */
 export function isCDPConnectionError(value: unknown): value is CDPConnectionError {
-	return value instanceof CDPConnectionError
+	return isInstance(value, CDPConnectionError)
 }
 
 /**
@@ -130,7 +132,7 @@ export function isCDPConnectionError(value: unknown): value is CDPConnectionErro
  * @returns True when value is a CDPTimeoutError instance
  */
 export function isCDPTimeoutError(value: unknown): value is CDPTimeoutError {
-	return value instanceof CDPTimeoutError
+	return isInstance(value, CDPTimeoutError)
 }
 
 /**
@@ -140,5 +142,5 @@ export function isCDPTimeoutError(value: unknown): value is CDPTimeoutError {
  * @returns True when value is a BrowserResultLimitError instance
  */
 export function isBrowserResultLimitError(value: unknown): value is BrowserResultLimitError {
-	return value instanceof BrowserResultLimitError
+	return isInstance(value, BrowserResultLimitError)
 }

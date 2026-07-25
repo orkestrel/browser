@@ -18,6 +18,9 @@ import { Emitter } from '@orkestrel/emitter'
 
 // === BrowserCodegen
 
+/**
+ * Records page navigation and form interactions and compiles replayable scripts.
+ */
 export class BrowserCodegen implements BrowserCodegenInterface {
 	readonly #client: CDPClientInterface
 	readonly #sessionId: string

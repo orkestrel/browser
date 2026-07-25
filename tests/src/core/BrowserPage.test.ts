@@ -14,6 +14,8 @@ import {
 import {
 	createCDPTransport,
 	createConnectedCDPClient,
+	createDOMSnapshotResult,
+	createRecorder,
 	createScreenshotWriter,
 	readCDPExpression,
 	requireValue,
@@ -21,6 +23,7 @@ import {
 	scriptEvaluate,
 	scriptFrameTree,
 	scriptSelectorPresent,
+	scriptTrustedSelector,
 	waitForCondition,
 	JPEG_BASE64,
 	PNG_BASE64,
@@ -164,7 +167,10 @@ describe('BrowserPage', () => {
 			)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.navigate('https://example.com')).resolves.toBeUndefined()
+			await expect(page.navigate('https://example.com')).resolves.toMatchObject({
+				url: 'https://example.com/',
+				same: false,
+			})
 			expect(page.url).toBe('https://example.com/')
 		})
 
@@ -295,11 +301,8 @@ describe('BrowserPage', () => {
 
 		it('leaves no dangling timer and no unhandled rejection when Page.navigate fails', async () => {
 			vi.useFakeTimers()
-			const unhandled: unknown[] = []
-			const onUnhandled = (reason: unknown): void => {
-				unhandled.push(reason)
-			}
-			process.on('unhandledRejection', onUnhandled)
+			const unhandled = createRecorder<[reason: unknown]>()
+			process.on('unhandledRejection', unhandled.handler)
 
 			try {
 				const { client, transport } = await createConnectedCDPClient()
@@ -317,9 +320,9 @@ describe('BrowserPage', () => {
 				// Advance well past the original timeout — nothing should fire/reject unobserved
 				await vi.advanceTimersByTimeAsync(50)
 				await Promise.resolve()
-				expect(unhandled).toEqual([])
+				expect(unhandled.calls).toEqual([])
 			} finally {
-				process.off('unhandledRejection', onUnhandled)
+				process.off('unhandledRejection', unhandled.handler)
 				vi.useRealTimers()
 			}
 		})
@@ -490,7 +493,7 @@ describe('BrowserPage', () => {
 
 			expect(Array.from(result.bytes)).toEqual([255, 216, 255, 224])
 			const sent = transport.sent.find((m) => m.method === 'Page.captureScreenshot')
-			expect(sent?.params).toEqual({ format: 'jpeg', quality: 80 })
+			expect(sent?.params).toEqual({ format: 'jpeg', quality: 80, fromSurface: true })
 		})
 
 		it('writes to the injected writer only when path is provided', async () => {
@@ -530,6 +533,21 @@ describe('BrowserPage', () => {
 			expect(sent?.params?.['clip']).toEqual({ x: 0, y: 0, width: 1000, height: 2000, scale: 1 })
 		})
 
+		it('rejects malformed full-page metrics instead of silently capturing the viewport', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Page.getLayoutMetrics', {
+				cssContentSize: { width: Number.NaN, height: 2000 },
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await expect(page.screenshot({ full: true })).rejects.toThrow(
+				'full-page screenshot metrics are malformed',
+			)
+			expect(transport.sent.some((message) => message.method === 'Page.captureScreenshot')).toBe(
+				false,
+			)
+		})
+
 		it('throws a BrowserError when no data is returned', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', {})
@@ -539,11 +557,141 @@ describe('BrowserPage', () => {
 		})
 	})
 
+	describe('advanced capture', () => {
+		it('applies clip, transparency, animation, caret, and mask controls with cleanup', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('__orkestrelScreenshotSequence'),
+				'token-1',
+			)
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('element.getAttribute(attribute)'),
+				true,
+			)
+			replyOk(transport, 'Emulation.setDefaultBackgroundColorOverride')
+			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await page.screenshot({
+				clip: [10, 20, 300, 200],
+				transparent: true,
+				animations: false,
+				caret: false,
+				mask: [page.selectors.css('.secret')],
+				color: '#123456',
+			})
+
+			expect(
+				transport.sent.find((message) => message.method === 'Page.captureScreenshot')?.params,
+			).toMatchObject({
+				format: 'png',
+				fromSurface: true,
+				captureBeyondViewport: true,
+				clip: { x: 10, y: 20, width: 300, height: 200, scale: 1 },
+			})
+			const background = transport.sent.filter(
+				(message) => message.method === 'Emulation.setDefaultBackgroundColorOverride',
+			)
+			expect(background).toHaveLength(2)
+			expect(background[0]?.params).toEqual({ color: { r: 0, g: 0, b: 0, a: 0 } })
+			expect(background[1]?.params).toBeUndefined()
+		})
+
+		it('removes temporary screenshot state when transparent background setup fails', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('__orkestrelScreenshotSequence'),
+				'token-1',
+			)
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('element.getAttribute(attribute)'),
+				true,
+			)
+			transport.onSend('Emulation.setDefaultBackgroundColorOverride', (message) => {
+				transport.fail(message.id, 'background failed')
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await expect(page.screenshot({ transparent: true, animations: false })).rejects.toThrow(
+				'background failed',
+			)
+
+			expect(
+				transport.sent.some(
+					(message) =>
+						message.method === 'Runtime.evaluate' &&
+						typeof message.params?.['expression'] === 'string' &&
+						message.params['expression'].includes('element.getAttribute(attribute)'),
+				),
+			).toBe(true)
+			expect(transport.sent.some((message) => message.method === 'Page.captureScreenshot')).toBe(
+				false,
+			)
+		})
+
+		it('prints PDF with validated dimensions, margins, templates, tags, and persistence', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const writer = createScreenshotWriter()
+			replyOk(transport, 'Page.printToPDF', { data: 'JVBERg==' })
+			const page = new BrowserPage(client, 'target-1', 'session-1', writer)
+
+			const result = await page.pdf({
+				path: 'report.pdf',
+				landscape: true,
+				background: true,
+				scale: 1.25,
+				width: 8.5,
+				height: 11,
+				margin: { top: 0.5, right: 0.25, bottom: 0.5, left: 0.25 },
+				ranges: '1-2',
+				header: '<span>Header</span>',
+				footer: '<span>Footer</span>',
+				tagged: true,
+				outline: true,
+			})
+
+			expect(Array.from(result.bytes)).toEqual([37, 80, 68, 70])
+			expect(writer.calls[0]?.path).toBe('report.pdf')
+			expect(
+				transport.sent.find((message) => message.method === 'Page.printToPDF')?.params,
+			).toMatchObject({
+				landscape: true,
+				printBackground: true,
+				displayHeaderFooter: true,
+				scale: 1.25,
+				paperWidth: 8.5,
+				paperHeight: 11,
+				marginTop: 0.5,
+				marginRight: 0.25,
+				marginBottom: 0.5,
+				marginLeft: 0.25,
+				pageRanges: '1-2',
+				generateTaggedPDF: true,
+				generateDocumentOutline: true,
+			})
+		})
+
+		it('rejects invalid capture combinations and PDF bounds before CDP traffic', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await expect(page.screenshot({ full: true, clip: [0, 0, 10, 10] })).rejects.toSatisfy(
+				isBrowserError,
+			)
+			await expect(page.screenshot({ type: 'png', quality: 80 })).rejects.toSatisfy(isBrowserError)
+			await expect(page.pdf({ scale: 3 })).rejects.toSatisfy(isBrowserError)
+			expect(transport.sent).toEqual([])
+		})
+	})
+
 	describe('click()', () => {
 		it('clicks a present element', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptSelectorPresent(transport, '#btn')
-			scriptEvaluate(transport, (expression) => expression.includes('el.click()'), undefined)
+			scriptTrustedSelector(transport, '#btn')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await expect(page.click('#btn')).resolves.toBeUndefined()
@@ -553,7 +701,7 @@ describe('BrowserPage', () => {
 			vi.useFakeTimers()
 			try {
 				const { client, transport } = await createConnectedCDPClient()
-				scriptEvaluate(transport, (expression) => expression.includes('!== null'), false)
+				scriptEvaluate(transport, (expression) => expression.includes('new Promise'), false)
 
 				const page = new BrowserPage(client, 'target-1', 'session-1')
 				const pending = page.click('#missing', { timeout: 20 })
@@ -570,8 +718,7 @@ describe('BrowserPage', () => {
 	describe('fill()', () => {
 		it('sets an input value', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptSelectorPresent(transport, '#name')
-			scriptEvaluate(transport, (expression) => expression.includes('el.value ='), undefined)
+			scriptTrustedSelector(transport, '#name')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await expect(page.fill('#name', 'hello world')).resolves.toBeUndefined()
@@ -579,27 +726,23 @@ describe('BrowserPage', () => {
 
 		it('sends a contenteditable-aware expression that sets textContent when isContentEditable', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptSelectorPresent(transport, '#editable')
-			scriptEvaluate(transport, (expression) => expression.includes('el.value ='), undefined)
+			scriptTrustedSelector(transport, '#editable')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await page.fill('#editable', 'hello world')
 
-			const fillCall = transport.sent.find(
-				(m) =>
-					m.method === 'Runtime.evaluate' && readCDPExpression(m)?.includes('el.value =') === true,
+			const focusCall = transport.sent.find(
+				(message) => message.method === 'Runtime.callFunctionOn',
 			)
-			const expression = requireValue(readCDPExpression(fillCall))
-			expect(expression).toContain('isContentEditable')
-			expect(expression).toContain('el.textContent =')
+			expect(focusCall?.params?.['functionDeclaration']).toContain('this.isContentEditable')
+			expect(transport.sent.some((message) => message.method === 'Input.insertText')).toBe(true)
 		})
 	})
 
 	describe('select()', () => {
 		it('selects the given values', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptSelectorPresent(transport, '#sel')
-			scriptEvaluate(transport, (expression) => expression.includes('opt.selected'), undefined)
+			scriptTrustedSelector(transport, '#sel')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			await expect(page.select('#sel', ['b'])).resolves.toBeUndefined()
@@ -680,8 +823,7 @@ describe('BrowserPage', () => {
 	describe('selector escaping', () => {
 		it('safely embeds a selector with embedded quotes and backslashes into the evaluate expression', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptEvaluate(transport, (expression) => expression.includes('!== null'), true)
-			scriptEvaluate(transport, (expression) => expression.includes('el.click()'), undefined)
+			scriptTrustedSelector(transport, String.raw`div[data-x='a"b\c']`)
 
 			const selector = String.raw`div[data-x='a"b\c']`
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -689,7 +831,9 @@ describe('BrowserPage', () => {
 
 			const clickCall = transport.sent.find(
 				(m) =>
-					m.method === 'Runtime.evaluate' && readCDPExpression(m)?.includes('el.click()') === true,
+					m.method === 'Runtime.evaluate' &&
+					m.params?.['returnByValue'] === false &&
+					readCDPExpression(m)?.includes(JSON.stringify(selector)) === true,
 			)
 			expect(clickCall).toBeDefined()
 			const expression = requireValue(readCDPExpression(clickCall))
@@ -705,10 +849,20 @@ describe('BrowserPage', () => {
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			const frames = await page.frames()
 
-			expect(frames).toEqual([
-				{ id: 'main-1', url: 'https://example.com/' },
+			expect(frames.map(({ id, parent, name, url }) => ({ id, parent, name, url }))).toEqual([
+				{
+					id: 'main-1',
+					parent: undefined,
+					name: undefined,
+					url: 'https://example.com/',
+				},
 				{ id: 'child-1', parent: 'main-1', name: 'child-frame', url: 'https://example.com/child' },
-				{ id: 'grandchild-1', parent: 'child-1', url: 'https://example.com/grandchild' },
+				{
+					id: 'grandchild-1',
+					parent: 'child-1',
+					name: undefined,
+					url: 'https://example.com/grandchild',
+				},
 			])
 		})
 
@@ -746,6 +900,116 @@ describe('BrowserPage', () => {
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			expect(await page.frames()).toEqual([])
+		})
+
+		it('routes out-of-process iframe operations through the attached child session', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.enable')
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
+			scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-oopif',
+					targetInfo: { type: 'iframe', targetId: 'child-1' },
+				},
+				'session-1',
+			)
+			const frame = await page.frame('child-frame')
+			if (frame === undefined) throw new Error('Expected child frame')
+
+			expect(await frame.evaluate('40 + 2')).toBe(42)
+			const world = transport.sent.find((message) => message.method === 'Page.createIsolatedWorld')
+			expect(world?.sessionId).toBe('session-oopif')
+			expect(world?.params?.['frameId']).toBe('child-1')
+			expect(
+				transport.sent.some(
+					(message) => message.method === 'Page.enable' && message.sessionId === 'session-oopif',
+				),
+			).toBe(true)
+		})
+
+		it('falls back to the page session after an iframe child target detaches', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.enable')
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
+			scriptEvaluate(transport, (expression) => expression.includes('6 * 7'), 42)
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-oopif',
+					targetInfo: { type: 'iframe', targetId: 'child-1' },
+				},
+				'session-1',
+			)
+			await waitForCondition(() =>
+				transport.sent.some(
+					(message) => message.method === 'Runtime.enable' && message.sessionId === 'session-oopif',
+				),
+			)
+			transport.event(
+				'Target.detachedFromTarget',
+				{ sessionId: 'session-oopif', targetId: 'child-1' },
+				'session-1',
+			)
+			const frame = await page.frame('child-frame')
+			if (frame === undefined) throw new Error('Expected child frame')
+			await frame.evaluate('6 * 7')
+
+			const worlds = transport.sent.filter(
+				(message) => message.method === 'Page.createIsolatedWorld',
+			)
+			expect(worlds.at(-1)?.sessionId).toBe('session-1')
+		})
+	})
+
+	describe('snapshot()', () => {
+		it('captures and decodes every document with the requested details', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'DOMSnapshot.captureSnapshot', createDOMSnapshotResult())
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			const snapshot = await page.snapshot({
+				styles: ['color'],
+				paint: true,
+				rects: true,
+			})
+
+			expect(snapshot.documents).toHaveLength(2)
+			expect(snapshot.documents[1]?.frame).toBe('frame-child')
+			const request = transport.sent.find(
+				(message) => message.method === 'DOMSnapshot.captureSnapshot',
+			)
+			expect(request?.sessionId).toBe('session-1')
+			expect(request?.params).toEqual({
+				computedStyles: ['color'],
+				includePaintOrder: true,
+				includeDOMRects: true,
+			})
+		})
+
+		it('enforces a caller-provided aggregate node limit', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'DOMSnapshot.captureSnapshot', createDOMSnapshotResult())
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await expect(page.snapshot({ limit: 8 })).rejects.toBeInstanceOf(BrowserResultLimitError)
+		})
+
+		it('rejects malformed protocol results instead of returning partial data', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'DOMSnapshot.captureSnapshot', {})
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			await expect(page.snapshot()).rejects.toThrow('Malformed DOMSnapshot.captureSnapshot result')
 		})
 	})
 

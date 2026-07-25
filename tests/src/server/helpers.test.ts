@@ -13,14 +13,17 @@
  */
 
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import {
+	createBrowserProfile,
 	findSystemBrowsers,
 	findSystemBrowser,
 	findAllInStore,
 	parseBrowserEngine,
 	launchBrowserProcess,
+	removeBrowserProfile,
 	waitForCDPReady,
 	fetchCDPTargets,
 } from '@src/server'
@@ -402,5 +405,37 @@ describe('launchBrowserProcess', () => {
 		} finally {
 			process.kill()
 		}
+	})
+})
+
+describe('browser profiles', () => {
+	it('creates and removes an isolated profile beneath the operating-system temp directory', async () => {
+		const profile = await createBrowserProfile()
+		try {
+			expect(profile.temporary).toBe(true)
+			expect(dirname(profile.path)).toBe(tmpdir())
+			expect(existsSync(profile.path)).toBe(true)
+			writeFileSync(join(profile.path, 'fixture'), 'profile data')
+		} finally {
+			await removeBrowserProfile(profile)
+		}
+
+		expect(existsSync(profile.path)).toBe(false)
+		await expect(removeBrowserProfile(profile)).resolves.toBeUndefined()
+	})
+
+	it('preserves a caller-owned persistent profile', async () => {
+		const path = createTempDirectory()
+		const profile = await createBrowserProfile(path)
+
+		expect(profile).toEqual({ path, temporary: false })
+		await removeBrowserProfile(profile)
+		expect(existsSync(path)).toBe(true)
+	})
+
+	it('refuses recursive removal outside the guarded temp-profile shape', async () => {
+		await expect(removeBrowserProfile({ path: tmpdir(), temporary: true })).rejects.toThrow(
+			'Refusing to remove an unsafe browser profile path',
+		)
 	})
 })

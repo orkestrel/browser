@@ -1,3 +1,5 @@
+import type { BrowserMouseButton } from './types.js'
+
 // === Base64
 
 /** Base64 alphabet, index-ordered, used to build {@link BASE64_LOOKUP}. */
@@ -59,6 +61,45 @@ export const BROWSER_RESULT_LIMIT_PATTERN = new RegExp(
 
 /** Poll interval in milliseconds while waiting for a selector to appear. */
 export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
+
+/** Default maximum node count accepted from a decoded CDP DOM snapshot. */
+export const BROWSER_SNAPSHOT_NODE_LIMIT = 100_000
+
+/** Isolated-world name used for iframe evaluation. */
+export const BROWSER_FRAME_WORLD_NAME = '__orkestrelBrowserFrame'
+
+/** Attribute used by the semantic test-id selector. */
+export const BROWSER_TEST_ID_ATTRIBUTE = 'data-testid'
+
+/** Number of animation frames whose element bounds must agree before trusted input. */
+export const BROWSER_STABLE_FRAME_COUNT = 2
+
+/** CDP Input modifier bit values keyed by canonical key name. */
+export const BROWSER_KEY_MODIFIERS: Readonly<Record<string, number>> = Object.freeze({
+	Alt: 1,
+	Control: 2,
+	Meta: 4,
+	Shift: 8,
+})
+
+/** CDP Input pressed-button bit values keyed by public mouse button. */
+export const BROWSER_MOUSE_BUTTON_MASKS: Readonly<Record<BrowserMouseButton, number>> =
+	Object.freeze({
+		left: 1,
+		right: 2,
+		middle: 4,
+		back: 8,
+		forward: 16,
+	})
+
+/** Tool identity embedded in HAR 1.2 documents. */
+export const BROWSER_HAR_CREATOR = Object.freeze({
+	name: '@orkestrel/browser',
+	version: '0.0.5',
+})
+
+/** Attribute used to tag temporary screenshot styles and masks. */
+export const BROWSER_SCREENSHOT_ATTRIBUTE = 'data-orkestrel-screenshot'
 
 /**
  * Bound (in milliseconds) on the best-effort `Page.stopLoading` call issued

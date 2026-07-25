@@ -19,6 +19,28 @@ export interface TestRecorderInterface<TArgs extends readonly unknown[]> {
 	clear(): void
 }
 
+/** Runtime call recorder backing {@link createRecorder}. */
+export class TestRecorder<
+	TArgs extends readonly unknown[],
+> implements TestRecorderInterface<TArgs> {
+	#calls: TArgs[] = []
+	readonly handler = (...args: TArgs): void => {
+		this.#calls.push(args)
+	}
+
+	get calls(): readonly TArgs[] {
+		return this.#calls
+	}
+
+	get count(): number {
+		return this.#calls.length
+	}
+
+	clear(): void {
+		this.#calls = []
+	}
+}
+
 /**
  * Create a call recorder — a real function that records every invocation's
  * arguments for later inspection.
@@ -26,22 +48,22 @@ export interface TestRecorderInterface<TArgs extends readonly unknown[]> {
  * @returns A {@link TestRecorderInterface}
  */
 export function createRecorder<TArgs extends readonly unknown[]>(): TestRecorderInterface<TArgs> {
-	let calls: TArgs[] = []
+	return new TestRecorder<TArgs>()
+}
 
-	return {
-		get calls(): readonly TArgs[] {
-			return calls
-		},
-		get count(): number {
-			return calls.length
-		},
-		handler: (...args: TArgs): void => {
-			calls.push(args)
-		},
-		clear(): void {
-			calls = []
-		},
-	}
+/** Ignore an intentional callback invocation. */
+export function ignoreCall(): void {
+	return undefined
+}
+
+/** Ignore an intentional asynchronous callback invocation. */
+export function ignoreAsyncCall(): Promise<void> {
+	return Promise.resolve()
+}
+
+/** Throw the stable listener failure used by emitter containment tests. */
+export function throwListenerError(): never {
+	throw new Error('listener failed')
 }
 
 /** A single wait, in place of an inline `setTimeout` promise. */
@@ -235,6 +257,15 @@ export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 
 	replyOk(transport, 'Target.attachToTarget', { sessionId: session })
 	replyOk(transport, 'Page.enable')
 	replyOk(transport, 'Runtime.enable')
+	replyOk(transport, 'Network.enable')
+	replyOk(transport, 'Network.disable')
+	replyOk(transport, 'Page.getFrameTree', {
+		frameTree: { frame: { id: `frame-${session}`, url: 'about:blank' } },
+	})
+	replyOk(transport, 'Target.setAutoAttach')
+	replyOk(transport, 'Page.setInterceptFileChooserDialog')
+	replyOk(transport, 'Browser.setDownloadBehavior')
+	replyOk(transport, 'Emulation.setTouchEmulationEnabled')
 }
 
 /** Read a sent Runtime expression without a type assertion. */
@@ -251,11 +282,42 @@ export function scriptSelectorPresent(
 	scriptEvaluate(
 		transport,
 		(expression) =>
-			expression.includes('querySelector') &&
-			expression.includes('!== null') &&
+			expression.includes('new Promise') &&
+			expression.includes('const query =') &&
 			expression.includes(JSON.stringify(selector)),
 		true,
 	)
+}
+
+/**
+ * Script the complete trusted-input path for one present selector.
+ *
+ * @param transport - Fake transport
+ * @param selector - Selector resolved by the locator
+ */
+export function scriptTrustedSelector(
+	transport: CDPTestTransportInterface,
+	selector: string,
+): void {
+	scriptSelectorPresent(transport, selector)
+	transport.onSend('Runtime.evaluate', (message) => {
+		const expression = message.params?.['expression']
+		if (
+			message.params?.['returnByValue'] === false &&
+			typeof expression === 'string' &&
+			expression.includes(JSON.stringify(selector))
+		) {
+			transport.reply(message.id, { result: { objectId: 'object-1' } })
+		}
+	})
+	replyOk(transport, 'Runtime.callFunctionOn', { result: { value: true } })
+	replyOk(transport, 'DOM.getContentQuads', {
+		quads: [[0, 0, 100, 0, 100, 40, 0, 40]],
+	})
+	replyOk(transport, 'Input.dispatchMouseEvent')
+	replyOk(transport, 'Input.dispatchKeyEvent')
+	replyOk(transport, 'Input.insertText')
+	replyOk(transport, 'Runtime.releaseObject')
 }
 
 /** Script the nested frame tree shared by page frame tests. */
@@ -350,6 +412,118 @@ export function createTarget(overrides?: Partial<CDPTarget>): CDPTarget {
 		title: 'Test Page',
 		url: 'about:blank',
 		...overrides,
+	}
+}
+
+/**
+ * Build a two-document `DOMSnapshot.captureSnapshot` result with sparse node
+ * metadata, layout, styles, and an iframe content-document link.
+ *
+ * @returns A protocol-shaped DOM snapshot result
+ */
+export function createDOMSnapshotResult(): unknown {
+	return {
+		strings: [
+			'frame-main',
+			'https://example.com/',
+			'Main',
+			'#document',
+			'',
+			'HTML',
+			'BODY',
+			'DIV',
+			'id',
+			'hero',
+			'#text',
+			'Hello world',
+			'rgb(1, 2, 3)',
+			'open',
+			'INPUT',
+			'typed',
+			'IFRAME',
+			'frame-child',
+			'https://example.com/child',
+			'Child',
+			'src',
+		],
+		documents: [
+			{
+				frameId: 0,
+				documentURL: 1,
+				title: 2,
+				scrollOffsetX: 12,
+				scrollOffsetY: 34,
+				contentWidth: 1200,
+				contentHeight: 2400,
+				nodes: {
+					parentIndex: [-1, 0, 1, 2, 3, 2, 2],
+					nodeType: [9, 1, 1, 1, 3, 1, 1],
+					nodeName: [3, 5, 6, 7, 10, 14, 16],
+					nodeValue: [4, 4, 4, 4, 11, 4, 4],
+					backendNodeId: [100, 101, 102, 103, 104, 105, 106],
+					attributes: [[], [], [], [8, 9], [], [8, 15], [20, 18]],
+					textValue: { index: [3], value: [11] },
+					inputValue: { index: [5], value: [15] },
+					inputChecked: { index: [5] },
+					optionSelected: { index: [] },
+					isClickable: { index: [3, 5] },
+					shadowRootType: { index: [3], value: [13] },
+					contentDocumentIndex: { index: [6], value: [1] },
+					pseudoType: { index: [], value: [] },
+					currentSourceURL: { index: [6], value: [18] },
+					originURL: { index: [6], value: [1] },
+				},
+				layout: {
+					nodeIndex: [3, 4, 5, 6],
+					styles: [[12], [12], [12], [12]],
+					bounds: [
+						[10, 20, 300, 100],
+						[10, 20, 0, 0],
+						[10, 140, 200, 40],
+						[10, 200, 600, 400],
+					],
+					text: [11, 11, 15, 4],
+					paintOrders: [2, 3, 4, 5],
+					offsetRects: [
+						[10, 20, 300, 100],
+						[10, 20, 0, 0],
+						[10, 140, 200, 40],
+						[10, 200, 600, 400],
+					],
+					scrollRects: [
+						[0, 0, 300, 100],
+						[0, 0, 0, 0],
+						[0, 0, 200, 40],
+						[0, 0, 600, 400],
+					],
+					clientRects: [
+						[10, 20, 300, 100],
+						[10, 20, 0, 0],
+						[10, 140, 200, 40],
+						[10, 200, 600, 400],
+					],
+				},
+			},
+			{
+				frameId: 17,
+				documentURL: 18,
+				title: 19,
+				nodes: {
+					parentIndex: [-1, 0],
+					nodeType: [9, 1],
+					nodeName: [3, 6],
+					nodeValue: [4, 4],
+					backendNodeId: [200, 201],
+					attributes: [[], []],
+				},
+				layout: {
+					nodeIndex: [1],
+					styles: [[12]],
+					bounds: [[0, 0, 600, 400]],
+					text: [4],
+				},
+			},
+		],
 	}
 }
 

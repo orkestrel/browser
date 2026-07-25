@@ -8,7 +8,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
-import { isRecord } from '@orkestrel/contract'
+import { isRecord, isString } from '@orkestrel/contract'
 import { createNodeWebSocket } from '@orkestrel/websocket'
 import { waitForCondition } from './setup.js'
 
@@ -412,6 +412,30 @@ export class CDPTestServer implements CDPTestServerInterface {
 			this.#send({ id, result: { targetInfos } })
 			return
 		}
+		if (method === 'Page.getFrameTree' && !this.#scripts.has(method)) {
+			this.#send({
+				id,
+				result: {
+					frameTree: { frame: { id: 'frame-main', url: 'about:blank' } },
+				},
+			})
+			return
+		}
+		if (method === 'Target.setAutoAttach' && !this.#scripts.has(method)) {
+			this.#send({ id, result: {} })
+			return
+		}
+		if (
+			(method === 'Network.enable' ||
+				method === 'Network.disable' ||
+				method === 'Emulation.setTouchEmulationEnabled' ||
+				method === 'Page.setInterceptFileChooserDialog' ||
+				method === 'Browser.setDownloadBehavior') &&
+			!this.#scripts.has(method)
+		) {
+			this.#send({ id, result: {} })
+			return
+		}
 
 		if (!this.#scripts.has(method)) return
 		const scripted = this.#scripts.get(method)
@@ -472,6 +496,8 @@ export interface FakeBrowserProcessInterface {
 	readonly args: readonly string[]
 	/** Reads the PID the process wrote at startup (polls briefly if not yet written). */
 	pid(): Promise<number>
+	/** Reads the complete process argument vector recorded at startup. */
+	arguments(): Promise<readonly string[]>
 	/**
 	 * Sever the active CDP WebSocket socket (via an HTTP control request to the
 	 * fake's own server) while leaving the process itself alive — simulates a
@@ -501,6 +527,7 @@ export function createFakeBrowserProcess(
 	const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-fake-'))
 	const scriptPath = join(dir, 'fake-browser.js')
 	const pidFile = join(dir, 'pid.txt')
+	const argumentsFile = join(dir, 'arguments.json')
 	const portFile = join(dir, 'port.txt')
 
 	// No shebang: the script is spawned via `node <script>`, never executed
@@ -509,6 +536,7 @@ export function createFakeBrowserProcess(
 	const lines: string[] = [
 		`process.on('uncaughtException', (e) => { try { require('fs').appendFileSync(${JSON.stringify(crashLogPath)}, String(e && e.stack)) } catch {} ; process.exit(1) })`,
 		`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
+		`require('fs').writeFileSync(${JSON.stringify(argumentsFile)}, JSON.stringify(process.argv))`,
 	]
 
 	if (options.ignoreSIGTERM === true) {
@@ -611,6 +639,18 @@ export function createFakeBrowserProcess(
 				await new Promise((resolve) => setTimeout(resolve, 20))
 			}
 			throw new Error(`Fake browser process never wrote its pid to ${pidFile}`)
+		},
+		async arguments(): Promise<readonly string[]> {
+			for (let attempt = 0; attempt < 50; attempt++) {
+				try {
+					const parsed: unknown = JSON.parse(readFileSync(argumentsFile, 'utf8'))
+					if (Array.isArray(parsed) && parsed.every(isString)) return parsed
+				} catch {
+					// Not written yet
+				}
+				await new Promise((resolve) => setTimeout(resolve, 20))
+			}
+			throw new Error(`Fake browser process never wrote its arguments to ${argumentsFile}`)
 		},
 		async dropSocket(): Promise<void> {
 			let dropPort: number | undefined

@@ -1,53 +1,280 @@
 import type {
 	BrowserCodegenInterface,
 	BrowserCodegenOptions,
-	BrowserFrame,
-	BrowserPageInterface,
+	BrowserClockInterface,
+	BrowserDiagnosticsInterface,
+	BrowserFrameInfo,
+	BrowserFrameInterface,
 	BrowserNavigationOptions,
-	BrowserActionOptions,
+	BrowserNavigationManagerInterface,
+	BrowserNavigationResult,
+	BrowserNavigationWatch,
+	BrowserNetworkManagerInterface,
+	BrowserPDFOptions,
+	BrowserPDFResult,
+	BrowserPageInterface,
+	BrowserPageEventMap,
+	BrowserResponse,
 	BrowserScreenshotOptions,
-	BrowserContentResult,
 	BrowserScreenshotResult,
+	BrowserScriptManagerInterface,
+	BrowserSnapshot,
+	BrowserSnapshotOptions,
 	BrowserWaitUntil,
+	BrowserWorkerCategory,
+	BrowserAccessibilityInterface,
 	CDPClientInterface,
 	ScreenshotWriterInterface,
 } from './types.js'
+import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCodegen } from './BrowserCodegen.js'
-import { BrowserError, BrowserResultLimitError, BrowserSelectorError } from './errors.js'
+import { BrowserAccessibility } from './BrowserAccessibility.js'
+import { BrowserClock } from './BrowserClock.js'
+import { BrowserDiagnostics } from './BrowserDiagnostics.js'
+import { BrowserDialog } from './BrowserDialog.js'
+import { BrowserDownload } from './BrowserDownload.js'
+import { BrowserFrame } from './BrowserFrame.js'
+import { BrowserFileChooser } from './BrowserFileChooser.js'
+import { BrowserNetworkManager } from './BrowserNetworkManager.js'
+import { BrowserNavigationManager } from './BrowserNavigationManager.js'
+import { BrowserScriptManager } from './BrowserScriptManager.js'
+import { BrowserWorker } from './BrowserWorker.js'
+import { BrowserError } from './errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
-	BROWSER_RESULT_LIMIT,
-	BROWSER_RESULT_LIMIT_PATTERN,
+	BROWSER_SNAPSHOT_NODE_LIMIT,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
-	BROWSER_WAIT_POLL_INTERVAL_MS,
 } from './constants.js'
-import { decodeBase64, guardEvaluateExpression } from './helpers.js'
-import { isRecord, isString } from '@orkestrel/contract'
+import {
+	decodeBase64,
+	decodeBrowserSnapshot,
+	browserPDFToParams,
+	browserScreenshotToParams,
+	compileScreenshotCleanupExpression,
+	compileScreenshotPreparationExpression,
+	readBrowserConsoleMessage,
+	readBrowserDownloadProgress,
+	readBrowserDownloadStart,
+	readBrowserFrames,
+	readBrowserPageError,
+	requireBrowserString,
+	validateBrowserTimeout,
+} from './helpers.js'
+import { isArray, isFiniteNumber, isInteger, isRecord, isString } from '@orkestrel/contract'
+import { Emitter } from '@orkestrel/emitter'
 
-// === BrowserPage
-
-export class BrowserPage implements BrowserPageInterface {
+/**
+ * A top-level browser page, including its target lifecycle and child frames.
+ */
+export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #client: CDPClientInterface
 	readonly #targetId: string
 	readonly #sessionId: string
 	readonly #writer: ScreenshotWriterInterface | undefined
-	#url = 'about:blank'
+	readonly #contextId: string | undefined
+	readonly #opener: BrowserPageInterface | undefined
+	readonly #emitter: Emitter<BrowserPageEventMap>
+	readonly #network: BrowserNetworkManager
+	readonly #navigationManager: BrowserNavigationManager
+	readonly #scripts: BrowserScriptManager
+	readonly #accessibility: BrowserAccessibility
+	readonly #diagnostics: BrowserDiagnostics
+	readonly #clock: BrowserClock
+	readonly #frameSessions: Map<string, Promise<string>> = new Map()
+	readonly #frameIds: Map<string, string> = new Map()
+	readonly #downloads: Map<string, BrowserDownload> = new Map()
+	readonly #workers: Map<string, BrowserWorker> = new Map()
+	readonly #popups: Map<string, BrowserPage> = new Map()
 	#closed = false
 	#codegen: BrowserCodegen | undefined
 	#codegenStart: Promise<BrowserCodegen> | undefined
-	#navigation: Promise<void> | undefined
+	#navigation: Promise<BrowserNavigationResult> | undefined
 	#closing: Promise<void> | undefined
 	#releasing: Promise<void> | undefined
-	#loadEvent: string | undefined
+	#loadEvents: readonly string[] = []
+	#sameDocument = false
 	#loadTimer: ReturnType<typeof setTimeout> | undefined
 	#loadResolve: (() => void) | undefined
 	#loadReject: ((error: unknown) => void) | undefined
+	#responses: BrowserResponse[] | undefined
+	#navigationResponseHandler = (response: BrowserResponse): void => {
+		if (response.frame === this.id) this.#responses?.push(response)
+	}
 	#destroyHandler = (params: Readonly<Record<string, unknown>>): void => {
 		if (!isString(params['targetId']) || params['targetId'] !== this.#targetId) return
 		this.#closed = true
 		void this.#release().catch(() => undefined)
 	}
-	#loadHandler = (): void => this.#resolveLoad()
+	#loadHandler = (params: Readonly<Record<string, unknown>>): void => {
+		if (this.#loadEvents.includes('Page.navigatedWithinDocument')) {
+			const frame = params['frameId']
+			if (isString(frame) && frame === this.id) {
+				this.#sameDocument = true
+				this.#resolveLoad()
+				return
+			}
+		}
+		if (this.#loadEvents.includes('Page.frameNavigated')) {
+			const frame = params['frame']
+			if (isRecord(frame) && frame['id'] === this.id) this.#resolveLoad()
+			return
+		}
+		if (
+			this.#loadEvents.includes('Page.loadEventFired') ||
+			this.#loadEvents.includes('Page.domContentEventFired')
+		) {
+			this.#resolveLoad()
+		}
+	}
+	#frameAttachedHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const frame = params['frameId']
+		const parent = params['parentFrameId']
+		if (!isString(frame)) return
+		this.#emitter.emit(
+			'attach',
+			new BrowserFrame(
+				this.#client,
+				(id) => this.#resolveFrameSession(id),
+				frame,
+				'about:blank',
+				isString(parent) ? parent : undefined,
+			),
+		)
+	}
+	#frameNavigatedHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const frame = params['frame']
+		if (!isRecord(frame) || !isString(frame['id']) || !isString(frame['url'])) return
+		if (frame['id'] === this.id) {
+			this.update(frame['url'])
+			this.#emitter.emit('navigate', frame['url'])
+		}
+	}
+	#frameDetachedHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const frame = params['frameId']
+		if (!isString(frame)) return
+		this.#frameSessions.delete(frame)
+		this.#emitter.emit('detach', frame)
+	}
+	#dialogHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const category = params['type']
+		if (
+			(category !== 'alert' &&
+				category !== 'confirm' &&
+				category !== 'prompt' &&
+				category !== 'beforeunload') ||
+			!isString(params['message'])
+		) {
+			return
+		}
+		this.#emitter.emit(
+			'dialog',
+			new BrowserDialog(
+				this,
+				category,
+				params['message'],
+				isString(params['defaultPrompt']) ? params['defaultPrompt'] : '',
+			),
+		)
+	}
+	#chooserHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const backend = params['backendNodeId']
+		const mode = params['mode']
+		if (!isInteger(backend)) return
+		this.#emitter.emit('chooser', new BrowserFileChooser(this, backend, mode === 'selectMultiple'))
+	}
+	#consoleHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const message = readBrowserConsoleMessage(params)
+		if (message !== undefined) this.#emitter.emit('console', message)
+	}
+	#errorHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const error = readBrowserPageError(params)
+		if (error !== undefined) this.#emitter.emit('error', error)
+	}
+	#crashHandler = (): void => this.#emitter.emit('crash')
+	#downloadHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const start = readBrowserDownloadStart(params)
+		if (start === undefined || (start.frame !== this.id && !this.#frameSessions.has(start.frame))) {
+			return
+		}
+		const download = new BrowserDownload(
+			this.#client,
+			start.id,
+			start.url,
+			start.name,
+			this.#contextId,
+		)
+		this.#downloads.set(start.id, download)
+		this.#emitter.emit('download', download)
+	}
+	#downloadProgressHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const decoded = readBrowserDownloadProgress(params)
+		if (decoded === undefined) return
+		const [id, progress] = decoded
+		const download = this.#downloads.get(id)
+		if (download === undefined) return
+		download.update(progress)
+		if (progress.status !== 'pending') this.#downloads.delete(id)
+	}
+	#attachedHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const target = params['targetInfo']
+		const session = params['sessionId']
+		if (!isRecord(target) || !isString(target['targetId']) || !isString(session)) {
+			return
+		}
+
+		const category = target['type']
+		if (category === 'worker' || category === 'service_worker' || category === 'shared_worker') {
+			void this.#attachWorker(
+				session,
+				target['targetId'],
+				isString(target['url']) ? target['url'] : '',
+				category,
+			)
+			return
+		}
+		if (category === 'page') {
+			void this.#attachPopup(
+				session,
+				target['targetId'],
+				isString(target['url']) ? target['url'] : 'about:blank',
+			)
+			return
+		}
+		if (category !== 'iframe') return
+
+		const frame = target['targetId']
+		const attempt = this.#enableFrameSession(session)
+		this.#frameSessions.set(frame, attempt)
+		this.#frameIds.set(session, frame)
+		void attempt.catch(() => {
+			if (this.#frameSessions.get(frame) === attempt) this.#frameSessions.delete(frame)
+			if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
+			void this.#detachChild(session)
+		})
+	}
+	#detachedHandler = (params: Readonly<Record<string, unknown>>): void => {
+		const session = params['sessionId']
+		const target = params['targetId']
+		if (isString(target)) {
+			const worker = this.#workers.get(target)
+			if (worker !== undefined) {
+				worker.detach()
+				this.#workers.delete(target)
+			}
+			const popup = this.#popups.get(target)
+			if (popup !== undefined) {
+				this.#popups.delete(target)
+				void popup.destroy().catch(() => undefined)
+			}
+		}
+		const frame = isString(target)
+			? target
+			: isString(session)
+				? this.#frameIds.get(session)
+				: undefined
+		if (frame !== undefined) this.#frameSessions.delete(frame)
+		if (isString(session)) this.#frameIds.delete(session)
+	}
 
 	constructor(
 		client: CDPClientInterface,
@@ -55,207 +282,257 @@ export class BrowserPage implements BrowserPageInterface {
 		sessionId: string,
 		writer?: ScreenshotWriterInterface,
 		url?: string,
+		frameId?: string,
+		contextId?: string,
+		opener?: BrowserPageInterface,
 	) {
+		super(client, sessionId, frameId ?? targetId, url ?? 'about:blank', undefined, undefined, false)
 		this.#client = client
 		this.#targetId = targetId
 		this.#sessionId = sessionId
 		this.#writer = writer
-		if (url !== undefined) this.#url = url
+		this.#contextId = contextId
+		this.#opener = opener
+		this.#emitter = new Emitter()
+		this.#network = new BrowserNetworkManager(this, writer)
+		this.#navigationManager = new BrowserNavigationManager(this)
+		this.#scripts = new BrowserScriptManager(this)
+		this.#accessibility = new BrowserAccessibility(this)
+		this.#diagnostics = new BrowserDiagnostics(this, writer)
+		this.#clock = new BrowserClock(this)
+		this.#network.emitter.on('request', (request) => this.#emitter.emit('request', request))
+		this.#network.emitter.on('response', (response) => this.#emitter.emit('response', response))
+		this.#network.emitter.on('failure', (failure) => this.#emitter.emit('failure', failure))
+		this.#network.emitter.on('socket', (socket) => this.#emitter.emit('socket', socket))
 
-		// Subscribe to external close detection (browser-level event, global subscription)
 		this.#client.subscribe('Target.targetDestroyed', this.#destroyHandler)
+		this.#client.subscribe('Target.attachedToTarget', this.#attachedHandler, this.#sessionId)
+		this.#client.subscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
+		this.#client.subscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
+		this.#client.subscribe('Page.frameNavigated', this.#frameNavigatedHandler, this.#sessionId)
+		this.#client.subscribe('Page.frameDetached', this.#frameDetachedHandler, this.#sessionId)
+		this.#client.subscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
+		this.#client.subscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
+		this.#client.subscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
+		this.#client.subscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
+		this.#client.subscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
+		this.#client.subscribe('Browser.downloadWillBegin', this.#downloadHandler)
+		this.#client.subscribe('Browser.downloadProgress', this.#downloadProgressHandler)
 	}
 
-	// === Property accessors
+	get emitter(): EmitterInterface<BrowserPageEventMap> {
+		return this.#emitter
+	}
 
-	get url(): string {
-		return this.#url
+	get network(): BrowserNetworkManagerInterface {
+		return this.#network
+	}
+
+	get navigation(): BrowserNavigationManagerInterface {
+		return this.#navigationManager
+	}
+
+	get scripts(): BrowserScriptManagerInterface {
+		return this.#scripts
+	}
+
+	get accessibility(): BrowserAccessibilityInterface {
+		return this.#accessibility
+	}
+
+	get diagnostics(): BrowserDiagnosticsInterface {
+		return this.#diagnostics
+	}
+
+	get clock(): BrowserClockInterface {
+		return this.#clock
+	}
+
+	get opener(): BrowserPageInterface | undefined {
+		return this.#opener
+	}
+
+	get target(): string {
+		return this.#targetId
 	}
 
 	get closed(): boolean {
 		return this.#closed
 	}
 
-	// === Public API
-
-	async title(): Promise<string> {
-		this.#assertOpen()
-		const result = await this.#evaluate('document.title')
-		return this.#requireString(result, 'Document title')
-	}
-
-	async navigate(url: string, options?: BrowserNavigationOptions): Promise<void> {
-		this.#assertOpen()
+	async navigate(
+		url: string,
+		options?: BrowserNavigationOptions,
+	): Promise<BrowserNavigationResult> {
+		this.assert()
 		while (this.#navigation !== undefined) {
 			await this.#navigation.catch(() => undefined)
 		}
-		this.#assertOpen()
+		this.assert()
 		const navigation = this.#navigate(url, options)
 		this.#navigation = navigation
 
 		try {
-			await navigation
+			return await navigation
 		} finally {
 			if (this.#navigation === navigation) this.#navigation = undefined
 		}
 	}
 
-	async content(): Promise<BrowserContentResult> {
-		this.#assertOpen()
-		const [title, html, text, currentUrl] = await Promise.all([
-			this.#evaluate('document.title'),
-			this.#evaluate(
-				guardEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
-			),
-			this.#evaluate(
-				guardEvaluateExpression(
-					'document.body ? document.body.innerText : ""',
-					BROWSER_RESULT_LIMIT,
-				),
-			),
-			this.#evaluate('location.href'),
-		])
-
-		const url = this.#requireString(currentUrl, 'Document URL')
-		this.#url = url
-
-		return {
-			url,
-			title: this.#requireString(title, 'Document title'),
-			html: this.#requireString(html, 'Document HTML'),
-			text: this.#requireString(text, 'Document text'),
+	async reload(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult> {
+		this.assert()
+		while (this.#navigation !== undefined) {
+			await this.#navigation.catch(() => undefined)
 		}
+		this.assert()
+		const navigation = this.#reload(options)
+		this.#navigation = navigation
+
+		try {
+			return await navigation
+		} finally {
+			if (this.#navigation === navigation) this.#navigation = undefined
+		}
+	}
+
+	async back(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult> {
+		return await this.#history(-1, options)
+	}
+
+	async forward(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult> {
+		return await this.#history(1, options)
 	}
 
 	async screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult> {
-		this.#assertOpen()
-		const format = options?.type ?? 'png'
-		const params: Record<string, unknown> = { format }
-
-		if (options?.quality !== undefined && format === 'jpeg') {
-			params['quality'] = options.quality
-		}
+		this.assert()
+		const params: Record<string, unknown> = { ...browserScreenshotToParams(options) }
 
 		if (options?.full === true) {
-			// Get full page dimensions for full-page screenshot
-			const metrics: unknown = await this.#client.send(
-				'Page.getLayoutMetrics',
-				undefined,
-				this.#sessionId,
-			)
+			const metrics = await this.request('Page.getLayoutMetrics')
+			const size =
+				isRecord(metrics) && isRecord(metrics['cssContentSize'])
+					? metrics['cssContentSize']
+					: isRecord(metrics) && isRecord(metrics['contentSize'])
+						? metrics['contentSize']
+						: undefined
+			const width = size?.['width']
+			const height = size?.['height']
+			if (!isFiniteNumber(width) || width <= 0 || !isFiniteNumber(height) || height <= 0) {
+				throw new BrowserError('Browser full-page screenshot metrics are malformed')
+			}
+			params['clip'] = { x: 0, y: 0, width, height, scale: 1 }
+			params['captureBeyondViewport'] = true
+		}
 
-			if (isRecord(metrics) && isRecord(metrics['contentSize'])) {
-				const contentSize = metrics['contentSize']
-				const width = contentSize['width']
-				const height = contentSize['height']
-
-				if (typeof width === 'number' && typeof height === 'number' && width > 0 && height > 0) {
-					params['clip'] = { x: 0, y: 0, width, height, scale: 1 }
-					params['captureBeyondViewport'] = true
+		if (options?.scale !== undefined) {
+			const ratio = options.scale === 'css' ? 1 : await this.evaluate('devicePixelRatio')
+			if (!isFiniteNumber(ratio) || ratio <= 0) {
+				throw new BrowserError('Browser screenshot device scale is malformed')
+			}
+			if (!isRecord(params['clip'])) {
+				const metrics = await this.request('Page.getLayoutMetrics')
+				const viewport =
+					isRecord(metrics) && isRecord(metrics['cssVisualViewport'])
+						? metrics['cssVisualViewport']
+						: undefined
+				if (
+					viewport === undefined ||
+					!isFiniteNumber(viewport['pageX']) ||
+					!isFiniteNumber(viewport['pageY']) ||
+					!isFiniteNumber(viewport['clientWidth']) ||
+					viewport['clientWidth'] <= 0 ||
+					!isFiniteNumber(viewport['clientHeight']) ||
+					viewport['clientHeight'] <= 0
+				) {
+					throw new BrowserError('Browser screenshot viewport metrics are malformed')
 				}
+				params['clip'] = {
+					x: viewport['pageX'],
+					y: viewport['pageY'],
+					width: viewport['clientWidth'],
+					height: viewport['clientHeight'],
+					scale: ratio,
+				}
+			} else {
+				params['clip']['scale'] = ratio
 			}
 		}
 
-		const result: unknown = await this.#client.send(
-			'Page.captureScreenshot',
-			params,
-			this.#sessionId,
-		)
+		let token: string | undefined
+		let transparent = false
+		try {
+			const preparation = compileScreenshotPreparationExpression(options)
+			if (preparation !== undefined) {
+				const value = await this.evaluate(preparation)
+				if (!isString(value)) throw new BrowserError('Browser screenshot preparation failed')
+				token = value
+			}
+			if (options?.transparent === true) {
+				await this.request('Emulation.setDefaultBackgroundColorOverride', {
+					color: { r: 0, g: 0, b: 0, a: 0 },
+				})
+				transparent = true
+			}
+			const result = await this.request('Page.captureScreenshot', params)
+			if (!isRecord(result) || !isString(result['data'])) {
+				throw new BrowserError('Screenshot failed: no data returned')
+			}
 
+			const bytes = decodeBase64(result['data'])
+			if (options?.path !== undefined) await this.save(options.path, bytes)
+			return { bytes, path: options?.path }
+		} finally {
+			if (transparent) {
+				await this.request('Emulation.setDefaultBackgroundColorOverride').catch(() => undefined)
+			}
+			if (token !== undefined) {
+				await this.evaluate(compileScreenshotCleanupExpression(token)).catch(() => undefined)
+			}
+		}
+	}
+
+	async pdf(options?: BrowserPDFOptions): Promise<BrowserPDFResult> {
+		this.assert()
+		const result = await this.request('Page.printToPDF', browserPDFToParams(options))
 		if (!isRecord(result) || !isString(result['data'])) {
-			throw new BrowserError('Screenshot failed: no data returned')
+			throw new BrowserError('PDF failed: no data returned')
 		}
-
 		const bytes = decodeBase64(result['data'])
-
-		if (options?.path !== undefined && this.#writer !== undefined) {
-			await this.#writer.write(options.path, bytes)
-		}
-
+		if (options?.path !== undefined) await this.save(options.path, bytes)
 		return { bytes, path: options?.path }
 	}
 
-	async click(selector: string, options?: BrowserActionOptions): Promise<void> {
-		this.#assertOpen()
-		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
-		await this.#waitForSelector(selector, timeout)
-		await this.#evaluate(
-			`(() => { const el = document.querySelector(${JSON.stringify(selector)}); if (el) { el.scrollIntoView({ block: 'center' }); el.click(); } else { throw new Error('Element not found: ' + ${JSON.stringify(selector)}); } })()`,
-		)
+	override async save(path: string, bytes: Uint8Array): Promise<void> {
+		if (this.#writer === undefined) {
+			throw new BrowserError('Browser page has no configured file writer', undefined, { path })
+		}
+		await this.#writer.write(path, bytes)
 	}
 
-	async fill(selector: string, value: string, options?: BrowserActionOptions): Promise<void> {
-		this.#assertOpen()
-		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
-		await this.#waitForSelector(selector, timeout)
-		await this.#evaluate(
-			`(() => {
-                const el = document.querySelector(${JSON.stringify(selector)});
-                if (!el) throw new Error('Element not found: ' + ${JSON.stringify(selector)});
-                el.focus();
-                if (el.isContentEditable) {
-                    el.textContent = ${JSON.stringify(value)};
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                } else {
-                    el.value = ${JSON.stringify(value)};
-                    el.dispatchEvent(new Event('input', { bubbles: true }));
-                    el.dispatchEvent(new Event('change', { bubbles: true }));
-                }
-            })()`,
-		)
-	}
-
-	async select(
-		selector: string,
-		values: readonly string[],
-		options?: BrowserActionOptions,
-	): Promise<void> {
-		this.#assertOpen()
-		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
-		await this.#waitForSelector(selector, timeout)
-		const valuesJson = JSON.stringify([...values])
-		await this.#evaluate(
-			`(() => {
-                const el = document.querySelector(${JSON.stringify(selector)});
-                if (!el) throw new Error('Element not found: ' + ${JSON.stringify(selector)});
-                const vals = ${valuesJson};
-                for (const opt of el.options) {
-                    opt.selected = vals.includes(opt.value);
-                }
-                el.dispatchEvent(new Event('change', { bubbles: true }));
-            })()`,
-		)
-	}
-
-	async evaluate(expression: string): Promise<unknown> {
-		this.#assertOpen()
-		return this.#evaluate(guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT))
-	}
-
-	async wait(selector: string, options?: BrowserActionOptions): Promise<void> {
-		this.#assertOpen()
-		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
-		await this.#waitForSelector(selector, timeout)
-	}
-
-	async frame(name: string): Promise<BrowserFrame | undefined> {
+	async frame(name: string): Promise<BrowserFrameInterface | undefined> {
 		const frames = await this.frames()
 		return frames.find((frame) => frame.name === name || frame.url === name)
 	}
 
-	async frames(): Promise<readonly BrowserFrame[]> {
-		this.#assertOpen()
-		const result: unknown = await this.#client.send('Page.getFrameTree', undefined, this.#sessionId)
+	async frames(): Promise<readonly BrowserFrameInterface[]> {
+		this.assert()
+		const result = await this.request('Page.getFrameTree')
+		return readBrowserFrames(result).map((frame) => this.#frame(frame))
+	}
 
-		if (!isRecord(result) || !isRecord(result['frameTree'])) return []
-
-		const frames: BrowserFrame[] = []
-		this.#flattenFrameTree(result['frameTree'], frames)
-		return frames
+	async snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshot> {
+		this.assert()
+		const styles = options?.styles ?? []
+		const result = await this.request('DOMSnapshot.captureSnapshot', {
+			computedStyles: [...styles],
+			includePaintOrder: options?.paint ?? false,
+			includeDOMRects: options?.rects ?? false,
+		})
+		return decodeBrowserSnapshot(result, styles, options?.limit ?? BROWSER_SNAPSHOT_NODE_LIMIT)
 	}
 
 	async codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface> {
-		this.#assertOpen()
+		this.assert()
 		if (this.#codegen !== undefined) return this.#codegen
 		const active = this.#codegenStart
 		if (active !== undefined) return await active
@@ -295,36 +572,152 @@ export class BrowserPage implements BrowserPageInterface {
 		return closing
 	}
 
-	// === Private helpers
+	protected override assert(): void {
+		super.assert()
+		if (this.#closed) throw new BrowserError('Browser page is closed')
+	}
 
-	async #navigate(url: string, options?: BrowserNavigationOptions): Promise<void> {
+	async #navigate(
+		url: string,
+		options?: BrowserNavigationOptions,
+	): Promise<BrowserNavigationResult> {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		const watch = this.#watchNavigation()
 		const condition = options?.condition ?? 'load'
-
 		const wait = this.#waitForLoadEvent(condition, timeout)
 		void wait.catch(() => undefined)
+		let loader: string | undefined
 
 		try {
-			const result: unknown = await this.#client.send(
-				'Page.navigate',
-				{ url },
-				this.#sessionId,
-				timeout,
-			)
-
+			const result = await this.request('Page.navigate', { url }, timeout)
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
 			}
-
+			if (isRecord(result) && isString(result['loaderId'])) loader = result['loaderId']
 			await wait
 		} catch (error) {
+			this.#clearNavigationWatch(watch)
 			this.#cancelLoad()
 			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
 			throw error
 		}
 
-		const currentUrl = await this.#evaluate('location.href')
-		this.#url = this.#requireString(currentUrl, 'Navigation URL')
+		return await this.#completeNavigation(watch, loader)
+	}
+
+	async #reload(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult> {
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		const watch = this.#watchNavigation()
+		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout)
+		void wait.catch(() => undefined)
+
+		try {
+			await this.request('Page.reload', undefined, timeout)
+			await wait
+		} catch (error) {
+			this.#clearNavigationWatch(watch)
+			this.#cancelLoad()
+			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
+			throw error
+		}
+
+		return await this.#completeNavigation(watch)
+	}
+
+	async #history(
+		offset: -1 | 1,
+		options?: BrowserNavigationOptions,
+	): Promise<BrowserNavigationResult> {
+		this.assert()
+		while (this.#navigation !== undefined) {
+			await this.#navigation.catch(() => undefined)
+		}
+		this.assert()
+		const navigation = this.#navigateHistory(offset, options)
+		this.#navigation = navigation
+
+		try {
+			return await navigation
+		} finally {
+			if (this.#navigation === navigation) this.#navigation = undefined
+		}
+	}
+
+	async #navigateHistory(
+		offset: -1 | 1,
+		options?: BrowserNavigationOptions,
+	): Promise<BrowserNavigationResult> {
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		const history = await this.request('Page.getNavigationHistory')
+		if (!isRecord(history) || !isInteger(history['currentIndex']) || !isArray(history['entries'])) {
+			throw new BrowserError('Navigation history is malformed')
+		}
+		const entry = history['entries'][history['currentIndex'] + offset]
+		if (!isRecord(entry) || !isInteger(entry['id'])) {
+			return { url: this.url, response: undefined, same: false }
+		}
+
+		const watch = this.#watchNavigation()
+		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout)
+		void wait.catch(() => undefined)
+		try {
+			await this.request('Page.navigateToHistoryEntry', { entryId: entry['id'] }, timeout)
+			await wait
+		} catch (error) {
+			this.#clearNavigationWatch(watch)
+			this.#cancelLoad()
+			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
+			throw error
+		}
+
+		return await this.#completeNavigation(watch)
+	}
+
+	#watchNavigation(): BrowserNavigationWatch {
+		const responses: BrowserResponse[] = []
+		this.#responses = responses
+		this.#network.emitter.on('response', this.#navigationResponseHandler)
+		return { responses }
+	}
+
+	#clearNavigationWatch(watch: BrowserNavigationWatch): void {
+		this.#network.emitter.off('response', this.#navigationResponseHandler)
+		if (this.#responses === watch.responses) this.#responses = undefined
+	}
+
+	#navigationResult(
+		watch: BrowserNavigationWatch,
+		url: string,
+		loader?: string,
+	): BrowserNavigationResult {
+		this.#clearNavigationWatch(watch)
+		const response =
+			loader === undefined
+				? watch.responses.findLast((candidate) => candidate.url === url)
+				: watch.responses.findLast((candidate) => candidate.loader === loader)
+		return {
+			url,
+			response,
+			same: this.#sameDocument,
+		}
+	}
+
+	async #completeNavigation(
+		watch: BrowserNavigationWatch,
+		loader?: string,
+	): Promise<BrowserNavigationResult> {
+		try {
+			const currentUrl = await this.raw('location.href')
+			const resolved = requireBrowserString(currentUrl, 'Navigation URL')
+			this.update(resolved)
+			return this.#navigationResult(watch, resolved, loader)
+		} catch (error) {
+			this.#clearNavigationWatch(watch)
+			throw error
+		}
 	}
 
 	async #startCodegen(options?: BrowserCodegenOptions): Promise<BrowserCodegen> {
@@ -349,7 +742,6 @@ export class BrowserPage implements BrowserPageInterface {
 
 	async #close(): Promise<void> {
 		await this.#release()
-
 		try {
 			await this.#client.send('Target.closeTarget', { targetId: this.#targetId })
 		} catch {
@@ -360,7 +752,6 @@ export class BrowserPage implements BrowserPageInterface {
 	#release(): Promise<void> {
 		const active = this.#releasing
 		if (active !== undefined) return active
-
 		const release = this.#releaseResources()
 		this.#releasing = release
 		return release
@@ -369,6 +760,10 @@ export class BrowserPage implements BrowserPageInterface {
 	async #releaseResources(): Promise<void> {
 		this.#cancelLoad()
 		await this.#codegenStart?.catch(() => undefined)
+		await this.#scripts.destroy().catch(() => undefined)
+		await this.#diagnostics.destroy().catch(() => undefined)
+		await this.#clock.uninstall().catch(() => undefined)
+		await this.#network.destroy().catch(() => undefined)
 
 		if (this.#codegen !== undefined) {
 			try {
@@ -379,112 +774,147 @@ export class BrowserPage implements BrowserPageInterface {
 			this.#codegen = undefined
 		}
 
+		this.#frameSessions.clear()
+		this.#frameIds.clear()
+		for (const worker of this.#workers.values()) worker.detach()
+		this.#workers.clear()
+		this.#popups.clear()
+		this.#downloads.clear()
 		this.#client.unsubscribe('Target.targetDestroyed', this.#destroyHandler)
+		this.#client.unsubscribe('Target.attachedToTarget', this.#attachedHandler, this.#sessionId)
+		this.#client.unsubscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
+		this.#client.unsubscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
+		this.#client.unsubscribe('Page.frameNavigated', this.#frameNavigatedHandler, this.#sessionId)
+		this.#client.unsubscribe('Page.frameDetached', this.#frameDetachedHandler, this.#sessionId)
+		this.#client.unsubscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
+		this.#client.unsubscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
+		this.#client.unsubscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
+		this.#client.unsubscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
+		this.#client.unsubscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
+		this.#client.unsubscribe('Browser.downloadWillBegin', this.#downloadHandler)
+		this.#client.unsubscribe('Browser.downloadProgress', this.#downloadProgressHandler)
+		if (!this.#emitter.destroyed) {
+			this.#emitter.emit('close')
+			this.#emitter.destroy()
+		}
 	}
 
-	#flattenFrameTree(node: Readonly<Record<string, unknown>>, out: BrowserFrame[]): void {
-		const frame = node['frame']
+	#frame(frame: BrowserFrameInfo): BrowserFrameInterface {
+		return new BrowserFrame(
+			this.#client,
+			(id) => this.#resolveFrameSession(id),
+			frame.id,
+			frame.url,
+			frame.parent,
+			frame.name,
+		)
+	}
 
-		if (isRecord(frame) && isString(frame['id']) && isString(frame['url'])) {
-			const parent = frame['parentId']
-			const name = frame['name']
+	async #resolveFrameSession(frame: string): Promise<string> {
+		const session = this.#frameSessions.get(frame)
+		return session === undefined ? this.#sessionId : await session
+	}
 
-			out.push({
-				id: frame['id'],
-				...(isString(parent) ? { parent } : {}),
-				...(isString(name) && name !== '' ? { name } : {}),
-				url: frame['url'],
-			})
-		}
+	async #enableFrameSession(session: string): Promise<string> {
+		await this.#client.send('Page.enable', undefined, session)
+		await this.#client.send('Runtime.enable', undefined, session)
+		return session
+	}
 
-		const children = node['childFrames']
-		if (Array.isArray(children)) {
-			for (const child of children) {
-				if (isRecord(child)) this.#flattenFrameTree(child, out)
+	async #attachWorker(
+		session: string,
+		id: string,
+		url: string,
+		category: BrowserWorkerCategory,
+	): Promise<void> {
+		try {
+			await this.#client.send('Runtime.enable', undefined, session)
+			if (this.#closed) {
+				await this.#detachChild(session)
+				return
 			}
+			const worker = new BrowserWorker(this.#client, session, id, url, category)
+			this.#workers.set(id, worker)
+			this.#emitter.emit('worker', worker)
+		} catch {
+			// A worker can terminate before its session is enabled.
+			await this.#detachChild(session)
 		}
 	}
 
-	// Best-effort: tells Chromium to abandon an in-flight navigation so the
-	// renderer is not left wedged behind it. Bounded by a short cap (see
-	// BROWSER_STOP_LOADING_TIMEOUT_MS) rather than the full per-call timeout,
-	// so a wedged renderer cannot add up to the whole timeout to the failure
-	// path; any failure here is swallowed so it never masks the original
-	// navigate error.
+	async #attachPopup(session: string, id: string, url: string): Promise<void> {
+		let popup: BrowserPage | undefined
+		try {
+			await this.#client.send('Page.enable', undefined, session)
+			await this.#client.send('Runtime.enable', undefined, session)
+			const result = await this.#client.send('Page.getFrameTree', undefined, session)
+			const frame = readBrowserFrames(result)[0]
+			if (frame === undefined || this.#closed) {
+				await this.#detachChild(session)
+				return
+			}
+			popup = new BrowserPage(
+				this.#client,
+				id,
+				session,
+				this.#writer,
+				url,
+				frame.id,
+				this.#contextId,
+				this,
+			)
+			await popup.send('Target.setAutoAttach', {
+				autoAttach: true,
+				waitForDebuggerOnStart: false,
+				flatten: true,
+			})
+			await popup.send('Page.setInterceptFileChooserDialog', { enabled: true })
+			await popup.network.start()
+			if (this.#closed) {
+				await popup.destroy()
+				return
+			}
+			this.#popups.set(id, popup)
+			this.#emitter.emit('popup', popup)
+		} catch {
+			// A popup can close before its session initialization completes.
+			if (popup !== undefined) await popup.destroy()
+			else await this.#detachChild(session)
+		}
+	}
+
+	async #detachChild(session: string): Promise<void> {
+		await this.#client
+			.send('Target.detachFromTarget', { sessionId: session })
+			.catch(() => undefined)
+	}
+
 	async #stopLoading(timeout: number): Promise<void> {
 		try {
-			await this.#client.send('Page.stopLoading', undefined, this.#sessionId, timeout)
+			await this.request('Page.stopLoading', undefined, timeout)
 		} catch {
-			// Best-effort only — the original navigate error is what the caller receives
+			// Best-effort only — the original navigation error wins.
 		}
-	}
-
-	async #evaluate(expression: string): Promise<unknown> {
-		const result: unknown = await this.#client.send(
-			'Runtime.evaluate',
-			{
-				expression,
-				returnByValue: true,
-				awaitPromise: true,
-			},
-			this.#sessionId,
-		)
-
-		if (!isRecord(result)) return undefined
-
-		// Check for exceptions
-		if (isRecord(result['exceptionDetails'])) {
-			const details = result['exceptionDetails']
-			if (isRecord(details['exception']) && isString(details['exception']['description'])) {
-				const description = details['exception']['description']
-				const limitMatch = BROWSER_RESULT_LIMIT_PATTERN.exec(description)
-				if (limitMatch !== null) {
-					throw new BrowserResultLimitError('Evaluation result exceeds BROWSER_RESULT_LIMIT', {
-						length: Number(limitMatch[1]),
-						limit: BROWSER_RESULT_LIMIT,
-					})
-				}
-				throw new BrowserError(description)
-			}
-			throw new BrowserError('JavaScript evaluation failed')
-		}
-
-		// Extract the value from the result
-		const remoteObject = result['result']
-		if (!isRecord(remoteObject)) return undefined
-
-		if ('value' in remoteObject) {
-			return remoteObject['value']
-		}
-
-		return undefined
-	}
-
-	async #waitForSelector(selector: string, timeout: number): Promise<void> {
-		const deadline = Date.now() + timeout
-		const selectorJson = JSON.stringify(selector)
-
-		while (Date.now() < deadline) {
-			const found = await this.#evaluate(`document.querySelector(${selectorJson}) !== null`)
-			if (found === true) return
-
-			await new Promise((resolve) => setTimeout(resolve, BROWSER_WAIT_POLL_INTERVAL_MS))
-		}
-
-		throw new BrowserSelectorError(`Timeout waiting for selector: ${selector}`)
 	}
 
 	#waitForLoadEvent(condition: BrowserWaitUntil, timeout: number): Promise<void> {
 		const eventName =
-			condition === 'domcontentloaded' ? 'Page.domContentEventFired' : 'Page.loadEventFired'
+			condition === 'commit'
+				? 'Page.frameNavigated'
+				: condition === 'domcontentloaded'
+					? 'Page.domContentEventFired'
+					: 'Page.loadEventFired'
 		const deferred = Promise.withResolvers<void>()
-		this.#loadEvent = eventName
+		this.#sameDocument = false
+		this.#loadEvents = [eventName, 'Page.navigatedWithinDocument']
 		this.#loadResolve = deferred.resolve
 		this.#loadReject = deferred.reject
 		this.#loadTimer = setTimeout(() => {
 			this.#rejectLoad(new BrowserError(`Navigation timeout after ${timeout}ms`))
 		}, timeout)
-		this.#client.subscribe(eventName, this.#loadHandler, this.#sessionId)
+		for (const event of this.#loadEvents) {
+			this.#client.subscribe(event, this.#loadHandler, this.#sessionId)
+		}
 		return deferred.promise
 	}
 
@@ -506,21 +936,12 @@ export class BrowserPage implements BrowserPageInterface {
 
 	#clearLoad(): void {
 		if (this.#loadTimer !== undefined) clearTimeout(this.#loadTimer)
-		if (this.#loadEvent !== undefined) {
-			this.#client.unsubscribe(this.#loadEvent, this.#loadHandler, this.#sessionId)
+		for (const event of this.#loadEvents) {
+			this.#client.unsubscribe(event, this.#loadHandler, this.#sessionId)
 		}
-		this.#loadEvent = undefined
+		this.#loadEvents = []
 		this.#loadTimer = undefined
 		this.#loadResolve = undefined
 		this.#loadReject = undefined
-	}
-
-	#requireString(value: unknown, field: string): string {
-		if (typeof value === 'string') return value
-		throw new BrowserError(`${field} failed: no string value returned`)
-	}
-
-	#assertOpen(): void {
-		if (this.#closed) throw new BrowserError('Browser page is closed')
 	}
 }

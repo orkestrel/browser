@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Archived source retained for reference only.
+old/
+
 # Build outputs
 dist/
 *.tsbuildinfo

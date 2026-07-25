@@ -2,19 +2,72 @@
  * src/core/helpers.ts tests.
  */
 
+import type { BrowserCodegenAction } from '@src/core'
 import { describe, it, expect } from 'vitest'
+import { attempt } from '@orkestrel/contract'
 import {
+	ancestorsOfBrowserNode,
+	attributeOfBrowserNode,
+	BrowserResultLimitError,
+	childrenOfBrowserNode,
+	closestBrowserNode,
+	commonAncestorOfBrowserNodes,
+	compileAttachedWaitExpression,
+	compileClickExpression,
+	compileHiddenWaitExpression,
+	compileSelectExpression,
+	compileVisibleWaitExpression,
+	computeBrowserNodeDistance,
 	decodeBase64,
+	decodeBrowserAttributes,
+	decodeBrowserSnapshot,
+	decodeRareBooleanData,
+	decodeRareIntegerData,
+	decodeRareStringData,
+	descendantsOfBrowserNode,
+	documentOfBrowserNode,
+	findBrowserDescendant,
+	findBrowserNode,
+	findBrowserNodes,
+	followingSiblingsOfBrowserNode,
+	isBrowserNodeDescendant,
+	isBrowserNodeVisible,
+	isBrowserResultLimitError,
+	matchesBrowserNode,
+	nodeToPath,
 	normalizeCodegenActions,
+	parentOfBrowserNode,
 	parseCodegenActionPayload,
+	precedingSiblingsOfBrowserNode,
+	readBrowserConsoleMessage,
+	readBrowserFrames,
+	readBrowserHeaders,
+	readBrowserProfile,
+	readBrowserRect,
+	readBrowserSecurity,
+	readBrowserTiming,
+	readBrowserTimingRange,
 	readCodegenNavigateAction,
+	readEvaluationResult,
+	readNumberArray,
+	readSnapshotString,
+	requireBrowserString,
+	siblingsOfBrowserNode,
+	walkBrowserNodeBreadthFirst,
+	walkBrowserSnapshot,
+	walkBrowserSnapshotBreadthFirst,
+	walkBrowserNode,
 	compileCodegenScript,
 	guardEvaluateExpression,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_RESULT_LIMIT_PATTERN,
 } from '@src/core'
-import type { BrowserCodegenAction } from '@src/core'
-import { evaluateJavaScript, JPEG_BASE64, PNG_BASE64 } from '../../setup.js'
+import {
+	createDOMSnapshotResult,
+	evaluateJavaScript,
+	JPEG_BASE64,
+	PNG_BASE64,
+} from '../../setup.js'
 
 describe('decodeBase64', () => {
 	it('decodes a small literal to its exact bytes', () => {
@@ -47,6 +100,605 @@ describe('decodeBase64', () => {
 
 	it('decodes the JPEG fixture to its documented signature-prefixed bytes', () => {
 		expect(decodeBase64(JPEG_BASE64)).toEqual(new Uint8Array([255, 216, 255, 224]))
+	})
+})
+
+describe('frame helpers', () => {
+	it('decodes a frame tree depth-first and normalizes absent metadata', () => {
+		expect(
+			readBrowserFrames({
+				frameTree: {
+					frame: { id: 'main', url: 'https://example.com' },
+					childFrames: [
+						{
+							frame: {
+								id: 'first',
+								parentId: 'main',
+								name: 'checkout',
+								url: 'https://example.com/checkout',
+							},
+							childFrames: [
+								{
+									frame: {
+										id: 'nested',
+										parentId: 'first',
+										name: '',
+										url: 'about:blank',
+									},
+								},
+							],
+						},
+						{ frame: { id: 'second', parentId: 'main', url: 'about:blank' } },
+					],
+				},
+			}),
+		).toEqual([
+			{ id: 'main', parent: undefined, name: undefined, url: 'https://example.com' },
+			{
+				id: 'first',
+				parent: 'main',
+				name: 'checkout',
+				url: 'https://example.com/checkout',
+			},
+			{ id: 'nested', parent: 'first', name: undefined, url: 'about:blank' },
+			{ id: 'second', parent: 'main', name: undefined, url: 'about:blank' },
+		])
+	})
+
+	it('returns no frames for malformed trees and skips malformed children', () => {
+		expect(readBrowserFrames(undefined)).toEqual([])
+		expect(readBrowserFrames({ frameTree: [] })).toEqual([])
+		expect(
+			readBrowserFrames({
+				frameTree: {
+					frame: { id: 1, url: false },
+					childFrames: [null, { frame: { id: 'valid', url: 'about:blank' } }],
+				},
+			}),
+		).toEqual([{ id: 'valid', parent: undefined, name: undefined, url: 'about:blank' }])
+	})
+})
+
+describe('network timing helpers', () => {
+	it('decodes finite ordered phases and omits Chromium unavailable sentinels', () => {
+		const timing = {
+			requestTime: 10,
+			proxyStart: -1,
+			proxyEnd: -1,
+			dnsStart: 0,
+			dnsEnd: 2,
+			connectStart: 2,
+			connectEnd: 5,
+			sslStart: 3,
+			sslEnd: 5,
+			sendStart: 5,
+			sendEnd: 6,
+			receiveHeadersEnd: 9,
+		}
+
+		expect(readBrowserTiming(timing)).toEqual({
+			request: 10,
+			proxy: undefined,
+			dns: { start: 0, end: 2 },
+			connect: { start: 2, end: 5 },
+			ssl: { start: 3, end: 5 },
+			send: { start: 5, end: 6 },
+			receive: 9,
+		})
+		expect(readBrowserTimingRange(timing, 'dnsStart', 'dnsEnd')).toEqual({
+			start: 0,
+			end: 2,
+		})
+	})
+
+	it('rejects non-finite, negative, and reversed protocol timing values', () => {
+		expect(readBrowserTiming({ requestTime: Number.NaN })).toBeUndefined()
+		expect(readBrowserTiming({ requestTime: -1 })).toBeUndefined()
+		expect(readBrowserTimingRange({ start: 2, end: 1 }, 'start', 'end')).toBeUndefined()
+		expect(
+			readBrowserTimingRange({ start: 0, end: Number.POSITIVE_INFINITY }, 'start', 'end'),
+		).toBeUndefined()
+	})
+
+	it('decodes ordered certificate validity and rejects malformed bounds', () => {
+		expect(
+			readBrowserSecurity({
+				protocol: 'TLS 1.3',
+				issuer: 'Example CA',
+				validFrom: 100,
+				validTo: 200,
+			}),
+		).toEqual({
+			protocol: 'TLS 1.3',
+			issuer: 'Example CA',
+			from: 100,
+			to: 200,
+		})
+		expect(
+			readBrowserSecurity({
+				protocol: 'TLS 1.3',
+				issuer: 'Example CA',
+				validFrom: 200,
+				validTo: 100,
+			}),
+		).toBeUndefined()
+	})
+})
+
+describe('contract-backed protocol decoding', () => {
+	it('accepts only strings and finite numbers in header records', () => {
+		expect(
+			readBrowserHeaders({
+				string: 'value',
+				number: 42,
+				infinite: Number.POSITIVE_INFINITY,
+				nan: Number.NaN,
+				boolean: true,
+			}),
+		).toEqual({ string: 'value', number: '42' })
+	})
+
+	it('contains cyclic console serialization without dropping the event', () => {
+		const cyclic: Record<string, unknown> = {}
+		cyclic['self'] = cyclic
+
+		expect(
+			readBrowserConsoleMessage({
+				type: 'log',
+				timestamp: 1,
+				args: [{ value: cyclic }],
+			}),
+		).toMatchObject({
+			level: 'log',
+			text: '[object Object]',
+			values: [cyclic],
+		})
+	})
+
+	it('keeps validated CPU profile arrays precisely numeric', () => {
+		expect(
+			readBrowserProfile({
+				profile: {
+					startTime: 1,
+					endTime: 2,
+					nodes: [
+						{
+							id: 1,
+							callFrame: {
+								functionName: 'work',
+								scriptId: '1',
+								url: 'https://example.com/app.js',
+								lineNumber: 0,
+								columnNumber: 0,
+							},
+							children: [2],
+						},
+					],
+					samples: [1],
+					timeDeltas: [0.5],
+				},
+			}),
+		).toMatchObject({
+			samples: [1],
+			deltas: [0.5],
+			nodes: [{ children: [2] }],
+		})
+	})
+
+	it('rejects non-finite and non-integer CPU profile arrays', () => {
+		const frame = {
+			functionName: 'work',
+			scriptId: '1',
+			url: '',
+			lineNumber: 0,
+			columnNumber: 0,
+		}
+
+		expect(() =>
+			readBrowserProfile({
+				profile: {
+					startTime: 1,
+					endTime: 2,
+					nodes: [{ id: 1, callFrame: frame, children: [1.5] }],
+				},
+			}),
+		).toThrow('Browser CPU profile node is malformed')
+		expect(() =>
+			readBrowserProfile({
+				profile: {
+					startTime: 1,
+					endTime: 2,
+					nodes: [{ id: 1, callFrame: frame }],
+					timeDeltas: [Number.POSITIVE_INFINITY],
+				},
+			}),
+		).toThrow('Browser CPU profile deltas are malformed')
+	})
+})
+
+describe('browser action expressions', () => {
+	it('embeds hostile selectors as JSON data rather than executable source', () => {
+		const selector = String.raw`div[data-value='";globalThis.pwned=true;//']`
+		const wait = compileAttachedWaitExpression(selector, true, 250)
+		const click = compileClickExpression(selector, true)
+
+		expect(wait).toContain(JSON.stringify(selector))
+		expect(click).toContain(JSON.stringify(selector))
+		expect(wait).toContain('const strict = true')
+		expect(wait).toContain('250')
+		expect(click).toContain('matches.length !== 1')
+		expect(click).toContain(':disabled')
+	})
+
+	it('lets non-strict visible waits act on the first match and hidden waits require all hidden', () => {
+		const visible = compileVisibleWaitExpression('.item', false, 100)
+		const hidden = compileHiddenWaitExpression('.item', false, 100)
+
+		expect(visible).toContain('matches.length > 0 && visible(matches[0])')
+		expect(hidden).toContain('Array.from(matches).every')
+	})
+
+	it('rejects missing options and multiple values for a single select', () => {
+		const expression = compileSelectExpression('#region', ['us', 'ca'], true)
+
+		expect(expression).toContain('!el.multiple && values.length > 1')
+		expect(expression).toContain('Select options not found')
+		expect(expression).toContain('new Set(Array.from(el.options')
+	})
+})
+
+describe('evaluation result helpers', () => {
+	it('returns the by-value result and permits an explicit undefined value', () => {
+		expect(readEvaluationResult({ result: { value: { ok: true } } })).toEqual({ ok: true })
+		expect(readEvaluationResult({ result: {} })).toBeUndefined()
+	})
+
+	it('maps the result-limit sentinel to BrowserResultLimitError', () => {
+		const result = attempt(() =>
+			readEvaluationResult({
+				exceptionDetails: {
+					exception: {
+						description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}1234`,
+					},
+				},
+			}),
+		)
+
+		expect(result.success).toBe(false)
+		if (result.success) return
+		expect(isBrowserResultLimitError(result.error)).toBe(true)
+		expect(
+			isBrowserResultLimitError(result.error) ? result.error.context : undefined,
+		).toMatchObject({
+			length: 1234,
+		})
+	})
+
+	it('rejects malformed and exceptional evaluation results', () => {
+		expect(readEvaluationResult(undefined)).toBeUndefined()
+		expect(() => readEvaluationResult({ exceptionDetails: { text: 'Evaluation failed' } })).toThrow(
+			'JavaScript evaluation failed',
+		)
+	})
+
+	it('requires string-shaped browser values', () => {
+		expect(requireBrowserString('title', 'Document title')).toBe('title')
+		expect(() => requireBrowserString(42, 'Document title')).toThrow(
+			'Document title failed: no string value returned',
+		)
+	})
+})
+
+describe('snapshot decoders', () => {
+	it('validates generic number arrays, string indexes, rectangles, and attributes', () => {
+		expect(readNumberArray([1, 2.5, -3])).toEqual([1, 2.5, -3])
+		expect(readNumberArray([1, '2'])).toBeUndefined()
+		expect(readNumberArray([Number.NaN])).toBeUndefined()
+		expect(readNumberArray([Number.POSITIVE_INFINITY])).toBeUndefined()
+		expect(readSnapshotString(['zero', 'one'], 1)).toBe('one')
+		expect(readSnapshotString(['zero'], 99)).toBeUndefined()
+		expect(readBrowserRect([1, 2, 3, 4])).toEqual([1, 2, 3, 4])
+		expect(readBrowserRect([1, 2, 3])).toBeUndefined()
+		const attributes = decodeBrowserAttributes([0, 1, 2, 3], ['id', 'hero', 'role', 'main'])
+		expect(attributes).toEqual({ id: 'hero', role: 'main' })
+		expect(Object.isFrozen(attributes)).toBe(true)
+	})
+
+	it('decodes sparse string, boolean, and integer records defensively', () => {
+		expect([...decodeRareStringData({ index: [2, 4], value: [0, 1] }, ['open', 'closed'])]).toEqual(
+			[
+				[2, 'open'],
+				[4, 'closed'],
+			],
+		)
+		expect([...decodeRareBooleanData({ index: [1, 3] })]).toEqual([1, 3])
+		expect([...decodeRareIntegerData({ index: [5], value: [9] })]).toEqual([[5, 9]])
+		expect([...decodeRareStringData({ index: 'invalid' }, [])]).toEqual([])
+		expect([...decodeRareBooleanData(undefined)]).toEqual([])
+		expect([...decodeRareIntegerData({ index: [], value: 'invalid' })]).toEqual([])
+	})
+
+	it('decodes documents, sparse node state, iframe links, and requested layout data', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+
+		expect(snapshot.styles).toEqual(['color'])
+		expect(snapshot.documents).toHaveLength(2)
+		expect(snapshot.documents[0]).toMatchObject({
+			index: 0,
+			frame: 'frame-main',
+			url: 'https://example.com/',
+			title: 'Main',
+			scroll: [12, 34],
+			width: 1200,
+			height: 2400,
+		})
+		const node = snapshot.documents[0]?.nodes[3]
+		expect(node).toMatchObject({
+			document: 0,
+			frame: 'frame-main',
+			index: 3,
+			id: 103,
+			parent: 2,
+			type: 1,
+			name: 'DIV',
+			attributes: { id: 'hero' },
+			text: 'Hello world',
+			clickable: true,
+			shadow: 'open',
+		})
+		expect(node?.layout).toEqual({
+			bounds: [10, 20, 300, 100],
+			styles: { color: 'rgb(1, 2, 3)' },
+			text: 'Hello world',
+			paint: 2,
+			offset: [10, 20, 300, 100],
+			scroll: [0, 0, 300, 100],
+			client: [10, 20, 300, 100],
+		})
+		expect(snapshot.documents[0]?.nodes[5]).toMatchObject({
+			input: 'typed',
+			checked: true,
+			clickable: true,
+		})
+		expect(snapshot.documents[0]?.nodes[6]).toMatchObject({
+			content: 1,
+			source: 'https://example.com/child',
+			origin: 'https://example.com/',
+		})
+	})
+
+	it('decodes Chromium negative-one title indexes as an empty document title', () => {
+		const snapshot = decodeBrowserSnapshot({
+			strings: ['frame-main', 'https://example.com/', '#document', ''],
+			documents: [
+				{
+					frameId: 0,
+					documentURL: 1,
+					title: -1,
+					nodes: {
+						parentIndex: [-1],
+						nodeType: [9],
+						nodeName: [2],
+						nodeValue: [-1],
+						backendNodeId: [1],
+						attributes: [[]],
+					},
+				},
+			],
+		})
+
+		expect(snapshot.documents[0]?.title).toBe('')
+		expect(snapshot.documents[0]?.nodes[0]?.value).toBe('')
+	})
+
+	it('rejects invalid limits and enforces the aggregate node limit', () => {
+		expect(() => decodeBrowserSnapshot(createDOMSnapshotResult(), [], -1)).toThrow(
+			'Browser snapshot limit must be a non-negative integer',
+		)
+		expect(() => decodeBrowserSnapshot(createDOMSnapshotResult(), [], 8)).toThrow(
+			BrowserResultLimitError,
+		)
+		expect(() => decodeBrowserSnapshot(createDOMSnapshotResult(), [], 9)).not.toThrow()
+	})
+
+	it('rejects malformed top-level, string-table, document, metadata, and node data', () => {
+		expect(() => decodeBrowserSnapshot(undefined)).toThrow(
+			'Malformed DOMSnapshot.captureSnapshot result',
+		)
+		expect(() => decodeBrowserSnapshot({ strings: [42], documents: [] })).toThrow(
+			'Malformed DOMSnapshot string table',
+		)
+		expect(() => decodeBrowserSnapshot({ strings: [], documents: [null] })).toThrow(
+			'Malformed DOM snapshot document',
+		)
+		expect(() =>
+			decodeBrowserSnapshot({
+				strings: [],
+				documents: [{ frameId: 0, documentURL: 0, title: 0, nodes: {} }],
+			}),
+		).toThrow('Malformed DOM snapshot document metadata')
+		expect(() =>
+			decodeBrowserSnapshot({
+				strings: ['frame', 'url', 'title'],
+				documents: [{ frameId: 0, documentURL: 1, title: 2, nodes: {} }],
+			}),
+		).toThrow('Malformed DOM snapshot node table')
+		expect(() =>
+			decodeBrowserSnapshot({
+				strings: ['frame', 'url', 'title', 'DIV', ''],
+				documents: [
+					{
+						frameId: 0,
+						documentURL: 1,
+						title: 2,
+						nodes: { nodeType: [1], nodeName: [], nodeValue: [4] },
+					},
+				],
+			}),
+		).toThrow('Malformed DOM snapshot node')
+	})
+})
+
+describe('snapshot traversal', () => {
+	it('walks every document and node in stable snapshot order', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const walked = [...walkBrowserSnapshot(snapshot)]
+
+		expect(walked).toHaveLength(9)
+		expect(walked.map((node) => `${node.document}:${node.index}`)).toEqual([
+			'0:0',
+			'0:1',
+			'0:2',
+			'0:3',
+			'0:4',
+			'0:5',
+			'0:6',
+			'1:0',
+			'1:1',
+		])
+	})
+
+	it('resolves documents, direct children, iframe roots, and nearest-first ancestors', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const main = snapshot.documents[0]
+		const div = main?.nodes[3]
+		const iframe = main?.nodes[6]
+		if (div === undefined || iframe === undefined) throw new Error('Snapshot fixture is malformed')
+
+		expect(documentOfBrowserNode(snapshot, div)?.frame).toBe('frame-main')
+		expect(childrenOfBrowserNode(snapshot, div).map((node) => node.index)).toEqual([4])
+		expect(
+			childrenOfBrowserNode(snapshot, iframe).map((node) => `${node.document}:${node.index}`),
+		).toEqual(['1:0'])
+		expect(ancestorsOfBrowserNode(snapshot, div).map((node) => node.name)).toEqual([
+			'BODY',
+			'HTML',
+			'#document',
+		])
+		const childBody = snapshot.documents[1]?.nodes[1]
+		if (childBody === undefined) throw new Error('Snapshot fixture is malformed')
+		expect(ancestorsOfBrowserNode(snapshot, childBody).map((node) => node.name)).toEqual([
+			'#document',
+			'IFRAME',
+			'BODY',
+			'HTML',
+			'#document',
+		])
+	})
+
+	it('walks and searches one subtree across an iframe boundary', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const body = snapshot.documents[0]?.nodes[2]
+		if (body === undefined) throw new Error('Snapshot fixture is malformed')
+
+		expect([...walkBrowserNode(snapshot, body)].map((node) => node.name)).toEqual([
+			'BODY',
+			'DIV',
+			'#text',
+			'INPUT',
+			'IFRAME',
+			'#document',
+			'BODY',
+		])
+		expect([...descendantsOfBrowserNode(snapshot, body)].map((node) => node.name)).toEqual([
+			'DIV',
+			'#text',
+			'INPUT',
+			'IFRAME',
+			'#document',
+			'BODY',
+		])
+		expect(
+			findBrowserDescendant(snapshot, body, (node) => node.frame === 'frame-child')?.name,
+		).toBe('#document')
+		expect(closestBrowserNode(snapshot, body, (node) => node.name === 'HTML')?.index).toBe(1)
+	})
+
+	it('walks breadth-first and resolves parent, sibling, ancestry, and distance relationships', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const body = snapshot.documents[0]?.nodes[2]
+		const div = snapshot.documents[0]?.nodes[3]
+		const input = snapshot.documents[0]?.nodes[5]
+		const iframe = snapshot.documents[0]?.nodes[6]
+		const childBody = snapshot.documents[1]?.nodes[1]
+		if (
+			body === undefined ||
+			div === undefined ||
+			input === undefined ||
+			iframe === undefined ||
+			childBody === undefined
+		) {
+			throw new Error('Snapshot fixture is malformed')
+		}
+
+		expect([...walkBrowserNodeBreadthFirst(snapshot, body)].map((node) => node.name)).toEqual([
+			'BODY',
+			'DIV',
+			'INPUT',
+			'IFRAME',
+			'#text',
+			'#document',
+			'BODY',
+		])
+		expect([...walkBrowserSnapshotBreadthFirst(snapshot)]).toHaveLength(
+			[...walkBrowserSnapshot(snapshot)].length,
+		)
+		expect(parentOfBrowserNode(snapshot, input)).toBe(body)
+		expect(siblingsOfBrowserNode(snapshot, input).map((node) => node.name)).toEqual([
+			'DIV',
+			'IFRAME',
+		])
+		expect(precedingSiblingsOfBrowserNode(snapshot, input)).toEqual([div])
+		expect(followingSiblingsOfBrowserNode(snapshot, input)).toEqual([iframe])
+		expect(commonAncestorOfBrowserNodes(snapshot, div, childBody)).toBe(body)
+		expect(isBrowserNodeDescendant(snapshot, childBody, iframe)).toBe(true)
+		expect(isBrowserNodeDescendant(snapshot, body, iframe)).toBe(false)
+		expect(computeBrowserNodeDistance(snapshot, div, childBody)).toBe(4)
+	})
+
+	it('finds the first or a bounded list without materializing the full traversal', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		expect(findBrowserNode(snapshot, (node) => node.name === 'INPUT')?.index).toBe(5)
+		expect(findBrowserNode(snapshot, () => false)).toBeUndefined()
+		expect(findBrowserNodes(snapshot, (node) => node.type === 1, 2)).toHaveLength(2)
+		expect(findBrowserNodes(snapshot, () => true, 0)).toEqual([])
+		expect(() => findBrowserNodes(snapshot, () => true, -1)).toThrow(
+			'Browser node result limit must be a non-negative integer',
+		)
+	})
+
+	it('matches names, text, frames, attributes, clickability, and visibility together', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const node = snapshot.documents[0]?.nodes[3]
+		const text = snapshot.documents[0]?.nodes[4]
+		if (node === undefined || text === undefined) throw new Error('Snapshot fixture is malformed')
+
+		expect(
+			matchesBrowserNode(node, {
+				name: 'div',
+				text: 'world',
+				attributes: { id: 'hero' },
+				frame: 'frame-main',
+				clickable: true,
+				visible: true,
+			}),
+		).toBe(true)
+		expect(matchesBrowserNode(node, { attributes: { role: 'button' } })).toBe(false)
+		expect(matchesBrowserNode(node, { frame: 'frame-child' })).toBe(false)
+		expect(isBrowserNodeVisible(node)).toBe(true)
+		expect(isBrowserNodeVisible(text)).toBe(false)
+		expect(attributeOfBrowserNode(node, 'id')).toBe('hero')
+		expect(attributeOfBrowserNode(node, 'missing')).toBeUndefined()
+	})
+
+	it('builds deterministic frame-qualified structural paths', () => {
+		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const node = snapshot.documents[0]?.nodes[3]
+		if (node === undefined) throw new Error('Snapshot fixture is malformed')
+
+		expect(nodeToPath(snapshot, node)).toBe(
+			'frame("frame-main") > #document:0 > html:1 > body:1 > div:1',
+		)
 	})
 })
 

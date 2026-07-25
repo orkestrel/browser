@@ -8,11 +8,12 @@
  * `findSystemBrowser()` discovering an actual browser on the machine.
  */
 
-import type { BrowserInterface } from '@src/server'
+import type { BrowserEngine, BrowserInterface } from '@src/server'
+import type { BrowserContextInterface } from '@src/core'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createServer } from 'node:http'
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
 	createBrowser,
@@ -20,6 +21,7 @@ import {
 	BrowserDestroyedError,
 	BrowserNotConnectedError,
 	BrowserConnectionError,
+	isBrowserConnectionError,
 	BROWSER_KILL_GRACE_MS,
 	BROWSER_PROCESS_EXIT_CAUSE,
 	BROWSER_TRANSPORT_LOSS_CAUSE,
@@ -40,9 +42,25 @@ import {
 	readServerPort,
 	waitForProcessExit,
 } from '../../setupServer.js'
-import { createRecorder, requireValue, waitForCondition, waitForDelay } from '../../setup.js'
+import {
+	createRecorder,
+	ignoreCall,
+	requireValue,
+	throwListenerError,
+	waitForCondition,
+	waitForDelay,
+} from '../../setup.js'
 
-const REAL_BROWSER_EXECUTABLE = findSystemBrowser()?.executable
+const REQUESTED_BROWSER_ENGINE = process.env['BROWSER_COMPATIBILITY_ENGINE']
+const REAL_BROWSER_ENGINE: BrowserEngine | undefined =
+	REQUESTED_BROWSER_ENGINE === 'chromium' ||
+	REQUESTED_BROWSER_ENGINE === 'chrome' ||
+	REQUESTED_BROWSER_ENGINE === 'edge'
+		? REQUESTED_BROWSER_ENGINE
+		: undefined
+const REAL_BROWSER_EXECUTABLE = findSystemBrowser(
+	REAL_BROWSER_ENGINE === undefined ? undefined : { engine: REAL_BROWSER_ENGINE },
+)?.executable
 
 // Container-safe launch flags: needed when running headless Chromium as root
 // (the common case in CI/sandboxed containers) — sandboxing requires a
@@ -108,9 +126,7 @@ describe('Browser idle state', () => {
 		const errors = createRecorder<[unknown, string]>()
 		createBrowser({
 			on: {
-				idle: () => {
-					throw new Error('listener failed')
-				},
+				idle: throwListenerError,
 			},
 			error: errors.handler,
 		})
@@ -515,6 +531,76 @@ describe('Browser create()', () => {
 	})
 })
 
+describe('Browser isolate()', () => {
+	it('creates and emits a configured incognito CDP context', async () => {
+		server = await createCDPTestServer()
+		server.list([])
+		server.script('Target.createBrowserContext', { browserContextId: 'context-1' })
+		server.script('Browser.setDownloadBehavior', {})
+		server.script('Target.disposeBrowserContext', {})
+		const browser = createBrowser({ cdp: { port: server.port } })
+		await browser.connect()
+		const contexts = createRecorder<[context: BrowserContextInterface]>()
+		browser.emitter.on('context', contexts.handler)
+
+		const context = await browser.isolate({
+			proxy: { server: 'http://proxy.test:8080', bypass: ['localhost', '*.internal'] },
+			origins: ['https://trusted.test'],
+			downloads: { path: 'C:\\downloads', named: true },
+			emulation: { locale: 'en-GB', viewport: { width: 900, height: 700 } },
+		})
+
+		expect(context.id).toBe('context-1')
+		expect(browser.contexts()).toContain(context)
+		expect(contexts.calls).toEqual([[context]])
+		expect(
+			server.received.find((message) => message.method === 'Target.createBrowserContext')?.params,
+		).toEqual({
+			disposeOnDetach: false,
+			proxyServer: 'http://proxy.test:8080',
+			proxyBypassList: 'localhost,*.internal',
+			originsWithUniversalNetworkAccess: ['https://trusted.test'],
+		})
+		expect(
+			server.received.find((message) => message.method === 'Browser.setDownloadBehavior')?.params,
+		).toEqual({
+			behavior: 'allowAndName',
+			browserContextId: 'context-1',
+			downloadPath: 'C:\\downloads',
+			eventsEnabled: true,
+		})
+
+		await context.close()
+		expect(browser.contexts()).not.toContain(context)
+		await browser.destroy()
+	})
+
+	it('rejects isolation while disconnected', async () => {
+		const browser = createBrowser()
+
+		await expect(browser.isolate()).rejects.toThrow(BrowserNotConnectedError)
+	})
+
+	it('rejects malformed context configuration before creating remote state', async () => {
+		server = await createCDPTestServer()
+		server.list([])
+		const browser = createBrowser({ cdp: { port: server.port } })
+		await browser.connect()
+
+		await expect(browser.isolate({ proxy: { server: '' } })).rejects.toThrow(
+			'proxy server cannot be empty',
+		)
+		await expect(browser.isolate({ origins: ['ftp://example.com'] })).rejects.toThrow(
+			'absolute HTTP(S) origin',
+		)
+
+		expect(
+			server.received.some((message) => message.method === 'Target.createBrowserContext'),
+		).toBe(false)
+		await browser.destroy()
+	})
+})
+
 // === launch path — executable resolution failure (no real browser spawned)
 
 describe('Browser launch path', () => {
@@ -557,6 +643,47 @@ describe('Browser launch path', () => {
 		expect(browser.connected).toBe(false)
 
 		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+	})
+
+	it('launches with an isolated user-data directory and removes it after teardown', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		const profileArgument = (await fake.arguments()).find((argument) =>
+			argument.startsWith('--user-data-dir='),
+		)
+		if (profileArgument === undefined) throw new Error('Missing browser profile argument')
+		const path = profileArgument.slice('--user-data-dir='.length)
+		expect(path).toContain('orkestrel-browser-')
+		expect(existsSync(path)).toBe(true)
+		expect(browser.connection).toBe('launch')
+
+		await browser.destroy()
+		expect(existsSync(path)).toBe(false)
+	})
+
+	it('never removes a caller-owned persistent user-data directory', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true })
+		const profile = createBrowserProfile()
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			profile,
+			cdp: { port: await reservePort() },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(await fake.arguments()).toContain(`--user-data-dir=${profile}`)
+		await browser.destroy()
+
+		expect(existsSync(profile)).toBe(true)
 	})
 
 	it('connect() with a requested engine and no matching installed browser rejects with the engine in context', async () => {
@@ -800,52 +927,52 @@ describe('Browser events', () => {
 	})
 
 	it('wires construction-time hooks via the on option', () => {
-		const browser = createBrowser({ on: { discover: () => {} } })
+		const browser = createBrowser({ on: { discover: ignoreCall } })
 		expect(browser.emitter.count('discover')).toBe(1)
 	})
 
 	it('emits idle event after construction', async () => {
-		let idled = false
-		createBrowser({ on: { idle: () => (idled = true) } })
+		const idle = createRecorder<[]>()
+		createBrowser({ on: { idle: idle.handler } })
 		await new Promise((resolve) => queueMicrotask(() => resolve(undefined)))
-		expect(idled).toBe(true)
+		expect(idle.count).toBe(1)
 	})
 
 	it('emits idle event on disconnect', async () => {
 		server = await createCDPTestServer()
 		server.list([])
-		let idleCount = 0
-		const browser = createBrowser({ cdp: { port: server.port }, on: { idle: () => idleCount++ } })
+		const idle = createRecorder<[]>()
+		const browser = createBrowser({ cdp: { port: server.port }, on: { idle: idle.handler } })
 		await new Promise((resolve) => queueMicrotask(() => resolve(undefined)))
-		const initialCount = idleCount
+		const initialCount = idle.count
 
 		await browser.connect()
 		await browser.disconnect()
 
-		expect(idleCount).toBeGreaterThan(initialCount)
+		expect(idle.count).toBeGreaterThan(initialCount)
 		await browser.destroy()
 	})
 
 	it('emits discover event', async () => {
-		let discovered = false
+		const discovered = createRecorder<[]>()
 		const browser = createBrowser({
 			cdp: { port: UNUSED_PORT },
-			on: { discover: () => (discovered = true) },
+			on: { discover: discovered.handler },
 		})
 		await browser.discover()
-		expect(discovered).toBe(true)
+		expect(discovered.count).toBe(1)
 	})
 
 	it('emits destroy event on destroy()', async () => {
-		let destroyed = false
-		const browser = createBrowser({ on: { destroy: () => (destroyed = true) } })
+		const destroyed = createRecorder<[]>()
+		const browser = createBrowser({ on: { destroy: destroyed.handler } })
 		await browser.destroy()
-		expect(destroyed).toBe(true)
+		expect(destroyed.count).toBe(1)
 	})
 
 	it('supports runtime on/off subscription', () => {
 		const browser = createBrowser()
-		const handler = (): void => {}
+		const handler = ignoreCall
 		browser.emitter.on('disconnect', handler)
 		expect(browser.emitter.count('disconnect')).toBe(1)
 		browser.emitter.off('disconnect', handler)
@@ -865,17 +992,17 @@ describe('Browser external-disconnect detection', () => {
 	it('connected reads are side-effect-free while healthy', async () => {
 		server = await createCDPTestServer()
 		server.list([])
-		let disconnectCount = 0
+		const disconnect = createRecorder<[]>()
 		const browser = createBrowser({
 			cdp: { port: server.port },
-			on: { disconnect: () => disconnectCount++ },
+			on: { disconnect: disconnect.handler },
 		})
 		await browser.connect()
 
 		for (let i = 0; i < 20; i++) {
 			expect(browser.connected).toBe(true)
 		}
-		expect(disconnectCount).toBe(0)
+		expect(disconnect.count).toBe(0)
 		expect(browser.status).toBe('connected')
 
 		await browser.destroy()
@@ -885,18 +1012,18 @@ describe('Browser external-disconnect detection', () => {
 		const testServer = await createCDPTestServer()
 		server = testServer
 		testServer.list([])
-		let disconnectCount = 0
+		const disconnect = createRecorder<[]>()
 		const browser = createBrowser({
 			cdp: { port: testServer.port },
-			on: { disconnect: () => disconnectCount++ },
+			on: { disconnect: disconnect.handler },
 		})
 		await browser.connect()
 
 		await testServer.close()
 		server = undefined
-		await waitForCondition(() => disconnectCount === 1)
+		await waitForCondition(() => disconnect.count === 1)
 
-		expect(disconnectCount).toBe(1)
+		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
 		// An external transport loss must never send a remote Browser.close —
 		// close() shuts down the shared remote ONLY on an explicit user call.
@@ -907,16 +1034,16 @@ describe('Browser external-disconnect detection', () => {
 
 	it('does not emit a spurious error/disconnect when destroy() runs during the transport-loss defer window', async () => {
 		const fake = createFakeBrowserProcess({ serveCDP: true })
-		let errorCount = 0
-		let disconnectCount = 0
+		const errors = createRecorder<[]>()
+		const disconnect = createRecorder<[]>()
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
 			cdp: { port: await reservePort() },
 			timeout: 5000,
 			on: {
-				error: () => errorCount++,
-				disconnect: () => disconnectCount++,
+				error: errors.handler,
+				disconnect: disconnect.handler,
 			},
 		})
 
@@ -933,8 +1060,8 @@ describe('Browser external-disconnect detection', () => {
 		// handler gets a chance to fire (and would be caught here if it did).
 		await waitForDelay(BROWSER_TRANSPORT_LOSS_DEFER_MS + 100)
 
-		expect(errorCount).toBe(0)
-		expect(disconnectCount).toBe(0)
+		expect(errors.count).toBe(0)
+		expect(disconnect.count).toBe(0)
 		expect(browser.connected).toBe(false)
 	})
 
@@ -972,16 +1099,16 @@ describe('Browser external-disconnect detection', () => {
 
 	it('transport loss while the owned process stays alive does not kill it, and the same instance reattaches', async () => {
 		const fake = createFakeBrowserProcess({ serveCDP: true })
-		let disconnectCount = 0
-		let lastError: unknown
+		const disconnect = createRecorder<[]>()
+		const errors = createRecorder<[error: unknown]>()
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
 			cdp: { port: await reservePort() },
 			timeout: 5000,
 			on: {
-				disconnect: () => disconnectCount++,
-				error: (error) => (lastError = error),
+				disconnect: disconnect.handler,
+				error: errors.handler,
 			},
 		})
 
@@ -990,12 +1117,13 @@ describe('Browser external-disconnect detection', () => {
 		const pid = await fake.pid()
 
 		await fake.dropSocket()
-		await waitForCondition(() => disconnectCount === 1)
+		await waitForCondition(() => disconnect.count === 1)
 
-		expect(disconnectCount).toBe(1)
+		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
+		const lastError = errors.calls[0]?.[0]
 		expect(lastError).toBeInstanceOf(BrowserConnectionError)
-		if (!(lastError instanceof BrowserConnectionError)) {
+		if (!isBrowserConnectionError(lastError)) {
 			throw new Error('Expected a BrowserConnectionError')
 		}
 		expect(lastError.context?.['cause']).toBe(BROWSER_TRANSPORT_LOSS_CAUSE)
@@ -1011,16 +1139,16 @@ describe('Browser external-disconnect detection', () => {
 
 	it('an observed process exit cleans up without attempting a kill, coded error then disconnect', async () => {
 		const fake = createFakeBrowserProcess({ serveCDP: true })
-		let disconnectCount = 0
-		let lastError: unknown
+		const disconnect = createRecorder<[]>()
+		const errors = createRecorder<[error: unknown]>()
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
 			cdp: { port: await reservePort() },
 			timeout: 5000,
 			on: {
-				disconnect: () => disconnectCount++,
-				error: (error) => (lastError = error),
+				disconnect: disconnect.handler,
+				error: errors.handler,
 			},
 		})
 
@@ -1028,12 +1156,13 @@ describe('Browser external-disconnect detection', () => {
 		const pid = await fake.pid()
 
 		process.kill(pid, 'SIGKILL')
-		await waitForCondition(() => disconnectCount === 1)
+		await waitForCondition(() => disconnect.count === 1)
 
-		expect(disconnectCount).toBe(1)
+		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
+		const lastError = errors.calls[0]?.[0]
 		expect(lastError).toBeInstanceOf(BrowserConnectionError)
-		if (!(lastError instanceof BrowserConnectionError)) {
+		if (!isBrowserConnectionError(lastError)) {
 			throw new Error('Expected a BrowserConnectionError')
 		}
 		expect(lastError.context?.['cause']).toBe(BROWSER_PROCESS_EXIT_CAUSE)
@@ -1345,6 +1474,67 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		}
 	}, 20_000)
 
+	it('drives locators, frames, routes, snapshots, accessibility, and PDF in a real browser', async () => {
+		const httpServer = createServer((request, response) => {
+			if (request.url === '/frame') {
+				response.writeHead(200, { 'content-type': 'text/html' })
+				response.end('<html><body><label>Email <input name="email"></label></body></html>')
+				return
+			}
+			response.writeHead(200, { 'content-type': 'text/html' })
+			response.end(
+				'<html><body><button aria-label="Save" onclick="document.body.dataset.clicked=\'yes\'">Save</button><iframe name="checkout" src="/frame"></iframe></body></html>',
+			)
+		})
+		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
+		const url = `http://127.0.0.1:${readServerPort(httpServer)}/`
+
+		try {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				profile: createBrowserProfile(),
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: await reservePort() },
+				timeout: 20_000,
+			})
+			await browser.connect()
+			const page = await browser.create({ url })
+
+			const save = page.selectors.role('button', { name: 'Save', exact: true })
+			expect(await save.count()).toBe(1)
+			await save.click()
+			expect(await page.evaluate('document.body.dataset.clicked')).toBe('yes')
+
+			const frame = await page.frame('checkout')
+			expect(frame).toBeDefined()
+			if (frame === undefined) throw new Error('Named frame was not attached')
+			const email = frame.selectors.label('Email', { exact: true })
+			await email.fill('ada@example.com')
+			expect(await email.value()).toBe('ada@example.com')
+
+			await page.network.route({ url: '**/api', method: 'GET' }, async (route) => {
+				await route.fulfill({
+					status: 200,
+					headers: { 'content-type': 'application/json' },
+					body: '{"source":"route"}',
+				})
+			})
+			expect(await page.evaluate("fetch('/api').then((response) => response.json())")).toEqual({
+				source: 'route',
+			})
+
+			const snapshot = await page.snapshot()
+			expect(snapshot.documents.length).toBeGreaterThanOrEqual(2)
+			const accessibility = await page.accessibility.snapshot()
+			expect(accessibility.nodes.some((node) => node.name === 'Save')).toBe(true)
+			const pdf = await page.pdf()
+			expect(Array.from(pdf.bytes.subarray(0, 4))).toEqual([0x25, 0x50, 0x44, 0x46])
+		} finally {
+			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+		}
+	}, 30_000)
+
 	it('screenshot returns real PNG bytes from a real browser page', async () => {
 		browser = createBrowser({
 			executable: REAL_BROWSER_EXECUTABLE,
@@ -1612,14 +1802,14 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			await proxy.start(chromiumWSURL.hostname, Number(chromiumWSURL.port))
 			const proxiedEndpoint = `ws://127.0.0.1:${proxyPort}${chromiumWSURL.pathname}`
 
-			let errorCount = 0
-			let disconnectCount = 0
+			const errors = createRecorder<[]>()
+			const disconnect = createRecorder<[]>()
 			proxied = createBrowser({
 				cdp: { endpoint: proxiedEndpoint },
 				timeout: 5000,
 				on: {
-					error: () => errorCount++,
-					disconnect: () => disconnectCount++,
+					error: errors.handler,
+					disconnect: disconnect.handler,
 				},
 			})
 
@@ -1632,10 +1822,10 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			// Sever the transport: destroy every piped socket and close the
 			// proxy server — the browser process itself is untouched.
 			await proxy.stop()
-			await waitForCondition(() => errorCount === 1 && disconnectCount === 1)
+			await waitForCondition(() => errors.count === 1 && disconnect.count === 1)
 
-			expect(errorCount).toBe(1)
-			expect(disconnectCount).toBe(1)
+			expect(errors.count).toBe(1)
+			expect(disconnect.count).toBe(1)
 			expect(proxied.connected).toBe(false)
 
 			// Chromium (owned by `owner`) survives the transport loss.

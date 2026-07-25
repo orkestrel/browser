@@ -28,6 +28,9 @@ export const BROWSER_LAUNCH_ARGS: readonly string[] = Object.freeze([
 /** Flag enabling headless mode on a launched browser process. */
 export const BROWSER_HEADLESS_ARG = '--headless=new'
 
+/** Prefix for isolated browser profiles created beneath the operating-system temp directory. */
+export const BROWSER_PROFILE_PREFIX = 'orkestrel-browser-'
+
 /** Grace period after SIGTERM before a launched process is escalated to SIGKILL during teardown. */
 export const BROWSER_KILL_GRACE_MS = 3_000
 

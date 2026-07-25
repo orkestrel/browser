@@ -78,11 +78,9 @@ export const srcServer = (config?: UserConfig): UserConfig =>
 				build: {
 					lib: {
 						entry: resolveWorkspacePath('src/server/index.ts'),
-						formats: ['es', 'cjs'],
-						fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
 					},
 					outDir: 'dist/src/server',
-					target: 'node24',
+					target: 'node22',
 					rolldownOptions: {
 						external: (id: string) =>
 							id === '@src/core' || id.startsWith('node:') || id.startsWith('@orkestrel/'),

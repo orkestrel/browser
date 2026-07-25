@@ -6,7 +6,7 @@ import type {
 } from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { CDPConnectionError, CDPError, CDPTimeoutError } from './errors.js'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
 
 // === CDPClient
 
@@ -294,17 +294,11 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	#onMessage(data: string): void {
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(data)
-		} catch {
-			return
-		}
-
+		const parsed = parseJSON(data)
 		if (!isRecord(parsed)) return
 
 		// Response to a pending request
-		if (typeof parsed['id'] === 'number') {
+		if (isInteger(parsed['id'])) {
 			const id = parsed['id']
 			const entry = this.#pending.get(id)
 			if (entry !== undefined) {

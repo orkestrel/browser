@@ -1,11 +1,18 @@
 import type { ChildProcess } from 'node:child_process'
 import type { CDPTarget } from '@src/core'
-import type { SystemBrowserOptions, SystemBrowser, BrowserEngine } from './types.js'
+import type {
+	BrowserEngine,
+	BrowserProfileResult,
+	SystemBrowser,
+	SystemBrowserOptions,
+} from './types.js'
 import { existsSync, globSync } from 'node:fs'
-import { win32 as pathWin32, posix as pathPosix } from 'node:path'
+import { mkdtemp, rm } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { basename, dirname, join, resolve, win32 as pathWin32, posix as pathPosix } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as waitForTimeout } from 'node:timers/promises'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { BROWSER_WAIT_POLL_INTERVAL_MS } from '@src/core'
 import {
 	BROWSER_CDP_PROTOCOL,
@@ -25,6 +32,7 @@ import {
 	BROWSER_LAUNCH_ARGS,
 	BROWSER_HEADLESS_ARG,
 	BROWSER_DEFAULT_HOST,
+	BROWSER_PROFILE_PREFIX,
 } from './constants.js'
 
 // === Discovery helpers
@@ -126,6 +134,38 @@ export function browserToEngine(browser?: string): BrowserEngine {
 	if (browser?.includes('Edg/') === true) return 'edge'
 	if (browser?.includes('Chrome/') === true) return 'chrome'
 	return 'chromium'
+}
+
+/**
+ * Resolve a persistent caller profile or create an isolated temporary one.
+ *
+ * @param path - Optional caller-owned persistent user-data directory
+ * @returns The resolved profile and whether the library owns its lifecycle
+ */
+export async function createBrowserProfile(path?: string): Promise<BrowserProfileResult> {
+	if (path !== undefined) return { path, temporary: false }
+	const directory = await mkdtemp(join(tmpdir(), BROWSER_PROFILE_PREFIX))
+	return { path: directory, temporary: true }
+}
+
+/**
+ * Remove a library-owned isolated browser profile.
+ *
+ * @remarks
+ * The path must remain a direct child of the operating-system temp directory
+ * with {@link BROWSER_PROFILE_PREFIX}; this defensive check prevents a
+ * malformed profile value from widening recursive deletion.
+ *
+ * @param profile - Resolved profile lifecycle result
+ */
+export async function removeBrowserProfile(profile: BrowserProfileResult): Promise<void> {
+	if (!profile.temporary) return
+	const path = resolve(profile.path)
+	const temporary = resolve(tmpdir())
+	if (dirname(path) !== temporary || !basename(path).startsWith(BROWSER_PROFILE_PREFIX)) {
+		throw new Error('Refusing to remove an unsafe browser profile path')
+	}
+	await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
 }
 
 /** Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file. */
@@ -353,7 +393,7 @@ export async function fetchCDPTargets(
 		if (!response.ok) return []
 
 		const list: unknown = await response.json()
-		if (!Array.isArray(list)) return []
+		if (!isArray(list)) return []
 
 		const targets: CDPTarget[] = []
 		for (const entry of list) {

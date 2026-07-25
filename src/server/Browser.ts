@@ -6,10 +6,12 @@ import type {
 	BrowserEventMap,
 	BrowserInterface,
 	BrowserOptions,
+	BrowserProfileResult,
 	BrowserStatus,
 } from './types.js'
 import type {
 	BrowserContextInterface,
+	BrowserContextOptions,
 	BrowserPageInterface,
 	BrowserPageOptions,
 	CDPTarget,
@@ -17,13 +19,19 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { addAbortListener, once } from 'node:events'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { BrowserContext, BROWSER_DEFAULT_TIMEOUT_MS, CDPClient } from '@src/core'
+import {
+	BrowserContext,
+	BROWSER_DEFAULT_TIMEOUT_MS,
+	CDPClient,
+	validateBrowserContextOptions,
+} from '@src/core'
 import {
 	BrowserConnectionError,
 	BrowserDestroyedError,
 	BrowserNotConnectedError,
+	isBrowserConnectionError,
 } from './errors.js'
 import {
 	BROWSER_CDP_PROTOCOL,
@@ -38,15 +46,20 @@ import {
 } from './constants.js'
 import {
 	browserToEngine,
+	createBrowserProfile,
 	findSystemBrowser,
 	launchBrowserProcess,
 	parseBrowserEngine,
+	removeBrowserProfile,
 	waitForCDPReady,
 } from './helpers.js'
 import { createCDPTransport, createScreenshotWriter } from './factories.js'
 
 // === Browser
 
+/**
+ * Discovers, launches, connects to, and owns Chromium-family browser sessions.
+ */
 export class Browser implements BrowserInterface {
 	readonly #emitter: Emitter<BrowserEventMap>
 	readonly #options: BrowserOptions
@@ -60,6 +73,7 @@ export class Browser implements BrowserInterface {
 	#endpoint: string | undefined
 	#client: CDPClient | undefined
 	#process: ChildProcess | undefined
+	#profile: BrowserProfileResult | undefined
 	#contexts: BrowserContext[] = []
 	#destroyed = false
 	#connecting: Promise<void> | undefined
@@ -186,6 +200,55 @@ export class Browser implements BrowserInterface {
 		return [...this.#contexts]
 	}
 
+	async isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		const client = this.#client
+		if (this.#status !== 'connected' || client === undefined) {
+			throw new BrowserNotConnectedError()
+		}
+		validateBrowserContextOptions(options)
+		const params: Record<string, unknown> = { disposeOnDetach: false }
+		if (options?.proxy !== undefined) {
+			params['proxyServer'] = options.proxy.server
+			if (options.proxy.bypass !== undefined) {
+				params['proxyBypassList'] = options.proxy.bypass.join(',')
+			}
+		}
+		if (options?.origins !== undefined) {
+			params['originsWithUniversalNetworkAccess'] = [...options.origins]
+		}
+		const result = await client.send('Target.createBrowserContext', params)
+		if (!isRecord(result) || !isString(result['browserContextId'])) {
+			throw new BrowserConnectionError('Failed to create isolated browser context')
+		}
+		const id = result['browserContextId']
+		const context = new BrowserContext(
+			client,
+			id,
+			options?.emulation?.viewport ?? this.#options.viewport,
+			createScreenshotWriter(),
+			options?.emulation,
+			options?.downloads,
+		)
+
+		try {
+			if (options?.downloads !== undefined) {
+				await client.send('Browser.setDownloadBehavior', {
+					behavior: options.downloads.named === true ? 'allowAndName' : 'allow',
+					browserContextId: id,
+					downloadPath: options.downloads.path,
+					eventsEnabled: true,
+				})
+			}
+		} catch (error) {
+			await context.close().catch(() => undefined)
+			throw error
+		}
+
+		this.#registerContext(context)
+		return context
+	}
+
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
 		if (this.#destroyed) throw new BrowserDestroyedError()
 		const client = this.#client
@@ -201,7 +264,7 @@ export class Browser implements BrowserInterface {
 				this.#options.viewport,
 				createScreenshotWriter(),
 			)
-			this.#contexts.push(context)
+			this.#registerContext(context)
 		}
 
 		const page = await context.create(options)
@@ -270,9 +333,9 @@ export class Browser implements BrowserInterface {
 
 			this.#status = 'error'
 			this.#emitter.emit('error', error)
-			if (error instanceof BrowserConnectionError) throw error
+			if (isBrowserConnectionError(error)) throw error
 
-			const message = error instanceof Error ? error.message : String(error)
+			const message = isError(error) ? error.message : String(error)
 			throw new BrowserConnectionError(message, { executable: this.#options.executable })
 		}
 	}
@@ -336,6 +399,7 @@ export class Browser implements BrowserInterface {
 		this.#unbindTransport()
 		this.#unbindProcess()
 		this.#process = undefined
+		void this.#releaseProfile().catch((error: unknown) => this.#emitter.emit('error', error))
 		this.#client = undefined
 		this.#contexts = []
 		this.#connection = undefined
@@ -563,14 +627,22 @@ export class Browser implements BrowserInterface {
 		}
 
 		this.#engine = resolvedEngine ?? 'chromium'
-		const profile = this.#options.profile
-		const process = launchBrowserProcess(
-			executable,
-			this.#cdpPort,
-			this.#options.headless ?? true,
-			profile,
-			this.#options.args,
-		)
+		await this.#releaseProfile()
+		const profile = await createBrowserProfile(this.#options.profile)
+		this.#profile = profile
+		let process: ChildProcess
+		try {
+			process = launchBrowserProcess(
+				executable,
+				this.#cdpPort,
+				this.#options.headless ?? true,
+				profile.path,
+				this.#options.args,
+			)
+		} catch (error) {
+			await this.#releaseProfile()
+			throw error
+		}
 		this.#process = process
 
 		let client: CDPClient | undefined
@@ -581,7 +653,7 @@ export class Browser implements BrowserInterface {
 			client = new CDPClient({ transport, timeout: this.#timeout() })
 			await this.#raceAbort(client.connect())
 
-			const connection = profile === undefined ? 'launch' : 'persistent'
+			const connection = this.#options.profile === undefined ? 'launch' : 'persistent'
 			this.#client = client
 			this.#endpoint = endpoint
 			this.#connection = connection
@@ -598,6 +670,7 @@ export class Browser implements BrowserInterface {
 			this.#unbindProcess()
 			await this.#closeClient(client)
 			await this.#terminate(process)
+			await this.#releaseProfile()
 			this.#process = undefined
 			this.#client = undefined
 			this.#endpoint = undefined
@@ -616,18 +689,18 @@ export class Browser implements BrowserInterface {
 		const signal = AbortSignal.any([controller.signal, this.#signal()])
 		const ready = waitForCDPReady(this.#cdpPort, this.#timeout(), this.#cdpHost, signal)
 		const exited = once(process, 'exit', { signal }).then((values) => {
-			const code = typeof values[0] === 'number' ? values[0] : null
-			const exitSignal = typeof values[1] === 'string' ? values[1] : null
+			const code = isInteger(values[0]) ? values[0] : null
+			const exitSignal = isString(values[1]) ? values[1] : null
 			throw new BrowserConnectionError(this.#formatLaunchExit(code, exitSignal), context)
 		})
 
 		try {
 			return await Promise.race([ready, exited])
 		} catch (error) {
-			if (error instanceof BrowserConnectionError) throw error
+			if (isBrowserConnectionError(error)) throw error
 			if (this.#signal().aborted) throw new BrowserConnectionError('Connection aborted', context)
 
-			const message = error instanceof Error ? error.message : String(error)
+			const message = isError(error) ? error.message : String(error)
 			throw new BrowserConnectionError(message, context)
 		} finally {
 			controller.abort()
@@ -659,7 +732,7 @@ export class Browser implements BrowserInterface {
 		} catch {
 			return
 		}
-		if (!isRecord(result) || !Array.isArray(result['targetInfos'])) return
+		if (!isRecord(result) || !isArray(result['targetInfos'])) return
 
 		const pages: CDPTarget[] = []
 		for (const target of result['targetInfos']) {
@@ -688,7 +761,7 @@ export class Browser implements BrowserInterface {
 			createScreenshotWriter(),
 		)
 		await context.sync(pages)
-		this.#contexts.push(context)
+		this.#registerContext(context)
 	}
 
 	async #destroyResources(): Promise<void> {
@@ -711,7 +784,11 @@ export class Browser implements BrowserInterface {
 			await this.#closeClient(client)
 			this.#client = undefined
 		} finally {
-			this.#finish()
+			try {
+				await this.#releaseProfile()
+			} finally {
+				this.#finish()
+			}
 		}
 	}
 
@@ -736,7 +813,11 @@ export class Browser implements BrowserInterface {
 			await this.#closeClient(client)
 			this.#client = undefined
 		} finally {
-			this.#finish()
+			try {
+				await this.#releaseProfile()
+			} finally {
+				this.#finish()
+			}
 		}
 	}
 
@@ -776,7 +857,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #closeContexts(): Promise<void> {
-		for (const context of this.#contexts) {
+		for (const context of [...this.#contexts]) {
 			try {
 				await context.close()
 			} catch {
@@ -786,7 +867,16 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #destroyContexts(): Promise<void> {
-		await this.#destroyContextList(this.#contexts)
+		await this.#destroyContextList([...this.#contexts])
+	}
+
+	#registerContext(context: BrowserContext): void {
+		this.#contexts.push(context)
+		context.emitter.on('close', () => {
+			const index = this.#contexts.indexOf(context)
+			if (index >= 0) this.#contexts.splice(index, 1)
+		})
+		this.#emitter.emit('context', context)
 	}
 
 	async #destroyContextList(contexts: readonly BrowserContext[]): Promise<void> {
@@ -806,6 +896,12 @@ export class Browser implements BrowserInterface {
 		} catch {
 			// Teardown is best-effort after a connection fault.
 		}
+	}
+
+	async #releaseProfile(): Promise<void> {
+		const profile = this.#profile
+		this.#profile = undefined
+		if (profile !== undefined) await removeBrowserProfile(profile)
 	}
 
 	async #waitForProcess(process: ChildProcess): Promise<void> {

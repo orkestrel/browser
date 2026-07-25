@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/browser",
-	"version": "0.0.5",
+	"version": "0.0.6",
 	"description": "Chrome DevTools Protocol browser automation with an environment-agnostic core. Part of the @orkestrel line.",
 	"keywords": [
 		"automation",

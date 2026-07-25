@@ -7,7 +7,7 @@ import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { isString } from '@orkestrel/contract'
+import { attempt, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
 	computeWebSocketAccept,
@@ -66,13 +66,13 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 
 		this.#socket?.destroy()
 		this.#socket = undefined
-		const attempt = this.#open()
-		this.#starting = attempt
+		const transition = this.#open()
+		this.#starting = transition
 
 		try {
-			await attempt
+			await transition
 		} finally {
-			if (this.#starting === attempt) this.#starting = undefined
+			if (this.#starting === transition) this.#starting = undefined
 		}
 	}
 
@@ -91,19 +91,26 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 			return
 		}
 
-		const attempt = this.#stop()
-		this.#closing = attempt
+		const transition = this.#stop()
+		this.#closing = transition
 		try {
-			await attempt
+			await transition
 		} finally {
-			if (this.#closing === attempt) this.#closing = undefined
+			if (this.#closing === transition) this.#closing = undefined
 		}
 	}
 
 	// === Private helpers
 
 	async #open(): Promise<void> {
-		const url = new URL(this.#url)
+		const parsed = attempt(() => new URL(this.#url))
+		if (!parsed.success) {
+			throw new BrowserConnectionError(`WebSocket CDP URL is invalid: ${this.#url}`, {
+				url: this.#url,
+				error: parsed.error,
+			})
+		}
+		const url = parsed.value
 		if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
 			throw new BrowserConnectionError(
 				`WebSocket CDP connection requires a ws: or wss: URL: ${this.#url}`,

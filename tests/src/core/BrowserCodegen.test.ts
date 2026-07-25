@@ -6,6 +6,7 @@ import {
 	createRecorder,
 	createStartedCodegen,
 	replyOk,
+	throwListenerError,
 } from '../../setup.js'
 
 const SESSION_ID = 'session-1'
@@ -87,9 +88,7 @@ describe('BrowserCodegen', () => {
 			const errors = createRecorder<[unknown, string]>()
 			const codegen = new BrowserCodegen(client, SESSION_ID, {
 				on: {
-					start: () => {
-						throw new Error('listener failed')
-					},
+					start: throwListenerError,
 				},
 				error: errors.handler,
 			})

@@ -4,7 +4,9 @@ A typed [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-pro
 browser automation library for the `@orkestrel` line. The environment-agnostic
 core (`src/core` — `CDPClient` speaking the CDP wire protocol over an injected
 `CDPTransportInterface`, plus `BrowserContext`, `BrowserPage`, and
-`BrowserCodegen`) never touches `node:*` or the DOM; the Node runtime (`src/server`)
+`BrowserFrame`, semantic locators, trusted input, network/HAR controls,
+diagnostics, structured DOM snapshots, and `BrowserCodegen`) never touches
+`node:*` or the DOM; the Node runtime (`src/server`)
 adapts it with a `WebSocketCDPTransport`, browser process launch/discovery
 (`node:child_process` + `fetch`), a filesystem screenshot writer, and the
 `Browser` façade that ties launch → context → page together. Part of the
@@ -18,7 +20,7 @@ npm install @orkestrel/browser
 
 ## Requirements
 
-- Node.js >= 24 for the server surface (the core surface is environment-agnostic)
+- Node.js >= 22 for the server surface (the core surface is environment-agnostic)
 - ESM and CommonJS builds ship for both the core and server entry points
 
 ## Usage
@@ -32,6 +34,9 @@ const browser = createBrowser()
 await browser.connect()
 const page = await browser.create({ url: 'https://example.com' })
 await page.click('#submit')
+const frame = await page.frame('checkout')
+await frame?.fill('[name=email]', 'ada@example.com')
+const snapshot = await page.snapshot({ styles: ['display'] })
 await page.screenshot({ path: 'example.png' })
 await browser.destroy()
 ```
@@ -54,12 +59,16 @@ const result = await client.send('Page.navigate', { url: 'https://example.com' }
 For the full surface — the CDP dispatch core, the `BrowserContext` /
 `BrowserPage` / `BrowserCodegen` entities, the server transports, and usage
 patterns — see [`guides/src/browser.md`](guides/src/browser.md).
+The researched Playwright comparison, known semantic limits, and prioritized
+Chromium/CDP roadmap live in
+[`guides/src/playwright.md`](guides/src/playwright.md).
 
 ## Package
 
 Published with two entry points per the `exports` field in `package.json`:
 the environment-agnostic core (`.`) — `CDPClient`, `BrowserContext`,
-`BrowserPage`, `BrowserCodegen`, `createCDPClient`, `CDPTransportInterface` —
+`BrowserPage`, `BrowserFrame`, DOM snapshot traversal helpers,
+`BrowserCodegen`, `createCDPClient`, `CDPTransportInterface` —
 and the Node-only server surface (`./server`) — `Browser`, `createBrowser`,
 `createCDPTransport`, `createScreenshotWriter`, `WebSocketCDPTransport`.
 

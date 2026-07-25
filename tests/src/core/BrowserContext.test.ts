@@ -1,6 +1,14 @@
 import { describe, it, expect } from 'vitest'
+import type { BrowserPageInterface } from '@src/core'
 import { BrowserContext } from '@src/core'
-import { createConnectedCDPClient, createTarget, replyOk, scriptCDPAttach } from '../../setup.js'
+import {
+	createConnectedCDPClient,
+	createRecorder,
+	createTarget,
+	replyOk,
+	scriptCDPAttach,
+	waitForCondition,
+} from '../../setup.js'
 
 // === BrowserContext
 
@@ -89,6 +97,42 @@ describe('BrowserContext', () => {
 			})
 		})
 
+		it('applies context emulation before adopting and emitting a popup page', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Emulation.setTimezoneOverride')
+			const context = new BrowserContext(client, undefined, undefined, undefined, {
+				timezone: 'America/New_York',
+			})
+			await context.sync([createTarget({ id: 'parent' })])
+			const pages = createRecorder<[page: BrowserPageInterface]>()
+			context.emitter.on('page', pages.handler)
+			pages.clear()
+
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'popup-session',
+					targetInfo: {
+						targetId: 'popup',
+						type: 'page',
+						url: 'https://example.com/popup',
+					},
+				},
+				'session-1',
+			)
+			await waitForCondition(() => context.pages().length === 2)
+
+			expect(pages.count).toBe(1)
+			expect(
+				transport.sent.some(
+					(message) =>
+						message.method === 'Emulation.setTimezoneOverride' &&
+						message.sessionId === 'popup-session',
+				),
+			).toBe(true)
+		})
+
 		it('throws when target creation fails to return a targetId', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.createTarget', {})
@@ -118,6 +162,31 @@ describe('BrowserContext', () => {
 
 			const context = new BrowserContext(client)
 			await expect(context.create()).rejects.toThrow('enable failed')
+
+			expect(transport.sent.some((message) => message.method === 'Target.detachFromTarget')).toBe(
+				true,
+			)
+			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(true)
+			expect(context.pages()).toEqual([])
+		})
+
+		it('releases a constructed page and closes its target when configuration fails', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
+			replyOk(transport, 'Target.attachToTarget', { sessionId: 'session-1' })
+			replyOk(transport, 'Page.enable')
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.getFrameTree', {
+				frameTree: { frame: { id: 'frame-1', url: 'about:blank' } },
+			})
+			transport.onSend('Target.setAutoAttach', (message) => {
+				transport.fail(message.id, 'auto attach failed')
+			})
+			replyOk(transport, 'Target.detachFromTarget')
+			replyOk(transport, 'Target.closeTarget')
+
+			const context = new BrowserContext(client)
+			await expect(context.create()).rejects.toThrow('auto attach failed')
 
 			expect(transport.sent.some((message) => message.method === 'Target.detachFromTarget')).toBe(
 				true,
@@ -265,6 +334,13 @@ describe('BrowserContext', () => {
 				}
 			})
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.getFrameTree', {
+				frameTree: { frame: { id: 'frame-good', url: 'about:blank' } },
+			})
+			replyOk(transport, 'Target.setAutoAttach')
+			replyOk(transport, 'Page.setInterceptFileChooserDialog')
+			replyOk(transport, 'Browser.setDownloadBehavior')
+			replyOk(transport, 'Network.enable')
 			replyOk(transport, 'Target.detachFromTarget')
 
 			const context = new BrowserContext(client)

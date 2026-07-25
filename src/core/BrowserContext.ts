@@ -1,23 +1,46 @@
 import type {
+	BrowserContextEventMap,
 	BrowserContextInterface,
+	BrowserCookieManagerInterface,
+	BrowserDownloadOptions,
+	BrowserEmulationManagerInterface,
+	BrowserEmulationOptions,
 	BrowserPageInterface,
 	BrowserPageOptions,
+	BrowserPermissionManagerInterface,
+	BrowserStorageManagerInterface,
 	BrowserViewport,
 	CDPClientInterface,
 	CDPTarget,
 	ScreenshotWriterInterface,
 } from './types.js'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import { BrowserCookieManager } from './BrowserCookieManager.js'
+import { BrowserEmulationManager } from './BrowserEmulationManager.js'
 import { BrowserPage } from './BrowserPage.js'
+import { BrowserPermissionManager } from './BrowserPermissionManager.js'
+import { BrowserStorageManager } from './BrowserStorageManager.js'
 import { BrowserError } from './errors.js'
-import { isRecord, isString } from '@orkestrel/contract'
+import { readBrowserFrames, validateBrowserViewport } from './helpers.js'
+import { instanceOf, isRecord, isString } from '@orkestrel/contract'
+import { Emitter } from '@orkestrel/emitter'
 
 // === BrowserContext
 
+/**
+ * Owns pages and shared state inside one Chromium browser context.
+ */
 export class BrowserContext implements BrowserContextInterface {
 	readonly #client: CDPClientInterface
 	readonly #id: string | undefined
 	readonly #viewport: BrowserViewport | undefined
 	readonly #writer: ScreenshotWriterInterface | undefined
+	readonly #downloads: BrowserDownloadOptions | undefined
+	readonly #emitter: Emitter<BrowserContextEventMap>
+	readonly #cookies: BrowserCookieManager
+	readonly #permissions: BrowserPermissionManager
+	readonly #storage: BrowserStorageManager
+	readonly #emulation: BrowserEmulationManager
 	readonly #pages: Map<string, BrowserPage> = new Map()
 	readonly #creating: Set<Promise<BrowserPage>> = new Set()
 	#syncing: Promise<void> | undefined
@@ -29,15 +52,44 @@ export class BrowserContext implements BrowserContextInterface {
 		id?: string,
 		viewport?: BrowserViewport,
 		writer?: ScreenshotWriterInterface,
+		emulation?: BrowserEmulationOptions,
+		downloads?: BrowserDownloadOptions,
 	) {
 		this.#client = client
+		if (viewport !== undefined) validateBrowserViewport(viewport)
 		this.#id = id
 		this.#viewport = viewport
 		this.#writer = writer
+		this.#downloads = downloads
+		this.#emitter = new Emitter()
+		this.#cookies = new BrowserCookieManager(client, id)
+		this.#permissions = new BrowserPermissionManager(client, id)
+		this.#storage = new BrowserStorageManager(this.#cookies, () => this.pages())
+		this.#emulation = new BrowserEmulationManager(() => this.pages(), emulation)
+	}
+
+	get emitter(): EmitterInterface<BrowserContextEventMap> {
+		return this.#emitter
 	}
 
 	get id(): string | undefined {
 		return this.#id
+	}
+
+	get cookies(): BrowserCookieManagerInterface {
+		return this.#cookies
+	}
+
+	get permissions(): BrowserPermissionManagerInterface {
+		return this.#permissions
+	}
+
+	get storage(): BrowserStorageManagerInterface {
+		return this.#storage
+	}
+
+	get emulation(): BrowserEmulationManagerInterface {
+		return this.#emulation
 	}
 
 	page(index?: number): BrowserPageInterface | undefined {
@@ -100,6 +152,7 @@ export class BrowserContext implements BrowserContextInterface {
 	// === Private helpers
 
 	async #create(options?: BrowserPageOptions): Promise<BrowserPage> {
+		if (options?.viewport !== undefined) validateBrowserViewport(options.viewport)
 		const result: unknown = await this.#client.send('Target.createTarget', {
 			url: 'about:blank',
 			...(this.#id === undefined ? {} : { browserContextId: this.#id }),
@@ -122,6 +175,7 @@ export class BrowserContext implements BrowserContextInterface {
 			if (this.#closed) throw new BrowserError('Browser context closed during page creation')
 
 			this.#pages.set(targetId, page)
+			this.#emitter.emit('page', page)
 			return page
 		} catch (error) {
 			if (page !== undefined) {
@@ -153,6 +207,7 @@ export class BrowserContext implements BrowserContextInterface {
 					continue
 				}
 				this.#pages.set(target.id, page)
+				this.#emitter.emit('page', page)
 			} catch {
 				// A disappearing or unsupported target does not invalidate its siblings.
 			}
@@ -165,15 +220,30 @@ export class BrowserContext implements BrowserContextInterface {
 		viewport: BrowserViewport | undefined,
 	): Promise<BrowserPage> {
 		let sessionId: string | undefined
+		let page: BrowserPage | undefined
 
 		try {
 			sessionId = await this.#openSession(targetId)
 			await this.#enableSession(sessionId)
+			const frameId = await this.#mainFrame(sessionId)
+			page = new BrowserPage(
+				this.#client,
+				targetId,
+				sessionId,
+				this.#writer,
+				url,
+				frameId,
+				this.#id,
+			)
+			await this.#configurePage(page)
+			await this.#emulation.attach(page)
 			if (viewport !== undefined) await this.#applyViewport(sessionId, viewport)
+			this.#observe(page)
 
-			return new BrowserPage(this.#client, targetId, sessionId, this.#writer, url)
+			return page
 		} catch (error) {
-			if (sessionId !== undefined) await this.#detachSession(sessionId)
+			if (page !== undefined) await page.destroy().catch(() => undefined)
+			else if (sessionId !== undefined) await this.#detachSession(sessionId)
 			throw error
 		}
 	}
@@ -184,41 +254,88 @@ export class BrowserContext implements BrowserContextInterface {
 		viewport: BrowserViewport | undefined,
 	): Promise<BrowserPage> {
 		let sessionId: string | undefined
+		let page: BrowserPage | undefined
 
 		try {
 			sessionId = await this.#openSession(targetId)
 			await this.#enableSession(sessionId)
+			const frameId = await this.#mainFrame(sessionId)
+			page = new BrowserPage(
+				this.#client,
+				targetId,
+				sessionId,
+				this.#writer,
+				url,
+				frameId,
+				this.#id,
+			)
+			await this.#configurePage(page)
+			await this.#emulation.attach(page)
 			if (viewport !== undefined) await this.#tryViewport(sessionId, viewport)
+			this.#observe(page)
 
-			return new BrowserPage(this.#client, targetId, sessionId, this.#writer, url)
+			return page
 		} catch (error) {
-			if (sessionId !== undefined) await this.#detachSession(sessionId)
+			if (page !== undefined) await page.destroy().catch(() => undefined)
+			else if (sessionId !== undefined) await this.#detachSession(sessionId)
 			throw error
 		}
 	}
 
 	async #destroyResources(): Promise<void> {
-		await this.#settle()
-		for (const page of this.#pages.values()) {
-			await page.destroy()
+		try {
+			await this.#settle()
+			let failed = false
+			let failure: unknown
+			for (const page of this.#pages.values()) {
+				try {
+					await page.destroy()
+				} catch (error) {
+					if (!failed) {
+						failed = true
+						failure = error
+					}
+				}
+			}
+			this.#pages.clear()
+			if (failed) throw failure
+		} finally {
+			this.#finish()
 		}
-		this.#pages.clear()
 	}
 
 	async #closeResources(): Promise<void> {
-		await this.#settle()
-		for (const page of this.#pages.values()) {
-			await page.close()
-		}
-		this.#pages.clear()
-
-		if (this.#id === undefined) return
 		try {
-			await this.#client.send('Target.disposeBrowserContext', {
-				browserContextId: this.#id,
-			})
-		} catch {
-			// The context may already be disposed.
+			await this.#settle()
+			let failed = false
+			let failure: unknown
+			for (const page of this.#pages.values()) {
+				try {
+					await page.close()
+				} catch (error) {
+					if (!failed) {
+						failed = true
+						failure = error
+					}
+				}
+			}
+			this.#pages.clear()
+
+			if (this.#id !== undefined) {
+				try {
+					await this.#client.send('Target.disposeBrowserContext', {
+						browserContextId: this.#id,
+					})
+				} catch (error) {
+					if (!failed) {
+						failed = true
+						failure = error
+					}
+				}
+			}
+			if (failed) throw failure
+		} finally {
+			this.#finish()
 		}
 	}
 
@@ -243,15 +360,56 @@ export class BrowserContext implements BrowserContextInterface {
 		await this.#client.send('Runtime.enable', undefined, sessionId)
 	}
 
+	async #mainFrame(sessionId: string): Promise<string> {
+		const result = await this.#client.send('Page.getFrameTree', undefined, sessionId)
+		const frame = readBrowserFrames(result)[0]
+		if (frame === undefined) throw new BrowserError('Failed to resolve the main browser frame')
+		return frame.id
+	}
+
+	async #configurePage(page: BrowserPage): Promise<void> {
+		await page.send('Target.setAutoAttach', {
+			autoAttach: true,
+			waitForDebuggerOnStart: false,
+			flatten: true,
+		})
+		await page.send('Page.setInterceptFileChooserDialog', { enabled: true })
+		const download: Record<string, unknown> = {
+			behavior:
+				this.#downloads === undefined
+					? 'default'
+					: this.#downloads.named === true
+						? 'allowAndName'
+						: 'allow',
+			eventsEnabled: true,
+		}
+		if (this.#id !== undefined) download['browserContextId'] = this.#id
+		if (this.#downloads !== undefined) download['downloadPath'] = this.#downloads.path
+		await this.#client.send('Browser.setDownloadBehavior', download)
+		await page.network.start()
+	}
+
 	async #applyViewport(sessionId: string, viewport: BrowserViewport): Promise<void> {
 		await this.#client.send(
 			'Emulation.setDeviceMetricsOverride',
 			{
 				width: viewport.width,
 				height: viewport.height,
-				deviceScaleFactor: 1,
-				mobile: false,
+				deviceScaleFactor: viewport.scale ?? 1,
+				mobile: viewport.mobile ?? false,
+				screenOrientation:
+					viewport.landscape === undefined
+						? undefined
+						: {
+								type: viewport.landscape ? 'landscapePrimary' : 'portraitPrimary',
+								angle: viewport.landscape ? 90 : 0,
+							},
 			},
+			sessionId,
+		)
+		await this.#client.send(
+			'Emulation.setTouchEmulationEnabled',
+			{ enabled: viewport.touch ?? false },
 			sessionId,
 		)
 	}
@@ -278,5 +436,43 @@ export class BrowserContext implements BrowserContextInterface {
 		} catch {
 			// The session may already be detached.
 		}
+	}
+
+	#observe(page: BrowserPage): void {
+		page.emitter.on('popup', (popup) => {
+			if (this.#closed) {
+				void popup.destroy().catch(() => undefined)
+				return
+			}
+			if (instanceOf(BrowserPage)(popup)) {
+				void this.#adoptPopup(popup)
+				return
+			}
+			this.#emitter.emit('page', popup)
+		})
+		page.emitter.on('close', () => {
+			if (this.#pages.get(page.target) === page) this.#pages.delete(page.target)
+		})
+	}
+
+	async #adoptPopup(popup: BrowserPage): Promise<void> {
+		try {
+			await this.#emulation.attach(popup)
+			if (this.#closed) {
+				await popup.destroy()
+				return
+			}
+			this.#pages.set(popup.target, popup)
+			this.#observe(popup)
+			this.#emitter.emit('page', popup)
+		} catch {
+			await popup.destroy().catch(() => undefined)
+		}
+	}
+
+	#finish(): void {
+		if (this.#emitter.destroyed) return
+		this.#emitter.emit('close')
+		this.#emitter.destroy()
 	}
 }
