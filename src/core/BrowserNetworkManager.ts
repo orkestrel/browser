@@ -41,61 +41,17 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	#fetch = false
 	#destroyed = false
 	#starting: Promise<void> | undefined
-	#requestHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const request = readBrowserRequest(params)
-		if (request !== undefined) this.#emitter.emit('request', request)
-	}
-	#responseHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const response = readBrowserResponse(params)
-		if (response !== undefined) this.#emitter.emit('response', response)
-	}
-	#failureHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const failure = readBrowserRequestFailure(params)
-		if (failure !== undefined) this.#emitter.emit('failure', failure)
-	}
-	#finishHandler = (params: Readonly<Record<string, unknown>>): void => {
-		if (isString(params['requestId'])) this.#emitter.emit('finish', params['requestId'])
-	}
-	#pausedHandler = (params: Readonly<Record<string, unknown>>): void => {
-		void this.#route(params).catch(() => undefined)
-	}
-	#authHandler = (params: Readonly<Record<string, unknown>>): void => {
-		void this.#authenticate(params).catch(() => undefined)
-	}
-	#socketHandler = (params: Readonly<Record<string, unknown>>): void => {
-		if (!isString(params['requestId']) || !isString(params['url'])) return
-		const socket = new BrowserWebSocket(params['requestId'], params['url'])
-		this.#sockets.set(socket.id, socket)
-		this.#emitter.emit('socket', socket)
-	}
-	#socketReceiveHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const socket = isString(params['requestId'])
-			? this.#sockets.get(params['requestId'])
-			: undefined
-		const frame = readBrowserWebSocketFrame(params)
-		if (socket !== undefined && frame !== undefined) socket.receive(frame)
-	}
-	#socketTransmitHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const socket = isString(params['requestId'])
-			? this.#sockets.get(params['requestId'])
-			: undefined
-		const frame = readBrowserWebSocketFrame(params)
-		if (socket !== undefined && frame !== undefined) socket.transmit(frame)
-	}
-	#socketErrorHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const socket = isString(params['requestId'])
-			? this.#sockets.get(params['requestId'])
-			: undefined
-		if (socket !== undefined && isString(params['errorMessage']))
-			socket.fail(params['errorMessage'])
-	}
-	#socketCloseHandler = (params: Readonly<Record<string, unknown>>): void => {
-		if (!isString(params['requestId'])) return
-		const socket = this.#sockets.get(params['requestId'])
-		if (socket === undefined) return
-		this.#sockets.delete(params['requestId'])
-		socket.close(isFiniteNumber(params['timestamp']) ? params['timestamp'] : Date.now() / 1000)
-	}
+	readonly #requestHandler = this.#handleRequest.bind(this)
+	readonly #responseHandler = this.#handleResponse.bind(this)
+	readonly #failureHandler = this.#handleFailure.bind(this)
+	readonly #finishHandler = this.#handleFinish.bind(this)
+	readonly #pausedHandler = this.#handlePause.bind(this)
+	readonly #authHandler = this.#handleAuth.bind(this)
+	readonly #socketHandler = this.#handleSocket.bind(this)
+	readonly #socketReceiveHandler = this.#handleSocketReceive.bind(this)
+	readonly #socketTransmitHandler = this.#handleSocketTransmit.bind(this)
+	readonly #socketErrorHandler = this.#handleSocketError.bind(this)
+	readonly #socketCloseHandler = this.#handleSocketClose.bind(this)
 
 	constructor(frame: BrowserFrameInterface, writer?: ScreenshotWriterInterface) {
 		this.#frame = frame
@@ -247,6 +203,72 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		this.#routes.length = 0
 		this.#emitter.destroy()
 		if (failed) throw failure
+	}
+
+	#handleRequest(params: Readonly<Record<string, unknown>>): void {
+		const request = readBrowserRequest(params)
+		if (request !== undefined) this.#emitter.emit('request', request)
+	}
+
+	#handleResponse(params: Readonly<Record<string, unknown>>): void {
+		const response = readBrowserResponse(params)
+		if (response !== undefined) this.#emitter.emit('response', response)
+	}
+
+	#handleFailure(params: Readonly<Record<string, unknown>>): void {
+		const failure = readBrowserRequestFailure(params)
+		if (failure !== undefined) this.#emitter.emit('failure', failure)
+	}
+
+	#handleFinish(params: Readonly<Record<string, unknown>>): void {
+		if (isString(params['requestId'])) this.#emitter.emit('finish', params['requestId'])
+	}
+
+	#handlePause(params: Readonly<Record<string, unknown>>): void {
+		void this.#route(params).catch(() => undefined)
+	}
+
+	#handleAuth(params: Readonly<Record<string, unknown>>): void {
+		void this.#authenticate(params).catch(() => undefined)
+	}
+
+	#handleSocket(params: Readonly<Record<string, unknown>>): void {
+		if (!isString(params['requestId']) || !isString(params['url'])) return
+		const socket = new BrowserWebSocket(params['requestId'], params['url'])
+		this.#sockets.set(socket.id, socket)
+		this.#emitter.emit('socket', socket)
+	}
+
+	#handleSocketReceive(params: Readonly<Record<string, unknown>>): void {
+		const socket = isString(params['requestId'])
+			? this.#sockets.get(params['requestId'])
+			: undefined
+		const frame = readBrowserWebSocketFrame(params)
+		if (socket !== undefined && frame !== undefined) socket.receive(frame)
+	}
+
+	#handleSocketTransmit(params: Readonly<Record<string, unknown>>): void {
+		const socket = isString(params['requestId'])
+			? this.#sockets.get(params['requestId'])
+			: undefined
+		const frame = readBrowserWebSocketFrame(params)
+		if (socket !== undefined && frame !== undefined) socket.transmit(frame)
+	}
+
+	#handleSocketError(params: Readonly<Record<string, unknown>>): void {
+		const socket = isString(params['requestId'])
+			? this.#sockets.get(params['requestId'])
+			: undefined
+		if (socket !== undefined && isString(params['errorMessage']))
+			socket.fail(params['errorMessage'])
+	}
+
+	#handleSocketClose(params: Readonly<Record<string, unknown>>): void {
+		if (!isString(params['requestId'])) return
+		const socket = this.#sockets.get(params['requestId'])
+		if (socket === undefined) return
+		this.#sockets.delete(params['requestId'])
+		socket.close(isFiniteNumber(params['timestamp']) ? params['timestamp'] : Date.now() / 1000)
 	}
 
 	async #begin(): Promise<void> {

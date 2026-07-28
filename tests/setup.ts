@@ -558,3 +558,9 @@ export const PNG_BASE64 = 'iVBORw0='
 
 /** Base64 for bytes `[255, 216, 255, 224]` (JPEG-signature-prefixed). */
 export const JPEG_BASE64 = '/9j/4A=='
+
+/** Whether a repository-relative Vue SFC path belongs to the private browser application. */
+export function isBrowserVuePath(path: string): boolean {
+	const normalized = path.replaceAll('\\', '/')
+	return normalized.startsWith('app/browser/')
+}

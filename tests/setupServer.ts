@@ -452,7 +452,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 /** A registered fake-browser fixture, tracked for guaranteed teardown. */
 interface RegisteredFakeBrowser {
-	readonly pidFile: string
+	readonly pidFiles: readonly string[]
 	readonly dir: string
 }
 
@@ -467,25 +467,43 @@ const registeredFakeBrowsers: RegisteredFakeBrowser[] = []
  */
 export async function destroyFakeBrowsers(): Promise<void> {
 	for (const fixture of registeredFakeBrowsers.splice(0)) {
-		let pid: number | undefined
-		try {
-			const contents = readFileSync(fixture.pidFile, 'utf8').trim()
-			if (contents.length > 0) pid = Number(contents)
-		} catch {
-			// pid file never written — nothing to kill
+		for (const pidFile of fixture.pidFiles) {
+			let pid: number | undefined
+			try {
+				const contents = readFileSync(pidFile, 'utf8').trim()
+				if (contents.length > 0) pid = Number(contents)
+			} catch {
+				// pid file never written — nothing to kill
+			}
+			if (pid === undefined) continue
+			try {
+				process.kill(pid, 'SIGKILL')
+			} catch {
+				// already dead (ESRCH) — nothing to do
+			}
+			await waitForProcessExit(pid).catch(() => undefined)
 		}
-		if (pid === undefined) {
-			rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
-			continue
-		}
-		try {
-			process.kill(pid, 'SIGKILL')
-		} catch {
-			// already dead (ESRCH) — nothing to do
-		}
-		await waitForProcessExit(pid).catch(() => undefined)
 		rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
 	}
+}
+
+/**
+ * Read a fixture process identifier once its spawned script has published it.
+ *
+ * @param path - PID file written by the fixture process
+ * @returns The published process identifier
+ */
+export async function readFixtureProcessId(path: string): Promise<number> {
+	for (let attempt = 0; attempt < 50; attempt++) {
+		try {
+			const contents = readFileSync(path, 'utf8').trim()
+			if (contents.length > 0) return Number(contents)
+		} catch {
+			// Not written yet
+		}
+		await new Promise((resolve) => setTimeout(resolve, 20))
+	}
+	throw new Error(`Fake browser process never wrote its pid to ${path}`)
 }
 
 /** A real, spawned stand-in "browser" process for exercising Browser's launch path. */
@@ -496,6 +514,8 @@ export interface FakeBrowserProcessInterface {
 	readonly args: readonly string[]
 	/** Reads the PID the process wrote at startup (polls briefly if not yet written). */
 	pid(): Promise<number>
+	/** Reads the PID of the process-tree fixture requested through `descendant`. */
+	descendant(): Promise<number>
 	/** Reads the complete process argument vector recorded at startup. */
 	arguments(): Promise<readonly string[]>
 	/**
@@ -516,17 +536,23 @@ export interface FakeBrowserProcessInterface {
  *
  * @param options - `serveCDP` runs a minimal real HTTP+WebSocket CDP endpoint
  * (parses `--remote-debugging-port=` from its own argv); `ignoreSIGTERM`
- * traps SIGTERM so only SIGKILL can terminate it. With neither option the
- * process just idles (never serves CDP) — useful for launch-failure/abort
- * scenarios.
+ * traps SIGTERM in the parent and requested descendant so only SIGKILL can
+ * terminate them; `descendant` spawns that process-tree fixture. With none
+ * of these options the process just idles (never serves CDP) — useful for
+ * launch-failure/abort scenarios.
  * @returns A {@link FakeBrowserProcessInterface}
  */
 export function createFakeBrowserProcess(
-	options: { readonly serveCDP?: boolean; readonly ignoreSIGTERM?: boolean } = {},
+	options: {
+		readonly serveCDP?: boolean
+		readonly ignoreSIGTERM?: boolean
+		readonly descendant?: boolean
+	} = {},
 ): FakeBrowserProcessInterface {
 	const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-fake-'))
 	const scriptPath = join(dir, 'fake-browser.js')
 	const pidFile = join(dir, 'pid.txt')
+	const descendantFile = join(dir, 'descendant.txt')
 	const argumentsFile = join(dir, 'arguments.json')
 	const portFile = join(dir, 'port.txt')
 
@@ -541,6 +567,19 @@ export function createFakeBrowserProcess(
 
 	if (options.ignoreSIGTERM === true) {
 		lines.push("process.on('SIGTERM', () => {})")
+	}
+	if (options.descendant === true) {
+		const descendantSource = [
+			`require('fs').writeFileSync(${JSON.stringify(descendantFile)}, String(process.pid))`,
+			...(options.ignoreSIGTERM === true ? ["process.on('SIGTERM', () => {})"] : []),
+			`const __runnerPid = ${process.pid}`,
+			'setInterval(() => {',
+			'\ttry { process.kill(__runnerPid, 0) } catch { process.exit(0) }',
+			'}, 500)',
+		].join('\n')
+		lines.push(
+			`require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: 'ignore' })`,
+		)
 	}
 
 	// Orphan watchdog: if the parent (test runner) is hard-aborted, this
@@ -623,22 +662,16 @@ export function createFakeBrowserProcess(
 
 	writeFileSync(scriptPath, `${lines.join('\n')}\n`)
 
-	registeredFakeBrowsers.push({ pidFile, dir })
+	registeredFakeBrowsers.push({ pidFiles: [pidFile, descendantFile], dir })
 
 	return {
 		executable: process.execPath,
 		args: [scriptPath],
 		async pid(): Promise<number> {
-			for (let attempt = 0; attempt < 50; attempt++) {
-				try {
-					const contents = readFileSync(pidFile, 'utf8').trim()
-					if (contents.length > 0) return Number(contents)
-				} catch {
-					// Not written yet
-				}
-				await new Promise((resolve) => setTimeout(resolve, 20))
-			}
-			throw new Error(`Fake browser process never wrote its pid to ${pidFile}`)
+			return readFixtureProcessId(pidFile)
+		},
+		async descendant(): Promise<number> {
+			return readFixtureProcessId(descendantFile)
 		},
 		async arguments(): Promise<readonly string[]> {
 			for (let attempt = 0; attempt < 50; attempt++) {

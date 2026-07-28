@@ -25,8 +25,8 @@ export class BrowserSelectorManager implements BrowserSelectorManagerInterface {
 		return new BrowserLocator(this.#frame, {
 			selector: 'role',
 			value,
-			name: options?.name,
-			exact: options?.exact,
+			...(options?.name !== undefined ? { name: options.name } : {}),
+			...(options?.exact !== undefined ? { exact: options.exact } : {}),
 		})
 	}
 
@@ -34,7 +34,7 @@ export class BrowserSelectorManager implements BrowserSelectorManagerInterface {
 		return new BrowserLocator(this.#frame, {
 			selector: 'text',
 			value,
-			exact: options?.exact,
+			...(options?.exact !== undefined ? { exact: options.exact } : {}),
 		})
 	}
 
@@ -42,7 +42,7 @@ export class BrowserSelectorManager implements BrowserSelectorManagerInterface {
 		return new BrowserLocator(this.#frame, {
 			selector: 'label',
 			value,
-			exact: options?.exact,
+			...(options?.exact !== undefined ? { exact: options.exact } : {}),
 		})
 	}
 
@@ -50,7 +50,7 @@ export class BrowserSelectorManager implements BrowserSelectorManagerInterface {
 		return new BrowserLocator(this.#frame, {
 			selector: 'placeholder',
 			value,
-			exact: options?.exact,
+			...(options?.exact !== undefined ? { exact: options.exact } : {}),
 		})
 	}
 

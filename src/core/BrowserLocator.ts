@@ -417,8 +417,8 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		let targetHandle: BrowserHandleInterface | undefined
 		try {
 			await target.wait({
-				timeout: options?.timeout,
-				strict: options?.strict,
+				...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+				...(options?.strict !== undefined ? { strict: options.strict } : {}),
 				state: 'visible',
 			})
 			targetHandle = await target.frame.handle(compileLocatorExpression(target.query))
@@ -447,8 +447,8 @@ export class BrowserLocator implements BrowserLocatorInterface {
 	): Promise<BrowserHandleInterface> {
 		validateBrowserActionOptions(options)
 		await this.wait({
-			timeout: options?.timeout,
-			strict: options?.strict,
+			...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+			...(options?.strict !== undefined ? { strict: options.strict } : {}),
 			state,
 		})
 		return await this.#frame.handle(compileLocatorExpression(this.#query))
@@ -463,7 +463,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 			await handle.call(
 				compileActionabilityFunction({
 					...actionability,
-					position: options?.position,
+					...(options?.position !== undefined ? { position: options.position } : {}),
 				}),
 			)
 		}

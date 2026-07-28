@@ -31,7 +31,7 @@ export const BROWSER_HEADLESS_ARG = '--headless=new'
 /** Prefix for isolated browser profiles created beneath the operating-system temp directory. */
 export const BROWSER_PROFILE_PREFIX = 'orkestrel-browser-'
 
-/** Grace period after SIGTERM before a launched process is escalated to SIGKILL during teardown. */
+/** Bound for each launched-process exit window during TERM-to-KILL teardown. */
 export const BROWSER_KILL_GRACE_MS = 3_000
 
 /** Bound for the `discover: false` port-occupancy probe before launching — short, since it only needs to detect an already-listening CDP endpoint, not perform full discovery. */

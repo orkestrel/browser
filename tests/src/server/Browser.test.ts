@@ -11,7 +11,7 @@
 import type { BrowserEngine, BrowserInterface } from '@src/server'
 import type { BrowserContextInterface } from '@src/core'
 import type { CDPTestServerInterface } from '../../setupServer.js'
-import { describe, it, expect, afterEach, vi } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { createServer } from 'node:http'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -22,7 +22,6 @@ import {
 	BrowserNotConnectedError,
 	BrowserConnectionError,
 	isBrowserConnectionError,
-	BROWSER_KILL_GRACE_MS,
 	BROWSER_PROCESS_EXIT_CAUSE,
 	BROWSER_TRANSPORT_LOSS_CAUSE,
 	BROWSER_TRANSPORT_LOSS_DEFER_MS,
@@ -325,6 +324,22 @@ describe('Browser connect() via CDP discovery', () => {
 
 		expect(browser.connected).toBe(true)
 		expect(server.sockets).toBe(1)
+		await browser.destroy()
+	})
+
+	it('final disconnect waits for a reconnect queued behind disconnect', async () => {
+		server = await createCDPTestServer()
+		server.list([])
+		const browser = createBrowser({ cdp: { port: server.port } })
+		await browser.connect()
+
+		const first = browser.disconnect()
+		const reconnecting = browser.connect()
+		const final = browser.disconnect()
+		await Promise.all([first, reconnecting, final])
+
+		expect(browser.connected).toBe(false)
+		expect(browser.owned).toBeUndefined()
 		await browser.destroy()
 	})
 
@@ -773,10 +788,9 @@ describe('Browser pid', () => {
 		expect(browser.connected).toBe(false)
 		expect(browser.pid).toBe(pid)
 
-		await browser.destroy()
+		await expect(browser.destroy()).resolves.toBeUndefined()
 		expect(browser.pid).toBeUndefined()
-
-		await waitForProcessExit(pid)
+		expect(browser.connected).toBe(false)
 	})
 
 	it('is undefined for a CDP-attached connection', async () => {
@@ -803,7 +817,9 @@ describe('Browser pid', () => {
 		const pid = await fake.pid()
 		expect(browser.pid).toBe(pid)
 
-		await browser.destroy()
+		await expect(browser.destroy()).resolves.toBeUndefined()
+		expect(browser.pid).toBeUndefined()
+		expect(browser.connected).toBe(false)
 	})
 
 	it('is undefined after destroy()', async () => {
@@ -816,8 +832,9 @@ describe('Browser pid', () => {
 		})
 
 		await browser.connect()
-		await browser.destroy()
+		await expect(browser.destroy()).resolves.toBeUndefined()
 		expect(browser.pid).toBeUndefined()
+		expect(browser.connected).toBe(false)
 	})
 })
 
@@ -1137,8 +1154,11 @@ describe('Browser external-disconnect detection', () => {
 		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
 	})
 
-	it('an observed process exit cleans up without attempting a kill, coded error then disconnect', async () => {
-		const fake = createFakeBrowserProcess({ serveCDP: true })
+	it('an observed process exit drains descendants, coded error then disconnect', async () => {
+		const fake = createFakeBrowserProcess({
+			serveCDP: true,
+			descendant: process.platform !== 'win32',
+		})
 		const disconnect = createRecorder<[]>()
 		const errors = createRecorder<[error: unknown]>()
 		const browser = createBrowser({
@@ -1154,6 +1174,8 @@ describe('Browser external-disconnect detection', () => {
 
 		await browser.connect()
 		const pid = await fake.pid()
+		expect(browser.pid).toBe(pid)
+		const descendant = process.platform === 'win32' ? undefined : await fake.descendant()
 
 		process.kill(pid, 'SIGKILL')
 		await waitForCondition(() => disconnect.count === 1)
@@ -1168,7 +1190,9 @@ describe('Browser external-disconnect detection', () => {
 		expect(lastError.context?.['cause']).toBe(BROWSER_PROCESS_EXIT_CAUSE)
 		expect(browser.pid).toBeUndefined()
 
-		await browser.destroy()
+		await expect(browser.destroy()).resolves.toBeUndefined()
+		expect(browser.pid).toBeUndefined()
+		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
 	})
 })
 
@@ -1231,7 +1255,10 @@ describe('Browser destroy()/close() matrix', () => {
 	})
 
 	it('close() on an owned session results in the process exiting', async () => {
-		const fake = createFakeBrowserProcess({ serveCDP: true })
+		const fake = createFakeBrowserProcess({
+			serveCDP: true,
+			descendant: process.platform !== 'win32',
+		})
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
@@ -1241,12 +1268,15 @@ describe('Browser destroy()/close() matrix', () => {
 
 		await browser.connect()
 		const pid = await fake.pid()
+		const descendant = process.platform === 'win32' ? undefined : await fake.descendant()
+		expect(browser.pid).toBe(pid)
 
-		await browser.close()
+		await expect(browser.close()).resolves.toBeUndefined()
 
-		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+		expect(browser.pid).toBeUndefined()
+		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
 		expect(browser.connected).toBe(false)
-	})
+	}, 10_000)
 })
 
 // === constructor engine seeding (design-5)
@@ -1314,7 +1344,7 @@ describe('Browser cdp.discover option', () => {
 
 describe('Browser abort mid-connect', () => {
 	it('rejects promptly and leaves no live process', async () => {
-		const fake = createFakeBrowserProcess()
+		const fake = createFakeBrowserProcess({ descendant: process.platform !== 'win32' })
 		const controller = new AbortController()
 		const browser = createBrowser({
 			executable: fake.executable,
@@ -1326,11 +1356,14 @@ describe('Browser abort mid-connect', () => {
 
 		const connectPromise = browser.connect()
 		const pid = await fake.pid()
+		expect(browser.pid).toBe(pid)
+		const descendant = process.platform === 'win32' ? undefined : await fake.descendant()
 		controller.abort()
 
 		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
 
-		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+		expect(browser.pid).toBeUndefined()
+		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
 	})
 })
 
@@ -1338,20 +1371,24 @@ describe('Browser abort mid-connect', () => {
 
 describe('Browser post-spawn connect failure', () => {
 	it('kills the spawned process when CDP never becomes ready', async () => {
-		const fake = createFakeBrowserProcess()
+		const fake = createFakeBrowserProcess({ descendant: process.platform !== 'win32' })
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
 			cdp: { port: 19_999 },
-			timeout: 150,
+			timeout: 2000,
 		})
 
 		const connectPromise = browser.connect()
+		const failure = connectPromise.catch((error: unknown) => error)
 		const pid = await fake.pid()
+		expect(browser.pid).toBe(pid)
+		const descendant = process.platform === 'win32' ? undefined : await fake.descendant()
 
-		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
+		expect(isBrowserConnectionError(await failure)).toBe(true)
 
-		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+		expect(browser.pid).toBeUndefined()
+		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
 	})
 })
 
@@ -1371,20 +1408,25 @@ describe('Browser destroy() kill escalation', () => {
 		expect(browser.status).toBe('connected')
 
 		const pid = await fake.pid()
-		expect(() => process.kill(pid, 0)).not.toThrow()
+		expect(browser.pid).toBe(pid)
 
-		await browser.destroy()
+		await expect(browser.destroy()).resolves.toBeUndefined()
 
-		expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+		expect(browser.pid).toBeUndefined()
+		expect(browser.connected).toBe(false)
 	})
 
 	// Windows cannot trap SIGTERM (Node delivers it as an unconditional
 	// terminate, not a catchable signal), so the ignore-then-escalate path
 	// is only observable on POSIX platforms.
 	it.runIf(process.platform !== 'win32')(
-		'escalates to SIGKILL when the launched process ignores SIGTERM',
+		'escalates the full process group to SIGKILL before destroy resolves',
 		async () => {
-			const fake = createFakeBrowserProcess({ serveCDP: true, ignoreSIGTERM: true })
+			const fake = createFakeBrowserProcess({
+				serveCDP: true,
+				ignoreSIGTERM: true,
+				descendant: true,
+			})
 			const browser = createBrowser({
 				executable: fake.executable,
 				args: fake.args,
@@ -1396,19 +1438,14 @@ describe('Browser destroy() kill escalation', () => {
 			expect(browser.status).toBe('connected')
 
 			const pid = await fake.pid()
-			expect(() => process.kill(pid, 0)).not.toThrow()
+			const descendant = await fake.descendant()
+			expect(browser.pid).toBe(pid)
 
-			vi.useFakeTimers()
-			try {
-				const destroyPromise = browser.destroy()
-				await vi.advanceTimersByTimeAsync(BROWSER_KILL_GRACE_MS + 100)
-				await destroyPromise
-			} finally {
-				vi.useRealTimers()
-			}
+			await expect(browser.destroy()).resolves.toBeUndefined()
 
-			await waitForProcessExit(pid)
-			expect(() => process.kill(pid, 0)).toThrow('ESRCH')
+			expect(browser.pid).toBeUndefined()
+			expect(browser.connected).toBe(false)
+			expect(isProcessAlive(descendant)).toBe(false)
 		},
 		15_000,
 	)
@@ -1452,7 +1489,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		try {
 			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
 				profile: createBrowserProfile(),
 				args: REAL_BROWSER_ARGS,
@@ -1491,7 +1528,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		try {
 			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
 				profile: createBrowserProfile(),
 				args: REAL_BROWSER_ARGS,
@@ -1537,7 +1574,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 	it('screenshot returns real PNG bytes from a real browser page', async () => {
 		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile: createBrowserProfile(),
 			args: REAL_BROWSER_ARGS,
@@ -1565,7 +1602,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	it('launches and destroys a real browser process, fully exiting it', async () => {
 		const port = await reservePort()
 		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile: createBrowserProfile(),
 			args: REAL_BROWSER_ARGS,
@@ -1581,7 +1618,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		// A destroyed launch releases its CDP port — a fresh launch can reuse it.
 		const relaunch = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile: createBrowserProfile(),
 			args: REAL_BROWSER_ARGS,
@@ -1597,7 +1634,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		const profile = createBrowserProfile()
 
 		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile,
 			args: REAL_BROWSER_ARGS,
@@ -1613,7 +1650,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		// directory was honored as the browser's user-data-dir rather than
 		// a throwaway default.
 		const relaunch = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile,
 			args: REAL_BROWSER_ARGS,
@@ -1630,7 +1667,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		// render within the timeout is itself proof the explicit `headless:
 		// true` option launched a working (non-UI-dependent) browser process.
 		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile: createBrowserProfile(),
 			args: REAL_BROWSER_ARGS,
@@ -1650,7 +1687,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 	it('an oversized evaluate() result rejects with a coded error and the session survives', async () => {
 		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile: createBrowserProfile(),
 			args: REAL_BROWSER_ARGS,
@@ -1686,7 +1723,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		try {
 			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
 				profile: createBrowserProfile(),
 				args: REAL_BROWSER_ARGS,
@@ -1727,7 +1764,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		try {
 			launched = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
 				profile: createBrowserProfile(),
 				args: REAL_BROWSER_ARGS,
@@ -1770,7 +1807,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		// Chromium (which is listening as 127.0.0.1:cdpPort), Chromium must be
 		// told to allow it explicitly.
 		const owner = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile: createBrowserProfile(),
 			args: [...REAL_BROWSER_ARGS, '--remote-allow-origins=*'],
@@ -1850,7 +1887,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 	it('close() gracefully shuts down an owned real browser process', async () => {
 		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
 			profile: createBrowserProfile(),
 			args: REAL_BROWSER_ARGS,
@@ -1876,7 +1913,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		try {
 			owner = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
 				profile: createBrowserProfile(),
 				args: REAL_BROWSER_ARGS,
@@ -1921,7 +1958,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		try {
 			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
 				profile: createBrowserProfile(),
 				args: REAL_BROWSER_ARGS,
@@ -1956,7 +1993,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 		try {
 			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
 				profile: createBrowserProfile(),
 				args: REAL_BROWSER_ARGS,

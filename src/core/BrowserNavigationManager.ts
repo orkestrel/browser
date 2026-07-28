@@ -18,21 +18,8 @@ import { BrowserError } from './errors.js'
 export class BrowserNavigationManager implements BrowserNavigationManagerInterface {
 	readonly #page: BrowserPageInterface
 	readonly #waits: Map<symbol, BrowserNavigationWait> = new Map()
-	#navigateHandler = (url: string): void => {
-		for (const [id, wait] of this.#waits) {
-			if (!matchesBrowserURL(url, wait.pattern)) continue
-			clearTimeout(wait.timer)
-			this.#waits.delete(id)
-			wait.resolve(url)
-		}
-	}
-	#closeHandler = (): void => {
-		for (const [id, wait] of this.#waits) {
-			clearTimeout(wait.timer)
-			this.#waits.delete(id)
-			wait.reject(new BrowserError('Browser URL wait ended because the page closed'))
-		}
-	}
+	readonly #navigateHandler = this.#handleNavigate.bind(this)
+	readonly #closeHandler = this.#handleClose.bind(this)
 
 	constructor(page: BrowserPageInterface) {
 		this.#page = page
@@ -74,6 +61,23 @@ export class BrowserNavigationManager implements BrowserNavigationManagerInterfa
 			expression,
 			timeout,
 		})
+	}
+
+	#handleNavigate(url: string): void {
+		for (const [id, wait] of this.#waits) {
+			if (!matchesBrowserURL(url, wait.pattern)) continue
+			clearTimeout(wait.timer)
+			this.#waits.delete(id)
+			wait.resolve(url)
+		}
+	}
+
+	#handleClose(): void {
+		for (const [id, wait] of this.#waits) {
+			clearTimeout(wait.timer)
+			this.#waits.delete(id)
+			wait.reject(new BrowserError('Browser URL wait ended because the page closed'))
+		}
 	}
 
 	#timeout(options?: BrowserNavigationWaitOptions): number {

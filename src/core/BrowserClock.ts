@@ -11,7 +11,7 @@ export class BrowserClock implements BrowserClockInterface {
 	#installed = false
 	#advancing = false
 	#budgetResolve: (() => void) | undefined
-	#budgetHandler = (): void => this.#budgetResolve?.()
+	readonly #budgetHandler = this.#handleBudget.bind(this)
 
 	constructor(frame: BrowserFrameInterface) {
 		this.#frame = frame
@@ -127,5 +127,9 @@ export class BrowserClock implements BrowserClockInterface {
 
 	#idle(): void {
 		if (this.#advancing) throw new BrowserError('Browser clock advance is already active')
+	}
+
+	#handleBudget(): void {
+		this.#budgetResolve?.()
 	}
 }

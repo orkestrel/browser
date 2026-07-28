@@ -170,7 +170,9 @@ export class BrowserContext implements BrowserContextInterface {
 			page = await this.#attach(targetId, options?.url ?? 'about:blank', viewport)
 
 			if (options?.url !== undefined && options.url !== 'about:blank') {
-				await page.navigate(options.url, { timeout: options.timeout })
+				await page.navigate(options.url, {
+					...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+				})
 			}
 			if (this.#closed) throw new BrowserError('Browser context closed during page creation')
 

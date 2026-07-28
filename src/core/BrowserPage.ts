@@ -97,184 +97,21 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#loadResolve: (() => void) | undefined
 	#loadReject: ((error: unknown) => void) | undefined
 	#responses: BrowserResponse[] | undefined
-	#navigationResponseHandler = (response: BrowserResponse): void => {
-		if (response.frame === this.id) this.#responses?.push(response)
-	}
-	#destroyHandler = (params: Readonly<Record<string, unknown>>): void => {
-		if (!isString(params['targetId']) || params['targetId'] !== this.#targetId) return
-		this.#closed = true
-		void this.#release().catch(() => undefined)
-	}
-	#loadHandler = (params: Readonly<Record<string, unknown>>): void => {
-		if (this.#loadEvents.includes('Page.navigatedWithinDocument')) {
-			const frame = params['frameId']
-			if (isString(frame) && frame === this.id) {
-				this.#sameDocument = true
-				this.#resolveLoad()
-				return
-			}
-		}
-		if (this.#loadEvents.includes('Page.frameNavigated')) {
-			const frame = params['frame']
-			if (isRecord(frame) && frame['id'] === this.id) this.#resolveLoad()
-			return
-		}
-		if (
-			this.#loadEvents.includes('Page.loadEventFired') ||
-			this.#loadEvents.includes('Page.domContentEventFired')
-		) {
-			this.#resolveLoad()
-		}
-	}
-	#frameAttachedHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const frame = params['frameId']
-		const parent = params['parentFrameId']
-		if (!isString(frame)) return
-		this.#emitter.emit(
-			'attach',
-			new BrowserFrame(
-				this.#client,
-				(id) => this.#resolveFrameSession(id),
-				frame,
-				'about:blank',
-				isString(parent) ? parent : undefined,
-			),
-		)
-	}
-	#frameNavigatedHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const frame = params['frame']
-		if (!isRecord(frame) || !isString(frame['id']) || !isString(frame['url'])) return
-		if (frame['id'] === this.id) {
-			this.update(frame['url'])
-			this.#emitter.emit('navigate', frame['url'])
-		}
-	}
-	#frameDetachedHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const frame = params['frameId']
-		if (!isString(frame)) return
-		this.#frameSessions.delete(frame)
-		this.#emitter.emit('detach', frame)
-	}
-	#dialogHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const category = params['type']
-		if (
-			(category !== 'alert' &&
-				category !== 'confirm' &&
-				category !== 'prompt' &&
-				category !== 'beforeunload') ||
-			!isString(params['message'])
-		) {
-			return
-		}
-		this.#emitter.emit(
-			'dialog',
-			new BrowserDialog(
-				this,
-				category,
-				params['message'],
-				isString(params['defaultPrompt']) ? params['defaultPrompt'] : '',
-			),
-		)
-	}
-	#chooserHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const backend = params['backendNodeId']
-		const mode = params['mode']
-		if (!isInteger(backend)) return
-		this.#emitter.emit('chooser', new BrowserFileChooser(this, backend, mode === 'selectMultiple'))
-	}
-	#consoleHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const message = readBrowserConsoleMessage(params)
-		if (message !== undefined) this.#emitter.emit('console', message)
-	}
-	#errorHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const error = readBrowserPageError(params)
-		if (error !== undefined) this.#emitter.emit('error', error)
-	}
-	#crashHandler = (): void => this.#emitter.emit('crash')
-	#downloadHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const start = readBrowserDownloadStart(params)
-		if (start === undefined || (start.frame !== this.id && !this.#frameSessions.has(start.frame))) {
-			return
-		}
-		const download = new BrowserDownload(
-			this.#client,
-			start.id,
-			start.url,
-			start.name,
-			this.#contextId,
-		)
-		this.#downloads.set(start.id, download)
-		this.#emitter.emit('download', download)
-	}
-	#downloadProgressHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const decoded = readBrowserDownloadProgress(params)
-		if (decoded === undefined) return
-		const [id, progress] = decoded
-		const download = this.#downloads.get(id)
-		if (download === undefined) return
-		download.update(progress)
-		if (progress.status !== 'pending') this.#downloads.delete(id)
-	}
-	#attachedHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const target = params['targetInfo']
-		const session = params['sessionId']
-		if (!isRecord(target) || !isString(target['targetId']) || !isString(session)) {
-			return
-		}
-
-		const category = target['type']
-		if (category === 'worker' || category === 'service_worker' || category === 'shared_worker') {
-			void this.#attachWorker(
-				session,
-				target['targetId'],
-				isString(target['url']) ? target['url'] : '',
-				category,
-			)
-			return
-		}
-		if (category === 'page') {
-			void this.#attachPopup(
-				session,
-				target['targetId'],
-				isString(target['url']) ? target['url'] : 'about:blank',
-			)
-			return
-		}
-		if (category !== 'iframe') return
-
-		const frame = target['targetId']
-		const attempt = this.#enableFrameSession(session)
-		this.#frameSessions.set(frame, attempt)
-		this.#frameIds.set(session, frame)
-		void attempt.catch(() => {
-			if (this.#frameSessions.get(frame) === attempt) this.#frameSessions.delete(frame)
-			if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
-			void this.#detachChild(session)
-		})
-	}
-	#detachedHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const session = params['sessionId']
-		const target = params['targetId']
-		if (isString(target)) {
-			const worker = this.#workers.get(target)
-			if (worker !== undefined) {
-				worker.detach()
-				this.#workers.delete(target)
-			}
-			const popup = this.#popups.get(target)
-			if (popup !== undefined) {
-				this.#popups.delete(target)
-				void popup.destroy().catch(() => undefined)
-			}
-		}
-		const frame = isString(target)
-			? target
-			: isString(session)
-				? this.#frameIds.get(session)
-				: undefined
-		if (frame !== undefined) this.#frameSessions.delete(frame)
-		if (isString(session)) this.#frameIds.delete(session)
-	}
+	readonly #navigationResponseHandler = this.#handleNavigationResponse.bind(this)
+	readonly #destroyHandler = this.#handleDestroy.bind(this)
+	readonly #loadHandler = this.#handleLoad.bind(this)
+	readonly #frameAttachedHandler = this.#handleFrameAttached.bind(this)
+	readonly #frameNavigatedHandler = this.#handleFrameNavigated.bind(this)
+	readonly #frameDetachedHandler = this.#handleFrameDetached.bind(this)
+	readonly #dialogHandler = this.#handleDialog.bind(this)
+	readonly #chooserHandler = this.#handleChooser.bind(this)
+	readonly #consoleHandler = this.#handleConsole.bind(this)
+	readonly #errorHandler = this.#handleError.bind(this)
+	readonly #crashHandler = this.#handleCrash.bind(this)
+	readonly #downloadHandler = this.#handleDownload.bind(this)
+	readonly #downloadProgressHandler = this.#handleDownloadProgress.bind(this)
+	readonly #attachedHandler = this.#handleAttached.bind(this)
+	readonly #detachedHandler = this.#handleDetached.bind(this)
 
 	constructor(
 		client: CDPClientInterface,
@@ -895,6 +732,201 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		} catch {
 			// Best-effort only — the original navigation error wins.
 		}
+	}
+
+	#handleNavigationResponse(response: BrowserResponse): void {
+		if (response.frame === this.id) this.#responses?.push(response)
+	}
+
+	#handleDestroy(params: Readonly<Record<string, unknown>>): void {
+		if (!isString(params['targetId']) || params['targetId'] !== this.#targetId) return
+		this.#closed = true
+		void this.#release().catch(() => undefined)
+	}
+
+	#handleLoad(params: Readonly<Record<string, unknown>>): void {
+		if (this.#loadEvents.includes('Page.navigatedWithinDocument')) {
+			const frame = params['frameId']
+			if (isString(frame) && frame === this.id) {
+				this.#sameDocument = true
+				this.#resolveLoad()
+				return
+			}
+		}
+		if (this.#loadEvents.includes('Page.frameNavigated')) {
+			const frame = params['frame']
+			if (isRecord(frame) && frame['id'] === this.id) this.#resolveLoad()
+			return
+		}
+		if (
+			this.#loadEvents.includes('Page.loadEventFired') ||
+			this.#loadEvents.includes('Page.domContentEventFired')
+		) {
+			this.#resolveLoad()
+		}
+	}
+
+	#handleFrameAttached(params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frameId']
+		const parent = params['parentFrameId']
+		if (!isString(frame)) return
+		this.#emitter.emit(
+			'attach',
+			new BrowserFrame(
+				this.#client,
+				(id) => this.#resolveFrameSession(id),
+				frame,
+				'about:blank',
+				isString(parent) ? parent : undefined,
+			),
+		)
+	}
+
+	#handleFrameNavigated(params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frame']
+		if (!isRecord(frame) || !isString(frame['id']) || !isString(frame['url'])) return
+		if (frame['id'] === this.id) {
+			this.update(frame['url'])
+			this.#emitter.emit('navigate', frame['url'])
+		}
+	}
+
+	#handleFrameDetached(params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frameId']
+		if (!isString(frame)) return
+		this.#frameSessions.delete(frame)
+		this.#emitter.emit('detach', frame)
+	}
+
+	#handleDialog(params: Readonly<Record<string, unknown>>): void {
+		const category = params['type']
+		if (
+			(category !== 'alert' &&
+				category !== 'confirm' &&
+				category !== 'prompt' &&
+				category !== 'beforeunload') ||
+			!isString(params['message'])
+		) {
+			return
+		}
+		this.#emitter.emit(
+			'dialog',
+			new BrowserDialog(
+				this,
+				category,
+				params['message'],
+				isString(params['defaultPrompt']) ? params['defaultPrompt'] : '',
+			),
+		)
+	}
+
+	#handleChooser(params: Readonly<Record<string, unknown>>): void {
+		const backend = params['backendNodeId']
+		const mode = params['mode']
+		if (!isInteger(backend)) return
+		this.#emitter.emit('chooser', new BrowserFileChooser(this, backend, mode === 'selectMultiple'))
+	}
+
+	#handleConsole(params: Readonly<Record<string, unknown>>): void {
+		const message = readBrowserConsoleMessage(params)
+		if (message !== undefined) this.#emitter.emit('console', message)
+	}
+
+	#handleError(params: Readonly<Record<string, unknown>>): void {
+		const error = readBrowserPageError(params)
+		if (error !== undefined) this.#emitter.emit('error', error)
+	}
+
+	#handleCrash(): void {
+		this.#emitter.emit('crash')
+	}
+
+	#handleDownload(params: Readonly<Record<string, unknown>>): void {
+		const start = readBrowserDownloadStart(params)
+		if (start === undefined || (start.frame !== this.id && !this.#frameSessions.has(start.frame))) {
+			return
+		}
+		const download = new BrowserDownload(
+			this.#client,
+			start.id,
+			start.url,
+			start.name,
+			this.#contextId,
+		)
+		this.#downloads.set(start.id, download)
+		this.#emitter.emit('download', download)
+	}
+
+	#handleDownloadProgress(params: Readonly<Record<string, unknown>>): void {
+		const decoded = readBrowserDownloadProgress(params)
+		if (decoded === undefined) return
+		const [id, progress] = decoded
+		const download = this.#downloads.get(id)
+		if (download === undefined) return
+		download.update(progress)
+		if (progress.status !== 'pending') this.#downloads.delete(id)
+	}
+
+	#handleAttached(params: Readonly<Record<string, unknown>>): void {
+		const target = params['targetInfo']
+		const session = params['sessionId']
+		if (!isRecord(target) || !isString(target['targetId']) || !isString(session)) {
+			return
+		}
+
+		const category = target['type']
+		if (category === 'worker' || category === 'service_worker' || category === 'shared_worker') {
+			void this.#attachWorker(
+				session,
+				target['targetId'],
+				isString(target['url']) ? target['url'] : '',
+				category,
+			)
+			return
+		}
+		if (category === 'page') {
+			void this.#attachPopup(
+				session,
+				target['targetId'],
+				isString(target['url']) ? target['url'] : 'about:blank',
+			)
+			return
+		}
+		if (category !== 'iframe') return
+
+		const frame = target['targetId']
+		const attempt = this.#enableFrameSession(session)
+		this.#frameSessions.set(frame, attempt)
+		this.#frameIds.set(session, frame)
+		void attempt.catch(() => {
+			if (this.#frameSessions.get(frame) === attempt) this.#frameSessions.delete(frame)
+			if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
+			void this.#detachChild(session)
+		})
+	}
+
+	#handleDetached(params: Readonly<Record<string, unknown>>): void {
+		const session = params['sessionId']
+		const target = params['targetId']
+		if (isString(target)) {
+			const worker = this.#workers.get(target)
+			if (worker !== undefined) {
+				worker.detach()
+				this.#workers.delete(target)
+			}
+			const popup = this.#popups.get(target)
+			if (popup !== undefined) {
+				this.#popups.delete(target)
+				void popup.destroy().catch(() => undefined)
+			}
+		}
+		const frame = isString(target)
+			? target
+			: isString(session)
+				? this.#frameIds.get(session)
+				: undefined
+		if (frame !== undefined) this.#frameSessions.delete(frame)
+		if (isString(session)) this.#frameIds.delete(session)
 	}
 
 	#waitForLoadEvent(condition: BrowserWaitUntil, timeout: number): Promise<void> {

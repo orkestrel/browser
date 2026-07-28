@@ -22,9 +22,7 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	readonly #scripts: Map<string, BrowserScriptEntry> = new Map()
 	#subscribed = false
 	#destroyed = false
-	#bindingHandler = (params: Readonly<Record<string, unknown>>): void => {
-		void this.#call(params).catch(() => undefined)
-	}
+	readonly #bindingHandler = this.#handleBinding.bind(this)
 
 	constructor(frame: BrowserFrameInterface) {
 		this.#frame = frame
@@ -149,6 +147,10 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 				awaitPromise: true,
 			})
 		}
+	}
+
+	#handleBinding(params: Readonly<Record<string, unknown>>): void {
+		void this.#call(params).catch(() => undefined)
 	}
 
 	#assert(): void {

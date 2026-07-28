@@ -42,10 +42,13 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	#reject: ((error: unknown) => void) | undefined
 	#timer: ReturnType<typeof setTimeout> | undefined
 	#closeResolve: (() => void) | undefined
-	#onSocketClose = (): void => this.#closeResolve?.()
+	readonly #onSocketClose = this.#handleSocketClose.bind(this)
 
 	constructor(options: WebSocketCDPTransportOptions) {
-		this.#emitter = new Emitter({ on: options.on, error: options.error })
+		this.#emitter = new Emitter({
+			...(options.on !== undefined ? { on: options.on } : {}),
+			...(options.error !== undefined ? { error: options.error } : {}),
+		})
 		this.#url = options.url
 		this.#timeout = options.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 	}
@@ -284,5 +287,9 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 			this.#emitter.emit('close')
 		})
 		socket.emitter.on('error', (error) => this.#emitter.emit('error', error))
+	}
+
+	#handleSocketClose(): void {
+		this.#closeResolve?.()
 	}
 }

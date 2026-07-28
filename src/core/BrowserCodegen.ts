@@ -30,13 +30,17 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	#starting: Promise<void> | undefined
 	#stopping: Promise<readonly BrowserCodegenAction[]> | undefined
 	#shutdown: Promise<void> | undefined
-
 	readonly #emitter: Emitter<BrowserCodegenEventMap>
+	readonly #onBindingCalled = this.#handleBindingCalled.bind(this)
+	readonly #onFrameNavigated = this.#handleFrameNavigated.bind(this)
 
 	constructor(client: CDPClientInterface, sessionId: string, options?: BrowserCodegenOptions) {
 		this.#client = client
 		this.#sessionId = sessionId
-		this.#emitter = new Emitter({ on: options?.on, error: options?.error })
+		this.#emitter = new Emitter({
+			...(options?.on !== undefined ? { on: options.on } : {}),
+			...(options?.error !== undefined ? { error: options.error } : {}),
+		})
 	}
 
 	// === Property accessors
@@ -166,7 +170,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		this.#emitter.destroy()
 	}
 
-	#onBindingCalled = (params: Readonly<Record<string, unknown>>): void => {
+	#handleBindingCalled(params: Readonly<Record<string, unknown>>): void {
 		if (params['name'] !== BROWSER_CODEGEN_BINDING_NAME) return
 
 		const action = parseCodegenActionPayload(params['payload'])
@@ -176,7 +180,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		this.#emitter.emit('action', action)
 	}
 
-	#onFrameNavigated = (params: Readonly<Record<string, unknown>>): void => {
+	#handleFrameNavigated(params: Readonly<Record<string, unknown>>): void {
 		const action = readCodegenNavigateAction(params)
 		if (action === undefined) return
 

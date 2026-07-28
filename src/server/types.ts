@@ -206,12 +206,13 @@ export interface BrowserOptions {
  *   process exiting on its own) drives the disconnected state, preceded by
  *   a coded `error` — `connect()` on the same instance can reattach afterward.
  * - `destroy` — release local resources. On a launched browser this closes
- *   pages/contexts, then kills and awaits the process. On an adopted browser
- *   it sends `Browser.close`. On a merely attached browser this is a LOCAL
- *   DETACH ONLY because other clients may share its targets. Idempotent.
+ *   pages/contexts, then kills and awaits the process plus its POSIX process
+ *   group. On an adopted browser it sends `Browser.close`. On a merely
+ *   attached browser this is a LOCAL DETACH ONLY because other clients may
+ *   share its targets. Idempotent.
  * - `close` — graceful REMOTE shutdown: best-effort sends CDP `Browser.close`
  *   (works whether attached or owned), and when owned also awaits the
- *   process's exit (escalating to a kill only if it doesn't exit in time),
+ *   process's exit and POSIX group drain (escalating to a kill only if needed),
  *   then performs the same local cleanup as `destroy()`. Use this to shut
  *   down a browser this instance doesn't own but wants to terminate anyway.
  *

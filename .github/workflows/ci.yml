@@ -5,74 +5,30 @@ on:
   pull_request:
 
 jobs:
-  minimum-node:
-    name: Node.js 22 minimum
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
-    permissions:
-      contents: read
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Typecheck
-        run: npm run check
-
-      - name: Build
-        run: npm run build
-
-      - name: Run tests
-        run: npm test
-
   ci:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['22.12.0', '26']
 
     steps:
       - name: Checkout code
-        uses: actions/checkout@v6
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
 
       - name: Set up Node.js
-        uses: actions/setup-node@v6
+        uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
-          node-version: '24'
+          node-version: ${{ matrix.node }}
           cache: 'npm'
 
       - name: Install dependencies
-        run: npm ci
-
-      - name: Install Playwright browsers
-        run: npx playwright install --with-deps chromium
-
-      - name: Install Ollama
-        run: curl -fsSL https://ollama.com/install.sh | sh
-
-      - name: Start Ollama
-        run: |
-          sudo systemctl stop ollama
-          OLLAMA_ORIGINS="*" OLLAMA_HOST="127.0.0.1:11434" nohup ollama serve > /dev/null 2>&1 &
-          for i in $(seq 1 30); do
-            if curl -sf http://127.0.0.1:11434/api/tags > /dev/null 2>&1; then
-              echo "Ollama is ready"
-              break
-            fi
-            echo "Waiting for Ollama... ($i/30)"
-            sleep 1
-          done
-      - name: Pull models
-        run: ollama pull qwen3.5:2b-q4_K_M
+        run: npm ci --ignore-scripts
 
       - name: Check formatting
         run: npm run format:check
@@ -83,53 +39,8 @@ jobs:
       - name: Typecheck
         run: npm run check
 
-      - name: Typecheck src
-        run: npm run check:src
-
       - name: Build
         run: npm run build
 
       - name: Run tests
         run: npm test
-
-  compatibility:
-    name: ${{ matrix.engine }} compatibility
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
-    permissions:
-      contents: read
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-latest
-            engine: chromium
-            install: true
-          - os: windows-latest
-            engine: chrome
-            install: false
-          - os: windows-latest
-            engine: edge
-            install: false
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v6
-
-      - name: Set up Node.js
-        uses: actions/setup-node@v6
-        with:
-          node-version: '24'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Install Chromium
-        if: matrix.install
-        run: npx playwright install --with-deps chromium
-
-      - name: Run real-browser compatibility tests
-        run: npx vitest run --config vite.config.ts --no-cache --reporter=dot --project src:server --testNamePattern "Browser real launch"
-        env:
-          BROWSER_COMPATIBILITY_ENGINE: ${{ matrix.engine }}

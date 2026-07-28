@@ -24,6 +24,7 @@ import { Emitter } from '@orkestrel/emitter'
 import {
 	BrowserContext,
 	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_WAIT_POLL_INTERVAL_MS,
 	CDPClient,
 	validateBrowserContextOptions,
 } from '@src/core'
@@ -78,14 +79,18 @@ export class Browser implements BrowserInterface {
 	#destroyed = false
 	#connecting: Promise<void> | undefined
 	#disconnecting: Promise<void> | undefined
+	#exitCleanup: Promise<void> | undefined
 	#shutdown: Promise<void> | undefined
 	#transport: CDPTransportInterface | undefined
-	#onTransportClose = (): void => this.#handleTransportLoss()
-	#onTransportError = (): void => this.#handleTransportLoss()
-	#onProcessExit = (): void => this.#handleProcessExit()
+	readonly #onTransportClose = this.#handleTransportLoss.bind(this)
+	readonly #onTransportError = this.#handleTransportLoss.bind(this)
+	readonly #onProcessExit = this.#handleProcessExit.bind(this)
 
 	constructor(options?: BrowserOptions) {
-		this.#emitter = new Emitter({ on: options?.on, error: options?.error })
+		this.#emitter = new Emitter({
+			...(options?.on !== undefined ? { on: options.on } : {}),
+			...(options?.error !== undefined ? { error: options.error } : {}),
+		})
 		this.#options = options ?? {}
 		this.#engine =
 			this.#options.engine ??
@@ -134,15 +139,13 @@ export class Browser implements BrowserInterface {
 
 	async connect(): Promise<void> {
 		if (this.#destroyed) throw new BrowserDestroyedError()
-		if (this.#disconnecting !== undefined) await this.#disconnecting
-		if (this.#destroyed) throw new BrowserDestroyedError()
-		if (this.#status === 'connected') return
 
 		const active = this.#connecting
 		if (active !== undefined) {
 			await active
 			return
 		}
+		if (this.#status === 'connected') return
 
 		const attempt = this.#establish()
 		this.#connecting = attempt
@@ -169,15 +172,11 @@ export class Browser implements BrowserInterface {
 	async disconnect(): Promise<void> {
 		if (this.#destroyed) return
 
-		const active = this.#disconnecting
-		if (active !== undefined) {
-			await active
-			return
-		}
-		if (this.#connecting !== undefined) {
-			await this.#connecting.catch(() => undefined)
-			if (this.#destroyed) return
-		}
+		const disconnecting = this.#disconnecting
+		const connecting = this.#connecting
+		if (disconnecting !== undefined) await disconnecting
+		if (connecting !== undefined) await connecting.catch(() => undefined)
+		if (this.#destroyed) return
 		if (this.#status !== 'connected' || this.#client === undefined) return
 
 		const attempt = this.#detach()
@@ -299,6 +298,11 @@ export class Browser implements BrowserInterface {
 	// === Private helpers
 
 	async #establish(): Promise<void> {
+		if (this.#disconnecting !== undefined) await this.#disconnecting
+		await this.#settleExit()
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#status === 'connected') return
+
 		this.#assertNotAborted()
 		this.#status = 'connecting'
 
@@ -396,10 +400,13 @@ export class Browser implements BrowserInterface {
 		const connected = this.#status === 'connected'
 		const client = this.#client
 		const contexts = this.#contexts
+		const process = this.#process
 		this.#unbindTransport()
 		this.#unbindProcess()
 		this.#process = undefined
-		void this.#releaseProfile().catch((error: unknown) => this.#emitter.emit('error', error))
+		const cleanup = this.#cleanupExitedProcess(process, contexts, client)
+		this.#exitCleanup = cleanup
+		void cleanup.catch((error: unknown) => this.#emitter.emit('error', error))
 		this.#client = undefined
 		this.#contexts = []
 		this.#connection = undefined
@@ -407,8 +414,6 @@ export class Browser implements BrowserInterface {
 		this.#endpoint = undefined
 		if (connected) this.#status = 'disconnected'
 
-		void this.#destroyContextList(contexts)
-		void this.#closeClient(client)
 		this.#emitter.emit(
 			'error',
 			new BrowserConnectionError('The browser process exited unexpectedly', {
@@ -614,7 +619,10 @@ export class Browser implements BrowserInterface {
 		if (executable !== undefined) {
 			resolvedEngine = parseBrowserEngine(executable) ?? 'chromium'
 		} else {
-			const found = findSystemBrowser({ ...this.#options.browsers, engine: requestedEngine })
+			const found = findSystemBrowser({
+				...this.#options.browsers,
+				...(requestedEngine !== undefined ? { engine: requestedEngine } : {}),
+			})
 			executable = found?.executable
 			resolvedEngine = found?.engine
 		}
@@ -765,6 +773,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #destroyResources(): Promise<void> {
+		let terminated = false
 		try {
 			await this.#settle()
 			this.#unbindTransport()
@@ -781,11 +790,15 @@ export class Browser implements BrowserInterface {
 
 			await this.#terminate(this.#process)
 			this.#process = undefined
-			await this.#closeClient(client)
-			this.#client = undefined
+			terminated = true
 		} finally {
+			const contexts = this.#contexts
+			this.#contexts = []
+			const client = this.#client
+			this.#client = undefined
 			try {
-				await this.#releaseProfile()
+				await this.#cleanupLocal(contexts, client)
+				if (terminated) await this.#releaseProfile()
 			} finally {
 				this.#finish()
 			}
@@ -793,6 +806,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #closeResources(): Promise<void> {
+		let terminated = false
 		try {
 			await this.#settle()
 			this.#unbindTransport()
@@ -805,16 +819,19 @@ export class Browser implements BrowserInterface {
 
 			const process = this.#process
 			if (process !== undefined) {
-				const exited = await this.#waitForProcessWithin(process, BROWSER_KILL_GRACE_MS)
+				const exited = await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS)
 				if (!exited) await this.#terminate(process)
 			}
 			this.#process = undefined
-
-			await this.#closeClient(client)
-			this.#client = undefined
+			terminated = true
 		} finally {
+			const contexts = this.#contexts
+			this.#contexts = []
+			const client = this.#client
+			this.#client = undefined
 			try {
-				await this.#releaseProfile()
+				await this.#cleanupLocal(contexts, client)
+				if (terminated) await this.#releaseProfile()
 			} finally {
 				this.#finish()
 			}
@@ -824,6 +841,14 @@ export class Browser implements BrowserInterface {
 	async #settle(): Promise<void> {
 		await this.#connecting?.catch(() => undefined)
 		await this.#disconnecting?.catch(() => undefined)
+		await this.#settleExit()
+	}
+
+	async #settleExit(): Promise<void> {
+		const cleanup = this.#exitCleanup
+		if (cleanup === undefined) return
+		await cleanup
+		if (this.#exitCleanup === cleanup) this.#exitCleanup = undefined
 	}
 
 	async #closeRemote(client: CDPClient | undefined): Promise<void> {
@@ -904,9 +929,27 @@ export class Browser implements BrowserInterface {
 		if (profile !== undefined) await removeBrowserProfile(profile)
 	}
 
-	async #waitForProcess(process: ChildProcess): Promise<void> {
-		if (process.exitCode !== null || process.signalCode !== null) return
-		await once(process, 'exit')
+	async #cleanupExitedProcess(
+		process: ChildProcess | undefined,
+		contexts: readonly BrowserContext[],
+		client: CDPClient | undefined,
+	): Promise<void> {
+		let terminated = false
+		try {
+			await this.#terminate(process)
+			terminated = true
+		} finally {
+			await this.#cleanupLocal(contexts, client)
+		}
+		if (terminated) await this.#releaseProfile()
+	}
+
+	async #cleanupLocal(
+		contexts: readonly BrowserContext[],
+		client: CDPClient | undefined,
+	): Promise<void> {
+		await this.#destroyContextList(contexts)
+		await this.#closeClient(client)
 	}
 
 	async #waitForProcessWithin(process: ChildProcess, timeout: number): Promise<boolean> {
@@ -924,23 +967,85 @@ export class Browser implements BrowserInterface {
 		}
 	}
 
+	#hasProcessGroup(process: ChildProcess): boolean {
+		const pid = process.pid
+		return globalThis.process.platform !== 'win32' && pid !== undefined && pid > 0
+	}
+
+	#inspectProcessGroup(process: ChildProcess): boolean | undefined {
+		if (!this.#hasProcessGroup(process)) return false
+		return this.#signalProcess(process, 0)
+	}
+
+	#signalProcess(process: ChildProcess, signal: NodeJS.Signals | 0): boolean | undefined {
+		const pid = process.pid
+		try {
+			if (this.#hasProcessGroup(process) && pid !== undefined) {
+				return globalThis.process.kill(-pid, signal)
+			}
+			return process.kill(signal)
+		} catch (error) {
+			const code =
+				isError(error) && 'code' in error && isString(error.code) ? error.code : undefined
+			if (code === 'ESRCH') return false
+			if (signal === 0) return code === 'EPERM' ? true : undefined
+			throw new BrowserConnectionError('Failed to signal the browser process', {
+				pid,
+				signal,
+				cause: error,
+			})
+		}
+	}
+
+	async #waitForProcessGroupWithin(
+		process: ChildProcess,
+		timeout: number,
+	): Promise<boolean | undefined> {
+		const deadline = performance.now() + timeout
+		let confirmed = false
+		// Node observes only the direct child; POSIX exposes no event for the
+		// remaining members of its process group, so bound the drain probe.
+		while (true) {
+			const alive = this.#inspectProcessGroup(process)
+			if (alive === false) return true
+			if (alive === true) confirmed = true
+			const remaining = deadline - performance.now()
+			if (remaining <= 0) return confirmed ? false : undefined
+			await new Promise<void>((resolve) =>
+				setTimeout(resolve, Math.min(BROWSER_WAIT_POLL_INTERVAL_MS, remaining)),
+			)
+		}
+	}
+
+	async #waitForTerminationWithin(
+		process: ChildProcess,
+		timeout: number,
+		final = false,
+	): Promise<boolean> {
+		const exited = this.#waitForProcessWithin(process, timeout)
+		const drained = this.#waitForProcessGroupWithin(process, timeout)
+		const results = await Promise.all([exited, drained])
+		return results[0] && (results[1] === true || (final && results[1] === undefined))
+	}
+
 	async #terminate(process: ChildProcess | undefined): Promise<void> {
-		if (process === undefined || process.exitCode !== null || process.signalCode !== null) return
-
-		try {
-			process.kill('SIGTERM')
-		} catch {
+		if (
+			process === undefined ||
+			((process.exitCode !== null || process.signalCode !== null) &&
+				this.#inspectProcessGroup(process) === false)
+		) {
 			return
 		}
 
-		if (await this.#waitForProcessWithin(process, BROWSER_KILL_GRACE_MS)) return
+		if (this.#signalProcess(process, 'SIGTERM') === false) return
+		if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS)) return
 
-		try {
-			process.kill('SIGKILL')
-		} catch {
-			return
-		}
-		await this.#waitForProcess(process)
+		if (this.#signalProcess(process, 'SIGKILL') === false) return
+		if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS, true)) return
+
+		throw new BrowserConnectionError('Browser process did not exit after SIGKILL', {
+			pid: process.pid,
+		})
 	}
 
 	#finish(): void {
@@ -952,6 +1057,7 @@ export class Browser implements BrowserInterface {
 		this.#endpoint = undefined
 		this.#client = undefined
 		this.#process = undefined
+		this.#exitCleanup = undefined
 		this.#contexts = []
 		this.#emitter.emit('destroy')
 		this.#emitter.destroy()

@@ -65,8 +65,8 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 				expires: cookie.expires,
 				http: cookie.http,
 				secure: cookie.secure,
-				site: cookie.site,
-				partition: cookie.partition,
+				...(cookie.site !== undefined ? { site: cookie.site } : {}),
+				...(cookie.partition !== undefined ? { partition: cookie.partition } : {}),
 			}),
 		)
 		const restore: Record<string, unknown> = { cookies }

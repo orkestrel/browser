@@ -62,8 +62,8 @@ export class BrowserStorageManager implements BrowserStorageManagerInterface {
 			expires: cookie.expires,
 			http: cookie.http,
 			secure: cookie.secure,
-			site: cookie.site,
-			partition: cookie.partition,
+			...(cookie.site !== undefined ? { site: cookie.site } : {}),
+			...(cookie.partition !== undefined ? { partition: cookie.partition } : {}),
 		}))
 		return { cookies, origins: storage }
 	}

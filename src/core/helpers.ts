@@ -410,13 +410,14 @@ export function createBrowserHAREntry(
 			cookies: [],
 			headers: requestHeaders,
 			queryString: query,
-			postData:
-				post === undefined
-					? undefined
-					: {
+			...(post !== undefined
+				? {
+						postData: {
 							mimeType: requestMime,
 							text: post,
 						},
+					}
+				: {}),
 			headersSize: -1,
 			bodySize: post === undefined ? 0 : textToBytes(post).byteLength,
 		},
@@ -429,8 +430,7 @@ export function createBrowserHAREntry(
 			content: {
 				size,
 				mimeType: response?.mime ?? 'application/octet-stream',
-				text,
-				encoding: text === undefined ? undefined : 'base64',
+				...(text !== undefined ? { text, encoding: 'base64' } : {}),
 			},
 			redirectURL: redirect,
 			headersSize: -1,
@@ -1627,7 +1627,9 @@ export function readBrowserCookiePartition(value: unknown): BrowserCookiePartiti
 	if (!isRecord(value) || !isString(value['topLevelSite'])) return undefined
 	return {
 		site: value['topLevelSite'],
-		ancestor: isBoolean(value['hasCrossSiteAncestor']) ? value['hasCrossSiteAncestor'] : undefined,
+		...(isBoolean(value['hasCrossSiteAncestor'])
+			? { ancestor: value['hasCrossSiteAncestor'] }
+			: {}),
 	}
 }
 
@@ -1902,7 +1904,7 @@ export function readBrowserDownloadProgress(
 			status,
 			received: value['receivedBytes'],
 			total: value['totalBytes'],
-			path: isString(value['filePath']) ? value['filePath'] : undefined,
+			...(isString(value['filePath']) ? { path: value['filePath'] } : {}),
 		},
 	]
 }

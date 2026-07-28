@@ -19,12 +19,7 @@ export class BrowserTracing implements BrowserTracingInterface {
 	#active = false
 	#options: BrowserTracingOptions | undefined
 	#completion: PromiseWithResolvers<string> | undefined
-	#completeHandler = (params: Readonly<Record<string, unknown>>): void => {
-		const completion = this.#completion
-		if (completion === undefined) return
-		if (isString(params['stream'])) completion.resolve(params['stream'])
-		else completion.reject(new BrowserError('Browser trace did not return an IO stream'))
-	}
+	readonly #completeHandler = this.#handleComplete.bind(this)
 
 	constructor(frame: BrowserFrameInterface, writer?: ScreenshotWriterInterface) {
 		this.#frame = frame
@@ -118,5 +113,12 @@ export class BrowserTracing implements BrowserTracingInterface {
 		} finally {
 			clearTimeout(timer)
 		}
+	}
+
+	#handleComplete(params: Readonly<Record<string, unknown>>): void {
+		const completion = this.#completion
+		if (completion === undefined) return
+		if (isString(params['stream'])) completion.resolve(params['stream'])
+		else completion.reject(new BrowserError('Browser trace did not return an IO stream'))
 	}
 }

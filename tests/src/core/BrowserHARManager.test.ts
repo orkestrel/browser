@@ -104,7 +104,6 @@ describe('BrowserHARManager', () => {
 							cookies: [],
 							headers: [],
 							queryString: [],
-							postData: undefined,
 							headersSize: -1,
 							bodySize: 0,
 						},

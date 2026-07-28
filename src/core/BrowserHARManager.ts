@@ -36,61 +36,11 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 	#failure: unknown
 	#archive: BrowserHAR | undefined
 	#fallback = false
-	#requestHandler = (request: BrowserRequest): void => {
-		if (!this.#recording) return
-		this.#pending.set(request.id, {
-			request,
-			started: request.walltime === undefined ? Date.now() : request.walltime * 1000,
-			response: undefined,
-		})
-	}
-	#responseHandler = (response: BrowserResponse): void => {
-		const pending = this.#pending.get(response.id)
-		if (pending === undefined) return
-		this.#pending.set(response.id, {
-			request: pending.request,
-			started: pending.started,
-			response,
-		})
-	}
-	#failureHandler = (failure: BrowserRequestFailure): void => {
-		const pending = this.#pending.get(failure.id)
-		if (pending === undefined) return
-		this.#pending.delete(failure.id)
-		this.#entries.push(
-			createBrowserHAREntry(
-				pending,
-				Math.max(0, Date.now() - pending.started),
-				undefined,
-				failure.error,
-			),
-		)
-	}
-	#finishHandler = (id: string): void => this.#track(this.#complete(id))
-	#replayHandler: BrowserRouteHandler = async (route) => {
-		const entry = this.#archive?.log.entries.find(
-			(candidate) =>
-				candidate.request.url === route.request.url &&
-				candidate.request.method === route.request.method,
-		)
-		if (entry === undefined || entry.response.status === 0) {
-			if (this.#fallback) await route.continue()
-			else await route.abort('Failed')
-			return
-		}
-		const body =
-			entry.response.content.text === undefined
-				? undefined
-				: entry.response.content.encoding === 'base64'
-					? decodeBase64(entry.response.content.text)
-					: entry.response.content.text
-		await route.fulfill({
-			status: entry.response.status,
-			phrase: entry.response.statusText,
-			headers: browserHARHeadersToRecord(entry.response.headers),
-			body,
-		})
-	}
+	readonly #requestHandler = this.#handleRequest.bind(this)
+	readonly #responseHandler = this.#handleResponse.bind(this)
+	readonly #failureHandler = this.#handleFailure.bind(this)
+	readonly #finishHandler = this.#handleFinish.bind(this)
+	readonly #replayHandler: BrowserRouteHandler = this.#handleReplay.bind(this)
 
 	constructor(network: BrowserNetworkManagerInterface, writer?: ScreenshotWriterInterface) {
 		this.#network = network
@@ -189,6 +139,68 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		if (replaying) await this.#network.unroute(this.#replayHandler)
 		this.#entries.length = 0
 		this.#pending.clear()
+	}
+
+	#handleRequest(request: BrowserRequest): void {
+		if (!this.#recording) return
+		this.#pending.set(request.id, {
+			request,
+			started: request.walltime === undefined ? Date.now() : request.walltime * 1000,
+			response: undefined,
+		})
+	}
+
+	#handleResponse(response: BrowserResponse): void {
+		const pending = this.#pending.get(response.id)
+		if (pending === undefined) return
+		this.#pending.set(response.id, {
+			request: pending.request,
+			started: pending.started,
+			response,
+		})
+	}
+
+	#handleFailure(failure: BrowserRequestFailure): void {
+		const pending = this.#pending.get(failure.id)
+		if (pending === undefined) return
+		this.#pending.delete(failure.id)
+		this.#entries.push(
+			createBrowserHAREntry(
+				pending,
+				Math.max(0, Date.now() - pending.started),
+				undefined,
+				failure.error,
+			),
+		)
+	}
+
+	#handleFinish(id: string): void {
+		this.#track(this.#complete(id))
+	}
+
+	async #handleReplay(route: Parameters<BrowserRouteHandler>[0]): Promise<void> {
+		const entry = this.#archive?.log.entries.find(
+			(candidate) =>
+				candidate.request.url === route.request.url &&
+				candidate.request.method === route.request.method,
+		)
+		if (entry === undefined || entry.response.status === 0) {
+			if (this.#fallback) await route.continue()
+			else await route.abort('Failed')
+			return
+		}
+		const body =
+			entry.response.content.text === undefined
+				? undefined
+				: entry.response.content.encoding === 'base64'
+					? decodeBase64(entry.response.content.text)
+					: entry.response.content.text
+		await route.fulfill({
+			status: entry.response.status,
+			phrase: entry.response.statusText,
+			headers: browserHARHeadersToRecord(entry.response.headers),
+			...(body !== undefined ? { body } : {}),
+		})
 	}
 
 	async #complete(id: string): Promise<void> {

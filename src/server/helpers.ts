@@ -295,6 +295,10 @@ export function findAllInStore(base: string, platform: string): readonly string[
 /**
  * Launch a browser process with raw-CDP debugging flags.
  *
+ * @remarks
+ * POSIX launches own an isolated process group so lifecycle teardown can
+ * signal and await every Chromium subprocess without affecting the caller.
+ *
  * @param executable - Absolute path to the browser executable
  * @param port - Port the browser exposes its CDP endpoint on
  * @param headless - Whether to launch in headless mode
@@ -320,7 +324,10 @@ export function launchBrowserProcess(
 	if (headless) args.push(BROWSER_HEADLESS_ARG)
 	if (profile !== undefined) args.push(`--user-data-dir=${profile}`)
 
-	return spawn(executable, args, { stdio: 'ignore' })
+	return spawn(executable, args, {
+		stdio: 'ignore',
+		detached: process.platform !== 'win32',
+	})
 }
 
 /**
