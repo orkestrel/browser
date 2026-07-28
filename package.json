@@ -81,12 +81,12 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.8",
 		"@orkestrel/emitter": "^0.0.4",
-		"@orkestrel/websocket": "^0.0.5"
+		"@orkestrel/websocket": "^0.0.6"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.58.12",
-		"@orkestrel/guide": "^0.0.5",
-		"@orkestrel/scaffold": "^0.0.6",
+		"@orkestrel/guide": "^0.0.7",
+		"@orkestrel/scaffold": "^0.0.7",
 		"@types/node": "^26.1.2",
 		"@vitest/browser-playwright": "^4.1.10",
 		"oxfmt": "^0.61.0",
