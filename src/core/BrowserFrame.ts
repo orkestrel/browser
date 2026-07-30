@@ -103,9 +103,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.assert()
 		const [title, html, text, currentUrl] = await Promise.all([
 			this.#evaluate('document.title'),
-			this.#evaluate(
-				guardEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
-			),
+			this.#captureHTML(),
 			this.#evaluate(
 				guardEvaluateExpression(
 					'document.body ? document.body.innerText : ""',
@@ -126,8 +124,9 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	async article(): Promise<string> {
-		const { html, url } = await this.content()
-		return renderText(createHTML(html).distill({ base: url }).document)
+		this.assert()
+		const html = requireBrowserString(await this.#captureHTML(), 'Document HTML')
+		return renderText(createHTML(html).distill().document)
 	}
 
 	async click(selector: string, options?: BrowserActionOptions): Promise<void> {
@@ -221,6 +220,12 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	protected update(url: string): void {
 		this.#url = url
+	}
+
+	async #captureHTML(): Promise<unknown> {
+		return await this.#evaluate(
+			guardEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
+		)
 	}
 
 	async #evaluate(expression: string, timeout?: number): Promise<unknown> {

@@ -14,6 +14,7 @@ import { isBrowserNodeQuery, matchesBrowserNode } from './helpers.js'
 
 /** A navigable, serializable browser DOM snapshot. */
 export class BrowserSnapshot implements BrowserSnapshotInterface {
+	// Documents are fixed and frozen at construction, so the derived owner index cannot go stale.
 	#owners: ReadonlyMap<number, BrowserNode> | undefined
 	readonly documents: readonly BrowserDocument[]
 	readonly styles: readonly string[]

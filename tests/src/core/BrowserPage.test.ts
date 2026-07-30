@@ -482,7 +482,7 @@ describe('BrowserPage', () => {
 			scriptEvaluate(
 				transport,
 				(expression) => expression.includes('innerText'),
-				'Article\nPage body.',
+				'Navigation\nArticle\nPage body.\nFooter',
 			)
 			scriptEvaluate(
 				transport,
@@ -491,7 +491,12 @@ describe('BrowserPage', () => {
 			)
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 
-			expect(await page.article()).toBe('Article\nPage body.')
+			const content = await page.content()
+			const article = await page.article()
+
+			expect(article).toBe('Article\nPage body.')
+			expect(article).not.toBe(content.text)
+			expect(article).not.toContain('Navigation')
 		})
 	})
 

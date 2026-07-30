@@ -1,9 +1,11 @@
 import type { BrowserWaitState } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
+	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BrowserFrame,
 	BrowserSelectorError,
 	isBrowserError,
+	isBrowserResultLimitError,
 	isBrowserSelectorError,
 } from '@src/core'
 import {
@@ -169,6 +171,46 @@ describe('BrowserFrame', () => {
 		expect(article).not.toContain('Hidden distraction')
 		expect(article).not.toContain('Cookie choices')
 		expect(article).toContain('Topic\tResult')
+	})
+
+	it('distills article HTML when discarded body text exceeds the result limit', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
+		scriptEvaluate(transport, (expression) => expression === 'document.title', 'Article')
+		scriptEvaluate(
+			transport,
+			(expression) => expression.includes('document.documentElement.outerHTML'),
+			'<html><body><main><article><p>Readable article.</p></article></main></body></html>',
+		)
+		scriptEvaluate(
+			transport,
+			(expression) => expression === 'location.href',
+			'https://example.com/article',
+		)
+		transport.onSend('Runtime.evaluate', (message) => {
+			const expression = message.params?.['expression']
+			if (
+				typeof expression === 'string' &&
+				expression.includes('document.body ? document.body.innerText')
+			) {
+				transport.reply(message.id, {
+					exceptionDetails: {
+						exception: {
+							description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}4200000`,
+						},
+					},
+				})
+			}
+		})
+		const frame = new BrowserFrame(
+			client,
+			'session-child',
+			'frame-child',
+			'https://example.com/frame',
+		)
+
+		await expect(frame.content()).rejects.toSatisfy(isBrowserResultLimitError)
+		await expect(frame.article()).resolves.toBe('Readable article.')
 	})
 
 	it('waits and acts entirely through the frame execution context', async () => {

@@ -1350,6 +1350,7 @@ export interface BrowserFrameInfo {
  * - `url` — current frame URL
  * - `title` — resolve the document title
  * - `content` — extract page URL, title, HTML, and visible text
+ * - `article` — the page's reader-facing prose, boilerplate and hidden regions pruned (not `content()`'s whole-body text)
  * - `click` — click an element matching the selector
  * - `fill` — type text into an input element
  * - `select` — choose option(s) in a `<select>` element
