@@ -6,8 +6,9 @@
 > — no `WebSocket`, no `node:*`, no filesystem — so it runs identically in
 > Node or a browser: `CDPClient` frames JSON-RPC-shaped CDP messages over the
 > transport, `BrowserContext` / `BrowserPage` model a CDP browser context and
-> its pages, `BrowserCodegen` records page interactions for later script
-> compilation. **Server** (`@orkestrel/browser/server`) supplies the missing
+> its pages, `BrowserSnapshot` turns a captured DOM snapshot into navigable
+> serializable data, `BrowserCodegen` records page interactions for later
+> script compilation. **Server** (`@orkestrel/browser/server`) supplies the missing
 > environment pieces: `WebSocketCDPTransport` (a Node `WebSocket`-backed CDP
 > transport), `Browser` (discovery → connect → launch lifecycle, spawning a
 > real Chromium-family process when nothing is already listening), and a
@@ -46,19 +47,21 @@ await client.close()
 
 #### Factories
 
-| API               | Kind     | Summary                                                                   |
-| ----------------- | -------- | ------------------------------------------------------------------------- |
-| `createCDPClient` | function | Create a `CDPClientInterface` bound to the given `CDPTransportInterface`. |
+| API                     | Kind     | Summary                                                                                 |
+| ----------------------- | -------- | --------------------------------------------------------------------------------------- |
+| `createCDPClient`       | function | Create a `CDPClientInterface` bound to the given `CDPTransportInterface`.               |
+| `createBrowserSnapshot` | function | Create a navigable `BrowserSnapshotInterface` over decoded `BrowserSnapshotInput` data. |
 
 #### Entities
 
-| API              | Kind  | Summary                                                                                                                  |
-| ---------------- | ----- | ------------------------------------------------------------------------------------------------------------------------ |
-| `CDPClient`      | class | Lightweight CDP client over a `CDPTransportInterface` — JSON-RPC framing, `connect` / `send` / `subscribe` / `close`.    |
-| `BrowserContext` | class | Isolated browser session over a CDP browser context — manages its `BrowserPage`s (`page` / `pages` / `create` / `sync`). |
-| `BrowserFrame`   | class | One attached document frame with isolated-world evaluation and frame-scoped actions over its current CDP session.        |
-| `BrowserPage`    | class | A single browser page or frame — navigation, content extraction, screenshot, element interaction, codegen.               |
-| `BrowserCodegen` | class | Records page interactions (navigate/click/fill/select) via CDP bindings, for later compilation into a replayable script. |
+| API               | Kind  | Summary                                                                                                                                   |
+| ----------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `CDPClient`       | class | Lightweight CDP client over a `CDPTransportInterface` — JSON-RPC framing, `connect` / `send` / `subscribe` / `close`.                     |
+| `BrowserContext`  | class | Isolated browser session over a CDP browser context — manages its `BrowserPage`s (`page` / `pages` / `create` / `sync`).                  |
+| `BrowserFrame`    | class | One attached document frame with isolated-world evaluation and frame-scoped actions over its current CDP session.                         |
+| `BrowserPage`     | class | A single browser page or frame — navigation, content extraction, screenshot, element interaction, codegen.                                |
+| `BrowserCodegen`  | class | Records page interactions (navigate/click/fill/select) via CDP bindings, for later compilation into a replayable script.                  |
+| `BrowserSnapshot` | class | A navigable, serializable capture of every attached document — walking, structural relationships, search, and paths over plain node data. |
 
 #### Constants
 
@@ -114,55 +117,35 @@ try {
 
 #### Helpers
 
-| API                               | Kind     | Summary                                                                                                                                                                                         |
-| --------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `decodeBase64`                    | function | Decode a base64-encoded string into raw bytes (pure JS, no `Buffer`/`atob` — runs identically Node/browser).                                                                                    |
-| `guardEvaluateExpression`         | function | Wrap a `Runtime.evaluate` expression so the in-page code stringifies its own result and throws a recognizable sentinel error before an oversized result would overflow the CDP transport frame. |
-| `normalizeCodegenActions`         | function | Collapse consecutive `fill` actions on the same selector into the latest value.                                                                                                                 |
-| `parseCodegenActionPayload`       | function | Parse a codegen binding payload string into a typed `BrowserCodegenAction`, or `undefined` if malformed.                                                                                        |
-| `readCodegenNavigateAction`       | function | Derive a `navigate` codegen action from a `Page.frameNavigated` CDP event (top-level frame only).                                                                                               |
-| `compileCodegenScript`            | function | Compile recorded codegen actions into a replayable JavaScript or TypeScript script.                                                                                                             |
-| `readEvaluationResult`            | function | Decode a `Runtime.evaluate` result and map guarded oversize exceptions to `BrowserResultLimitError`.                                                                                            |
-| `requireBrowserString`            | function | Narrow a browser-evaluated value to a required string.                                                                                                                                          |
-| `readBrowserFrames`               | function | Decode `Page.getFrameTree` into depth-first frame metadata.                                                                                                                                     |
-| `compileAttachedWaitExpression`   | function | Compile an in-page attached-state wait.                                                                                                                                                         |
-| `compileDetachedWaitExpression`   | function | Compile an in-page detached-state wait.                                                                                                                                                         |
-| `compileVisibleWaitExpression`    | function | Compile an in-page visible-state wait.                                                                                                                                                          |
-| `compileHiddenWaitExpression`     | function | Compile an in-page hidden-state wait.                                                                                                                                                           |
-| `compileClickExpression`          | function | Compile a strict, visibility-checked click expression.                                                                                                                                          |
-| `compileFillExpression`           | function | Compile a strict, editable fill expression.                                                                                                                                                     |
-| `compileSelectExpression`         | function | Compile a strict select expression.                                                                                                                                                             |
-| `readNumberArray`                 | function | Narrow an unknown protocol value to an all-number array.                                                                                                                                        |
-| `readSnapshotString`              | function | Resolve an index from a DOMSnapshot string table.                                                                                                                                               |
-| `decodeRareStringData`            | function | Decode sparse CDP string data into a node-index map.                                                                                                                                            |
-| `decodeRareBooleanData`           | function | Decode sparse CDP boolean indexes into a set.                                                                                                                                                   |
-| `decodeRareIntegerData`           | function | Decode sparse CDP integer data into a node-index map.                                                                                                                                           |
-| `readBrowserRect`                 | function | Decode a four-number CSS-pixel rectangle.                                                                                                                                                       |
-| `decodeBrowserAttributes`         | function | Decode flattened name/value indexes into a frozen attribute record.                                                                                                                             |
-| `decodeBrowserSnapshot`           | function | Validate and decode `DOMSnapshot.captureSnapshot` into serializable documents and nodes.                                                                                                        |
-| `walkBrowserSnapshot`             | function | Lazily traverse every snapshot node in structural depth-first order.                                                                                                                            |
-| `walkBrowserSnapshotBreadthFirst` | function | Lazily traverse every snapshot node in structural breadth-first order.                                                                                                                          |
-| `walkBrowserNode`                 | function | Lazily traverse one snapshot subtree, including its root.                                                                                                                                       |
-| `walkBrowserNodeBreadthFirst`     | function | Lazily traverse one snapshot subtree in breadth-first order.                                                                                                                                    |
-| `descendantsOfBrowserNode`        | function | Lazily traverse descendants of one node.                                                                                                                                                        |
-| `documentOfBrowserNode`           | function | Resolve the document containing a snapshot node.                                                                                                                                                |
-| `childrenOfBrowserNode`           | function | Return direct children, entering linked iframe content documents.                                                                                                                               |
-| `parentOfBrowserNode`             | function | Resolve a structural parent, including an iframe owner.                                                                                                                                         |
-| `siblingsOfBrowserNode`           | function | Return every structural sibling except the supplied node.                                                                                                                                       |
-| `precedingSiblingsOfBrowserNode`  | function | Return structural siblings before a node.                                                                                                                                                       |
-| `followingSiblingsOfBrowserNode`  | function | Return structural siblings after a node.                                                                                                                                                        |
-| `ancestorsOfBrowserNode`          | function | Return nearest-first ancestors across document and iframe boundaries.                                                                                                                           |
-| `isBrowserNodeDescendant`         | function | Test ancestry across document and iframe boundaries.                                                                                                                                            |
-| `commonAncestorOfBrowserNodes`    | function | Resolve the nearest common structural ancestor.                                                                                                                                                 |
-| `computeBrowserNodeDistance`      | function | Compute the structural edge distance between two nodes.                                                                                                                                         |
-| `findBrowserNode`                 | function | Find the first matching node across a snapshot.                                                                                                                                                 |
-| `findBrowserNodes`                | function | Find a bounded list of matching nodes.                                                                                                                                                          |
-| `findBrowserDescendant`           | function | Find the first matching descendant beneath a node.                                                                                                                                              |
-| `closestBrowserNode`              | function | Find the nearest matching node from a candidate through its ancestors.                                                                                                                          |
-| `attributeOfBrowserNode`          | function | Read one captured node attribute.                                                                                                                                                               |
-| `matchesBrowserNode`              | function | Match a node against a declarative query.                                                                                                                                                       |
-| `isBrowserNodeVisible`            | function | Test whether a node has a non-empty captured layout box.                                                                                                                                        |
-| `nodeToPath`                      | function | Build a deterministic frame-qualified structural path.                                                                                                                                          |
+| API                             | Kind     | Summary                                                                                                                                                                                         |
+| ------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decodeBase64`                  | function | Decode a base64-encoded string into raw bytes (pure JS, no `Buffer`/`atob` — runs identically Node/browser).                                                                                    |
+| `guardEvaluateExpression`       | function | Wrap a `Runtime.evaluate` expression so the in-page code stringifies its own result and throws a recognizable sentinel error before an oversized result would overflow the CDP transport frame. |
+| `normalizeCodegenActions`       | function | Collapse consecutive `fill` actions on the same selector into the latest value.                                                                                                                 |
+| `parseCodegenActionPayload`     | function | Parse a codegen binding payload string into a typed `BrowserCodegenAction`, or `undefined` if malformed.                                                                                        |
+| `readCodegenNavigateAction`     | function | Derive a `navigate` codegen action from a `Page.frameNavigated` CDP event (top-level frame only).                                                                                               |
+| `compileCodegenScript`          | function | Compile recorded codegen actions into a replayable JavaScript or TypeScript script.                                                                                                             |
+| `readEvaluationResult`          | function | Decode a `Runtime.evaluate` result and map guarded oversize exceptions to `BrowserResultLimitError`.                                                                                            |
+| `requireBrowserString`          | function | Narrow a browser-evaluated value to a required string.                                                                                                                                          |
+| `readBrowserFrames`             | function | Decode `Page.getFrameTree` into depth-first frame metadata.                                                                                                                                     |
+| `compileAttachedWaitExpression` | function | Compile an in-page attached-state wait.                                                                                                                                                         |
+| `compileDetachedWaitExpression` | function | Compile an in-page detached-state wait.                                                                                                                                                         |
+| `compileVisibleWaitExpression`  | function | Compile an in-page visible-state wait.                                                                                                                                                          |
+| `compileHiddenWaitExpression`   | function | Compile an in-page hidden-state wait.                                                                                                                                                           |
+| `compileClickExpression`        | function | Compile a strict, visibility-checked click expression.                                                                                                                                          |
+| `compileFillExpression`         | function | Compile a strict, editable fill expression.                                                                                                                                                     |
+| `compileSelectExpression`       | function | Compile a strict select expression.                                                                                                                                                             |
+| `readNumberArray`               | function | Narrow an unknown protocol value to an all-number array.                                                                                                                                        |
+| `readSnapshotString`            | function | Resolve an index from a DOMSnapshot string table.                                                                                                                                               |
+| `decodeRareStringData`          | function | Decode sparse CDP string data into a node-index map.                                                                                                                                            |
+| `decodeRareBooleanData`         | function | Decode sparse CDP boolean indexes into a set.                                                                                                                                                   |
+| `decodeRareIntegerData`         | function | Decode sparse CDP integer data into a node-index map.                                                                                                                                           |
+| `readBrowserRect`               | function | Decode a four-number CSS-pixel rectangle.                                                                                                                                                       |
+| `decodeBrowserAttributes`       | function | Decode flattened name/value indexes into a frozen attribute record.                                                                                                                             |
+| `decodeBrowserSnapshot`         | function | Validate and decode `DOMSnapshot.captureSnapshot` into a serializable `BrowserSnapshotInput`.                                                                                                   |
+| `attributeOfBrowserNode`        | function | Read one captured node attribute.                                                                                                                                                               |
+| `matchesBrowserNode`            | function | Match a node against a declarative query.                                                                                                                                                       |
+| `isBrowserNodeVisible`          | function | Test whether a node has a non-empty captured layout box.                                                                                                                                        |
 
 ```ts
 import {
@@ -189,29 +172,9 @@ import {
 	readBrowserRect,
 	decodeBrowserAttributes,
 	decodeBrowserSnapshot,
-	walkBrowserSnapshot,
-	walkBrowserSnapshotBreadthFirst,
-	walkBrowserNode,
-	walkBrowserNodeBreadthFirst,
-	descendantsOfBrowserNode,
-	documentOfBrowserNode,
-	childrenOfBrowserNode,
-	parentOfBrowserNode,
-	siblingsOfBrowserNode,
-	precedingSiblingsOfBrowserNode,
-	followingSiblingsOfBrowserNode,
-	ancestorsOfBrowserNode,
-	isBrowserNodeDescendant,
-	commonAncestorOfBrowserNodes,
-	computeBrowserNodeDistance,
-	findBrowserNode,
-	findBrowserNodes,
-	findBrowserDescendant,
-	closestBrowserNode,
 	attributeOfBrowserNode,
 	matchesBrowserNode,
 	isBrowserNodeVisible,
-	nodeToPath,
 } from '@orkestrel/browser'
 
 const guarded = guardEvaluateExpression('document.title', 3_000_000) // wrapped expression string
@@ -236,34 +199,15 @@ const rareBooleans = decodeRareBooleanData(rawRareBooleans)
 const rareIntegers = decodeRareIntegerData(rawRareIntegers)
 const rect = readBrowserRect([0, 0, 100, 40])
 const attributes = decodeBrowserAttributes(rawAttributes, snapshotStrings)
-const snapshot = decodeBrowserSnapshot(rawSnapshot, ['display'])
-const allNodes = [...walkBrowserSnapshot(snapshot)]
-const levelNodes = [...walkBrowserSnapshotBreadthFirst(snapshot)]
-const subtree = [...walkBrowserNode(snapshot, allNodes[0])]
-const levelSubtree = [...walkBrowserNodeBreadthFirst(snapshot, allNodes[0])]
-const descendants = [...descendantsOfBrowserNode(snapshot, allNodes[0])]
-const document = documentOfBrowserNode(snapshot, allNodes[0])
-const children = childrenOfBrowserNode(snapshot, allNodes[0])
-const parent = parentOfBrowserNode(snapshot, allNodes[0])
-const siblings = siblingsOfBrowserNode(snapshot, allNodes[0])
-const preceding = precedingSiblingsOfBrowserNode(snapshot, allNodes[0])
-const following = followingSiblingsOfBrowserNode(snapshot, allNodes[0])
-const ancestors = ancestorsOfBrowserNode(snapshot, allNodes[0])
-const descended = isBrowserNodeDescendant(snapshot, allNodes[1], allNodes[0])
-const common = commonAncestorOfBrowserNodes(snapshot, allNodes[0], allNodes[1])
-const distance = computeBrowserNodeDistance(snapshot, allNodes[0], allNodes[1])
-const first = findBrowserNode(snapshot, (node) => node.name === 'ARTICLE')
-const matches = findBrowserNodes(
-	snapshot,
-	(node) => matchesBrowserNode(node, { visible: true }),
-	20,
-)
-const descendant = findBrowserDescendant(snapshot, allNodes[0], (node) => node.name === 'A')
-const closest = closestBrowserNode(snapshot, allNodes[0], (node) => node.name === 'MAIN')
-const id = attributeOfBrowserNode(allNodes[0], 'id')
-const rendered = isBrowserNodeVisible(allNodes[0])
-const path = nodeToPath(snapshot, allNodes[0])
+const decoded = decodeBrowserSnapshot(rawSnapshot, ['display']) // BrowserSnapshotInput
+const node = decoded.documents[0].nodes[0]
+const id = attributeOfBrowserNode(node, 'id')
+const article = matchesBrowserNode(node, { name: 'article', visible: true })
+const rendered = isBrowserNodeVisible(node)
 ```
+
+Navigating decoded data is the `BrowserSnapshot` entity's job, not a helper
+family's — see [`BrowserSnapshotInterface`](#browsersnapshotinterface) below.
 
 #### Types
 
@@ -299,7 +243,11 @@ const path = nodeToPath(snapshot, allNodes[0])
 | `BrowserLayout`               | interface | Optional layout box, computed styles, text, paint order, and DOM rectangles for a snapshot node.                                                                                             |
 | `BrowserNode`                 | interface | One flattened serializable DOM node, including attributes, sparse state, frame identity, and layout.                                                                                         |
 | `BrowserDocument`             | interface | One captured document with frame metadata, dimensions, and nodes.                                                                                                                            |
-| `BrowserSnapshot`             | interface | Every captured document plus the requested computed-style names.                                                                                                                             |
+| `BrowserSnapshotInput`        | interface | `{ documents; styles }` — every captured document plus the requested computed-style names; the serializable form a `BrowserSnapshot` is built from and serializes back to.                   |
+| `BrowserWalkOrder`            | type      | `'depth' \| 'breadth'` — structural ordering for a snapshot walk.                                                                                                                            |
+| `BrowserWalkOptions`          | interface | `{ root?; order? }` — optional subtree root (included in the walk) and traversal order (default `'depth'`).                                                                                  |
+| `BrowserSiblingRelation`      | type      | `'preceding' \| 'following'` — structural sibling side relative to a node.                                                                                                                   |
+| `BrowserSnapshotInterface`    | interface | Extends `BrowserSnapshotInput`; adds walking, structural relationships, search, and path derivation over plain `BrowserNode` values.                                                         |
 | `BrowserSnapshotOptions`      | interface | `{ styles?; paint?; rects?; limit? }` — DOM snapshot capture and decoding controls.                                                                                                          |
 | `BrowserNodePredicate`        | type      | `(node: BrowserNode) => boolean` — traversal/search predicate.                                                                                                                               |
 | `BrowserNodeQuery`            | interface | Declarative name/text/attribute/frame/visibility/clickability matcher.                                                                                                                       |
@@ -949,9 +897,10 @@ The public methods of the layer's behavioral interfaces — every call-signature
 member listed (their `readonly` data members stay Surface rows). Each
 implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
 `CDPClientInterface`, `BrowserContext` ↔ `BrowserContextInterface`,
-`BrowserPage` ↔ `BrowserPageInterface`, `BrowserCodegen` ↔
-`BrowserCodegenInterface`, `Browser` ↔ `BrowserInterface`,
-`WebSocketCDPTransport` ↔ `CDPTransportInterface`.
+`BrowserPage` ↔ `BrowserPageInterface`, `BrowserSnapshot` ↔
+`BrowserSnapshotInterface`, `BrowserCodegen` ↔ `BrowserCodegenInterface`,
+`Browser` ↔ `BrowserInterface`, `WebSocketCDPTransport` ↔
+`CDPTransportInterface`.
 
 #### `CDPTransportInterface`
 
@@ -1081,7 +1030,7 @@ surface above and declares only page/target-specific operations here.
 | `pdf`        | `Promise<BrowserPDFResult>`                   | Print the page to PDF bytes, optionally persisted through the injected writer.                                    |
 | `frame`      | `Promise<BrowserFrameInterface \| undefined>` | Look up a first-class frame by name or URL.                                                                       |
 | `frames`     | `Promise<readonly BrowserFrameInterface[]>`   | Decode the flattened frame tree, main frame first.                                                                |
-| `snapshot`   | `Promise<BrowserSnapshot>`                    | Capture and decode all attached documents, shadow roots, template contents, layout, and optional computed styles. |
+| `snapshot`   | `Promise<BrowserSnapshotInterface>`           | Capture and decode all attached documents, shadow roots, template contents, layout, and optional computed styles. |
 | `codegen`    | `Promise<BrowserCodegenInterface>`            | Start or return the current action recorder.                                                                      |
 | `destroy`    | `Promise<void>`                               | Release local resources and detach without closing the remote target.                                             |
 | `close`      | `Promise<void>`                               | Close the remote target and release resources.                                                                    |
@@ -1103,6 +1052,63 @@ const child = await page.frame('checkout') // BrowserFrameInterface | undefined
 const children = await page.frames() // readonly BrowserFrameInterface[]
 const snapshot = await page.snapshot({ styles: ['display'], rects: true })
 await page.close()
+```
+
+#### `BrowserSnapshotInterface`
+
+One page capture as navigable data. Its two `readonly` members — `documents`
+and `styles`, inherited from the Surface `BrowserSnapshotInput` row — are the
+entire serialized form; every method below derives structure from them on
+demand, storing nothing that could drift. Nodes stay
+plain `BrowserNode` data — passed in as arguments and handed back unwrapped —
+so a snapshot survives `JSON.stringify` and comes back through
+`createBrowserSnapshot`. Walks are lazy generators, so `find` stops at the
+first match and `filter` stops at its limit.
+
+| Method        | Returns                                 | Behavior                                                                                                                                                                     |
+| ------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `walk`        | `Generator<BrowserNode, void, unknown>` | Traverse the whole capture, or one subtree when `root` is given (the root is yielded first), in `'depth'` (default) or `'breadth'` order. Each node is visited exactly once. |
+| `descendants` | `Generator<BrowserNode, void, unknown>` | Traverse one node's subtree in depth-first order, excluding the node itself.                                                                                                 |
+| `document`    | `BrowserDocument \| undefined`          | Resolve the captured document a node belongs to.                                                                                                                             |
+| `children`    | `readonly BrowserNode[]`                | Direct children, entering a linked iframe's content document.                                                                                                                |
+| `parent`      | `BrowserNode \| undefined`              | Structural parent, crossing a document boundary to the owning iframe.                                                                                                        |
+| `siblings`    | `readonly BrowserNode[]`                | Structural siblings — `'preceding'` or `'following'` narrows to one side; omitting the relation returns every sibling except the node itself.                                |
+| `ancestors`   | `readonly BrowserNode[]`                | Nearest-first ancestors across document and iframe boundaries.                                                                                                               |
+| `common`      | `BrowserNode \| undefined`              | Nearest common ancestor of two nodes, counting each node as its own candidate.                                                                                               |
+| `distance`    | `number \| undefined`                   | Structural edge count between two nodes; `undefined` when they share no ancestor.                                                                                            |
+| `find`        | `BrowserNode \| undefined`              | First node matching a `BrowserNodeQuery` or a `BrowserNodePredicate`.                                                                                                        |
+| `filter`      | `readonly BrowserNode[]`                | Every matching node, bounded by an optional `limit`; a negative or fractional limit throws a coded `BrowserError`.                                                           |
+| `closest`     | `BrowserNode \| undefined`              | Nearest match from a node through its ancestors, testing the node first.                                                                                                     |
+| `path`        | `string`                                | Deterministic frame-qualified structural path for one node.                                                                                                                  |
+
+```ts
+import type { BrowserSnapshotInput } from '@orkestrel/browser'
+import { createBrowserSnapshot, matchesBrowserNode } from '@orkestrel/browser'
+
+const captured = await page.snapshot({ styles: ['display'], rects: true })
+const stored: BrowserSnapshotInput = JSON.parse(JSON.stringify(captured)) // { documents, styles }
+const snapshot = createBrowserSnapshot(stored) // navigable again, same data
+
+const main = snapshot.find({ name: 'main', visible: true }) // declarative query
+const heading = snapshot.find((node) => node.name === 'H1') // predicate
+const clickable = snapshot.filter({ clickable: true }, 20) // first 20 matches
+
+if (main !== undefined && heading !== undefined) {
+	snapshot.document(main)?.url // the document holding a node
+	snapshot.children(main) // direct children, entering iframe content
+	snapshot.parent(heading) // structural parent, iframe owner included
+	snapshot.siblings(heading, 'preceding') // one structural side
+	snapshot.ancestors(heading) // nearest-first, across frames
+	snapshot.common(main, heading) // nearest shared ancestor
+	snapshot.distance(main, heading) // structural edge count
+	snapshot.closest(heading, { name: 'section' }) // self, then ancestors
+	snapshot.path(heading) // frame("frame-main") > #document:0 > html:1 > ...
+
+	const perLevel = [...snapshot.walk({ root: main, order: 'breadth' })]
+	const links = [...snapshot.descendants(main)].filter((node) =>
+		matchesBrowserNode(node, { name: 'a', visible: true }),
+	) // subtree search: descendants + matchesBrowserNode
+}
 ```
 
 #### `BrowserCodegenInterface`
@@ -1259,10 +1265,11 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
 10. **DOC ↔ SOURCE method bijection.** The `## Methods` tables list exactly
     the public methods of each behavioral interface — `CDPTransportInterface`,
     `CDPClientInterface`, `BrowserContextInterface`, `BrowserPageInterface`,
-    `BrowserCodegenInterface`, `BrowserInterface` — exhaustive, both
-    directions, and each implementing class (`WebSocketCDPTransport`,
-    `CDPClient`, `BrowserContext`, `BrowserPage`, `BrowserCodegen`, `Browser`)
-    exposes the same public methods, no more. The remaining exports add no
+    `BrowserSnapshotInterface`, `BrowserCodegenInterface`, `BrowserInterface` —
+    exhaustive, both directions, and each implementing class
+    (`WebSocketCDPTransport`, `CDPClient`, `BrowserContext`, `BrowserPage`,
+    `BrowserSnapshot`, `BrowserCodegen`, `Browser`) exposes the same public
+    methods, no more. The remaining exports add no
     behavioral interface with methods (the factories, `decodeBase64` /
     `guardEvaluateExpression` / `parseCodegenActionPayload` /
     `readCodegenNavigateAction` / `compileCodegenScript` / `findSystemBrowser` /
@@ -1300,6 +1307,17 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
     an observed process exit — never on `disconnect()` alone. It is
     `undefined` from the start on a plain CDP attach (`connection === 'cdp'`),
     which never owns a process.
+13. **A snapshot is serializable data plus navigation.** `BrowserSnapshot`
+    holds exactly the two `BrowserSnapshotInput` members, so
+    `JSON.stringify(snapshot)` yields `{ documents, styles }` and nothing else,
+    and `createBrowserSnapshot(parsed)` turns that JSON back into a navigable
+    entity whose walks and `path()` results match the original's. Navigation
+    reads plain data: every method takes and returns bare `BrowserNode` values,
+    never a wrapper node entity, and the constructor copies and freezes both
+    arrays so a caller's later mutation cannot reach the snapshot. Containment
+    is derived, not declared — a node contains a candidate exactly when
+    `snapshot.ancestors(candidate)` includes it — so no membership flag or
+    `contains`-style member can drift from the ancestry walk.
 
 ## Patterns
 
