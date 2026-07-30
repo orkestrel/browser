@@ -898,9 +898,10 @@ The public methods of the layer's behavioral interfaces — every call-signature
 member listed (their `readonly` data members stay Surface rows). Each
 implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
 `CDPClientInterface`, `BrowserContext` ↔ `BrowserContextInterface`,
-`BrowserPage` ↔ `BrowserPageInterface`, `BrowserSnapshot` ↔
-`BrowserSnapshotInterface`, `BrowserCodegen` ↔ `BrowserCodegenInterface`,
-`Browser` ↔ `BrowserInterface`, `WebSocketCDPTransport` ↔
+`BrowserFrame` ↔ `BrowserFrameInterface`, `BrowserPage` ↔
+`BrowserPageInterface`, `BrowserSnapshot` ↔ `BrowserSnapshotInterface`,
+`BrowserCodegen` ↔ `BrowserCodegenInterface`, `Browser` ↔
+`BrowserInterface`, `WebSocketCDPTransport` ↔
 `CDPTransportInterface`.
 
 #### `CDPTransportInterface`
@@ -987,6 +988,7 @@ target.
 | ------------- | --------------------------------- | ------------------------------------------------------------------------------------------ |
 | `title`       | `Promise<string>`                 | Resolve the frame document title.                                                          |
 | `content`     | `Promise<BrowserContentResult>`   | Extract URL, title, HTML, and visible text with result-size guards.                        |
+| `article`     | `Promise<string>`                 | Distill the frame HTML to reader-facing plain text, boilerplate and hidden regions pruned. |
 | `click`       | `Promise<void>`                   | Strict-by-default visible and enabled CSS-selector click.                                  |
 | `fill`        | `Promise<void>`                   | Strict-by-default editable input or contenteditable fill, dispatching input/change events. |
 | `select`      | `Promise<void>`                   | Strict-by-default option selection on an enabled `<select>`.                               |
@@ -1006,6 +1008,7 @@ await child?.fill('[name=email]', 'ada@example.com')
 await child?.click('button[type=submit]')
 await child?.select('select', ['business'])
 const content = await child?.content()
+const article = await child?.article() // the same document as distilled plain text
 const result = await child?.evaluate('document.readyState')
 const handle = await child?.handle('document.body')
 await handle?.dispose()
@@ -1181,9 +1184,12 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    `src/server`), and every export of either appears as a Surface row —
    exhaustive, both directions.
 2. **Core is environment-agnostic.** `src/core` imports only
-   `@orkestrel/emitter` and `@orkestrel/contract` — no `node:*`, no
-   `WebSocket`, no filesystem. Every CDP method call and event flows through
-   the injected `CDPTransportInterface`; core never assumes a runtime.
+   `@orkestrel/emitter`, `@orkestrel/contract`, and `@orkestrel/html` — no
+   `node:*`, no `WebSocket`, no filesystem. `@orkestrel/html` is string → AST →
+   string work with no host of its own, so `article()` distills the HTML
+   `content()` already returned without leaving core. Every CDP method call
+   and event flows through the injected `CDPTransportInterface`; core never
+   assumes a runtime.
    Host-side CDP boundaries use `@orkestrel/contract` total guards for
    records, arrays, strings, finite numbers, integers, booleans, errors, and
    class instances. Synchronous JSON and URL operations cross through
@@ -1265,10 +1271,11 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    `BrowserCodegenScriptOptions.language` (default `'javascript'`).
 10. **DOC ↔ SOURCE method bijection.** The `## Methods` tables list exactly
     the public methods of each behavioral interface — `CDPTransportInterface`,
-    `CDPClientInterface`, `BrowserContextInterface`, `BrowserPageInterface`,
-    `BrowserSnapshotInterface`, `BrowserCodegenInterface`, `BrowserInterface` —
-    exhaustive, both directions, and each implementing class
-    (`WebSocketCDPTransport`, `CDPClient`, `BrowserContext`, `BrowserPage`,
+    `CDPClientInterface`, `BrowserContextInterface`, `BrowserFrameInterface`,
+    `BrowserPageInterface`, `BrowserSnapshotInterface`,
+    `BrowserCodegenInterface`, `BrowserInterface` — exhaustive, both
+    directions, and each implementing class (`WebSocketCDPTransport`,
+    `CDPClient`, `BrowserContext`, `BrowserFrame`, `BrowserPage`,
     `BrowserSnapshot`, `BrowserCodegen`, `Browser`) exposes the same public
     methods, no more. The remaining exports add no
     behavioral interface with methods (the factories, `decodeBase64` /

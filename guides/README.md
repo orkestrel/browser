@@ -32,6 +32,13 @@ built from (no `as` anywhere on the CDP message boundary). It documents
 **that package's** surface, not anything sourced in this repo; it is kept
 here for the same reason.
 
+[`src/html.md`](src/html.md) is a byte-identical mirror of the guide for
+`@orkestrel/html` — the newest runtime dependency, the parse → `distill` →
+`renderText` pipeline `BrowserFrameInterface.article()` is built from (the
+reader-facing prose of a page, extracted from the HTML `content()` already
+returns). It documents **that package's** surface, not anything sourced in
+this repo; it is kept here for the same reason.
+
 [`src/guide.md`](src/guide.md) is a byte-identical mirror of the guide for
 `@orkestrel/guide` — the devDependency powering this repo's guides-parity
 test suite (`tests/guides/src/parity.test.ts`). It documents **that
@@ -39,6 +46,14 @@ package's** surface (`Guide` / `Source`, the manifest and comparison
 helpers), not anything sourced in this repo; it is kept here so a reader of
 the parity suite can see the primitives it is built from without leaving
 this guide set.
+
+[`src/scaffold.md`](src/scaffold.md) is a byte-identical mirror of the guide
+for `@orkestrel/scaffold` — the devDependency behind this repo's
+`npm run scaffold` command, the `Blueprint` → `Plan` → `Artifact` projection
+this workspace's layout is compiled from and whose `Sync` is what keeps the
+mirrors in this section current. It documents **that package's** surface, not
+anything sourced in this repo; it is kept here so a reader of this workspace's
+shape can see the tool that produced it without leaving this guide set.
 
 [`src/websocket.md`](src/websocket.md) is a byte-identical mirror of the guide
 for `@orkestrel/websocket` — a runtime dependency, the `NodeWebSocketInterface`
