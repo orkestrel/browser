@@ -18,7 +18,7 @@ import type {
 	BrowserScreenshotOptions,
 	BrowserScreenshotResult,
 	BrowserScriptManagerInterface,
-	BrowserSnapshot,
+	BrowserSnapshotInterface,
 	BrowserSnapshotOptions,
 	BrowserWaitUntil,
 	BrowserWorkerCategory,
@@ -38,6 +38,7 @@ import { BrowserFileChooser } from './BrowserFileChooser.js'
 import { BrowserNetworkManager } from './BrowserNetworkManager.js'
 import { BrowserNavigationManager } from './BrowserNavigationManager.js'
 import { BrowserScriptManager } from './BrowserScriptManager.js'
+import { BrowserSnapshot } from './BrowserSnapshot.js'
 import { BrowserWorker } from './BrowserWorker.js'
 import { BrowserError } from './errors.js'
 import {
@@ -357,7 +358,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		return readBrowserFrames(result).map((frame) => this.#frame(frame))
 	}
 
-	async snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshot> {
+	async snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface> {
 		this.assert()
 		const styles = options?.styles ?? []
 		const result = await this.request('DOMSnapshot.captureSnapshot', {
@@ -365,7 +366,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			includePaintOrder: options?.paint ?? false,
 			includeDOMRects: options?.rects ?? false,
 		})
-		return decodeBrowserSnapshot(result, styles, options?.limit ?? BROWSER_SNAPSHOT_NODE_LIMIT)
+		return new BrowserSnapshot(
+			decodeBrowserSnapshot(result, styles, options?.limit ?? BROWSER_SNAPSHOT_NODE_LIMIT),
+		)
 	}
 
 	async codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface> {

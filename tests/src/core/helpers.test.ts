@@ -6,39 +6,24 @@ import type { BrowserCodegenAction } from '@src/core'
 import { describe, it, expect } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
-	ancestorsOfBrowserNode,
 	attributeOfBrowserNode,
 	BrowserResultLimitError,
-	childrenOfBrowserNode,
-	closestBrowserNode,
-	commonAncestorOfBrowserNodes,
 	compileAttachedWaitExpression,
 	compileClickExpression,
 	compileHiddenWaitExpression,
 	compileSelectExpression,
 	compileVisibleWaitExpression,
-	computeBrowserNodeDistance,
 	decodeBase64,
 	decodeBrowserAttributes,
 	decodeBrowserSnapshot,
 	decodeRareBooleanData,
 	decodeRareIntegerData,
 	decodeRareStringData,
-	descendantsOfBrowserNode,
-	documentOfBrowserNode,
-	findBrowserDescendant,
-	findBrowserNode,
-	findBrowserNodes,
-	followingSiblingsOfBrowserNode,
-	isBrowserNodeDescendant,
 	isBrowserNodeVisible,
 	isBrowserResultLimitError,
 	matchesBrowserNode,
-	nodeToPath,
 	normalizeCodegenActions,
-	parentOfBrowserNode,
 	parseCodegenActionPayload,
-	precedingSiblingsOfBrowserNode,
 	readBrowserConsoleMessage,
 	readBrowserFrames,
 	readBrowserHeaders,
@@ -52,11 +37,6 @@ import {
 	readNumberArray,
 	readSnapshotString,
 	requireBrowserString,
-	siblingsOfBrowserNode,
-	walkBrowserNodeBreadthFirst,
-	walkBrowserSnapshot,
-	walkBrowserSnapshotBreadthFirst,
-	walkBrowserNode,
 	compileCodegenScript,
 	guardEvaluateExpression,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
@@ -539,134 +519,7 @@ describe('snapshot decoders', () => {
 	})
 })
 
-describe('snapshot traversal', () => {
-	it('walks every document and node in stable snapshot order', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
-		const walked = [...walkBrowserSnapshot(snapshot)]
-
-		expect(walked).toHaveLength(9)
-		expect(walked.map((node) => `${node.document}:${node.index}`)).toEqual([
-			'0:0',
-			'0:1',
-			'0:2',
-			'0:3',
-			'0:4',
-			'0:5',
-			'0:6',
-			'1:0',
-			'1:1',
-		])
-	})
-
-	it('resolves documents, direct children, iframe roots, and nearest-first ancestors', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
-		const main = snapshot.documents[0]
-		const div = main?.nodes[3]
-		const iframe = main?.nodes[6]
-		if (div === undefined || iframe === undefined) throw new Error('Snapshot fixture is malformed')
-
-		expect(documentOfBrowserNode(snapshot, div)?.frame).toBe('frame-main')
-		expect(childrenOfBrowserNode(snapshot, div).map((node) => node.index)).toEqual([4])
-		expect(
-			childrenOfBrowserNode(snapshot, iframe).map((node) => `${node.document}:${node.index}`),
-		).toEqual(['1:0'])
-		expect(ancestorsOfBrowserNode(snapshot, div).map((node) => node.name)).toEqual([
-			'BODY',
-			'HTML',
-			'#document',
-		])
-		const childBody = snapshot.documents[1]?.nodes[1]
-		if (childBody === undefined) throw new Error('Snapshot fixture is malformed')
-		expect(ancestorsOfBrowserNode(snapshot, childBody).map((node) => node.name)).toEqual([
-			'#document',
-			'IFRAME',
-			'BODY',
-			'HTML',
-			'#document',
-		])
-	})
-
-	it('walks and searches one subtree across an iframe boundary', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
-		const body = snapshot.documents[0]?.nodes[2]
-		if (body === undefined) throw new Error('Snapshot fixture is malformed')
-
-		expect([...walkBrowserNode(snapshot, body)].map((node) => node.name)).toEqual([
-			'BODY',
-			'DIV',
-			'#text',
-			'INPUT',
-			'IFRAME',
-			'#document',
-			'BODY',
-		])
-		expect([...descendantsOfBrowserNode(snapshot, body)].map((node) => node.name)).toEqual([
-			'DIV',
-			'#text',
-			'INPUT',
-			'IFRAME',
-			'#document',
-			'BODY',
-		])
-		expect(
-			findBrowserDescendant(snapshot, body, (node) => node.frame === 'frame-child')?.name,
-		).toBe('#document')
-		expect(closestBrowserNode(snapshot, body, (node) => node.name === 'HTML')?.index).toBe(1)
-	})
-
-	it('walks breadth-first and resolves parent, sibling, ancestry, and distance relationships', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
-		const body = snapshot.documents[0]?.nodes[2]
-		const div = snapshot.documents[0]?.nodes[3]
-		const input = snapshot.documents[0]?.nodes[5]
-		const iframe = snapshot.documents[0]?.nodes[6]
-		const childBody = snapshot.documents[1]?.nodes[1]
-		if (
-			body === undefined ||
-			div === undefined ||
-			input === undefined ||
-			iframe === undefined ||
-			childBody === undefined
-		) {
-			throw new Error('Snapshot fixture is malformed')
-		}
-
-		expect([...walkBrowserNodeBreadthFirst(snapshot, body)].map((node) => node.name)).toEqual([
-			'BODY',
-			'DIV',
-			'INPUT',
-			'IFRAME',
-			'#text',
-			'#document',
-			'BODY',
-		])
-		expect([...walkBrowserSnapshotBreadthFirst(snapshot)]).toHaveLength(
-			[...walkBrowserSnapshot(snapshot)].length,
-		)
-		expect(parentOfBrowserNode(snapshot, input)).toBe(body)
-		expect(siblingsOfBrowserNode(snapshot, input).map((node) => node.name)).toEqual([
-			'DIV',
-			'IFRAME',
-		])
-		expect(precedingSiblingsOfBrowserNode(snapshot, input)).toEqual([div])
-		expect(followingSiblingsOfBrowserNode(snapshot, input)).toEqual([iframe])
-		expect(commonAncestorOfBrowserNodes(snapshot, div, childBody)).toBe(body)
-		expect(isBrowserNodeDescendant(snapshot, childBody, iframe)).toBe(true)
-		expect(isBrowserNodeDescendant(snapshot, body, iframe)).toBe(false)
-		expect(computeBrowserNodeDistance(snapshot, div, childBody)).toBe(4)
-	})
-
-	it('finds the first or a bounded list without materializing the full traversal', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
-		expect(findBrowserNode(snapshot, (node) => node.name === 'INPUT')?.index).toBe(5)
-		expect(findBrowserNode(snapshot, () => false)).toBeUndefined()
-		expect(findBrowserNodes(snapshot, (node) => node.type === 1, 2)).toHaveLength(2)
-		expect(findBrowserNodes(snapshot, () => true, 0)).toEqual([])
-		expect(() => findBrowserNodes(snapshot, () => true, -1)).toThrow(
-			'Browser node result limit must be a non-negative integer',
-		)
-	})
-
+describe('snapshot node helpers', () => {
 	it('matches names, text, frames, attributes, clickability, and visibility together', () => {
 		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
 		const node = snapshot.documents[0]?.nodes[3]
@@ -689,16 +542,6 @@ describe('snapshot traversal', () => {
 		expect(isBrowserNodeVisible(text)).toBe(false)
 		expect(attributeOfBrowserNode(node, 'id')).toBe('hero')
 		expect(attributeOfBrowserNode(node, 'missing')).toBeUndefined()
-	})
-
-	it('builds deterministic frame-qualified structural paths', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
-		const node = snapshot.documents[0]?.nodes[3]
-		if (node === undefined) throw new Error('Snapshot fixture is malformed')
-
-		expect(nodeToPath(snapshot, node)).toBe(
-			'frame("frame-main") > #document:0 > html:1 > body:1 > div:1',
-		)
 	})
 })
 

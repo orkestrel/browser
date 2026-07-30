@@ -1432,10 +1432,48 @@ export interface BrowserDocument {
 	readonly height: number | undefined
 }
 
-/** A flattened, serializable snapshot of every document attached to a page. */
-export interface BrowserSnapshot {
+/** Serializable input for a navigable browser snapshot. */
+export interface BrowserSnapshotInput {
 	readonly documents: readonly BrowserDocument[]
 	readonly styles: readonly string[]
+}
+
+/** Structural ordering for a browser snapshot walk. */
+export type BrowserWalkOrder = 'depth' | 'breadth'
+
+/**
+ * Options for walking a browser snapshot.
+ *
+ * @remarks
+ * - `root` — optional subtree root, included in the walk
+ * - `order` — structural traversal order, defaulting to depth-first
+ */
+export interface BrowserWalkOptions {
+	readonly root?: BrowserNode
+	readonly order?: BrowserWalkOrder
+}
+
+/** Structural sibling relationship relative to a browser node. */
+export type BrowserSiblingRelation = 'preceding' | 'following'
+
+/** A navigable, serializable snapshot of every document attached to a page. */
+export interface BrowserSnapshotInterface extends BrowserSnapshotInput {
+	walk(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown>
+	descendants(node: BrowserNode): Generator<BrowserNode, void, unknown>
+	document(node: BrowserNode): BrowserDocument | undefined
+	children(node: BrowserNode): readonly BrowserNode[]
+	parent(node: BrowserNode): BrowserNode | undefined
+	siblings(node: BrowserNode, relation?: BrowserSiblingRelation): readonly BrowserNode[]
+	ancestors(node: BrowserNode): readonly BrowserNode[]
+	common(first: BrowserNode, second: BrowserNode): BrowserNode | undefined
+	distance(first: BrowserNode, second: BrowserNode): number | undefined
+	find(query: BrowserNodeQuery | BrowserNodePredicate): BrowserNode | undefined
+	filter(query: BrowserNodeQuery | BrowserNodePredicate, limit?: number): readonly BrowserNode[]
+	closest(
+		node: BrowserNode,
+		query: BrowserNodeQuery | BrowserNodePredicate,
+	): BrowserNode | undefined
+	path(node: BrowserNode): string
 }
 
 /**
@@ -1512,7 +1550,7 @@ export interface BrowserPageInterface extends BrowserFrameInterface {
 	pdf(options?: BrowserPDFOptions): Promise<BrowserPDFResult>
 	frame(name: string): Promise<BrowserFrameInterface | undefined>
 	frames(): Promise<readonly BrowserFrameInterface[]>
-	snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshot>
+	snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface>
 	codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface>
 	destroy(): Promise<void>
 	close(): Promise<void>

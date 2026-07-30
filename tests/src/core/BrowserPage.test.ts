@@ -985,6 +985,10 @@ describe('BrowserPage', () => {
 
 			expect(snapshot.documents).toHaveLength(2)
 			expect(snapshot.documents[1]?.frame).toBe('frame-child')
+			const div = snapshot.find({ name: 'div' })
+			expect(div).toBeDefined()
+			if (div === undefined) throw new Error('Snapshot fixture is malformed')
+			expect(snapshot.path(div)).toBe('frame("frame-main") > #document:0 > html:1 > body:1 > div:1')
 			const request = transport.sent.find(
 				(message) => message.method === 'DOMSnapshot.captureSnapshot',
 			)
