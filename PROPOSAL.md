@@ -8,6 +8,14 @@ gated on demonstrated demand and must not be built speculatively. This document
 records the reconciled decisions from the `@orkestrel/html` package build so the
 next campaign starts from evidence rather than memory.
 
+**Revised after `@orkestrel/html@0.0.1` shipped.** Part 1 is unchanged — the
+snapshot census below still matches `src/`, which has not moved. Part 2 changed
+materially: `@orkestrel/html` no longer renders markdown at all. Its markdown
+projection was removed so that `@orkestrel/markdown` could be rebuilt on top of
+it, which invalidates the pipeline this document originally proposed and changes
+how many dependency edges each candidate convenience costs. Both are corrected
+below rather than left to be rediscovered.
+
 ## Context and motivation
 
 `src/core/helpers.ts` has grown a large family of free functions that all take a
@@ -36,32 +44,32 @@ Every function below lives in `src/core/helpers.ts` and is a public export.
 result. All are documented in `guides/src/browser.md` (Snapshot helpers table,
 lines 142–165) and exercised by `tests/src/core/helpers.test.ts`.
 
-| Function                          | `helpers.ts` | One-line purpose                                              |
-| --------------------------------- | ------------ | ------------------------------------------------------------ |
+| Function                          | `helpers.ts` | One-line purpose                                                                       |
+| --------------------------------- | ------------ | -------------------------------------------------------------------------------------- |
 | `decodeBrowserSnapshot`           | 3020         | Decode a CDP `DOMSnapshot.captureSnapshot` into a `BrowserSnapshot` (**the producer**) |
-| `walkBrowserSnapshot`             | 3193         | Lazily walk every node, depth-first                          |
-| `walkBrowserSnapshotBreadthFirst` | 3228         | Lazily walk every node, breadth-first                        |
-| `walkBrowserNode`                 | 3261         | Lazily walk one subtree, depth-first, root included          |
-| `walkBrowserNodeBreadthFirst`     | 3291         | Lazily walk one subtree, breadth-first, root included        |
-| `descendantsOfBrowserNode`        | 3317         | Lazily walk a node's descendants, excluding itself           |
-| `documentOfBrowserNode`           | 3338         | Resolve the `BrowserDocument` containing a node              |
-| `childrenOfBrowserNode`           | 3356         | Direct children (entering iframe content documents)          |
-| `parentOfBrowserNode`             | 3379         | Structural parent (iframe root → owning frame node)          |
-| `siblingsOfBrowserNode`           | 3397         | Every sibling except the node                                |
-| `precedingSiblingsOfBrowserNode`  | 3420         | Siblings before the node, in order                           |
-| `followingSiblingsOfBrowserNode`  | 3444         | Siblings after the node, in order                            |
-| `ancestorsOfBrowserNode`          | 3468         | Nearest-first ancestor chain                                 |
-| `isBrowserNodeDescendant`         | 3496         | Whether one node is below another across frames              |
-| `commonAncestorOfBrowserNodes`    | 3514         | Nearest common ancestor of two nodes                         |
-| `computeBrowserNodeDistance`      | 3533         | Tree edge-count between two nodes                            |
-| `findBrowserNode`                 | 3559         | First node satisfying a predicate                            |
-| `findBrowserNodes`                | 3577         | Bounded list of nodes satisfying a predicate                 |
-| `findBrowserDescendant`           | 3605         | First matching descendant beneath a node                     |
-| `closestBrowserNode`              | 3624         | Nearest match from a node upward through ancestors           |
-| `attributeOfBrowserNode`          | 3640         | Read one attribute off a node                                |
-| `matchesBrowserNode`              | 3651         | Test a node against a declarative `BrowserNodeQuery`         |
-| `isBrowserNodeVisible`            | 3677         | Whether a node reports a non-empty layout box                |
-| `nodeToPath`                      | 3689         | Deterministic frame-qualified structural path for a node     |
+| `walkBrowserSnapshot`             | 3193         | Lazily walk every node, depth-first                                                    |
+| `walkBrowserSnapshotBreadthFirst` | 3228         | Lazily walk every node, breadth-first                                                  |
+| `walkBrowserNode`                 | 3261         | Lazily walk one subtree, depth-first, root included                                    |
+| `walkBrowserNodeBreadthFirst`     | 3291         | Lazily walk one subtree, breadth-first, root included                                  |
+| `descendantsOfBrowserNode`        | 3317         | Lazily walk a node's descendants, excluding itself                                     |
+| `documentOfBrowserNode`           | 3338         | Resolve the `BrowserDocument` containing a node                                        |
+| `childrenOfBrowserNode`           | 3356         | Direct children (entering iframe content documents)                                    |
+| `parentOfBrowserNode`             | 3379         | Structural parent (iframe root → owning frame node)                                    |
+| `siblingsOfBrowserNode`           | 3397         | Every sibling except the node                                                          |
+| `precedingSiblingsOfBrowserNode`  | 3420         | Siblings before the node, in order                                                     |
+| `followingSiblingsOfBrowserNode`  | 3444         | Siblings after the node, in order                                                      |
+| `ancestorsOfBrowserNode`          | 3468         | Nearest-first ancestor chain                                                           |
+| `isBrowserNodeDescendant`         | 3496         | Whether one node is below another across frames                                        |
+| `commonAncestorOfBrowserNodes`    | 3514         | Nearest common ancestor of two nodes                                                   |
+| `computeBrowserNodeDistance`      | 3533         | Tree edge-count between two nodes                                                      |
+| `findBrowserNode`                 | 3559         | First node satisfying a predicate                                                      |
+| `findBrowserNodes`                | 3577         | Bounded list of nodes satisfying a predicate                                           |
+| `findBrowserDescendant`           | 3605         | First matching descendant beneath a node                                               |
+| `closestBrowserNode`              | 3624         | Nearest match from a node upward through ancestors                                     |
+| `attributeOfBrowserNode`          | 3640         | Read one attribute off a node                                                          |
+| `matchesBrowserNode`              | 3651         | Test a node against a declarative `BrowserNodeQuery`                                   |
+| `isBrowserNodeVisible`            | 3677         | Whether a node reports a non-empty layout box                                          |
+| `nodeToPath`                      | 3689         | Deterministic frame-qualified structural path for a node                               |
 
 Supporting shapes in `src/core/types.ts`: `BrowserNode` (1400), `BrowserDocument`
 (1424), `BrowserSnapshot` (1436), `BrowserNodePredicate` (1458),
@@ -116,7 +124,10 @@ export interface BrowserSnapshotInterface {
 	parent(node: BrowserNode): BrowserNode | undefined
 	siblings(node: BrowserNode, relation?: BrowserSiblingRelation): readonly BrowserNode[]
 	ancestors(node: BrowserNode): readonly BrowserNode[]
-	closest(node: BrowserNode, query: BrowserNodeQuery | BrowserNodePredicate): BrowserNode | undefined
+	closest(
+		node: BrowserNode,
+		query: BrowserNodeQuery | BrowserNodePredicate,
+	): BrowserNode | undefined
 	common(first: BrowserNode, second: BrowserNode): BrowserNode | undefined
 	distance(first: BrowserNode, second: BrowserNode): number | undefined
 	path(node: BrowserNode): string
@@ -270,43 +281,85 @@ Fold them; keep only the genuinely reusable node-only leaves exported and tested
 
 From the `@orkestrel/html` campaign, on the record:
 
-- `@orkestrel/html` is a **leaf**: it depends on nobody in the family and is
-  depended on by nobody yet.
+- `@orkestrel/html` is the **HTML foundation**, published at `0.0.1`. It takes
+  one runtime dependency, `@orkestrel/contract`, and `@orkestrel/markdown` is
+  being rebuilt on top of it. (This corrects an earlier statement here that html
+  was a leaf depended on by nobody — true when written, false now.)
 - **`@orkestrel/browser` must never be a dependency of `@orkestrel/html`.** The
   snapshot traversal in Part 1 navigates **CDP DOM snapshots**, not HTML source;
   it does **not** belong in `@orkestrel/html` and must not move there.
-- Today there is **no edge**. `@orkestrel/browser`'s only ecosystem dependencies
-  are `@orkestrel/contract` and `@orkestrel/emitter` (`package.json:82–83`);
+- Today there is **no edge**. `@orkestrel/browser`'s ecosystem dependencies are
+  `@orkestrel/contract`, `@orkestrel/emitter`, and `@orkestrel/websocket`;
   `@orkestrel/html` is absent, correctly.
 - The **only** correct future edge is `browser → html`, and only once
   `@orkestrel/browser` earns a real, content-returning convenience with actual
-  callers.
+  callers. A `browser → markdown` edge would be a second, heavier option — see
+  the cost comparison below.
 
 ### Proposed API and dependency (when the trigger fires)
 
-A single content-distillation convenience on the frame/page — proposed name
-`page.markdown()` (alternatives: `article()`, `distill()`) — that pipes the
-already-captured HTML through the `@orkestrel/html` pipeline and returns
-LLM-ready markdown:
+A single content-distillation convenience on the frame/page that pipes the
+already-captured HTML through the `@orkestrel/html` pipeline and returns the
+content worth reading. There are now **two** candidate shapes, and they cost
+different amounts, because `@orkestrel/html` no longer projects to markdown.
+
+**First, the objection that has to be answered.** `content()` already returns a
+`text` field (`src/core/types.ts:247`), and it is `document.body.innerText`
+evaluated in the page (`src/core/BrowserFrame.ts:101-125`). So "browser can
+already give me text" is true, and any text-returning convenience must justify
+itself against that field, not against nothing.
+
+It can. `content().text` is the **whole body**, boilerplate included — nav,
+footer, aside, cookie banner, hidden content. What `@orkestrel/html` adds is not
+text extraction but **content selection**: `distill()` prunes boilerplate and
+hidden subtrees, sanitizes, extracts the content region, and resolves relative
+URLs against a base. The value of the edge is the pruning, not the rendering.
+Any framing of Part 2 that sells "text" rather than "the article" is selling
+something browser already has.
+
+**Option A — distilled text, one edge (`browser → html`).** `renderText` is
+html's own projection and is structural: it tab-separates table cells,
+newline-separates rows and block boundaries, and keeps whitespace beneath `pre`
+verbatim, matching the platform's `innerText` on those cases. It still drops
+heading level, link destination, list markers and ordinals, nesting depth, and
+image `alt`.
 
 ```ts
 // PROPOSED-NEW on BrowserFrameInterface / BrowserPageInterface
+text(): Promise<string>
+```
+
+```ts
+// inside BrowserFrame.text()
+const { html, url } = await this.content() // src/core/BrowserFrame.ts:101
+const article = createHTML(html).distill({ base: url }) // @orkestrel/html — sanitizes first
+return renderText(article.document) // @orkestrel/html
+```
+
+Note the name collision this exposes: a `text()` method returning distilled text
+sits beside a `content().text` field returning whole-body text, and one word
+cannot carry both meanings. That is an argument for naming the method after the
+artifact it selects — `article()` — rather than after its format.
+
+**Option B — markdown, two edges (`browser → markdown → html`).** Markdown
+conversion now lives in `@orkestrel/markdown`, which itself depends on
+`@orkestrel/html`. A markdown-returning convenience therefore pulls both
+packages, including html's ~2,100-entry character-reference table, to produce a
+string. It preserves heading level, link destination, and list ordinals that
+Option A loses.
+
+```ts
+// PROPOSED-NEW — heavier; requires @orkestrel/markdown
 markdown(): Promise<string>
 ```
 
-Pipeline (all `@orkestrel/html` symbols below are **external**, from that
-package's published surface per the html campaign — not exports of this repo):
-
-```ts
-// inside BrowserFrame.markdown()
-const { html } = await this.content()                 // src/core/BrowserFrame.ts:101
-const doc = createHTML(html).sanitize().distill()      // @orkestrel/html
-return renderMarkdown(doc)                              // @orkestrel/html
-```
-
-- **Exact new dependency:** `@orkestrel/html` at its published version, added to
-  `package.json` **only** when this method ships. This is the first and only
-  `browser → html` edge.
+- **Exact new dependency:** for Option A, `@orkestrel/html` at its published
+  version, added to `package.json` **only** when the method ships — the first and
+  only `browser → html` edge. For Option B, `@orkestrel/markdown` instead, with
+  html arriving transitively.
+- **Note on `distill`:** it sanitizes internally before extracting, so a separate
+  `.sanitize()` in the chain is redundant. The earlier draft of this document
+  chained both; that was noise.
 - **Environment:** **core**. `content()` returns `BrowserContentResult`
   (`types.ts:243`) whose `html` is a plain string produced host-independently
   (`BrowserFrame.content()` reads `document.documentElement.outerHTML` over CDP,
@@ -314,10 +367,12 @@ return renderMarkdown(doc)                              // @orkestrel/html
   so nothing forces this into browser or server.
 - **Why it is gated:** this is **product-convenience policy**, not framework
   mechanism. AGENTS.md "mechanism, not product policy" and "minimal public API —
-  add capability with its real consumer; do not speculate" both apply. `markdown()`
-  encodes an opinion (sanitize, then distill, then render) that belongs to a
-  consumer until enough consumers want the same opinion. It must have real
-  callers before adoption.
+  add capability with its real consumer; do not speculate" both apply. Either
+  method encodes an opinion — distill, then render, in one particular projection —
+  that belongs to a consumer until enough consumers want the same opinion. It
+  must have real callers before adoption. The two-option split makes this sharper,
+  not softer: picking a return type on a package's behalf is exactly the product
+  decision the rule reserves for the consumer.
 
 ### Current zero-coupling alternative (available today)
 
@@ -327,30 +382,41 @@ with zero coupling between them:
 
 ```ts
 import { createBrowser } from '@orkestrel/browser/server'
-import { createHTML, renderMarkdown } from '@orkestrel/html' // consumer's own dependency
+import { createHTML, renderText } from '@orkestrel/html' // consumer's own dependency
 
 const browser = createBrowser({ headless: true })
 await browser.connect()
 const page = await browser.create({ url: 'https://example.com' })
 
-const { html } = await page.content()                  // BrowserContentResult.html: string
-const markdown = renderMarkdown(createHTML(html).sanitize().distill())
+const { html, url } = await page.content() // BrowserContentResult
+const article = createHTML(html).distill({ base: url }) // boilerplate pruned, links absolute
+const text = renderText(article.document) // structural plain text
 
 await browser.destroy()
 ```
 
+A consumer wanting markdown swaps the second import for `@orkestrel/markdown`'s
+HTML-to-markdown projection and keeps the same seam.
+
 `@orkestrel/browser` hands out a string; `@orkestrel/html` consumes a string; the
 seam is the plain `html` field, so neither package knows about the other. This is
 the correct arrangement until demand justifies moving the three-line pipeline
-inside the library.
+inside the library — and it is the arrangement that lets a consumer choose its own
+return type, which is the whole reason Part 2 stays deferred.
 
 ### Deferral gate
 
-Part 2 is **not now**. Build `page.markdown()` and add the `@orkestrel/html`
-dependency only when there are **multiple real callers** repeating the exact
-`content().html → sanitize → distill → renderMarkdown` pipeline — the concrete
-consumer that the minimal-API law requires. Until then, the zero-coupling
-composition above is the supported path, and the edge stays unbuilt.
+Part 2 is **not now**. Build the convenience and add the dependency only when
+there are **multiple real callers** repeating the exact
+`content().html → distill → render` pipeline **with the same return type** — the
+concrete consumer that the minimal-API law requires. Callers that disagree on the
+projection are evidence the seam belongs where it is, not evidence of demand.
+Until then, the zero-coupling composition above is the supported path and the edge
+stays unbuilt.
+
+If the trigger does fire, prefer **Option A** unless the callers specifically need
+the semantics markdown preserves and text cannot: one dependency edge instead of
+two, and no package pulled in solely to format a string.
 
 ---
 
@@ -377,7 +443,17 @@ composition above is the supported path, and the edge stays unbuilt.
 3. **Sibling API.** `siblings(node, relation?)` vs. keeping `preceding`/
    `following` as separate concerns — confirm the discriminant reads cleanly.
 4. **Part 2 trigger threshold.** How many repeated call sites count as
-   "demonstrated demand" before `page.markdown()` and the `@orkestrel/html`
+   "demonstrated demand" before a content convenience and the `@orkestrel/html`
    edge are justified?
-5. **Part 2 method name.** `markdown()` vs. `article()` vs. `distill()` — decide
-   with the real consumer, since the name should describe the returned artifact.
+5. **Part 2 return type and name.** Option A (one edge) or Option B (two edges)?
+   Decide with the real consumer, since the choice determines how many packages
+   `@orkestrel/browser` depends on. If callers split on return type, the seam stays
+   outside. On naming: `text()` collides in meaning with the existing
+   `content().text` field, so prefer a name describing the selected artifact —
+   `article()` — over one describing its format.
+6. **Should `base` default to the content URL?** The examples pass
+   `{ base: url }` from `content()`, which is correct — it is the URL after
+   navigation, so redirects resolve properly. If a convenience ships, confirm
+   whether it defaults `base` that way. Convenient, but it is one more opinion
+   encoded on the consumer's behalf, and a caller distilling saved HTML from
+   elsewhere would want to override it.
