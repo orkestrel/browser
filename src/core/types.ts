@@ -1492,7 +1492,7 @@ export interface BrowserSnapshotOptions {
 	readonly limit?: number
 }
 
-/** Predicate used by browser snapshot traversal helpers. */
+/** Predicate form accepted by {@link BrowserSnapshotInterface} find, filter, and closest methods. */
 export type BrowserNodePredicate = (node: BrowserNode) => boolean
 
 /**

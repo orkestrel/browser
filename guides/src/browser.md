@@ -144,6 +144,7 @@ try {
 | `decodeBrowserAttributes`       | function | Decode flattened name/value indexes into a frozen attribute record.                                                                                                                             |
 | `decodeBrowserSnapshot`         | function | Validate and decode `DOMSnapshot.captureSnapshot` into a serializable `BrowserSnapshotInput`.                                                                                                   |
 | `attributeOfBrowserNode`        | function | Read one captured node attribute.                                                                                                                                                               |
+| `isBrowserNodeQuery`            | function | Test whether a browser-node matcher is a declarative query rather than a predicate.                                                                                                             |
 | `matchesBrowserNode`            | function | Match a node against a declarative query.                                                                                                                                                       |
 | `isBrowserNodeVisible`          | function | Test whether a node has a non-empty captured layout box.                                                                                                                                        |
 

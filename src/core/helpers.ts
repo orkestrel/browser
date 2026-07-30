@@ -28,6 +28,7 @@ import type {
 	BrowserAXNode,
 	BrowserKey,
 	BrowserNode,
+	BrowserNodePredicate,
 	BrowserNodeQuery,
 	BrowserPageError,
 	BrowserProfile,
@@ -63,6 +64,7 @@ import {
 	isArray,
 	isBoolean,
 	isFiniteNumber,
+	isFunction,
 	isInteger,
 	isRecord,
 	isString,
@@ -3188,6 +3190,26 @@ export function decodeBrowserSnapshot(
  */
 export function attributeOfBrowserNode(node: BrowserNode, name: string): string | undefined {
 	return node.attributes[name]
+}
+
+/**
+ * Test whether a browser-node matcher is a declarative query.
+ *
+ * @param value - Browser-node query or predicate
+ * @returns Whether the matcher is a declarative query
+ *
+ * @example
+ * ```ts
+ * import { isBrowserNodeQuery } from '@src/core'
+ *
+ * isBrowserNodeQuery({ name: 'main' }) // true
+ * isBrowserNodeQuery(() => true) // false
+ * ```
+ */
+export function isBrowserNodeQuery(
+	value: BrowserNodeQuery | BrowserNodePredicate,
+): value is BrowserNodeQuery {
+	return !isFunction(value)
 }
 
 /**

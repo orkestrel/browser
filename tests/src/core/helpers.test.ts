@@ -19,6 +19,7 @@ import {
 	decodeRareBooleanData,
 	decodeRareIntegerData,
 	decodeRareStringData,
+	isBrowserNodeQuery,
 	isBrowserNodeVisible,
 	isBrowserResultLimitError,
 	matchesBrowserNode,
@@ -520,6 +521,11 @@ describe('snapshot decoders', () => {
 })
 
 describe('snapshot node helpers', () => {
+	it('distinguishes declarative queries from predicate functions', () => {
+		expect(isBrowserNodeQuery({ name: 'main' })).toBe(true)
+		expect(isBrowserNodeQuery(() => true)).toBe(false)
+	})
+
 	it('matches names, text, frames, attributes, clickability, and visibility together', () => {
 		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
 		const node = snapshot.documents[0]?.nodes[3]

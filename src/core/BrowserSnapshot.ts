@@ -8,9 +8,9 @@ import type {
 	BrowserSnapshotInterface,
 	BrowserWalkOptions,
 } from './types.js'
-import { isFunction, isInteger } from '@orkestrel/contract'
+import { isInteger } from '@orkestrel/contract'
 import { BrowserError } from './errors.js'
-import { matchesBrowserNode } from './helpers.js'
+import { isBrowserNodeQuery, matchesBrowserNode } from './helpers.js'
 
 /** A navigable, serializable browser DOM snapshot. */
 export class BrowserSnapshot implements BrowserSnapshotInterface {
@@ -89,8 +89,8 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 	}
 
 	common(first: BrowserNode, second: BrowserNode): BrowserNode | undefined {
-		const firstAncestors = [first, ...this.ancestors(first)]
-		const secondAncestors = [second, ...this.ancestors(second)]
+		const firstAncestors = this.#chain(first)
+		const secondAncestors = this.#chain(second)
 		const identities = new Set(firstAncestors.map((node) => this.#identity(node)))
 		return secondAncestors.find((node) => identities.has(this.#identity(node)))
 	}
@@ -99,10 +99,8 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		const common = this.common(first, second)
 		if (common === undefined) return undefined
 		const identity = this.#identity(common)
-		const firstDistance = [first, ...this.ancestors(first)].findIndex(
-			(node) => this.#identity(node) === identity,
-		)
-		const secondDistance = [second, ...this.ancestors(second)].findIndex(
+		const firstDistance = this.#chain(first).findIndex((node) => this.#identity(node) === identity)
+		const secondDistance = this.#chain(second).findIndex(
 			(node) => this.#identity(node) === identity,
 		)
 		if (firstDistance < 0 || secondDistance < 0) return undefined
@@ -228,9 +226,12 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 			: this.children(parent)
 	}
 
+	#chain(node: BrowserNode): readonly BrowserNode[] {
+		return [node, ...this.ancestors(node)]
+	}
+
 	#match(node: BrowserNode, query: BrowserNodeQuery | BrowserNodePredicate): boolean {
-		if (isFunction(query)) return Boolean(query(node))
-		return Reflect.apply(matchesBrowserNode, undefined, [node, query])
+		return isBrowserNodeQuery(query) ? matchesBrowserNode(node, query) : query(node)
 	}
 
 	#identity(node: BrowserNode): string {

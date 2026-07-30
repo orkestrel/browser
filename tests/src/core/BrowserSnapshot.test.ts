@@ -143,7 +143,11 @@ describe('BrowserSnapshot', () => {
 		expect(snapshot.find((node) => node.name === 'INPUT')?.index).toBe(5)
 		expect(snapshot.find(() => false)).toBeUndefined()
 		expect(snapshot.filter((node) => node.type === 1, 2)).toHaveLength(2)
-		expect(snapshot.filter(() => true, 0)).toEqual([])
+		expect(
+			snapshot.filter(() => {
+				throw new Error('Zero-limit predicate must not run')
+			}, 0),
+		).toEqual([])
 		expect(() => snapshot.filter(() => true, -1)).toThrow(
 			'Browser node result limit must be a non-negative integer',
 		)

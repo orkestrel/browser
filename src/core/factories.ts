@@ -33,10 +33,10 @@ export function createCDPClient(options: CDPClientOptions): CDPClientInterface {
  *
  * @example
  * ```ts
- * import { createBrowserSnapshot } from '@src/core'
+ * import { createBrowserSnapshot, decodeBrowserSnapshot } from '@src/core'
  *
- * const snapshot = createBrowserSnapshot({ documents: [], styles: [] })
- * snapshot.filter(() => true) // []
+ * const snapshot = createBrowserSnapshot(decodeBrowserSnapshot(captured, ['display']))
+ * snapshot.find({ name: 'main' })
  * ```
  */
 export function createBrowserSnapshot(input: BrowserSnapshotInput): BrowserSnapshotInterface {
