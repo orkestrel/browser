@@ -69,7 +69,9 @@ one-word methods: `walk`, `descendants`, `document`, `children`, `parent`,
 `find`/`filter`/`closest` accept a `BrowserNodeQuery` or a predicate.
 `createBrowserSnapshot(input)` builds one from typed input — the only shape it
 accepts — and `BrowserPage.snapshot()` returns `Promise<BrowserSnapshotInterface>`.
-Four node-only leaves stayed exported and unit-tested: `decodeBrowserSnapshot`,
+Four leaves stayed exported and unit-tested: `decodeBrowserSnapshot` (the
+producer — it takes a captured protocol snapshot and yields
+`BrowserSnapshotInput`) plus the three node-only predicates
 `matchesBrowserNode`, `isBrowserNodeVisible`, and `attributeOfBrowserNode`. Nodes
 remain plain serializable data — passed in as arguments, handed back unwrapped,
 never wrapped in a cursor.
@@ -317,30 +319,20 @@ two, and no package pulled in solely to format a string.
 
 ## Open questions
 
-1. **Name collision resolution — answered.** The plain-data type is
-   `BrowserSnapshotInput` and the contract is
-   `BrowserSnapshotInterface extends BrowserSnapshotInput`, so the class keeps the
-   bare `BrowserSnapshot` name. The split was chosen because it leaves callers one
-   name per job — data in, entity out — instead of asking them to distinguish a
-   structural type from a class of the same name.
-2. **`walk` ordering shape — answered.** One `walk(options?)` carrying
-   `order?: 'depth' | 'breadth'` shipped, because the ordering pair is data and the
-   four separate walk functions were four names for one traversal; the options
-   object was chosen over positionals so that no caller ever has to write
-   `walk(undefined, 'breadth')`.
-3. **Sibling API — answered.** `siblings(node, relation?)` shipped and reads
-   cleanly: the relation names its axis, absence means every sibling, and three
-   exports became one method.
-4. **Part 2 trigger threshold.** How many repeated call sites count as
+Part 1's three design questions (the name-collision split, the `walk` ordering
+shape, and the sibling API) were answered by the shipped surface and are recorded
+under "Decisions taken" above. What remains open is Part 2's, verbatim:
+
+1. **Part 2 trigger threshold.** How many repeated call sites count as
    "demonstrated demand" before a content convenience and the `@orkestrel/html`
    edge are justified?
-5. **Part 2 return type and name.** Option A (one edge) or Option B (two edges)?
+2. **Part 2 return type and name.** Option A (one edge) or Option B (two edges)?
    Decide with the real consumer, since the choice determines how many packages
    `@orkestrel/browser` depends on. If callers split on return type, the seam stays
    outside. On naming: `text()` collides in meaning with the existing
    `content().text` field, so prefer a name describing the selected artifact —
    `article()` — over one describing its format.
-6. **Should `base` default to the content URL?** The examples pass
+3. **Should `base` default to the content URL?** The examples pass
    `{ base: url }` from `content()`, which is correct — it is the URL after
    navigation, so redirects resolve properly. If a convenience ships, confirm
    whether it defaults `base` that way. Convenient, but it is one more opinion
