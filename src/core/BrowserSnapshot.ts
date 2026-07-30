@@ -14,6 +14,7 @@ import { isBrowserNodeQuery, matchesBrowserNode } from './helpers.js'
 
 /** A navigable, serializable browser DOM snapshot. */
 export class BrowserSnapshot implements BrowserSnapshotInterface {
+	#owners: ReadonlyMap<number, BrowserNode> | undefined
 	readonly documents: readonly BrowserDocument[]
 	readonly styles: readonly string[]
 
@@ -54,9 +55,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 	parent(node: BrowserNode): BrowserNode | undefined {
 		const document = this.document(node)
 		if (document === undefined) return undefined
-		return node.parent === undefined
-			? this.find((candidate) => candidate.content === node.document)
-			: document.nodes[node.parent]
+		return node.parent === undefined ? this.#owner(node.document) : document.nodes[node.parent]
 	}
 
 	siblings(node: BrowserNode, relation?: BrowserSiblingRelation): readonly BrowserNode[] {
@@ -178,6 +177,17 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		}
 		for (const document of this.documents) roots.push(...document.nodes)
 		return roots
+	}
+
+	#owner(document: number): BrowserNode | undefined {
+		const owners = this.#owners
+		if (owners !== undefined) return owners.get(document)
+		const index = new Map<number, BrowserNode>()
+		for (const node of this.walk()) {
+			if (node.content !== undefined && !index.has(node.content)) index.set(node.content, node)
+		}
+		this.#owners = index
+		return index.get(document)
 	}
 
 	*#depth(root?: BrowserNode): Generator<BrowserNode, void, unknown> {

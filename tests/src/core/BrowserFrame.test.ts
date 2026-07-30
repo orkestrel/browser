@@ -133,6 +133,44 @@ describe('BrowserFrame', () => {
 		expect(frame.url).toBe('https://example.com/updated')
 	})
 
+	it('distills article content while pruning boilerplate and preserving structure', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const html =
+			'<html><body><nav>Site navigation</nav><aside class="cookie-banner">Cookie choices</aside><main><article><h1>Research Notes</h1><p>The load-bearing article text.</p><table><tr><th>Topic</th><th>Result</th></tr><tr><td>Distillation</td><td>Clean</td></tr></table></article></main><p hidden>Hidden distraction</p><footer>Footer links</footer></body></html>'
+		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
+		scriptEvaluate(transport, (expression) => expression === 'document.title', 'Research Notes')
+		scriptEvaluate(
+			transport,
+			(expression) => expression.includes('document.documentElement.outerHTML'),
+			html,
+		)
+		scriptEvaluate(
+			transport,
+			(expression) => expression.includes('document.body ? document.body.innerText'),
+			'Site navigation\nResearch Notes\nThe load-bearing article text.\nFooter links',
+		)
+		scriptEvaluate(
+			transport,
+			(expression) => expression === 'location.href',
+			'https://example.com/article',
+		)
+		const frame = new BrowserFrame(
+			client,
+			'session-child',
+			'frame-child',
+			'https://example.com/frame',
+		)
+
+		const article = await frame.article()
+
+		expect(article).toContain('The load-bearing article text.')
+		expect(article).not.toContain('Site navigation')
+		expect(article).not.toContain('Footer links')
+		expect(article).not.toContain('Hidden distraction')
+		expect(article).not.toContain('Cookie choices')
+		expect(article).toContain('Topic\tResult')
+	})
+
 	it('waits and acts entirely through the frame execution context', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })

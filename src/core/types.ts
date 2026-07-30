@@ -1368,6 +1368,7 @@ export interface BrowserFrameInterface {
 	readonly touch: BrowserTouchInterface
 	title(): Promise<string>
 	content(): Promise<BrowserContentResult>
+	article(): Promise<string>
 	click(selector: string, options?: BrowserActionOptions): Promise<void>
 	fill(selector: string, value: string, options?: BrowserActionOptions): Promise<void>
 	select(selector: string, values: readonly string[], options?: BrowserActionOptions): Promise<void>
@@ -1477,7 +1478,8 @@ export interface BrowserSnapshotInterface extends BrowserSnapshotInput {
 }
 
 /**
- * Options for capturing a browser DOM snapshot.
+ * Options configuring capture through {@link BrowserPageInterface} `snapshot()`.
+ * The snapshot entity's creation input is {@link BrowserSnapshotInput}.
  *
  * @remarks
  * - `styles` — computed CSS property names to capture

@@ -21,6 +21,7 @@ import { BROWSER_FRAME_WORLD_NAME, BROWSER_RESULT_LIMIT } from './constants.js'
 import { guardEvaluateExpression, readEvaluationResult, requireBrowserString } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { isInteger, isRecord, isString } from '@orkestrel/contract'
+import { createHTML, renderText } from '@orkestrel/html'
 
 /**
  * One attached document frame, evaluated through its own CDP execution world.
@@ -122,6 +123,11 @@ export class BrowserFrame implements BrowserFrameInterface {
 			html: requireBrowserString(html, 'Document HTML'),
 			text: requireBrowserString(text, 'Document text'),
 		}
+	}
+
+	async article(): Promise<string> {
+		const { html, url } = await this.content()
+		return renderText(createHTML(html).distill({ base: url }).document)
 	}
 
 	async click(selector: string, options?: BrowserActionOptions): Promise<void> {

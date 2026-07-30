@@ -470,6 +470,29 @@ describe('BrowserPage', () => {
 
 			expect(sentTextExpression).toContain(BROWSER_RESULT_LIMIT_SENTINEL_PREFIX)
 		})
+
+		it('serves inherited article distillation through the page', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Article')
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('outerHTML'),
+				'<html><body><nav>Navigation</nav><main><article><h1>Article</h1><p>Page body.</p></article></main><footer>Footer</footer></body></html>',
+			)
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('innerText'),
+				'Article\nPage body.',
+			)
+			scriptEvaluate(
+				transport,
+				(expression) => expression === 'location.href',
+				'https://example.com/article',
+			)
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			expect(await page.article()).toBe('Article\nPage body.')
+		})
 	})
 
 	describe('screenshot()', () => {
