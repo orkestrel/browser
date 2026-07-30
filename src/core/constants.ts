@@ -95,7 +95,7 @@ export const BROWSER_MOUSE_BUTTON_MASKS: Readonly<Record<BrowserMouseButton, num
 /** Tool identity embedded in HAR 1.2 documents. */
 export const BROWSER_HAR_CREATOR = Object.freeze({
 	name: '@orkestrel/browser',
-	version: '0.0.5',
+	version: '0.0.8',
 })
 
 /** Attribute used to tag temporary screenshot styles and masks. */

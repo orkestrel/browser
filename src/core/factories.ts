@@ -30,6 +30,14 @@ export function createCDPClient(options: CDPClientOptions): CDPClientInterface {
  *
  * @param input - Captured documents and computed-style names
  * @returns A {@link BrowserSnapshotInterface}
+ *
+ * @example
+ * ```ts
+ * import { createBrowserSnapshot } from '@src/core'
+ *
+ * const snapshot = createBrowserSnapshot({ documents: [], styles: [] })
+ * snapshot.filter(() => true) // []
+ * ```
  */
 export function createBrowserSnapshot(input: BrowserSnapshotInput): BrowserSnapshotInterface {
 	return new BrowserSnapshot(input)

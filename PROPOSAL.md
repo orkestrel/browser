@@ -2,7 +2,7 @@
 
 ## Status
 
-**Part 1 — shipped in this campaign.** The traversal family is now the
+**Part 1 — shipped in this campaign (browser 0.0.8).** The traversal family is now the
 `BrowserSnapshot` entity in `@orkestrel/browser` core, landed with no new
 dependency. What follows is the record of that change — the fold map from the old
 exports to the shipped surface, the decisions taken along the way, and how the
