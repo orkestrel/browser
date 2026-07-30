@@ -8,7 +8,10 @@
 > transport, `BrowserContext` / `BrowserPage` model a CDP browser context and
 > its pages, `BrowserSnapshot` turns a captured DOM snapshot into navigable
 > serializable data, `BrowserCodegen` records page interactions for later
-> script compilation. **Server** (`@orkestrel/browser/server`) supplies the missing
+> script compilation. One capability reaches past the protocol: `article()`
+> distills a captured document to its reader-facing prose through
+> `@orkestrel/html` — content selection, not another whole-body text dump.
+> **Server** (`@orkestrel/browser/server`) supplies the missing
 > environment pieces: `WebSocketCDPTransport` (a Node `WebSocket`-backed CDP
 > transport), `Browser` (discovery → connect → launch lifecycle, spawning a
 > real Chromium-family process when nothing is already listening), and a
@@ -1008,7 +1011,7 @@ await child?.fill('[name=email]', 'ada@example.com')
 await child?.click('button[type=submit]')
 await child?.select('select', ['business'])
 const content = await child?.content()
-const article = await child?.article() // the same document as distilled plain text
+const article = await child?.article() // its own HTML capture, distilled to plain text
 const result = await child?.evaluate('document.readyState')
 const handle = await child?.handle('document.body')
 await handle?.dispose()
@@ -1186,8 +1189,10 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
 2. **Core is environment-agnostic.** `src/core` imports only
    `@orkestrel/emitter`, `@orkestrel/contract`, and `@orkestrel/html` — no
    `node:*`, no `WebSocket`, no filesystem. `@orkestrel/html` is string → AST →
-   string work with no host of its own, so `article()` distills the HTML
-   `content()` already returned without leaving core. Every CDP method call
+   string work with no host of its own, so `article()` distills a captured
+   document without leaving core: `content()` and `article()` share ONE
+   size-guarded `outerHTML` capture, and `article()` evaluates nothing else —
+   no URL, no title, no body text. Every CDP method call
    and event flows through the injected `CDPTransportInterface`; core never
    assumes a runtime.
    Host-side CDP boundaries use `@orkestrel/contract` total guards for
@@ -1198,6 +1203,12 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    `typeof` and `instanceof` checks appear only inside compiled expressions
    that execute in the remote page, where host package imports are
    unavailable.
+   The `browser → html` edge is one-way and stays that way: `@orkestrel/browser`
+   must never become a dependency of `@orkestrel/html`. `BrowserSnapshot`
+   navigates CDP DOM snapshots rather than HTML source, so it never moves into
+   `@orkestrel/html`. Nor does the snapshot entity ever gain rendering,
+   extraction, or distillation — `article()` on the frame is where distillation
+   lives, and it is the only place it lives.
 3. **The transport is a dumb text pipe.** `CDPTransportInterface` does no
    JSON framing of its own — `CDPClient` owns request/response correlation
    (`id`), timeout handling, and event dispatch (global + session-scoped
@@ -1252,15 +1263,20 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    `guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT)`, and
    `.content()` wraps BOTH its HTML (`outerHTML`) and visible-text
    (`innerText`) sub-evaluations the same way — only `title` and `url` are
-   NOT size-guarded. The guard stringifies the in-page result and throws a
+   NOT size-guarded. `article()` shares that one HTML capture and so inherits
+   its guard exactly: an oversized document fails `content()` and `article()`
+   identically. It does NOT inherit the body-text guard, because it never
+   evaluates `innerText` — a document whose visible text alone exceeds the
+   limit fails `content()` while `article()` still returns.
+   The guard stringifies the in-page result and throws a
    `BROWSER_RESULT_LIMIT_SENTINEL_PREFIX` (`[[ORKESTREL_BROWSER_RESULT_LIMIT]]`)
    followed by the serialized length before an oversized result could
    overflow the CDP transport frame; `BrowserPage` recognizes that
    sentinel (`BROWSER_RESULT_LIMIT_PATTERN`) and rejects with a coded
    `BrowserResultLimitError` instead — the underlying CDP connection and
    browser process are unaffected. The crash-safety guarantee therefore
-   applies to `evaluate()` and to both the HTML and text fields of
-   `.content()`.
+   applies to `evaluate()`, to both the HTML and text fields of `.content()`,
+   and to `article()`'s HTML capture.
 9. **Codegen normalizes and compiles deterministically.**
    `normalizeCodegenActions` collapses consecutive `fill`s on the same
    selector to the latest value (including `contenteditable` fills, captured

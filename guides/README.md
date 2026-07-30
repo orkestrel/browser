@@ -33,10 +33,10 @@ built from (no `as` anywhere on the CDP message boundary). It documents
 here for the same reason.
 
 [`src/html.md`](src/html.md) is a byte-identical mirror of the guide for
-`@orkestrel/html` — the newest runtime dependency, the parse → `distill` →
+`@orkestrel/html` — a runtime dependency, the parse → `distill` →
 `renderText` pipeline `BrowserFrameInterface.article()` is built from (the
-reader-facing prose of a page, extracted from the HTML `content()` already
-returns). It documents **that package's** surface, not anything sourced in
+reader-facing prose of a page, extracted from the frame's own HTML
+capture). It documents **that package's** surface, not anything sourced in
 this repo; it is kept here for the same reason.
 
 [`src/guide.md`](src/guide.md) is a byte-identical mirror of the guide for
