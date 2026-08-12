@@ -19,6 +19,7 @@ import {
 	decodeRareBooleanData,
 	decodeRareIntegerData,
 	decodeRareStringData,
+	encodeBase64,
 	isBrowserNodeQuery,
 	isBrowserNodeVisible,
 	isBrowserResultLimitError,
@@ -42,6 +43,7 @@ import {
 	guardEvaluateExpression,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_RESULT_LIMIT_PATTERN,
+	BASE64_CHARS,
 } from '@src/core'
 import {
 	createDOMSnapshotResult,
@@ -81,6 +83,12 @@ describe('decodeBase64', () => {
 
 	it('decodes the JPEG fixture to its documented signature-prefixed bytes', () => {
 		expect(decodeBase64(JPEG_BASE64)).toEqual(new Uint8Array([255, 216, 255, 224]))
+	})
+
+	// decodeBase64 reads BASE64_LOOKUP and encodeBase64 reads BASE64_CHARS, so decoding the whole
+	// alphabet and re-encoding it fails on any single character where the two disagree.
+	it('agrees with encodeBase64 across every character of the alphabet', () => {
+		expect(encodeBase64(decodeBase64(BASE64_CHARS))).toBe(BASE64_CHARS)
 	})
 })
 

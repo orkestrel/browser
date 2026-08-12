@@ -531,7 +531,7 @@ export function createDOMSnapshotResult(): unknown {
 
 /** A fake {@link ScreenshotWriterInterface} recording every `write()` call. */
 export interface FakeScreenshotWriterInterface extends ScreenshotWriterInterface {
-	readonly calls: readonly { readonly path: string; readonly data: Uint8Array }[]
+	readonly calls: ReadonlyArray<{ readonly path: string; readonly data: Uint8Array }>
 }
 
 /**
@@ -541,7 +541,7 @@ export interface FakeScreenshotWriterInterface extends ScreenshotWriterInterface
  * @returns A {@link FakeScreenshotWriterInterface}
  */
 export function createScreenshotWriter(): FakeScreenshotWriterInterface {
-	const calls: { path: string; data: Uint8Array }[] = []
+	const calls: Array<{ path: string; data: Uint8Array }> = []
 
 	return {
 		calls,

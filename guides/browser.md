@@ -16,8 +16,8 @@
 > transport), `Browser` (discovery → connect → launch lifecycle, spawning a
 > real Chromium-family process when nothing is already listening), and a
 > filesystem-backed screenshot writer. Source:
-> [`src/core`](../../src/core) (via `@src/core`) +
-> [`src/server`](../../src/server) (via `@src/server`).
+> [`src/core`](../src/core) (via `@src/core`) +
+> [`src/server`](../src/server) (via `@src/server`).
 
 ## Surface
 

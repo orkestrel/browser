@@ -1480,7 +1480,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	})
 
 	it('creates a page and navigates it in a real browser', async () => {
-		const httpServer = createServer((req, res) => {
+		const httpServer = createServer((_req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
 			res.end('<html><head><title>Real Launch</title></head><body>Hello</body></html>')
 		})
@@ -1712,7 +1712,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	}, 20_000)
 
 	it('content() on a huge DOM never crashes the session', async () => {
-		const httpServer = createServer((req, res) => {
+		const httpServer = createServer((_req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
 			res.end(
 				`<html><body><div id="big">${'a'.repeat(BROWSER_RESULT_LIMIT + 500_000)}</div></body></html>`,
@@ -1752,7 +1752,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	}, 20_000)
 
 	it('reattaching over CDP reports the correct page url immediately, before navigate()/content()', async () => {
-		const httpServer = createServer((req, res) => {
+		const httpServer = createServer((_req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
 			res.end('<html><head><title>Reattach Fidelity</title></head><body>Hi</body></html>')
 		})
@@ -1984,7 +1984,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	}, 20_000)
 
 	it('records and replays a contenteditable fill via codegen on a real DOM', async () => {
-		const httpServer = createServer((req, res) => {
+		const httpServer = createServer((_req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
 			res.end('<html><body><div id="editable" contenteditable="true"></div></body></html>')
 		})

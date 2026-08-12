@@ -167,7 +167,7 @@ export function bytesToText(value: Uint8Array): string {
  */
 export function browserHeadersToProtocol(
 	headers: Readonly<Record<string, string>>,
-): readonly Readonly<Record<string, string>>[] {
+): ReadonlyArray<Readonly<Record<string, string>>> {
 	return Object.entries(headers).map(([name, value]) => ({ name, value }))
 }
 
@@ -1733,8 +1733,10 @@ export function readBrowserStorageEntries(
  * @param media - Public media configuration
  * @returns Protocol feature records
  */
-export function mediaToFeatures(media: BrowserMedia): readonly Readonly<Record<string, string>>[] {
-	const features: Readonly<Record<string, string>>[] = []
+export function mediaToFeatures(
+	media: BrowserMedia,
+): ReadonlyArray<Readonly<Record<string, string>>> {
+	const features: Array<Readonly<Record<string, string>>> = []
 	if (media.color !== undefined) features.push({ name: 'prefers-color-scheme', value: media.color })
 	if (media.contrast !== undefined) {
 		features.push({ name: 'prefers-contrast', value: media.contrast })
@@ -2125,7 +2127,7 @@ export function readBrowserFrames(value: unknown): readonly BrowserFrameInfo[] {
 	if (!isRecord(value) || !isRecord(value['frameTree'])) return []
 
 	const frames: BrowserFrameInfo[] = []
-	const stack: Readonly<Record<string, unknown>>[] = [value['frameTree']]
+	const stack: Array<Readonly<Record<string, unknown>>> = [value['frameTree']]
 
 	while (stack.length > 0) {
 		const node = stack.pop()
