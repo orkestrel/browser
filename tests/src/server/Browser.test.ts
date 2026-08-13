@@ -28,6 +28,7 @@ import {
 } from '@src/server'
 import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError, compileCodegenScript } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
+import { createRecorder, requireValue, waitForDelay } from '@orkestrel/test'
 import {
 	createCDPTestServer,
 	createBrowserProfile,
@@ -41,14 +42,7 @@ import {
 	readServerPort,
 	waitForProcessExit,
 } from '../../setupServer.js'
-import {
-	createRecorder,
-	ignoreCall,
-	requireValue,
-	throwListenerError,
-	waitForCondition,
-	waitForDelay,
-} from '../../setup.js'
+import { ignoreCall, throwListenerError, waitForCondition } from '../../setup.js'
 
 const REQUESTED_BROWSER_ENGINE = process.env['BROWSER_COMPATIBILITY_ENGINE']
 const REAL_BROWSER_ENGINE: BrowserEngine | undefined =

@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import type { BrowserPageInterface } from '@src/core'
 import { BrowserContext } from '@src/core'
+import { createRecorder } from '@orkestrel/test'
 import {
 	createConnectedCDPClient,
-	createRecorder,
 	createTarget,
 	replyOk,
 	scriptCDPAttach,

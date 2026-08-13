@@ -1,9 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { BrowserCodegen, createCDPClient } from '@src/core'
+import { createRecorder } from '@orkestrel/test'
 import {
 	createCDPTransport,
 	createCodegenBindingPayload,
-	createRecorder,
 	createStartedCodegen,
 	replyOk,
 	throwListenerError,

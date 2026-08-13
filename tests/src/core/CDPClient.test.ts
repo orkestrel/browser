@@ -9,7 +9,8 @@ import {
 	CDPConnectionError,
 	CDPTimeoutError,
 } from '@src/core'
-import { createCDPTransport, createRecorder, replyOk } from '../../setup.js'
+import { createRecorder } from '@orkestrel/test'
+import { createCDPTransport, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
 // === CDPClient

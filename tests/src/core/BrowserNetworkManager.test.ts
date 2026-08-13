@@ -1,9 +1,9 @@
 import type { BrowserWebSocketFrame, BrowserWebSocketInterface } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError } from '@src/core'
+import { createRecorder } from '@orkestrel/test'
 import {
 	createConnectedCDPClient,
-	createRecorder,
 	ignoreAsyncCall,
 	replyOk,
 	waitForCondition,

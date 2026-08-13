@@ -8,48 +8,7 @@ import type {
 import { BrowserCodegen, createCDPClient } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-
-// === Test recorder (AGENTS §16.1)
-
-/** A real callback with recorded calls — used instead of a test-framework spy. */
-export interface TestRecorderInterface<TArgs extends readonly unknown[]> {
-	readonly calls: readonly TArgs[]
-	readonly count: number
-	readonly handler: (...args: TArgs) => void
-	clear(): void
-}
-
-/** Runtime call recorder backing {@link createRecorder}. */
-export class TestRecorder<
-	TArgs extends readonly unknown[],
-> implements TestRecorderInterface<TArgs> {
-	#calls: TArgs[] = []
-	readonly handler = (...args: TArgs): void => {
-		this.#calls.push(args)
-	}
-
-	get calls(): readonly TArgs[] {
-		return this.#calls
-	}
-
-	get count(): number {
-		return this.#calls.length
-	}
-
-	clear(): void {
-		this.#calls = []
-	}
-}
-
-/**
- * Create a call recorder — a real function that records every invocation's
- * arguments for later inspection.
- *
- * @returns A {@link TestRecorderInterface}
- */
-export function createRecorder<TArgs extends readonly unknown[]>(): TestRecorderInterface<TArgs> {
-	return new TestRecorder<TArgs>()
-}
+import { waitForDelay } from '@orkestrel/test'
 
 /** Ignore an intentional callback invocation. */
 export function ignoreCall(): void {
@@ -64,11 +23,6 @@ export function ignoreAsyncCall(): Promise<void> {
 /** Throw the stable listener failure used by emitter containment tests. */
 export function throwListenerError(): never {
 	throw new Error('listener failed')
-}
-
-/** A single wait, in place of an inline `setTimeout` promise. */
-export function waitForDelay(ms = 0): Promise<void> {
-	return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 /**
@@ -91,15 +45,6 @@ export async function waitForCondition(
 		}
 		await waitForDelay(interval)
 	}
-}
-
-/** Return a required fixture value while narrowing away `undefined`. */
-export function requireValue<T>(
-	value: T | undefined,
-	message = 'Required test value is missing',
-): T {
-	if (value === undefined) throw new Error(message)
-	return value
 }
 
 /** Evaluate a JavaScript expression fixture and expose its result as unknown. */

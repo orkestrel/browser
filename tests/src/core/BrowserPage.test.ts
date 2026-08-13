@@ -25,14 +25,13 @@ import {
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
 } from '@src/core'
+import { createRecorder, requireValue } from '@orkestrel/test'
 import {
 	createCDPTransport,
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
-	createRecorder,
 	createScreenshotWriter,
 	readCDPExpression,
-	requireValue,
 	replyOk,
 	scriptEvaluate,
 	scriptFrameTree,

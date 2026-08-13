@@ -8,9 +8,9 @@ import {
 	isBrowserResultLimitError,
 	isBrowserSelectorError,
 } from '@src/core'
+import { createRecorder } from '@orkestrel/test'
 import {
 	createConnectedCDPClient,
-	createRecorder,
 	readCDPExpression,
 	replyOk,
 	scriptEvaluate,
