@@ -12,10 +12,12 @@
  * of `child_process`.
  */
 
+import type { ScratchInterface } from '@orkestrel/test/server'
 import { describe, it, expect, afterEach } from 'vitest'
-import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
+import { createScratch } from '@orkestrel/test/server'
 import {
 	createBrowserProfile,
 	findSystemBrowsers,
@@ -27,18 +29,15 @@ import {
 	waitForCDPReady,
 	fetchCDPTargets,
 } from '@src/server'
-import {
-	createCDPTestServer,
-	createTempDirectory,
-	destroyTempDirectories,
-} from '../../setupServer.js'
+import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
+const scratches: ScratchInterface[] = []
 afterEach(async () => {
 	await server?.close()
 	server = undefined
-	destroyTempDirectories()
+	for (const scratch of scratches.splice(0)) scratch.destroy()
 })
 
 describe('findSystemBrowser', () => {
@@ -48,9 +47,10 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('returns a planted path candidate when it exists', () => {
-		const dir = createTempDirectory()
-		const file = join(dir, 'chrome')
-		writeFileSync(file, '')
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const file = join(scratch.path, 'chrome')
+		scratch.write('chrome', '')
 
 		const found = findSystemBrowser({ env: {}, paths: [file], names: [], stores: [] })
 
@@ -58,11 +58,12 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('prefers an env override over a path candidate', () => {
-		const dir = createTempDirectory()
-		const envFile = join(dir, 'env-chrome')
-		const pathFile = join(dir, 'path-chrome')
-		writeFileSync(envFile, '')
-		writeFileSync(pathFile, '')
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const envFile = join(scratch.path, 'env-chrome')
+		const pathFile = join(scratch.path, 'path-chrome')
+		scratch.write('env-chrome', '')
+		scratch.write('path-chrome', '')
 
 		const found = findSystemBrowser({
 			env: { PLAYWRIGHT_EXECUTABLE_PATH: envFile },
@@ -75,9 +76,10 @@ describe('findSystemBrowser', () => {
 	})
 
 	it('falls through to CHROME_PATH when PLAYWRIGHT_EXECUTABLE_PATH is absent', () => {
-		const dir = createTempDirectory()
-		const chromePathFile = join(dir, 'chrome-path-chrome')
-		writeFileSync(chromePathFile, '')
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const chromePathFile = join(scratch.path, 'chrome-path-chrome')
+		scratch.write('chrome-path-chrome', '')
 
 		const found = findSystemBrowser({
 			env: { CHROME_PATH: chromePathFile },
@@ -95,35 +97,29 @@ describe('findSystemBrowser', () => {
 		// linux -> chromium-<rev>/chrome-linux/chrome
 		// darwin -> chromium-<rev>/chrome-mac/Chromium.app/Contents/MacOS/Chromium
 		// win32 -> chromium-<rev>/chrome-win/chrome.exe
-		const store = createTempDirectory()
-		const binary =
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const relative =
 			process.platform === 'win32'
-				? join(store, 'chromium-1194', 'chrome-win', 'chrome.exe')
+				? join('chromium-1194', 'chrome-win', 'chrome.exe')
 				: process.platform === 'darwin'
-					? join(
-							store,
-							'chromium-1194',
-							'chrome-mac',
-							'Chromium.app',
-							'Contents',
-							'MacOS',
-							'Chromium',
-						)
-					: join(store, 'chromium-1194', 'chrome-linux', 'chrome')
-		mkdirSync(dirname(binary), { recursive: true })
-		writeFileSync(binary, '')
+					? join('chromium-1194', 'chrome-mac', 'Chromium.app', 'Contents', 'MacOS', 'Chromium')
+					: join('chromium-1194', 'chrome-linux', 'chrome')
+		scratch.write(relative, '')
+		const binary = join(scratch.path, relative)
 
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [store] })
+		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [scratch.path] })
 
 		expect(found).toEqual({ executable: binary, engine: 'chromium' })
 	})
 
 	it('resolves the top-level chromium link inside a browser store', () => {
-		const store = createTempDirectory()
-		const link = join(store, 'chromium')
-		writeFileSync(link, '')
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const link = join(scratch.path, 'chromium')
+		scratch.write('chromium', '')
 
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [store] })
+		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [scratch.path] })
 
 		expect(found).toEqual({ executable: link, engine: 'chromium' })
 	})
@@ -135,21 +131,23 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('returns every planted candidate in resolution-precedence order with classified engines', () => {
-		const dir = createTempDirectory()
-		const envFile = join(dir, 'msedge')
-		const pathFile = join(dir, 'google-chrome')
-		writeFileSync(envFile, '')
-		writeFileSync(pathFile, '')
+		const dirScratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(dirScratch)
+		const envFile = join(dirScratch.path, 'msedge')
+		const pathFile = join(dirScratch.path, 'google-chrome')
+		dirScratch.write('msedge', '')
+		dirScratch.write('google-chrome', '')
 
-		const store = createTempDirectory()
-		const link = join(store, 'chromium')
-		writeFileSync(link, '')
+		const storeScratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(storeScratch)
+		const link = join(storeScratch.path, 'chromium')
+		storeScratch.write('chromium', '')
 
 		const found = findSystemBrowsers({
 			env: { PLAYWRIGHT_EXECUTABLE_PATH: envFile },
 			paths: [pathFile],
 			names: [],
-			stores: [store],
+			stores: [storeScratch.path],
 		})
 
 		expect(found).toEqual([
@@ -160,9 +158,10 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('dedupes a candidate reachable via two sources by normalized path', () => {
-		const dir = createTempDirectory()
-		const shared = join(dir, 'chrome')
-		writeFileSync(shared, '')
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const shared = join(scratch.path, 'chrome')
+		scratch.write('chrome', '')
 
 		const found = findSystemBrowsers({
 			env: { PLAYWRIGHT_EXECUTABLE_PATH: shared },
@@ -175,11 +174,12 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('narrows results to the requested engine', () => {
-		const dir = createTempDirectory()
-		const edgeFile = join(dir, 'msedge')
-		const chromeFile = join(dir, 'google-chrome')
-		writeFileSync(edgeFile, '')
-		writeFileSync(chromeFile, '')
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const edgeFile = join(scratch.path, 'msedge')
+		const chromeFile = join(scratch.path, 'google-chrome')
+		scratch.write('msedge', '')
+		scratch.write('google-chrome', '')
 
 		const found = findSystemBrowsers({
 			env: {},
@@ -193,9 +193,10 @@ describe('findSystemBrowsers', () => {
 	})
 
 	it('returns an empty array when the engine filter matches nothing', () => {
-		const dir = createTempDirectory()
-		const chromeFile = join(dir, 'google-chrome')
-		writeFileSync(chromeFile, '')
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const chromeFile = join(scratch.path, 'google-chrome')
+		scratch.write('google-chrome', '')
 
 		const found = findSystemBrowsers({
 			env: {},
@@ -211,13 +212,13 @@ describe('findSystemBrowsers', () => {
 
 describe('findAllInStore', () => {
 	it('orders multi-digit browser revisions numerically from newest to oldest', () => {
-		const store = createTempDirectory()
-		const binaries = ['99', '100'].map((revision) =>
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const relatives = ['99', '100'].map((revision) =>
 			process.platform === 'win32'
-				? join(store, `chromium-${revision}`, 'chrome-win', 'chrome.exe')
+				? join(`chromium-${revision}`, 'chrome-win', 'chrome.exe')
 				: process.platform === 'darwin'
 					? join(
-							store,
 							`chromium-${revision}`,
 							'chrome-mac',
 							'Chromium.app',
@@ -225,14 +226,12 @@ describe('findAllInStore', () => {
 							'MacOS',
 							'Chromium',
 						)
-					: join(store, `chromium-${revision}`, 'chrome-linux', 'chrome'),
+					: join(`chromium-${revision}`, 'chrome-linux', 'chrome'),
 		)
-		for (const binary of binaries) {
-			mkdirSync(dirname(binary), { recursive: true })
-			writeFileSync(binary, '')
-		}
+		for (const relative of relatives) scratch.write(relative, '')
+		const binaries = relatives.map((relative) => join(scratch.path, relative))
 
-		expect(findAllInStore(store, process.platform)).toEqual([...binaries].reverse())
+		expect(findAllInStore(scratch.path, process.platform)).toEqual([...binaries].reverse())
 	})
 })
 
@@ -425,12 +424,16 @@ describe('browser profiles', () => {
 	})
 
 	it('preserves a caller-owned persistent profile', async () => {
-		const path = createTempDirectory()
-		const profile = await createBrowserProfile(path)
+		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(scratch)
+		const profile = await createBrowserProfile(scratch.path)
 
-		expect(profile).toEqual({ path, temporary: false })
+		expect(profile).toEqual({ path: scratch.path, temporary: false })
 		await removeBrowserProfile(profile)
-		expect(existsSync(path)).toBe(true)
+		// `existsSync` checks the scratch's own root directory, which is not a
+		// containment-checked target `scratch.has()` accepts — it stays on
+		// `node:fs`.
+		expect(existsSync(scratch.path)).toBe(true)
 	})
 
 	it('refuses recursive removal outside the guarded temp-profile shape', async () => {

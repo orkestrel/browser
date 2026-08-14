@@ -6,31 +6,30 @@
  * shape and real connectivity against the in-process CDP test server.
  */
 
+import type { ScratchInterface } from '@orkestrel/test/server'
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtemp, readFile, rm } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
+import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { createScratch } from '@orkestrel/test/server'
 import { createBrowser, createCDPTransport, createScreenshotWriter } from '@src/server'
 import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
-let tempDir: string | undefined
+let scratch: ScratchInterface | undefined
 
 afterEach(async () => {
 	await server?.close()
 	server = undefined
-	if (tempDir !== undefined) {
-		await rm(tempDir, { recursive: true, force: true })
-		tempDir = undefined
-	}
+	scratch?.destroy()
+	scratch = undefined
 })
 
 describe('createScreenshotWriter', () => {
 	it('writes real bytes to a real file, creating parent dirs', async () => {
-		tempDir = await mkdtemp(join(tmpdir(), 'scsr-screenshot-'))
+		scratch = createScratch({ prefix: 'scsr-screenshot-' })
 		const writer = createScreenshotWriter()
-		const path = join(tempDir, 'nested', 'shot.png')
+		const path = join(scratch.path, 'nested', 'shot.png')
 		const bytes = new Uint8Array([137, 80, 78, 71])
 
 		await writer.write(path, bytes)
@@ -40,9 +39,9 @@ describe('createScreenshotWriter', () => {
 	})
 
 	it('overwrites an existing file at the same path', async () => {
-		tempDir = await mkdtemp(join(tmpdir(), 'scsr-screenshot-'))
+		scratch = createScratch({ prefix: 'scsr-screenshot-' })
 		const writer = createScreenshotWriter()
-		const path = join(tempDir, 'shot.png')
+		const path = join(scratch.path, 'shot.png')
 
 		await writer.write(path, new Uint8Array([1, 2, 3]))
 		await writer.write(path, new Uint8Array([4, 5]))

@@ -2,14 +2,14 @@ import type { IncomingMessage, Server as HTTPServer, ServerResponse } from 'node
 import type { AddressInfo, Server as NetServer, Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
+import type { ScratchInterface } from '@orkestrel/test/server'
 import { createServer } from 'node:http'
 import { createConnection, createServer as createNetServer } from 'node:net'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { isRecord, isString } from '@orkestrel/contract'
 import { createNodeWebSocket } from '@orkestrel/websocket'
+import { createScratch } from '@orkestrel/test/server'
 import { waitForCondition } from './setup.js'
 
 /**
@@ -66,13 +66,13 @@ export function waitForProcessExit(pid: number, timeout = 5000): Promise<void> {
 	return waitForCondition(() => !isProcessAlive(pid), timeout, 50)
 }
 
-const registeredTempDirectories: string[] = []
+const registeredScratches: ScratchInterface[] = []
 
 /** Create and register a temporary directory for deterministic test teardown. */
 export function createTempDirectory(prefix = 'orkestrel-browser-test-'): string {
-	const dir = mkdtempSync(join(tmpdir(), prefix))
-	registeredTempDirectories.push(dir)
-	return dir
+	const scratch = createScratch({ prefix })
+	registeredScratches.push(scratch)
+	return scratch.path
 }
 
 /** Create and register a persistent-profile fixture directory. */
@@ -80,10 +80,10 @@ export function createBrowserProfile(): string {
 	return createTempDirectory('orkestrel-browser-profile-')
 }
 
-/** Remove every registered test directory, retrying transient Windows locks. */
+/** Remove every registered test directory. */
 export function destroyTempDirectories(): void {
-	for (const dir of registeredTempDirectories.splice(0)) {
-		rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+	for (const scratch of registeredScratches.splice(0)) {
+		scratch.destroy()
 	}
 }
 
@@ -452,8 +452,8 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 /** A registered fake-browser fixture, tracked for guaranteed teardown. */
 interface RegisteredFakeBrowser {
-	readonly pidFiles: readonly string[]
-	readonly dir: string
+	readonly scratch: ScratchInterface
+	readonly pidNames: readonly string[]
 }
 
 const registeredFakeBrowsers: RegisteredFakeBrowser[] = []
@@ -467,11 +467,11 @@ const registeredFakeBrowsers: RegisteredFakeBrowser[] = []
  */
 export async function destroyFakeBrowsers(): Promise<void> {
 	for (const fixture of registeredFakeBrowsers.splice(0)) {
-		for (const pidFile of fixture.pidFiles) {
+		for (const pidName of fixture.pidNames) {
 			let pid: number | undefined
 			try {
-				const contents = readFileSync(pidFile, 'utf8').trim()
-				if (contents.length > 0) pid = Number(contents)
+				const contents = fixture.scratch.read(pidName)?.trim()
+				if (contents !== undefined && contents.length > 0) pid = Number(contents)
 			} catch {
 				// pid file never written — nothing to kill
 			}
@@ -483,27 +483,31 @@ export async function destroyFakeBrowsers(): Promise<void> {
 			}
 			await waitForProcessExit(pid).catch(() => undefined)
 		}
-		rmSync(fixture.dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+		fixture.scratch.destroy()
 	}
 }
 
 /**
  * Read a fixture process identifier once its spawned script has published it.
  *
- * @param path - PID file written by the fixture process
+ * @param scratch - The fixture's owned scratch directory
+ * @param name - Root-relative pid file name written by the fixture process
  * @returns The published process identifier
  */
-export async function readFixtureProcessId(path: string): Promise<number> {
+export async function readFixtureProcessId(
+	scratch: ScratchInterface,
+	name: string,
+): Promise<number> {
 	for (let attempt = 0; attempt < 50; attempt++) {
 		try {
-			const contents = readFileSync(path, 'utf8').trim()
-			if (contents.length > 0) return Number(contents)
+			const contents = scratch.read(name)?.trim()
+			if (contents !== undefined && contents.length > 0) return Number(contents)
 		} catch {
 			// Not written yet
 		}
 		await new Promise((resolve) => setTimeout(resolve, 20))
 	}
-	throw new Error(`Fake browser process never wrote its pid to ${path}`)
+	throw new Error(`Fake browser process never wrote its pid to ${join(scratch.path, name)}`)
 }
 
 /** A real, spawned stand-in "browser" process for exercising Browser's launch path. */
@@ -549,16 +553,16 @@ export function createFakeBrowserProcess(
 		readonly descendant?: boolean
 	} = {},
 ): FakeBrowserProcessInterface {
-	const dir = mkdtempSync(join(tmpdir(), 'orkestrel-browser-fake-'))
-	const scriptPath = join(dir, 'fake-browser.js')
-	const pidFile = join(dir, 'pid.txt')
-	const descendantFile = join(dir, 'descendant.txt')
-	const argumentsFile = join(dir, 'arguments.json')
-	const portFile = join(dir, 'port.txt')
+	const scratch = createScratch({ prefix: 'orkestrel-browser-fake-' })
+	const scriptPath = join(scratch.path, 'fake-browser.js')
+	const pidFile = join(scratch.path, 'pid.txt')
+	const descendantFile = join(scratch.path, 'descendant.txt')
+	const argumentsFile = join(scratch.path, 'arguments.json')
+	const portFile = join(scratch.path, 'port.txt')
 
 	// No shebang: the script is spawned via `node <script>`, never executed
 	// directly, so it needs no execute bit and no shebang line.
-	const crashLogPath = join(dir, 'crash.log')
+	const crashLogPath = join(scratch.path, 'crash.log')
 	const lines: string[] = [
 		`process.on('uncaughtException', (e) => { try { require('fs').appendFileSync(${JSON.stringify(crashLogPath)}, String(e && e.stack)) } catch {} ; process.exit(1) })`,
 		`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
@@ -660,23 +664,24 @@ export function createFakeBrowserProcess(
 		)
 	}
 
-	writeFileSync(scriptPath, `${lines.join('\n')}\n`)
+	scratch.write('fake-browser.js', `${lines.join('\n')}\n`)
 
-	registeredFakeBrowsers.push({ pidFiles: [pidFile, descendantFile], dir })
+	registeredFakeBrowsers.push({ scratch, pidNames: ['pid.txt', 'descendant.txt'] })
 
 	return {
 		executable: process.execPath,
 		args: [scriptPath],
 		async pid(): Promise<number> {
-			return readFixtureProcessId(pidFile)
+			return readFixtureProcessId(scratch, 'pid.txt')
 		},
 		async descendant(): Promise<number> {
-			return readFixtureProcessId(descendantFile)
+			return readFixtureProcessId(scratch, 'descendant.txt')
 		},
 		async arguments(): Promise<readonly string[]> {
 			for (let attempt = 0; attempt < 50; attempt++) {
 				try {
-					const parsed: unknown = JSON.parse(readFileSync(argumentsFile, 'utf8'))
+					const text = scratch.read('arguments.json')
+					const parsed: unknown = text === undefined ? undefined : JSON.parse(text)
 					if (Array.isArray(parsed) && parsed.every(isString)) return parsed
 				} catch {
 					// Not written yet
@@ -689,8 +694,8 @@ export function createFakeBrowserProcess(
 			let dropPort: number | undefined
 			for (let attempt = 0; attempt < 50; attempt++) {
 				try {
-					const contents = readFileSync(portFile, 'utf8').trim()
-					if (contents.length > 0) {
+					const contents = scratch.read('port.txt')?.trim()
+					if (contents !== undefined && contents.length > 0) {
 						dropPort = Number(contents)
 						break
 					}
