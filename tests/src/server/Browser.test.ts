@@ -31,7 +31,6 @@ import { isRecord } from '@orkestrel/contract'
 import { createRecorder, requireValue, waitForDelay } from '@orkestrel/test'
 import {
 	createCDPTestServer,
-	createBrowserProfile,
 	createFakeBrowserProcess,
 	createTempDirectory,
 	createTCPProxy,
@@ -679,7 +678,7 @@ describe('Browser launch path', () => {
 
 	it('never removes a caller-owned persistent user-data directory', async () => {
 		const fake = createFakeBrowserProcess({ serveCDP: true })
-		const profile = createBrowserProfile()
+		const profile = createTempDirectory('orkestrel-browser-profile-').path
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
@@ -712,7 +711,7 @@ describe('Browser launch path', () => {
 
 	it('disconnect() on a persistent (profile-backed) launch releases the process without killing it, allowing reattachment', async () => {
 		const fake = createFakeBrowserProcess({ serveCDP: true })
-		const profileDir = createBrowserProfile()
+		const profileDir = createTempDirectory('orkestrel-browser-profile-').path
 		const port = await reservePort()
 
 		const browser = createBrowser({
@@ -765,7 +764,7 @@ describe('Browser pid', () => {
 
 	it('remains readable while a persistent owner is disconnected, then clears on destroy()', async () => {
 		const fake = createFakeBrowserProcess({ serveCDP: true })
-		const profileDir = createBrowserProfile()
+		const profileDir = createTempDirectory('orkestrel-browser-profile-').path
 		const browser = createBrowser({
 			executable: fake.executable,
 			args: fake.args,
@@ -1485,7 +1484,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			browser = createBrowser({
 				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
-				profile: createBrowserProfile(),
+				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: await reservePort() },
 				timeout: 20_000,
@@ -1524,7 +1523,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			browser = createBrowser({
 				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
-				profile: createBrowserProfile(),
+				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: await reservePort() },
 				timeout: 20_000,
@@ -1570,7 +1569,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		browser = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
-			profile: createBrowserProfile(),
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
 			cdp: { port: await reservePort() },
 			timeout: 20_000,
@@ -1584,8 +1583,8 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		// PNG signature: 89 50 4E 47 0D 0A 1A 0A
 		expect(Array.from(result.bytes.subarray(0, 4))).toEqual([0x89, 0x50, 0x4e, 0x47])
 
-		const dir = createTempDirectory('orkestrel-browser-screenshot-')
-		const path = join(dir, 'screenshot.png')
+		const scratch = createTempDirectory('orkestrel-browser-screenshot-')
+		const path = join(scratch.path, 'screenshot.png')
 
 		const withPath = await page.screenshot({ path })
 		expect(withPath.path).toBe(path)
@@ -1598,7 +1597,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		browser = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
-			profile: createBrowserProfile(),
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
 			cdp: { port },
 			timeout: 20_000,
@@ -1614,7 +1613,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		const relaunch = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
-			profile: createBrowserProfile(),
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
 			cdp: { port },
 			timeout: 20_000,
@@ -1625,7 +1624,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 	}, 20_000)
 
 	it('connect() with a profile launches with a persistent user-data dir', async () => {
-		const profile = createBrowserProfile()
+		const profile = createTempDirectory('orkestrel-browser-profile-').path
 
 		browser = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
@@ -1663,7 +1662,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		browser = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
-			profile: createBrowserProfile(),
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
 			cdp: { port: await reservePort() },
 			timeout: 20_000,
@@ -1683,7 +1682,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		browser = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
-			profile: createBrowserProfile(),
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
 			cdp: { port: await reservePort() },
 			timeout: 20_000,
@@ -1719,7 +1718,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			browser = createBrowser({
 				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
-				profile: createBrowserProfile(),
+				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: await reservePort() },
 				timeout: 20_000,
@@ -1760,7 +1759,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			launched = createBrowser({
 				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
-				profile: createBrowserProfile(),
+				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port },
 				timeout: 20_000,
@@ -1803,7 +1802,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		const owner = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
-			profile: createBrowserProfile(),
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: [...REAL_BROWSER_ARGS, '--remote-allow-origins=*'],
 			cdp: { port: cdpPort },
 			timeout: 20_000,
@@ -1883,7 +1882,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 		browser = createBrowser({
 			executable: requireValue(REAL_BROWSER_EXECUTABLE),
 			headless: true,
-			profile: createBrowserProfile(),
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
 			cdp: { port: await reservePort() },
 			timeout: 20_000,
@@ -1909,7 +1908,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			owner = createBrowser({
 				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
-				profile: createBrowserProfile(),
+				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port },
 				timeout: 20_000,
@@ -1954,7 +1953,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			browser = createBrowser({
 				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
-				profile: createBrowserProfile(),
+				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: await reservePort() },
 				timeout: 20_000,
@@ -1989,7 +1988,7 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			browser = createBrowser({
 				executable: requireValue(REAL_BROWSER_EXECUTABLE),
 				headless: true,
-				profile: createBrowserProfile(),
+				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: await reservePort() },
 				timeout: 20_000,

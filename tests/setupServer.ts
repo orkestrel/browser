@@ -68,16 +68,11 @@ export function waitForProcessExit(pid: number, timeout = 5000): Promise<void> {
 
 const registeredScratches: ScratchInterface[] = []
 
-/** Create and register a temporary directory for deterministic test teardown. */
-export function createTempDirectory(prefix = 'orkestrel-browser-test-'): string {
+/** Allocate and register a temporary scratch directory for deterministic test teardown. */
+export function createTempDirectory(prefix = 'orkestrel-browser-test-'): ScratchInterface {
 	const scratch = createScratch({ prefix })
 	registeredScratches.push(scratch)
-	return scratch.path
-}
-
-/** Create and register a persistent-profile fixture directory. */
-export function createBrowserProfile(): string {
-	return createTempDirectory('orkestrel-browser-profile-')
+	return scratch
 }
 
 /** Remove every registered test directory. */
