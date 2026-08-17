@@ -10,6 +10,7 @@ import { createRequire } from 'node:module'
 import { isRecord, isString } from '@orkestrel/contract'
 import { createNodeWebSocket } from '@orkestrel/websocket'
 import { createScratch } from '@orkestrel/test/server'
+import { createTeardown } from '@orkestrel/test'
 import { waitForCondition } from './setup.js'
 
 /**
@@ -66,20 +67,18 @@ export function waitForProcessExit(pid: number, timeout = 5000): Promise<void> {
 	return waitForCondition(() => !isProcessAlive(pid), timeout, 50)
 }
 
-const registeredScratches: ScratchInterface[] = []
+const tempDirectoryTeardown = createTeardown()
 
 /** Allocate and register a temporary scratch directory for deterministic test teardown. */
 export function createTempDirectory(prefix = 'orkestrel-browser-test-'): ScratchInterface {
 	const scratch = createScratch({ prefix })
-	registeredScratches.push(scratch)
+	tempDirectoryTeardown.add(() => scratch.destroy())
 	return scratch
 }
 
 /** Remove every registered test directory. */
-export function destroyTempDirectories(): void {
-	for (const scratch of registeredScratches.splice(0)) {
-		scratch.destroy()
-	}
+export function destroyTempDirectories(): Promise<void> {
+	return tempDirectoryTeardown.destroy()
 }
 
 /** Raw TCP fixture that accepts connections without completing a handshake. */

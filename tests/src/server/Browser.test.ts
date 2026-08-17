@@ -69,7 +69,7 @@ afterEach(async () => {
 	// Safety net — SIGKILLs any fake browser process a failed/aborted test
 	// left running, in addition to each test's own explicit kills.
 	await destroyFakeBrowsers()
-	destroyTempDirectories()
+	await destroyTempDirectories()
 })
 
 // A port nothing is listening on — used for "no CDP endpoint reachable" cases.
