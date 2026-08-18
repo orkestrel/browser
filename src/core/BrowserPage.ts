@@ -246,7 +246,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const params: Record<string, unknown> = { ...browserScreenshotToParams(options) }
 
 		if (options?.full === true) {
-			const metrics = await this.request('Page.getLayoutMetrics')
+			const metrics = await this.send('Page.getLayoutMetrics')
 			const size =
 				isRecord(metrics) && isRecord(metrics['cssContentSize'])
 					? metrics['cssContentSize']
@@ -268,7 +268,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				throw new BrowserError('Browser screenshot device scale is malformed')
 			}
 			if (!isRecord(params['clip'])) {
-				const metrics = await this.request('Page.getLayoutMetrics')
+				const metrics = await this.send('Page.getLayoutMetrics')
 				const viewport =
 					isRecord(metrics) && isRecord(metrics['cssVisualViewport'])
 						? metrics['cssVisualViewport']
@@ -306,12 +306,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				token = value
 			}
 			if (options?.transparent === true) {
-				await this.request('Emulation.setDefaultBackgroundColorOverride', {
+				await this.send('Emulation.setDefaultBackgroundColorOverride', {
 					color: { r: 0, g: 0, b: 0, a: 0 },
 				})
 				transparent = true
 			}
-			const result = await this.request('Page.captureScreenshot', params)
+			const result = await this.send('Page.captureScreenshot', params)
 			if (!isRecord(result) || !isString(result['data'])) {
 				throw new BrowserError('Screenshot failed: no data returned')
 			}
@@ -321,7 +321,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			return { bytes, path: options?.path }
 		} finally {
 			if (transparent) {
-				await this.request('Emulation.setDefaultBackgroundColorOverride').catch(() => undefined)
+				await this.send('Emulation.setDefaultBackgroundColorOverride').catch(() => undefined)
 			}
 			if (token !== undefined) {
 				await this.evaluate(compileScreenshotCleanupExpression(token)).catch(() => undefined)
@@ -331,7 +331,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	async pdf(options?: BrowserPDFOptions): Promise<BrowserPDFResult> {
 		this.assert()
-		const result = await this.request('Page.printToPDF', browserPDFToParams(options))
+		const result = await this.send('Page.printToPDF', browserPDFToParams(options))
 		if (!isRecord(result) || !isString(result['data'])) {
 			throw new BrowserError('PDF failed: no data returned')
 		}
@@ -354,14 +354,14 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	async frames(): Promise<readonly BrowserFrameInterface[]> {
 		this.assert()
-		const result = await this.request('Page.getFrameTree')
+		const result = await this.send('Page.getFrameTree')
 		return readBrowserFrames(result).map((frame) => this.#frame(frame))
 	}
 
 	async snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface> {
 		this.assert()
 		const styles = options?.styles ?? []
-		const result = await this.request('DOMSnapshot.captureSnapshot', {
+		const result = await this.send('DOMSnapshot.captureSnapshot', {
 			computedStyles: [...styles],
 			includePaintOrder: options?.paint ?? false,
 			includeDOMRects: options?.rects ?? false,
@@ -412,7 +412,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		return closing
 	}
 
-	protected override assert(): void {
+	override assert(): void {
 		super.assert()
 		if (this.#closed) throw new BrowserError('Browser page is closed')
 	}
@@ -430,7 +430,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		let loader: string | undefined
 
 		try {
-			const result = await this.request('Page.navigate', { url }, timeout)
+			const result = await this.send('Page.navigate', { url }, timeout)
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
 			}
@@ -454,7 +454,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		void wait.catch(() => undefined)
 
 		try {
-			await this.request('Page.reload', undefined, timeout)
+			await this.send('Page.reload', undefined, timeout)
 			await wait
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
@@ -491,7 +491,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	): Promise<BrowserNavigationResult> {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
-		const history = await this.request('Page.getNavigationHistory')
+		const history = await this.send('Page.getNavigationHistory')
 		if (!isRecord(history) || !isInteger(history['currentIndex']) || !isArray(history['entries'])) {
 			throw new BrowserError('Navigation history is malformed')
 		}
@@ -504,7 +504,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout)
 		void wait.catch(() => undefined)
 		try {
-			await this.request('Page.navigateToHistoryEntry', { entryId: entry['id'] }, timeout)
+			await this.send('Page.navigateToHistoryEntry', { entryId: entry['id'] }, timeout)
 			await wait
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
@@ -550,7 +550,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		loader?: string,
 	): Promise<BrowserNavigationResult> {
 		try {
-			const currentUrl = await this.raw('location.href')
+			const currentUrl = await this.evaluate('location.href')
 			const resolved = requireBrowserString(currentUrl, 'Navigation URL')
 			this.update(resolved)
 			return this.#navigationResult(watch, resolved, loader)
@@ -731,7 +731,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	async #stopLoading(timeout: number): Promise<void> {
 		try {
-			await this.request('Page.stopLoading', undefined, timeout)
+			await this.send('Page.stopLoading', undefined, timeout)
 		} catch {
 			// Best-effort only — the original navigation error wins.
 		}

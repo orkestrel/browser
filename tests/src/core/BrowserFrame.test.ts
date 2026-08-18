@@ -4,12 +4,15 @@ import {
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BrowserFrame,
 	BrowserSelectorError,
+	createCDPClient,
 	isBrowserError,
 	isBrowserResultLimitError,
 	isBrowserSelectorError,
+	isCDPTimeoutError,
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
 import {
+	createCDPTransport,
 	createConnectedCDPClient,
 	readCDPExpression,
 	replyOk,
@@ -334,6 +337,22 @@ describe('BrowserFrame', () => {
 		expect(request?.params).toEqual({ depth: 1 })
 	})
 
+	it('bounds one send with its own timeout instead of the client default', async () => {
+		const transport = createCDPTransport()
+		// The client-wide default is far beyond the test timeout, so only the
+		// per-call argument can settle this never-answered request.
+		const client = createCDPClient({ transport, timeout: 600_000 })
+		await client.connect()
+		const frame = new BrowserFrame(
+			client,
+			'session-child',
+			'frame-child',
+			'https://example.com/frame',
+		)
+
+		await expect(frame.send('DOM.getDocument', undefined, 20)).rejects.toSatisfy(isCDPTimeoutError)
+	})
+
 	it('rejects operations after the CDP client disconnects', async () => {
 		const { client } = await createConnectedCDPClient()
 		const frame = new BrowserFrame(
@@ -345,5 +364,33 @@ describe('BrowserFrame', () => {
 		await client.close()
 
 		await expect(frame.evaluate('1')).rejects.toSatisfy(isBrowserError)
+	})
+
+	it('asserts a disconnected frame is unusable before any protocol work', async () => {
+		const { client } = await createConnectedCDPClient()
+		const frame = new BrowserFrame(
+			client,
+			'session-child',
+			'frame-child',
+			'https://example.com/frame',
+		)
+
+		expect(() => frame.assert()).not.toThrow()
+		await client.close()
+		expect(() => frame.assert()).toThrow('Browser frame is disconnected')
+	})
+
+	it('records an externally observed url as the frame url', async () => {
+		const { client } = await createConnectedCDPClient()
+		const frame = new BrowserFrame(
+			client,
+			'session-child',
+			'frame-child',
+			'https://example.com/frame',
+		)
+
+		frame.update('https://example.com/frame/next')
+
+		expect(frame.url).toBe('https://example.com/frame/next')
 	})
 })

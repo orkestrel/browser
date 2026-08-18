@@ -1356,7 +1356,9 @@ export interface BrowserFrameInfo {
  * - `select` — choose option(s) in a `<select>` element
  * - `evaluate` — execute a JavaScript expression in the page context
  * - `wait` — wait for an element state
- * - `send` — issue a raw CDP method in the frame's current target session
+ * - `send` — issue a raw CDP method in the frame's current target session, with an optional per-call timeout
+ * - `assert` — throw when the frame can no longer accept protocol work
+ * - `update` — record an externally observed URL as the frame's current URL
  */
 export interface BrowserFrameInterface {
 	readonly id: string
@@ -1376,10 +1378,16 @@ export interface BrowserFrameInterface {
 	evaluate(expression: string, timeout?: number): Promise<unknown>
 	handle(expression: string): Promise<BrowserHandleInterface>
 	wait(selector: string, options?: BrowserWaitOptions): Promise<void>
-	send(method: string, params?: Readonly<Record<string, unknown>>): Promise<unknown>
+	send(
+		method: string,
+		params?: Readonly<Record<string, unknown>>,
+		timeout?: number,
+	): Promise<unknown>
 	subscribe(method: string, handler: CDPHandler): Promise<void>
 	unsubscribe(method: string, handler: CDPHandler): Promise<void>
 	save(path: string, bytes: Uint8Array): Promise<void>
+	assert(): void
+	update(url: string): void
 }
 
 // === Browser snapshot

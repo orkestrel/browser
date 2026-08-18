@@ -242,7 +242,7 @@ family's — see [`BrowserSnapshotInterface`](#browsersnapshotinterface) below.
 | `BrowserCodegenInterface`     | interface | `emitter` / `started` data members + `start` / `stop` / `actions` / `script` / `clear` / `destroy` methods.                                                                                  |
 | `BrowserSessionFunction`      | type      | `(frame: string) => Promise<string>` — resolves the current CDP target session for a frame.                                                                                                  |
 | `BrowserFrameInfo`            | interface | Serializable `id` / `parent` / `name` / `url` metadata decoded from `Page.getFrameTree`.                                                                                                     |
-| `BrowserFrameInterface`       | interface | Frame metadata plus title/content/actions/evaluation/waiting and raw frame-session CDP access.                                                                                               |
+| `BrowserFrameInterface`       | interface | Frame metadata plus title/content/actions/evaluation/waiting, usability assertion, observed-URL recording, and raw frame-session CDP access.                                                 |
 | `BrowserRect`                 | type      | Readonly `[x, y, width, height]` CSS-pixel tuple.                                                                                                                                            |
 | `BrowserLayout`               | interface | Optional layout box, computed styles, text, paint order, and DOM rectangles for a snapshot node.                                                                                             |
 | `BrowserNode`                 | interface | One flattened serializable DOM node, including attributes, sparse state, frame identity, and layout.                                                                                         |
@@ -987,21 +987,23 @@ evaluation uses a named isolated world and automatically follows an attached
 out-of-process iframe session when Chromium splits the frame into another
 target.
 
-| Method        | Returns                           | Behavior                                                                                   |
-| ------------- | --------------------------------- | ------------------------------------------------------------------------------------------ |
-| `title`       | `Promise<string>`                 | Resolve the frame document title.                                                          |
-| `content`     | `Promise<BrowserContentResult>`   | Extract URL, title, HTML, and visible text with result-size guards.                        |
-| `article`     | `Promise<string>`                 | Distill the frame HTML to reader-facing plain text, boilerplate and hidden regions pruned. |
-| `click`       | `Promise<void>`                   | Strict-by-default visible and enabled CSS-selector click.                                  |
-| `fill`        | `Promise<void>`                   | Strict-by-default editable input or contenteditable fill, dispatching input/change events. |
-| `select`      | `Promise<void>`                   | Strict-by-default option selection on an enabled `<select>`.                               |
-| `evaluate`    | `Promise<unknown>`                | Evaluate an expression in the frame execution world with result-size guarding.             |
-| `handle`      | `Promise<BrowserHandleInterface>` | Evaluate an expression by reference and return a disposable remote object handle.          |
-| `wait`        | `Promise<void>`                   | Wait for attached, detached, visible, or hidden selector state.                            |
-| `send`        | `Promise<unknown>`                | Issue a raw CDP method in the frame's current target session.                              |
-| `subscribe`   | `Promise<void>`                   | Subscribe to a CDP event in the frame's current target session.                            |
-| `unsubscribe` | `Promise<void>`                   | Remove a frame-session CDP event subscription.                                             |
-| `save`        | `Promise<void>`                   | Persist bytes through a page writer; child frames reject because they own no writer.       |
+| Method        | Returns                           | Behavior                                                                                                                                                                                                                           |
+| ------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`       | `Promise<string>`                 | Resolve the frame document title.                                                                                                                                                                                                  |
+| `content`     | `Promise<BrowserContentResult>`   | Extract URL, title, HTML, and visible text with result-size guards.                                                                                                                                                                |
+| `article`     | `Promise<string>`                 | Distill the frame HTML to reader-facing plain text, boilerplate and hidden regions pruned.                                                                                                                                         |
+| `click`       | `Promise<void>`                   | Strict-by-default visible and enabled CSS-selector click.                                                                                                                                                                          |
+| `fill`        | `Promise<void>`                   | Strict-by-default editable input or contenteditable fill, dispatching input/change events.                                                                                                                                         |
+| `select`      | `Promise<void>`                   | Strict-by-default option selection on an enabled `<select>`.                                                                                                                                                                       |
+| `evaluate`    | `Promise<unknown>`                | Evaluate an expression in the frame execution world with result-size guarding.                                                                                                                                                     |
+| `handle`      | `Promise<BrowserHandleInterface>` | Evaluate an expression by reference and return a disposable remote object handle.                                                                                                                                                  |
+| `wait`        | `Promise<void>`                   | Wait for attached, detached, visible, or hidden selector state.                                                                                                                                                                    |
+| `send`        | `Promise<unknown>`                | Issue a raw CDP method in the frame's current target session, with an optional per-call `timeout` overriding the client-wide default.                                                                                              |
+| `subscribe`   | `Promise<void>`                   | Subscribe to a CDP event in the frame's current target session.                                                                                                                                                                    |
+| `unsubscribe` | `Promise<void>`                   | Remove a frame-session CDP event subscription.                                                                                                                                                                                     |
+| `save`        | `Promise<void>`                   | Persist bytes through a page writer; child frames reject because they own no writer.                                                                                                                                               |
+| `assert`      | `void`                            | Throw a coded `BrowserError` when the frame can no longer accept protocol work: `BrowserFrame` throws once the CDP client disconnects, and `BrowserPage` also throws once the page closes. Every other method here calls it first. |
+| `update`      | `void`                            | Record an externally observed URL as the frame's current `url`. `BrowserPage` calls it from its own `Page.frameNavigated` handler.                                                                                                 |
 
 ```ts
 const child = await page.frame('checkout')
@@ -1019,7 +1021,10 @@ const onLoad = () => log('loaded')
 await child?.subscribe('Page.loadEventFired', onLoad)
 await child?.unsubscribe('Page.loadEventFired', onLoad)
 const root = await child?.send('DOM.getDocument')
+const tree = await child?.send('DOM.getDocument', { depth: 1 }, 5_000) // per-call timeout
 await page.save('./artifact.bin', new Uint8Array([1, 2, 3]))
+child?.assert() // throws once the client disconnects, or the page closes
+child?.update('https://example.com/checkout') // record a URL observed elsewhere
 ```
 
 #### `BrowserPageInterface`

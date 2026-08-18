@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { createCDPClient } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
 import {
@@ -9,7 +9,7 @@ import {
 	CDPConnectionError,
 	CDPTimeoutError,
 } from '@src/core'
-import { createRecorder } from '@orkestrel/test'
+import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { createCDPTransport, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
@@ -100,22 +100,20 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects immediately without leaking a pending timer when params are not serializable', async () => {
-			vi.useFakeTimers()
-			try {
-				await client.connect()
-				const circular: Record<string, unknown> = {}
-				circular['self'] = circular
+			const timedClient = createCDPClient({ transport, timeout: 20 })
+			await timedClient.connect()
+			const circular: Record<string, unknown> = {}
+			circular['self'] = circular
 
-				const sent = client.send('Bad.method', circular)
-				sent.catch(() => undefined)
+			const sent = timedClient.send('Bad.method', circular)
+			sent.catch(() => undefined)
 
-				// Advance well past the timeout window — if a pending entry leaked,
-				// this would trigger a second, late timeout rejection.
-				await vi.advanceTimersByTimeAsync(10_000)
-				await expect(sent).rejects.toThrow('Converting circular structure to JSON')
-			} finally {
-				vi.useRealTimers()
-			}
+			// Wait past the timeout window — if a pending entry leaked, a late
+			// timeout rejection would replace the serialization failure.
+			await waitForDelay(50)
+			await expect(sent).rejects.toThrow('Converting circular structure to JSON')
+			// Serialization failed before the frame reached the transport.
+			expect(transport.sent).toHaveLength(0)
 		})
 
 		it('rejects when not connected', async () => {
@@ -136,58 +134,41 @@ describe('CDPClient', () => {
 		})
 
 		it('times out a pending request', async () => {
-			vi.useFakeTimers()
-			try {
-				const timedClient = createCDPClient({ transport, timeout: 20 })
-				await timedClient.connect()
+			const timedClient = createCDPClient({ transport, timeout: 20 })
+			await timedClient.connect()
 
-				const pending = timedClient.send('Never.replies')
-				await Promise.all([
-					expect(pending).rejects.toThrow('timed out'),
-					vi.advanceTimersByTimeAsync(25),
-				])
-			} finally {
-				vi.useRealTimers()
-			}
+			await expect(timedClient.send('Never.replies')).rejects.toThrow('timed out')
 		})
 
 		it('rejects a timed-out request with a coded CDPTimeoutError carrying method/timeout', async () => {
-			vi.useFakeTimers()
-			try {
-				const timedClient = createCDPClient({ transport, timeout: 20 })
-				await timedClient.connect()
+			const timedClient = createCDPClient({ transport, timeout: 20 })
+			await timedClient.connect()
 
-				const pending = timedClient.send('Never.replies').catch((caught: unknown) => caught)
-				await vi.advanceTimersByTimeAsync(25)
-				const thrown = await pending
+			const thrown: unknown = await timedClient
+				.send('Never.replies')
+				.catch((caught: unknown) => caught)
 
-				expect(isCDPTimeoutError(thrown)).toBe(true)
-				expect(thrown instanceof CDPTimeoutError ? thrown.context?.['method'] : undefined).toBe(
-					'Never.replies',
-				)
-				expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
-			} finally {
-				vi.useRealTimers()
-			}
+			expect(isCDPTimeoutError(thrown)).toBe(true)
+			expect(thrown instanceof CDPTimeoutError ? thrown.context?.['method'] : undefined).toBe(
+				'Never.replies',
+			)
+			expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
 		})
 
 		it('uses a per-call timeout that overrides the client-wide default', async () => {
-			vi.useFakeTimers()
-			try {
-				const longClient = createCDPClient({ transport, timeout: 10_000 })
-				await longClient.connect()
+			const longClient = createCDPClient({ transport, timeout: 10_000 })
+			await longClient.connect()
 
-				const pending = longClient
-					.send('Never.replies', undefined, undefined, 20)
-					.catch((caught: unknown) => caught)
-				await vi.advanceTimersByTimeAsync(25)
-				const thrown = await pending
+			const started = performance.now()
+			const thrown: unknown = await longClient
+				.send('Never.replies', undefined, undefined, 20)
+				.catch((caught: unknown) => caught)
+			const elapsed = performance.now() - started
 
-				expect(isCDPTimeoutError(thrown)).toBe(true)
-				expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
-			} finally {
-				vi.useRealTimers()
-			}
+			expect(isCDPTimeoutError(thrown)).toBe(true)
+			expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
+			// The 10s client-wide default never bounded this call.
+			expect(elapsed).toBeLessThan(1_000)
 		})
 	})
 
@@ -405,8 +386,4 @@ describe('CDPClient', () => {
 			expect(transport.closed).toBe(true)
 		})
 	})
-})
-
-afterEach(() => {
-	vi.useRealTimers()
 })

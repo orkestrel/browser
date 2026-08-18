@@ -181,9 +181,13 @@ export class BrowserFrame implements BrowserFrameInterface {
 		await this.#selectors.css(selector).wait(options)
 	}
 
-	async send(method: string, params?: Readonly<Record<string, unknown>>): Promise<unknown> {
+	async send(
+		method: string,
+		params?: Readonly<Record<string, unknown>>,
+		timeout?: number,
+	): Promise<unknown> {
 		this.assert()
-		return await this.#client.send(method, params, await this.#sessionId())
+		return await this.#client.send(method, params, await this.#sessionId(), timeout)
 	}
 
 	async subscribe(method: string, handler: CDPHandler): Promise<void> {
@@ -200,25 +204,13 @@ export class BrowserFrame implements BrowserFrameInterface {
 		throw new BrowserError('Browser frame has no configured file writer', undefined, { path })
 	}
 
-	protected assert(): void {
+	assert(): void {
 		if (!this.#client.connected) {
 			throw new BrowserError('Browser frame is disconnected', undefined, { frame: this.#id })
 		}
 	}
 
-	protected async request(
-		method: string,
-		params?: Readonly<Record<string, unknown>>,
-		timeout?: number,
-	): Promise<unknown> {
-		return await this.#client.send(method, params, await this.#sessionId(), timeout)
-	}
-
-	protected async raw(expression: string, timeout?: number): Promise<unknown> {
-		return await this.#evaluate(expression, timeout)
-	}
-
-	protected update(url: string): void {
+	update(url: string): void {
 		this.#url = url
 	}
 
