@@ -25,7 +25,7 @@ import {
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
 } from '@src/core'
-import { createRecorder, requireValue, waitForDelay } from '@orkestrel/test'
+import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
 	createCDPTransport,
 	createConnectedCDPClient,
@@ -37,7 +37,6 @@ import {
 	scriptFrameTree,
 	scriptSelectorPresent,
 	scriptTrustedSelector,
-	waitForCondition,
 	JPEG_BASE64,
 	PNG_BASE64,
 } from '../../setup.js'
@@ -972,7 +971,7 @@ describe('BrowserPage', () => {
 				},
 				'session-1',
 			)
-			await waitForCondition(() =>
+			await waitForCondition('the out-of-process frame session enabled Runtime', () =>
 				transport.sent.some(
 					(message) => message.method === 'Runtime.enable' && message.sessionId === 'session-oopif',
 				),
@@ -1088,7 +1087,7 @@ describe('BrowserPage', () => {
 			const codegen = await page.codegen()
 
 			transport.event('Target.targetDestroyed', { targetId: 'target-1' })
-			await waitForCondition(() => !codegen.started)
+			await waitForCondition('the codegen recorder stopped', () => !codegen.started)
 			await page.close()
 
 			expect(codegen.started).toBe(false)
@@ -1357,7 +1356,7 @@ describe('BrowserPage events', () => {
 			},
 			'session-1',
 		)
-		await waitForCondition(() => workers.count === 1)
+		await waitForCondition('the worker event was delivered', () => workers.count === 1)
 
 		expect(workers.calls[0]?.[0]).toMatchObject({
 			id: 'worker-1',
@@ -1399,7 +1398,7 @@ describe('BrowserPage events', () => {
 			},
 			'session-1',
 		)
-		await waitForCondition(() => popups.count === 1)
+		await waitForCondition('the popup event was delivered', () => popups.count === 1)
 
 		const popup = popups.calls[0]?.[0]
 		expect(popup).toMatchObject({

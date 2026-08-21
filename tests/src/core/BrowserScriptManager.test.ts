@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError } from '@src/core'
-import { createConnectedCDPClient, replyOk, waitForCondition } from '../../setup.js'
+import { waitForCondition } from '@orkestrel/test'
+import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserScriptManager', () => {
 	it('installs a script for future documents and evaluates it in the current document', async () => {
@@ -51,7 +52,7 @@ describe('BrowserScriptManager', () => {
 			},
 			'session-1',
 		)
-		await waitForCondition(() =>
+		await waitForCondition('the script was evaluated in context 9', () =>
 			transport.sent.some(
 				(message) => message.method === 'Runtime.evaluate' && message.params?.['contextId'] === 9,
 			),

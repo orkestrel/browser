@@ -8,7 +8,6 @@ import type {
 import { BrowserCodegen, createCDPClient } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { waitForDelay } from '@orkestrel/test'
 
 /** Ignore an intentional callback invocation. */
 export function ignoreCall(): void {
@@ -23,28 +22,6 @@ export function ignoreAsyncCall(): Promise<void> {
 /** Throw the stable listener failure used by emitter containment tests. */
 export function throwListenerError(): never {
 	throw new Error('listener failed')
-}
-
-/**
- * Wait until `condition` becomes true, rejecting when `timeout` elapses.
- *
- * @param condition - The observable condition to check
- * @param timeout - Maximum wait in milliseconds
- * @param interval - Delay between checks in milliseconds
- * @returns A promise resolving once the condition is true
- */
-export async function waitForCondition(
-	condition: () => boolean,
-	timeout = 1000,
-	interval = 10,
-): Promise<void> {
-	const deadline = Date.now() + timeout
-	while (!condition()) {
-		if (Date.now() >= deadline) {
-			throw new Error(`Condition was not met within ${timeout}ms`)
-		}
-		await waitForDelay(interval)
-	}
 }
 
 /** Evaluate a JavaScript expression fixture and expose its result as unknown. */

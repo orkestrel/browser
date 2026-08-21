@@ -1,13 +1,8 @@
 import type { BrowserWebSocketFrame, BrowserWebSocketInterface } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError } from '@src/core'
-import { createRecorder } from '@orkestrel/test'
-import {
-	createConnectedCDPClient,
-	ignoreAsyncCall,
-	replyOk,
-	waitForCondition,
-} from '../../setup.js'
+import { createRecorder, waitForCondition } from '@orkestrel/test'
+import { createConnectedCDPClient, ignoreAsyncCall, replyOk } from '../../setup.js'
 
 describe('BrowserNetworkManager', () => {
 	it('decodes requests, redirects, responses, failures, and completion events', async () => {
@@ -171,7 +166,7 @@ describe('BrowserNetworkManager', () => {
 			},
 			'session-1',
 		)
-		await waitForCondition(() =>
+		await waitForCondition('the route fulfilled the request', () =>
 			transport.sent.some((message) => message.method === 'Fetch.fulfillRequest'),
 		)
 
@@ -205,7 +200,7 @@ describe('BrowserNetworkManager', () => {
 			},
 			'session-1',
 		)
-		await waitForCondition(() =>
+		await waitForCondition('the route failed the request', () =>
 			transport.sent.some((message) => message.method === 'Fetch.failRequest'),
 		)
 
@@ -230,7 +225,7 @@ describe('BrowserNetworkManager', () => {
 			{ requestId: 'fetch-malformed', request: { url: 42 } },
 			'session-1',
 		)
-		await waitForCondition(() =>
+		await waitForCondition('the malformed route failed the request', () =>
 			transport.sent.some((message) => message.method === 'Fetch.failRequest'),
 		)
 
@@ -260,7 +255,7 @@ describe('BrowserNetworkManager', () => {
 			},
 			'session-1',
 		)
-		await waitForCondition(() =>
+		await waitForCondition('the route continued the request', () =>
 			transport.sent.some((message) => message.method === 'Fetch.continueRequest'),
 		)
 		await page.network.unroute(handler)
@@ -277,7 +272,7 @@ describe('BrowserNetworkManager', () => {
 		await page.network.credentials({ username: 'user', password: 'secret' })
 
 		transport.event('Fetch.authRequired', { requestId: 'auth-1' }, 'session-1')
-		await waitForCondition(() =>
+		await waitForCondition('the route answered the auth challenge', () =>
 			transport.sent.some((message) => message.method === 'Fetch.continueWithAuth'),
 		)
 

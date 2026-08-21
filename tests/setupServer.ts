@@ -9,9 +9,8 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { isRecord, isString } from '@orkestrel/contract'
 import { createNodeWebSocket } from '@orkestrel/websocket'
-import { createScratch } from '@orkestrel/test/server'
-import { createTeardown } from '@orkestrel/test'
-import { waitForCondition } from './setup.js'
+import { createScratch, isRunning } from '@orkestrel/test/server'
+import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
 
 /**
  * Reserve a free localhost port by binding an ephemeral server to port 0 and
@@ -42,21 +41,6 @@ export function readServerPort(server: NetServer): number {
 // === Server-only test helpers (AGENTS §16.1 — node:* allowed here)
 
 /**
- * Whether a process currently accepts signal `0`.
- *
- * @param pid - Process identifier to probe
- * @returns True while the process is alive
- */
-export function isProcessAlive(pid: number): boolean {
-	try {
-		process.kill(pid, 0)
-		return true
-	} catch {
-		return false
-	}
-}
-
-/**
  * Wait until a process exits.
  *
  * @param pid - Process identifier to observe
@@ -64,7 +48,10 @@ export function isProcessAlive(pid: number): boolean {
  * @returns A promise resolving after the process exits
  */
 export function waitForProcessExit(pid: number, timeout = 5000): Promise<void> {
-	return waitForCondition(() => !isProcessAlive(pid), timeout, 50)
+	return waitForCondition(`process ${pid} has exited`, () => !isRunning(pid), {
+		budget: timeout,
+		interval: 50,
+	})
 }
 
 const tempDirectoryTeardown = createTeardown()
@@ -482,26 +469,21 @@ export async function destroyFakeBrowsers(): Promise<void> {
 }
 
 /**
- * Read a fixture process identifier once its spawned script has published it.
+ * Read a fixture process identifier after its spawned script has published it.
  *
  * @param scratch - The fixture's owned scratch directory
  * @param name - Root-relative pid file name written by the fixture process
  * @returns The published process identifier
+ * @remarks The predicate rejects a torn write as well as a missing file, so a partially flushed
+ * pid is retried rather than returned as `NaN`.
  */
-export async function readFixtureProcessId(
-	scratch: ScratchInterface,
-	name: string,
-): Promise<number> {
-	for (let attempt = 0; attempt < 50; attempt++) {
-		try {
-			const contents = scratch.read(name)?.trim()
-			if (contents !== undefined && contents.length > 0) return Number(contents)
-		} catch {
-			// Not written yet
-		}
-		await new Promise((resolve) => setTimeout(resolve, 20))
-	}
-	throw new Error(`Fake browser process never wrote its pid to ${join(scratch.path, name)}`)
+export function readFixtureProcessId(scratch: ScratchInterface, name: string): Promise<number> {
+	return retryUntil(
+		`the fake browser pid at ${join(scratch.path, name)}`,
+		() => Number(scratch.read(name)?.trim()),
+		(pid) => Number.isInteger(pid) && pid > 0,
+		{ attempts: 50, interval: 20, budget: 1000 },
+	)
 }
 
 /** A real, spawned stand-in "browser" process for exercising Browser's launch path. */
@@ -672,35 +654,28 @@ export function createFakeBrowserProcess(
 			return readFixtureProcessId(scratch, 'descendant.txt')
 		},
 		async arguments(): Promise<readonly string[]> {
-			for (let attempt = 0; attempt < 50; attempt++) {
-				try {
+			const argv = await retryUntil(
+				`the fake browser argument vector at ${argumentsFile}`,
+				() => {
 					const text = scratch.read('arguments.json')
 					const parsed: unknown = text === undefined ? undefined : JSON.parse(text)
-					if (Array.isArray(parsed) && parsed.every(isString)) return parsed
-				} catch {
-					// Not written yet
-				}
-				await new Promise((resolve) => setTimeout(resolve, 20))
-			}
-			throw new Error(`Fake browser process never wrote its arguments to ${argumentsFile}`)
+					return Array.isArray(parsed) && parsed.every(isString) ? parsed : undefined
+				},
+				(value) => value !== undefined,
+				{ attempts: 50, interval: 20, budget: 1000 },
+			)
+			return requireValue(
+				argv,
+				`Fake browser process never wrote its arguments to ${argumentsFile}`,
+			)
 		},
 		async dropSocket(): Promise<void> {
-			let dropPort: number | undefined
-			for (let attempt = 0; attempt < 50; attempt++) {
-				try {
-					const contents = scratch.read('port.txt')?.trim()
-					if (contents !== undefined && contents.length > 0) {
-						dropPort = Number(contents)
-						break
-					}
-				} catch {
-					// Not written yet
-				}
-				await new Promise((resolve) => setTimeout(resolve, 20))
-			}
-			if (dropPort === undefined) {
-				throw new Error(`Fake browser process never wrote its listening port to ${portFile}`)
-			}
+			const dropPort = await retryUntil(
+				`the fake browser listening port at ${portFile}`,
+				() => Number(scratch.read('port.txt')?.trim()),
+				(port) => Number.isInteger(port) && port > 0,
+				{ attempts: 50, interval: 20, budget: 1000 },
+			)
 			await fetch(`http://127.0.0.1:${dropPort}/__drop`)
 		},
 	}

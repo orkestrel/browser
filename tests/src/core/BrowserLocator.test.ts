@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError, isBrowserSelectorError } from '@src/core'
+import { waitForCondition } from '@orkestrel/test'
 import {
 	createConnectedCDPClient,
 	createScreenshotWriter,
@@ -7,7 +8,6 @@ import {
 	replyOk,
 	scriptEvaluate,
 	scriptTrustedSelector,
-	waitForCondition,
 } from '../../setup.js'
 
 describe('BrowserLocator', () => {
@@ -185,7 +185,7 @@ describe('BrowserLocator', () => {
 		expect(result.path).toBe('card.png')
 		expect(writer.calls).toHaveLength(1)
 		expect(Array.from(writer.calls[0]?.data ?? [])).toEqual([137, 80, 78, 71, 13])
-		await waitForCondition(() =>
+		await waitForCondition('the resolved object was released', () =>
 			transport.sent.some((message) => message.method === 'Runtime.releaseObject'),
 		)
 	})

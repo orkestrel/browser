@@ -28,7 +28,8 @@ import {
 } from '@src/server'
 import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError, compileCodegenScript } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
-import { createRecorder, requireValue, waitForDelay } from '@orkestrel/test'
+import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { isRunning } from '@orkestrel/test/server'
 import {
 	createCDPTestServer,
 	createFakeBrowserProcess,
@@ -37,11 +38,10 @@ import {
 	reservePort,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
-	isProcessAlive,
 	readServerPort,
 	waitForProcessExit,
 } from '../../setupServer.js'
-import { ignoreCall, throwListenerError, waitForCondition } from '../../setup.js'
+import { ignoreCall, throwListenerError } from '../../setup.js'
 
 const REQUESTED_BROWSER_ENGINE = process.env['BROWSER_COMPATIBILITY_ENGINE']
 const REAL_BROWSER_ENGINE: BrowserEngine | undefined =
@@ -123,7 +123,7 @@ describe('Browser idle state', () => {
 			error: errors.handler,
 		})
 
-		await waitForCondition(() => errors.count === 1)
+		await waitForCondition('the idle error was reported', () => errors.count === 1)
 		expect(errors.calls[0]?.[1]).toBe('idle')
 	})
 
@@ -416,7 +416,9 @@ describe('Browser connect() via CDP discovery', () => {
 
 		await browser.disconnect()
 
-		await waitForCondition(() => server?.sockets === 0, 500)
+		await waitForCondition('the test server has no open sockets', () => server?.sockets === 0, {
+			budget: 500,
+		})
 		expect(server.sockets).toBe(0)
 
 		await browser.connect()
@@ -640,7 +642,7 @@ describe('Browser launch path', () => {
 		expect(browser.connected).toBe(false)
 		expect(browser.owned).toBe(true)
 		expect(browser.pid).toBe(pid)
-		expect(isProcessAlive(pid)).toBe(true)
+		expect(isRunning(pid)).toBe(true)
 
 		await browser.connect()
 		expect(browser.connected).toBe(true)
@@ -1031,7 +1033,10 @@ describe('Browser external-disconnect detection', () => {
 
 		await testServer.close()
 		server = undefined
-		await waitForCondition(() => disconnect.count === 1)
+		await waitForCondition(
+			'the browser reported one disconnect after the server closed',
+			() => disconnect.count === 1,
+		)
 
 		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
@@ -1094,7 +1099,7 @@ describe('Browser external-disconnect detection', () => {
 		await fake.dropSocket()
 		process.kill(pid, 'SIGKILL')
 
-		await waitForCondition(() => browser.pid === undefined)
+		await waitForCondition('the browser released its process id', () => browser.pid === undefined)
 
 		expect(browser.status).toBe('disconnected')
 		expect(browser.pid).toBeUndefined()
@@ -1127,7 +1132,10 @@ describe('Browser external-disconnect detection', () => {
 		const pid = await fake.pid()
 
 		await fake.dropSocket()
-		await waitForCondition(() => disconnect.count === 1)
+		await waitForCondition(
+			'the browser reported one disconnect after the socket dropped',
+			() => disconnect.count === 1,
+		)
 
 		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
@@ -1171,7 +1179,10 @@ describe('Browser external-disconnect detection', () => {
 		const descendant = process.platform === 'win32' ? undefined : await fake.descendant()
 
 		process.kill(pid, 'SIGKILL')
-		await waitForCondition(() => disconnect.count === 1)
+		await waitForCondition(
+			'the browser reported one disconnect after the process was killed',
+			() => disconnect.count === 1,
+		)
 
 		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
@@ -1185,7 +1196,7 @@ describe('Browser external-disconnect detection', () => {
 
 		await expect(browser.destroy()).resolves.toBeUndefined()
 		expect(browser.pid).toBeUndefined()
-		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
+		expect(descendant === undefined || !isRunning(descendant)).toBe(true)
 	})
 })
 
@@ -1267,7 +1278,7 @@ describe('Browser destroy()/close() matrix', () => {
 		await expect(browser.close()).resolves.toBeUndefined()
 
 		expect(browser.pid).toBeUndefined()
-		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
+		expect(descendant === undefined || !isRunning(descendant)).toBe(true)
 		expect(browser.connected).toBe(false)
 	}, 10_000)
 })
@@ -1356,7 +1367,7 @@ describe('Browser abort mid-connect', () => {
 		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
 
 		expect(browser.pid).toBeUndefined()
-		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
+		expect(descendant === undefined || !isRunning(descendant)).toBe(true)
 	})
 })
 
@@ -1381,7 +1392,7 @@ describe('Browser post-spawn connect failure', () => {
 		expect(isBrowserConnectionError(await failure)).toBe(true)
 
 		expect(browser.pid).toBeUndefined()
-		expect(descendant === undefined || !isProcessAlive(descendant)).toBe(true)
+		expect(descendant === undefined || !isRunning(descendant)).toBe(true)
 	})
 })
 
@@ -1438,7 +1449,7 @@ describe('Browser destroy() kill escalation', () => {
 
 			expect(browser.pid).toBeUndefined()
 			expect(browser.connected).toBe(false)
-			expect(isProcessAlive(descendant)).toBe(false)
+			expect(isRunning(descendant)).toBe(false)
 		},
 		15_000,
 	)
@@ -1852,7 +1863,10 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 			// Sever the transport: destroy every piped socket and close the
 			// proxy server — the browser process itself is untouched.
 			await proxy.stop()
-			await waitForCondition(() => errors.count === 1 && disconnect.count === 1)
+			await waitForCondition(
+				'the browser reported one error and one disconnect',
+				() => errors.count === 1 && disconnect.count === 1,
+			)
 
 			expect(errors.count).toBe(1)
 			expect(disconnect.count).toBe(1)
@@ -1928,12 +1942,15 @@ describe.runIf(REAL_BROWSER_EXECUTABLE !== undefined)('Browser real launch', () 
 
 			// Attached close() does not await the remote process. Observe the owner's
 			// actual lifecycle and the OS process rather than sleeping for a fixed delay.
-			await waitForCondition(() => disconnect.count > 0, 20_000, 50)
+			await waitForCondition('the owner reported a disconnect', () => disconnect.count > 0, {
+				budget: 20_000,
+				interval: 50,
+			})
 			expect(owner.connected).toBe(false)
 			const livePid = requireValue(pid)
 			await waitForProcessExit(livePid)
 			expect(disconnect.count).toBe(1)
-			expect(isProcessAlive(livePid)).toBe(false)
+			expect(isRunning(livePid)).toBe(false)
 		} finally {
 			// Safety net — no-op once close() has already torn everything down.
 			await owner?.destroy()

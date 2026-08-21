@@ -1,14 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { BrowserPageInterface } from '@src/core'
 import { BrowserContext } from '@src/core'
-import { createRecorder } from '@orkestrel/test'
-import {
-	createConnectedCDPClient,
-	createTarget,
-	replyOk,
-	scriptCDPAttach,
-	waitForCondition,
-} from '../../setup.js'
+import { createRecorder, waitForCondition } from '@orkestrel/test'
+import { createConnectedCDPClient, createTarget, replyOk, scriptCDPAttach } from '../../setup.js'
 
 // === BrowserContext
 
@@ -121,7 +115,7 @@ describe('BrowserContext', () => {
 				},
 				'session-1',
 			)
-			await waitForCondition(() => context.pages().length === 2)
+			await waitForCondition('the context reports two pages', () => context.pages().length === 2)
 
 			expect(pages.count).toBe(1)
 			expect(

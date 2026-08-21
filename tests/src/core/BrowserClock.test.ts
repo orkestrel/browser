@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError } from '@src/core'
-import { createConnectedCDPClient, replyOk, waitForCondition } from '../../setup.js'
+import { waitForCondition } from '@orkestrel/test'
+import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserClock', () => {
 	it('installs, advances by a budget event, pauses, resumes, and uninstalls virtual time', async () => {
@@ -80,7 +81,7 @@ describe('BrowserClock', () => {
 		await page.clock.install(1_000)
 
 		const active = page.clock.advance(10)
-		await waitForCondition(() =>
+		await waitForCondition('a virtual time budget of 10 was sent', () =>
 			transport.sent.some((message) => message.params?.['budget'] === 10),
 		)
 
