@@ -1,5 +1,6 @@
 import type { BrowserHAR } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { waitForDelay } from '@orkestrel/test'
 import { browserHARHeadersToRecord, BrowserPage, validateBrowserHAR } from '@src/core'
 import { createConnectedCDPClient, createScreenshotWriter, replyOk } from '../../setup.js'
 
@@ -149,7 +150,7 @@ describe('BrowserHARManager', () => {
 				'session-1',
 			)
 		}
-		await new Promise((resolve) => setTimeout(resolve, 0))
+		await waitForDelay(0)
 
 		expect(
 			transport.sent.some(
