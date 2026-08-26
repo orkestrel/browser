@@ -31,6 +31,7 @@ import { isRecord } from '@orkestrel/contract'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
+	COOPERATIVE_SIGTERM,
 	createCDPTestServer,
 	createFakeBrowserProcess,
 	createTempDirectory,
@@ -758,6 +759,98 @@ describe('Browser launch path', () => {
 	})
 })
 
+describe('Browser launcher hand-off', () => {
+	it('takes over the process serving CDP when the spawned launcher exits 0 before readiness', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true, launcher: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 10_000,
+		})
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+		expect(browser.connection).toBe('launch')
+
+		const launcher = await fake.pid()
+		const serving = await fake.browser()
+		expect(serving).not.toBe(launcher)
+
+		// The spawned process is gone, so a session that owned it would own
+		// nothing; the session must own the process answering CDP instead.
+		await waitForProcessExit(launcher)
+		expect(isRunning(launcher)).toBe(false)
+		expect(browser.pid).toBe(serving)
+		expect(browser.owned).toBe(true)
+
+		await browser.destroy()
+		await waitForProcessExit(serving)
+		expect(isRunning(serving)).toBe(false)
+		expect(browser.pid).toBeUndefined()
+	}, 20_000)
+
+	it('rejects when the spawned process exits with a nonzero code', async () => {
+		// A real spawned executable that exits 3 straight away. The script is a
+		// file rather than `node -e`, so the CDP flags that follow it stay
+		// script arguments instead of being parsed as Node options.
+		const script = createTempDirectory('orkestrel-browser-exit-').write(
+			'exit.js',
+			'process.exit(3)\n',
+		)
+		const browser = createBrowser({
+			executable: process.execPath,
+			args: [script],
+			cdp: { port: await reservePort() },
+			timeout: 10_000,
+		})
+
+		await expect(browser.connect()).rejects.toThrow(
+			'Browser process exited before CDP became ready (code: 3)',
+		)
+		expect(browser.status).toBe('error')
+		expect(browser.pid).toBeUndefined()
+	}, 20_000)
+
+	it('rejects when a clean exit leaves no process serving CDP within the readiness budget', async () => {
+		const script = createTempDirectory('orkestrel-browser-exit-').write(
+			'exit.js',
+			'process.exit(0)\n',
+		)
+		const browser = createBrowser({
+			executable: process.execPath,
+			args: [script],
+			cdp: { port: await reservePort() },
+			timeout: 1500,
+		})
+
+		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		expect(browser.status).toBe('error')
+		expect(browser.pid).toBeUndefined()
+	}, 20_000)
+
+	it('rejects and closes the endpoint when it does not name the process serving it', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true, launcher: true, unnamed: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 3000,
+		})
+
+		await expect(browser.connect()).rejects.toThrow(
+			'The browser launcher exited without naming the process serving its CDP endpoint',
+		)
+		expect(browser.status).toBe('error')
+		expect(browser.pid).toBeUndefined()
+
+		// A browser the session cannot own is closed rather than left running.
+		const serving = await fake.browser()
+		await waitForProcessExit(serving)
+		expect(isRunning(serving)).toBe(false)
+	}, 20_000)
+})
+
 describe('Browser pid', () => {
 	it('is undefined before connecting', () => {
 		const browser = createBrowser()
@@ -1420,10 +1513,9 @@ describe('Browser destroy() kill escalation', () => {
 		expect(browser.connected).toBe(false)
 	})
 
-	// Windows cannot trap SIGTERM (Node delivers it as an unconditional
-	// terminate, not a catchable signal), so the ignore-then-escalate path
-	// is only observable on POSIX platforms.
-	it.runIf(process.platform !== 'win32')(
+	// The ignore-then-escalate path is only observable where SIGTERM is a
+	// catchable signal a process can trap; see `COOPERATIVE_SIGTERM`.
+	it.runIf(COOPERATIVE_SIGTERM)(
 		'escalates the full process group to SIGKILL before destroy resolves',
 		async () => {
 			const fake = createFakeBrowserProcess({

@@ -206,15 +206,17 @@ export interface BrowserOptions {
  *   process exiting on its own) drives the disconnected state, preceded by
  *   a coded `error` — `connect()` on the same instance can reattach afterward.
  * - `destroy` — release local resources. On a launched browser this closes
- *   pages/contexts, then kills and awaits the process plus its POSIX process
- *   group. On an adopted browser it sends `Browser.close`. On a merely
+ *   pages/contexts, then kills and awaits the process serving the CDP endpoint
+ *   plus its POSIX process group. On an adopted browser it sends
+ *   `Browser.close`. On a merely
  *   attached browser this is a LOCAL DETACH ONLY because other clients may
  *   share its targets. Idempotent.
  * - `close` — graceful REMOTE shutdown: best-effort sends CDP `Browser.close`
- *   (works whether attached or owned), and when owned also awaits the
- *   process's exit and POSIX group drain (escalating to a kill only if needed),
- *   then performs the same local cleanup as `destroy()`. Use this to shut
- *   down a browser this instance doesn't own but wants to terminate anyway.
+ *   (works whether attached or owned), and when owned also awaits the exit of
+ *   the process serving the CDP endpoint plus its POSIX process-group drain
+ *   (escalating to a kill only if needed), then performs the same local cleanup
+ *   as `destroy()`. Use this to shut down a browser this instance doesn't own
+ *   but wants to terminate anyway.
  *
  * **Page management:**
  * - `context(index?)` → one context or first
@@ -236,12 +238,17 @@ export interface BrowserInterface {
 	readonly owned: boolean | undefined
 	readonly connected: boolean
 	/**
-	 * The process this instance launched, if any, while it is believed alive.
+	 * The process serving this session's CDP endpoint, if any, while it is
+	 * believed alive.
 	 *
 	 * @remarks
-	 * Remains readable after a persistent disconnect (the process keeps
-	 * running, detached from the transport) until `destroy()` or an
-	 * observed process exit clears it.
+	 * A launch owns the process behind its endpoint rather than the process it
+	 * spawned. The two are the same until the spawned process is a launcher
+	 * that re-executes the browser and exits before the endpoint answers —
+	 * Microsoft Edge on Windows — in which case this reports the process the
+	 * launcher handed the endpoint to. Remains readable after a persistent
+	 * disconnect (the process keeps running, detached from the transport)
+	 * until `destroy()` or an observed process exit clears it.
 	 */
 	readonly pid: number | undefined
 	discover(): Promise<BrowserDiscoveryResult>

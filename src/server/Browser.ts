@@ -74,6 +74,10 @@ export class Browser implements BrowserInterface {
 	#endpoint: string | undefined
 	#client: CDPClient | undefined
 	#process: ChildProcess | undefined
+	// Identifier the launcher handed the endpoint to when it re-executed the
+	// browser and exited before CDP became ready. Undefined whenever the
+	// spawned child is itself the process serving the endpoint.
+	#servingPid: number | undefined
 	#profile: BrowserProfileResult | undefined
 	#contexts: BrowserContext[] = []
 	#destroyed = false
@@ -128,7 +132,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	get pid(): number | undefined {
-		return this.#process?.pid
+		return this.#servingPid ?? this.#process?.pid
 	}
 
 	async discover(): Promise<BrowserDiscoveryResult> {
@@ -404,6 +408,7 @@ export class Browser implements BrowserInterface {
 		this.#unbindTransport()
 		this.#unbindProcess()
 		this.#process = undefined
+		this.#servingPid = undefined
 		const cleanup = this.#cleanupExitedProcess(process, contexts, client)
 		this.#exitCleanup = cleanup
 		void cleanup.catch((error: unknown) => this.#emitter.emit('error', error))
@@ -430,36 +435,31 @@ export class Browser implements BrowserInterface {
 	#handleTransportLoss(): void {
 		if (this.#destroyed || this.#status !== 'connected') return
 
-		const process = this.#process
-		if (process !== undefined && (process.exitCode !== null || process.signalCode !== null)) {
+		if (this.#process === undefined) {
+			this.#confirmTransportLoss()
+			return
+		}
+
+		if (!this.#alive()) {
 			this.#handleProcessExit()
 			return
 		}
 
-		if (process !== undefined) {
-			setTimeout(() => this.#confirmTransportLoss(), BROWSER_TRANSPORT_LOSS_DEFER_MS)
-			return
-		}
-
-		this.#confirmTransportLoss()
+		// A spawned child that is already dead is diagnosed by its own `exit`
+		// event, never by a probe here: Node sets `exitCode` in the same callback
+		// that emits `exit`, and reports ESRCH from `ChildProcess.kill(0)` as a
+		// `false` return rather than a throw, so no reading of the handle can see
+		// the death before the event does. The defer only has to outlast the loop
+		// turn that delivers it.
+		setTimeout(() => this.#confirmTransportLoss(), BROWSER_TRANSPORT_LOSS_DEFER_MS)
 	}
 
 	#confirmTransportLoss(): void {
 		if (this.#destroyed || this.#status !== 'connected') return
 
-		const process = this.#process
-		if (process !== undefined && (process.exitCode !== null || process.signalCode !== null)) {
+		if (this.#process !== undefined && !this.#alive()) {
 			this.#handleProcessExit()
 			return
-		}
-
-		if (process?.pid !== undefined) {
-			try {
-				process.kill(0)
-			} catch {
-				this.#handleProcessExit()
-				return
-			}
 		}
 
 		const client = this.#client
@@ -505,6 +505,10 @@ export class Browser implements BrowserInterface {
 
 	#bindProcess(process: ChildProcess): void {
 		this.#unbindProcess()
+		// A launcher that handed the endpoint on has already exited, and its exit
+		// says nothing about the browser now serving CDP. That browser has no
+		// child handle, so the transport reports its death.
+		if (this.#servingPid !== undefined) return
 		process.once('exit', this.#onProcessExit)
 		if (process.exitCode !== null || process.signalCode !== null) {
 			queueMicrotask(this.#onProcessExit)
@@ -660,6 +664,7 @@ export class Browser implements BrowserInterface {
 			const transport = createCDPTransport({ url: endpoint, timeout: this.#timeout() })
 			client = new CDPClient({ transport, timeout: this.#timeout() })
 			await this.#raceAbort(client.connect())
+			await this.#takeEndpointOwner(process, client)
 
 			const connection = this.#options.profile === undefined ? 'launch' : 'persistent'
 			this.#client = client
@@ -680,11 +685,55 @@ export class Browser implements BrowserInterface {
 			await this.#terminate(process)
 			await this.#releaseProfile()
 			this.#process = undefined
+			this.#servingPid = undefined
 			this.#client = undefined
 			this.#endpoint = undefined
 			this.#owned = undefined
 			throw error
 		}
+	}
+
+	/**
+	 * Takes over the process serving the CDP endpoint when the spawned child is
+	 * no longer it.
+	 *
+	 * @remarks
+	 * A Windows launcher — Microsoft Edge — re-executes the browser with the
+	 * same `--remote-debugging-port` and exits 0 before the endpoint answers, so
+	 * the child this instance spawned parents the real tree without being part
+	 * of it. Chromium names the process behind the endpoint as the `browser`
+	 * entry of `SystemInfo.getProcessInfo`, which identifies it without a
+	 * platform branch. An endpoint that names no such process cannot be owned,
+	 * so the launch closes it and fails rather than leaking it.
+	 */
+	async #takeEndpointOwner(process: ChildProcess, client: CDPClient): Promise<void> {
+		if (process.exitCode === null && process.signalCode === null) return
+
+		let result: unknown
+		try {
+			result = await client.send('SystemInfo.getProcessInfo')
+		} catch {
+			result = undefined
+		}
+
+		let pid: number | undefined
+		if (isRecord(result) && isArray(result['processInfo'])) {
+			for (const entry of result['processInfo']) {
+				if (!isRecord(entry) || entry['type'] !== 'browser' || !isInteger(entry['id'])) continue
+				pid = entry['id']
+				break
+			}
+		}
+
+		if (pid === undefined) {
+			await this.#closeRemote(client)
+			throw new BrowserConnectionError(
+				'The browser launcher exited without naming the process serving its CDP endpoint',
+				{ executable: this.#options.executable, pid: process.pid },
+			)
+		}
+
+		this.#servingPid = pid
 	}
 
 	async #waitForLaunch(
@@ -699,6 +748,11 @@ export class Browser implements BrowserInterface {
 		const exited = once(process, 'exit', { signal }).then((values) => {
 			const code = isInteger(values[0]) ? values[0] : null
 			const exitSignal = isString(values[1]) ? values[1] : null
+			// A launcher that re-executes the browser exits cleanly and hands the
+			// endpoint to the process it spawned, so a clean exit ends the child
+			// rather than the launch. Keep waiting for the endpoint on the same
+			// readiness budget, which still fails loudly when none appears.
+			if (code === 0 && exitSignal === null) return ready
 			throw new BrowserConnectionError(this.#formatLaunchExit(code, exitSignal), context)
 		})
 
@@ -790,6 +844,7 @@ export class Browser implements BrowserInterface {
 
 			await this.#terminate(this.#process)
 			this.#process = undefined
+			this.#servingPid = undefined
 			terminated = true
 		} finally {
 			const contexts = this.#contexts
@@ -823,6 +878,7 @@ export class Browser implements BrowserInterface {
 				if (!exited) await this.#terminate(process)
 			}
 			this.#process = undefined
+			this.#servingPid = undefined
 			terminated = true
 		} finally {
 			const contexts = this.#contexts
@@ -972,17 +1028,35 @@ export class Browser implements BrowserInterface {
 		return globalThis.process.platform !== 'win32' && pid !== undefined && pid > 0
 	}
 
-	#inspectProcessGroup(process: ChildProcess): boolean | undefined {
-		if (!this.#hasProcessGroup(process)) return false
+	// Whether the process serving the CDP endpoint is still running. The spawned
+	// child reports through its own handle; a process the launcher handed the
+	// endpoint to has none, so it is probed by identifier.
+	#alive(): boolean {
+		const process = this.#process
+		if (process === undefined) return false
+		if (this.#servingPid !== undefined) return this.#signalProcess(process, 0) !== false
+		return process.exitCode === null && process.signalCode === null
+	}
+
+	// Whether the launch retains a process the reaped child does not account
+	// for: the POSIX process group, or the process the launcher handed the
+	// endpoint to.
+	#inspectRemainder(process: ChildProcess): boolean | undefined {
+		if (!this.#hasProcessGroup(process) && this.#servingPid === undefined) return false
 		return this.#signalProcess(process, 0)
 	}
 
 	#signalProcess(process: ChildProcess, signal: NodeJS.Signals | 0): boolean | undefined {
 		const pid = process.pid
+		const serving = this.#servingPid
 		try {
 			if (this.#hasProcessGroup(process) && pid !== undefined) {
 				return globalThis.process.kill(-pid, signal)
 			}
+			// Terminating the Chromium browser process takes its whole tree with
+			// it, so Windows needs no separate tree walk to reach the renderers,
+			// GPU, and utility children the serving process parents.
+			if (serving !== undefined) return globalThis.process.kill(serving, signal)
 			return process.kill(signal)
 		} catch (error) {
 			const code =
@@ -990,23 +1064,24 @@ export class Browser implements BrowserInterface {
 			if (code === 'ESRCH') return false
 			if (signal === 0) return code === 'EPERM' ? true : undefined
 			throw new BrowserConnectionError('Failed to signal the browser process', {
-				pid,
+				pid: serving ?? pid,
 				signal,
 				cause: error,
 			})
 		}
 	}
 
-	async #waitForProcessGroupWithin(
+	async #waitForRemainderWithin(
 		process: ChildProcess,
 		timeout: number,
 	): Promise<boolean | undefined> {
 		const deadline = performance.now() + timeout
 		let confirmed = false
-		// Node observes only the direct child; POSIX exposes no event for the
-		// remaining members of its process group, so bound the drain probe.
+		// Node observes only the direct child, and neither the rest of a POSIX
+		// process group nor a process the launcher handed the endpoint to raises
+		// an exit event here, so bound the drain probe.
 		while (true) {
-			const alive = this.#inspectProcessGroup(process)
+			const alive = this.#inspectRemainder(process)
 			if (alive === false) return true
 			if (alive === true) confirmed = true
 			const remaining = deadline - performance.now()
@@ -1023,7 +1098,7 @@ export class Browser implements BrowserInterface {
 		final = false,
 	): Promise<boolean> {
 		const exited = this.#waitForProcessWithin(process, timeout)
-		const drained = this.#waitForProcessGroupWithin(process, timeout)
+		const drained = this.#waitForRemainderWithin(process, timeout)
 		const results = await Promise.all([exited, drained])
 		return results[0] && (results[1] === true || (final && results[1] === undefined))
 	}
@@ -1032,7 +1107,7 @@ export class Browser implements BrowserInterface {
 		if (
 			process === undefined ||
 			((process.exitCode !== null || process.signalCode !== null) &&
-				this.#inspectProcessGroup(process) === false)
+				this.#inspectRemainder(process) === false)
 		) {
 			return
 		}
@@ -1044,7 +1119,7 @@ export class Browser implements BrowserInterface {
 		if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS, true)) return
 
 		throw new BrowserConnectionError('Browser process did not exit after SIGKILL', {
-			pid: process.pid,
+			pid: this.#servingPid ?? process.pid,
 		})
 	}
 
@@ -1057,6 +1132,7 @@ export class Browser implements BrowserInterface {
 		this.#endpoint = undefined
 		this.#client = undefined
 		this.#process = undefined
+		this.#servingPid = undefined
 		this.#exitCleanup = undefined
 		this.#contexts = []
 		this.#emitter.emit('destroy')

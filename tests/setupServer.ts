@@ -13,6 +13,18 @@ import { createScratch, isRunning } from '@orkestrel/test/server'
 import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
 
 /**
+ * Whether this platform delivers `SIGTERM` as a catchable signal a process can
+ * trap and outlive.
+ *
+ * @remarks
+ * Windows has no such signal: Node maps `SIGTERM` there onto an unconditional
+ * terminate, so a `SIGTERM` handler never runs and no process survives the
+ * signal. Gate any case asserting cooperative `SIGTERM` delivery on this
+ * reading rather than repeating the platform test.
+ */
+export const COOPERATIVE_SIGTERM = process.platform !== 'win32'
+
+/**
  * Reserve a free localhost port by binding an ephemeral server to port 0 and
  * immediately closing it — avoids hardcoded test ports colliding across
  * parallel/aborted runs.
@@ -496,6 +508,8 @@ export interface FakeBrowserProcessInterface {
 	pid(): Promise<number>
 	/** Reads the PID of the process-tree fixture requested through `descendant`. */
 	descendant(): Promise<number>
+	/** Reads the PID of the re-executed process serving CDP, requested through `launcher`. */
+	browser(): Promise<number>
 	/** Reads the complete process argument vector recorded at startup. */
 	arguments(): Promise<readonly string[]>
 	/**
@@ -517,9 +531,13 @@ export interface FakeBrowserProcessInterface {
  * @param options - `serveCDP` runs a minimal real HTTP+WebSocket CDP endpoint
  * (parses `--remote-debugging-port=` from its own argv); `ignoreSIGTERM`
  * traps SIGTERM in the parent and requested descendant so only SIGKILL can
- * terminate them; `descendant` spawns that process-tree fixture. With none
- * of these options the process just idles (never serves CDP) — useful for
- * launch-failure/abort scenarios.
+ * terminate them; `descendant` spawns that process-tree fixture; `launcher`
+ * reproduces a Windows launcher (Microsoft Edge) by re-executing the script as
+ * a descendant carrying the same argv and exiting 0 straight away, so the
+ * spawned process is never the one that serves CDP; `unnamed` leaves
+ * `SystemInfo.getProcessInfo` unanswered so the endpoint never names the
+ * process serving it. With none of these options the process just idles (never
+ * serves CDP) — useful for launch-failure/abort scenarios.
  * @returns A {@link FakeBrowserProcessInterface}
  */
 export function createFakeBrowserProcess(
@@ -527,12 +545,15 @@ export function createFakeBrowserProcess(
 		readonly serveCDP?: boolean
 		readonly ignoreSIGTERM?: boolean
 		readonly descendant?: boolean
+		readonly launcher?: boolean
+		readonly unnamed?: boolean
 	} = {},
 ): FakeBrowserProcessInterface {
 	const scratch = createScratch({ prefix: 'orkestrel-browser-fake-' })
 	const scriptPath = join(scratch.path, 'fake-browser.js')
 	const pidFile = join(scratch.path, 'pid.txt')
 	const descendantFile = join(scratch.path, 'descendant.txt')
+	const browserFile = join(scratch.path, 'browser.txt')
 	const argumentsFile = join(scratch.path, 'arguments.json')
 	const portFile = join(scratch.path, 'port.txt')
 
@@ -541,9 +562,36 @@ export function createFakeBrowserProcess(
 	const crashLogPath = join(scratch.path, 'crash.log')
 	const lines: string[] = [
 		`process.on('uncaughtException', (e) => { try { require('fs').appendFileSync(${JSON.stringify(crashLogPath)}, String(e && e.stack)) } catch {} ; process.exit(1) })`,
-		`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
-		`require('fs').writeFileSync(${JSON.stringify(argumentsFile)}, JSON.stringify(process.argv))`,
 	]
+
+	if (options.launcher === true) {
+		// The launcher records itself, re-executes this same script with the
+		// same CDP flags plus a marker, and exits 0 before the endpoint is up —
+		// the shape Microsoft Edge takes on Windows. The re-executed process
+		// records itself separately and goes on to serve CDP.
+		lines.push(
+			[
+				"if (process.argv.includes('--orkestrel-relaunched')) {",
+				`\trequire('fs').writeFileSync(${JSON.stringify(browserFile)}, String(process.pid))`,
+				'} else {',
+				`\trequire('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
+				`\trequire('fs').writeFileSync(${JSON.stringify(argumentsFile)}, JSON.stringify(process.argv))`,
+				// Windows destroys a non-detached child when its parent exits this
+				// abruptly, so the re-executed process is detached there. POSIX
+				// keeps it undetached, which leaves it in the launcher's process
+				// group exactly as a real Chromium subprocess would be.
+				"\tconst __child = require('child_process').spawn(process.execPath, [__filename, '--orkestrel-relaunched', ...process.argv.slice(2)], { stdio: 'ignore', detached: process.platform === 'win32' })",
+				'\t__child.unref()',
+				'\tprocess.exit(0)',
+				'}',
+			].join('\n'),
+		)
+	} else {
+		lines.push(
+			`require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid))`,
+			`require('fs').writeFileSync(${JSON.stringify(argumentsFile)}, JSON.stringify(process.argv))`,
+		)
+	}
 
 	if (options.ignoreSIGTERM === true) {
 		lines.push("process.on('SIGTERM', () => {})")
@@ -566,15 +614,24 @@ export function createFakeBrowserProcess(
 	// process is reparented to init (ppid 1 on POSIX) — self-exit instead of
 	// leaking across subsequent test runs. `process.kill(ppid, 0)` is a
 	// cross-platform (including Windows) liveness probe: it throws when the
-	// parent is gone even where reparenting never yields ppid 1.
+	// parent is gone even where reparenting never yields ppid 1. A `launcher`
+	// fixture orphans its re-executed process by design, so that process
+	// watches the test runner rather than its own immediate parent.
 	lines.push(
-		[
-			'const __ppid = process.ppid',
-			'setInterval(() => {',
-			'\tif (process.ppid === 1) { process.exit(0); return }',
-			'\ttry { process.kill(__ppid, 0) } catch { process.exit(0) }',
-			'}, 500)',
-		].join('\n'),
+		options.launcher === true
+			? [
+					`const __runner = ${process.pid}`,
+					'setInterval(() => {',
+					'\ttry { process.kill(__runner, 0) } catch { process.exit(0) }',
+					'}, 500)',
+				].join('\n')
+			: [
+					'const __ppid = process.ppid',
+					'setInterval(() => {',
+					'\tif (process.ppid === 1) { process.exit(0); return }',
+					'\ttry { process.kill(__ppid, 0) } catch { process.exit(0) }',
+					'}, 500)',
+				].join('\n'),
 	)
 
 	if (options.serveCDP === true) {
@@ -625,6 +682,8 @@ export function createFakeBrowserProcess(
 				'\t\t\t\tsetImmediate(() => process.exit(0))',
 				"\t\t\t} else if (msg.method === 'Target.getTargets') {",
 				'\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: { targetInfos: [] } }))',
+				`\t\t\t} else if (msg.method === 'SystemInfo.getProcessInfo' && ${String(options.unnamed !== true)}) {`,
+				"\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: { processInfo: [{ type: 'browser', id: process.pid, cpuTime: 0 }] } }))",
 				'\t\t\t}',
 				'\t\t} catch {}',
 				'\t})',
@@ -642,7 +701,7 @@ export function createFakeBrowserProcess(
 
 	scratch.write('fake-browser.js', `${lines.join('\n')}\n`)
 
-	registeredFakeBrowsers.push({ scratch, pidNames: ['pid.txt', 'descendant.txt'] })
+	registeredFakeBrowsers.push({ scratch, pidNames: ['pid.txt', 'descendant.txt', 'browser.txt'] })
 
 	return {
 		executable: process.execPath,
@@ -652,6 +711,9 @@ export function createFakeBrowserProcess(
 		},
 		async descendant(): Promise<number> {
 			return readFixtureProcessId(scratch, 'descendant.txt')
+		},
+		async browser(): Promise<number> {
+			return readFixtureProcessId(scratch, 'browser.txt')
 		},
 		async arguments(): Promise<readonly string[]> {
 			const argv = await retryUntil(

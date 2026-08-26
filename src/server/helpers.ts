@@ -237,11 +237,36 @@ export function probeAllPathNames(names: readonly string[], platform: string): r
 	for (const name of names) {
 		const result = spawnSync(finder, [name], { stdio: 'pipe' })
 		if (result.status === 0) {
-			const output = result.stdout.toString('utf-8').trim().split('\n')[0]
-			if (output !== undefined && output.length > 0) found.push(output)
+			const executable = readFirstLine(result.stdout.toString('utf-8'))
+			if (executable !== undefined) found.push(executable)
 		}
 	}
 	return found
+}
+
+/**
+ * Returns the first non-empty line of a command's output, without its
+ * surrounding whitespace.
+ *
+ * @remarks
+ * `where` reports every PATH match on its own CRLF-terminated line, so a
+ * carriage return left on the first line would travel into `existsSync` and
+ * `spawn` as part of the executable path.
+ *
+ * @param output - Raw decoded standard output of a command
+ * @returns The first line carrying text, or undefined when the output has none
+ *
+ * @example
+ * ```ts
+ * readFirstLine('C:\\bin\\chrome.exe\r\nC:\\other\\chrome.exe\r\n') // 'C:\\bin\\chrome.exe'
+ * ```
+ */
+export function readFirstLine(output: string): string | undefined {
+	for (const line of output.split(/\r?\n/)) {
+		const text = line.trim()
+		if (text.length > 0) return text
+	}
+	return undefined
 }
 
 /** Build the default Playwright browser store base directories to search for a managed Chromium. */
@@ -298,6 +323,11 @@ export function findAllInStore(base: string, platform: string): readonly string[
  * @remarks
  * POSIX launches own an isolated process group so lifecycle teardown can
  * signal and await every Chromium subprocess without affecting the caller.
+ * Windows launches are not detached and own no group, so teardown there
+ * signals one process by identifier: the spawned process, or the process the
+ * launcher handed the endpoint to when that spawned process re-executed the
+ * browser and exited. Terminating a Chromium browser process takes its own
+ * subprocesses with it, so that single signal drains the tree.
  *
  * @param executable - Absolute path to the browser executable
  * @param port - Port the browser exposes its CDP endpoint on

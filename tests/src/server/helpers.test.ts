@@ -14,9 +14,10 @@
 
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { describe, it, expect, afterEach } from 'vitest'
-import { existsSync, writeFileSync } from 'node:fs'
+import { chmodSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join, dirname } from 'node:path'
+import { join, dirname, delimiter } from 'node:path'
+import { requireValue } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import {
 	createBrowserProfile,
@@ -25,6 +26,8 @@ import {
 	findAllInStore,
 	parseBrowserEngine,
 	launchBrowserProcess,
+	probeAllPathNames,
+	readFirstLine,
 	removeBrowserProfile,
 	waitForCDPReady,
 	fetchCDPTargets,
@@ -207,6 +210,59 @@ describe('findSystemBrowsers', () => {
 		})
 
 		expect(found).toEqual([])
+	})
+})
+
+describe('readFirstLine', () => {
+	it('returns the first CRLF line without its carriage return', () => {
+		expect(readFirstLine('C:\\bin\\chrome.exe\r\nC:\\other\\chrome.exe\r\n')).toBe(
+			'C:\\bin\\chrome.exe',
+		)
+	})
+
+	it('returns the first line of LF-separated output', () => {
+		expect(readFirstLine('/usr/bin/chromium\n/opt/chromium\n')).toBe('/usr/bin/chromium')
+	})
+
+	it('skips leading blank lines', () => {
+		expect(readFirstLine('\r\n\r\n/usr/bin/chromium\r\n')).toBe('/usr/bin/chromium')
+	})
+
+	it('returns undefined when the output carries no text', () => {
+		expect(readFirstLine('')).toBeUndefined()
+		expect(readFirstLine('\r\n \r\n')).toBeUndefined()
+	})
+})
+
+describe('probeAllPathNames', () => {
+	it('returns an existing path for a name PATH resolves more than once', () => {
+		// Plants the same command in two scratch directories and puts both on
+		// PATH, so the real `where`/`which` reports multiple matches. Windows
+		// separates them with CRLF, which the returned path must not carry.
+		const first = createScratch({ prefix: 'orkestrel-browser-test-' })
+		const second = createScratch({ prefix: 'orkestrel-browser-test-' })
+		scratches.push(first, second)
+		const name = 'orkestrel-browser-probe-fixture'
+		const file = process.platform === 'win32' ? `${name}.exe` : name
+		for (const scratch of [first, second]) {
+			scratch.write(file, '')
+			if (process.platform !== 'win32') chmodSync(join(scratch.path, file), 0o755)
+		}
+
+		const original = process.env['PATH']
+		process.env['PATH'] = [first.path, second.path, original ?? ''].join(delimiter)
+		try {
+			const found = probeAllPathNames([name], process.platform)
+
+			expect(found).toEqual([join(first.path, file)])
+			expect(existsSync(requireValue(found[0], 'PATH probe returned no path'))).toBe(true)
+		} finally {
+			process.env['PATH'] = original
+		}
+	})
+
+	it('returns nothing for a name PATH cannot resolve', () => {
+		expect(probeAllPathNames(['orkestrel-browser-absent-fixture'], process.platform)).toEqual([])
 	})
 })
 

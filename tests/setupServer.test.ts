@@ -24,6 +24,7 @@ import { basename, join } from 'node:path'
 import { readProperty, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
+	COOPERATIVE_SIGTERM,
 	createCDPTestServer,
 	createFakeBrowserProcess,
 	createStallServer,
@@ -439,22 +440,25 @@ describe('createFakeBrowserProcess', () => {
 		await waitForProcessExit(pid)
 	})
 
-	it('spawns a descendant that outlives SIGTERM and hands both to the registry teardown', async () => {
-		const fake = createFakeBrowserProcess({ descendant: true, ignoreSIGTERM: true })
-		spawn(fake.executable, [...fake.args, '--remote-debugging-port=0'], { stdio: 'ignore' })
+	it.runIf(COOPERATIVE_SIGTERM)(
+		'spawns a descendant that outlives SIGTERM and hands both to the registry teardown',
+		async () => {
+			const fake = createFakeBrowserProcess({ descendant: true, ignoreSIGTERM: true })
+			spawn(fake.executable, [...fake.args, '--remote-debugging-port=0'], { stdio: 'ignore' })
 
-		const pid = await fake.pid()
-		const descendant = await fake.descendant()
-		process.kill(pid, 'SIGTERM')
-		process.kill(descendant, 'SIGTERM')
+			const pid = await fake.pid()
+			const descendant = await fake.descendant()
+			process.kill(pid, 'SIGTERM')
+			process.kill(descendant, 'SIGTERM')
 
-		await expect(waitForProcessExit(pid, 300)).rejects.toThrow(
-			`Condition "process ${pid} has exited" did not hold within 300ms`,
-		)
-		expect(isRunning(descendant)).toBe(true)
+			await expect(waitForProcessExit(pid, 300)).rejects.toThrow(
+				`Condition "process ${pid} has exited" did not hold within 300ms`,
+			)
+			expect(isRunning(descendant)).toBe(true)
 
-		await destroyFakeBrowsers()
+			await destroyFakeBrowsers()
 
-		expect([isRunning(pid), isRunning(descendant)]).toStrictEqual([false, false])
-	})
+			expect([isRunning(pid), isRunning(descendant)]).toStrictEqual([false, false])
+		},
+	)
 })
