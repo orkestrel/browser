@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/browser",
-	"version": "0.0.13",
+	"version": "0.0.14",
 	"description": "Chrome DevTools Protocol browser automation with an environment-agnostic core. Part of the @orkestrel line.",
 	"keywords": [
 		"automation",
@@ -87,14 +87,14 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.13",
 		"@orkestrel/emitter": "^0.0.8",
-		"@orkestrel/html": "^0.0.6",
+		"@orkestrel/html": "^0.0.7",
 		"@orkestrel/websocket": "^0.0.10"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.0",
 		"@orkestrel/guide": "^0.0.14",
-		"@orkestrel/probe": "^0.0.6",
-		"@orkestrel/scaffold": "^0.0.53",
+		"@orkestrel/probe": "^0.0.8",
+		"@orkestrel/scaffold": "^0.0.54",
 		"@orkestrel/test": "^0.0.11",
 		"@types/node": "^26.3.0",
 		"@vitest/browser-playwright": "^4.1.11",
