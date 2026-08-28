@@ -23,6 +23,7 @@ import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/cont
 import { Emitter } from '@orkestrel/emitter'
 import {
 	BrowserContext,
+	BrowserFlight,
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	BROWSER_WAIT_POLL_INTERVAL_MS,
 	CDPClient,
@@ -81,14 +82,14 @@ export class Browser implements BrowserInterface {
 	#profile: BrowserProfileResult | undefined
 	#contexts: BrowserContext[] = []
 	#destroyed = false
-	#connecting: Promise<void> | undefined
-	#disconnecting: Promise<void> | undefined
+	readonly #connecting: BrowserFlight = new BrowserFlight()
+	readonly #disconnecting: BrowserFlight = new BrowserFlight()
 	#exitCleanup: Promise<void> | undefined
 	#shutdown: Promise<void> | undefined
 	#transport: CDPTransportInterface | undefined
-	readonly #onTransportClose = this.#handleTransportLoss.bind(this)
-	readonly #onTransportError = this.#handleTransportLoss.bind(this)
-	readonly #onProcessExit = this.#handleProcessExit.bind(this)
+	readonly #transportCloseHandler = this.#handleTransportLoss.bind(this)
+	readonly #transportErrorHandler = this.#handleTransportLoss.bind(this)
+	readonly #processExitHandler = this.#handleProcessExit.bind(this)
 
 	constructor(options?: BrowserOptions) {
 		this.#emitter = new Emitter({
@@ -144,21 +145,14 @@ export class Browser implements BrowserInterface {
 	async connect(): Promise<void> {
 		if (this.#destroyed) throw new BrowserDestroyedError()
 
-		const active = this.#connecting
+		const active = this.#connecting.attempt
 		if (active !== undefined) {
 			await active
 			return
 		}
 		if (this.#status === 'connected') return
 
-		const attempt = this.#establish()
-		this.#connecting = attempt
-
-		try {
-			await attempt
-		} finally {
-			if (this.#connecting === attempt) this.#connecting = undefined
-		}
+		await this.#connecting.execute(() => this.#establish())
 	}
 
 	adopt(): void {
@@ -176,21 +170,14 @@ export class Browser implements BrowserInterface {
 	async disconnect(): Promise<void> {
 		if (this.#destroyed) return
 
-		const disconnecting = this.#disconnecting
-		const connecting = this.#connecting
+		const disconnecting = this.#disconnecting.attempt
+		const connecting = this.#connecting.attempt
 		if (disconnecting !== undefined) await disconnecting
 		if (connecting !== undefined) await connecting.catch(() => undefined)
 		if (this.#destroyed) return
 		if (this.#status !== 'connected' || this.#client === undefined) return
 
-		const attempt = this.#detach()
-		this.#disconnecting = attempt
-
-		try {
-			await attempt
-		} finally {
-			if (this.#disconnecting === attempt) this.#disconnecting = undefined
-		}
+		await this.#disconnecting.execute(() => this.#detach())
 	}
 
 	context(index?: number): BrowserContextInterface | undefined {
@@ -302,7 +289,8 @@ export class Browser implements BrowserInterface {
 	// === Private helpers
 
 	async #establish(): Promise<void> {
-		if (this.#disconnecting !== undefined) await this.#disconnecting
+		const disconnecting = this.#disconnecting.attempt
+		if (disconnecting !== undefined) await disconnecting
 		await this.#settleExit()
 		if (this.#destroyed) throw new BrowserDestroyedError()
 		if (this.#status === 'connected') return
@@ -491,15 +479,15 @@ export class Browser implements BrowserInterface {
 	#bindTransport(transport: CDPTransportInterface): void {
 		this.#unbindTransport()
 		this.#transport = transport
-		transport.emitter.on('close', this.#onTransportClose)
-		transport.emitter.on('error', this.#onTransportError)
+		transport.emitter.on('close', this.#transportCloseHandler)
+		transport.emitter.on('error', this.#transportErrorHandler)
 	}
 
 	#unbindTransport(): void {
 		const transport = this.#transport
 		if (transport === undefined) return
-		transport.emitter.off('close', this.#onTransportClose)
-		transport.emitter.off('error', this.#onTransportError)
+		transport.emitter.off('close', this.#transportCloseHandler)
+		transport.emitter.off('error', this.#transportErrorHandler)
 		this.#transport = undefined
 	}
 
@@ -509,14 +497,14 @@ export class Browser implements BrowserInterface {
 		// says nothing about the browser now serving CDP. That browser has no
 		// child handle, so the transport reports its death.
 		if (this.#servingPid !== undefined) return
-		process.once('exit', this.#onProcessExit)
+		process.once('exit', this.#processExitHandler)
 		if (process.exitCode !== null || process.signalCode !== null) {
-			queueMicrotask(this.#onProcessExit)
+			queueMicrotask(this.#processExitHandler)
 		}
 	}
 
 	#unbindProcess(): void {
-		this.#process?.off('exit', this.#onProcessExit)
+		this.#process?.off('exit', this.#processExitHandler)
 	}
 
 	#timeout(): number {
@@ -895,8 +883,8 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #settle(): Promise<void> {
-		await this.#connecting?.catch(() => undefined)
-		await this.#disconnecting?.catch(() => undefined)
+		await this.#connecting.attempt?.catch(() => undefined)
+		await this.#disconnecting.attempt?.catch(() => undefined)
 		await this.#settleExit()
 	}
 

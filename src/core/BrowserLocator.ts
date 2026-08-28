@@ -22,10 +22,12 @@ import {
 	compileHiddenLocatorWaitExpression,
 	compileLocatorExpression,
 	compileLocatorListExpression,
-	compileVisibleLocatorWaitExpression,
-	browserScreenshotToParams,
 	compileScreenshotCleanupExpression,
 	compileScreenshotPreparationExpression,
+	compileVisibleLocatorWaitExpression,
+} from './compilers.js'
+import {
+	browserScreenshotToParams,
 	decodeBase64,
 	readBrowserQuad,
 	requireBrowserString,

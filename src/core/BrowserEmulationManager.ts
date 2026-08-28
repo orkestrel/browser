@@ -2,6 +2,7 @@ import type {
 	BrowserEmulationManagerInterface,
 	BrowserEmulationOptions,
 	BrowserPageInterface,
+	BrowserPagesFunction,
 } from './types.js'
 import { mediaToFeatures, validateBrowserEmulationOptions } from './helpers.js'
 
@@ -9,10 +10,10 @@ import { mediaToFeatures, validateBrowserEmulationOptions } from './helpers.js'
  * Rendering, identity, location, and network emulation for context pages.
  */
 export class BrowserEmulationManager implements BrowserEmulationManagerInterface {
-	readonly #pages: () => readonly BrowserPageInterface[]
+	readonly #pages: BrowserPagesFunction
 	#options: BrowserEmulationOptions | undefined
 
-	constructor(pages: () => readonly BrowserPageInterface[], options?: BrowserEmulationOptions) {
+	constructor(pages: BrowserPagesFunction, options?: BrowserEmulationOptions) {
 		if (options !== undefined) validateBrowserEmulationOptions(options)
 		this.#pages = pages
 		this.#options = options

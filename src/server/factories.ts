@@ -13,7 +13,7 @@ import { WebSocketCDPTransport } from './transports/WebSocketCDPTransport.js'
  *
  * @example
  * ```ts
- * import { createBrowser } from '@src/server'
+ * import { createBrowser } from '@orkestrel/browser/server'
  *
  * const browser = createBrowser()
  * await browser.connect()

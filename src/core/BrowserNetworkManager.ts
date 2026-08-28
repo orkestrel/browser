@@ -10,6 +10,7 @@ import type {
 	ScreenshotWriterInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import { BrowserFlight } from './BrowserFlight.js'
 import { BrowserHARManager } from './BrowserHARManager.js'
 import { BrowserRoute } from './BrowserRoute.js'
 import { BrowserWebSocket } from './BrowserWebSocket.js'
@@ -21,6 +22,7 @@ import {
 	readBrowserRequestFailure,
 	readBrowserResponse,
 	readBrowserWebSocketFrame,
+	settleBrowserTeardown,
 	textToBytes,
 } from './helpers.js'
 import { BrowserError } from './errors.js'
@@ -38,9 +40,9 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	readonly #sockets: Map<string, BrowserWebSocket> = new Map()
 	#credentials: BrowserCredentials | undefined
 	#started = false
-	#fetch = false
+	#intercepting = false
 	#destroyed = false
-	#starting: Promise<void> | undefined
+	readonly #starting: BrowserFlight = new BrowserFlight()
 	readonly #requestHandler = this.#handleRequest.bind(this)
 	readonly #responseHandler = this.#handleResponse.bind(this)
 	readonly #failureHandler = this.#handleFailure.bind(this)
@@ -70,18 +72,12 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	async start(): Promise<void> {
 		if (this.#destroyed) throw new BrowserError('Browser network manager is destroyed')
 		if (this.#started) return
-		const active = this.#starting
+		const active = this.#starting.attempt
 		if (active !== undefined) {
 			await active
 			return
 		}
-		const transition = this.#begin()
-		this.#starting = transition
-		try {
-			await transition
-		} finally {
-			if (this.#starting === transition) this.#starting = undefined
-		}
+		await this.#starting.execute(() => this.#start())
 	}
 
 	async body(id: string): Promise<Uint8Array> {
@@ -162,47 +158,21 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	async destroy(): Promise<void> {
 		if (this.#destroyed) return
 		this.#destroyed = true
-		let failed = false
-		let failure: unknown
-		try {
-			await this.#har.clear()
-		} catch (error) {
-			failed = true
-			failure = error
-		}
-		if (this.#fetch) {
-			try {
-				await this.#frame.send('Fetch.disable')
-			} catch (error) {
-				if (!failed) {
-					failed = true
-					failure = error
-				}
-			}
-		}
-		if (this.#started) {
-			try {
-				await this.#frame.send('Network.disable')
-			} catch (error) {
-				if (!failed) {
-					failed = true
-					failure = error
-				}
-			}
-		}
-		try {
-			await this.#unsubscribe()
-		} catch (error) {
-			if (!failed) {
-				failed = true
-				failure = error
-			}
-		}
+		const failure = await settleBrowserTeardown(
+			() => this.#har.clear(),
+			async () => {
+				if (this.#intercepting) await this.#frame.send('Fetch.disable')
+			},
+			async () => {
+				if (this.#started) await this.#frame.send('Network.disable')
+			},
+			() => this.#unsubscribe(),
+		)
 		for (const socket of this.#sockets.values()) socket.close(Date.now() / 1000)
 		this.#sockets.clear()
 		this.#routes.length = 0
 		this.#emitter.destroy()
-		if (failed) throw failure
+		if (failure !== undefined) throw failure
 	}
 
 	#handleRequest(params: Readonly<Record<string, unknown>>): void {
@@ -271,7 +241,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		socket.close(isFiniteNumber(params['timestamp']) ? params['timestamp'] : Date.now() / 1000)
 	}
 
-	async #begin(): Promise<void> {
+	async #start(): Promise<void> {
 		try {
 			await this.#subscribe()
 			await this.#frame.send('Network.enable')
@@ -279,7 +249,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 			await this.#configure()
 		} catch (error) {
 			this.#started = false
-			this.#fetch = false
+			this.#intercepting = false
 			await this.#frame.send('Fetch.disable').catch(() => undefined)
 			await this.#frame.send('Network.disable').catch(() => undefined)
 			await this.#unsubscribe().catch(() => undefined)
@@ -290,9 +260,9 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	async #configure(): Promise<void> {
 		const enabled = this.#routes.length > 0 || this.#credentials !== undefined
 		if (!enabled) {
-			if (this.#fetch) {
+			if (this.#intercepting) {
 				await this.#frame.send('Fetch.disable')
-				this.#fetch = false
+				this.#intercepting = false
 			}
 			return
 		}
@@ -304,7 +274,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 			})),
 			handleAuthRequests: this.#credentials !== undefined,
 		})
-		this.#fetch = true
+		this.#intercepting = true
 	}
 
 	async #route(params: Readonly<Record<string, unknown>>): Promise<void> {

@@ -42,10 +42,14 @@ export interface CDPTransportInterface {
  * @remarks
  * - `transport` — the text pipe the client sends/receives JSON-RPC frames over
  * - `timeout` — ms before a pending request or connection attempt fails (default from constants)
+ * - `error` — receives a subscriber's throw with the CDP event method that
+ *   raised it; without it a broken handler fails silently, because a throwing
+ *   subscriber is never allowed to reach its siblings or the dispatch loop
  */
 export interface CDPClientOptions {
 	readonly transport: CDPTransportInterface
 	readonly timeout?: number
+	readonly error?: EmitterErrorHandler
 }
 
 /** Handler invoked for a subscribed CDP event with its params record. */
@@ -80,13 +84,38 @@ export interface CDPClientInterface {
 	send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		sessionId?: string,
+		session?: string,
 		timeout?: number,
 	): Promise<unknown>
-	subscribe(method: string, handler: CDPHandler, sessionId?: string): void
-	unsubscribe(method: string, handler: CDPHandler, sessionId?: string): void
+	subscribe(method: string, handler: CDPHandler, session?: string): void
+	unsubscribe(method: string, handler: CDPHandler, session?: string): void
 	close(): Promise<void>
 }
+
+// === Browser flight
+
+/** The work one {@link BrowserFlightInterface} transition performs. */
+export type BrowserFlightFunction<T> = () => Promise<T>
+
+/**
+ * One asynchronous transition shared by every caller that arrives while it runs.
+ *
+ * @remarks
+ * `attempt` is the promise of the transition in flight, or undefined when none
+ * is running; an entity reads it to answer a question about its own state, such
+ * as whether a close must wait for an in-flight connect. `execute` starts the
+ * work when nothing is in flight, and joins the running transition otherwise.
+ */
+export interface BrowserFlightInterface<T> {
+	readonly attempt: Promise<T> | undefined
+	execute(work: BrowserFlightFunction<T>): Promise<T>
+}
+
+/** Returns the live pages of the context a manager was constructed against. */
+export type BrowserPagesFunction = () => readonly BrowserPageInterface[]
+
+/** One teardown step run to settlement while the first failure is retained. */
+export type BrowserTeardownFunction = () => Promise<unknown>
 
 // === Screenshot writer
 
@@ -153,7 +182,7 @@ export interface BrowserNavigationResult {
 
 /** State retained while correlating navigation with Network events. */
 export interface BrowserNavigationWatch {
-	readonly responses: BrowserResponse[]
+	readonly responses: readonly BrowserResponse[]
 }
 
 /** One pending URL-pattern wait. */
@@ -1023,7 +1052,7 @@ export interface BrowserHAREntry {
 	readonly timings: BrowserHARTimings
 }
 
-/** Mutable recording state held until a request finishes. */
+/** Recording state held until a request finishes; a new value replaces it on each update. */
 export interface BrowserHARPending {
 	readonly request: BrowserRequest
 	readonly started: number

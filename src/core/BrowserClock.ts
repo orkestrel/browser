@@ -1,6 +1,7 @@
 import type { BrowserClockInterface, BrowserFrameInterface } from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { BrowserError } from './errors.js'
+import { settleBrowserTeardown } from './helpers.js'
 import { isFiniteNumber } from '@orkestrel/contract'
 
 /**
@@ -75,7 +76,6 @@ export class BrowserClock implements BrowserClockInterface {
 		const timer = setTimeout(() => {
 			deferred.reject(new BrowserError('Browser virtual-time budget timed out'))
 		}, BROWSER_DEFAULT_TIMEOUT_MS)
-		let failed = false
 		let failure: unknown
 		try {
 			await this.#frame.send('Emulation.setVirtualTimePolicy', {
@@ -85,30 +85,18 @@ export class BrowserClock implements BrowserClockInterface {
 			})
 			await deferred.promise
 		} catch (error) {
-			failed = true
 			failure = error
 		} finally {
 			clearTimeout(timer)
 			this.#budgetResolve = undefined
-			try {
-				await this.#frame.unsubscribe('Emulation.virtualTimeBudgetExpired', this.#budgetHandler)
-			} catch (error) {
-				if (!failed) {
-					failed = true
-					failure = error
-				}
-			}
-			try {
-				await this.#frame.send('Emulation.setVirtualTimePolicy', { policy: 'pause' })
-			} catch (error) {
-				if (!failed) {
-					failed = true
-					failure = error
-				}
-			}
+			const settled = await settleBrowserTeardown(
+				() => this.#frame.unsubscribe('Emulation.virtualTimeBudgetExpired', this.#budgetHandler),
+				() => this.#frame.send('Emulation.setVirtualTimePolicy', { policy: 'pause' }),
+			)
+			failure ??= settled
 			this.#advancing = false
 		}
-		if (failed) throw failure
+		if (failure !== undefined) throw failure
 	}
 
 	async uninstall(): Promise<void> {

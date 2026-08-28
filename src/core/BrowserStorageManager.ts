@@ -1,7 +1,7 @@
 import type {
 	BrowserCookieInput,
 	BrowserCookieManagerInterface,
-	BrowserPageInterface,
+	BrowserPagesFunction,
 	BrowserStorageManagerInterface,
 	BrowserStorageOptions,
 	BrowserStorageOrigin,
@@ -11,8 +11,8 @@ import {
 	compileStorageClearExpression,
 	compileStorageReadExpression,
 	compileStorageRestoreExpression,
-	readBrowserStorageOrigin,
-} from './helpers.js'
+} from './compilers.js'
+import { readBrowserStorageOrigin } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { attempt } from '@orkestrel/contract'
 
@@ -21,12 +21,9 @@ import { attempt } from '@orkestrel/contract'
  */
 export class BrowserStorageManager implements BrowserStorageManagerInterface {
 	readonly #cookies: BrowserCookieManagerInterface
-	readonly #pages: () => readonly BrowserPageInterface[]
+	readonly #pages: BrowserPagesFunction
 
-	constructor(
-		cookies: BrowserCookieManagerInterface,
-		pages: () => readonly BrowserPageInterface[],
-	) {
+	constructor(cookies: BrowserCookieManagerInterface, pages: BrowserPagesFunction) {
 		this.#cookies = cookies
 		this.#pages = pages
 	}

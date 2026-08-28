@@ -1,6 +1,7 @@
 import type { BrowserWorkerCategory, BrowserWorkerInterface, CDPClientInterface } from './types.js'
 import { BROWSER_RESULT_LIMIT } from './constants.js'
-import { guardEvaluateExpression, readEvaluationResult } from './helpers.js'
+import { guardEvaluateExpression } from './compilers.js'
+import { readEvaluationResult } from './helpers.js'
 import { BrowserError } from './errors.js'
 
 /**

@@ -219,7 +219,7 @@ family's — see [`BrowserSnapshotInterface`](#browsersnapshotinterface) below.
 | ----------------------------- | --------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDPTransportEventMap`        | type      | `{ message: [data: string]; close: []; error: [error: unknown] }` — the transport's observable surface.                                                                                      |
 | `CDPTransportInterface`       | interface | `emitter` data member + `start` / `send` / `close` methods — the dumb text pipe a `CDPClientInterface` sends/receives JSON-RPC frames over.                                                  |
-| `CDPClientOptions`            | interface | `{ transport: CDPTransportInterface; timeout?: number }` — options for `createCDPClient`.                                                                                                    |
+| `CDPClientOptions`            | interface | `{ transport: CDPTransportInterface; timeout?: number; error?: EmitterErrorHandler }` — options for `createCDPClient`; `error` receives a subscriber throw with the CDP event method.        |
 | `CDPHandler`                  | type      | `(params: Readonly<Record<string, unknown>>) => void` — handler invoked for a subscribed CDP event.                                                                                          |
 | `CDPTarget`                   | interface | `{ id: string; type: string; title: string; url: string }` — one entry of the CDP `Target.getTargets` result.                                                                                |
 | `CDPClientInterface`          | interface | `connected` data member + `connect` / `reconnect` / `send` / `subscribe` / `unsubscribe` / `close` methods (`send` takes an optional per-call `timeout` overriding the client-wide default). |
@@ -464,6 +464,7 @@ validation, scraping, and compilation can be tested without a browser.
 | `BROWSER_SCREENSHOT_ATTRIBUTE` | const | Temporary attribute used to scope screenshot preparation styles.   |
 | `BROWSER_STABLE_FRAME_COUNT`   | const | Consecutive animation frames required by the stability check.      |
 | `BROWSER_TEST_ID_ATTRIBUTE`    | const | Attribute used by test-id locators.                                |
+| `BROWSER_VISIBILITY_SOURCE`    | const | In-page visibility predicate source shared by every compiler.      |
 | `BrowserAccessibility`         | class | Accessibility-domain snapshot reader.                              |
 | `BrowserClock`                 | class | Chromium virtual-time lifecycle.                                   |
 | `BrowserCookieManager`         | class | Context-scoped cookie manager.                                     |
@@ -473,6 +474,7 @@ validation, scraping, and compilation can be tested without a browser.
 | `BrowserDownload`              | class | One observable download with progress and cancellation.            |
 | `BrowserEmulationManager`      | class | Context-inherited Chromium emulation overrides.                    |
 | `BrowserFileChooser`           | class | One intercepted file chooser.                                      |
+| `BrowserFlight`                | class | One asynchronous transition shared by every caller that joins it.  |
 | `BrowserHARManager`            | class | HAR 1.2 recording, persistence, and replay.                        |
 | `BrowserHandle`                | class | Remote JavaScript object handle.                                   |
 | `BrowserKeyboard`              | class | Trusted Chromium keyboard input.                                   |
@@ -558,6 +560,7 @@ validation, scraping, and compilation can be tested without a browser.
 | `readBrowserStorageOrigin`               | function | Decode an origin storage result.                               |
 | `readBrowserStreamChunk`                 | function | Decode an IO stream chunk.                                     |
 | `readBrowserStyleCoverage`               | function | Decode CSS coverage.                                           |
+| `settleBrowserTeardown`                  | function | Run teardown steps to settlement and return the first failure. |
 | `readBrowserTiming`                      | function | Decode network timing phases.                                  |
 | `readBrowserTimingRange`                 | function | Decode one network timing start/end pair.                      |
 | `readBrowserWebSocketFrame`              | function | Decode a WebSocket frame event.                                |
@@ -808,6 +811,8 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserEmulationManagerInterface`  | interface | Context emulation lifecycle.                                      |
 | `BrowserEmulationOptions`           | interface | Viewport, identity, location, media, network, and auth emulation. |
 | `BrowserFileChooserInterface`       | interface | File chooser metadata and file selection.                         |
+| `BrowserFlightFunction`             | type      | The work one flight transition performs.                          |
+| `BrowserFlightInterface`            | interface | One shared asynchronous transition contract.                      |
 | `BrowserFilterOptions`              | interface | Locator text/visibility filter.                                   |
 | `BrowserFunctionCoverage`           | interface | Per-function JavaScript coverage.                                 |
 | `BrowserGeolocation`                | interface | Latitude, longitude, and accuracy override.                       |
@@ -847,6 +852,7 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserPDFResult`                  | interface | PDF bytes and optional path.                                      |
 | `BrowserPageError`                  | interface | Uncaught page exception.                                          |
 | `BrowserPageEventMap`               | type      | Page, frame, target, input, and network events.                   |
+| `BrowserPagesFunction`              | type      | Returns a context's live pages at call time.                      |
 | `BrowserPerformanceInterface`       | interface | Metrics and CPU-profile contract.                                 |
 | `BrowserPermissionManagerInterface` | interface | Context permission contract.                                      |
 | `BrowserPoint`                      | interface | CSS-pixel coordinate.                                             |
@@ -882,6 +888,7 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserStorageState`               | interface | Cookies and selected web-storage origins.                         |
 | `BrowserStreamChunk`                | interface | Decoded CDP IO chunk.                                             |
 | `BrowserStyleCoverage`              | interface | Per-style-sheet CSS coverage.                                     |
+| `BrowserTeardownFunction`           | type      | One teardown step run to settlement.                              |
 | `BrowserTextOptions`                | interface | Exactness for text-like locators.                                 |
 | `BrowserTextResultOptions`          | interface | Single/all locator text selection.                                |
 | `BrowserTiming`                     | interface | CDP network timing phases.                                        |
@@ -906,7 +913,8 @@ implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
 `CDPClientInterface`, `BrowserContext` ↔ `BrowserContextInterface`,
 `BrowserFrame` ↔ `BrowserFrameInterface`, `BrowserPage` ↔
 `BrowserPageInterface`, `BrowserSnapshot` ↔ `BrowserSnapshotInterface`,
-`BrowserCodegen` ↔ `BrowserCodegenInterface`, `Browser` ↔
+`BrowserCodegen` ↔ `BrowserCodegenInterface`, `BrowserFlight` ↔
+`BrowserFlightInterface`, `Browser` ↔
 `BrowserInterface`, `WebSocketCDPTransport` ↔
 `CDPTransportInterface`.
 
@@ -914,11 +922,11 @@ implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
 
 The text pipe a `CDPClientInterface` sends and receives JSON-RPC frames over.
 
-| Method  | Returns         | Behavior                                                                                                                                                                                        |
-| ------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start` | `Promise<void>` | Open the underlying connection.                                                                                                                                                                 |
-| `send`  | `Promise<void>` | Write one raw text frame to the connection. Throws a plain `Error('WebSocket CDP transport is not open')` (not a coded `BrowserConnectionError`) if called before `start()` or after `close()`. |
-| `close` | `Promise<void>` | Close the underlying connection and release resources.                                                                                                                                          |
+| Method  | Returns         | Behavior                                                                                                                                                        |
+| ------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start` | `Promise<void>` | Open the underlying connection.                                                                                                                                 |
+| `send`  | `Promise<void>` | Write one raw text frame to the connection. Throws a coded `BrowserConnectionError` carrying the transport `url` if called before `start()` or after `close()`. |
+| `close` | `Promise<void>` | Close the underlying connection and release resources.                                                                                                          |
 
 ```ts
 transport.emitter.on('message', (data) => log(data))
@@ -1147,6 +1155,25 @@ const actions = await codegen.stop()
 const script = codegen.script({ language: 'typescript' })
 codegen.clear() // reset the captured action list
 await codegen.destroy()
+```
+
+#### `BrowserFlightInterface`
+
+One asynchronous transition at a time, shared by every caller that joins it
+while it runs. An entity keeps its own entry guards — what makes a transition
+unnecessary is the entity's own state — and holds one flight per transition, so
+the in-flight identity check is written once instead of once per lifecycle.
+
+| Method    | Returns      | Behavior                                                                                               |
+| --------- | ------------ | ------------------------------------------------------------------------------------------------------ |
+| `execute` | `Promise<T>` | Start the work when nothing is in flight, otherwise join the running transition and return its result. |
+
+```ts
+import { BrowserFlight } from '@orkestrel/browser'
+
+const starting = new BrowserFlight()
+await starting.execute(() => transport.start())
+const joined = starting.attempt // the in-flight promise, or undefined
 ```
 
 #### `BrowserInterface`

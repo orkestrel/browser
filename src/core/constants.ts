@@ -142,6 +142,18 @@ export const BROWSER_TEST_ID_ATTRIBUTE = 'data-testid'
 /** Number of animation frames whose element bounds must agree before trusted input. */
 export const BROWSER_STABLE_FRAME_COUNT = 2
 
+/**
+ * In-page visibility predicate source, over a `style` computed style and a
+ * `rect` bounding box already in scope at the interpolation site.
+ *
+ * @remarks
+ * Every compiled expression that decides whether an element is visible
+ * interpolates this one source, so what "visible" means has a single
+ * definition rather than one copy per compiler.
+ */
+export const BROWSER_VISIBILITY_SOURCE =
+	"style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse' && rect.width > 0 && rect.height > 0"
+
 /** CDP Input modifier bit values keyed by canonical key name. */
 export const BROWSER_KEY_MODIFIERS: Readonly<Record<string, number>> = Object.freeze({
 	Alt: 1,
@@ -160,10 +172,17 @@ export const BROWSER_MOUSE_BUTTON_MASKS: Readonly<Record<BrowserMouseButton, num
 		forward: 16,
 	})
 
-/** Tool identity embedded in HAR 1.2 documents. */
+/**
+ * Tool identity embedded in HAR 1.2 documents.
+ *
+ * @remarks
+ * `version` is this package's own released version. A parity test in
+ * `tests/src/core/BrowserHARManager.test.ts` compares it against the manifest,
+ * so the archive stamp cannot drift away from the release that wrote it.
+ */
 export const BROWSER_HAR_CREATOR = Object.freeze({
 	name: '@orkestrel/browser',
-	version: '0.0.11',
+	version: '0.0.14',
 })
 
 /** Attribute used to tag temporary screenshot styles and masks. */

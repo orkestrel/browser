@@ -28,6 +28,7 @@ import type {
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCodegen } from './BrowserCodegen.js'
+import { BrowserFlight } from './BrowserFlight.js'
 import { BrowserAccessibility } from './BrowserAccessibility.js'
 import { BrowserClock } from './BrowserClock.js'
 import { BrowserDiagnostics } from './BrowserDiagnostics.js'
@@ -47,12 +48,14 @@ import {
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
 } from './constants.js'
 import {
+	compileScreenshotCleanupExpression,
+	compileScreenshotPreparationExpression,
+} from './compilers.js'
+import {
 	decodeBase64,
 	decodeBrowserSnapshot,
 	browserPDFToParams,
 	browserScreenshotToParams,
-	compileScreenshotCleanupExpression,
-	compileScreenshotPreparationExpression,
 	readBrowserConsoleMessage,
 	readBrowserDownloadProgress,
 	readBrowserDownloadStart,
@@ -88,7 +91,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #popups: Map<string, BrowserPage> = new Map()
 	#closed = false
 	#codegen: BrowserCodegen | undefined
-	#codegenStart: Promise<BrowserCodegen> | undefined
+	readonly #codegenStart: BrowserFlight<BrowserCodegen> = new BrowserFlight()
 	#navigation: Promise<BrowserNavigationResult> | undefined
 	#closing: Promise<void> | undefined
 	#releasing: Promise<void> | undefined
@@ -374,16 +377,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	async codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface> {
 		this.assert()
 		if (this.#codegen !== undefined) return this.#codegen
-		const active = this.#codegenStart
+		const active = this.#codegenStart.attempt
 		if (active !== undefined) return await active
 
-		const attempt = this.#startCodegen(options)
-		this.#codegenStart = attempt
-		try {
-			return await attempt
-		} finally {
-			if (this.#codegenStart === attempt) this.#codegenStart = undefined
-		}
+		return await this.#codegenStart.execute(() => this.#startCodegen(options))
 	}
 
 	destroy(): Promise<void> {
@@ -599,7 +596,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	async #releaseResources(): Promise<void> {
 		this.#cancelLoad()
-		await this.#codegenStart?.catch(() => undefined)
+		await this.#codegenStart.attempt?.catch(() => undefined)
 		await this.#scripts.destroy().catch(() => undefined)
 		await this.#diagnostics.destroy().catch(() => undefined)
 		await this.#clock.uninstall().catch(() => undefined)

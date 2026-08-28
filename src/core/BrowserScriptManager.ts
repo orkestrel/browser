@@ -6,11 +6,10 @@ import type {
 } from './types.js'
 import {
 	compileBrowserBindingCleanup,
-	compileBrowserBindingSource,
 	compileBrowserBindingResult,
-	readBrowserBindingCall,
-	readBrowserScriptIdentifier,
-} from './helpers.js'
+	compileBrowserBindingSource,
+} from './compilers.js'
+import { readBrowserBindingCall, readBrowserScriptIdentifier } from './helpers.js'
 import { BrowserError } from './errors.js'
 
 /**

@@ -6,7 +6,7 @@ import { isInstance } from '@orkestrel/contract'
  * Base error for all browser automation operations.
  *
  * @remarks
- * Carries a machine-readable `code` and optional `context` (AGENTS §12) so
+ * Carries a machine-readable `code` and optional `context` so
  * callers can branch in a `catch` without parsing message strings.
  */
 export class BrowserError extends Error {

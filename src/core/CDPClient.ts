@@ -4,6 +4,8 @@ import type {
 	CDPHandler,
 	CDPTransportInterface,
 } from './types.js'
+import type { EmitterErrorHandler } from '@orkestrel/emitter'
+import { BrowserFlight } from './BrowserFlight.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { CDPConnectionError, CDPError, CDPTimeoutError } from './errors.js'
 import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
@@ -19,10 +21,9 @@ import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
  * (WebSocket, pipe, or any other duplex channel); this class owns only
  * the JSON-RPC framing and id/session correlation.
  *
- * Supports session-scoped event subscriptions: when a sessionId is
- * provided to subscribe/unsubscribe, the handler only fires for CDP
- * events carrying that sessionId. Global subscriptions (no sessionId)
- * continue to see ALL events for backwards compatibility.
+ * Supports session-scoped event subscriptions: a subscription registered
+ * without a session id receives the event whatever session carries it, and a
+ * session-scoped subscription receives only its own session's events.
  */
 export class CDPClient implements CDPClientInterface {
 	readonly #transport: CDPTransportInterface
@@ -36,19 +37,20 @@ export class CDPClient implements CDPClientInterface {
 			timer: ReturnType<typeof setTimeout>
 		}
 	> = new Map()
-	readonly #subscriptions: Map<string, Set<CDPHandler>> = new Map()
-	readonly #sessionSubscriptions: Map<string, Map<string, Set<CDPHandler>>> = new Map()
+	readonly #subscriptions: Map<string | undefined, Map<string, Set<CDPHandler>>> = new Map()
 	#connected = false
 	#active = false
 	#wired = false
 	readonly #timeout: number
-	#connecting: Promise<void> | undefined
-	#closing: Promise<void> | undefined
+	readonly #error: EmitterErrorHandler | undefined
+	readonly #connecting: BrowserFlight = new BrowserFlight()
+	readonly #closing: BrowserFlight = new BrowserFlight()
 	#closeRequested = false
 
 	constructor(options: CDPClientOptions) {
 		this.#transport = options.transport
 		this.#timeout = options.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		this.#error = options.error
 	}
 
 	get connected(): boolean {
@@ -56,18 +58,14 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	async connect(): Promise<void> {
-		if (this.#closing !== undefined) await this.#closing
+		const closing = this.#closing.attempt
+		if (closing !== undefined) await closing
 		if (this.#connected) return
-		if (this.#connecting !== undefined) return this.#connecting
+		const active = this.#connecting.attempt
+		if (active !== undefined) return await active
 
 		this.#closeRequested = false
-		const attempt = this.#start()
-		this.#connecting = attempt
-		try {
-			await attempt
-		} finally {
-			if (this.#connecting === attempt) this.#connecting = undefined
-		}
+		await this.#connecting.execute(() => this.#connect())
 	}
 
 	/**
@@ -87,7 +85,7 @@ export class CDPClient implements CDPClientInterface {
 	async send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		sessionId?: string,
+		session?: string,
 		timeout?: number,
 	): Promise<unknown> {
 		if (!this.#connected) {
@@ -100,8 +98,8 @@ export class CDPClient implements CDPClientInterface {
 		if (params !== undefined) {
 			message['params'] = params
 		}
-		if (sessionId !== undefined) {
-			message['sessionId'] = sessionId
+		if (session !== undefined) {
+			message['sessionId'] = session
 		}
 
 		const serialized = JSON.stringify(message)
@@ -128,53 +126,29 @@ export class CDPClient implements CDPClientInterface {
 		})
 	}
 
-	subscribe(method: string, handler: CDPHandler, sessionId?: string): void {
-		if (sessionId !== undefined) {
-			let sessionMap = this.#sessionSubscriptions.get(sessionId)
-			if (sessionMap === undefined) {
-				sessionMap = new Map()
-				this.#sessionSubscriptions.set(sessionId, sessionMap)
-			}
-			let handlers = sessionMap.get(method)
-			if (handlers === undefined) {
-				handlers = new Set()
-				sessionMap.set(method, handlers)
-			}
-			handlers.add(handler)
-		} else {
-			let handlers = this.#subscriptions.get(method)
-			if (handlers === undefined) {
-				handlers = new Set()
-				this.#subscriptions.set(method, handlers)
-			}
-			handlers.add(handler)
+	subscribe(method: string, handler: CDPHandler, session?: string): void {
+		let methods = this.#subscriptions.get(session)
+		if (methods === undefined) {
+			methods = new Map()
+			this.#subscriptions.set(session, methods)
 		}
+		let handlers = methods.get(method)
+		if (handlers === undefined) {
+			handlers = new Set()
+			methods.set(method, handlers)
+		}
+		handlers.add(handler)
 	}
 
-	unsubscribe(method: string, handler: CDPHandler, sessionId?: string): void {
-		if (sessionId !== undefined) {
-			const sessionMap = this.#sessionSubscriptions.get(sessionId)
-			if (sessionMap !== undefined) {
-				const handlers = sessionMap.get(method)
-				if (handlers !== undefined) {
-					handlers.delete(handler)
-					if (handlers.size === 0) {
-						sessionMap.delete(method)
-					}
-				}
-				if (sessionMap.size === 0) {
-					this.#sessionSubscriptions.delete(sessionId)
-				}
-			}
-		} else {
-			const handlers = this.#subscriptions.get(method)
-			if (handlers !== undefined) {
-				handlers.delete(handler)
-				if (handlers.size === 0) {
-					this.#subscriptions.delete(method)
-				}
-			}
+	unsubscribe(method: string, handler: CDPHandler, session?: string): void {
+		const methods = this.#subscriptions.get(session)
+		if (methods === undefined) return
+		const handlers = methods.get(method)
+		if (handlers !== undefined) {
+			handlers.delete(handler)
+			if (handlers.size === 0) methods.delete(method)
 		}
+		if (methods.size === 0) this.#subscriptions.delete(session)
 	}
 
 	/**
@@ -190,24 +164,12 @@ export class CDPClient implements CDPClientInterface {
 	 * transport is closed deterministically once `start()` resolves.
 	 */
 	async close(): Promise<void> {
-		const active = this.#closing
-		if (active !== undefined) {
-			await active
-			return
-		}
-
-		const attempt = this.#stop()
-		this.#closing = attempt
-		try {
-			await attempt
-		} finally {
-			if (this.#closing === attempt) this.#closing = undefined
-		}
+		await this.#closing.execute(() => this.#close())
 	}
 
 	// === Private helpers
 
-	async #start(): Promise<void> {
+	async #connect(): Promise<void> {
 		if (!this.#wired) {
 			this.#transport.emitter.on('message', (data) => this.#onMessage(data))
 			this.#transport.emitter.on('close', () => this.#onClose())
@@ -233,10 +195,11 @@ export class CDPClient implements CDPClientInterface {
 		this.#connected = true
 	}
 
-	async #stop(): Promise<void> {
-		if (this.#connecting !== undefined) {
+	async #close(): Promise<void> {
+		const connecting = this.#connecting.attempt
+		if (connecting !== undefined) {
 			this.#closeRequested = true
-			await this.#connecting.catch(() => undefined)
+			await connecting.catch(() => undefined)
 			// The in-flight attempt may have already flipped #connected to
 			// true before observing #closeRequested (race between the
 			// attempt's final steps and #closeRequested being set here).
@@ -328,32 +291,29 @@ export class CDPClient implements CDPClientInterface {
 				? rawParams
 				: Object.freeze({})
 
-			// Fire global handlers (backwards compatible — see ALL events)
-			const globalHandlers = this.#subscriptions.get(method)
-			if (globalHandlers !== undefined) {
-				this.#dispatch(globalHandlers, params)
-			}
+			const global = this.#subscriptions.get(undefined)?.get(method)
+			if (global !== undefined) this.#dispatch(global, method, params)
 
-			// Fire session-scoped handlers
-			const eventSessionId = parsed['sessionId']
-			if (isString(eventSessionId)) {
-				const sessionMap = this.#sessionSubscriptions.get(eventSessionId)
-				if (sessionMap !== undefined) {
-					const sessionHandlers = sessionMap.get(method)
-					if (sessionHandlers !== undefined) {
-						this.#dispatch(sessionHandlers, params)
-					}
-				}
+			const session = parsed['sessionId']
+			if (isString(session)) {
+				const scoped = this.#subscriptions.get(session)?.get(method)
+				if (scoped !== undefined) this.#dispatch(scoped, method, params)
 			}
 		}
 	}
 
-	#dispatch(handlers: ReadonlySet<CDPHandler>, params: Readonly<Record<string, unknown>>): void {
+	#dispatch(
+		handlers: ReadonlySet<CDPHandler>,
+		method: string,
+		params: Readonly<Record<string, unknown>>,
+	): void {
 		for (const handler of [...handlers]) {
 			try {
 				handler(params)
-			} catch {
-				// One observer must not prevent sibling observers from receiving the event.
+			} catch (thrown) {
+				// One observer must not prevent sibling observers from receiving the
+				// event, so the throw is reported rather than propagated.
+				this.#error?.(thrown, method)
 			}
 		}
 	}

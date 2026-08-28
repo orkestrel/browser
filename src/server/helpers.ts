@@ -13,7 +13,8 @@ import { basename, dirname, join, resolve, win32 as pathWin32, posix as pathPosi
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as waitForTimeout } from 'node:timers/promises'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
-import { BROWSER_WAIT_POLL_INTERVAL_MS } from '@src/core'
+import { BROWSER_WAIT_POLL_INTERVAL_MS, BrowserError } from '@src/core'
+import { BrowserConnectionError } from './errors.js'
 import {
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_CDP_VERSION_PATH,
@@ -163,7 +164,9 @@ export async function removeBrowserProfile(profile: BrowserProfileResult): Promi
 	const path = resolve(profile.path)
 	const temporary = resolve(tmpdir())
 	if (dirname(path) !== temporary || !basename(path).startsWith(BROWSER_PROFILE_PREFIX)) {
-		throw new Error('Refusing to remove an unsafe browser profile path')
+		throw new BrowserError('Refusing to remove an unsafe browser profile path', undefined, {
+			path,
+		})
 	}
 	await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
 }
@@ -366,6 +369,7 @@ export function launchBrowserProcess(
  * @param port - Port the browser exposes its CDP endpoint on
  * @param timeout - Maximum time to wait in milliseconds
  * @param host - Host the browser exposes its CDP endpoint on (default `127.0.0.1`)
+ * @param signal - Optional external abort; an abort while waiting rethrows rather than resolving
  * @returns The browser's WebSocket debugger URL
  *
  * @throws When the endpoint does not become ready before the timeout
@@ -404,7 +408,10 @@ export async function waitForCDPReady(
 		if (delay > 0) await waitForTimeout(delay, undefined, { signal })
 	}
 
-	throw new Error(`CDP endpoint on port ${port} did not become ready within ${timeout}ms`)
+	throw new BrowserConnectionError(
+		`CDP endpoint on port ${port} did not become ready within ${timeout}ms`,
+		{ port, timeout },
+	)
 }
 
 /**

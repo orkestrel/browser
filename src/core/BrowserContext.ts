@@ -16,12 +16,13 @@ import type {
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCookieManager } from './BrowserCookieManager.js'
+import { BrowserFlight } from './BrowserFlight.js'
 import { BrowserEmulationManager } from './BrowserEmulationManager.js'
 import { BrowserPage } from './BrowserPage.js'
 import { BrowserPermissionManager } from './BrowserPermissionManager.js'
 import { BrowserStorageManager } from './BrowserStorageManager.js'
 import { BrowserError } from './errors.js'
-import { readBrowserFrames, validateBrowserViewport } from './helpers.js'
+import { readBrowserFrames, settleBrowserTeardown, validateBrowserViewport } from './helpers.js'
 import { instanceOf, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
@@ -43,7 +44,7 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #emulation: BrowserEmulationManager
 	readonly #pages: Map<string, BrowserPage> = new Map()
 	readonly #creating: Set<Promise<BrowserPage>> = new Set()
-	#syncing: Promise<void> | undefined
+	readonly #syncing: BrowserFlight = new BrowserFlight()
 	#shutdown: Promise<void> | undefined
 	#closed = false
 
@@ -115,18 +116,14 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async sync(targets: readonly CDPTarget[]): Promise<void> {
-		while (this.#syncing !== undefined) {
-			await this.#syncing
+		let active = this.#syncing.attempt
+		while (active !== undefined) {
+			await active
+			active = this.#syncing.attempt
 		}
 		if (this.#closed) throw new BrowserError('Browser context is closed')
 
-		const attempt = this.#sync(targets)
-		this.#syncing = attempt
-		try {
-			await attempt
-		} finally {
-			if (this.#syncing === attempt) this.#syncing = undefined
-		}
+		await this.#syncing.execute(() => this.#sync(targets))
 	}
 
 	destroy(): Promise<void> {
@@ -287,20 +284,11 @@ export class BrowserContext implements BrowserContextInterface {
 	async #destroyResources(): Promise<void> {
 		try {
 			await this.#settle()
-			let failed = false
-			let failure: unknown
-			for (const page of this.#pages.values()) {
-				try {
-					await page.destroy()
-				} catch (error) {
-					if (!failed) {
-						failed = true
-						failure = error
-					}
-				}
-			}
+			const failure = await settleBrowserTeardown(
+				...[...this.#pages.values()].map((page) => () => page.destroy()),
+			)
 			this.#pages.clear()
-			if (failed) throw failure
+			if (failure !== undefined) throw failure
 		} finally {
 			this.#finish()
 		}
@@ -309,33 +297,19 @@ export class BrowserContext implements BrowserContextInterface {
 	async #closeResources(): Promise<void> {
 		try {
 			await this.#settle()
-			let failed = false
-			let failure: unknown
-			for (const page of this.#pages.values()) {
-				try {
-					await page.close()
-				} catch (error) {
-					if (!failed) {
-						failed = true
-						failure = error
-					}
-				}
-			}
+			let failure = await settleBrowserTeardown(
+				...[...this.#pages.values()].map((page) => () => page.close()),
+			)
 			this.#pages.clear()
 
-			if (this.#id !== undefined) {
-				try {
-					await this.#client.send('Target.disposeBrowserContext', {
-						browserContextId: this.#id,
-					})
-				} catch (error) {
-					if (!failed) {
-						failed = true
-						failure = error
-					}
-				}
+			const id = this.#id
+			if (id !== undefined) {
+				const settled = await settleBrowserTeardown(() =>
+					this.#client.send('Target.disposeBrowserContext', { browserContextId: id }),
+				)
+				failure ??= settled
 			}
-			if (failed) throw failure
+			if (failure !== undefined) throw failure
 		} finally {
 			this.#finish()
 		}
@@ -343,7 +317,7 @@ export class BrowserContext implements BrowserContextInterface {
 
 	async #settle(): Promise<void> {
 		await Promise.allSettled([...this.#creating])
-		await this.#syncing?.catch(() => undefined)
+		await this.#syncing.attempt?.catch(() => undefined)
 	}
 
 	async #openSession(targetId: string): Promise<string> {

@@ -1,10 +1,28 @@
 import type { BrowserHAR } from '@src/core'
 import { describe, expect, it } from 'vitest'
+import { readFileSync } from 'node:fs'
 import { waitForDelay } from '@orkestrel/test'
-import { browserHARHeadersToRecord, BrowserPage, validateBrowserHAR } from '@src/core'
+import { parseJSON, isRecord, isString } from '@orkestrel/contract'
+import {
+	browserHARHeadersToRecord,
+	BROWSER_HAR_CREATOR,
+	BrowserPage,
+	validateBrowserHAR,
+} from '@src/core'
 import { createConnectedCDPClient, createScreenshotWriter, replyOk } from '../../setup.js'
 
 describe('BrowserHARManager', () => {
+	it('stamps archives with the version the manifest declares', () => {
+		const manifest = parseJSON(
+			readFileSync(new URL('../../../package.json', import.meta.url), 'utf8'),
+		)
+		const declared =
+			isRecord(manifest) && isString(manifest['version']) ? manifest['version'] : undefined
+
+		expect(BROWSER_HAR_CREATOR.name).toBe(isRecord(manifest) ? manifest['name'] : undefined)
+		expect(BROWSER_HAR_CREATOR.version).toBe(declared)
+	})
+
 	it('removes recording listeners when Network startup fails', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		transport.onSend('Network.enable', (message) => transport.fail(message.id, 'network failed'))

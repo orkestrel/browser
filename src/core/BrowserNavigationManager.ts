@@ -5,11 +5,8 @@ import type {
 	BrowserPageInterface,
 } from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS, BROWSER_WAIT_POLL_INTERVAL_MS } from './constants.js'
-import {
-	compileFunctionWaitExpression,
-	matchesBrowserURL,
-	validateBrowserTimeout,
-} from './helpers.js'
+import { compileFunctionWaitExpression } from './compilers.js'
+import { matchesBrowserURL, validateBrowserTimeout } from './helpers.js'
 import { BrowserError } from './errors.js'
 
 /**

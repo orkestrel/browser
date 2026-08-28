@@ -16,7 +16,7 @@ import {
 	WEBSOCKET_READY_OPEN,
 	WEBSOCKET_VERSION,
 } from '@orkestrel/websocket'
-import { BROWSER_DEFAULT_TIMEOUT_MS } from '@src/core'
+import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserFlight } from '@src/core'
 import { BrowserConnectionError } from '../errors.js'
 
 // === WebSocketCDPTransport
@@ -35,14 +35,14 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	readonly #url: string
 	readonly #timeout: number
 	#socket: NodeWebSocketInterface | undefined
-	#starting: Promise<void> | undefined
-	#closing: Promise<void> | undefined
+	readonly #starting: BrowserFlight = new BrowserFlight()
+	readonly #closing: BrowserFlight = new BrowserFlight()
 	#request: ClientRequest | undefined
 	#resolve: ((socket: NodeWebSocketInterface) => void) | undefined
 	#reject: ((error: unknown) => void) | undefined
 	#timer: ReturnType<typeof setTimeout> | undefined
 	#closeResolve: (() => void) | undefined
-	readonly #onSocketClose = this.#handleSocketClose.bind(this)
+	readonly #socketCloseHandler = this.#handleSocketClose.bind(this)
 
 	constructor(options: WebSocketCDPTransportOptions) {
 		this.#emitter = new Emitter({
@@ -58,10 +58,11 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	}
 
 	async start(): Promise<void> {
-		if (this.#closing !== undefined) await this.#closing
+		const closing = this.#closing.attempt
+		if (closing !== undefined) await closing
 		if (this.#socket?.readyState === WEBSOCKET_READY_OPEN) return
 
-		const active = this.#starting
+		const active = this.#starting.attempt
 		if (active !== undefined) {
 			await active
 			return
@@ -69,43 +70,24 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 
 		this.#socket?.destroy()
 		this.#socket = undefined
-		const transition = this.#open()
-		this.#starting = transition
-
-		try {
-			await transition
-		} finally {
-			if (this.#starting === transition) this.#starting = undefined
-		}
+		await this.#starting.execute(() => this.#start())
 	}
 
 	async send(data: string): Promise<void> {
 		const socket = this.#socket
 		if (socket === undefined || socket.readyState !== WEBSOCKET_READY_OPEN) {
-			throw new Error('WebSocket CDP transport is not open')
+			throw new BrowserConnectionError('WebSocket CDP transport is not open', { url: this.#url })
 		}
 		socket.send(data)
 	}
 
 	async close(): Promise<void> {
-		const active = this.#closing
-		if (active !== undefined) {
-			await active
-			return
-		}
-
-		const transition = this.#stop()
-		this.#closing = transition
-		try {
-			await transition
-		} finally {
-			if (this.#closing === transition) this.#closing = undefined
-		}
+		await this.#closing.execute(() => this.#close())
 	}
 
 	// === Private helpers
 
-	async #open(): Promise<void> {
+	async #start(): Promise<void> {
 		const parsed = attempt(() => new URL(this.#url))
 		if (!parsed.success) {
 			throw new BrowserConnectionError(`WebSocket CDP URL is invalid: ${this.#url}`, {
@@ -152,7 +134,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 		this.#bind(socket)
 	}
 
-	async #stop(): Promise<void> {
+	async #close(): Promise<void> {
 		const request = this.#request
 		if (request !== undefined) {
 			this.#rejectRequest(
@@ -164,7 +146,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 			)
 			request.destroy()
 		}
-		await this.#starting?.catch(() => undefined)
+		await this.#starting.attempt?.catch(() => undefined)
 
 		const socket = this.#socket
 		this.#socket = undefined
@@ -172,7 +154,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 
 		const closed = Promise.withResolvers<void>()
 		this.#closeResolve = closed.resolve
-		socket.emitter.on('close', this.#onSocketClose)
+		socket.emitter.on('close', this.#socketCloseHandler)
 		try {
 			socket.close()
 			if (socket.readyState !== WEBSOCKET_READY_CLOSED) await closed.promise
@@ -180,7 +162,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 			socket.destroy()
 			if (socket.readyState !== WEBSOCKET_READY_CLOSED) await closed.promise
 		} finally {
-			socket.emitter.off('close', this.#onSocketClose)
+			socket.emitter.off('close', this.#socketCloseHandler)
 			this.#closeResolve = undefined
 		}
 	}
