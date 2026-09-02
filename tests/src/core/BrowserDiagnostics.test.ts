@@ -209,6 +209,10 @@ describe('BrowserDiagnostics', () => {
 		expect(await page.diagnostics.performance.metrics()).toEqual([
 			{ name: 'TaskDuration', value: 1.25 },
 		])
+		const methods = transport.sent.map((message) => message.method)
+		expect(methods.lastIndexOf('Performance.disable')).toBeGreaterThan(
+			methods.lastIndexOf('Performance.getMetrics'),
+		)
 		await page.diagnostics.profiler.start(100)
 		const profile = await page.diagnostics.profiler.stop()
 
@@ -224,6 +228,23 @@ describe('BrowserDiagnostics', () => {
 			hit: 3,
 			children: [2],
 		})
+	})
+
+	it('disables the Performance domain after a failed metrics read', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Performance.enable')
+		replyOk(transport, 'Performance.disable')
+		transport.onSend('Performance.getMetrics', (message) =>
+			transport.fail(message.id, 'metrics failed'),
+		)
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+
+		await expect(page.diagnostics.performance.metrics()).rejects.toThrow('metrics failed')
+
+		const methods = transport.sent.map((message) => message.method)
+		expect(methods.lastIndexOf('Performance.disable')).toBeGreaterThan(
+			methods.lastIndexOf('Performance.getMetrics'),
+		)
 	})
 
 	it('disables the profiler after start and stop failures', async () => {

@@ -60,6 +60,9 @@ export class CDPClient implements CDPClientInterface {
 	readonly #connecting: BrowserTransition = new BrowserTransition()
 	readonly #closing: BrowserTransition = new BrowserTransition()
 	#closeRequested = false
+	// Set while this client is the one closing the transport, so the transport
+	// `close` a teardown produces reports `close` rather than `drop`.
+	#expected = false
 
 	constructor(options: CDPClientOptions) {
 		this.#transport = options.transport
@@ -87,6 +90,7 @@ export class CDPClient implements CDPClientInterface {
 		if (active !== undefined) return await active
 
 		this.#closeRequested = false
+		this.#expected = false
 		await this.#connecting.execute(() => this.#connect())
 	}
 
@@ -203,6 +207,7 @@ export class CDPClient implements CDPClientInterface {
 
 		if (this.#closeRequested) {
 			this.#closeRequested = false
+			this.#expected = true
 			try {
 				await this.#transport.close()
 			} finally {
@@ -240,6 +245,7 @@ export class CDPClient implements CDPClientInterface {
 			this.#pending.delete(id)
 		}
 
+		this.#expected = true
 		try {
 			await this.#transport.close()
 		} finally {
@@ -263,7 +269,7 @@ export class CDPClient implements CDPClientInterface {
 			entry.reject(new CDPConnectionError('CDP connection closed', { method: entry.method }))
 			this.#pending.delete(id)
 		}
-		this.#emitter.emit('drop')
+		if (!this.#expected) this.#emitter.emit('drop')
 	}
 
 	#onError(error: unknown): void {

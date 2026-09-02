@@ -59,9 +59,12 @@ export type CDPClientEventMap = {
  * - `transport` — the text pipe the client sends/receives JSON-RPC frames over
  * - `timeout` — ms before a pending request or connection attempt fails (default from constants)
  * - `on` — initial event listeners wired at construction
- * - `error` — receives a subscriber's throw with the CDP event method that
- *   raised it; without it a broken handler fails silently, because a throwing
- *   subscriber is never allowed to reach its siblings or the dispatch loop
+ * - `error` — receives a throwing subscriber's error on both dispatch paths:
+ *   a CDP event subscriber's throw arrives with the CDP method that raised it,
+ *   and a lifecycle subscriber's throw arrives with the lifecycle event name
+ *   (`connect`, `close`, `drop`, `error`) as the second argument. Without it a
+ *   broken handler fails silently, because a throwing subscriber is never
+ *   allowed to reach its siblings or the dispatch loop
  */
 export interface CDPClientOptions {
 	readonly transport: CDPTransportInterface
@@ -719,6 +722,18 @@ export interface BrowserChord {
 	readonly key: string
 }
 
+/**
+ * Every option a trusted-input operation can carry.
+ *
+ * @remarks
+ * The intersection of each option type that carries a bounded key, so one
+ * validator answers for a locator click, a locator drag, a mouse click, a
+ * mouse drag, and keyboard entry alike.
+ */
+export type BrowserOperationOptions = BrowserPointerOptions &
+	BrowserClickOptions &
+	BrowserDragOptions
+
 /** Keyboard input operations bound to one frame target session. */
 export interface BrowserKeyboardInterface {
 	down(key: string): Promise<void>
@@ -842,9 +857,9 @@ export interface BrowserDownloadStart {
  * One context download tracked through Chromium's Browser domain.
  *
  * @remarks
- * Progress arrives from the page that owns the download, which drives the
- * concrete `BrowserDownload`, so the published contract carries the observed
- * state and `cancel` alone.
+ * Progress arrives from the owning page, which drives the concrete
+ * `BrowserDownload`. `update` is on this contract because the class exposes
+ * exactly its interface methods.
  */
 export interface BrowserDownloadInterface {
 	readonly emitter: EmitterInterface<BrowserDownloadEventMap>
@@ -856,6 +871,8 @@ export interface BrowserDownloadInterface {
 	readonly total: number
 	readonly path: string | undefined
 	cancel(): Promise<void>
+	/** Records one progress update. The owning page drives it. */
+	update(progress: BrowserDownloadProgress): void
 }
 
 /** One console API call. */
@@ -1007,13 +1024,22 @@ export type BrowserWebSocketEventMap = {
  *
  * @remarks
  * The connection is an observation: a page's network manager reconstructs it
- * from Network-domain events and drives the concrete `BrowserWebSocket`, so
- * the published contract carries the identity and the emitter alone.
+ * from Network-domain events and drives the concrete `BrowserWebSocket`. The
+ * drive methods are on this contract because the class exposes exactly its
+ * interface methods.
  */
 export interface BrowserWebSocketInterface {
 	readonly emitter: EmitterInterface<BrowserWebSocketEventMap>
 	readonly id: string
 	readonly url: string
+	/** Reports one received frame. The page's network manager drives it. */
+	receive(frame: BrowserWebSocketFrame): void
+	/** Reports one sent frame. The page's network manager drives it. */
+	transmit(frame: BrowserWebSocketFrame): void
+	/** Reports a connection fault. The page's network manager drives it. */
+	fail(message: string): void
+	/** Reports the close and destroys the emitter. The page's network manager drives it. */
+	close(timestamp: number): void
 }
 
 /** Network events emitted by a page's network manager. */

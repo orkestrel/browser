@@ -52,6 +52,10 @@ export type CDPSentHandler = (message: CDPSentMessage) => void
  * server-initiated behavior with `reply` / `fail` (correlate a response by
  * id) and `event` (push a CDP event frame), or use the `onSend` hook to
  * script a response the moment a matching request arrives.
+ *
+ * `close()` emits `close` when the transport was started, the way the real
+ * WebSocket transport reports every socket close including the one it
+ * requested itself.
  */
 export interface CDPTestTransportInterface extends CDPTransportInterface {
 	readonly sent: readonly CDPSentMessage[]
@@ -115,8 +119,12 @@ export function createCDPTransport(): CDPTestTransportInterface {
 			for (const handler of handlers.get(method) ?? []) handler(message)
 		},
 		async close(): Promise<void> {
+			const open = started
 			closed = true
 			started = false
+			// The real transport reports every socket close, including the one it
+			// requested itself, so a close request emits `close` exactly once.
+			if (open) emitter.emit('close')
 		},
 		onSend(method: string, handler: CDPSentHandler): void {
 			let list = handlers.get(method)

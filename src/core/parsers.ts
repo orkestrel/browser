@@ -35,7 +35,8 @@ import {
 } from './helpers.js'
 
 /**
- * Decodes one `Network.requestWillBeSent` or `Fetch.requestPaused` event.
+ * Coerces one `Network.requestWillBeSent` or `Fetch.requestPaused` event to a
+ * `BrowserRequest`, or `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Request or undefined
@@ -76,7 +77,8 @@ export function parseBrowserRequest(value: unknown): BrowserRequest | undefined 
 }
 
 /**
- * Decodes one `Network.responseReceived` event.
+ * Coerces one `Network.responseReceived` event to a `BrowserResponse`, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Response or undefined
@@ -100,7 +102,8 @@ export function parseBrowserResponse(value: unknown): BrowserResponse | undefine
 }
 
 /**
- * Decodes one Chromium response object with its event identity.
+ * Coerces one Chromium response object plus its event identity to a
+ * `BrowserResponse`, or `undefined` off-shape.
  *
  * @param value - Unknown response object
  * @param id - Request id
@@ -148,7 +151,8 @@ export function parseBrowserResponseRecord(
 }
 
 /**
- * Decodes Chromium response timing.
+ * Coerces Chromium response timing to a `BrowserTiming`, or `undefined`
+ * off-shape.
  *
  * @param value - Unknown timing object
  * @returns Timing or undefined
@@ -170,7 +174,8 @@ export function parseBrowserTiming(value: unknown): BrowserTiming | undefined {
 }
 
 /**
- * Decodes one start/end pair from Chromium network timing data.
+ * Coerces one named start/end pair of Chromium network timing to a
+ * `BrowserTimingRange`, or `undefined` off-shape.
  *
  * @param value - Unknown timing object
  * @param start - Start field
@@ -197,7 +202,8 @@ export function parseBrowserTimingRange(
 }
 
 /**
- * Decodes Chromium TLS security details.
+ * Coerces Chromium TLS security details to a `BrowserSecurity`, or `undefined`
+ * off-shape.
  *
  * @param value - Unknown security details
  * @returns Security metadata or undefined
@@ -222,7 +228,8 @@ export function parseBrowserSecurity(value: unknown): BrowserSecurity | undefine
 }
 
 /**
- * Decodes one `Network.loadingFailed` event.
+ * Coerces one `Network.loadingFailed` event to a `BrowserRequestFailure`, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Failure or undefined
@@ -240,7 +247,8 @@ export function parseBrowserRequestFailure(value: unknown): BrowserRequestFailur
 }
 
 /**
- * Decodes one WebSocket frame event.
+ * Coerces one WebSocket frame event to a `BrowserWebSocketFrame`, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Frame or undefined
@@ -262,7 +270,8 @@ export function parseBrowserWebSocketFrame(value: unknown): BrowserWebSocketFram
 }
 
 /**
- * Decodes one Runtime binding invocation.
+ * Coerces one Runtime binding invocation to a `BrowserBindingCall`, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown `Runtime.bindingCalled` parameters
  * @returns Valid call or undefined
@@ -295,7 +304,8 @@ export function parseBrowserBindingCall(value: unknown): BrowserBindingCall | un
 }
 
 /**
- * Decodes a string-valued Accessibility-domain AXValue.
+ * Coerces a string-valued Accessibility-domain AXValue to a string, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown AX value
  * @returns String or undefined
@@ -306,7 +316,8 @@ export function parseBrowserAXString(value: unknown): string | undefined {
 }
 
 /**
- * Decodes an optional Chromium cookie partition key.
+ * Coerces an optional Chromium cookie partition key to a
+ * `BrowserCookiePartition`, or `undefined` off-shape.
  *
  * @param value - Unknown partition value
  * @returns Partition key or undefined
@@ -322,7 +333,8 @@ export function parseBrowserCookiePartition(value: unknown): BrowserCookiePartit
 }
 
 /**
- * Decodes one `Runtime.consoleAPICalled` event.
+ * Coerces one `Runtime.consoleAPICalled` event to a `BrowserConsoleMessage`, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Console message or undefined
@@ -353,7 +365,8 @@ export function parseBrowserConsoleMessage(value: unknown): BrowserConsoleMessag
 }
 
 /**
- * Decodes one `Runtime.exceptionThrown` event.
+ * Coerces one `Runtime.exceptionThrown` event to a `BrowserPageError`, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Page error or undefined
@@ -376,7 +389,8 @@ export function parseBrowserPageError(value: unknown): BrowserPageError | undefi
 }
 
 /**
- * Decodes one `Browser.downloadWillBegin` event.
+ * Coerces one `Browser.downloadWillBegin` event to a `BrowserDownloadStart`, or
+ * `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Download start or undefined
@@ -400,7 +414,8 @@ export function parseBrowserDownloadStart(value: unknown): BrowserDownloadStart 
 }
 
 /**
- * Decodes one `Browser.downloadProgress` event.
+ * Coerces one `Browser.downloadProgress` event to a `BrowserDownloadProgress`,
+ * or `undefined` off-shape.
  *
  * @param value - Unknown event parameters
  * @returns Download id and progress, or undefined
@@ -440,7 +455,8 @@ export function parseBrowserDownloadProgress(
 }
 
 /**
- * Parses a codegen binding payload into a typed action.
+ * Coerces a codegen binding payload string to a `BrowserCodegenAction`, or
+ * `undefined` off-shape.
  *
  * @remarks
  * The in-page recorder script calls the CDP binding with a JSON string
@@ -475,7 +491,8 @@ export function parseCodegenActionPayload(payload: unknown): BrowserCodegenActio
 }
 
 /**
- * Derives a `navigate` codegen action from a `Page.frameNavigated` CDP event.
+ * Coerces a `Page.frameNavigated` CDP event to a `navigate` codegen action, or
+ * `undefined` off-shape.
  *
  * @remarks
  * Only the top-level (main) frame's navigation is recorded — a frame
@@ -497,7 +514,7 @@ export function parseCodegenNavigateAction(
 }
 
 /**
- * Reads an unknown value as an all-number array.
+ * Coerces an unknown value to an all-number array, or `undefined` off-shape.
  *
  * @param value - Candidate value
  * @returns The number array, or undefined
@@ -510,7 +527,8 @@ export function parseNumberArray(value: unknown): readonly number[] | undefined 
 }
 
 /**
- * Resolves one index from a CDP snapshot string table.
+ * Coerces one CDP snapshot string-table index to its string, or `undefined`
+ * off-shape.
  *
  * @param strings - Snapshot string table
  * @param index - Candidate string index
@@ -525,7 +543,8 @@ export function parseSnapshotString(
 }
 
 /**
- * Decodes a CDP snapshot rectangle.
+ * Coerces a CDP snapshot rectangle to a `BrowserRect`, or `undefined`
+ * off-shape.
  *
  * @param value - Candidate four-number array
  * @returns A rectangle, or undefined

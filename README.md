@@ -60,7 +60,7 @@ const result = await client.send('Page.navigate', { url: 'https://example.com' }
 
 For the full surface — the CDP dispatch core, the `BrowserContext` /
 `BrowserPage` / `BrowserCodegen` entities, the server transports, and usage
-patterns — see [`guides/src/browser.md`](guides/src/browser.md).
+patterns — see [`guides/browser.md`](guides/browser.md).
 
 ## Package
 

@@ -2,14 +2,13 @@ import type {
 	BrowserActionOptions,
 	BrowserActionabilityOptions,
 	BrowserFrameInterface,
-	BrowserClickOptions,
-	BrowserDragOptions,
 	BrowserHandleInterface,
 	BrowserLocatorClickOptions,
 	BrowserLocatorDragOptions,
 	BrowserLocatorFilter,
 	BrowserLocatorInterface,
 	BrowserLocatorTypeOptions,
+	BrowserOperationOptions,
 	BrowserPointerOptions,
 	BrowserPoint,
 	BrowserQuery,
@@ -460,7 +459,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 	}
 
 	async #resolve(
-		options: (BrowserPointerOptions & BrowserClickOptions & BrowserDragOptions) | undefined,
+		options: BrowserOperationOptions | undefined,
 		state: 'attached' | 'visible',
 	): Promise<BrowserHandleInterface> {
 		validateBrowserInputOptions(options)

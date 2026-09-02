@@ -15,9 +15,7 @@ import type {
 	BrowserHARValue,
 	BrowserLayout,
 	BrowserMetric,
-	BrowserClickOptions,
-	BrowserDragOptions,
-	BrowserPointerOptions,
+	BrowserOperationOptions,
 	BrowserAccessibilityOptions,
 	BrowserAccessibilitySnapshot,
 	BrowserAXNode,
@@ -501,15 +499,13 @@ export function validateBrowserPoint(point: BrowserPoint): void {
  * Validates the bounded keys of one trusted-input operation.
  *
  * @remarks
- * The parameter is the intersection of every option type that carries a
- * bounded key, so one validator answers for a locator click, a locator drag,
- * a mouse click, a mouse drag, and keyboard entry alike.
+ * The parameter is `BrowserOperationOptions`, so one validator answers for a
+ * locator click, a locator drag, a mouse click, a mouse drag, and keyboard
+ * entry alike.
  *
  * @param options - Candidate input options
  */
-export function validateBrowserInputOptions(
-	options?: BrowserPointerOptions & BrowserClickOptions & BrowserDragOptions,
-): void {
+export function validateBrowserInputOptions(options?: BrowserOperationOptions): void {
 	if (options?.delay !== undefined && (!isFiniteNumber(options.delay) || options.delay < 0)) {
 		throw new BrowserError('Browser input delay must be non-negative and finite', undefined, {
 			delay: options.delay,

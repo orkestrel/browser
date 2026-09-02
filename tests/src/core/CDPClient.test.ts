@@ -388,11 +388,13 @@ describe('CDPClient', () => {
 	})
 
 	describe('emitter', () => {
-		it('reports connect and close around an explicit teardown', async () => {
+		it('reports connect and close, and never drop, around an explicit teardown', async () => {
 			const connect = createRecorder<[]>()
 			const close = createRecorder<[]>()
+			const drop = createRecorder<[]>()
 			client.emitter.on('connect', connect.handler)
 			client.emitter.on('close', close.handler)
+			client.emitter.on('drop', drop.handler)
 
 			await client.connect()
 			expect(connect.count).toBe(1)
@@ -400,6 +402,7 @@ describe('CDPClient', () => {
 
 			await client.close()
 			expect(close.count).toBe(1)
+			expect(drop.count).toBe(0)
 		})
 
 		it('reports drop when the transport ends without a close request', async () => {

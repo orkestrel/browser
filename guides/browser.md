@@ -125,12 +125,12 @@ try {
 | `decodeBase64`                     | function | Decode a base64-encoded string into raw bytes (pure JS, no `Buffer`/`atob` — runs identically Node/browser).                                                                                       |
 | `compileGuardedEvaluateExpression` | function | Compile a `Runtime.evaluate` expression so the in-page code stringifies its own result and throws a recognizable sentinel error before an oversized result would overflow the CDP transport frame. |
 | `normalizeCodegenActions`          | function | Collapse consecutive `fill` actions on the same selector into the latest value.                                                                                                                    |
-| `parseCodegenActionPayload`        | function | Parse a codegen binding payload string into a typed `BrowserCodegenAction`, or `undefined` if malformed.                                                                                           |
-| `parseCodegenNavigateAction`       | function | Derive a `navigate` codegen action from a `Page.frameNavigated` CDP event (top-level frame only), or `undefined` when the event is not one.                                                        |
+| `parseCodegenActionPayload`        | function | Coerce a codegen binding payload string to a `BrowserCodegenAction`, or `undefined` off-shape.                                                                                                     |
+| `parseCodegenNavigateAction`       | function | Coerce a `Page.frameNavigated` CDP event to a `navigate` codegen action, or `undefined` off-shape and for every frame but the top-level one.                                                       |
 | `compileCodegenScript`             | function | Compile recorded codegen actions into a replayable JavaScript or TypeScript script.                                                                                                                |
-| `readEvaluationResult`             | function | Decode a `Runtime.evaluate` result and map guarded oversize exceptions to `BrowserResultLimitError`.                                                                                               |
+| `readEvaluationResult`             | function | Read a `Runtime.evaluate` result. Throws a `BrowserError` on a failed evaluation, and a `BrowserResultLimitError` past the guarded result size.                                                    |
 | `requireBrowserString`             | function | Narrow a browser-evaluated value to a required string.                                                                                                                                             |
-| `readBrowserFrames`                | function | Decode `Page.getFrameTree` into depth-first frame metadata.                                                                                                                                        |
+| `readBrowserFrames`                | function | Read `Page.getFrameTree` into depth-first frame metadata, skipping every off-shape frame.                                                                                                          |
 | `compileAttachedWaitExpression`    | function | Compile an in-page attached-state wait.                                                                                                                                                            |
 | `compileDetachedWaitExpression`    | function | Compile an in-page detached-state wait.                                                                                                                                                            |
 | `compileVisibleWaitExpression`     | function | Compile an in-page visible-state wait.                                                                                                                                                             |
@@ -138,14 +138,14 @@ try {
 | `compileClickExpression`           | function | Compile a strict, visibility-checked click expression.                                                                                                                                             |
 | `compileFillExpression`            | function | Compile a strict, editable fill expression.                                                                                                                                                        |
 | `compileSelectExpression`          | function | Compile a strict select expression.                                                                                                                                                                |
-| `parseNumberArray`                 | function | Coerce an unknown protocol value to an all-number array, or `undefined`.                                                                                                                           |
-| `parseSnapshotString`              | function | Resolve an index from a DOMSnapshot string table, or `undefined`.                                                                                                                                  |
-| `readRareStringData`               | function | Read sparse CDP string data into a node-index map.                                                                                                                                                 |
-| `readRareBooleanData`              | function | Read sparse CDP boolean indexes into a set.                                                                                                                                                        |
-| `readRareIntegerData`              | function | Read sparse CDP integer data into a node-index map.                                                                                                                                                |
-| `parseBrowserRect`                 | function | Coerce a four-number CSS-pixel rectangle, or `undefined`.                                                                                                                                          |
-| `readBrowserAttributes`            | function | Read flattened name/value indexes into a frozen attribute record.                                                                                                                                  |
-| `readBrowserSnapshot`              | function | Validate and read `DOMSnapshot.captureSnapshot` into a serializable `BrowserSnapshotInput`.                                                                                                        |
+| `parseNumberArray`                 | function | Coerce an unknown protocol value to an all-number array, or `undefined` off-shape.                                                                                                                 |
+| `parseSnapshotString`              | function | Coerce one DOMSnapshot string-table index to its string, or `undefined` off-shape.                                                                                                                 |
+| `readRareStringData`               | function | Read sparse CDP string data into a node-index map, skipping every off-shape entry.                                                                                                                 |
+| `readRareBooleanData`              | function | Read sparse CDP boolean indexes into a set, skipping every off-shape entry.                                                                                                                        |
+| `readRareIntegerData`              | function | Read sparse CDP integer data into a node-index map, skipping every off-shape entry.                                                                                                                |
+| `parseBrowserRect`                 | function | Coerce a four-number CSS-pixel rectangle to a `BrowserRect`, or `undefined` off-shape.                                                                                                             |
+| `readBrowserAttributes`            | function | Read flattened name/value indexes into a frozen attribute record, skipping every off-shape pair.                                                                                                   |
+| `readBrowserSnapshot`              | function | Read a `DOMSnapshot.captureSnapshot` response into a serializable `BrowserSnapshotInput`. Throws a `BrowserError` off-shape, and a `BrowserResultLimitError` past the configured node limit.       |
 | `attributeOfBrowserNode`           | function | Read one captured node attribute.                                                                                                                                                                  |
 | `isBrowserNodeQuery`               | function | Test whether a browser-node matcher is a declarative query rather than a predicate.                                                                                                                |
 | `matchesBrowserNode`               | function | Match a node against a declarative query.                                                                                                                                                          |
@@ -215,51 +215,51 @@ family's — see [`BrowserSnapshotInterface`](#browsersnapshotinterface) below.
 
 #### Types
 
-| Type                          | Kind      | Shape                                                                                                                                                                                                                       |
-| ----------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CDPTransportEventMap`        | type      | `{ message: [data: string]; close: []; error: [error: unknown] }` — the transport's observable surface.                                                                                                                     |
-| `CDPTransportInterface`       | interface | `emitter` data member + `start` / `send` / `close` methods — the dumb text pipe a `CDPClientInterface` sends/receives JSON-RPC frames over.                                                                                 |
-| `CDPClientOptions`            | interface | `{ transport: CDPTransportInterface; timeout?: number; on?: EmitterHooks<CDPClientEventMap>; error?: EmitterErrorHandler }` — options for `createCDPClient`; `error` receives a subscriber throw with the CDP event method. |
-| `CDPHandler`                  | type      | `(params: Readonly<Record<string, unknown>>) => void` — handler invoked for a subscribed CDP event.                                                                                                                         |
-| `CDPClientEventMap`           | type      | `{ connect: []; close: []; drop: []; error: [error: unknown] }` — the client's own connection lifecycle.                                                                                                                    |
-| `CDPTarget`                   | interface | `{ id: string; category: string; title: string; url: string }` — one entry of the CDP `Target.getTargets` result; `category` mirrors the protocol's `type` field.                                                           |
-| `CDPClientInterface`          | interface | `emitter` / `connected` data members + `connect` / `reconnect` / `send` / `subscribe` / `unsubscribe` / `close` methods (`send` takes a trailing `CDPSendOptions`).                                                         |
-| `CDPSendOptions`              | interface | `{ session?: string; timeout?: number }` — options for one CDP method call.                                                                                                                                                 |
-| `BrowserWriterInterface`      | interface | `write(path, data)` — pluggable sink for persisting captured browser bytes to a path; core never touches a filesystem directly.                                                                                             |
-| `BrowserViewport`             | interface | `{ width: number; height: number }` — viewport dimensions for a browser page.                                                                                                                                               |
-| `BrowserWaitUntil`            | type      | `'load' \| 'domcontentloaded'` — page load condition for navigation (the CDP load event `navigate()` awaits).                                                                                                               |
-| `BrowserPageOptions`          | interface | `{ url?; viewport?; timeout? }` — options for creating a browser page.                                                                                                                                                      |
-| `BrowserNavigationOptions`    | interface | `{ condition?: BrowserWaitUntil; timeout? }` — options for page navigation (default `'load'`).                                                                                                                              |
-| `BrowserActionOptions`        | interface | `{ timeout?; strict?; force?; trial? }` — options for strict-by-default element interaction.                                                                                                                                |
-| `BrowserWaitState`            | type      | `'attached' \| 'detached' \| 'visible' \| 'hidden'` — selector state awaited by a frame.                                                                                                                                    |
-| `BrowserWaitOptions`          | interface | `{ timeout?; strict?; state? }` — options for selector-state waits.                                                                                                                                                         |
-| `BrowserScreenshotOptions`    | interface | `{ path?; full?; format?: 'png' \| 'jpeg'; quality? }` — options for taking a page screenshot.                                                                                                                              |
-| `BrowserContentResult`        | interface | `{ url: string; title: string; html: string; text: string }` — result of page content extraction.                                                                                                                           |
-| `BrowserScreenshotResult`     | interface | `{ bytes: Uint8Array; path: string \| undefined }` — result of a page screenshot.                                                                                                                                           |
-| `BrowserCodegenAction`        | type      | Discriminated union — `navigate` / `click` / `fill` / `select` — one recorded browser action.                                                                                                                               |
-| `BrowserCodegenEventMap`      | type      | `{ start: []; stop: [actions]; action: [action]; clear: [] }` — the observable surface of a `BrowserCodegenInterface`.                                                                                                      |
-| `BrowserCodegenOptions`       | interface | `{ on?: EmitterHooks<BrowserCodegenEventMap>; error?: EmitterErrorHandler }` — options for creating a BrowserCodegen recorder.                                                                                              |
-| `BrowserCodegenLanguage`      | type      | `'javascript' \| 'typescript'` — target language for a compiled codegen script.                                                                                                                                             |
-| `BrowserCodegenScriptOptions` | interface | `{ language?: BrowserCodegenLanguage }` — options for compiling recorded actions into a script (default `'javascript'`).                                                                                                    |
-| `BrowserCodegenInterface`     | interface | `emitter` / `started` data members + `start` / `stop` / `actions` / `script` / `clear` / `destroy` methods.                                                                                                                 |
-| `BrowserSessionFunction`      | type      | `(frame: string) => Promise<string>` — resolves the current CDP target session for a frame.                                                                                                                                 |
-| `BrowserFrameInfo`            | interface | Serializable `id` / `parent` / `name` / `url` metadata decoded from `Page.getFrameTree`.                                                                                                                                    |
-| `BrowserFrameInterface`       | interface | Frame metadata plus title/content/actions/evaluation/waiting, usability assertion, observed-URL recording, and raw frame-session CDP access.                                                                                |
-| `BrowserSendOptions`          | interface | `{ timeout?: number }` — options for one raw CDP call in a frame's target session.                                                                                                                                          |
-| `BrowserRect`                 | type      | Readonly `[x, y, width, height]` CSS-pixel tuple.                                                                                                                                                                           |
-| `BrowserLayout`               | interface | Optional layout box, computed styles, text, paint order, and DOM rectangles for a snapshot node.                                                                                                                            |
-| `BrowserNode`                 | interface | One flattened serializable DOM node, including attributes, sparse state, frame identity, layout, and the `category` that mirrors the DOM `nodeType`.                                                                        |
-| `BrowserDocument`             | interface | One captured document with frame metadata, dimensions, and nodes.                                                                                                                                                           |
-| `BrowserSnapshotInput`        | interface | `{ documents; styles }` — every captured document plus the requested computed-style names; the serializable form a `BrowserSnapshot` is built from and serializes back to.                                                  |
-| `BrowserWalkOrder`            | type      | `'depth' \| 'breadth'` — structural ordering for a snapshot walk.                                                                                                                                                           |
-| `BrowserWalkOptions`          | interface | `{ root?; order? }` — optional subtree root (included in the walk) and traversal order (default `'depth'`).                                                                                                                 |
-| `BrowserSiblingRelation`      | type      | `'preceding' \| 'following'` — structural sibling side relative to a node.                                                                                                                                                  |
-| `BrowserSnapshotInterface`    | interface | Extends `BrowserSnapshotInput`; adds walking, structural relationships, search, and path derivation over plain `BrowserNode` values.                                                                                        |
-| `BrowserSnapshotOptions`      | interface | `{ styles?; paint?; rects?; limit? }` — DOM snapshot capture and decoding controls.                                                                                                                                         |
-| `BrowserNodePredicate`        | type      | `(node: BrowserNode) => boolean` — traversal/search predicate.                                                                                                                                                              |
-| `BrowserNodeQuery`            | interface | Declarative name/text/attribute/frame/visibility/clickability matcher.                                                                                                                                                      |
-| `BrowserPageInterface`        | interface | Extends `BrowserFrameInterface`; adds `closed` plus navigation, screenshots, frame discovery, DOM snapshots, codegen, and target teardown.                                                                                  |
-| `BrowserContextInterface`     | interface | `id` data member + `page` / `pages` / `create` / `sync` / `destroy` / `close` methods.                                                                                                                                      |
+| Type                          | Kind      | Shape                                                                                                                                                                                                                                                                                    |
+| ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CDPTransportEventMap`        | type      | `{ message: [data: string]; close: []; error: [error: unknown] }` — the transport's observable surface.                                                                                                                                                                                  |
+| `CDPTransportInterface`       | interface | `emitter` data member + `start` / `send` / `close` methods — the dumb text pipe a `CDPClientInterface` sends/receives JSON-RPC frames over.                                                                                                                                              |
+| `CDPClientOptions`            | interface | `{ transport: CDPTransportInterface; timeout?: number; on?: EmitterHooks<CDPClientEventMap>; error?: EmitterErrorHandler }` — options for `createCDPClient`; `error` receives a subscriber throw with the CDP event method, or with the lifecycle event name for a lifecycle subscriber. |
+| `CDPHandler`                  | type      | `(params: Readonly<Record<string, unknown>>) => void` — handler invoked for a subscribed CDP event.                                                                                                                                                                                      |
+| `CDPClientEventMap`           | type      | `{ connect: []; close: []; drop: []; error: [error: unknown] }` — the client's own connection lifecycle.                                                                                                                                                                                 |
+| `CDPTarget`                   | interface | `{ id: string; category: string; title: string; url: string }` — one entry of the CDP `Target.getTargets` result; `category` mirrors the protocol's `type` field.                                                                                                                        |
+| `CDPClientInterface`          | interface | `emitter` / `connected` data members + `connect` / `reconnect` / `send` / `subscribe` / `unsubscribe` / `close` methods (`send` takes a trailing `CDPSendOptions`).                                                                                                                      |
+| `CDPSendOptions`              | interface | `{ session?: string; timeout?: number }` — options for one CDP method call.                                                                                                                                                                                                              |
+| `BrowserWriterInterface`      | interface | `write(path, data)` — pluggable sink for persisting captured browser bytes to a path; core never touches a filesystem directly.                                                                                                                                                          |
+| `BrowserViewport`             | interface | `{ width: number; height: number }` — viewport dimensions for a browser page.                                                                                                                                                                                                            |
+| `BrowserWaitUntil`            | type      | `'commit' \| 'load' \| 'domcontentloaded'` — page load condition for navigation (the CDP load event `navigate()` awaits).                                                                                                                                                                |
+| `BrowserPageOptions`          | interface | `{ url?; viewport?; timeout? }` — options for creating a browser page.                                                                                                                                                                                                                   |
+| `BrowserNavigationOptions`    | interface | `{ condition?: BrowserWaitUntil; timeout? }` — options for page navigation (default `'load'`).                                                                                                                                                                                           |
+| `BrowserActionOptions`        | interface | `{ timeout?; strict?; force?; trial? }` — options for strict-by-default element interaction.                                                                                                                                                                                             |
+| `BrowserWaitState`            | type      | `'attached' \| 'detached' \| 'visible' \| 'hidden'` — selector state awaited by a frame.                                                                                                                                                                                                 |
+| `BrowserWaitOptions`          | interface | `{ timeout?; strict?; state? }` — options for selector-state waits.                                                                                                                                                                                                                      |
+| `BrowserScreenshotOptions`    | interface | `{ path?; full?; format?: 'png' \| 'jpeg'; quality? }` — options for taking a page screenshot.                                                                                                                                                                                           |
+| `BrowserContentResult`        | interface | `{ url: string; title: string; html: string; text: string }` — result of page content extraction.                                                                                                                                                                                        |
+| `BrowserScreenshotResult`     | interface | `{ bytes: Uint8Array; path: string \| undefined }` — result of a page screenshot.                                                                                                                                                                                                        |
+| `BrowserCodegenAction`        | type      | Discriminated union — `navigate` / `click` / `fill` / `select` — one recorded browser action.                                                                                                                                                                                            |
+| `BrowserCodegenEventMap`      | type      | `{ start: []; stop: [actions]; action: [action]; clear: [] }` — the observable surface of a `BrowserCodegenInterface`.                                                                                                                                                                   |
+| `BrowserCodegenOptions`       | interface | `{ on?: EmitterHooks<BrowserCodegenEventMap>; error?: EmitterErrorHandler }` — options for creating a BrowserCodegen recorder.                                                                                                                                                           |
+| `BrowserCodegenLanguage`      | type      | `'javascript' \| 'typescript'` — target language for a compiled codegen script.                                                                                                                                                                                                          |
+| `BrowserCodegenScriptOptions` | interface | `{ language?: BrowserCodegenLanguage }` — options for compiling recorded actions into a script (default `'javascript'`).                                                                                                                                                                 |
+| `BrowserCodegenInterface`     | interface | `emitter` / `started` data members + `start` / `stop` / `actions` / `script` / `clear` / `destroy` methods.                                                                                                                                                                              |
+| `BrowserSessionFunction`      | type      | `(frame: string) => Promise<string>` — resolves the current CDP target session for a frame.                                                                                                                                                                                              |
+| `BrowserFrameInfo`            | interface | Serializable `id` / `parent` / `name` / `url` metadata decoded from `Page.getFrameTree`.                                                                                                                                                                                                 |
+| `BrowserFrameInterface`       | interface | Frame metadata plus title/content/actions/evaluation/waiting, usability assertion, observed-URL recording, and raw frame-session CDP access.                                                                                                                                             |
+| `BrowserSendOptions`          | interface | `{ timeout?: number }` — options for one raw CDP call in a frame's target session.                                                                                                                                                                                                       |
+| `BrowserRect`                 | type      | Readonly `[x, y, width, height]` CSS-pixel tuple.                                                                                                                                                                                                                                        |
+| `BrowserLayout`               | interface | Optional layout box, computed styles, text, paint order, and DOM rectangles for a snapshot node.                                                                                                                                                                                         |
+| `BrowserNode`                 | interface | One flattened serializable DOM node, including attributes, sparse state, frame identity, layout, and the `category` that mirrors the DOM `nodeType`.                                                                                                                                     |
+| `BrowserDocument`             | interface | One captured document with frame metadata, dimensions, and nodes.                                                                                                                                                                                                                        |
+| `BrowserSnapshotInput`        | interface | `{ documents; styles }` — every captured document plus the requested computed-style names; the serializable form a `BrowserSnapshot` is built from and serializes back to.                                                                                                               |
+| `BrowserWalkOrder`            | type      | `'depth' \| 'breadth'` — structural ordering for a snapshot walk.                                                                                                                                                                                                                        |
+| `BrowserWalkOptions`          | interface | `{ root?; order? }` — optional subtree root (included in the walk) and traversal order (default `'depth'`).                                                                                                                                                                              |
+| `BrowserSiblingRelation`      | type      | `'preceding' \| 'following'` — structural sibling side relative to a node.                                                                                                                                                                                                               |
+| `BrowserSnapshotInterface`    | interface | Extends `BrowserSnapshotInput`; adds walking, structural relationships, search, and path derivation over plain `BrowserNode` values.                                                                                                                                                     |
+| `BrowserSnapshotOptions`      | interface | `{ styles?; paint?; rects?; limit? }` — DOM snapshot capture and decoding controls.                                                                                                                                                                                                      |
+| `BrowserNodePredicate`        | type      | `(node: BrowserNode) => boolean` — traversal/search predicate.                                                                                                                                                                                                                           |
+| `BrowserNodeQuery`            | interface | Declarative name/text/attribute/frame/visibility/clickability matcher.                                                                                                                                                                                                                   |
+| `BrowserPageInterface`        | interface | Extends `BrowserFrameInterface`; adds `closed` plus navigation, screenshots, frame discovery, DOM snapshots, codegen, and target teardown.                                                                                                                                               |
+| `BrowserContextInterface`     | interface | `id` data member + `page` / `pages` / `create` / `sync` / `destroy` / `close` methods.                                                                                                                                                                                                   |
 
 ### Server
 
@@ -481,85 +481,85 @@ validation, scraping, and compilation can be tested without a browser.
 
 #### Extended helpers
 
-| API                                      | Kind     | Summary                                                                                |
-| ---------------------------------------- | -------- | -------------------------------------------------------------------------------------- |
-| `browserHARHeadersToRecord`              | function | Convert HAR header entries to a Fetch header record.                                   |
-| `browserHeadersToProtocol`               | function | Convert a header record to CDP name/value entries.                                     |
-| `browserPDFToParams`                     | function | Validate and compile PDF options to CDP parameters.                                    |
-| `browserScreenshotToParams`              | function | Validate and compile screenshot options to CDP parameters.                             |
-| `bytesToText`                            | function | Decode UTF-8 bytes.                                                                    |
-| `compileActionabilityFunction`           | function | Compile element actionability checks for a remote handle.                              |
-| `compileAttachedLocatorWaitExpression`   | function | Compile a strict locator attached-state wait.                                          |
-| `compileBrowserBindingCleanup`           | function | Compile host-binding cleanup in a page.                                                |
-| `compileBrowserBindingResult`            | function | Compile host-binding settlement in a page.                                             |
-| `compileBrowserBindingSource`            | function | Compile a page-side host-binding facade.                                               |
-| `compileDetachedLocatorWaitExpression`   | function | Compile a strict locator detached-state wait.                                          |
-| `compileFunctionWaitExpression`          | function | Compile an auto-retrying page predicate.                                               |
-| `compileHiddenLocatorWaitExpression`     | function | Compile a strict locator hidden-state wait.                                            |
-| `compileLocatorExpression`               | function | Compile a query that returns its first element.                                        |
-| `compileLocatorListExpression`           | function | Compile a deep, open-shadow-aware semantic query.                                      |
-| `compileScreenshotCleanupExpression`     | function | Compile cleanup for temporary screenshot styles.                                       |
-| `compileScreenshotPreparationExpression` | function | Compile screenshot masking, caret, and animation preparation.                          |
-| `compileStorageClearExpression`          | function | Compile origin storage clearing.                                                       |
-| `compileStorageReadExpression`           | function | Compile origin storage extraction.                                                     |
-| `compileStorageRestoreExpression`        | function | Compile origin storage restoration.                                                    |
-| `compileVisibleLocatorWaitExpression`    | function | Compile a strict locator visible-state wait.                                           |
-| `computeBrowserButtons`                  | function | Compute the current Chromium mouse button bit mask.                                    |
-| `computeBrowserModifiers`                | function | Compute Chromium keyboard modifier bits.                                               |
-| `concatBytes`                            | function | Concatenate byte chunks without a runtime-specific buffer.                             |
-| `cookieToProtocol`                       | function | Validate and project a public cookie into CDP input.                                   |
-| `createBrowserHAREntry`                  | function | Build one standards-shaped HAR 1.2 exchange entry.                                     |
-| `encodeBase64`                           | function | Encode bytes as base64 without Node or DOM globals.                                    |
-| `keyToBrowserInput`                      | function | Normalize a key token to Chromium input metadata.                                      |
-| `matchesBrowserCookieURL`                | function | Match a cookie against a URL using domain/path/security rules.                         |
-| `matchesBrowserRoute`                    | function | Match an observed request against route criteria.                                      |
-| `matchesBrowserURL`                      | function | Match a URL against the supported `*`/`**` glob grammar.                               |
-| `mediaToFeatures`                        | function | Project public media options to Chromium feature entries.                              |
-| `parseBrowserAXString`                   | function | Decode an accessibility string property.                                               |
-| `parseBrowserBindingCall`                | function | Decode a Runtime binding invocation.                                                   |
-| `parseBrowserChord`                      | function | Parse a keyboard chord.                                                                |
-| `parseBrowserConsoleMessage`             | function | Decode a console event.                                                                |
-| `parseBrowserCookiePartition`            | function | Decode cookie partition metadata.                                                      |
-| `parseBrowserDownloadProgress`           | function | Decode download progress.                                                              |
-| `parseBrowserDownloadStart`              | function | Decode download creation metadata.                                                     |
-| `parseBrowserPageError`                  | function | Decode an uncaught page exception.                                                     |
-| `parseBrowserRequest`                    | function | Decode a request event.                                                                |
-| `parseBrowserRequestFailure`             | function | Decode a request failure.                                                              |
-| `parseBrowserResponse`                   | function | Decode a response event.                                                               |
-| `parseBrowserResponseRecord`             | function | Decode a response object with event identity.                                          |
-| `parseBrowserSecurity`                   | function | Decode TLS security details.                                                           |
-| `parseBrowserTiming`                     | function | Decode network timing phases.                                                          |
-| `parseBrowserTimingRange`                | function | Decode one network timing start/end pair.                                              |
-| `parseBrowserWebSocketFrame`             | function | Decode a WebSocket frame event.                                                        |
-| `readBrowserAXValue`                     | function | Decode an accessibility property value.                                                |
-| `readBrowserAccessibility`               | function | Decode an accessibility tree response.                                                 |
-| `readBrowserCookie`                      | function | Decode one CDP cookie.                                                                 |
-| `readBrowserCookies`                     | function | Decode a cookie list response.                                                         |
-| `readBrowserCoverageRanges`              | function | Decode and normalize coverage ranges.                                                  |
-| `readBrowserHeaders`                     | function | Decode CDP headers to string values.                                                   |
-| `readBrowserMetrics`                     | function | Decode performance metrics.                                                            |
-| `readBrowserProfile`                     | function | Decode a sampled CPU profile.                                                          |
-| `readBrowserProfileFrame`                | function | Decode a CPU-profile call frame.                                                       |
-| `readBrowserQuad`                        | function | Decode and validate an element content quad.                                           |
-| `readBrowserRemoteValue`                 | function | Decode a Runtime remote value.                                                         |
-| `readBrowserScriptCoverage`              | function | Decode JavaScript coverage.                                                            |
-| `readBrowserScriptIdentifier`            | function | Decode an installed init-script identifier.                                            |
-| `readBrowserStack`                       | function | Decode a browser stack trace.                                                          |
-| `readBrowserStorageEntries`              | function | Decode origin storage entries.                                                         |
-| `readBrowserStorageOrigin`               | function | Decode an origin storage result.                                                       |
-| `readBrowserStreamChunk`                 | function | Decode an IO stream chunk.                                                             |
-| `readBrowserStyleCoverage`               | function | Decode CSS coverage.                                                                   |
-| `settleBrowserTeardown`                  | function | Run teardown steps to settlement and return the first failure.                         |
-| `textToBytes`                            | function | Encode UTF-8 text.                                                                     |
-| `validateBrowserAccessibilityOptions`    | function | Validate accessibility snapshot bounds.                                                |
-| `validateBrowserContextOptions`          | function | Validate isolated-context configuration before CDP mutation.                           |
-| `validateBrowserEmulationOptions`        | function | Validate emulation configuration before partial application.                           |
-| `validateBrowserHAR`                     | function | Validate the HAR 1.2 fields required for replay.                                       |
-| `validateBrowserInputOptions`            | function | Validate the bounded delay, count, steps, and position of one trusted-input operation. |
-| `validateBrowserPoint`                   | function | Validate finite viewport coordinates.                                                  |
-| `validateBrowserRange`                   | function | Validate an optional finite numeric range.                                             |
-| `validateBrowserTimeout`                 | function | Validate a non-negative finite timeout.                                                |
-| `validateBrowserViewport`                | function | Validate dimensions and device scale.                                                  |
+| API                                      | Kind     | Summary                                                                                                                                  |
+| ---------------------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `browserHARHeadersToRecord`              | function | Convert HAR header entries to a Fetch header record.                                                                                     |
+| `browserHeadersToProtocol`               | function | Convert a header record to CDP name/value entries.                                                                                       |
+| `browserPDFToParams`                     | function | Validate and compile PDF options to CDP parameters.                                                                                      |
+| `browserScreenshotToParams`              | function | Validate and compile screenshot options to CDP parameters.                                                                               |
+| `bytesToText`                            | function | Decode UTF-8 bytes.                                                                                                                      |
+| `compileActionabilityFunction`           | function | Compile element actionability checks for a remote handle.                                                                                |
+| `compileAttachedLocatorWaitExpression`   | function | Compile a strict locator attached-state wait.                                                                                            |
+| `compileBrowserBindingCleanup`           | function | Compile host-binding cleanup in a page.                                                                                                  |
+| `compileBrowserBindingResult`            | function | Compile host-binding settlement in a page.                                                                                               |
+| `compileBrowserBindingSource`            | function | Compile a page-side host-binding facade.                                                                                                 |
+| `compileDetachedLocatorWaitExpression`   | function | Compile a strict locator detached-state wait.                                                                                            |
+| `compileFunctionWaitExpression`          | function | Compile an auto-retrying page predicate.                                                                                                 |
+| `compileHiddenLocatorWaitExpression`     | function | Compile a strict locator hidden-state wait.                                                                                              |
+| `compileLocatorExpression`               | function | Compile a query that returns its first element.                                                                                          |
+| `compileLocatorListExpression`           | function | Compile a deep, open-shadow-aware semantic query.                                                                                        |
+| `compileScreenshotCleanupExpression`     | function | Compile cleanup for temporary screenshot styles.                                                                                         |
+| `compileScreenshotPreparationExpression` | function | Compile screenshot masking, caret, and animation preparation.                                                                            |
+| `compileStorageClearExpression`          | function | Compile origin storage clearing.                                                                                                         |
+| `compileStorageReadExpression`           | function | Compile origin storage extraction.                                                                                                       |
+| `compileStorageRestoreExpression`        | function | Compile origin storage restoration.                                                                                                      |
+| `compileVisibleLocatorWaitExpression`    | function | Compile a strict locator visible-state wait.                                                                                             |
+| `computeBrowserButtons`                  | function | Compute the current Chromium mouse button bit mask.                                                                                      |
+| `computeBrowserModifiers`                | function | Compute Chromium keyboard modifier bits.                                                                                                 |
+| `concatBytes`                            | function | Concatenate byte chunks without a runtime-specific buffer.                                                                               |
+| `cookieToProtocol`                       | function | Validate and project a public cookie into CDP input.                                                                                     |
+| `createBrowserHAREntry`                  | function | Build one standards-shaped HAR 1.2 exchange entry.                                                                                       |
+| `encodeBase64`                           | function | Encode bytes as base64 without Node or DOM globals.                                                                                      |
+| `keyToBrowserInput`                      | function | Normalize a key token to Chromium input metadata.                                                                                        |
+| `matchesBrowserCookieURL`                | function | Match a cookie against a URL using domain/path/security rules.                                                                           |
+| `matchesBrowserRoute`                    | function | Match an observed request against route criteria.                                                                                        |
+| `matchesBrowserURL`                      | function | Match a URL against the supported `*`/`**` glob grammar.                                                                                 |
+| `mediaToFeatures`                        | function | Project public media options to Chromium feature entries.                                                                                |
+| `parseBrowserAXString`                   | function | Coerce a string-valued Accessibility AXValue to a string, or `undefined` off-shape.                                                      |
+| `parseBrowserBindingCall`                | function | Coerce a Runtime binding invocation to a `BrowserBindingCall`, or `undefined` off-shape.                                                 |
+| `parseBrowserChord`                      | function | Parse a keyboard chord such as `Control+Shift+P` into canonical modifiers and a terminal key. Throws a `BrowserError` on an empty chord. |
+| `parseBrowserConsoleMessage`             | function | Coerce a `Runtime.consoleAPICalled` event to a `BrowserConsoleMessage`, or `undefined` off-shape.                                        |
+| `parseBrowserCookiePartition`            | function | Coerce a cookie partition key to a `BrowserCookiePartition`, or `undefined` off-shape.                                                   |
+| `parseBrowserDownloadProgress`           | function | Coerce a `Browser.downloadProgress` event to a `BrowserDownloadProgress`, or `undefined` off-shape.                                      |
+| `parseBrowserDownloadStart`              | function | Coerce a `Browser.downloadWillBegin` event to a `BrowserDownloadStart`, or `undefined` off-shape.                                        |
+| `parseBrowserPageError`                  | function | Coerce a `Runtime.exceptionThrown` event to a `BrowserPageError`, or `undefined` off-shape.                                              |
+| `parseBrowserRequest`                    | function | Coerce a `Network.requestWillBeSent` or `Fetch.requestPaused` event to a `BrowserRequest`, or `undefined` off-shape.                     |
+| `parseBrowserRequestFailure`             | function | Coerce a `Network.loadingFailed` event to a `BrowserRequestFailure`, or `undefined` off-shape.                                           |
+| `parseBrowserResponse`                   | function | Coerce a `Network.responseReceived` event to a `BrowserResponse`, or `undefined` off-shape.                                              |
+| `parseBrowserResponseRecord`             | function | Coerce a Chromium response object plus its event identity to a `BrowserResponse`, or `undefined` off-shape.                              |
+| `parseBrowserSecurity`                   | function | Coerce Chromium TLS security details to a `BrowserSecurity`, or `undefined` off-shape.                                                   |
+| `parseBrowserTiming`                     | function | Coerce Chromium response timing to a `BrowserTiming`, or `undefined` off-shape.                                                          |
+| `parseBrowserTimingRange`                | function | Coerce one named start/end pair of Chromium network timing to a `BrowserTimingRange`, or `undefined` off-shape.                          |
+| `parseBrowserWebSocketFrame`             | function | Coerce a WebSocket frame event to a `BrowserWebSocketFrame`, or `undefined` off-shape.                                                   |
+| `readBrowserAXValue`                     | function | Read the underlying value of an Accessibility AXValue, `undefined` when the record carries none.                                         |
+| `readBrowserAccessibility`               | function | Read an `Accessibility.getFullAXTree` response into a snapshot. Throws a `BrowserError` off-shape.                                       |
+| `readBrowserCookie`                      | function | Read one Chromium cookie. Throws a `BrowserError` off-shape.                                                                             |
+| `readBrowserCookies`                     | function | Read a `Network.getCookies` response into cookies. Throws a `BrowserError` off-shape.                                                    |
+| `readBrowserCoverageRanges`              | function | Read and normalize coverage ranges. Throws a `BrowserError` off-shape.                                                                   |
+| `readBrowserHeaders`                     | function | Read a Chromium Headers object into string values, skipping every entry that is neither a string nor a finite number.                    |
+| `readBrowserMetrics`                     | function | Read Performance-domain metrics. Throws a `BrowserError` off-shape.                                                                      |
+| `readBrowserProfile`                     | function | Read a sampled CPU profile. Throws a `BrowserError` off-shape.                                                                           |
+| `readBrowserProfileFrame`                | function | Read one CPU-profile call frame. Throws a `BrowserError` off-shape.                                                                      |
+| `readBrowserQuad`                        | function | Read the first `DOM.getContentQuads` quad and its center. Throws a `BrowserError` off-shape.                                             |
+| `readBrowserRemoteValue`                 | function | Read a Runtime remote value, falling back to its unserializable form and its description, `undefined` when it carries none.              |
+| `readBrowserScriptCoverage`              | function | Read JavaScript coverage. Throws a `BrowserError` off-shape.                                                                             |
+| `readBrowserScriptIdentifier`            | function | Read an installed init-script identifier. Throws a `BrowserError` off-shape.                                                             |
+| `readBrowserStack`                       | function | Read a Chromium runtime stack trace, skipping every off-shape call frame.                                                                |
+| `readBrowserStorageEntries`              | function | Read origin storage entries. Throws a `BrowserError` off-shape.                                                                          |
+| `readBrowserStorageOrigin`               | function | Read an origin storage result. Throws a `BrowserError` off-shape.                                                                        |
+| `readBrowserStreamChunk`                 | function | Read one `IO.read` response. Throws a `BrowserError` off-shape.                                                                          |
+| `readBrowserStyleCoverage`               | function | Read CSS coverage. Throws a `BrowserError` off-shape.                                                                                    |
+| `settleBrowserTeardown`                  | function | Run teardown steps to settlement and return the first failure.                                                                           |
+| `textToBytes`                            | function | Encode UTF-8 text.                                                                                                                       |
+| `validateBrowserAccessibilityOptions`    | function | Validate accessibility snapshot bounds.                                                                                                  |
+| `validateBrowserContextOptions`          | function | Validate isolated-context configuration before CDP mutation.                                                                             |
+| `validateBrowserEmulationOptions`        | function | Validate emulation configuration before partial application.                                                                             |
+| `validateBrowserHAR`                     | function | Validate the HAR 1.2 fields required for replay.                                                                                         |
+| `validateBrowserInputOptions`            | function | Validate the bounded delay, count, steps, and position of one trusted-input operation.                                                   |
+| `validateBrowserPoint`                   | function | Validate finite viewport coordinates.                                                                                                    |
+| `validateBrowserRange`                   | function | Validate an optional finite numeric range.                                                                                               |
+| `validateBrowserTimeout`                 | function | Validate a non-negative finite timeout.                                                                                                  |
+| `validateBrowserViewport`                | function | Validate dimensions and device scale.                                                                                                    |
 
 The pure helpers can be composed around captured CDP payloads without creating
 a browser entity. This compact fixture sketch intentionally shows every
@@ -791,11 +791,11 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserCoverageRange`              | interface | Covered source range and execution count.                                                        |
 | `BrowserCoverageResult`             | interface | Combined script/style coverage result.                                                           |
 | `BrowserCredentials`                | interface | HTTP basic-auth credentials.                                                                     |
-| `BrowserDiagnosticsInterface`       | interface | Tracing/coverage/performance group.                                                              |
+| `BrowserDiagnosticsInterface`       | interface | Diagnostics group contract: `tracing` / `coverage` / `performance` / `profiler`.                 |
 | `BrowserDialogCategory`             | type      | JavaScript dialog category.                                                                      |
 | `BrowserDialogInterface`            | interface | Dialog data and settlement contract.                                                             |
 | `BrowserDownloadEventMap`           | type      | Download progress/finish/abort events.                                                           |
-| `BrowserDownloadInterface`          | interface | Download state plus `cancel`.                                                                    |
+| `BrowserDownloadInterface`          | interface | Download state, `cancel`, and the progress update its page drives.                               |
 | `BrowserDownloadOptions`            | interface | Context download path/policy.                                                                    |
 | `BrowserDownloadProgress`           | interface | Decoded download progress event.                                                                 |
 | `BrowserDownloadStart`              | interface | Decoded download creation event.                                                                 |
@@ -842,6 +842,7 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserNavigationWatch`            | interface | Pending request/response correlation state.                                                      |
 | `BrowserNetworkEventMap`            | type      | Request/response/failure/finish/socket events.                                                   |
 | `BrowserNetworkManagerInterface`    | interface | Page network lifecycle contract.                                                                 |
+| `BrowserOperationOptions`           | type      | Every option a trusted-input operation can carry.                                                |
 | `BrowserPDFOptions`                 | interface | Chromium print-to-PDF options.                                                                   |
 | `BrowserPDFResult`                  | interface | PDF bytes and optional path.                                                                     |
 | `BrowserPageError`                  | interface | Uncaught page exception.                                                                         |
@@ -876,7 +877,6 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserSecurity`                   | interface | TLS protocol, issuer, and validity.                                                              |
 | `BrowserSelector`                   | type      | CSS/role/text/label/placeholder/testId locator axis.                                             |
 | `BrowserSelectorManagerInterface`   | interface | Semantic locator factory contract: `css` / `role` / `text` / `label` / `placeholder` / `testId`. |
-| `BrowserSendOptions`                | interface | Per-call timeout for a raw frame-session CDP call.                                               |
 | `BrowserStackFrame`                 | interface | Browser-side exception stack frame.                                                              |
 | `BrowserStorageEntry`               | interface | Web-storage key/value pair.                                                                      |
 | `BrowserStorageManagerInterface`    | interface | Storage state lifecycle contract.                                                                |
@@ -899,7 +899,7 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserUserAgent`                  | interface | User-agent string/language/platform override.                                                    |
 | `BrowserWebSocketEventMap`          | type      | WebSocket frame/error/close events.                                                              |
 | `BrowserWebSocketFrame`             | interface | WebSocket opcode/payload/mask/timestamp.                                                         |
-| `BrowserWebSocketInterface`         | interface | Observable WebSocket contract — identity and emitter only.                                       |
+| `BrowserWebSocketInterface`         | interface | Observable WebSocket contract — identity, emitter, and the frame updates its manager drives.     |
 | `BrowserWorkerCategory`             | type      | Dedicated/service/shared worker category.                                                        |
 | `BrowserWorkerInterface`            | interface | Attached worker evaluation/CDP contract.                                                         |
 
@@ -913,7 +913,8 @@ implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
 `BrowserPageInterface`, `BrowserSnapshot` ↔ `BrowserSnapshotInterface`,
 `BrowserCodegen` ↔ `BrowserCodegenInterface`, `BrowserTransition` ↔
 `BrowserTransitionInterface`, `Browser` ↔
-`BrowserInterface`, `WebSocketCDPTransport` ↔
+`BrowserInterface`, `BrowserWebSocket` ↔ `BrowserWebSocketInterface`,
+`BrowserDownload` ↔ `BrowserDownloadInterface`, `WebSocketCDPTransport` ↔
 `CDPTransportInterface`.
 
 #### `CDPTransportInterface`
@@ -1229,6 +1230,58 @@ await isolated.close()
 await browser.destroy() // terminates and awaits the owned process
 ```
 
+#### `BrowserWebSocketInterface`
+
+One WebSocket connection a page's network manager reconstructs from
+Network-domain events. The manager owns the connection and drives every method
+here; a consumer reads `id` and `url` and subscribes through `emitter`.
+
+| Method     | Returns | Behavior                                                                                                           |
+| ---------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
+| `receive`  | `void`  | Emit `receive` for one frame the page received. Ignored after `close`.                                             |
+| `transmit` | `void`  | Emit `transmit` for one frame the page sent. Ignored after `close`.                                                |
+| `fail`     | `void`  | Emit `error` with the connection's fault message. Ignored after `close`.                                           |
+| `close`    | `void`  | Emit `close` with the closing timestamp, then destroy the emitter. Every later call on this connection is ignored. |
+
+```ts
+page.network.emitter.on('socket', (socket) => {
+	log(socket.id, socket.url)
+	socket.emitter.on('receive', (frame) => log(frame.data))
+	socket.emitter.on('transmit', (frame) => log(frame.data))
+	socket.emitter.on('error', (message) => log(message))
+	socket.emitter.on('close', (timestamp) => log(timestamp))
+})
+// The page's network manager drives the connection from Network-domain events:
+socket.receive({ opcode: 1, data: 'pong', masked: false, timestamp: 4 })
+socket.transmit({ opcode: 1, data: 'ping', masked: false, timestamp: 3 })
+socket.fail('handshake rejected')
+socket.close(6)
+```
+
+#### `BrowserDownloadInterface`
+
+One context download tracked through Chromium's Browser domain. The owning page
+drives `update` from `Browser.downloadProgress`; a consumer calls `cancel` and
+reads the observed state.
+
+| Method   | Returns         | Behavior                                                                                                                                                      |
+| -------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cancel` | `Promise<void>` | Send CDP `Browser.cancelDownload` for this download. Ignored unless the status is still `pending`.                                                            |
+| `update` | `void`          | Record one progress update, emit `progress`, and settle the download by emitting `complete` or `cancel` and destroying the emitter. Ignored after it settles. |
+
+```ts
+page.emitter.on('download', (download) => {
+	log(download.id, download.url, download.name)
+	download.emitter.on('progress', (received, total) => log(received, total))
+	download.emitter.on('complete', (path) => log(path))
+	download.emitter.on('cancel', () => log('cancelled'))
+})
+// The owning page drives progress from Browser.downloadProgress:
+download.update({ status: 'pending', received: 512, total: 2_048 })
+download.update({ status: 'complete', received: 2_048, total: 2_048, path: './report.pdf' })
+await download.cancel() // ignored once the download settled
+```
+
 ## Contract
 
 These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `browser.md`:
@@ -1266,11 +1319,11 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    (`id`), timeout handling, and event dispatch (global + session-scoped
    subscriptions) over the transport's raw `message` / `close` / `error`
    events.
-4. **Screenshots never touch a filesystem in core.** `BrowserPage.screenshot`
-   accepts an optional `BrowserWriterInterface` (injected via
-   `BrowserContext`) and calls `write(path, bytes)` only when a `path` is
-   given; the server supplies `createBrowserWriter` (an `fs`-backed
-   implementation) via `Browser`.
+4. **Captured bytes never touch a filesystem in core.** A page accepts an
+   optional `BrowserWriterInterface`, injected through `BrowserContext`, and
+   calls `write(path, bytes)` only when a screenshot, PDF, trace, or HAR
+   request carries a `path`; the server supplies `createBrowserWriter`, an
+   `fs`-backed implementation, through `Browser`.
 5. **Server owns the connection lifecycle.** `Browser.connect()` tries, in
    order: an explicit `cdp.endpoint`; a passive probe of
    `{cdp.host}:{cdp.port}` (defaulting to `127.0.0.1:{cdp.port}` via
