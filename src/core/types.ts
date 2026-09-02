@@ -41,9 +41,10 @@ export interface CDPTransportInterface {
  *
  * @remarks
  * `connect` fires once the transport started and dispatch began; `close`
- * fires after an explicit teardown; `drop` fires when the transport ended
- * without a close request; `error` carries a transport-level fault (unknown
- * shape — narrow before use).
+ * fires after an explicit teardown, including one that interrupted a
+ * pending `connect()`; `drop` fires when the transport ended without a
+ * close request; `error` carries a transport-level fault (unknown shape —
+ * narrow before use).
  */
 export type CDPClientEventMap = {
 	readonly connect: readonly []

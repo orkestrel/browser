@@ -213,6 +213,7 @@ export class CDPClient implements CDPClientInterface {
 			} finally {
 				this.#active = false
 			}
+			this.#emitter.emit('close')
 			throw new CDPConnectionError('CDP client was closed while connecting', {
 				method: 'connect',
 			})

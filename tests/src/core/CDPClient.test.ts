@@ -372,6 +372,11 @@ describe('CDPClient', () => {
 		})
 
 		it('closes the transport and rejects the in-flight connect() when close() races connect()', async () => {
+			const close = createRecorder<[]>()
+			const drop = createRecorder<[]>()
+			client.emitter.on('close', close.handler)
+			client.emitter.on('drop', drop.handler)
+
 			const connecting = client.connect().catch((caught: unknown) => caught)
 			const closing = client.close()
 
@@ -384,6 +389,8 @@ describe('CDPClient', () => {
 			)
 			expect(client.connected).toBe(false)
 			expect(transport.closed).toBe(true)
+			expect(close.count).toBe(1)
+			expect(drop.count).toBe(0)
 		})
 	})
 
