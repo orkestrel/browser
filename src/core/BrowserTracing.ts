@@ -11,7 +11,7 @@ import { BrowserError } from './errors.js'
 import { isString } from '@orkestrel/contract'
 
 /**
- * Chromium trace capture streamed through the IO domain.
+ * Captures Chromium traces streamed through the IO domain.
  *
  * @example
  * ```ts

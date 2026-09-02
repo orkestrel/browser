@@ -13,7 +13,7 @@ import {
 } from './helpers.js'
 
 /**
- * Trusted mouse input through Chromium's CDP Input domain.
+ * Sends trusted mouse input through Chromium's CDP Input domain.
  *
  * @example
  * ```ts

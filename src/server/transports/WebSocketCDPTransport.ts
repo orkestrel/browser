@@ -22,7 +22,7 @@ import { BrowserConnectionError } from '../errors.js'
 // === WebSocketCDPTransport
 
 /**
- * `@orkestrel/websocket`-backed raw CDP text transport.
+ * Provides a raw CDP text transport backed by `@orkestrel/websocket`.
  *
  * @remarks
  * Performs and validates the RFC 6455 HTTP upgrade, then delegates frame

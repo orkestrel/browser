@@ -17,7 +17,7 @@ import { BrowserError } from './errors.js'
 import { attempt } from '@orkestrel/contract'
 
 /**
- * Portable cookie and web-storage state for one browser context.
+ * Imports, exports, and clears cookie and web-storage state for one browser context.
  *
  * @example
  * ```ts

@@ -2,57 +2,57 @@ import type { BrowserEngine } from './types.js'
 
 // === CDP discovery
 
-/** Default CDP port probed for an existing browser and used for launches. */
+/** Sets the default CDP port probed for an existing browser and used for launches. */
 export const BROWSER_DEFAULT_CDP_PORT = 9222
 
-/** Default host probed for an existing browser and used for launches (avoids `localhost` resolving to `::1` when Chromium binds `127.0.0.1`). */
+/** Sets the default host probed for an existing browser and used for launches (avoids `localhost` resolving to `::1` when Chromium binds `127.0.0.1`). */
 export const BROWSER_DEFAULT_HOST = '127.0.0.1'
 
-/** Protocol prefix for CDP discovery requests. */
+/** Names the protocol prefix for CDP discovery requests. */
 export const BROWSER_CDP_PROTOCOL = 'http'
 
-/** Path appended to the CDP host to fetch version metadata (endpoint discovery). */
+/** Names the path appended to the CDP host to fetch version metadata (endpoint discovery). */
 export const BROWSER_CDP_VERSION_PATH = '/json/version'
 
-/** Path appended to the CDP host to list open targets (pages, workers, etc). */
+/** Names the path appended to the CDP host to list open targets (pages, workers, etc). */
 export const BROWSER_CDP_LIST_PATH = '/json/list'
 
 // === Browser launch
 
-/** Flags always passed to a launched browser process, alongside the caller's own. */
+/** Lists the flags always passed to a launched browser process, alongside the caller's own. */
 export const BROWSER_LAUNCH_ARGS: readonly string[] = Object.freeze([
 	'--no-first-run',
 	'--no-default-browser-check',
 ])
 
-/** Flag enabling headless mode on a launched browser process. */
+/** Names the flag that enables headless mode on a launched browser process. */
 export const BROWSER_HEADLESS_ARG = '--headless=new'
 
-/** Prefix for isolated browser profiles created beneath the operating-system temp directory. */
+/** Names the prefix for isolated browser profiles created beneath the operating-system temp directory. */
 export const BROWSER_PROFILE_PREFIX = 'orkestrel-browser-'
 
-/** Bound for each launched-process exit window during TERM-to-KILL teardown. */
+/** Bounds each launched-process exit window during TERM-to-KILL teardown. */
 export const BROWSER_KILL_GRACE_MS = 3_000
 
-/** Bound for the `discover: false` port-occupancy probe before launching — short, since it only needs to detect an already-listening CDP endpoint, not perform full discovery. */
+/** Bounds the `discover: false` port-occupancy probe before launching — short, since it only needs to detect an already-listening CDP endpoint, not perform full discovery. */
 export const BROWSER_PORT_PROBE_TIMEOUT_MS = 200
 
-/** Brief defer applied once when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event (which libuv may reap slightly later than the socket close) first say over the diagnosis. */
+/** Defers once, briefly, when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event (which libuv may reap slightly later than the socket close) first say over the diagnosis. */
 export const BROWSER_TRANSPORT_LOSS_DEFER_MS = 50
 
-/** Machine-readable error-context cause for an owned browser process exiting. */
+/** Names the machine-readable error-context cause for an owned browser process exiting. */
 export const BROWSER_PROCESS_EXIT_CAUSE = 'process-exit'
 
-/** Machine-readable error-context cause for a CDP transport disconnecting while its browser remains alive. */
+/** Names the machine-readable error-context cause for a CDP transport disconnecting while its browser remains alive. */
 export const BROWSER_TRANSPORT_LOSS_CAUSE = 'transport-loss'
 
-/** Environment variables checked (in order) for an explicit browser executable path override. */
+/** Lists the environment variables checked (in order) for an explicit browser executable path override. */
 export const BROWSER_ENV_PATH_KEYS: readonly string[] = Object.freeze([
 	'PLAYWRIGHT_EXECUTABLE_PATH',
 	'CHROME_PATH',
 ])
 
-/** Well-known Chrome/Chromium/Edge executable paths with no platform-specific root, keyed by `process.platform`. */
+/** Lists the well-known Chrome/Chromium/Edge executable paths with no platform-specific root, keyed by `process.platform`. */
 export const BROWSER_EXECUTABLE_PATHS: Readonly<Record<string, readonly string[]>> = Object.freeze({
 	linux: Object.freeze([
 		'/usr/bin/google-chrome',
@@ -73,20 +73,20 @@ export const BROWSER_EXECUTABLE_PATHS: Readonly<Record<string, readonly string[]
 	win32: Object.freeze([]),
 })
 
-/** Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root (`PROGRAMFILES`, `PROGRAMFILES(X86)`, `LOCALAPPDATA`). */
+/** Lists the Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root (`PROGRAMFILES`, `PROGRAMFILES(X86)`, `LOCALAPPDATA`). */
 export const BROWSER_WINDOWS_SUFFIXES: readonly string[] = Object.freeze([
 	'Google\\Chrome\\Application\\chrome.exe',
 	'Microsoft\\Edge\\Application\\msedge.exe',
 	'Chromium\\Application\\chrome.exe',
 ])
 
-/** Fallback Windows install roots used when the corresponding environment variable is absent. */
+/** Lists the fallback Windows install roots used when the corresponding environment variable is absent. */
 export const BROWSER_WINDOWS_ROOT_FALLBACKS: Readonly<Record<string, string>> = Object.freeze({
 	PROGRAMFILES: 'C:\\Program Files',
 	'PROGRAMFILES(X86)': 'C:\\Program Files (x86)',
 })
 
-/** Command names probed on PATH when no well-known executable path exists. */
+/** Lists the command names probed on PATH when no well-known executable path exists. */
 export const BROWSER_EXECUTABLE_NAMES: readonly string[] = Object.freeze([
 	'google-chrome',
 	'google-chrome-stable',
@@ -97,23 +97,23 @@ export const BROWSER_EXECUTABLE_NAMES: readonly string[] = Object.freeze([
 	'chrome',
 ])
 
-/** Environment variable naming an additional Playwright browser store base directory. */
+/** Names the environment variable that carries an additional Playwright browser store base directory. */
 export const BROWSER_STORE_ENV_KEY = 'PLAYWRIGHT_BROWSERS_PATH'
 
-/** Well-known Playwright browser store base directories checked in addition to `PLAYWRIGHT_BROWSERS_PATH`. */
+/** Lists the well-known Playwright browser store base directories checked in addition to `PLAYWRIGHT_BROWSERS_PATH`. */
 export const BROWSER_STORE_DEFAULT_DIRS: readonly string[] = Object.freeze(['/opt/pw-browsers'])
 
-/** Per-OS default Playwright browser cache directory, relative to the home directory (win32 uses `LOCALAPPDATA` directly). */
+/** Names the per-OS default Playwright browser cache directory, relative to the home directory (win32 uses `LOCALAPPDATA` directly). */
 export const BROWSER_STORE_CACHE_DIRS: Readonly<Record<string, string>> = Object.freeze({
 	linux: '.cache/ms-playwright',
 	darwin: 'Library/Caches/ms-playwright',
 })
 
-/** Name of the top-level Chromium symlink/binary Playwright maintains inside a browser store base. */
+/** Names the top-level Chromium symlink/binary Playwright maintains inside a browser store base. */
 export const BROWSER_STORE_LINK_NAME = 'chromium'
 
 /**
- * Case-insensitive substrings identifying an executable path/name's browser
+ * Lists the case-insensitive substrings identifying an executable path/name's browser
  * engine, checked by `parseBrowserEngine` in the order `edge` → `chromium` → `chrome`.
  */
 export const BROWSER_ENGINE_HINTS: Readonly<Record<BrowserEngine, readonly string[]>> =
@@ -130,7 +130,7 @@ export const BROWSER_ENGINE_HINTS: Readonly<Record<BrowserEngine, readonly strin
 		chrome: Object.freeze(['google-chrome', 'google/chrome', 'google\\chrome', 'chrome']),
 	})
 
-/** Glob pattern (relative to a store base) matching a versioned Chromium binary, keyed by `process.platform`. */
+/** Names the glob pattern (relative to a store base) matching a versioned Chromium binary, keyed by `process.platform`. */
 export const BROWSER_STORE_GLOBS: Readonly<Record<string, string>> = Object.freeze({
 	linux: 'chromium-*/chrome-linux*/chrome',
 	darwin: 'chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium',

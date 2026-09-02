@@ -16,7 +16,7 @@ import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
 // === CDPClient
 
 /**
- * Lightweight Chrome DevTools Protocol client over a {@link CDPTransportInterface}.
+ * Provides a lightweight Chrome DevTools Protocol client over a {@link CDPTransportInterface}.
  *
  * @remarks
  * Sends JSON-RPC messages over the injected transport and dispatches
@@ -95,7 +95,7 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	/**
-	 * Close the transport and re-establish a fresh connection.
+	 * Closes the transport and re-establishes a fresh connection.
 	 *
 	 * @remarks
 	 * Client-level subscriptions (`subscribe`/`unsubscribe` registrations)
@@ -177,7 +177,7 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	/**
-	 * Close the transport and reject all pending requests.
+	 * Closes the transport and rejects all pending requests.
 	 *
 	 * @remarks
 	 * Subscriptions registered via `subscribe()` are client-level

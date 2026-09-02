@@ -10,7 +10,7 @@ import { BrowserError } from './errors.js'
 import { isInteger, isString } from '@orkestrel/contract'
 
 /**
- * One paused request that can be aborted, continued, or fulfilled exactly once.
+ * Represents one paused request that can be aborted, continued, or fulfilled exactly once.
  */
 export class BrowserRoute implements BrowserRouteInterface {
 	readonly #frame: BrowserFrameInterface

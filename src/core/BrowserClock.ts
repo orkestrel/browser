@@ -5,7 +5,7 @@ import { settleBrowserTeardown } from './helpers.js'
 import { isFiniteNumber } from '@orkestrel/contract'
 
 /**
- * Chromium virtual-time budget controls for deterministic page timers.
+ * Controls the Chromium virtual-time budget for deterministic page timers.
  *
  * @example
  * ```ts

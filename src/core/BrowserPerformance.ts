@@ -2,7 +2,7 @@ import type { BrowserFrameInterface, BrowserMetric, BrowserPerformanceInterface 
 import { readBrowserMetrics } from './helpers.js'
 
 /**
- * Performance-domain metrics for one frame.
+ * Reads Performance-domain metrics for one frame.
  *
  * @example
  * ```ts

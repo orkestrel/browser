@@ -12,7 +12,7 @@ import {
 import { BrowserError } from './errors.js'
 
 /**
- * JavaScript precise coverage and CSS rule usage for one page target.
+ * Collects JavaScript precise coverage and CSS rule usage for one page target.
  *
  * @example
  * ```ts

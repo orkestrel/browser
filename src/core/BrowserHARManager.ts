@@ -23,7 +23,7 @@ import {
 import { BrowserError } from './errors.js'
 
 /**
- * HTTP archive recording and replay over one page network manager.
+ * Records and replays HTTP archives over one page network manager.
  *
  * @example
  * ```ts

@@ -7,7 +7,7 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
- * Observable WebSocket connection reconstructed from Network-domain events.
+ * Represents an observable WebSocket connection reconstructed from Network-domain events.
  *
  * @example
  * ```ts

@@ -11,7 +11,7 @@ import {
 } from './helpers.js'
 
 /**
- * Trusted keyboard input through Chromium's CDP Input domain.
+ * Sends trusted keyboard input through Chromium's CDP Input domain.
  *
  * @example
  * ```ts

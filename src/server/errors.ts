@@ -4,7 +4,7 @@ import { isInstance } from '@orkestrel/contract'
 // === Server browser errors
 
 /**
- * A CDP connection, discovery, or launch attempt failed.
+ * Reports that a CDP connection, discovery, or launch attempt failed.
  */
 export class BrowserConnectionError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -14,7 +14,7 @@ export class BrowserConnectionError extends BrowserError {
 }
 
 /**
- * An operation requiring an active connection was attempted while disconnected.
+ * Reports that an operation requiring an active connection was attempted while disconnected.
  */
 export class BrowserNotConnectedError extends BrowserError {
 	constructor(context?: Readonly<Record<string, unknown>>) {
@@ -24,7 +24,7 @@ export class BrowserNotConnectedError extends BrowserError {
 }
 
 /**
- * An operation was attempted after the Browser was destroyed.
+ * Reports that an operation was attempted after the Browser was destroyed.
  */
 export class BrowserDestroyedError extends BrowserError {
 	constructor(context?: Readonly<Record<string, unknown>>) {
@@ -36,30 +36,30 @@ export class BrowserDestroyedError extends BrowserError {
 // === Server browser type guards
 
 /**
- * Narrow an unknown value to BrowserConnectionError.
+ * Narrows an unknown value to BrowserConnectionError.
  *
  * @param value - Value to check
- * @returns True when value is a BrowserConnectionError instance
+ * @returns True if value is a BrowserConnectionError instance; false otherwise
  */
 export function isBrowserConnectionError(value: unknown): value is BrowserConnectionError {
 	return isInstance(value, BrowserConnectionError)
 }
 
 /**
- * Narrow an unknown value to BrowserNotConnectedError.
+ * Narrows an unknown value to BrowserNotConnectedError.
  *
  * @param value - Value to check
- * @returns True when value is a BrowserNotConnectedError instance
+ * @returns True if value is a BrowserNotConnectedError instance; false otherwise
  */
 export function isBrowserNotConnectedError(value: unknown): value is BrowserNotConnectedError {
 	return isInstance(value, BrowserNotConnectedError)
 }
 
 /**
- * Narrow an unknown value to BrowserDestroyedError.
+ * Narrows an unknown value to BrowserDestroyedError.
  *
  * @param value - Value to check
- * @returns True when value is a BrowserDestroyedError instance
+ * @returns True if value is a BrowserDestroyedError instance; false otherwise
  */
 export function isBrowserDestroyedError(value: unknown): value is BrowserDestroyedError {
 	return isInstance(value, BrowserDestroyedError)

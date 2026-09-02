@@ -4,7 +4,7 @@ import { readEvaluationResult } from './helpers.js'
 import { isRecord, isString } from '@orkestrel/contract'
 
 /**
- * One retained remote object in a frame execution context.
+ * Represents one retained remote object in a frame execution context.
  */
 export class BrowserHandle implements BrowserHandleInterface {
 	readonly #client: CDPClientInterface

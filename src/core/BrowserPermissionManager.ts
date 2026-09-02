@@ -1,7 +1,7 @@
 import type { BrowserPermissionManagerInterface, CDPClientInterface } from './types.js'
 
 /**
- * Permission overrides isolated to one browser context.
+ * Applies permission overrides isolated to one browser context.
  *
  * @example
  * ```ts

@@ -41,7 +41,7 @@ import { BrowserError, BrowserSelectorError } from './errors.js'
 import { isArray, isFiniteNumber, isInteger, isRecord, isString } from '@orkestrel/contract'
 
 /**
- * Reusable strict semantic locator over one frame.
+ * Represents a reusable strict semantic locator over one frame.
  *
  * @example
  * ```ts

@@ -1,7 +1,7 @@
 import type { BrowserTransitionFunction, BrowserTransitionInterface } from './types.js'
 
 /**
- * One asynchronous transition at a time, shared by every caller that joins it.
+ * Runs one asynchronous transition at a time, shared by every caller that joins it.
  *
  * @remarks
  * An entity with a lifecycle runs the same guard around every transition: take

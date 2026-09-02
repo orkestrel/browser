@@ -13,7 +13,7 @@ import { BrowserError } from './errors.js'
 import { isBrowserNodeQuery, matchesBrowserNode } from './helpers.js'
 
 /**
- * A navigable, serializable browser DOM snapshot.
+ * Represents a navigable, serializable browser DOM snapshot.
  *
  * @example
  * ```ts

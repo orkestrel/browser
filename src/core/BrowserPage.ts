@@ -70,7 +70,7 @@ import { isArray, isFiniteNumber, isInteger, isRecord, isString } from '@orkestr
 import { Emitter } from '@orkestrel/emitter'
 
 /**
- * A top-level browser page, including its target lifecycle and child frames.
+ * Represents a top-level browser page, including its target lifecycle and child frames.
  *
  * @example
  * ```ts

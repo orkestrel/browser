@@ -7,10 +7,10 @@ import type { BrowserMouseButton } from './types.js'
 // policy sweep rejects. Entry n of the table is BASE64_CHARS[n], and the whole-alphabet
 // round-trip in tests/src/core/helpers.test.ts fails on any single-entry disagreement.
 
-/** Base64 alphabet, index-ordered, used to build {@link BASE64_LOOKUP}. */
+/** Holds the index-ordered base64 alphabet used to build {@link BASE64_LOOKUP}. */
 export const BASE64_CHARS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'
 
-/** Base64 character to 6-bit value lookup table, derived from {@link BASE64_CHARS}. */
+/** Maps each base64 character to its 6-bit value, derived from {@link BASE64_CHARS}. */
 export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze({
 	A: 0,
 	B: 1,
@@ -80,11 +80,11 @@ export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze({
 
 // === Browser
 
-/** Default timeout in milliseconds for browser connection, requests, and navigation. */
+/** Sets the default timeout in milliseconds for browser connection, requests, and navigation. */
 export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
 
 /**
- * Maximum serialized-character length for an `evaluate()`/`content()` result,
+ * Caps the serialized-character length for an `evaluate()`/`content()` result,
  * enforced IN-PAGE before the result is returned to CDP.
  *
  * @remarks
@@ -105,7 +105,7 @@ export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
 export const BROWSER_RESULT_LIMIT = 2_500_000
 
 /**
- * Distinctive prefix for the in-page result-limit sentinel error, immediately
+ * Names the distinctive prefix for the in-page result-limit sentinel error, immediately
  * followed by the serialized length.
  *
  * @remarks
@@ -127,23 +127,23 @@ export const BROWSER_RESULT_LIMIT_PATTERN = new RegExp(
 	`^(?:Uncaught )?Error: \\[\\[ORKESTREL_BROWSER_RESULT_LIMIT\\]\\](\\d+)`,
 )
 
-/** Poll interval in milliseconds while waiting for a selector to appear. */
+/** Sets the poll interval in milliseconds while waiting for a selector to appear. */
 export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
 
-/** Default maximum node count accepted from a decoded CDP DOM snapshot. */
+/** Sets the default maximum node count accepted from a decoded CDP DOM snapshot. */
 export const BROWSER_SNAPSHOT_NODE_LIMIT = 100_000
 
-/** Isolated-world name used for iframe evaluation. */
+/** Names the isolated world used for iframe evaluation. */
 export const BROWSER_FRAME_WORLD_NAME = '__orkestrelBrowserFrame'
 
-/** Attribute used by the semantic test-id selector. */
+/** Names the attribute the semantic test-id selector uses. */
 export const BROWSER_TEST_ID_ATTRIBUTE = 'data-testid'
 
-/** Number of animation frames whose element bounds must agree before trusted input. */
+/** Sets the number of animation frames whose element bounds must agree before trusted input. */
 export const BROWSER_STABLE_FRAME_COUNT = 2
 
 /**
- * In-page visibility predicate source, over a `style` computed style and a
+ * Holds the in-page visibility predicate source, over a `style` computed style and a
  * `rect` bounding box already in scope at the interpolation site.
  *
  * @remarks
@@ -154,7 +154,7 @@ export const BROWSER_STABLE_FRAME_COUNT = 2
 export const BROWSER_VISIBILITY_SOURCE =
 	"style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse' && rect.width > 0 && rect.height > 0"
 
-/** CDP Input modifier bit values keyed by canonical key name. */
+/** Maps a canonical modifier name to its CDP Input modifier bit value. */
 export const BROWSER_KEY_MODIFIERS: Readonly<Record<string, number>> = Object.freeze({
 	Alt: 1,
 	Control: 2,
@@ -162,7 +162,7 @@ export const BROWSER_KEY_MODIFIERS: Readonly<Record<string, number>> = Object.fr
 	Shift: 8,
 })
 
-/** CDP Input pressed-button bit values keyed by public mouse button. */
+/** Maps each public mouse button to its CDP Input pressed-button bit value. */
 export const BROWSER_MOUSE_BUTTON_MASKS: Readonly<Record<BrowserMouseButton, number>> =
 	Object.freeze({
 		left: 1,
@@ -173,7 +173,7 @@ export const BROWSER_MOUSE_BUTTON_MASKS: Readonly<Record<BrowserMouseButton, num
 	})
 
 /**
- * Tool identity embedded in HAR 1.2 documents.
+ * Names the tool identity embedded in HAR 1.2 documents.
  *
  * @remarks
  * `version` is this package's own released version. A parity test in
@@ -185,11 +185,11 @@ export const BROWSER_HAR_CREATOR = Object.freeze({
 	version: '0.0.14',
 })
 
-/** Attribute used to tag temporary screenshot styles and masks. */
+/** Names the attribute that tags temporary screenshot styles and masks. */
 export const BROWSER_SCREENSHOT_ATTRIBUTE = 'data-orkestrel-screenshot'
 
 /**
- * Bound (in milliseconds) on the best-effort `Page.stopLoading` call issued
+ * Bounds (in milliseconds) the best-effort `Page.stopLoading` call issued
  * after a failed `navigate()`.
  *
  * @remarks
@@ -200,19 +200,19 @@ export const BROWSER_SCREENSHOT_ATTRIBUTE = 'data-orkestrel-screenshot'
  */
 export const BROWSER_STOP_LOADING_TIMEOUT_MS = 1_000
 
-/** Default viewport width in pixels. */
+/** Sets the default viewport width in pixels. */
 export const BROWSER_DEFAULT_VIEWPORT_WIDTH = 1280
 
-/** Default viewport height in pixels. */
+/** Sets the default viewport height in pixels. */
 export const BROWSER_DEFAULT_VIEWPORT_HEIGHT = 720
 
 // === Browser codegen
 
-/** Name of the CDP runtime binding the codegen recorder script calls into. */
+/** Names the CDP runtime binding the codegen recorder script calls into. */
 export const BROWSER_CODEGEN_BINDING_NAME = '__orkestrelBrowserCodegen'
 
 /**
- * In-page recorder script injected via `Page.addScriptToEvaluateOnNewDocument`
+ * Holds the in-page recorder script injected via `Page.addScriptToEvaluateOnNewDocument`
  * and `Runtime.evaluate`.
  *
  * @remarks

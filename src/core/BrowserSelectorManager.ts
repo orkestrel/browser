@@ -8,7 +8,7 @@ import type {
 import { BrowserLocator } from './BrowserLocator.js'
 
 /**
- * Semantic locator factory for one frame.
+ * Creates semantic locators for one frame.
  *
  * @example
  * ```ts

@@ -5,7 +5,7 @@ import { readEvaluationResult } from './helpers.js'
 import { BrowserError } from './errors.js'
 
 /**
- * Dedicated, shared, or service worker attached through a flattened target session.
+ * Represents a dedicated, shared, or service worker attached through a flattened target session.
  */
 export class BrowserWorker implements BrowserWorkerInterface {
 	readonly #client: CDPClientInterface

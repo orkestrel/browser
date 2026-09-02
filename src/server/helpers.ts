@@ -40,7 +40,7 @@ import {
 // === Discovery helpers
 
 /**
- * Enumerate every Chrome/Chromium/Edge executable discoverable on this
+ * Enumerates every Chrome/Chromium/Edge executable discoverable on this
  * machine, deduplicated by normalized absolute path.
  *
  * @remarks
@@ -98,7 +98,7 @@ export function findSystemBrowsers(options?: SystemBrowserOptions): readonly Sys
 }
 
 /**
- * Locate a Chrome/Chromium/Edge executable on this machine — the first entry
+ * Locates a Chrome/Chromium/Edge executable on this machine — the first entry
  * of {@link findSystemBrowsers}.
  *
  * @param options - Overrides for the candidate sources; see {@link SystemBrowserOptions}
@@ -109,7 +109,7 @@ export function findSystemBrowser(options?: SystemBrowserOptions): SystemBrowser
 }
 
 /**
- * Classify an executable path/name into a {@link BrowserEngine} by
+ * Classifies an executable path/name into a {@link BrowserEngine} by
  * case-insensitive hint, checked in the order edge → chromium → chrome.
  *
  * @param executable - Executable path or command name to classify
@@ -125,13 +125,13 @@ export function parseBrowserEngine(executable: string): BrowserEngine | undefine
 	return undefined
 }
 
-/** Normalize an executable path for cross-source deduplication (case-insensitive on Windows). */
+/** Normalizes an executable path for cross-source deduplication (case-insensitive on Windows). */
 export function normalizeExecutablePath(path: string, platform: string): string {
 	const normalized = platform === 'win32' ? pathWin32.normalize(path) : pathPosix.normalize(path)
 	return platform === 'win32' ? normalized.toLowerCase() : normalized
 }
 
-/** Classify a `/json/version` `Browser` string into a {@link BrowserEngine} (`Edg/` → edge, `Chrome/` → chrome, else chromium). */
+/** Classifies a `/json/version` `Browser` string into a {@link BrowserEngine} (`Edg/` → edge, `Chrome/` → chrome, else chromium). */
 export function browserToEngine(browser?: string): BrowserEngine {
 	if (browser?.includes('Edg/') === true) return 'edge'
 	if (browser?.includes('Chrome/') === true) return 'chrome'
@@ -139,7 +139,7 @@ export function browserToEngine(browser?: string): BrowserEngine {
 }
 
 /**
- * Resolve a persistent caller profile or create an isolated temporary one.
+ * Resolves a persistent caller profile or creates an isolated temporary one.
  *
  * @param path - Optional caller-owned persistent user-data directory
  * @returns The resolved profile and whether the library owns its lifecycle
@@ -151,7 +151,7 @@ export async function createBrowserProfile(path?: string): Promise<BrowserProfil
 }
 
 /**
- * Remove a library-owned isolated browser profile.
+ * Removes a library-owned isolated browser profile.
  *
  * @remarks
  * The path must remain a direct child of the operating-system temp directory
@@ -184,7 +184,7 @@ export function findEnvOverrides(
 	return found
 }
 
-/** Build the default well-known install-path candidates for a platform, deriving Windows roots from env vars. */
+/** Builds the default well-known install-path candidates for a platform, deriving Windows roots from env vars. */
 export function defaultInstallPaths(
 	platform: string,
 	env: Readonly<Record<string, string | undefined>>,
@@ -201,7 +201,7 @@ export function defaultInstallPaths(
 	return paths
 }
 
-/** Derive Windows install roots from env vars, falling back to well-known literals when absent. */
+/** Derives Windows install roots from env vars, falling back to well-known literals when absent. */
 export function windowsRoots(env: Readonly<Record<string, string | undefined>>): readonly string[] {
 	const programFiles = env['PROGRAMFILES'] ?? BROWSER_WINDOWS_ROOT_FALLBACKS['PROGRAMFILES']
 	const programFilesX86 =
@@ -256,7 +256,7 @@ export function readFirstLine(output: string): string | undefined {
 	return undefined
 }
 
-/** Build the default Playwright browser store base directories to search for a managed Chromium. */
+/** Builds the default Playwright browser store base directories to search for a managed Chromium. */
 export function defaultStoreBases(
 	env: Readonly<Record<string, string | undefined>>,
 	platform: string,
@@ -300,7 +300,7 @@ export function findInStore(base: string, platform: string): readonly string[] {
 }
 
 /**
- * Launch a browser process with raw-CDP debugging flags.
+ * Launches a browser process with raw-CDP debugging flags.
  *
  * @remarks
  * POSIX launches own an isolated process group so lifecycle teardown can
@@ -343,7 +343,7 @@ export function launchBrowserProcess(
 }
 
 /**
- * Poll a browser's CDP version endpoint until it responds or the timeout elapses.
+ * Polls a browser's CDP version endpoint until it responds or the timeout elapses.
  *
  * @param port - Port the browser exposes its CDP endpoint on
  * @param timeout - Maximum time to wait in milliseconds

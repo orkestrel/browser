@@ -26,7 +26,7 @@ import { isInteger, isRecord, isString } from '@orkestrel/contract'
 import { createHTML, renderText } from '@orkestrel/html'
 
 /**
- * One attached document frame, evaluated through its own CDP execution world.
+ * Represents one attached document frame, evaluated through its own CDP execution world.
  *
  * @example
  * ```ts

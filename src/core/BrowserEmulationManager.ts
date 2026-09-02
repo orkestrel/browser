@@ -7,7 +7,7 @@ import type {
 import { mediaToFeatures, validateBrowserEmulationOptions } from './helpers.js'
 
 /**
- * Rendering, identity, location, and network emulation for context pages.
+ * Applies rendering, identity, location, and network emulation for context pages.
  *
  * @example
  * ```ts

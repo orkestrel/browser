@@ -3,7 +3,7 @@ import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkes
 // === CDP transport
 
 /**
- * Event map for a {@link CDPTransportInterface} — the raw text pipe a
+ * Maps the events emitted by a {@link CDPTransportInterface} — the raw text pipe a
  * {@link CDPClientInterface} sends and receives JSON-RPC frames over.
  *
  * @remarks
@@ -18,7 +18,7 @@ export type CDPTransportEventMap = {
 }
 
 /**
- * A dumb text transport CDPClient sends and receives JSON-RPC frames over.
+ * Represents a dumb text transport CDPClient sends and receives JSON-RPC frames over.
  *
  * @remarks
  * The transport owns the connection (WebSocket, pipe, or any other duplex
@@ -37,7 +37,7 @@ export interface CDPTransportInterface {
 // === CDP client
 
 /**
- * Event map for a {@link CDPClientInterface}.
+ * Maps the events a {@link CDPClientInterface} emits.
  *
  * @remarks
  * `connect` fires once the transport started and dispatch began; `close`
@@ -54,7 +54,7 @@ export type CDPClientEventMap = {
 }
 
 /**
- * Options for creating a CDPClient.
+ * Describes the options for creating a CDPClient.
  *
  * @remarks
  * - `transport` — the text pipe the client sends/receives JSON-RPC frames over
@@ -75,7 +75,7 @@ export interface CDPClientOptions {
 }
 
 /**
- * Options for one CDP method call.
+ * Describes the options for one CDP method call.
  *
  * @remarks
  * - `session` — scope the call to one attached CDP session
@@ -86,11 +86,11 @@ export interface CDPSendOptions {
 	readonly timeout?: number
 }
 
-/** Handler invoked for a subscribed CDP event with its params record. */
+/** Receives a subscribed CDP event with its params record. */
 export type CDPHandler = (params: Readonly<Record<string, unknown>>) => void
 
 /**
- * One entry of the CDP `Target.getTargets` result.
+ * Represents one entry of the CDP `Target.getTargets` result.
  *
  * @remarks
  * `category` mirrors the protocol's `type` field — `'page'`, `'worker'`,
@@ -104,7 +104,7 @@ export interface CDPTarget {
 }
 
 /**
- * Lightweight Chrome DevTools Protocol client over a {@link CDPTransportInterface}.
+ * Provides a lightweight Chrome DevTools Protocol client over a {@link CDPTransportInterface}.
  *
  * @remarks
  * - `emitter` — subscribe to the client's own connection lifecycle
@@ -135,11 +135,11 @@ export interface CDPClientInterface {
 
 // === Browser transition
 
-/** The work one {@link BrowserTransitionInterface} transition performs. */
+/** Runs the work one {@link BrowserTransitionInterface} transition performs. */
 export type BrowserTransitionFunction<T> = () => Promise<T>
 
 /**
- * One asynchronous transition shared by every caller that arrives while it runs.
+ * Represents one asynchronous transition shared by every caller that arrives while it runs.
  *
  * @remarks
  * `pending` is the promise of the transition in flight, or undefined when none
@@ -155,7 +155,7 @@ export interface BrowserTransitionInterface<T> {
 // === Browser writer
 
 /**
- * Pluggable sink for persisting captured browser bytes to a path.
+ * Provides a pluggable sink for persisting captured browser bytes to a path.
  *
  * @remarks
  * Core never touches a filesystem directly — a page accepts an optional
@@ -168,7 +168,7 @@ export interface BrowserWriterInterface {
 
 // === Browser shared
 
-/** Viewport dimensions for a browser page. */
+/** Describes the viewport dimensions for a browser page. */
 export interface BrowserViewport {
 	readonly width: number
 	readonly height: number
@@ -178,11 +178,11 @@ export interface BrowserViewport {
 	readonly landscape?: boolean
 }
 
-/** Page load condition for navigation — the CDP load event awaited by `navigate()`. */
+/** Names the page load condition for navigation — the CDP load event awaited by `navigate()`. */
 export type BrowserWaitUntil = 'commit' | 'load' | 'domcontentloaded'
 
 /**
- * Options for creating a browser page.
+ * Describes the options for creating a browser page.
  *
  * @remarks
  * - `url` — navigate to this URL immediately after creation
@@ -196,7 +196,7 @@ export interface BrowserPageOptions {
 }
 
 /**
- * Options for page navigation.
+ * Describes the options for page navigation.
  *
  * @remarks
  * - `condition` — page load condition to wait for (default `'load'`)
@@ -208,19 +208,19 @@ export interface BrowserNavigationOptions {
 	readonly timeout?: number
 }
 
-/** Outcome of a top-level navigation command. */
+/** Describes the outcome of a top-level navigation command. */
 export interface BrowserNavigationResult {
 	readonly url: string
 	readonly response: BrowserResponse | undefined
 	readonly same: boolean
 }
 
-/** State retained while correlating navigation with Network events. */
+/** Holds the state retained while correlating navigation with Network events. */
 export interface BrowserNavigationWatch {
 	readonly responses: readonly BrowserResponse[]
 }
 
-/** One pending URL-pattern wait. */
+/** Represents one pending URL-pattern wait. */
 export interface BrowserNavigationWait {
 	readonly pattern: string
 	readonly timer: ReturnType<typeof setTimeout>
@@ -228,19 +228,19 @@ export interface BrowserNavigationWait {
 	readonly reject: (error: unknown) => void
 }
 
-/** Options for URL and predicate waits. */
+/** Describes the options for URL and predicate waits. */
 export interface BrowserNavigationWaitOptions {
 	readonly timeout?: number
 }
 
-/** URL and in-page predicate waits associated with one page. */
+/** Provides URL and in-page predicate waits associated with one page. */
 export interface BrowserNavigationManagerInterface {
 	wait(pattern: string, options?: BrowserNavigationWaitOptions): Promise<string>
 	until(expression: string, options?: BrowserNavigationWaitOptions): Promise<unknown>
 }
 
 /**
- * Options for element interaction (click, fill, select, wait).
+ * Describes the options for element interaction (click, fill, select, wait).
  *
  * @remarks
  * - `timeout` — maximum time to wait for the selector in milliseconds
@@ -256,7 +256,7 @@ export interface BrowserActionOptions {
 }
 
 /**
- * Options shared by every trusted input operation.
+ * Describes the options shared by every trusted input operation.
  *
  * @remarks
  * - `delay` — milliseconds between the transitions the operation dispatches
@@ -266,7 +266,7 @@ export interface BrowserInputOptions {
 }
 
 /**
- * Options for a trusted mouse click.
+ * Describes the options for a trusted mouse click.
  *
  * @remarks
  * - `button` — pressed mouse button (default `'left'`)
@@ -278,7 +278,7 @@ export interface BrowserClickOptions extends BrowserInputOptions {
 }
 
 /**
- * Options for a trusted mouse drag.
+ * Describes the options for a trusted mouse drag.
  *
  * @remarks
  * - `button` — pressed mouse button (default `'left'`)
@@ -290,7 +290,7 @@ export interface BrowserDragOptions extends BrowserInputOptions {
 }
 
 /**
- * Options for a locator operation that aims at a point inside the element.
+ * Describes the options for a locator operation that aims at a point inside the element.
  *
  * @remarks
  * - `position` — offset from the element's top-left corner, in CSS pixels
@@ -299,20 +299,20 @@ export interface BrowserPointerOptions extends BrowserActionOptions {
 	readonly position?: BrowserPoint
 }
 
-/** Options for a locator click, combining element resolution with mouse input. */
+/** Describes the options for a locator click, combining element resolution with mouse input. */
 export interface BrowserLocatorClickOptions extends BrowserPointerOptions, BrowserClickOptions {}
 
-/** Options for a locator drag, combining element resolution with mouse input. */
+/** Describes the options for a locator drag, combining element resolution with mouse input. */
 export interface BrowserLocatorDragOptions extends BrowserPointerOptions, BrowserDragOptions {}
 
-/** Options for locator keyboard entry, combining element resolution with key input. */
+/** Describes the options for locator keyboard entry, combining element resolution with key input. */
 export interface BrowserLocatorTypeOptions extends BrowserActionOptions, BrowserInputOptions {}
 
-/** Element state a frame or page can wait for. */
+/** Names an element state a frame or page can wait for. */
 export type BrowserWaitState = 'attached' | 'detached' | 'visible' | 'hidden'
 
 /**
- * Options for waiting on an element.
+ * Describes the options for waiting on an element.
  *
  * @remarks
  * - `timeout` — maximum time to wait in milliseconds
@@ -324,7 +324,7 @@ export interface BrowserWaitOptions extends BrowserActionOptions {
 }
 
 /**
- * Options for taking a page screenshot.
+ * Describes the options for taking a page screenshot.
  *
  * @remarks
  * - `path` — file path to persist the screenshot to, via the page's writer
@@ -347,7 +347,7 @@ export interface BrowserScreenshotOptions {
 }
 
 /**
- * Result of page content extraction.
+ * Describes the result of page content extraction.
  *
  * @remarks
  * - `url` — current page URL after navigation
@@ -363,7 +363,7 @@ export interface BrowserContentResult {
 }
 
 /**
- * Result of a page screenshot.
+ * Describes the result of a page screenshot.
  *
  * @remarks
  * - `bytes` — raw image bytes
@@ -374,13 +374,13 @@ export interface BrowserScreenshotResult {
 	readonly path: string | undefined
 }
 
-/** One teardown step run to settlement while the first failure is retained. */
+/** Runs one teardown step to settlement while the first failure is retained. */
 export type BrowserTeardownFunction = () => Promise<unknown>
 
 // === Browser handles
 
 /**
- * A remote JavaScript object retained in one frame execution context.
+ * Represents a remote JavaScript object retained in one frame execution context.
  */
 export interface BrowserHandleInterface {
 	readonly id: string
@@ -391,10 +391,10 @@ export interface BrowserHandleInterface {
 	dispose(): Promise<void>
 }
 
-/** Host function exposed into page JavaScript. */
+/** Runs a host function exposed into page JavaScript. */
 export type BrowserBindingHandler = (...args: unknown[]) => unknown | Promise<unknown>
 
-/** Decoded page-to-host binding call. */
+/** Describes a decoded page-to-host binding call. */
 export interface BrowserBindingCall {
 	readonly id: string
 	readonly name: string
@@ -402,7 +402,7 @@ export interface BrowserBindingCall {
 	readonly context: number
 }
 
-/** Initialization scripts and host bindings for one page. */
+/** Manages initialization scripts and host bindings for one page. */
 export interface BrowserScriptManagerInterface {
 	add(source: string): Promise<string>
 	remove(id: string): Promise<void>
@@ -411,7 +411,7 @@ export interface BrowserScriptManagerInterface {
 	destroy(): Promise<void>
 }
 
-/** One installed new-document script and its optional host binding owner. */
+/** Represents one installed new-document script and its optional host binding owner. */
 export interface BrowserScriptEntry {
 	readonly source: string
 	readonly binding: string | undefined
@@ -419,7 +419,7 @@ export interface BrowserScriptEntry {
 
 // === Browser accessibility
 
-/** One decoded Chromium accessibility node. */
+/** Represents one decoded Chromium accessibility node. */
 export interface BrowserAXNode {
 	readonly id: string
 	readonly parent: string | undefined
@@ -434,26 +434,26 @@ export interface BrowserAXNode {
 	readonly properties: Readonly<Record<string, unknown>>
 }
 
-/** Serializable accessibility-tree snapshot. */
+/** Describes a serializable accessibility-tree snapshot. */
 export interface BrowserAccessibilitySnapshot {
 	readonly roots: readonly string[]
 	readonly nodes: readonly BrowserAXNode[]
 }
 
-/** Accessibility snapshot options. */
+/** Describes the options for an accessibility snapshot. */
 export interface BrowserAccessibilityOptions {
 	readonly root?: number
 	readonly depth?: number
 }
 
-/** Accessibility tree inspection. */
+/** Inspects the accessibility tree. */
 export interface BrowserAccessibilityInterface {
 	snapshot(options?: BrowserAccessibilityOptions): Promise<BrowserAccessibilitySnapshot>
 }
 
 // === Browser diagnostics
 
-/** Chromium trace capture options. */
+/** Describes the options for a Chromium trace capture. */
 export interface BrowserTracingOptions {
 	readonly path?: string
 	readonly categories?: readonly string[]
@@ -461,19 +461,19 @@ export interface BrowserTracingOptions {
 	readonly sampling?: boolean
 }
 
-/** Trace capture result. */
+/** Describes the result of a trace capture. */
 export interface BrowserTracingResult {
 	readonly bytes: Uint8Array
 	readonly path: string | undefined
 }
 
-/** One decoded IO stream read. */
+/** Represents one decoded IO stream read. */
 export interface BrowserStreamChunk {
 	readonly bytes: Uint8Array
 	readonly eof: boolean
 }
 
-/** Trace capture lifecycle. */
+/** Drives the trace capture lifecycle. */
 export interface BrowserTracingInterface {
 	readonly active: boolean
 	start(options?: BrowserTracingOptions): Promise<void>
@@ -481,47 +481,47 @@ export interface BrowserTracingInterface {
 	destroy(): Promise<void>
 }
 
-/** Source range reported by JavaScript or CSS coverage. */
+/** Describes a source range reported by JavaScript or CSS coverage. */
 export interface BrowserCoverageRange {
 	readonly start: number
 	readonly end: number
 	readonly count: number
 }
 
-/** Function coverage inside one script. */
+/** Describes function coverage inside one script. */
 export interface BrowserFunctionCoverage {
 	readonly name: string
 	readonly ranges: readonly BrowserCoverageRange[]
 	readonly block: boolean
 }
 
-/** JavaScript script coverage. */
+/** Describes JavaScript script coverage. */
 export interface BrowserScriptCoverage {
 	readonly id: string
 	readonly url: string
 	readonly functions: readonly BrowserFunctionCoverage[]
 }
 
-/** CSS stylesheet coverage. */
+/** Describes CSS stylesheet coverage. */
 export interface BrowserStyleCoverage {
 	readonly id: string
 	readonly ranges: readonly BrowserCoverageRange[]
 }
 
-/** Coverage capture options. */
+/** Describes the options for a coverage capture. */
 export interface BrowserCoverageOptions {
 	readonly javascript?: boolean
 	readonly css?: boolean
 	readonly detailed?: boolean
 }
 
-/** Combined JavaScript and CSS usage. */
+/** Describes combined JavaScript and CSS usage. */
 export interface BrowserCoverageResult {
 	readonly scripts: readonly BrowserScriptCoverage[]
 	readonly styles: readonly BrowserStyleCoverage[]
 }
 
-/** Coverage capture lifecycle. */
+/** Drives the coverage capture lifecycle. */
 export interface BrowserCoverageInterface {
 	readonly active: boolean
 	start(options?: BrowserCoverageOptions): Promise<void>
@@ -529,13 +529,13 @@ export interface BrowserCoverageInterface {
 	destroy(): Promise<void>
 }
 
-/** One Performance-domain metric. */
+/** Represents one Performance-domain metric. */
 export interface BrowserMetric {
 	readonly name: string
 	readonly value: number
 }
 
-/** JavaScript call frame from a CPU profile. */
+/** Describes a JavaScript call frame from a CPU profile. */
 export interface BrowserProfileFrame {
 	readonly function: string
 	readonly script: string
@@ -544,7 +544,7 @@ export interface BrowserProfileFrame {
 	readonly column: number
 }
 
-/** One node in a sampled CPU profile. */
+/** Represents one node in a sampled CPU profile. */
 export interface BrowserProfileNode {
 	readonly id: number
 	readonly frame: BrowserProfileFrame
@@ -552,7 +552,7 @@ export interface BrowserProfileNode {
 	readonly children: readonly number[]
 }
 
-/** Sampled CPU profile. */
+/** Describes a sampled CPU profile. */
 export interface BrowserProfile {
 	readonly start: number
 	readonly end: number
@@ -562,7 +562,7 @@ export interface BrowserProfile {
 }
 
 /**
- * Performance-domain metrics.
+ * Reads Performance-domain metrics.
  *
  * @remarks
  * Each call enables the Performance domain and disables it again, so the
@@ -573,7 +573,7 @@ export interface BrowserPerformanceInterface {
 	metrics(): Promise<readonly BrowserMetric[]>
 }
 
-/** Sampled CPU profile lifecycle. */
+/** Drives the sampled CPU profile lifecycle. */
 export interface BrowserProfilerInterface {
 	readonly active: boolean
 	start(interval?: number): Promise<void>
@@ -581,7 +581,7 @@ export interface BrowserProfilerInterface {
 	destroy(): Promise<void>
 }
 
-/** Diagnostics grouped by capability. */
+/** Groups the diagnostics by capability. */
 export interface BrowserDiagnosticsInterface {
 	readonly tracing: BrowserTracingInterface
 	readonly coverage: BrowserCoverageInterface
@@ -592,7 +592,7 @@ export interface BrowserDiagnosticsInterface {
 
 // === Browser clock
 
-/** Chromium virtual-time control for deterministic page timers. */
+/** Controls Chromium virtual time for deterministic page timers. */
 export interface BrowserClockInterface {
 	readonly installed: boolean
 	install(time?: number): Promise<void>
@@ -605,21 +605,21 @@ export interface BrowserClockInterface {
 // === Browser selectors and locators
 
 /**
- * Selector axis supported by {@link BrowserSelectorManagerInterface}.
+ * Names a selector axis supported by {@link BrowserSelectorManagerInterface}.
  *
  * @remarks
  * `testId` mirrors the `data-testid` attribute {@link BROWSER_TEST_ID_ATTRIBUTE} names.
  */
 export type BrowserSelector = 'css' | 'role' | 'text' | 'label' | 'placeholder' | 'testId'
 
-/** Declarative locator filter applied after selector resolution. */
+/** Describes a declarative locator filter applied after selector resolution. */
 export interface BrowserLocatorFilter {
 	readonly text?: string
 	readonly exact?: boolean
 	readonly visible?: boolean
 }
 
-/** Serializable selector query, including optional ancestry and filtering. */
+/** Describes a serializable selector query, including optional ancestry and filtering. */
 export interface BrowserQuery {
 	readonly selector: BrowserSelector
 	readonly value: string
@@ -630,24 +630,24 @@ export interface BrowserQuery {
 	readonly index?: number
 }
 
-/** Options for role-based locator creation. */
+/** Describes the options for role-based locator creation. */
 export interface BrowserRoleOptions {
 	readonly name?: string
 	readonly exact?: boolean
 }
 
-/** Options for text-like locator creation. */
+/** Describes the options for text-like locator creation. */
 export interface BrowserTextOptions {
 	readonly exact?: boolean
 }
 
-/** Options for setting files on a file input. */
+/** Describes the options for setting files on a file input. */
 export interface BrowserUploadOptions extends BrowserActionOptions {
 	readonly files: readonly string[]
 }
 
 /**
- * Reusable strict locator over one frame.
+ * Represents a reusable strict locator over one frame.
  */
 export interface BrowserLocatorInterface {
 	readonly frame: BrowserFrameInterface
@@ -684,7 +684,7 @@ export interface BrowserLocatorInterface {
 }
 
 /**
- * Locator factory grouped by selector semantics.
+ * Groups the locator factories by selector semantics.
  */
 export interface BrowserSelectorManagerInterface {
 	css(value: string): BrowserLocatorInterface
@@ -697,19 +697,19 @@ export interface BrowserSelectorManagerInterface {
 
 // === Browser input
 
-/** Point in viewport CSS pixels. */
+/** Describes a point in viewport CSS pixels. */
 export interface BrowserPoint {
 	readonly x: number
 	readonly y: number
 }
 
-/** Mouse button understood by Chromium's Input domain. */
+/** Names a mouse button understood by Chromium's Input domain. */
 export type BrowserMouseButton = 'left' | 'middle' | 'right' | 'back' | 'forward'
 
-/** Screenshot coordinate scale. */
+/** Names a screenshot coordinate scale. */
 export type BrowserScreenshotScale = 'css' | 'device'
 
-/** Normalized CDP keyboard key data. */
+/** Describes normalized CDP keyboard key data. */
 export interface BrowserKey {
 	readonly key: string
 	readonly code: string
@@ -717,14 +717,14 @@ export interface BrowserKey {
 	readonly number: number
 }
 
-/** Parsed keyboard chord. */
+/** Describes a parsed keyboard chord. */
 export interface BrowserChord {
 	readonly modifiers: readonly string[]
 	readonly key: string
 }
 
 /**
- * Every option a trusted-input operation can carry.
+ * Collects every option a trusted-input operation can carry.
  *
  * @remarks
  * The intersection of each option type that carries a bounded key, so one
@@ -735,7 +735,7 @@ export type BrowserOperationOptions = BrowserPointerOptions &
 	BrowserClickOptions &
 	BrowserDragOptions
 
-/** Keyboard input operations bound to one frame target session. */
+/** Provides keyboard input operations bound to one frame target session. */
 export interface BrowserKeyboardInterface {
 	down(key: string): Promise<void>
 	up(key: string): Promise<void>
@@ -744,7 +744,7 @@ export interface BrowserKeyboardInterface {
 	insert(value: string): Promise<void>
 }
 
-/** Mouse input operations bound to one frame target session. */
+/** Provides mouse input operations bound to one frame target session. */
 export interface BrowserMouseInterface {
 	move(point: BrowserPoint): Promise<void>
 	down(button?: BrowserMouseButton, count?: number): Promise<void>
@@ -754,12 +754,12 @@ export interface BrowserMouseInterface {
 	wheel(delta: BrowserPoint): Promise<void>
 }
 
-/** Touch input operations bound to one frame target session. */
+/** Provides touch input operations bound to one frame target session. */
 export interface BrowserTouchInterface {
 	tap(point: BrowserPoint): Promise<void>
 }
 
-/** Actionability checks performed before locator input. */
+/** Describes the actionability checks performed before locator input. */
 export interface BrowserActionabilityOptions {
 	readonly visible?: boolean
 	readonly stable?: boolean
@@ -769,7 +769,7 @@ export interface BrowserActionabilityOptions {
 	readonly position?: BrowserPoint
 }
 
-/** Decoded content quad and its actionable center. */
+/** Describes a decoded content quad and its actionable center. */
 export interface BrowserQuad {
 	readonly points: readonly [number, number, number, number, number, number, number, number]
 	readonly center: BrowserPoint
@@ -777,7 +777,7 @@ export interface BrowserQuad {
 
 // === Browser PDF
 
-/** Paper margin lengths accepted by Chromium print-to-PDF. */
+/** Describes the paper margin lengths accepted by Chromium print-to-PDF. */
 export interface BrowserMargin {
 	readonly top?: number
 	readonly right?: number
@@ -785,7 +785,7 @@ export interface BrowserMargin {
 	readonly left?: number
 }
 
-/** Options for printing a Chromium page to PDF. */
+/** Describes the options for printing a Chromium page to PDF. */
 export interface BrowserPDFOptions {
 	readonly path?: string
 	readonly landscape?: boolean
@@ -801,7 +801,7 @@ export interface BrowserPDFOptions {
 	readonly outline?: boolean
 }
 
-/** Result of printing a page to PDF. */
+/** Describes the result of printing a page to PDF. */
 export interface BrowserPDFResult {
 	readonly bytes: Uint8Array
 	readonly path: string | undefined
@@ -809,10 +809,10 @@ export interface BrowserPDFResult {
 
 // === Browser page events
 
-/** JavaScript dialog category reported by Chromium. */
+/** Names a JavaScript dialog category reported by Chromium. */
 export type BrowserDialogCategory = 'alert' | 'confirm' | 'prompt' | 'beforeunload'
 
-/** One active JavaScript dialog. */
+/** Represents one active JavaScript dialog. */
 export interface BrowserDialogInterface {
 	readonly category: BrowserDialogCategory
 	readonly message: string
@@ -821,24 +821,24 @@ export interface BrowserDialogInterface {
 	dismiss(): Promise<void>
 }
 
-/** One intercepted file chooser. */
+/** Represents one intercepted file chooser. */
 export interface BrowserFileChooserInterface {
 	readonly multiple: boolean
 	upload(files: readonly string[]): Promise<void>
 	cancel(): Promise<void>
 }
 
-/** Download lifecycle phase. */
+/** Names a download lifecycle phase. */
 export type BrowserDownloadStatus = 'pending' | 'complete' | 'cancelled'
 
-/** Download progress events. */
+/** Maps the download progress events. */
 export type BrowserDownloadEventMap = {
 	readonly progress: readonly [received: number, total: number]
 	readonly complete: readonly [path: string | undefined]
 	readonly cancel: readonly []
 }
 
-/** Protocol-neutral download progress update. */
+/** Describes a protocol-neutral download progress update. */
 export interface BrowserDownloadProgress {
 	readonly status: BrowserDownloadStatus
 	readonly received: number
@@ -846,7 +846,7 @@ export interface BrowserDownloadProgress {
 	readonly path?: string
 }
 
-/** Decoded `Browser.downloadWillBegin` event. */
+/** Describes a decoded `Browser.downloadWillBegin` event. */
 export interface BrowserDownloadStart {
 	readonly id: string
 	readonly url: string
@@ -855,7 +855,7 @@ export interface BrowserDownloadStart {
 }
 
 /**
- * One context download tracked through Chromium's Browser domain.
+ * Represents one context download tracked through Chromium's Browser domain.
  *
  * @remarks
  * Progress arrives from the owning page, which drives the concrete
@@ -872,11 +872,11 @@ export interface BrowserDownloadInterface {
 	readonly total: number
 	readonly path: string | undefined
 	cancel(): Promise<void>
-	/** Records one progress update. The owning page drives it. */
+	/** Records one step of the download's progress. The owning page drives it. */
 	update(progress: BrowserDownloadProgress): void
 }
 
-/** One console API call. */
+/** Represents one console API call. */
 export interface BrowserConsoleMessage {
 	readonly level: string
 	readonly text: string
@@ -885,7 +885,7 @@ export interface BrowserConsoleMessage {
 	readonly stack: readonly BrowserStackFrame[]
 }
 
-/** One browser-side stack frame. */
+/** Represents one browser-side stack frame. */
 export interface BrowserStackFrame {
 	readonly url: string
 	readonly function: string
@@ -893,17 +893,17 @@ export interface BrowserStackFrame {
 	readonly column: number
 }
 
-/** One uncaught page exception. */
+/** Represents one uncaught page exception. */
 export interface BrowserPageError {
 	readonly message: string
 	readonly stack: readonly BrowserStackFrame[]
 	readonly timestamp: number
 }
 
-/** Worker target category. */
+/** Names a worker target category. */
 export type BrowserWorkerCategory = 'worker' | 'service_worker' | 'shared_worker'
 
-/** Script worker attached to a page target. */
+/** Represents a script worker attached to a page target. */
 export interface BrowserWorkerInterface {
 	readonly id: string
 	readonly url: string
@@ -914,7 +914,7 @@ export interface BrowserWorkerInterface {
 	close(): Promise<void>
 }
 
-/** Typed page, frame, target, and user-visible browser events. */
+/** Maps the typed page, frame, target, and user-visible browser events. */
 export type BrowserPageEventMap = {
 	readonly navigate: readonly [url: string]
 	readonly attach: readonly [frame: BrowserFrameInterface]
@@ -936,7 +936,7 @@ export type BrowserPageEventMap = {
 
 // === Browser network
 
-/** One observed browser request. */
+/** Represents one observed browser request. */
 export interface BrowserRequest {
 	readonly id: string
 	readonly loader: string | undefined
@@ -951,7 +951,7 @@ export interface BrowserRequest {
 	readonly redirect: BrowserResponse | undefined
 }
 
-/** TLS details supplied with a browser response. */
+/** Describes the TLS details supplied with a browser response. */
 export interface BrowserSecurity {
 	readonly protocol: string
 	readonly issuer: string
@@ -959,13 +959,13 @@ export interface BrowserSecurity {
 	readonly to: number
 }
 
-/** Start/end pair for one network timing phase. */
+/** Describes the start/end pair for one network timing phase. */
 export interface BrowserTimingRange {
 	readonly start: number
 	readonly end: number
 }
 
-/** Network timing values in milliseconds relative to request time. */
+/** Holds network timing values in milliseconds relative to request time. */
 export interface BrowserTiming {
 	readonly request: number
 	readonly proxy: BrowserTimingRange | undefined
@@ -976,7 +976,7 @@ export interface BrowserTiming {
 	readonly receive: number | undefined
 }
 
-/** One observed browser response. */
+/** Represents one observed browser response. */
 export interface BrowserResponse {
 	readonly id: string
 	readonly loader: string
@@ -996,7 +996,7 @@ export interface BrowserResponse {
 	readonly security: BrowserSecurity | undefined
 }
 
-/** One failed browser request. */
+/** Represents one failed browser request. */
 export interface BrowserRequestFailure {
 	readonly id: string
 	readonly error: string
@@ -1004,7 +1004,7 @@ export interface BrowserRequestFailure {
 	readonly blocked: string | undefined
 }
 
-/** WebSocket frame payload. */
+/** Describes a WebSocket frame payload. */
 export interface BrowserWebSocketFrame {
 	readonly opcode: number
 	readonly data: string
@@ -1012,7 +1012,7 @@ export interface BrowserWebSocketFrame {
 	readonly timestamp: number
 }
 
-/** WebSocket lifecycle events. */
+/** Maps the WebSocket lifecycle events. */
 export type BrowserWebSocketEventMap = {
 	readonly receive: readonly [frame: BrowserWebSocketFrame]
 	readonly transmit: readonly [frame: BrowserWebSocketFrame]
@@ -1021,7 +1021,7 @@ export type BrowserWebSocketEventMap = {
 }
 
 /**
- * One observed WebSocket connection.
+ * Represents one observed WebSocket connection.
  *
  * @remarks
  * The connection is an observation: a page's network manager reconstructs it
@@ -1039,11 +1039,11 @@ export interface BrowserWebSocketInterface {
 	transmit(frame: BrowserWebSocketFrame): void
 	/** Reports a connection fault. The page's network manager drives it. */
 	fail(message: string): void
-	/** Reports the close and destroys the emitter. The page's network manager drives it. */
+	/** Reports the connection closing and destroys the emitter. The page's network manager drives it. */
 	close(timestamp: number): void
 }
 
-/** Network events emitted by a page's network manager. */
+/** Maps the network events a page's network manager emits. */
 export type BrowserNetworkEventMap = {
 	readonly request: readonly [request: BrowserRequest]
 	readonly response: readonly [response: BrowserResponse]
@@ -1052,14 +1052,14 @@ export type BrowserNetworkEventMap = {
 	readonly socket: readonly [socket: BrowserWebSocketInterface]
 }
 
-/** Route matching criteria. Omitted fields match all values. */
+/** Describes route matching criteria. Omitted fields match all values. */
 export interface BrowserRouteQuery {
 	readonly url?: string
 	readonly method?: string
 	readonly resource?: string
 }
 
-/** Overrides supplied when continuing an intercepted request. */
+/** Describes the overrides supplied when continuing an intercepted request. */
 export interface BrowserRouteContinueOptions {
 	readonly url?: string
 	readonly method?: string
@@ -1067,7 +1067,7 @@ export interface BrowserRouteContinueOptions {
 	readonly post?: string
 }
 
-/** Synthetic response supplied when fulfilling an intercepted request. */
+/** Describes the synthetic response supplied when fulfilling an intercepted request. */
 export interface BrowserRouteFulfillOptions {
 	readonly status?: number
 	readonly phrase?: string
@@ -1075,7 +1075,7 @@ export interface BrowserRouteFulfillOptions {
 	readonly body?: string | Uint8Array
 }
 
-/** One paused Fetch-domain request. */
+/** Represents one paused Fetch-domain request. */
 export interface BrowserRouteInterface {
 	readonly id: string
 	readonly request: BrowserRequest
@@ -1085,29 +1085,29 @@ export interface BrowserRouteInterface {
 	fulfill(options: BrowserRouteFulfillOptions): Promise<void>
 }
 
-/** Function invoked for a matching intercepted request. */
+/** Runs for a matching intercepted request. */
 export type BrowserRouteHandler = (route: BrowserRouteInterface) => void | Promise<void>
 
-/** One installed network route. */
+/** Represents one installed network route. */
 export interface BrowserRouteDefinition {
 	readonly query: BrowserRouteQuery
 	readonly handler: BrowserRouteHandler
 }
 
-/** HAR recording options. */
+/** Describes the options for a HAR recording. */
 export interface BrowserHAROptions {
 	readonly path?: string
 	readonly content?: boolean
 }
 
-/** One name/value pair in an HTTP archive. */
+/** Represents one name/value pair in an HTTP archive. */
 export interface BrowserHARValue {
 	readonly name: string
 	readonly value: string
 }
 
 /**
- * One cookie in an HTTP archive.
+ * Represents one cookie in an HTTP archive.
  *
  * @remarks
  * HAR data preserves the official HAR 1.2 JSON field names. These compound
@@ -1122,13 +1122,13 @@ export interface BrowserHARCookie extends BrowserHARValue {
 	readonly secure?: boolean
 }
 
-/** Request body metadata in an HTTP archive. */
+/** Describes request body metadata in an HTTP archive. */
 export interface BrowserHARPost {
 	readonly mimeType: string
 	readonly text: string
 }
 
-/** Response body metadata in an HTTP archive. */
+/** Describes response body metadata in an HTTP archive. */
 export interface BrowserHARContent {
 	readonly size: number
 	readonly mimeType: string
@@ -1136,7 +1136,7 @@ export interface BrowserHARContent {
 	readonly encoding?: 'base64'
 }
 
-/** HAR 1.2 request entry. */
+/** Describes a HAR 1.2 request entry. */
 export interface BrowserHARRequest {
 	readonly method: string
 	readonly url: string
@@ -1149,7 +1149,7 @@ export interface BrowserHARRequest {
 	readonly bodySize: number
 }
 
-/** HAR 1.2 response entry. */
+/** Describes a HAR 1.2 response entry. */
 export interface BrowserHARResponse {
 	readonly status: number
 	readonly statusText: string
@@ -1162,7 +1162,7 @@ export interface BrowserHARResponse {
 	readonly bodySize: number
 }
 
-/** HAR 1.2 phase timings in milliseconds. */
+/** Holds HAR 1.2 phase timings in milliseconds. */
 export interface BrowserHARTimings {
 	readonly blocked: number
 	readonly dns: number
@@ -1173,7 +1173,7 @@ export interface BrowserHARTimings {
 	readonly ssl: number
 }
 
-/** One completed HTTP exchange in a HAR recording. */
+/** Represents one completed HTTP exchange in a HAR recording. */
 export interface BrowserHAREntry {
 	readonly startedDateTime: string
 	readonly time: number
@@ -1183,37 +1183,37 @@ export interface BrowserHAREntry {
 	readonly timings: BrowserHARTimings
 }
 
-/** Recording state held until a request finishes; a new value replaces it on each update. */
+/** Holds recording state until a request finishes; a new value replaces it on each update. */
 export interface BrowserHARPending {
 	readonly request: BrowserRequest
 	readonly started: number
 	readonly response: BrowserResponse | undefined
 }
 
-/** Tool identity embedded in an HTTP archive. */
+/** Describes the tool identity embedded in an HTTP archive. */
 export interface BrowserHARCreator {
 	readonly name: string
 	readonly version: string
 }
 
-/** HAR 1.2 log object. */
+/** Describes the HAR 1.2 log object. */
 export interface BrowserHARLog {
 	readonly version: '1.2'
 	readonly creator: BrowserHARCreator
 	readonly entries: readonly BrowserHAREntry[]
 }
 
-/** Standards-shaped HAR 1.2 document produced by the network manager. */
+/** Describes the standards-shaped HAR 1.2 document produced by the network manager. */
 export interface BrowserHAR {
 	readonly log: BrowserHARLog
 }
 
-/** HAR replay behavior. */
+/** Describes HAR replay behavior. */
 export interface BrowserHARReplayOptions {
 	readonly fallback?: boolean
 }
 
-/** HAR recording and replay operations. */
+/** Provides HAR recording and replay operations. */
 export interface BrowserHARManagerInterface {
 	readonly recording: boolean
 	start(options?: BrowserHAROptions): Promise<void>
@@ -1222,7 +1222,7 @@ export interface BrowserHARManagerInterface {
 	clear(): Promise<void>
 }
 
-/** Page-scoped network observation and interception. */
+/** Provides page-scoped network observation and interception. */
 export interface BrowserNetworkManagerInterface {
 	readonly emitter: EmitterInterface<BrowserNetworkEventMap>
 	readonly har: BrowserHARManagerInterface
@@ -1240,16 +1240,16 @@ export interface BrowserNetworkManagerInterface {
 
 // === Browser context state
 
-/** Cookie same-site policy understood by Chromium. */
+/** Names a cookie same-site policy understood by Chromium. */
 export type BrowserSameSite = 'Strict' | 'Lax' | 'None'
 
-/** Cookie partition key used by CHIPS-partitioned cookies. */
+/** Describes a cookie partition key used by CHIPS-partitioned cookies. */
 export interface BrowserCookiePartition {
 	readonly site: string
 	readonly ancestor?: boolean
 }
 
-/** One cookie returned from a browser context. */
+/** Represents one cookie returned from a browser context. */
 export interface BrowserCookie {
 	readonly name: string
 	readonly value: string
@@ -1262,7 +1262,7 @@ export interface BrowserCookie {
 	readonly partition: BrowserCookiePartition | undefined
 }
 
-/** Input used to create or replace a browser cookie. */
+/** Describes the input used to create or replace a browser cookie. */
 export interface BrowserCookieInput {
 	readonly name: string
 	readonly value: string
@@ -1277,65 +1277,65 @@ export interface BrowserCookieInput {
 	readonly partition?: BrowserCookiePartition
 }
 
-/** Optional narrowing criteria for clearing context cookies. */
+/** Describes optional narrowing criteria for clearing context cookies. */
 export interface BrowserCookieFilter {
 	readonly name?: string
 	readonly domain?: string
 	readonly path?: string
 }
 
-/** Cookie operations scoped to one browser context. */
+/** Provides cookie operations scoped to one browser context. */
 export interface BrowserCookieManagerInterface {
 	cookies(urls?: readonly string[]): Promise<readonly BrowserCookie[]>
 	set(cookies: readonly BrowserCookieInput[]): Promise<void>
 	clear(filter?: BrowserCookieFilter): Promise<void>
 }
 
-/** Permission override operations scoped to one browser context. */
+/** Provides permission override operations scoped to one browser context. */
 export interface BrowserPermissionManagerInterface {
 	grant(permissions: readonly string[], origin?: string): Promise<void>
 	deny(permissions: readonly string[], origin?: string): Promise<void>
 	clear(): Promise<void>
 }
 
-/** One key/value pair from web storage. */
+/** Represents one key/value pair from web storage. */
 export interface BrowserStorageEntry {
 	readonly name: string
 	readonly value: string
 }
 
-/** Origin-scoped local and session storage snapshot. */
+/** Describes an origin-scoped local and session storage snapshot. */
 export interface BrowserStorageOrigin {
 	readonly origin: string
 	readonly local: readonly BrowserStorageEntry[]
 	readonly session: readonly BrowserStorageEntry[]
 }
 
-/** Portable browser authentication and storage snapshot. */
+/** Describes a portable browser authentication and storage snapshot. */
 export interface BrowserStorageState {
 	readonly cookies: readonly BrowserCookieInput[]
 	readonly origins: readonly BrowserStorageOrigin[]
 }
 
-/** Options for collecting storage state from selected origins. */
+/** Describes the options for collecting storage state from selected origins. */
 export interface BrowserStorageOptions {
 	readonly origins?: readonly string[]
 }
 
-/** Storage-state import, export, and clearing operations. */
+/** Provides storage-state import, export, and clearing operations. */
 export interface BrowserStorageManagerInterface {
 	state(options?: BrowserStorageOptions): Promise<BrowserStorageState>
 	restore(state: BrowserStorageState): Promise<void>
 	clear(origin?: string): Promise<void>
 }
 
-/** HTTP basic-auth credentials applied to context pages. */
+/** Describes the HTTP basic-auth credentials applied to context pages. */
 export interface BrowserCredentials {
 	readonly username: string
 	readonly password: string
 }
 
-/** Geographic location override. */
+/** Describes a geographic location override. */
 export interface BrowserGeolocation {
 	readonly latitude: number
 	readonly longitude: number
@@ -1343,7 +1343,7 @@ export interface BrowserGeolocation {
 }
 
 /**
- * Browser color and media feature overrides.
+ * Describes browser color and media feature overrides.
  *
  * @remarks
  * - `output` — emulated output medium, mirroring the CSS `media` type
@@ -1360,14 +1360,14 @@ export interface BrowserMedia {
 	readonly colors?: 'active' | 'none'
 }
 
-/** User-agent metadata accepted by Chromium emulation. */
+/** Describes user-agent metadata accepted by Chromium emulation. */
 export interface BrowserUserAgent {
 	readonly value: string
 	readonly language?: string
 	readonly platform?: string
 }
 
-/** Network and rendering overrides inherited by context pages. */
+/** Describes network and rendering overrides inherited by context pages. */
 export interface BrowserEmulationOptions {
 	readonly viewport?: BrowserViewport
 	readonly user?: BrowserUserAgent
@@ -1383,26 +1383,26 @@ export interface BrowserEmulationOptions {
 /** Returns the context's live pages at call time. */
 export type BrowserPagesFunction = () => readonly BrowserPageInterface[]
 
-/** Context-scoped emulation configuration. */
+/** Configures context-scoped emulation. */
 export interface BrowserEmulationManagerInterface {
 	apply(options: BrowserEmulationOptions): Promise<void>
 	clear(): Promise<void>
 	attach(page: BrowserPageInterface): Promise<void>
 }
 
-/** Proxy settings used when creating an isolated browser context. */
+/** Describes proxy settings used when creating an isolated browser context. */
 export interface BrowserProxy {
 	readonly server: string
 	readonly bypass?: readonly string[]
 }
 
-/** Download policy for a browser context. */
+/** Describes the download policy for a browser context. */
 export interface BrowserDownloadOptions {
 	readonly path: string
 	readonly named?: boolean
 }
 
-/** Options for creating and configuring an isolated browser context. */
+/** Describes the options for creating and configuring an isolated browser context. */
 export interface BrowserContextOptions {
 	readonly proxy?: BrowserProxy
 	readonly origins?: readonly string[]
@@ -1410,7 +1410,7 @@ export interface BrowserContextOptions {
 	readonly emulation?: BrowserEmulationOptions
 }
 
-/** Browser-context lifecycle events. */
+/** Maps the browser-context lifecycle events. */
 export type BrowserContextEventMap = {
 	readonly page: readonly [page: BrowserPageInterface]
 	readonly close: readonly []
@@ -1418,7 +1418,7 @@ export type BrowserContextEventMap = {
 
 // === Browser codegen
 
-/** One recorded browser action captured during a codegen session. */
+/** Represents one recorded browser action captured during a codegen session. */
 export type BrowserCodegenAction =
 	| { readonly action: 'navigate'; readonly url: string }
 	| { readonly action: 'click'; readonly selector: string }
@@ -1426,7 +1426,7 @@ export type BrowserCodegenAction =
 	| { readonly action: 'select'; readonly selector: string; readonly values: readonly string[] }
 
 /**
- * Event map for a {@link BrowserCodegenInterface}.
+ * Maps the events a {@link BrowserCodegenInterface} emits.
  *
  * @remarks
  * - `start` — recording started
@@ -1442,7 +1442,7 @@ export type BrowserCodegenEventMap = {
 }
 
 /**
- * Options for creating a BrowserCodegen recorder.
+ * Describes the options for creating a BrowserCodegen recorder.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction
@@ -1453,11 +1453,11 @@ export interface BrowserCodegenOptions {
 	readonly error?: EmitterErrorHandler
 }
 
-/** Target language for a compiled codegen script. */
+/** Names the target language for a compiled codegen script. */
 export type BrowserCodegenLanguage = 'javascript' | 'typescript'
 
 /**
- * Options for compiling recorded actions into a script.
+ * Describes the options for compiling recorded actions into a script.
  *
  * @remarks
  * - `language` — target output language (default `'javascript'`)
@@ -1493,11 +1493,11 @@ export interface BrowserCodegenInterface {
 
 // === Browser frame
 
-/** Resolve the current CDP session for a frame id. */
+/** Resolves the current CDP session for a frame id. */
 export type BrowserSessionFunction = (frame: string) => Promise<string>
 
 /**
- * Options for one raw CDP method call issued in a frame's target session.
+ * Describes the options for one raw CDP method call issued in a frame's target session.
  *
  * @remarks
  * The frame supplies its own session, so a caller bounds the call and nothing
@@ -1510,7 +1510,7 @@ export interface BrowserSendOptions {
 }
 
 /**
- * Serializable frame metadata decoded from CDP `Page.getFrameTree`.
+ * Describes serializable frame metadata decoded from CDP `Page.getFrameTree`.
  *
  * @remarks
  * - `id` — the frame's CDP frame id
@@ -1526,7 +1526,7 @@ export interface BrowserFrameInfo {
 }
 
 /**
- * Operations shared by a top-level page and an iframe document.
+ * Provides the operations shared by a top-level page and an iframe document.
  *
  * @remarks
  * - `id` — CDP frame id
@@ -1577,10 +1577,10 @@ export interface BrowserFrameInterface {
 
 // === Browser snapshot
 
-/** A rectangle in CSS pixels: x, y, width, height. */
+/** Represents a rectangle in CSS pixels: x, y, width, height. */
 export type BrowserRect = readonly [x: number, y: number, width: number, height: number]
 
-/** Layout data associated with one captured DOM node. */
+/** Describes layout data associated with one captured DOM node. */
 export interface BrowserLayout {
 	readonly bounds: BrowserRect | undefined
 	readonly styles: Readonly<Record<string, string>>
@@ -1592,7 +1592,7 @@ export interface BrowserLayout {
 }
 
 /**
- * One serializable DOM node decoded from a CDP DOM snapshot.
+ * Represents one serializable DOM node decoded from a CDP DOM snapshot.
  *
  * @remarks
  * `category` mirrors the DOM `nodeType` value — `1` for an element, `3` for
@@ -1621,7 +1621,7 @@ export interface BrowserNode {
 	readonly layout: BrowserLayout | undefined
 }
 
-/** One document captured in a CDP DOM snapshot. */
+/** Represents one document captured in a CDP DOM snapshot. */
 export interface BrowserDocument {
 	readonly index: number
 	readonly frame: string
@@ -1633,17 +1633,17 @@ export interface BrowserDocument {
 	readonly height: number | undefined
 }
 
-/** Serializable input for a navigable browser snapshot. */
+/** Describes the serializable input for a navigable browser snapshot. */
 export interface BrowserSnapshotInput {
 	readonly documents: readonly BrowserDocument[]
 	readonly styles: readonly string[]
 }
 
-/** Structural ordering for a browser snapshot walk. */
+/** Names the structural ordering for a browser snapshot walk. */
 export type BrowserWalkOrder = 'depth' | 'breadth'
 
 /**
- * Options for walking a browser snapshot.
+ * Describes the options for walking a browser snapshot.
  *
  * @remarks
  * - `root` — optional subtree root, included in the walk
@@ -1654,10 +1654,10 @@ export interface BrowserWalkOptions {
 	readonly order?: BrowserWalkOrder
 }
 
-/** Structural sibling relationship relative to a browser node. */
+/** Names a structural sibling relationship relative to a browser node. */
 export type BrowserSiblingRelation = 'preceding' | 'following'
 
-/** A navigable, serializable snapshot of every document attached to a page. */
+/** Represents a navigable, serializable snapshot of every document attached to a page. */
 export interface BrowserSnapshotInterface extends BrowserSnapshotInput {
 	walk(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown>
 	descendants(node: BrowserNode): Generator<BrowserNode, void, unknown>
@@ -1678,7 +1678,7 @@ export interface BrowserSnapshotInterface extends BrowserSnapshotInput {
 }
 
 /**
- * Options configuring capture through {@link BrowserPageInterface} `snapshot()`.
+ * Describes the options configuring capture through {@link BrowserPageInterface} `snapshot()`.
  * The snapshot entity's creation input is {@link BrowserSnapshotInput}.
  *
  * @remarks
@@ -1694,11 +1694,11 @@ export interface BrowserSnapshotOptions {
 	readonly limit?: number
 }
 
-/** Predicate form accepted by {@link BrowserSnapshotInterface} find, filter, and closest methods. */
+/** Names the predicate form accepted by {@link BrowserSnapshotInterface} find, filter, and closest methods. */
 export type BrowserNodePredicate = (node: BrowserNode) => boolean
 
 /**
- * Declarative browser-node matcher used by {@link matchesBrowserNode}.
+ * Describes a declarative browser-node matcher used by {@link matchesBrowserNode}.
  *
  * @remarks
  * Every supplied field must match. `name` is case-insensitive, `text`
@@ -1717,7 +1717,7 @@ export interface BrowserNodeQuery {
 // === Browser page
 
 /**
- * Abstraction over a single top-level browser page.
+ * Abstracts a single top-level browser page.
  *
  * @remarks
  * Inherits every {@link BrowserFrameInterface} document operation for the
@@ -1761,7 +1761,7 @@ export interface BrowserPageInterface extends BrowserFrameInterface {
 // === Browser context
 
 /**
- * Isolated browser session over a CDP browser context.
+ * Represents an isolated browser session over a CDP browser context.
  *
  * @remarks
  * Follows the manager accessor pattern:

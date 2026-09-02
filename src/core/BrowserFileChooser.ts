@@ -2,7 +2,7 @@ import type { BrowserFileChooserInterface, BrowserFrameInterface } from './types
 import { BrowserError } from './errors.js'
 
 /**
- * One intercepted file input selection.
+ * Represents one intercepted file input selection.
  */
 export class BrowserFileChooser implements BrowserFileChooserInterface {
 	readonly #frame: BrowserFrameInterface

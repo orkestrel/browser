@@ -2,7 +2,7 @@ import type { BrowserFrameInterface, BrowserPoint, BrowserTouchInterface } from 
 import { validateBrowserPoint } from './helpers.js'
 
 /**
- * Trusted touch input through Chromium's CDP Input domain.
+ * Sends trusted touch input through Chromium's CDP Input domain.
  *
  * @example
  * ```ts

@@ -16,7 +16,7 @@ import {
 } from './constants.js'
 
 /**
- * Compile an auto-retrying in-page predicate wait.
+ * Compiles an auto-retrying in-page predicate wait.
  *
  * @param expression - Value or function expression
  * @param timeout - Maximum wait in milliseconds
@@ -47,7 +47,7 @@ export function compileFunctionWaitExpression(expression: string, timeout: numbe
 }
 
 /**
- * Compile the page-side promise facade for one Runtime binding.
+ * Compiles the page-side promise facade for one Runtime binding.
  *
  * @param name - Binding identifier
  * @returns Self-installing script source
@@ -82,7 +82,7 @@ export function compileBrowserBindingSource(name: string): string {
 }
 
 /**
- * Compile delivery of a host binding result to one execution context.
+ * Compiles delivery of a host binding result to one execution context.
  *
  * @param name - Binding identifier
  * @param id - Call identifier
@@ -100,7 +100,7 @@ export function compileBrowserBindingResult(
 }
 
 /**
- * Compile current-document cleanup for one page-side host binding facade.
+ * Compiles current-document cleanup for one page-side host binding facade.
  *
  * @param name - Binding identifier
  * @returns Runtime cleanup expression
@@ -114,7 +114,7 @@ export function compileBrowserBindingCleanup(name: string): string {
 }
 
 /**
- * Compile temporary animation, caret, and mask setup for a screenshot.
+ * Compiles temporary animation, caret, and mask setup for a screenshot.
  *
  * @param options - Screenshot controls
  * @returns Setup expression or undefined when no preparation is required
@@ -157,7 +157,7 @@ export function compileScreenshotPreparationExpression(
 }
 
 /**
- * Compile cleanup for temporary screenshot styles and masks.
+ * Compiles cleanup for temporary screenshot styles and masks.
  *
  * @param token - Preparation token
  * @returns Cleanup expression
@@ -173,7 +173,7 @@ export function compileScreenshotCleanupExpression(token: string): string {
 }
 
 /**
- * Compile an expression that serializes local and session storage.
+ * Compiles an expression that serializes local and session storage.
  *
  * @returns In-page storage expression
  */
@@ -191,7 +191,7 @@ export function compileStorageReadExpression(): string {
 }
 
 /**
- * Compile an expression that restores one origin's web storage.
+ * Compiles an expression that restores one origin's web storage.
  *
  * @param origin - Storage values to restore
  * @returns In-page restore expression
@@ -208,7 +208,7 @@ export function compileStorageRestoreExpression(origin: BrowserStorageOrigin): s
 }
 
 /**
- * Compile an expression that clears local and session storage.
+ * Compiles an expression that clears local and session storage.
  *
  * @returns In-page clear expression
  */
@@ -249,7 +249,7 @@ ${expression}
 }
 
 /**
- * Compile recorded codegen actions into a replayable script.
+ * Compiles recorded codegen actions into a replayable script.
  *
  * @remarks
  * Emits one statement per action against a `page` object shaped like
@@ -293,7 +293,7 @@ export function compileCodegenScript(
 }
 
 /**
- * Compile a deep, shadow-aware locator query returning every match.
+ * Compiles a deep, shadow-aware locator query returning every match.
  *
  * @param query - Serializable locator query
  * @returns Runtime expression returning an element array
@@ -428,7 +428,7 @@ export function compileLocatorListExpression(query: BrowserQuery): string {
 }
 
 /**
- * Compile a deep locator query returning its first match.
+ * Compiles a deep locator query returning its first match.
  *
  * @param query - Serializable locator query
  * @returns Runtime expression returning one element or undefined
@@ -438,7 +438,7 @@ export function compileLocatorExpression(query: BrowserQuery): string {
 }
 
 /**
- * Compile an attached-state locator wait.
+ * Compiles an attached-state locator wait.
  */
 export function compileAttachedLocatorWaitExpression(
 	query: BrowserQuery,
@@ -472,7 +472,7 @@ export function compileAttachedLocatorWaitExpression(
 }
 
 /**
- * Compile a detached-state locator wait.
+ * Compiles a detached-state locator wait.
  */
 export function compileDetachedLocatorWaitExpression(
 	query: BrowserQuery,
@@ -506,7 +506,7 @@ export function compileDetachedLocatorWaitExpression(
 }
 
 /**
- * Compile a visible-state locator wait.
+ * Compiles a visible-state locator wait.
  */
 export function compileVisibleLocatorWaitExpression(
 	query: BrowserQuery,
@@ -545,7 +545,7 @@ export function compileVisibleLocatorWaitExpression(
 }
 
 /**
- * Compile a hidden-state locator wait.
+ * Compiles a hidden-state locator wait.
  */
 export function compileHiddenLocatorWaitExpression(
 	query: BrowserQuery,
@@ -584,7 +584,7 @@ export function compileHiddenLocatorWaitExpression(
 }
 
 /**
- * Compile the element-side actionability pass used before trusted input.
+ * Compiles the element-side actionability pass used before trusted input.
  *
  * @param options - Checks required for the action
  * @returns Async `Runtime.callFunctionOn` function declaration
@@ -624,7 +624,7 @@ export function compileActionabilityFunction(options: BrowserActionabilityOption
 }
 
 /**
- * Compile an in-page wait for an attached selector.
+ * Compiles an in-page wait for an attached selector.
  *
  * @param selector - CSS selector
  * @param strict - Whether more than one match is an error
@@ -666,7 +666,7 @@ export function compileAttachedWaitExpression(
 }
 
 /**
- * Compile an in-page wait for a detached selector.
+ * Compiles an in-page wait for a detached selector.
  *
  * @param selector - CSS selector
  * @param strict - Whether more than one match is an error
@@ -708,7 +708,7 @@ export function compileDetachedWaitExpression(
 }
 
 /**
- * Compile an in-page wait for a visible selector.
+ * Compiles an in-page wait for a visible selector.
  *
  * @param selector - CSS selector
  * @param strict - Whether more than one match is an error
@@ -755,7 +755,7 @@ export function compileVisibleWaitExpression(
 }
 
 /**
- * Compile an in-page wait for a hidden selector.
+ * Compiles an in-page wait for a hidden selector.
  *
  * @param selector - CSS selector
  * @param strict - Whether more than one match is an error
@@ -802,7 +802,7 @@ export function compileHiddenWaitExpression(
 }
 
 /**
- * Compile a strict, visibility-checked click expression.
+ * Compiles a strict, visibility-checked click expression.
  *
  * @param selector - CSS selector
  * @param strict - Whether more than one match is an error
@@ -825,7 +825,7 @@ export function compileClickExpression(selector: string, strict: boolean): strin
 }
 
 /**
- * Compile a strict, editable fill expression.
+ * Compiles a strict, editable fill expression.
  *
  * @param selector - CSS selector
  * @param value - Value to assign
@@ -856,7 +856,7 @@ export function compileFillExpression(selector: string, value: string, strict: b
 }
 
 /**
- * Compile a strict select expression.
+ * Compiles a strict select expression.
  *
  * @param selector - CSS selector
  * @param values - Option values to select

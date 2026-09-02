@@ -14,7 +14,7 @@ import { parseBrowserBindingCall } from './parsers.js'
 import { BrowserError } from './errors.js'
 
 /**
- * New-document scripts and promise-based host functions for one page.
+ * Installs new-document scripts and promise-based host functions for one page.
  *
  * @example
  * ```ts

@@ -10,17 +10,17 @@ import type {
 
 // === Browser shared
 
-/** Supported browser engine (raw CDP targets Chromium-family browsers only). */
+/** Names a supported browser engine (raw CDP targets Chromium-family browsers only). */
 export type BrowserEngine = 'chromium' | 'chrome' | 'edge'
 
-/** How the browser connection was established. */
+/** Names how the browser connection was established. */
 export type BrowserConnection = 'cdp' | 'launch' | 'persistent'
 
-/** Lifecycle status of a browser wrapper. */
+/** Names the lifecycle status of a browser wrapper. */
 export type BrowserStatus = 'idle' | 'connecting' | 'connected' | 'disconnected' | 'error'
 
 /**
- * Result of passive browser discovery.
+ * Describes the result of passive browser discovery.
  *
  * @remarks
  * Returned by `discover()` to report whether an existing browser is
@@ -36,7 +36,7 @@ export interface BrowserDiscoveryResult {
 }
 
 /**
- * Options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources.
+ * Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources.
  *
  * @remarks
  * Each field replaces the default candidate list for its category — a field
@@ -65,7 +65,7 @@ export interface SystemBrowserOptions {
 }
 
 /**
- * One discovered browser executable on this machine.
+ * Represents one discovered browser executable on this machine.
  *
  * @remarks
  * Returned by `findSystemBrowsers`/`findSystemBrowser` — pairs the resolved
@@ -77,7 +77,7 @@ export type SystemBrowser = {
 }
 
 /**
- * Resolved browser profile directory used for a Chromium-family launch.
+ * Describes the resolved browser profile directory used for a Chromium-family launch.
  *
  * @remarks
  * `temporary` is true only for an isolated profile created by
@@ -90,7 +90,7 @@ export interface BrowserProfileResult {
 }
 
 /**
- * CDP (Chrome DevTools Protocol) connection configuration.
+ * Configures the CDP (Chrome DevTools Protocol) connection.
  *
  * @remarks
  * - `port` — port number to probe for an existing CDP endpoint (default `9222`)
@@ -112,7 +112,7 @@ export interface BrowserCDPOptions {
 }
 
 /**
- * Event map for a {@link BrowserInterface}.
+ * Maps the events a {@link BrowserInterface} emits.
  *
  * @remarks
  * - `idle` — no active connection (initial state, or after disconnect)
@@ -139,7 +139,7 @@ export type BrowserEventMap = {
 }
 
 /**
- * Options for creating a Browser.
+ * Describes the options for creating a Browser.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction
@@ -176,7 +176,7 @@ export interface BrowserOptions {
 }
 
 /**
- * Browser wrapper with discovery, connection management, and lifecycle control.
+ * Wraps a browser with discovery, connection management, and lifecycle control.
  *
  * @remarks
  * Encapsulates the full raw-CDP browser lifecycle behind a clean interface:
@@ -226,7 +226,7 @@ export interface BrowserInterface {
 	readonly status: BrowserStatus
 	readonly connection: BrowserConnection | undefined
 	/**
-	 * Whether this instance is responsible for terminating the represented browser.
+	 * Reports whether this instance is responsible for terminating the represented browser.
 	 *
 	 * @remarks
 	 * `true` for launched and explicitly adopted sessions, `false` for an
@@ -234,7 +234,7 @@ export interface BrowserInterface {
 	 */
 	readonly owned: boolean | undefined
 	/**
-	 * The process serving this session's CDP endpoint, if any, while it is
+	 * Reports the process serving this session's CDP endpoint, if any, while it is
 	 * believed alive.
 	 *
 	 * @remarks
@@ -249,7 +249,7 @@ export interface BrowserInterface {
 	readonly pid: number | undefined
 	discover(): Promise<BrowserDiscoveryResult>
 	connect(): Promise<void>
-	/** Assume responsibility for terminating the currently connected browser. */
+	/** Assumes responsibility for terminating the currently connected browser. */
 	adopt(): void
 	disconnect(): Promise<void>
 	context(index?: number): BrowserContextInterface | undefined
@@ -263,7 +263,7 @@ export interface BrowserInterface {
 // === WebSocket CDP transport
 
 /**
- * Options for creating a WebSocketCDPTransport.
+ * Describes the options for creating a WebSocketCDPTransport.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction

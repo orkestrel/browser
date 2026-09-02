@@ -75,7 +75,7 @@ import {
 } from './parsers.js'
 
 /**
- * Decode a base64-encoded string into raw bytes.
+ * Decodes a base64-encoded string into raw bytes.
  *
  * @remarks
  * Pure JS implementation — no `Buffer`, no `atob` (DOM-only) — so it runs
@@ -114,7 +114,7 @@ export function decodeBase64(text: string): Uint8Array {
 }
 
 /**
- * Encode raw bytes as base64 without relying on Node or DOM globals.
+ * Encodes raw bytes as base64 without relying on Node or DOM globals.
  *
  * @param bytes - Raw input bytes
  * @returns Base64 text
@@ -135,18 +135,18 @@ export function encodeBase64(bytes: Uint8Array): string {
 	return result
 }
 
-/** Encode UTF-8 text as bytes. */
+/** Encodes UTF-8 text as bytes. */
 export function textToBytes(value: string): Uint8Array {
 	return new TextEncoder().encode(value)
 }
 
-/** Decode UTF-8 bytes as text. */
+/** Decodes UTF-8 bytes as text. */
 export function bytesToText(value: Uint8Array): string {
 	return new TextDecoder().decode(value)
 }
 
 /**
- * Convert a header record to Fetch-domain name/value entries.
+ * Converts a header record to Fetch-domain name/value entries.
  *
  * @param headers - Header record
  * @returns Protocol header entries
@@ -158,7 +158,7 @@ export function browserHeadersToProtocol(
 }
 
 /**
- * Decode a Chromium Headers object into string values.
+ * Decodes a Chromium Headers object into string values.
  *
  * @param value - Unknown headers
  * @returns Frozen-compatible header record
@@ -173,7 +173,7 @@ export function readBrowserHeaders(value: unknown): Readonly<Record<string, stri
 }
 
 /**
- * Build a standards-shaped HAR 1.2 entry from one observed exchange.
+ * Builds a standards-shaped HAR 1.2 entry from one observed exchange.
  *
  * @param pending - Request and optional response captured by the recorder
  * @param duration - Whole exchange duration in milliseconds
@@ -275,7 +275,7 @@ export function createBrowserHAREntry(
 }
 
 /**
- * Convert HAR name/value headers into a Fetch-domain header record.
+ * Converts HAR name/value headers into a Fetch-domain header record.
  *
  * @param headers - HAR header entries
  * @returns Header record with later duplicate names replacing earlier values
@@ -296,7 +296,7 @@ export function browserHARHeadersToRecord(
 }
 
 /**
- * Validate the HAR 1.2 fields required for deterministic replay.
+ * Validates the HAR 1.2 fields required for deterministic replay.
  *
  * @param value - Candidate archive
  */
@@ -442,11 +442,11 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 }
 
 /**
- * Match a request against route criteria.
+ * Matches a request against route criteria.
  *
  * @param request - Observed request
  * @param query - Match criteria
- * @returns Whether every supplied criterion matches
+ * @returns True if every supplied criterion matches; false otherwise
  */
 export function matchesBrowserRoute(request: BrowserRequest, query: BrowserRouteQuery): boolean {
 	if (query.method !== undefined && request.method !== query.method) return false
@@ -456,11 +456,11 @@ export function matchesBrowserRoute(request: BrowserRequest, query: BrowserRoute
 }
 
 /**
- * Match a URL using Chromium-style `*` and `**` glob segments.
+ * Matches a URL using Chromium-style `*` and `**` glob segments.
  *
  * @param url - Candidate URL
  * @param pattern - Glob pattern
- * @returns Whether the whole URL matches
+ * @returns True if the whole URL matches; false otherwise
  */
 export function matchesBrowserURL(url: string, pattern: string): boolean {
 	const source = pattern
@@ -472,7 +472,7 @@ export function matchesBrowserURL(url: string, pattern: string): boolean {
 }
 
 /**
- * Decode `Page.addScriptToEvaluateOnNewDocument` result.
+ * Decodes the `Page.addScriptToEvaluateOnNewDocument` result.
  *
  * @param value - Unknown protocol result
  * @returns Script identifier
@@ -485,7 +485,7 @@ export function readBrowserScriptIdentifier(value: unknown): string {
 }
 
 /**
- * Validate viewport input coordinates.
+ * Validates viewport input coordinates.
  *
  * @param point - Candidate point
  */
@@ -525,7 +525,7 @@ export function validateBrowserInputOptions(options?: BrowserOperationOptions): 
 }
 
 /**
- * Validate a public browser timeout before protocol work begins.
+ * Validates a public browser timeout before protocol work begins.
  *
  * @param timeout - Timeout in milliseconds
  */
@@ -538,7 +538,7 @@ export function validateBrowserTimeout(timeout: number): void {
 }
 
 /**
- * Validate Chromium viewport metrics.
+ * Validates Chromium viewport metrics.
  *
  * @param viewport - Public viewport configuration
  */
@@ -561,7 +561,7 @@ export function validateBrowserViewport(viewport: BrowserViewport): void {
 }
 
 /**
- * Validate context emulation boundaries before partial application.
+ * Validates context emulation boundaries before partial application.
  *
  * @param options - Public emulation configuration
  */
@@ -599,7 +599,7 @@ export function validateBrowserEmulationOptions(options: BrowserEmulationOptions
 }
 
 /**
- * Validate isolated-context options before creating remote state.
+ * Validates isolated-context options before creating remote state.
  *
  * @param options - Public context configuration
  */
@@ -639,7 +639,7 @@ export function validateBrowserContextOptions(options?: BrowserContextOptions): 
 }
 
 /**
- * Validate Accessibility-domain snapshot bounds.
+ * Validates Accessibility-domain snapshot bounds.
  *
  * @param options - Public accessibility snapshot options
  */
@@ -659,7 +659,7 @@ export function validateBrowserAccessibilityOptions(options?: BrowserAccessibili
 }
 
 /**
- * Validate and compile Page.printToPDF parameters.
+ * Validates and compiles Page.printToPDF parameters.
  *
  * @param options - Public PDF options
  * @returns Protocol parameter record
@@ -696,7 +696,7 @@ export function browserPDFToParams(options?: BrowserPDFOptions): Readonly<Record
 }
 
 /**
- * Validate and compile basic Page.captureScreenshot parameters.
+ * Validates and compiles basic Page.captureScreenshot parameters.
  *
  * @param options - Public screenshot options
  * @returns Protocol parameter record
@@ -734,7 +734,7 @@ export function browserScreenshotToParams(
 }
 
 /**
- * Validate a finite numeric range.
+ * Validates a finite numeric range.
  *
  * @param value - Candidate number
  * @param field - Diagnostic field
@@ -764,7 +764,7 @@ export function validateBrowserRange(
 }
 
 /**
- * Decode Accessibility-domain nodes into a flat serializable tree.
+ * Decodes Accessibility-domain nodes into a flat serializable tree.
  *
  * @param value - Unknown full or partial AX-tree result
  * @returns Valid accessibility snapshot
@@ -807,7 +807,7 @@ export function readBrowserAccessibility(value: unknown): BrowserAccessibilitySn
 }
 
 /**
- * Decode an Accessibility-domain AXValue.
+ * Decodes an Accessibility-domain AXValue.
  *
  * @param value - Unknown AX value
  * @returns Underlying value
@@ -817,7 +817,7 @@ export function readBrowserAXValue(value: unknown): unknown {
 }
 
 /**
- * Concatenate byte chunks without Node-specific buffers.
+ * Concatenates byte chunks without Node-specific buffers.
  *
  * @param chunks - Byte arrays in source order
  * @returns Combined bytes
@@ -834,7 +834,7 @@ export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
 }
 
 /**
- * Decode one `IO.read` response.
+ * Decodes one `IO.read` response.
  *
  * @param value - Unknown protocol result
  * @returns Valid stream chunk
@@ -851,7 +851,7 @@ export function readBrowserStreamChunk(value: unknown): BrowserStreamChunk {
 }
 
 /**
- * Decode JavaScript precise coverage.
+ * Decodes JavaScript precise coverage.
  *
  * @param value - Unknown `Profiler.takePreciseCoverage` result
  * @returns Script coverage
@@ -891,7 +891,7 @@ export function readBrowserScriptCoverage(value: unknown): readonly BrowserScrip
 }
 
 /**
- * Decode CSS rule usage.
+ * Decodes CSS rule usage.
  *
  * @param value - Unknown `CSS.stopRuleUsageTracking` result
  * @returns Stylesheet coverage
@@ -924,7 +924,7 @@ export function readBrowserStyleCoverage(value: unknown): readonly BrowserStyleC
 }
 
 /**
- * Decode coverage ranges.
+ * Decodes coverage ranges.
  *
  * @param value - Unknown ranges
  * @param script - Script index for diagnostics
@@ -961,7 +961,7 @@ export function readBrowserCoverageRanges(
 }
 
 /**
- * Decode Performance-domain metrics.
+ * Decodes Performance-domain metrics.
  *
  * @param value - Unknown metrics result
  * @returns Valid metrics
@@ -979,7 +979,7 @@ export function readBrowserMetrics(value: unknown): readonly BrowserMetric[] {
 }
 
 /**
- * Decode one CPU profile.
+ * Decodes one CPU profile.
  *
  * @param value - Unknown `Profiler.stop` result
  * @returns Valid profile
@@ -1036,7 +1036,7 @@ export function readBrowserProfile(value: unknown): BrowserProfile {
 }
 
 /**
- * Decode a CPU profile call frame.
+ * Decodes a CPU profile call frame.
  *
  * @param value - Unknown call frame
  * @param node - Node index for diagnostics
@@ -1063,7 +1063,7 @@ export function readBrowserProfileFrame(value: unknown, node: number): BrowserPr
 }
 
 /**
- * Convert a typed cookie input into Chromium protocol fields.
+ * Converts a typed cookie input into Chromium protocol fields.
  *
  * @param cookie - Validated public cookie input
  * @returns Protocol cookie record
@@ -1109,7 +1109,7 @@ export function cookieToProtocol(cookie: BrowserCookieInput): Readonly<Record<st
 }
 
 /**
- * Decode cookies returned by `Storage.getCookies`.
+ * Decodes cookies returned by `Storage.getCookies`.
  *
  * @param value - Unknown protocol result
  * @returns Valid cookies
@@ -1122,7 +1122,7 @@ export function readBrowserCookies(value: unknown): readonly BrowserCookie[] {
 }
 
 /**
- * Decode one Chromium cookie.
+ * Decodes one Chromium cookie.
  *
  * @param value - Unknown cookie record
  * @param index - Source array position for diagnostics
@@ -1159,11 +1159,11 @@ export function readBrowserCookie(value: unknown, index: number): BrowserCookie 
 }
 
 /**
- * Match a decoded cookie against one request URL.
+ * Matches a decoded cookie against one request URL.
  *
  * @param cookie - Decoded context cookie
  * @param value - Candidate absolute URL
- * @returns Whether domain, path, and secure constraints match
+ * @returns True if domain, path, and secure constraints match; false otherwise
  */
 export function matchesBrowserCookieURL(cookie: BrowserCookie, value: string): boolean {
 	const result = attempt(() => new URL(value))
@@ -1182,7 +1182,7 @@ export function matchesBrowserCookieURL(cookie: BrowserCookie, value: string): b
 }
 
 /**
- * Decode one in-page web-storage snapshot.
+ * Decodes one in-page web-storage snapshot.
  *
  * @param value - Unknown evaluation result
  * @param origin - Origin represented by the result
@@ -1199,7 +1199,7 @@ export function readBrowserStorageOrigin(value: unknown, origin: string): Browse
 }
 
 /**
- * Decode a list of web-storage entries.
+ * Decodes a list of web-storage entries.
  *
  * @param value - Unknown entry list
  * @param origin - Origin used for diagnostics
@@ -1227,7 +1227,7 @@ export function readBrowserStorageEntries(
 }
 
 /**
- * Convert typed media preferences to Chromium emulated media features.
+ * Converts typed media preferences to Chromium emulated media features.
  *
  * @param media - Public media configuration
  * @returns Protocol feature records
@@ -1252,7 +1252,7 @@ export function mediaToFeatures(
 }
 
 /**
- * Decode a Chromium runtime stack trace.
+ * Decodes a Chromium runtime stack trace.
  *
  * @param value - Unknown stack trace or call-frame list
  * @returns Valid stack frames
@@ -1282,7 +1282,7 @@ export function readBrowserStack(value: unknown): readonly BrowserStackFrame[] {
 }
 
 /**
- * Decode a Runtime remote object's printable value.
+ * Decodes a Runtime remote object's printable value.
  *
  * @param value - Unknown remote object
  * @returns By-value data or a description
@@ -1296,7 +1296,7 @@ export function readBrowserRemoteValue(value: unknown): unknown {
 }
 
 /**
- * Decode one CDP `Runtime.evaluate` result.
+ * Decodes one CDP `Runtime.evaluate` result.
  *
  * @param value - Unknown CDP result
  * @returns The returned by-value payload, or undefined
@@ -1326,7 +1326,7 @@ export function readEvaluationResult(value: unknown): unknown {
 }
 
 /**
- * Require an evaluated browser value to be a string.
+ * Requires an evaluated browser value to be a string.
  *
  * @param value - Candidate evaluated value
  * @param field - Human-readable field name used in the error
@@ -1338,7 +1338,7 @@ export function requireBrowserString(value: unknown, field: string): string {
 }
 
 /**
- * Normalize a raw list of recorded codegen actions.
+ * Normalizes a raw list of recorded codegen actions.
  *
  * @remarks
  * Collapses consecutive `fill` actions on the same selector into the latest
@@ -1372,7 +1372,7 @@ export function normalizeCodegenActions(
 }
 
 /**
- * Decode a flattened CDP `Page.getFrameTree` result.
+ * Decodes a flattened CDP `Page.getFrameTree` result.
  *
  * @param value - Unknown CDP result
  * @returns Frame metadata in depth-first, main-frame-first order
@@ -1409,7 +1409,7 @@ export function readBrowserFrames(value: unknown): readonly BrowserFrameInfo[] {
 }
 
 /**
- * Decode the first `DOM.getContentQuads` quad and its center.
+ * Decodes the first `DOM.getContentQuads` quad and its center.
  *
  * @param value - Unknown CDP result
  * @returns Decoded quad
@@ -1452,7 +1452,7 @@ export function readBrowserQuad(value: unknown): BrowserQuad {
 }
 
 /**
- * Parse a keyboard chord such as `Control+Shift+P`.
+ * Parses a keyboard chord such as `Control+Shift+P`.
  *
  * @param value - Chord source
  * @returns Canonical modifiers and terminal key
@@ -1481,7 +1481,7 @@ export function parseBrowserChord(value: string): BrowserChord {
 }
 
 /**
- * Compute the CDP Input modifier bitmask.
+ * Computes the CDP Input modifier bitmask.
  *
  * @param modifiers - Canonical modifier names
  * @returns Combined CDP modifier mask
@@ -1493,7 +1493,7 @@ export function computeBrowserModifiers(modifiers: readonly string[]): number {
 }
 
 /**
- * Compute the CDP Input pressed-button bitmask.
+ * Computes the CDP Input pressed-button bitmask.
  *
  * @param buttons - Currently pressed public mouse buttons
  * @returns Combined CDP pressed-button mask
@@ -1505,7 +1505,7 @@ export function computeBrowserButtons(buttons: readonly BrowserMouseButton[]): n
 }
 
 /**
- * Normalize one key to CDP keyboard event data.
+ * Normalizes one key to CDP keyboard event data.
  *
  * @param value - Key value or canonical key name
  * @returns Normalized key data
@@ -1799,7 +1799,7 @@ export function readBrowserSnapshot(
 }
 
 /**
- * Read one captured node attribute.
+ * Reads one captured node attribute.
  *
  * @param node - Captured browser node
  * @param name - Attribute name
@@ -1810,10 +1810,10 @@ export function attributeOfBrowserNode(node: BrowserNode, name: string): string 
 }
 
 /**
- * Test whether a browser-node matcher is a declarative query.
+ * Tests whether a browser-node matcher is a declarative query.
  *
  * @param value - Browser-node query or predicate
- * @returns Whether the matcher is a declarative query
+ * @returns True if the matcher is a declarative query; false otherwise
  *
  * @example
  * ```ts
@@ -1830,11 +1830,11 @@ export function isBrowserNodeQuery(
 }
 
 /**
- * Test a captured node against a declarative query.
+ * Tests a captured node against a declarative query.
  *
  * @param node - Captured browser node
  * @param query - Fields every candidate must satisfy
- * @returns Whether the node matches
+ * @returns True if the node matches; false otherwise
  */
 export function matchesBrowserNode(node: BrowserNode, query: BrowserNodeQuery): boolean {
 	if (query.name !== undefined && node.name.toLowerCase() !== query.name.toLowerCase()) return false
@@ -1857,10 +1857,10 @@ export function matchesBrowserNode(node: BrowserNode, query: BrowserNodeQuery): 
 }
 
 /**
- * Test whether a captured node has a non-empty rendered layout box.
+ * Tests whether a captured node has a non-empty rendered layout box.
  *
  * @param node - Captured browser node
- * @returns Whether the snapshot reports a visible layout box
+ * @returns True if the snapshot reports a visible layout box; false otherwise
  */
 export function isBrowserNodeVisible(node: BrowserNode): boolean {
 	const bounds = node.layout?.bounds

@@ -4,7 +4,7 @@ import { BrowserError } from './errors.js'
 import { isInteger } from '@orkestrel/contract'
 
 /**
- * Sampled JavaScript CPU profiles over one frame's Profiler domain.
+ * Records sampled JavaScript CPU profiles over one frame's Profiler domain.
  *
  * @example
  * ```ts

@@ -7,7 +7,7 @@ import type {
 import { readBrowserAccessibility, validateBrowserAccessibilityOptions } from './helpers.js'
 
 /**
- * Chromium Accessibility-domain snapshots for one page.
+ * Captures Chromium Accessibility-domain snapshots for one page.
  *
  * @example
  * ```ts

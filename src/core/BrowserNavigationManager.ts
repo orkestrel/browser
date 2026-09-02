@@ -10,7 +10,7 @@ import { matchesBrowserURL, validateBrowserTimeout } from './helpers.js'
 import { BrowserError } from './errors.js'
 
 /**
- * URL and page-predicate waits resilient to ordinary navigation events.
+ * Runs URL and page-predicate waits resilient to ordinary navigation events.
  *
  * @example
  * ```ts

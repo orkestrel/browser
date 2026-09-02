@@ -10,7 +10,7 @@ import { isRecord } from '@orkestrel/contract'
 import { BrowserError } from './errors.js'
 
 /**
- * Cookie operations isolated to one browser context.
+ * Performs cookie operations isolated to one browser context.
  *
  * @example
  * ```ts

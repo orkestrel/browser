@@ -32,7 +32,7 @@ import { attempt, isFiniteNumber, isRecord, isString } from '@orkestrel/contract
 import { Emitter } from '@orkestrel/emitter'
 
 /**
- * Page-scoped Network and Fetch domain lifecycle.
+ * Drives the page-scoped Network and Fetch domain lifecycle.
  *
  * @example
  * ```ts

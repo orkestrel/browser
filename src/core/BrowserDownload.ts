@@ -9,7 +9,7 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
- * One Chromium download and its progress lifecycle.
+ * Represents one Chromium download and its progress lifecycle.
  */
 export class BrowserDownload implements BrowserDownloadInterface {
 	readonly #client: CDPClientInterface

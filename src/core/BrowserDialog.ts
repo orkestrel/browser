@@ -6,7 +6,7 @@ import type {
 import { BrowserError } from './errors.js'
 
 /**
- * One JavaScript dialog awaiting a user decision.
+ * Represents one JavaScript dialog awaiting a user decision.
  */
 export class BrowserDialog implements BrowserDialogInterface {
 	readonly #frame: BrowserFrameInterface
