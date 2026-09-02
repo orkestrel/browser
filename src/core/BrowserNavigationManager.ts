@@ -11,6 +11,15 @@ import { BrowserError } from './errors.js'
 
 /**
  * URL and page-predicate waits resilient to ordinary navigation events.
+ *
+ * @example
+ * ```ts
+ * import { BrowserNavigationManager } from '@orkestrel/browser'
+ *
+ * const navigation = new BrowserNavigationManager(page)
+ * const url = await navigation.wait('https://example.com/checkout', { timeout: 5_000 })
+ * await navigation.until('document.readyState === "complete"')
+ * ```
  */
 export class BrowserNavigationManager implements BrowserNavigationManagerInterface {
 	readonly #page: BrowserPageInterface

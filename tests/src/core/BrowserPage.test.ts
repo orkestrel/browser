@@ -30,7 +30,7 @@ import {
 	createCDPTransport,
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
-	createScreenshotWriter,
+	createRecordingWriter,
 	readCDPExpression,
 	replyOk,
 	scriptEvaluate,
@@ -514,7 +514,7 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Page.captureScreenshot', { data: JPEG_BASE64 })
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const result = await page.screenshot({ type: 'jpeg', quality: 80 })
+			const result = await page.screenshot({ format: 'jpeg', quality: 80 })
 
 			expect(Array.from(result.bytes)).toEqual([255, 216, 255, 224])
 			const sent = transport.sent.find((m) => m.method === 'Page.captureScreenshot')
@@ -524,7 +524,7 @@ describe('BrowserPage', () => {
 		it('writes to the injected writer only when path is provided', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
-			const writer = createScreenshotWriter()
+			const writer = createRecordingWriter()
 
 			const page = new BrowserPage(client, 'target-1', 'session-1', writer)
 			const result = await page.screenshot({ path: '/tmp/shot.png' })
@@ -538,7 +538,7 @@ describe('BrowserPage', () => {
 		it('does not write when no path is given even with a writer', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
-			const writer = createScreenshotWriter()
+			const writer = createRecordingWriter()
 
 			const page = new BrowserPage(client, 'target-1', 'session-1', writer)
 			await page.screenshot()
@@ -660,7 +660,7 @@ describe('BrowserPage', () => {
 
 		it('prints PDF with validated dimensions, margins, templates, tags, and persistence', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			const writer = createScreenshotWriter()
+			const writer = createRecordingWriter()
 			replyOk(transport, 'Page.printToPDF', { data: 'JVBERg==' })
 			const page = new BrowserPage(client, 'target-1', 'session-1', writer)
 
@@ -707,7 +707,9 @@ describe('BrowserPage', () => {
 			await expect(page.screenshot({ full: true, clip: [0, 0, 10, 10] })).rejects.toSatisfy(
 				isBrowserError,
 			)
-			await expect(page.screenshot({ type: 'png', quality: 80 })).rejects.toSatisfy(isBrowserError)
+			await expect(page.screenshot({ format: 'png', quality: 80 })).rejects.toSatisfy(
+				isBrowserError,
+			)
 			await expect(page.pdf({ scale: 3 })).rejects.toSatisfy(isBrowserError)
 			expect(transport.sent).toEqual([])
 		})

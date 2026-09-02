@@ -54,7 +54,7 @@ describe('CDPClient', () => {
 			await client.connect()
 			replyOk(transport, 'Page.navigate', { frameId: 'f1' })
 
-			await client.send('Page.navigate', { url: 'about:blank' }, 'session-1')
+			await client.send('Page.navigate', { url: 'about:blank' }, { session: 'session-1' })
 
 			expect(transport.sent[0]?.params).toEqual({ url: 'about:blank' })
 			expect(transport.sent[0]?.sessionId).toBe('session-1')
@@ -161,7 +161,7 @@ describe('CDPClient', () => {
 
 			const started = performance.now()
 			const thrown: unknown = await longClient
-				.send('Never.replies', undefined, undefined, 20)
+				.send('Never.replies', undefined, { timeout: 20 })
 				.catch((caught: unknown) => caught)
 			const elapsed = performance.now() - started
 
@@ -384,6 +384,55 @@ describe('CDPClient', () => {
 			)
 			expect(client.connected).toBe(false)
 			expect(transport.closed).toBe(true)
+		})
+	})
+
+	describe('emitter', () => {
+		it('reports connect and close around an explicit teardown', async () => {
+			const connect = createRecorder<[]>()
+			const close = createRecorder<[]>()
+			client.emitter.on('connect', connect.handler)
+			client.emitter.on('close', close.handler)
+
+			await client.connect()
+			expect(connect.count).toBe(1)
+			expect(close.count).toBe(0)
+
+			await client.close()
+			expect(close.count).toBe(1)
+		})
+
+		it('reports drop when the transport ends without a close request', async () => {
+			const drop = createRecorder<[]>()
+			const close = createRecorder<[]>()
+			client.emitter.on('drop', drop.handler)
+			client.emitter.on('close', close.handler)
+			await client.connect()
+
+			transport.closeRemote()
+
+			expect(drop.count).toBe(1)
+			expect(close.count).toBe(0)
+		})
+
+		it('reports the transport fault on error', async () => {
+			const errors = createRecorder<[error: unknown]>()
+			client.emitter.on('error', errors.handler)
+			await client.connect()
+			const fault = new Error('socket failed')
+
+			transport.errorRemote(fault)
+
+			expect(errors.calls).toEqual([[fault]])
+		})
+
+		it('wires the listeners supplied at construction', async () => {
+			const connect = createRecorder<[]>()
+			const wired = createCDPClient({ transport, on: { connect: connect.handler } })
+
+			await wired.connect()
+
+			expect(connect.count).toBe(1)
 		})
 	})
 })

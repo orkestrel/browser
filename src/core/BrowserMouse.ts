@@ -1,5 +1,6 @@
 import type {
-	BrowserActionOptions,
+	BrowserClickOptions,
+	BrowserDragOptions,
 	BrowserFrameInterface,
 	BrowserMouseButton,
 	BrowserMouseInterface,
@@ -7,12 +8,21 @@ import type {
 } from './types.js'
 import {
 	computeBrowserButtons,
-	validateBrowserActionOptions,
+	validateBrowserInputOptions,
 	validateBrowserPoint,
 } from './helpers.js'
 
 /**
  * Trusted mouse input through Chromium's CDP Input domain.
+ *
+ * @example
+ * ```ts
+ * import { BrowserMouse } from '@orkestrel/browser'
+ *
+ * const mouse = new BrowserMouse(page)
+ * await mouse.click({ x: 50, y: 20 }, { button: 'left', count: 2 })
+ * await mouse.drag({ x: 10, y: 10 }, { x: 90, y: 90 }, { steps: 20 })
+ * ```
  */
 export class BrowserMouse implements BrowserMouseInterface {
 	readonly #frame: BrowserFrameInterface
@@ -36,7 +46,7 @@ export class BrowserMouse implements BrowserMouseInterface {
 	}
 
 	async down(button: BrowserMouseButton = 'left', count = 1): Promise<void> {
-		validateBrowserActionOptions({ count })
+		validateBrowserInputOptions({ count })
 		const buttons = new Set(this.#buttons)
 		buttons.add(button)
 		await this.#frame.send('Input.dispatchMouseEvent', {
@@ -51,7 +61,7 @@ export class BrowserMouse implements BrowserMouseInterface {
 	}
 
 	async up(button: BrowserMouseButton = 'left', count = 1): Promise<void> {
-		validateBrowserActionOptions({ count })
+		validateBrowserInputOptions({ count })
 		const buttons = new Set(this.#buttons)
 		buttons.delete(button)
 		try {
@@ -68,8 +78,8 @@ export class BrowserMouse implements BrowserMouseInterface {
 		}
 	}
 
-	async click(point: BrowserPoint, options?: BrowserActionOptions): Promise<void> {
-		validateBrowserActionOptions(options)
+	async click(point: BrowserPoint, options?: BrowserClickOptions): Promise<void> {
+		validateBrowserInputOptions(options)
 		const button = options?.button ?? 'left'
 		const count = options?.count ?? 1
 		await this.move(point)
@@ -80,12 +90,8 @@ export class BrowserMouse implements BrowserMouseInterface {
 		await this.up(button, count)
 	}
 
-	async drag(
-		start: BrowserPoint,
-		end: BrowserPoint,
-		options?: BrowserActionOptions,
-	): Promise<void> {
-		validateBrowserActionOptions(options)
+	async drag(start: BrowserPoint, end: BrowserPoint, options?: BrowserDragOptions): Promise<void> {
+		validateBrowserInputOptions(options)
 		validateBrowserPoint(start)
 		validateBrowserPoint(end)
 		const steps = options?.steps ?? 10

@@ -23,7 +23,7 @@ import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/cont
 import { Emitter } from '@orkestrel/emitter'
 import {
 	BrowserContext,
-	BrowserFlight,
+	BrowserTransition,
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	BROWSER_WAIT_POLL_INTERVAL_MS,
 	CDPClient,
@@ -55,12 +55,22 @@ import {
 	removeBrowserProfile,
 	waitForCDPReady,
 } from './helpers.js'
-import { createCDPTransport, createScreenshotWriter } from './factories.js'
+import { createCDPTransport, createBrowserWriter } from './factories.js'
 
 // === Browser
 
 /**
  * Discovers, launches, connects to, and owns Chromium-family browser sessions.
+ *
+ * @example
+ * ```ts
+ * import { Browser } from '@orkestrel/browser/server'
+ *
+ * const browser = new Browser({ headless: true })
+ * await browser.connect()
+ * const page = await browser.create({ url: 'https://example.com' })
+ * await browser.destroy()
+ * ```
  */
 export class Browser implements BrowserInterface {
 	readonly #emitter: Emitter<BrowserEventMap>
@@ -82,8 +92,8 @@ export class Browser implements BrowserInterface {
 	#profile: BrowserProfileResult | undefined
 	#contexts: BrowserContext[] = []
 	#destroyed = false
-	readonly #connecting: BrowserFlight = new BrowserFlight()
-	readonly #disconnecting: BrowserFlight = new BrowserFlight()
+	readonly #connecting: BrowserTransition = new BrowserTransition()
+	readonly #disconnecting: BrowserTransition = new BrowserTransition()
 	#exitCleanup: Promise<void> | undefined
 	#shutdown: Promise<void> | undefined
 	#transport: CDPTransportInterface | undefined
@@ -128,10 +138,6 @@ export class Browser implements BrowserInterface {
 		return this.#owned
 	}
 
-	get connected(): boolean {
-		return this.#status === 'connected'
-	}
-
 	get pid(): number | undefined {
 		return this.#servingPid ?? this.#process?.pid
 	}
@@ -145,7 +151,7 @@ export class Browser implements BrowserInterface {
 	async connect(): Promise<void> {
 		if (this.#destroyed) throw new BrowserDestroyedError()
 
-		const active = this.#connecting.attempt
+		const active = this.#connecting.pending
 		if (active !== undefined) {
 			await active
 			return
@@ -170,8 +176,8 @@ export class Browser implements BrowserInterface {
 	async disconnect(): Promise<void> {
 		if (this.#destroyed) return
 
-		const disconnecting = this.#disconnecting.attempt
-		const connecting = this.#connecting.attempt
+		const disconnecting = this.#disconnecting.pending
+		const connecting = this.#connecting.pending
 		if (disconnecting !== undefined) await disconnecting
 		if (connecting !== undefined) await connecting.catch(() => undefined)
 		if (this.#destroyed) return
@@ -216,7 +222,7 @@ export class Browser implements BrowserInterface {
 			client,
 			id,
 			options?.emulation?.viewport ?? this.#options.viewport,
-			createScreenshotWriter(),
+			createBrowserWriter(),
 			options?.emulation,
 			options?.downloads,
 		)
@@ -248,12 +254,7 @@ export class Browser implements BrowserInterface {
 
 		let context = this.#contexts[0]
 		if (context === undefined) {
-			context = new BrowserContext(
-				client,
-				undefined,
-				this.#options.viewport,
-				createScreenshotWriter(),
-			)
+			context = new BrowserContext(client, undefined, this.#options.viewport, createBrowserWriter())
 			this.#registerContext(context)
 		}
 
@@ -289,7 +290,7 @@ export class Browser implements BrowserInterface {
 	// === Private helpers
 
 	async #establish(): Promise<void> {
-		const disconnecting = this.#disconnecting.attempt
+		const disconnecting = this.#disconnecting.pending
 		if (disconnecting !== undefined) await disconnecting
 		await this.#settleExit()
 		if (this.#destroyed) throw new BrowserDestroyedError()
@@ -313,7 +314,7 @@ export class Browser implements BrowserInterface {
 			const discover = this.#options.cdp?.discover ?? true
 			if (discover) {
 				const discovery = await this.#raceAbort(this.#discoverCDP(this.#signal()))
-				if (discovery.found && discovery.endpoint !== undefined) {
+				if (discovery.endpoint !== undefined) {
 					this.#engine = browserToEngine(discovery.browser)
 					await this.#connectCDP(discovery.endpoint)
 					return
@@ -530,12 +531,7 @@ export class Browser implements BrowserInterface {
 				: undefined
 			const browser = isString(info['Browser']) ? info['Browser'] : undefined
 
-			return {
-				found: endpoint !== undefined,
-				endpoint,
-				browser,
-				connection: endpoint !== undefined ? 'cdp' : undefined,
-			}
+			return { endpoint, browser }
 		} catch (error) {
 			if (signal?.aborted === true) throw error
 			return this.#notFound()
@@ -543,7 +539,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	#notFound(): BrowserDiscoveryResult {
-		return { found: false, endpoint: undefined, browser: undefined, connection: undefined }
+		return { endpoint: undefined, browser: undefined }
 	}
 
 	async #assertPortFree(): Promise<void> {
@@ -797,7 +793,7 @@ export class Browser implements BrowserInterface {
 			}
 			pages.push({
 				id: target['targetId'],
-				type: target['type'],
+				category: target['type'],
 				title: target['title'],
 				url: target['url'],
 			})
@@ -808,7 +804,7 @@ export class Browser implements BrowserInterface {
 			client,
 			undefined,
 			this.#options.viewport,
-			createScreenshotWriter(),
+			createBrowserWriter(),
 		)
 		await context.sync(pages)
 		this.#registerContext(context)
@@ -883,8 +879,8 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #settle(): Promise<void> {
-		await this.#connecting.attempt?.catch(() => undefined)
-		await this.#disconnecting.attempt?.catch(() => undefined)
+		await this.#connecting.pending?.catch(() => undefined)
+		await this.#disconnecting.pending?.catch(() => undefined)
 		await this.#settleExit()
 	}
 

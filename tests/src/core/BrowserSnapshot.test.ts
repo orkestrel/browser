@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest'
 import {
 	BrowserSnapshot,
 	createBrowserSnapshot,
-	decodeBrowserSnapshot,
+	readBrowserSnapshot,
 	matchesBrowserNode,
 } from '@src/core'
 import { createDOMSnapshotResult } from '../../setup.js'
@@ -15,7 +15,7 @@ import { createDOMSnapshotResult } from '../../setup.js'
 describe('BrowserSnapshot', () => {
 	it('walks every document and node in stable snapshot order', () => {
 		const snapshot = createBrowserSnapshot(
-			decodeBrowserSnapshot(createDOMSnapshotResult(), ['color']),
+			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
 		const walked = [...snapshot.walk()]
 
@@ -35,7 +35,7 @@ describe('BrowserSnapshot', () => {
 
 	it('resolves documents, direct children, iframe roots, and nearest-first ancestors', () => {
 		const snapshot = createBrowserSnapshot(
-			decodeBrowserSnapshot(createDOMSnapshotResult(), ['color']),
+			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
 		const main = snapshot.documents[0]
 		const div = main?.nodes[3]
@@ -61,7 +61,7 @@ describe('BrowserSnapshot', () => {
 
 	it('walks and searches one subtree across an iframe boundary', () => {
 		const snapshot = createBrowserSnapshot(
-			decodeBrowserSnapshot(createDOMSnapshotResult(), ['color']),
+			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
 		const body = snapshot.documents[0]?.nodes[2]
 		if (body === undefined) throw new Error('Snapshot fixture is malformed')
@@ -93,7 +93,7 @@ describe('BrowserSnapshot', () => {
 
 	it('walks breadth-first and resolves parent, sibling, ancestry, and distance relationships', () => {
 		const snapshot = createBrowserSnapshot(
-			decodeBrowserSnapshot(createDOMSnapshotResult(), ['color']),
+			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
 		const body = snapshot.documents[0]?.nodes[2]
 		const div = snapshot.documents[0]?.nodes[3]
@@ -137,12 +137,12 @@ describe('BrowserSnapshot', () => {
 
 	it('finds the first or a bounded list without materializing the full traversal', () => {
 		const snapshot = createBrowserSnapshot(
-			decodeBrowserSnapshot(createDOMSnapshotResult(), ['color']),
+			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
 
 		expect(snapshot.find((node) => node.name === 'INPUT')?.index).toBe(5)
 		expect(snapshot.find(() => false)).toBeUndefined()
-		expect(snapshot.filter((node) => node.type === 1, 2)).toHaveLength(2)
+		expect(snapshot.filter((node) => node.category === 1, 2)).toHaveLength(2)
 		expect(
 			snapshot.filter(() => {
 				throw new Error('Zero-limit predicate must not run')
@@ -163,7 +163,7 @@ describe('BrowserSnapshot', () => {
 
 	it('matches declarative queries through entity methods', () => {
 		const snapshot = createBrowserSnapshot(
-			decodeBrowserSnapshot(createDOMSnapshotResult(), ['color']),
+			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
 		const node = snapshot.documents[0]?.nodes[3]
 		const text = snapshot.documents[0]?.nodes[4]
@@ -187,7 +187,7 @@ describe('BrowserSnapshot', () => {
 
 	it('builds deterministic frame-qualified structural paths', () => {
 		const snapshot = createBrowserSnapshot(
-			decodeBrowserSnapshot(createDOMSnapshotResult(), ['color']),
+			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
 		const node = snapshot.documents[0]?.nodes[3]
 		if (node === undefined) throw new Error('Snapshot fixture is malformed')
@@ -197,7 +197,7 @@ describe('BrowserSnapshot', () => {
 	})
 
 	it('round-trips serializable data and rehydrates navigation', () => {
-		const input = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const input = readBrowserSnapshot(createDOMSnapshotResult(), ['color'])
 		const snapshot = createBrowserSnapshot(input)
 		const text = JSON.stringify(snapshot)
 		const parsed: BrowserSnapshotInput = JSON.parse(text)
@@ -217,7 +217,7 @@ describe('BrowserSnapshot', () => {
 	})
 
 	it('defensively copies and freezes input arrays', () => {
-		const input = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const input = readBrowserSnapshot(createDOMSnapshotResult(), ['color'])
 		const document = input.documents[0]
 		if (document === undefined) throw new Error('Snapshot fixture is malformed')
 		const documents = [...input.documents]
@@ -234,7 +234,7 @@ describe('BrowserSnapshot', () => {
 	})
 
 	it('seeds orphaned and cyclic nodes once without hanging', () => {
-		const input = decodeBrowserSnapshot(createDOMSnapshotResult())
+		const input = readBrowserSnapshot(createDOMSnapshotResult())
 		const document = input.documents[0]
 		const first = document?.nodes[0]
 		const second = document?.nodes[1]

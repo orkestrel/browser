@@ -9,11 +9,21 @@ import {
 	compileBrowserBindingResult,
 	compileBrowserBindingSource,
 } from './compilers.js'
-import { readBrowserBindingCall, readBrowserScriptIdentifier } from './helpers.js'
+import { readBrowserScriptIdentifier } from './helpers.js'
+import { parseBrowserBindingCall } from './parsers.js'
 import { BrowserError } from './errors.js'
 
 /**
  * New-document scripts and promise-based host functions for one page.
+ *
+ * @example
+ * ```ts
+ * import { BrowserScriptManager } from '@orkestrel/browser'
+ *
+ * const scripts = new BrowserScriptManager(page)
+ * const id = await scripts.add('window.__ready = true')
+ * await scripts.remove(id)
+ * ```
  */
 export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	readonly #frame: BrowserFrameInterface
@@ -128,7 +138,7 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	}
 
 	async #call(params: Readonly<Record<string, unknown>>): Promise<void> {
-		const call = readBrowserBindingCall(params)
+		const call = parseBrowserBindingCall(params)
 		if (call === undefined) return
 		const handler = this.#bindings.get(call.name)
 		if (handler === undefined) return

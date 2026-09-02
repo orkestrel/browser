@@ -37,7 +37,7 @@ export class BrowserHandle implements BrowserHandleInterface {
 				awaitPromise: true,
 				returnByValue: true,
 			},
-			this.#session,
+			{ session: this.#session },
 		)
 		return readEvaluationResult(result)
 	}
@@ -53,7 +53,7 @@ export class BrowserHandle implements BrowserHandleInterface {
 				awaitPromise: true,
 				returnByValue: false,
 			},
-			this.#session,
+			{ session: this.#session },
 		)
 		if (!isRecord(result) || !isRecord(result['result'])) return undefined
 		const id = result['result']['objectId']
@@ -75,7 +75,13 @@ export class BrowserHandle implements BrowserHandleInterface {
 		this.#disposed = true
 		if (!this.#client.connected) return
 		try {
-			await this.#client.send('Runtime.releaseObject', { objectId: this.#id }, this.#session)
+			await this.#client.send(
+				'Runtime.releaseObject',
+				{ objectId: this.#id },
+				{
+					session: this.#session,
+				},
+			)
 		} catch {
 			// The execution context may already be gone.
 		}

@@ -23,7 +23,7 @@ import {
 	createCodegenBindingPayload,
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
-	createScreenshotWriter,
+	createRecordingWriter,
 	createStartedCodegen,
 	createTarget,
 	evaluateJavaScript,
@@ -200,7 +200,7 @@ describe('replyOk', () => {
 
 		await expect(client.send('Page.enable')).resolves.toStrictEqual({})
 		await expect(client.send('Page.enable')).resolves.toStrictEqual({})
-		await expect(client.send('Page.close', undefined, undefined, 50)).rejects.toThrow(
+		await expect(client.send('Page.close', undefined, { timeout: 50 })).rejects.toThrow(
 			'CDP request timed out: Page.close',
 		)
 
@@ -220,14 +220,14 @@ describe('scriptCDPAttach', () => {
 		await expect(
 			named.client.send('Target.attachToTarget', { targetId: 'target-1', flatten: true }),
 		).resolves.toStrictEqual({ sessionId: 'session-7' })
-		await expect(named.client.send('Page.enable', undefined, 'session-7')).resolves.toStrictEqual(
-			{},
-		)
 		await expect(
-			named.client.send('Runtime.enable', undefined, 'session-7'),
+			named.client.send('Page.enable', undefined, { session: 'session-7' }),
 		).resolves.toStrictEqual({})
 		await expect(
-			named.client.send('Page.getFrameTree', undefined, 'session-7'),
+			named.client.send('Runtime.enable', undefined, { session: 'session-7' }),
+		).resolves.toStrictEqual({})
+		await expect(
+			named.client.send('Page.getFrameTree', undefined, { session: 'session-7' }),
 		).resolves.toStrictEqual({
 			frameTree: { frame: { id: 'frame-session-7', url: 'about:blank' } },
 		})
@@ -282,7 +282,7 @@ describe('scriptEvaluate', () => {
 			client.send('Runtime.evaluate', { expression: 'window.name' }),
 		).resolves.toStrictEqual({ result: { value: 'orkestrel' } })
 		await expect(
-			client.send('Runtime.evaluate', { expression: 'document.title' }, undefined, 50),
+			client.send('Runtime.evaluate', { expression: 'document.title' }, { timeout: 50 }),
 		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
 	})
 })
@@ -300,10 +300,10 @@ describe('scriptSelectorPresent', () => {
 			result: { value: true },
 		})
 		await expect(
-			client.send('Runtime.evaluate', { expression: lookalike }, undefined, 50),
+			client.send('Runtime.evaluate', { expression: lookalike }, { timeout: 50 }),
 		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
 		await expect(
-			client.send('Runtime.evaluate', { expression: direct }, undefined, 50),
+			client.send('Runtime.evaluate', { expression: direct }, { timeout: 50 }),
 		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
 	})
 })
@@ -345,8 +345,7 @@ describe('scriptTrustedSelector', () => {
 					expression: `document.querySelector(${JSON.stringify('#other')})`,
 					returnByValue: false,
 				},
-				undefined,
-				50,
+				{ timeout: 50 },
 			),
 		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
 	})
@@ -423,13 +422,13 @@ describe('createTarget', () => {
 	it('builds a page target and replaces only the overridden fields', () => {
 		expect(createTarget()).toStrictEqual({
 			id: 'target-1',
-			type: 'page',
+			category: 'page',
 			title: 'Test Page',
 			url: 'about:blank',
 		})
 		expect(createTarget({ id: 'target-2', url: 'https://example.com/' })).toStrictEqual({
 			id: 'target-2',
-			type: 'page',
+			category: 'page',
 			title: 'Test Page',
 			url: 'https://example.com/',
 		})
@@ -525,9 +524,9 @@ describe('createDOMSnapshotResult', () => {
 
 // === Screenshot writer and encoded constants
 
-describe('createScreenshotWriter', () => {
+describe('createRecordingWriter', () => {
 	it('records the path and the exact bytes of every write in call order', async () => {
-		const writer = createScreenshotWriter()
+		const writer = createRecordingWriter()
 		const first = Uint8Array.from([1, 2, 3])
 		const second = Uint8Array.from([4])
 

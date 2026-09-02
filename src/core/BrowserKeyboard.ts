@@ -1,17 +1,26 @@
 import type {
-	BrowserActionOptions,
 	BrowserFrameInterface,
+	BrowserInputOptions,
 	BrowserKeyboardInterface,
 } from './types.js'
 import {
 	computeBrowserModifiers,
 	keyToBrowserInput,
 	parseBrowserChord,
-	validateBrowserActionOptions,
+	validateBrowserInputOptions,
 } from './helpers.js'
 
 /**
  * Trusted keyboard input through Chromium's CDP Input domain.
+ *
+ * @example
+ * ```ts
+ * import { BrowserKeyboard } from '@orkestrel/browser'
+ *
+ * const keyboard = new BrowserKeyboard(page)
+ * await keyboard.type('orkestrel', { delay: 10 })
+ * await keyboard.press('Control+Enter')
+ * ```
  */
 export class BrowserKeyboard implements BrowserKeyboardInterface {
 	readonly #frame: BrowserFrameInterface
@@ -55,8 +64,8 @@ export class BrowserKeyboard implements BrowserKeyboardInterface {
 		}
 	}
 
-	async press(value: string, options?: BrowserActionOptions): Promise<void> {
-		validateBrowserActionOptions(options)
+	async press(value: string, options?: BrowserInputOptions): Promise<void> {
+		validateBrowserInputOptions(options)
 		const chord = parseBrowserChord(value)
 		for (const modifier of chord.modifiers) await this.down(modifier)
 		try {
@@ -70,8 +79,8 @@ export class BrowserKeyboard implements BrowserKeyboardInterface {
 		}
 	}
 
-	async type(value: string, options?: BrowserActionOptions): Promise<void> {
-		validateBrowserActionOptions(options)
+	async type(value: string, options?: BrowserInputOptions): Promise<void> {
+		validateBrowserInputOptions(options)
 		for (const character of value) {
 			await this.down(character)
 			await this.up(character)

@@ -3,6 +3,14 @@ import { validateBrowserPoint } from './helpers.js'
 
 /**
  * Trusted touch input through Chromium's CDP Input domain.
+ *
+ * @example
+ * ```ts
+ * import { BrowserTouch } from '@orkestrel/browser'
+ *
+ * const touch = new BrowserTouch(page)
+ * await touch.tap({ x: 120, y: 240 })
+ * ```
  */
 export class BrowserTouch implements BrowserTouchInterface {
 	readonly #frame: BrowserFrameInterface

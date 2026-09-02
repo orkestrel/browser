@@ -1,16 +1,11 @@
 import type {
 	BrowserCodegenAction,
-	BrowserBindingCall,
 	BrowserChord,
 	BrowserCookie,
 	BrowserCookieInput,
-	BrowserCookiePartition,
-	BrowserConsoleMessage,
 	BrowserContextOptions,
 	BrowserCoverageRange,
 	BrowserDocument,
-	BrowserDownloadProgress,
-	BrowserDownloadStart,
 	BrowserEmulationOptions,
 	BrowserFrameInfo,
 	BrowserFunctionCoverage,
@@ -20,7 +15,9 @@ import type {
 	BrowserHARValue,
 	BrowserLayout,
 	BrowserMetric,
-	BrowserActionOptions,
+	BrowserClickOptions,
+	BrowserDragOptions,
+	BrowserPointerOptions,
 	BrowserAccessibilityOptions,
 	BrowserAccessibilitySnapshot,
 	BrowserAXNode,
@@ -28,7 +25,6 @@ import type {
 	BrowserNode,
 	BrowserNodePredicate,
 	BrowserNodeQuery,
-	BrowserPageError,
 	BrowserProfile,
 	BrowserProfileFrame,
 	BrowserProfileNode,
@@ -37,12 +33,8 @@ import type {
 	BrowserPDFOptions,
 	BrowserMedia,
 	BrowserRequest,
-	BrowserRequestFailure,
-	BrowserResponse,
 	BrowserRouteQuery,
-	BrowserSecurity,
 	BrowserQuad,
-	BrowserRect,
 	BrowserSnapshotInput,
 	BrowserScriptCoverage,
 	BrowserScreenshotOptions,
@@ -52,10 +44,7 @@ import type {
 	BrowserStackFrame,
 	BrowserStyleCoverage,
 	BrowserTeardownFunction,
-	BrowserTiming,
-	BrowserTimingRange,
 	BrowserViewport,
-	BrowserWebSocketFrame,
 } from './types.js'
 import {
 	attempt,
@@ -68,7 +57,6 @@ import {
 	isString,
 	parseArray,
 	parseEnum,
-	parseJSON,
 } from '@orkestrel/contract'
 import {
 	BASE64_CHARS,
@@ -80,6 +68,13 @@ import {
 	BROWSER_MOUSE_BUTTON_MASKS,
 } from './constants.js'
 import { BrowserError, BrowserResultLimitError } from './errors.js'
+import {
+	parseBrowserAXString,
+	parseBrowserCookiePartition,
+	parseBrowserRect,
+	parseNumberArray,
+	parseSnapshotString,
+} from './parsers.js'
 
 /**
  * Decode a base64-encoded string into raw bytes.
@@ -177,168 +172,6 @@ export function readBrowserHeaders(value: unknown): Readonly<Record<string, stri
 		if (isString(entry) || isFiniteNumber(entry)) headers[name] = String(entry)
 	}
 	return headers
-}
-
-/**
- * Decode one `Network.requestWillBeSent` or `Fetch.requestPaused` event.
- *
- * @param value - Unknown event parameters
- * @returns Request or undefined
- */
-export function readBrowserRequest(value: unknown): BrowserRequest | undefined {
-	if (!isRecord(value) || !isString(value['requestId']) || !isRecord(value['request'])) {
-		return undefined
-	}
-	const request = value['request']
-	if (!isString(request['url']) || !isString(request['method'])) {
-		return undefined
-	}
-	const timestamp = isFiniteNumber(value['timestamp']) ? value['timestamp'] : undefined
-	const walltime = isFiniteNumber(value['wallTime']) ? value['wallTime'] : undefined
-	return {
-		id: value['requestId'],
-		loader: isString(value['loaderId']) ? value['loaderId'] : undefined,
-		frame: isString(value['frameId']) ? value['frameId'] : undefined,
-		url: request['url'],
-		method: request['method'],
-		headers: readBrowserHeaders(request['headers']),
-		post: isString(request['postData']) ? request['postData'] : undefined,
-		resource: isString(value['type'])
-			? value['type']
-			: isString(value['resourceType'])
-				? value['resourceType']
-				: undefined,
-		timestamp,
-		walltime,
-		redirect: readBrowserResponseRecord(
-			value['redirectResponse'],
-			value['requestId'],
-			isString(value['loaderId']) ? value['loaderId'] : '',
-			isString(value['frameId']) ? value['frameId'] : undefined,
-			timestamp ?? 0,
-		),
-	}
-}
-
-/**
- * Decode one `Network.responseReceived` event.
- *
- * @param value - Unknown event parameters
- * @returns Response or undefined
- */
-export function readBrowserResponse(value: unknown): BrowserResponse | undefined {
-	if (
-		!isRecord(value) ||
-		!isString(value['requestId']) ||
-		!isString(value['loaderId']) ||
-		!isFiniteNumber(value['timestamp'])
-	) {
-		return undefined
-	}
-	return readBrowserResponseRecord(
-		value['response'],
-		value['requestId'],
-		value['loaderId'],
-		isString(value['frameId']) ? value['frameId'] : undefined,
-		value['timestamp'],
-	)
-}
-
-/**
- * Decode one Chromium response object with its event identity.
- *
- * @param value - Unknown response object
- * @param id - Request id
- * @param loader - Loader id
- * @param frame - Optional frame id
- * @param timestamp - Monotonic event timestamp
- * @returns Response or undefined
- */
-export function readBrowserResponseRecord(
-	value: unknown,
-	id: string,
-	loader: string,
-	frame: string | undefined,
-	timestamp: number,
-): BrowserResponse | undefined {
-	if (
-		!isRecord(value) ||
-		!isString(value['url']) ||
-		!isFiniteNumber(value['status']) ||
-		!isString(value['statusText']) ||
-		!isString(value['mimeType']) ||
-		!isString(value['protocol']) ||
-		!isFiniteNumber(timestamp)
-	) {
-		return undefined
-	}
-	return {
-		id,
-		loader,
-		frame,
-		url: value['url'],
-		status: value['status'],
-		phrase: value['statusText'],
-		headers: readBrowserHeaders(value['headers']),
-		mime: value['mimeType'],
-		protocol: value['protocol'],
-		address: isString(value['remoteIPAddress']) ? value['remoteIPAddress'] : undefined,
-		port: isFiniteNumber(value['remotePort']) ? value['remotePort'] : undefined,
-		cached: value['fromDiskCache'] === true || value['fromPrefetchCache'] === true,
-		worker: value['fromServiceWorker'] === true,
-		timestamp,
-		timing: readBrowserTiming(value['timing']),
-		security: readBrowserSecurity(value['securityDetails']),
-	}
-}
-
-/**
- * Decode Chromium response timing.
- *
- * @param value - Unknown timing object
- * @returns Timing or undefined
- */
-export function readBrowserTiming(value: unknown): BrowserTiming | undefined {
-	if (!isRecord(value) || !isFiniteNumber(value['requestTime']) || value['requestTime'] < 0) {
-		return undefined
-	}
-	const receive = value['receiveHeadersEnd']
-	return {
-		request: value['requestTime'],
-		proxy: readBrowserTimingRange(value, 'proxyStart', 'proxyEnd'),
-		dns: readBrowserTimingRange(value, 'dnsStart', 'dnsEnd'),
-		connect: readBrowserTimingRange(value, 'connectStart', 'connectEnd'),
-		ssl: readBrowserTimingRange(value, 'sslStart', 'sslEnd'),
-		send: readBrowserTimingRange(value, 'sendStart', 'sendEnd'),
-		receive: isFiniteNumber(receive) && receive >= 0 ? receive : undefined,
-	}
-}
-
-/**
- * Decode one start/end pair from Chromium network timing data.
- *
- * @param value - Unknown timing object
- * @param start - Start field
- * @param end - End field
- * @returns Timing range or undefined
- */
-export function readBrowserTimingRange(
-	value: unknown,
-	start: string,
-	end: string,
-): BrowserTimingRange | undefined {
-	if (!isRecord(value)) return undefined
-	const startValue = value[start]
-	const endValue = value[end]
-	if (
-		!isFiniteNumber(startValue) ||
-		startValue < 0 ||
-		!isFiniteNumber(endValue) ||
-		endValue < startValue
-	) {
-		return undefined
-	}
-	return { start: startValue, end: endValue }
 }
 
 /**
@@ -611,71 +444,6 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 }
 
 /**
- * Decode Chromium TLS security details.
- *
- * @param value - Unknown security details
- * @returns Security metadata or undefined
- */
-export function readBrowserSecurity(value: unknown): BrowserSecurity | undefined {
-	if (
-		!isRecord(value) ||
-		!isString(value['protocol']) ||
-		!isString(value['issuer']) ||
-		!isFiniteNumber(value['validFrom']) ||
-		!isFiniteNumber(value['validTo']) ||
-		value['validTo'] < value['validFrom']
-	) {
-		return undefined
-	}
-	return {
-		protocol: value['protocol'],
-		issuer: value['issuer'],
-		from: value['validFrom'],
-		to: value['validTo'],
-	}
-}
-
-/**
- * Decode one `Network.loadingFailed` event.
- *
- * @param value - Unknown event parameters
- * @returns Failure or undefined
- */
-export function readBrowserRequestFailure(value: unknown): BrowserRequestFailure | undefined {
-	if (!isRecord(value) || !isString(value['requestId']) || !isString(value['errorText'])) {
-		return undefined
-	}
-	return {
-		id: value['requestId'],
-		error: value['errorText'],
-		cancelled: value['canceled'] === true,
-		blocked: isString(value['blockedReason']) ? value['blockedReason'] : undefined,
-	}
-}
-
-/**
- * Decode one WebSocket frame event.
- *
- * @param value - Unknown event parameters
- * @returns Frame or undefined
- */
-export function readBrowserWebSocketFrame(value: unknown): BrowserWebSocketFrame | undefined {
-	if (!isRecord(value) || !isRecord(value['response']) || !isFiniteNumber(value['timestamp'])) {
-		return undefined
-	}
-	const frame = value['response']
-	if (!isInteger(frame['opcode']) || frame['opcode'] < 0 || !isString(frame['payloadData'])) {
-		return undefined
-	}
-	return {
-		opcode: frame['opcode'],
-		data: frame['payloadData'],
-		masked: frame['mask'] === true,
-		timestamp: value['timestamp'],
-	}
-}
-
-/**
  * Match a request against route criteria.
  *
  * @param request - Observed request
@@ -706,39 +474,6 @@ export function matchesBrowserURL(url: string, pattern: string): boolean {
 }
 
 /**
- * Decode one Runtime binding invocation.
- *
- * @param value - Unknown `Runtime.bindingCalled` parameters
- * @returns Valid call or undefined
- */
-export function readBrowserBindingCall(value: unknown): BrowserBindingCall | undefined {
-	if (
-		!isRecord(value) ||
-		!isString(value['name']) ||
-		!isString(value['payload']) ||
-		!isInteger(value['executionContextId'])
-	) {
-		return undefined
-	}
-	const payload = parseJSON(value['payload'])
-	if (
-		!isRecord(payload) ||
-		!isString(payload['id']) ||
-		!isString(payload['name']) ||
-		!isArray(payload['args']) ||
-		payload['name'] !== value['name']
-	) {
-		return undefined
-	}
-	return {
-		id: payload['id'],
-		name: payload['name'],
-		args: payload['args'],
-		context: value['executionContextId'],
-	}
-}
-
-/**
  * Decode `Page.addScriptToEvaluateOnNewDocument` result.
  *
  * @param value - Unknown protocol result
@@ -763,11 +498,18 @@ export function validateBrowserPoint(point: BrowserPoint): void {
 }
 
 /**
- * Validate shared trusted-input options.
+ * Validates the bounded keys of one trusted-input operation.
  *
- * @param options - Candidate action options
+ * @remarks
+ * The parameter is the intersection of every option type that carries a
+ * bounded key, so one validator answers for a locator click, a locator drag,
+ * a mouse click, a mouse drag, and keyboard entry alike.
+ *
+ * @param options - Candidate input options
  */
-export function validateBrowserActionOptions(options?: BrowserActionOptions): void {
+export function validateBrowserInputOptions(
+	options?: BrowserPointerOptions & BrowserClickOptions & BrowserDragOptions,
+): void {
 	if (options?.delay !== undefined && (!isFiniteNumber(options.delay) || options.delay < 0)) {
 		throw new BrowserError('Browser input delay must be non-negative and finite', undefined, {
 			delay: options.delay,
@@ -966,7 +708,7 @@ export function browserPDFToParams(options?: BrowserPDFOptions): Readonly<Record
 export function browserScreenshotToParams(
 	options?: BrowserScreenshotOptions,
 ): Readonly<Record<string, unknown>> {
-	const format = options?.type ?? 'png'
+	const format = options?.format ?? 'png'
 	if (options?.quality !== undefined) {
 		if (format !== 'jpeg') {
 			throw new BrowserError('Browser screenshot quality is only valid for JPEG')
@@ -1055,9 +797,9 @@ export function readBrowserAccessibility(value: unknown): BrowserAccessibilitySn
 			backend: isInteger(candidate['backendDOMNodeId']) ? candidate['backendDOMNodeId'] : undefined,
 			frame: isString(candidate['frameId']) ? candidate['frameId'] : undefined,
 			ignored: candidate['ignored'] === true,
-			role: readBrowserAXString(candidate['role']),
-			name: readBrowserAXString(candidate['name']),
-			description: readBrowserAXString(candidate['description']),
+			role: parseBrowserAXString(candidate['role']),
+			name: parseBrowserAXString(candidate['name']),
+			description: parseBrowserAXString(candidate['description']),
 			value: readBrowserAXValue(candidate['value']),
 			properties,
 		})
@@ -1076,17 +818,6 @@ export function readBrowserAccessibility(value: unknown): BrowserAccessibilitySn
  */
 export function readBrowserAXValue(value: unknown): unknown {
 	return isRecord(value) && 'value' in value ? value['value'] : undefined
-}
-
-/**
- * Decode a string-valued Accessibility-domain AXValue.
- *
- * @param value - Unknown AX value
- * @returns String or undefined
- */
-export function readBrowserAXString(value: unknown): string | undefined {
-	const decoded = readBrowserAXValue(value)
-	return isString(decoded) ? decoded : undefined
 }
 
 /**
@@ -1427,7 +1158,7 @@ export function readBrowserCookie(value: unknown, index: number): BrowserCookie 
 		http: value['httpOnly'],
 		secure: value['secure'],
 		site: sameSite,
-		partition: readBrowserCookiePartition(value['partitionKey']),
+		partition: parseBrowserCookiePartition(value['partitionKey']),
 	}
 }
 
@@ -1452,22 +1183,6 @@ export function matchesBrowserCookieURL(cookie: BrowserCookie, value: string): b
 			(cookie.path.endsWith('/') || url.pathname[cookie.path.length] === '/'))
 	const secureMatches = !cookie.secure || url.protocol === 'https:' || url.protocol === 'wss:'
 	return domainMatches && pathMatches && secureMatches
-}
-
-/**
- * Decode an optional Chromium cookie partition key.
- *
- * @param value - Unknown partition value
- * @returns Partition key or undefined
- */
-export function readBrowserCookiePartition(value: unknown): BrowserCookiePartition | undefined {
-	if (!isRecord(value) || !isString(value['topLevelSite'])) return undefined
-	return {
-		site: value['topLevelSite'],
-		...(isBoolean(value['hasCrossSiteAncestor'])
-			? { ancestor: value['hasCrossSiteAncestor'] }
-			: {}),
-	}
 }
 
 /**
@@ -1525,7 +1240,9 @@ export function mediaToFeatures(
 	media: BrowserMedia,
 ): ReadonlyArray<Readonly<Record<string, string>>> {
 	const features: Array<Readonly<Record<string, string>>> = []
-	if (media.color !== undefined) features.push({ name: 'prefers-color-scheme', value: media.color })
+	if (media.scheme !== undefined) {
+		features.push({ name: 'prefers-color-scheme', value: media.scheme })
+	}
 	if (media.contrast !== undefined) {
 		features.push({ name: 'prefers-contrast', value: media.contrast })
 	}
@@ -1569,37 +1286,6 @@ export function readBrowserStack(value: unknown): readonly BrowserStackFrame[] {
 }
 
 /**
- * Decode one `Runtime.consoleAPICalled` event.
- *
- * @param value - Unknown event parameters
- * @returns Console message or undefined
- */
-export function readBrowserConsoleMessage(value: unknown): BrowserConsoleMessage | undefined {
-	if (
-		!isRecord(value) ||
-		!isString(value['type']) ||
-		!isFiniteNumber(value['timestamp']) ||
-		!isArray(value['args'])
-	) {
-		return undefined
-	}
-	const values = value['args'].map(readBrowserRemoteValue)
-	return {
-		level: value['type'],
-		text: values
-			.map((entry) => {
-				if (isString(entry)) return entry
-				const serialized = attempt<unknown>(() => JSON.stringify(entry))
-				return serialized.success && isString(serialized.value) ? serialized.value : String(entry)
-			})
-			.join(' '),
-		values,
-		timestamp: value['timestamp'],
-		stack: readBrowserStack(value['stackTrace']),
-	}
-}
-
-/**
  * Decode a Runtime remote object's printable value.
  *
  * @param value - Unknown remote object
@@ -1611,93 +1297,6 @@ export function readBrowserRemoteValue(value: unknown): unknown {
 	if (isString(value['unserializableValue'])) return value['unserializableValue']
 	if (isString(value['description'])) return value['description']
 	return undefined
-}
-
-/**
- * Decode one `Runtime.exceptionThrown` event.
- *
- * @param value - Unknown event parameters
- * @returns Page error or undefined
- */
-export function readBrowserPageError(value: unknown): BrowserPageError | undefined {
-	if (!isRecord(value) || !isRecord(value['exceptionDetails'])) return undefined
-	const details = value['exceptionDetails']
-	const timestamp = isFiniteNumber(value['timestamp']) ? value['timestamp'] : Date.now()
-	const exception = readBrowserRemoteValue(details['exception'])
-	const message = isString(exception)
-		? exception
-		: isString(details['text'])
-			? details['text']
-			: 'Uncaught page exception'
-	return {
-		message,
-		stack: readBrowserStack(details['stackTrace']),
-		timestamp,
-	}
-}
-
-/**
- * Decode one `Browser.downloadWillBegin` event.
- *
- * @param value - Unknown event parameters
- * @returns Download start or undefined
- */
-export function readBrowserDownloadStart(value: unknown): BrowserDownloadStart | undefined {
-	if (
-		!isRecord(value) ||
-		!isString(value['guid']) ||
-		!isString(value['url']) ||
-		!isString(value['suggestedFilename']) ||
-		!isString(value['frameId'])
-	) {
-		return undefined
-	}
-	return {
-		id: value['guid'],
-		url: value['url'],
-		name: value['suggestedFilename'],
-		frame: value['frameId'],
-	}
-}
-
-/**
- * Decode one `Browser.downloadProgress` event.
- *
- * @param value - Unknown event parameters
- * @returns Download id and progress, or undefined
- */
-export function readBrowserDownloadProgress(
-	value: unknown,
-): readonly [id: string, progress: BrowserDownloadProgress] | undefined {
-	if (
-		!isRecord(value) ||
-		!isString(value['guid']) ||
-		!isFiniteNumber(value['receivedBytes']) ||
-		value['receivedBytes'] < 0 ||
-		!isFiniteNumber(value['totalBytes']) ||
-		value['totalBytes'] < 0
-	) {
-		return undefined
-	}
-	const state = parseEnum(value['state'], ['completed', 'canceled', 'inProgress'])
-	const status =
-		state === 'completed'
-			? 'complete'
-			: state === 'canceled'
-				? 'cancelled'
-				: state === 'inProgress'
-					? 'pending'
-					: undefined
-	if (status === undefined) return undefined
-	return [
-		value['guid'],
-		{
-			status,
-			received: value['receivedBytes'],
-			total: value['totalBytes'],
-			...(isString(value['filePath']) ? { path: value['filePath'] } : {}),
-		},
-	]
 }
 
 /**
@@ -1777,63 +1376,6 @@ export function normalizeCodegenActions(
 }
 
 /**
- * Parse a codegen binding payload into a typed action.
- *
- * @remarks
- * The in-page recorder script calls the CDP binding with a JSON string
- * payload shaped like a {@link BrowserCodegenAction}. Returns `undefined`
- * when the payload is not valid JSON or does not match a known action shape.
- *
- * @param payload - Raw binding call payload (the CDP `payload` param)
- * @returns The parsed action, or `undefined` when the payload is malformed
- */
-export function parseCodegenActionPayload(payload: unknown): BrowserCodegenAction | undefined {
-	if (!isString(payload)) return undefined
-	const parsed = parseJSON(payload)
-	if (!isRecord(parsed)) return undefined
-
-	const action = parseEnum(parsed['action'], ['click', 'fill', 'select'])
-	const selector = parsed['selector']
-
-	if (action === 'click' && isString(selector)) {
-		return { action: 'click', selector }
-	}
-
-	if (action === 'fill' && isString(selector) && isString(parsed['value'])) {
-		return { action: 'fill', selector, value: parsed['value'] }
-	}
-
-	if (action === 'select' && isString(selector)) {
-		const values = parseArray(parsed['values'], isString)
-		if (values !== undefined) return { action: 'select', selector, values }
-	}
-
-	return undefined
-}
-
-/**
- * Derive a `navigate` codegen action from a `Page.frameNavigated` CDP event.
- *
- * @remarks
- * Only the top-level (main) frame's navigation is recorded — a frame
- * carrying a `parentId` is a sub-frame and is ignored.
- *
- * @param params - The CDP `Page.frameNavigated` event params
- * @returns A `navigate` action, or `undefined` when the event is not a
- *   top-level navigation with a resolvable URL
- */
-export function readCodegenNavigateAction(
-	params: Readonly<Record<string, unknown>>,
-): BrowserCodegenAction | undefined {
-	const frame = params['frame']
-	if (!isRecord(frame)) return undefined
-	if ('parentId' in frame) return undefined
-	if (!isString(frame['url'])) return undefined
-
-	return { action: 'navigate', url: frame['url'] }
-}
-
-/**
  * Decode a flattened CDP `Page.getFrameTree` result.
  *
  * @param value - Unknown CDP result
@@ -1880,7 +1422,7 @@ export function readBrowserQuad(value: unknown): BrowserQuad {
 	if (!isRecord(value) || !isArray(value['quads'])) {
 		throw new BrowserError('Element has no content quad')
 	}
-	const points = readNumberArray(value['quads'][0])
+	const points = parseNumberArray(value['quads'][0])
 	if (points === undefined || points.length !== 8) {
 		throw new BrowserError('Element has a malformed content quad')
 	}
@@ -2010,77 +1552,52 @@ export function keyToBrowserInput(value: string): BrowserKey {
 }
 
 /**
- * Read an unknown value as an all-number array.
- *
- * @param value - Candidate value
- * @returns The number array, or undefined
- */
-export function readNumberArray(value: unknown): readonly number[] | undefined {
-	if (!isArray(value) || !value.every(isFiniteNumber)) {
-		return undefined
-	}
-	return value
-}
-
-/**
- * Resolve one index from a CDP snapshot string table.
- *
- * @param strings - Snapshot string table
- * @param index - Candidate string index
- * @returns The resolved string, or undefined
- */
-export function readSnapshotString(strings: readonly string[], index: unknown): string | undefined {
-	if (!isInteger(index)) return undefined
-	return strings[index]
-}
-
-/**
- * Decode CDP snapshot sparse string data.
+ * Decodes CDP snapshot sparse string data.
  *
  * @param value - Sparse `{ index, value }` record
  * @param strings - Snapshot string table
  * @returns Node-index to string map
  */
-export function decodeRareStringData(
+export function readRareStringData(
 	value: unknown,
 	strings: readonly string[],
 ): ReadonlyMap<number, string> {
 	const decoded = new Map<number, string>()
 	if (!isRecord(value)) return decoded
-	const indexes = readNumberArray(value['index'])
-	const values = readNumberArray(value['value'])
+	const indexes = parseNumberArray(value['index'])
+	const values = parseNumberArray(value['value'])
 	if (indexes === undefined || values === undefined) return decoded
 
 	for (let index = 0; index < indexes.length; index += 1) {
 		const node = indexes[index]
-		const text = readSnapshotString(strings, values[index])
+		const text = parseSnapshotString(strings, values[index])
 		if (node !== undefined && text !== undefined) decoded.set(node, text)
 	}
 	return decoded
 }
 
 /**
- * Decode CDP snapshot sparse boolean data.
+ * Decodes CDP snapshot sparse boolean data.
  *
  * @param value - Sparse `{ index }` record
  * @returns Set of node indexes whose value is true
  */
-export function decodeRareBooleanData(value: unknown): ReadonlySet<number> {
+export function readRareBooleanData(value: unknown): ReadonlySet<number> {
 	if (!isRecord(value)) return new Set()
-	return new Set(readNumberArray(value['index']) ?? [])
+	return new Set(parseNumberArray(value['index']) ?? [])
 }
 
 /**
- * Decode CDP snapshot sparse integer data.
+ * Decodes CDP snapshot sparse integer data.
  *
  * @param value - Sparse `{ index, value }` record
  * @returns Node-index to integer map
  */
-export function decodeRareIntegerData(value: unknown): ReadonlyMap<number, number> {
+export function readRareIntegerData(value: unknown): ReadonlyMap<number, number> {
 	const decoded = new Map<number, number>()
 	if (!isRecord(value)) return decoded
-	const indexes = readNumberArray(value['index'])
-	const values = readNumberArray(value['value'])
+	const indexes = parseNumberArray(value['index'])
+	const values = parseNumberArray(value['value'])
 	if (indexes === undefined || values === undefined) return decoded
 
 	for (let index = 0; index < indexes.length; index += 1) {
@@ -2092,56 +1609,37 @@ export function decodeRareIntegerData(value: unknown): ReadonlyMap<number, numbe
 }
 
 /**
- * Decode a CDP snapshot rectangle.
- *
- * @param value - Candidate four-number array
- * @returns A rectangle, or undefined
- */
-export function readBrowserRect(value: unknown): BrowserRect | undefined {
-	const numbers = readNumberArray(value)
-	if (numbers === undefined || numbers.length !== 4) return undefined
-	const x = numbers[0]
-	const y = numbers[1]
-	const width = numbers[2]
-	const height = numbers[3]
-	if (x === undefined || y === undefined || width === undefined || height === undefined) {
-		return undefined
-	}
-	return [x, y, width, height]
-}
-
-/**
- * Decode flattened CDP node attributes.
+ * Decodes flattened CDP node attributes.
  *
  * @param value - Candidate string-index array
  * @param strings - Snapshot string table
  * @returns Frozen attribute record
  */
-export function decodeBrowserAttributes(
+export function readBrowserAttributes(
 	value: unknown,
 	strings: readonly string[],
 ): Readonly<Record<string, string>> {
-	const indexes = readNumberArray(value)
+	const indexes = parseNumberArray(value)
 	const attributes: Record<string, string> = {}
 	if (indexes === undefined) return Object.freeze(attributes)
 
 	for (let index = 0; index < indexes.length; index += 2) {
-		const name = readSnapshotString(strings, indexes[index])
-		const attribute = readSnapshotString(strings, indexes[index + 1])
+		const name = parseSnapshotString(strings, indexes[index])
+		const attribute = parseSnapshotString(strings, indexes[index + 1])
 		if (name !== undefined && attribute !== undefined) attributes[name] = attribute
 	}
 	return Object.freeze(attributes)
 }
 
 /**
- * Decode a CDP `DOMSnapshot.captureSnapshot` result.
+ * Decodes a CDP `DOMSnapshot.captureSnapshot` result.
  *
  * @param value - Unknown CDP result
  * @param styles - Requested computed-style names, in protocol order
  * @param limit - Maximum accepted node count
  * @returns A typed serializable browser snapshot
  */
-export function decodeBrowserSnapshot(
+export function readBrowserSnapshot(
 	value: unknown,
 	styles: readonly string[] = [],
 	limit = BROWSER_SNAPSHOT_NODE_LIMIT,
@@ -2162,7 +1660,7 @@ export function decodeBrowserSnapshot(
 	let count = 0
 	for (const document of value['documents']) {
 		if (!isRecord(document) || !isRecord(document['nodes'])) continue
-		count += readNumberArray(document['nodes']['nodeType'])?.length ?? 0
+		count += parseNumberArray(document['nodes']['nodeType'])?.length ?? 0
 	}
 	if (count > limit) {
 		throw new BrowserResultLimitError('DOM snapshot exceeds the configured node limit', {
@@ -2181,46 +1679,46 @@ export function decodeBrowserSnapshot(
 		}
 
 		const rawNodes = rawDocument['nodes']
-		const frame = readSnapshotString(strings, rawDocument['frameId'])
-		const url = readSnapshotString(strings, rawDocument['documentURL'])
+		const frame = parseSnapshotString(strings, rawDocument['frameId'])
+		const url = parseSnapshotString(strings, rawDocument['documentURL'])
 		const title =
-			rawDocument['title'] === -1 ? '' : readSnapshotString(strings, rawDocument['title'])
+			rawDocument['title'] === -1 ? '' : parseSnapshotString(strings, rawDocument['title'])
 		if (frame === undefined || url === undefined || title === undefined) {
 			throw new BrowserError('Malformed DOM snapshot document metadata', undefined, {
 				document: documentIndex,
 			})
 		}
-		const types = readNumberArray(rawNodes['nodeType'])
-		const names = readNumberArray(rawNodes['nodeName'])
-		const values = readNumberArray(rawNodes['nodeValue'])
+		const types = parseNumberArray(rawNodes['nodeType'])
+		const names = parseNumberArray(rawNodes['nodeName'])
+		const values = parseNumberArray(rawNodes['nodeValue'])
 		if (types === undefined || names === undefined || values === undefined) {
 			throw new BrowserError('Malformed DOM snapshot node table', undefined, {
 				document: documentIndex,
 			})
 		}
 
-		const parents = readNumberArray(rawNodes['parentIndex']) ?? []
-		const ids = readNumberArray(rawNodes['backendNodeId']) ?? []
+		const parents = parseNumberArray(rawNodes['parentIndex']) ?? []
+		const ids = parseNumberArray(rawNodes['backendNodeId']) ?? []
 		const rawAttributes = isArray(rawNodes['attributes']) ? rawNodes['attributes'] : []
-		const texts = decodeRareStringData(rawNodes['textValue'], strings)
-		const inputs = decodeRareStringData(rawNodes['inputValue'], strings)
-		const checked = decodeRareBooleanData(rawNodes['inputChecked'])
-		const selected = decodeRareBooleanData(rawNodes['optionSelected'])
-		const clickable = decodeRareBooleanData(rawNodes['isClickable'])
-		const shadows = decodeRareStringData(rawNodes['shadowRootType'], strings)
-		const contents = decodeRareIntegerData(rawNodes['contentDocumentIndex'])
-		const pseudos = decodeRareStringData(rawNodes['pseudoType'], strings)
-		const sources = decodeRareStringData(rawNodes['currentSourceURL'], strings)
-		const origins = decodeRareStringData(rawNodes['originURL'], strings)
+		const texts = readRareStringData(rawNodes['textValue'], strings)
+		const inputs = readRareStringData(rawNodes['inputValue'], strings)
+		const checked = readRareBooleanData(rawNodes['inputChecked'])
+		const selected = readRareBooleanData(rawNodes['optionSelected'])
+		const clickable = readRareBooleanData(rawNodes['isClickable'])
+		const shadows = readRareStringData(rawNodes['shadowRootType'], strings)
+		const contents = readRareIntegerData(rawNodes['contentDocumentIndex'])
+		const pseudos = readRareStringData(rawNodes['pseudoType'], strings)
+		const sources = readRareStringData(rawNodes['currentSourceURL'], strings)
+		const origins = readRareStringData(rawNodes['originURL'], strings)
 		const layouts = new Map<number, BrowserLayout>()
 
 		if (isRecord(rawDocument['layout'])) {
 			const rawLayout = rawDocument['layout']
-			const nodeIndexes = readNumberArray(rawLayout['nodeIndex']) ?? []
+			const nodeIndexes = parseNumberArray(rawLayout['nodeIndex']) ?? []
 			const rawStyles = isArray(rawLayout['styles']) ? rawLayout['styles'] : []
 			const rawBounds = isArray(rawLayout['bounds']) ? rawLayout['bounds'] : []
-			const rawTexts = readNumberArray(rawLayout['text']) ?? []
-			const paints = readNumberArray(rawLayout['paintOrders']) ?? []
+			const rawTexts = parseNumberArray(rawLayout['text']) ?? []
+			const paints = parseNumberArray(rawLayout['paintOrders']) ?? []
 			const rawOffsets = isArray(rawLayout['offsetRects']) ? rawLayout['offsetRects'] : []
 			const rawScrolls = isArray(rawLayout['scrollRects']) ? rawLayout['scrollRects'] : []
 			const rawClients = isArray(rawLayout['clientRects']) ? rawLayout['clientRects'] : []
@@ -2228,32 +1726,32 @@ export function decodeBrowserSnapshot(
 			for (let layoutIndex = 0; layoutIndex < nodeIndexes.length; layoutIndex += 1) {
 				const nodeIndex = nodeIndexes[layoutIndex]
 				if (nodeIndex === undefined) continue
-				const styleIndexes = readNumberArray(rawStyles[layoutIndex]) ?? []
+				const styleIndexes = parseNumberArray(rawStyles[layoutIndex]) ?? []
 				const computed: Record<string, string> = {}
 				for (let styleIndex = 0; styleIndex < styles.length; styleIndex += 1) {
 					const name = styles[styleIndex]
-					const style = readSnapshotString(strings, styleIndexes[styleIndex])
+					const style = parseSnapshotString(strings, styleIndexes[styleIndex])
 					if (name !== undefined && style !== undefined) computed[name] = style
 				}
 				layouts.set(nodeIndex, {
-					bounds: readBrowserRect(rawBounds[layoutIndex]),
+					bounds: parseBrowserRect(rawBounds[layoutIndex]),
 					styles: Object.freeze(computed),
-					text: readSnapshotString(strings, rawTexts[layoutIndex]),
+					text: parseSnapshotString(strings, rawTexts[layoutIndex]),
 					paint: paints[layoutIndex],
-					offset: readBrowserRect(rawOffsets[layoutIndex]),
-					scroll: readBrowserRect(rawScrolls[layoutIndex]),
-					client: readBrowserRect(rawClients[layoutIndex]),
+					offset: parseBrowserRect(rawOffsets[layoutIndex]),
+					scroll: parseBrowserRect(rawScrolls[layoutIndex]),
+					client: parseBrowserRect(rawClients[layoutIndex]),
 				})
 			}
 		}
 
 		const nodes: BrowserNode[] = []
 		for (let nodeIndex = 0; nodeIndex < types.length; nodeIndex += 1) {
-			const type = types[nodeIndex]
-			const name = readSnapshotString(strings, names[nodeIndex])
+			const category = types[nodeIndex]
+			const name = parseSnapshotString(strings, names[nodeIndex])
 			const nodeValue =
-				values[nodeIndex] === -1 ? '' : readSnapshotString(strings, values[nodeIndex])
-			if (type === undefined || name === undefined || nodeValue === undefined) {
+				values[nodeIndex] === -1 ? '' : parseSnapshotString(strings, values[nodeIndex])
+			if (category === undefined || name === undefined || nodeValue === undefined) {
 				throw new BrowserError('Malformed DOM snapshot node', undefined, {
 					document: documentIndex,
 					index: nodeIndex,
@@ -2266,10 +1764,10 @@ export function decodeBrowserSnapshot(
 				index: nodeIndex,
 				id: ids[nodeIndex],
 				parent: parent === undefined || parent < 0 ? undefined : parent,
-				type,
+				category,
 				name,
 				value: nodeValue,
-				attributes: decodeBrowserAttributes(rawAttributes[nodeIndex], strings),
+				attributes: readBrowserAttributes(rawAttributes[nodeIndex], strings),
 				text: texts.get(nodeIndex),
 				input: inputs.get(nodeIndex),
 				checked: checked.has(nodeIndex) ? true : undefined,
@@ -2381,10 +1879,12 @@ export function isBrowserNodeVisible(node: BrowserNode): boolean {
  * is never skipped by an earlier fault, and the failure the caller reports is
  * the first one. The failure is returned rather than thrown, so the caller
  * keeps the cleanup that must still run after the steps and decides where the
- * throw belongs.
+ * throw belongs. A step may throw any value, `undefined` and `null` included,
+ * so the first throw is retained by a separate flag rather than by testing the
+ * retained value.
  *
  * @param steps - The teardown steps, in the order they must run
- * @returns The first failure, or undefined when every step settled
+ * @returns The value the first failing step threw, or undefined when no step threw
  *
  * @example
  * ```ts
@@ -2401,11 +1901,15 @@ export async function settleBrowserTeardown(
 	...steps: readonly BrowserTeardownFunction[]
 ): Promise<unknown> {
 	let failure: unknown
+	let settled = false
 	for (const step of steps) {
 		try {
 			await step()
 		} catch (error) {
-			failure ??= error
+			if (!settled) {
+				failure = error
+				settled = true
+			}
 		}
 	}
 	return failure

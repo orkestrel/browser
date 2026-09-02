@@ -8,6 +8,15 @@ import { mediaToFeatures, validateBrowserEmulationOptions } from './helpers.js'
 
 /**
  * Rendering, identity, location, and network emulation for context pages.
+ *
+ * @example
+ * ```ts
+ * import { BrowserEmulationManager } from '@orkestrel/browser'
+ *
+ * const emulation = new BrowserEmulationManager(() => context.pages())
+ * await emulation.apply({ locale: 'en-US', media: { scheme: 'dark' } })
+ * await emulation.clear()
+ * ```
  */
 export class BrowserEmulationManager implements BrowserEmulationManagerInterface {
 	readonly #pages: BrowserPagesFunction
@@ -115,7 +124,7 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 		}
 		if (options.media !== undefined) {
 			await page.send('Emulation.setEmulatedMedia', {
-				media: options.media.media ?? '',
+				media: options.media.output ?? '',
 				features: mediaToFeatures(options.media),
 			})
 		}

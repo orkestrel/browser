@@ -8,6 +8,14 @@ import { readBrowserAccessibility, validateBrowserAccessibilityOptions } from '.
 
 /**
  * Chromium Accessibility-domain snapshots for one page.
+ *
+ * @example
+ * ```ts
+ * import { BrowserAccessibility } from '@orkestrel/browser'
+ *
+ * const accessibility = new BrowserAccessibility(page)
+ * const tree = await accessibility.snapshot({ depth: 3 }) // { roots, nodes }
+ * ```
  */
 export class BrowserAccessibility implements BrowserAccessibilityInterface {
 	readonly #frame: BrowserFrameInterface

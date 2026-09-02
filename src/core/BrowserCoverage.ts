@@ -13,6 +13,15 @@ import { BrowserError } from './errors.js'
 
 /**
  * JavaScript precise coverage and CSS rule usage for one page target.
+ *
+ * @example
+ * ```ts
+ * import { BrowserCoverage } from '@orkestrel/browser'
+ *
+ * const coverage = new BrowserCoverage(page)
+ * await coverage.start({ javascript: true, css: true })
+ * const usage = await coverage.stop() // { scripts, styles }
+ * ```
  */
 export class BrowserCoverage implements BrowserCoverageInterface {
 	readonly #frame: BrowserFrameInterface

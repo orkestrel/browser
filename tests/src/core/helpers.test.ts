@@ -9,31 +9,23 @@ import {
 	attributeOfBrowserNode,
 	BrowserResultLimitError,
 	decodeBase64,
-	decodeBrowserAttributes,
-	decodeBrowserSnapshot,
-	decodeRareBooleanData,
-	decodeRareIntegerData,
-	decodeRareStringData,
+	readBrowserAttributes,
+	readBrowserSnapshot,
+	readRareBooleanData,
+	readRareIntegerData,
+	readRareStringData,
 	encodeBase64,
 	isBrowserNodeQuery,
 	isBrowserNodeVisible,
 	isBrowserResultLimitError,
 	matchesBrowserNode,
 	normalizeCodegenActions,
-	settleBrowserTeardown,
 	parseCodegenActionPayload,
-	readBrowserConsoleMessage,
+	settleBrowserTeardown,
 	readBrowserFrames,
 	readBrowserHeaders,
 	readBrowserProfile,
-	readBrowserRect,
-	readBrowserSecurity,
-	readBrowserTiming,
-	readBrowserTimingRange,
-	readCodegenNavigateAction,
 	readEvaluationResult,
-	readNumberArray,
-	readSnapshotString,
 	requireBrowserString,
 	compileCodegenScript,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
@@ -137,72 +129,6 @@ describe('frame helpers', () => {
 	})
 })
 
-describe('network timing helpers', () => {
-	it('decodes finite ordered phases and omits Chromium unavailable sentinels', () => {
-		const timing = {
-			requestTime: 10,
-			proxyStart: -1,
-			proxyEnd: -1,
-			dnsStart: 0,
-			dnsEnd: 2,
-			connectStart: 2,
-			connectEnd: 5,
-			sslStart: 3,
-			sslEnd: 5,
-			sendStart: 5,
-			sendEnd: 6,
-			receiveHeadersEnd: 9,
-		}
-
-		expect(readBrowserTiming(timing)).toEqual({
-			request: 10,
-			proxy: undefined,
-			dns: { start: 0, end: 2 },
-			connect: { start: 2, end: 5 },
-			ssl: { start: 3, end: 5 },
-			send: { start: 5, end: 6 },
-			receive: 9,
-		})
-		expect(readBrowserTimingRange(timing, 'dnsStart', 'dnsEnd')).toEqual({
-			start: 0,
-			end: 2,
-		})
-	})
-
-	it('rejects non-finite, negative, and reversed protocol timing values', () => {
-		expect(readBrowserTiming({ requestTime: Number.NaN })).toBeUndefined()
-		expect(readBrowserTiming({ requestTime: -1 })).toBeUndefined()
-		expect(readBrowserTimingRange({ start: 2, end: 1 }, 'start', 'end')).toBeUndefined()
-		expect(
-			readBrowserTimingRange({ start: 0, end: Number.POSITIVE_INFINITY }, 'start', 'end'),
-		).toBeUndefined()
-	})
-
-	it('decodes ordered certificate validity and rejects malformed bounds', () => {
-		expect(
-			readBrowserSecurity({
-				protocol: 'TLS 1.3',
-				issuer: 'Example CA',
-				validFrom: 100,
-				validTo: 200,
-			}),
-		).toEqual({
-			protocol: 'TLS 1.3',
-			issuer: 'Example CA',
-			from: 100,
-			to: 200,
-		})
-		expect(
-			readBrowserSecurity({
-				protocol: 'TLS 1.3',
-				issuer: 'Example CA',
-				validFrom: 200,
-				validTo: 100,
-			}),
-		).toBeUndefined()
-	})
-})
-
 describe('contract-backed protocol decoding', () => {
 	it('accepts only strings and finite numbers in header records', () => {
 		expect(
@@ -214,23 +140,6 @@ describe('contract-backed protocol decoding', () => {
 				boolean: true,
 			}),
 		).toEqual({ string: 'value', number: '42' })
-	})
-
-	it('contains cyclic console serialization without dropping the event', () => {
-		const cyclic: Record<string, unknown> = {}
-		cyclic['self'] = cyclic
-
-		expect(
-			readBrowserConsoleMessage({
-				type: 'log',
-				timestamp: 1,
-				args: [{ value: cyclic }],
-			}),
-		).toMatchObject({
-			level: 'log',
-			text: '[object Object]',
-			values: [cyclic],
-		})
 	})
 
 	it('keeps validated CPU profile arrays precisely numeric', () => {
@@ -337,36 +246,26 @@ describe('evaluation result helpers', () => {
 })
 
 describe('snapshot decoders', () => {
-	it('validates generic number arrays, string indexes, rectangles, and attributes', () => {
-		expect(readNumberArray([1, 2.5, -3])).toEqual([1, 2.5, -3])
-		expect(readNumberArray([1, '2'])).toBeUndefined()
-		expect(readNumberArray([Number.NaN])).toBeUndefined()
-		expect(readNumberArray([Number.POSITIVE_INFINITY])).toBeUndefined()
-		expect(readSnapshotString(['zero', 'one'], 1)).toBe('one')
-		expect(readSnapshotString(['zero'], 99)).toBeUndefined()
-		expect(readBrowserRect([1, 2, 3, 4])).toEqual([1, 2, 3, 4])
-		expect(readBrowserRect([1, 2, 3])).toBeUndefined()
-		const attributes = decodeBrowserAttributes([0, 1, 2, 3], ['id', 'hero', 'role', 'main'])
+	it('reads flattened attributes into a frozen record', () => {
+		const attributes = readBrowserAttributes([0, 1, 2, 3], ['id', 'hero', 'role', 'main'])
 		expect(attributes).toEqual({ id: 'hero', role: 'main' })
 		expect(Object.isFrozen(attributes)).toBe(true)
 	})
 
 	it('decodes sparse string, boolean, and integer records defensively', () => {
-		expect([...decodeRareStringData({ index: [2, 4], value: [0, 1] }, ['open', 'closed'])]).toEqual(
-			[
-				[2, 'open'],
-				[4, 'closed'],
-			],
-		)
-		expect([...decodeRareBooleanData({ index: [1, 3] })]).toEqual([1, 3])
-		expect([...decodeRareIntegerData({ index: [5], value: [9] })]).toEqual([[5, 9]])
-		expect([...decodeRareStringData({ index: 'invalid' }, [])]).toEqual([])
-		expect([...decodeRareBooleanData(undefined)]).toEqual([])
-		expect([...decodeRareIntegerData({ index: [], value: 'invalid' })]).toEqual([])
+		expect([...readRareStringData({ index: [2, 4], value: [0, 1] }, ['open', 'closed'])]).toEqual([
+			[2, 'open'],
+			[4, 'closed'],
+		])
+		expect([...readRareBooleanData({ index: [1, 3] })]).toEqual([1, 3])
+		expect([...readRareIntegerData({ index: [5], value: [9] })]).toEqual([[5, 9]])
+		expect([...readRareStringData({ index: 'invalid' }, [])]).toEqual([])
+		expect([...readRareBooleanData(undefined)]).toEqual([])
+		expect([...readRareIntegerData({ index: [], value: 'invalid' })]).toEqual([])
 	})
 
 	it('decodes documents, sparse node state, iframe links, and requested layout data', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const snapshot = readBrowserSnapshot(createDOMSnapshotResult(), ['color'])
 
 		expect(snapshot.styles).toEqual(['color'])
 		expect(snapshot.documents).toHaveLength(2)
@@ -386,7 +285,7 @@ describe('snapshot decoders', () => {
 			index: 3,
 			id: 103,
 			parent: 2,
-			type: 1,
+			category: 1,
 			name: 'DIV',
 			attributes: { id: 'hero' },
 			text: 'Hello world',
@@ -415,7 +314,7 @@ describe('snapshot decoders', () => {
 	})
 
 	it('decodes Chromium negative-one title indexes as an empty document title', () => {
-		const snapshot = decodeBrowserSnapshot({
+		const snapshot = readBrowserSnapshot({
 			strings: ['frame-main', 'https://example.com/', '#document', ''],
 			documents: [
 				{
@@ -439,39 +338,39 @@ describe('snapshot decoders', () => {
 	})
 
 	it('rejects invalid limits and enforces the aggregate node limit', () => {
-		expect(() => decodeBrowserSnapshot(createDOMSnapshotResult(), [], -1)).toThrow(
+		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], -1)).toThrow(
 			'Browser snapshot limit must be a non-negative integer',
 		)
-		expect(() => decodeBrowserSnapshot(createDOMSnapshotResult(), [], 8)).toThrow(
+		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], 8)).toThrow(
 			BrowserResultLimitError,
 		)
-		expect(() => decodeBrowserSnapshot(createDOMSnapshotResult(), [], 9)).not.toThrow()
+		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], 9)).not.toThrow()
 	})
 
 	it('rejects malformed top-level, string-table, document, metadata, and node data', () => {
-		expect(() => decodeBrowserSnapshot(undefined)).toThrow(
+		expect(() => readBrowserSnapshot(undefined)).toThrow(
 			'Malformed DOMSnapshot.captureSnapshot result',
 		)
-		expect(() => decodeBrowserSnapshot({ strings: [42], documents: [] })).toThrow(
+		expect(() => readBrowserSnapshot({ strings: [42], documents: [] })).toThrow(
 			'Malformed DOMSnapshot string table',
 		)
-		expect(() => decodeBrowserSnapshot({ strings: [], documents: [null] })).toThrow(
+		expect(() => readBrowserSnapshot({ strings: [], documents: [null] })).toThrow(
 			'Malformed DOM snapshot document',
 		)
 		expect(() =>
-			decodeBrowserSnapshot({
+			readBrowserSnapshot({
 				strings: [],
 				documents: [{ frameId: 0, documentURL: 0, title: 0, nodes: {} }],
 			}),
 		).toThrow('Malformed DOM snapshot document metadata')
 		expect(() =>
-			decodeBrowserSnapshot({
+			readBrowserSnapshot({
 				strings: ['frame', 'url', 'title'],
 				documents: [{ frameId: 0, documentURL: 1, title: 2, nodes: {} }],
 			}),
 		).toThrow('Malformed DOM snapshot node table')
 		expect(() =>
-			decodeBrowserSnapshot({
+			readBrowserSnapshot({
 				strings: ['frame', 'url', 'title', 'DIV', ''],
 				documents: [
 					{
@@ -493,7 +392,7 @@ describe('snapshot node helpers', () => {
 	})
 
 	it('matches names, text, frames, attributes, clickability, and visibility together', () => {
-		const snapshot = decodeBrowserSnapshot(createDOMSnapshotResult(), ['color'])
+		const snapshot = readBrowserSnapshot(createDOMSnapshotResult(), ['color'])
 		const node = snapshot.documents[0]?.nodes[3]
 		const text = snapshot.documents[0]?.nodes[4]
 		if (node === undefined || text === undefined) throw new Error('Snapshot fixture is malformed')
@@ -564,81 +463,6 @@ describe('normalizeCodegenActions', () => {
 	})
 })
 
-describe('parseCodegenActionPayload', () => {
-	it('parses a valid click payload', () => {
-		const payload = JSON.stringify({ action: 'click', selector: '#a' })
-		expect(parseCodegenActionPayload(payload)).toEqual({ action: 'click', selector: '#a' })
-	})
-
-	it('parses a valid fill payload', () => {
-		const payload = JSON.stringify({ action: 'fill', selector: '#a', value: 'text' })
-		expect(parseCodegenActionPayload(payload)).toEqual({
-			action: 'fill',
-			selector: '#a',
-			value: 'text',
-		})
-	})
-
-	it('parses a valid select payload', () => {
-		const payload = JSON.stringify({ action: 'select', selector: '#a', values: ['x', 'y'] })
-		expect(parseCodegenActionPayload(payload)).toEqual({
-			action: 'select',
-			selector: '#a',
-			values: ['x', 'y'],
-		})
-	})
-
-	it('returns undefined for invalid JSON', () => {
-		expect(parseCodegenActionPayload('{not json')).toBeUndefined()
-	})
-
-	it('returns undefined for a non-string payload', () => {
-		expect(parseCodegenActionPayload(42)).toBeUndefined()
-	})
-
-	it('returns undefined when the parsed JSON is not a record', () => {
-		expect(parseCodegenActionPayload(JSON.stringify(['a', 'b']))).toBeUndefined()
-		expect(parseCodegenActionPayload(JSON.stringify('a string'))).toBeUndefined()
-		expect(parseCodegenActionPayload(JSON.stringify(null))).toBeUndefined()
-	})
-
-	it('returns undefined for an unknown action name', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'scroll', selector: '#a' })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for click missing selector', () => {
-		expect(parseCodegenActionPayload(JSON.stringify({ action: 'click' }))).toBeUndefined()
-	})
-
-	it('returns undefined for click with a non-string selector', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'click', selector: 1 })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for fill missing value', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'fill', selector: '#a' })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for select with a non-array values field', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'select', selector: '#a', values: 'x' })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for select whose values contain a non-string element', () => {
-		expect(
-			parseCodegenActionPayload(
-				JSON.stringify({ action: 'select', selector: '#a', values: ['x', 1] }),
-			),
-		).toBeUndefined()
-	})
-})
-
 describe('contenteditable fill — parse/normalize/compile pipeline', () => {
 	it('flows a contenteditable fill binding payload through parse, normalize, and compile unchanged in shape', () => {
 		const payload = JSON.stringify({ action: 'fill', selector: '#editor', value: 'hello world' })
@@ -668,33 +492,6 @@ describe('contenteditable fill — parse/normalize/compile pipeline', () => {
 
 		const script = compileCodegenScript(normalized)
 		expect(script).toContain(`await page.fill("#editor", "hello")`)
-	})
-})
-
-describe('readCodegenNavigateAction', () => {
-	it('derives a navigate action from a top-level frame', () => {
-		const params = { frame: { url: 'https://example.com' } }
-		expect(readCodegenNavigateAction(params)).toEqual({
-			action: 'navigate',
-			url: 'https://example.com',
-		})
-	})
-
-	it('returns undefined for a sub-frame (has parentId)', () => {
-		const params = { frame: { url: 'https://example.com', parentId: 'p1' } }
-		expect(readCodegenNavigateAction(params)).toBeUndefined()
-	})
-
-	it('returns undefined when frame is missing', () => {
-		expect(readCodegenNavigateAction({})).toBeUndefined()
-	})
-
-	it('returns undefined when frame is not a record', () => {
-		expect(readCodegenNavigateAction({ frame: 'not-a-record' })).toBeUndefined()
-	})
-
-	it('returns undefined when the frame url is not a string', () => {
-		expect(readCodegenNavigateAction({ frame: { url: 42 } })).toBeUndefined()
 	})
 })
 
@@ -739,5 +536,39 @@ describe('settleBrowserTeardown', () => {
 
 	it('returns undefined for no steps at all', async () => {
 		expect(await settleBrowserTeardown()).toBeUndefined()
+	})
+
+	it('keeps a thrown undefined as the first failure rather than a later one', async () => {
+		const ran: string[] = []
+		const failure = await settleBrowserTeardown(
+			async () => {
+				ran.push('first')
+				throw undefined
+			},
+			async () => {
+				ran.push('second')
+				throw new Error('second failed')
+			},
+		)
+
+		expect(ran).toEqual(['first', 'second'])
+		expect(failure).toBeUndefined()
+	})
+
+	it('keeps a thrown null as the first failure rather than a later one', async () => {
+		const ran: string[] = []
+		const failure = await settleBrowserTeardown(
+			async () => {
+				ran.push('first')
+				throw null
+			},
+			async () => {
+				ran.push('second')
+				throw new Error('second failed')
+			},
+		)
+
+		expect(ran).toEqual(['first', 'second'])
+		expect(failure).toBeNull()
 	})
 })

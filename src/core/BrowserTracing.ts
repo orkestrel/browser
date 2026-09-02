@@ -3,7 +3,7 @@ import type {
 	BrowserTracingInterface,
 	BrowserTracingOptions,
 	BrowserTracingResult,
-	ScreenshotWriterInterface,
+	BrowserWriterInterface,
 } from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { concatBytes, readBrowserStreamChunk } from './helpers.js'
@@ -12,16 +12,25 @@ import { isString } from '@orkestrel/contract'
 
 /**
  * Chromium trace capture streamed through the IO domain.
+ *
+ * @example
+ * ```ts
+ * import { BrowserTracing } from '@orkestrel/browser'
+ *
+ * const tracing = new BrowserTracing(page)
+ * await tracing.start({ screenshots: true })
+ * const trace = await tracing.stop() // { bytes, path }
+ * ```
  */
 export class BrowserTracing implements BrowserTracingInterface {
 	readonly #frame: BrowserFrameInterface
-	readonly #writer: ScreenshotWriterInterface | undefined
+	readonly #writer: BrowserWriterInterface | undefined
 	#active = false
 	#options: BrowserTracingOptions | undefined
 	#completion: PromiseWithResolvers<string> | undefined
 	readonly #completeHandler = this.#handleComplete.bind(this)
 
-	constructor(frame: BrowserFrameInterface, writer?: ScreenshotWriterInterface) {
+	constructor(frame: BrowserFrameInterface, writer?: BrowserWriterInterface) {
 		this.#frame = frame
 		this.#writer = writer
 	}

@@ -13,7 +13,7 @@ import {
 	compileHiddenWaitExpression,
 	compileSelectExpression,
 	compileVisibleWaitExpression,
-	guardEvaluateExpression,
+	compileGuardedEvaluateExpression,
 } from '@src/core'
 import { evaluateJavaScript } from '../../setup.js'
 
@@ -48,9 +48,9 @@ describe('browser action expressions', () => {
 	})
 })
 
-describe('guardEvaluateExpression', () => {
+describe('compileGuardedEvaluateExpression', () => {
 	it('wraps the expression and embeds the limit in the thrown sentinel message', () => {
-		const wrapped = guardEvaluateExpression('1 + 1', 100)
+		const wrapped = compileGuardedEvaluateExpression('1 + 1', 100)
 		expect(wrapped).toContain('1 + 1')
 		expect(wrapped).toContain('JSON.stringify(r)')
 		expect(wrapped).toContain(
@@ -60,29 +60,29 @@ describe('guardEvaluateExpression', () => {
 	})
 
 	it('returns the original value when the serialized result is within the limit', () => {
-		const wrapped = guardEvaluateExpression('({ a: 1 })', 1000)
+		const wrapped = compileGuardedEvaluateExpression('({ a: 1 })', 1000)
 		expect(evaluateJavaScript(wrapped)).toEqual({ a: 1 })
 	})
 
 	it('throws the sentinel error when the serialized result exceeds the limit', () => {
-		const wrapped = guardEvaluateExpression('"x".repeat(50)', 10)
+		const wrapped = compileGuardedEvaluateExpression('"x".repeat(50)', 10)
 		expect(() => evaluateJavaScript(wrapped)).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
 	})
 
 	it('does not throw for a non-serializable (undefined) result even over a tiny limit', () => {
-		const wrapped = guardEvaluateExpression('undefined', 0)
+		const wrapped = compileGuardedEvaluateExpression('undefined', 0)
 		expect(evaluateJavaScript(wrapped)).toBeUndefined()
 	})
 
 	it('places the expression on its own line so a trailing line comment cannot swallow the closing guard syntax', () => {
-		const wrapped = guardEvaluateExpression('1 + 1 // a trailing comment', 1000)
+		const wrapped = compileGuardedEvaluateExpression('1 + 1 // a trailing comment', 1000)
 		// Must still parse: a single-line wrapper would have the `// comment`
 		// consume everything after it on that line, including the guard tail.
 		expect(evaluateJavaScript(wrapped)).toBe(2)
 	})
 
 	it('still enforces the limit when the expression ends with a line comment', () => {
-		const wrapped = guardEvaluateExpression('"x".repeat(50) // trailing comment', 10)
+		const wrapped = compileGuardedEvaluateExpression('"x".repeat(50) // trailing comment', 10)
 		expect(() => evaluateJavaScript(wrapped)).toThrow(`${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}52`)
 	})
 

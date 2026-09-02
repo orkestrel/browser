@@ -3,7 +3,7 @@ import { BrowserPage, isBrowserError, isBrowserSelectorError } from '@src/core'
 import { waitForCondition } from '@orkestrel/test'
 import {
 	createConnectedCDPClient,
-	createScreenshotWriter,
+	createRecordingWriter,
 	PNG_BASE64,
 	replyOk,
 	scriptEvaluate,
@@ -175,7 +175,7 @@ describe('BrowserLocator', () => {
 
 	it('persists element screenshots through the page writer and cleans up handles', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		const writer = createScreenshotWriter()
+		const writer = createRecordingWriter()
 		scriptTrustedSelector(transport, '#card')
 		replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 		const page = new BrowserPage(client, 'target-1', 'session-1', writer)
@@ -188,6 +188,30 @@ describe('BrowserLocator', () => {
 		await waitForCondition('the resolved object was released', () =>
 			transport.sent.some((message) => message.method === 'Runtime.releaseObject'),
 		)
+	})
+
+	it('reads one element through text() and every match through texts()', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptEvaluate(transport, (expression) => expression.includes('?.innerText'), 'Save')
+		scriptEvaluate(transport, (expression) => expression.includes('=> element.innerText'), [
+			'Save',
+			'Cancel',
+		])
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+
+		await expect(page.selectors.css('button').text()).resolves.toBe('Save')
+		await expect(page.selectors.css('button').texts()).resolves.toEqual(['Save', 'Cancel'])
+	})
+
+	it('refuses a malformed text list rather than returning a partial one', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptEvaluate(transport, (expression) => expression.includes('=> element.innerText'), [
+			'Save',
+			7,
+		])
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+
+		await expect(page.selectors.css('button').texts()).rejects.toSatisfy(isBrowserError)
 	})
 
 	it('rejects invalid indexes and input option boundaries before trusted dispatch', async () => {

@@ -3,7 +3,7 @@ import type {
 	CDPTarget,
 	CDPTransportEventMap,
 	CDPTransportInterface,
-	ScreenshotWriterInterface,
+	BrowserWriterInterface,
 } from '@src/core'
 import { BrowserCodegen, createCDPClient } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
@@ -330,7 +330,7 @@ export function scriptEvaluate(
 export function createTarget(overrides?: Partial<CDPTarget>): CDPTarget {
 	return {
 		id: 'target-1',
-		type: 'page',
+		category: 'page',
 		title: 'Test Page',
 		url: 'about:blank',
 		...overrides,
@@ -449,20 +449,20 @@ export function createDOMSnapshotResult(): unknown {
 	}
 }
 
-// === Fake screenshot writer
+// === Recording writer
 
-/** A fake {@link ScreenshotWriterInterface} recording every `write()` call. */
-export interface FakeScreenshotWriterInterface extends ScreenshotWriterInterface {
+/** A {@link BrowserWriterInterface} recording every `write()` call. */
+export interface RecordingWriterInterface extends BrowserWriterInterface {
 	readonly calls: ReadonlyArray<{ readonly path: string; readonly data: Uint8Array }>
 }
 
 /**
- * Create an in-memory {@link ScreenshotWriterInterface} that records writes
+ * Creates an in-memory {@link BrowserWriterInterface} that records writes
  * instead of touching a filesystem.
  *
- * @returns A {@link FakeScreenshotWriterInterface}
+ * @returns A {@link RecordingWriterInterface}
  */
-export function createScreenshotWriter(): FakeScreenshotWriterInterface {
+export function createRecordingWriter(): RecordingWriterInterface {
 	const calls: Array<{ path: string; data: Uint8Array }> = []
 
 	return {

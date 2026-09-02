@@ -12,11 +12,11 @@ import type {
 	BrowserViewport,
 	CDPClientInterface,
 	CDPTarget,
-	ScreenshotWriterInterface,
+	BrowserWriterInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCookieManager } from './BrowserCookieManager.js'
-import { BrowserFlight } from './BrowserFlight.js'
+import { BrowserTransition } from './BrowserTransition.js'
 import { BrowserEmulationManager } from './BrowserEmulationManager.js'
 import { BrowserPage } from './BrowserPage.js'
 import { BrowserPermissionManager } from './BrowserPermissionManager.js'
@@ -30,12 +30,21 @@ import { Emitter } from '@orkestrel/emitter'
 
 /**
  * Owns pages and shared state inside one Chromium browser context.
+ *
+ * @example
+ * ```ts
+ * import { BrowserContext } from '@orkestrel/browser'
+ *
+ * const context = new BrowserContext(client)
+ * const page = await context.create({ url: 'https://example.com' })
+ * await context.destroy()
+ * ```
  */
 export class BrowserContext implements BrowserContextInterface {
 	readonly #client: CDPClientInterface
 	readonly #id: string | undefined
 	readonly #viewport: BrowserViewport | undefined
-	readonly #writer: ScreenshotWriterInterface | undefined
+	readonly #writer: BrowserWriterInterface | undefined
 	readonly #downloads: BrowserDownloadOptions | undefined
 	readonly #emitter: Emitter<BrowserContextEventMap>
 	readonly #cookies: BrowserCookieManager
@@ -44,7 +53,7 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #emulation: BrowserEmulationManager
 	readonly #pages: Map<string, BrowserPage> = new Map()
 	readonly #creating: Set<Promise<BrowserPage>> = new Set()
-	readonly #syncing: BrowserFlight = new BrowserFlight()
+	readonly #syncing: BrowserTransition = new BrowserTransition()
 	#shutdown: Promise<void> | undefined
 	#closed = false
 
@@ -52,7 +61,7 @@ export class BrowserContext implements BrowserContextInterface {
 		client: CDPClientInterface,
 		id?: string,
 		viewport?: BrowserViewport,
-		writer?: ScreenshotWriterInterface,
+		writer?: BrowserWriterInterface,
 		emulation?: BrowserEmulationOptions,
 		downloads?: BrowserDownloadOptions,
 	) {
@@ -116,10 +125,10 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async sync(targets: readonly CDPTarget[]): Promise<void> {
-		let active = this.#syncing.attempt
+		let active = this.#syncing.pending
 		while (active !== undefined) {
 			await active
-			active = this.#syncing.attempt
+			active = this.#syncing.pending
 		}
 		if (this.#closed) throw new BrowserError('Browser context is closed')
 
@@ -187,7 +196,7 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async #sync(targets: readonly CDPTarget[]): Promise<void> {
-		const pageTargets = targets.filter((target) => target.type === 'page')
+		const pageTargets = targets.filter((target) => target.category === 'page')
 		const targetIds = new Set(pageTargets.map((target) => target.id))
 
 		for (const [id, page] of this.#pages) {
@@ -317,7 +326,7 @@ export class BrowserContext implements BrowserContextInterface {
 
 	async #settle(): Promise<void> {
 		await Promise.allSettled([...this.#creating])
-		await this.#syncing.attempt?.catch(() => undefined)
+		await this.#syncing.pending?.catch(() => undefined)
 	}
 
 	async #openSession(targetId: string): Promise<string> {
@@ -332,12 +341,12 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async #enableSession(sessionId: string): Promise<void> {
-		await this.#client.send('Page.enable', undefined, sessionId)
-		await this.#client.send('Runtime.enable', undefined, sessionId)
+		await this.#client.send('Page.enable', undefined, { session: sessionId })
+		await this.#client.send('Runtime.enable', undefined, { session: sessionId })
 	}
 
 	async #mainFrame(sessionId: string): Promise<string> {
-		const result = await this.#client.send('Page.getFrameTree', undefined, sessionId)
+		const result = await this.#client.send('Page.getFrameTree', undefined, { session: sessionId })
 		const frame = readBrowserFrames(result)[0]
 		if (frame === undefined) throw new BrowserError('Failed to resolve the main browser frame')
 		return frame.id
@@ -381,12 +390,12 @@ export class BrowserContext implements BrowserContextInterface {
 								angle: viewport.landscape ? 90 : 0,
 							},
 			},
-			sessionId,
+			{ session: sessionId },
 		)
 		await this.#client.send(
 			'Emulation.setTouchEmulationEnabled',
 			{ enabled: viewport.touch ?? false },
-			sessionId,
+			{ session: sessionId },
 		)
 	}
 

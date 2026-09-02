@@ -35,7 +35,7 @@ describe('BrowserCookieManager', () => {
 		})
 		const cookies = new BrowserCookieManager(client, 'context-1')
 
-		const result = await cookies.list(['https://www.example.com/app/page'])
+		const result = await cookies.cookies(['https://www.example.com/app/page'])
 
 		expect(result).toHaveLength(1)
 		expect(result[0]).toMatchObject({
@@ -96,8 +96,8 @@ describe('BrowserCookieManager', () => {
 		})
 		const cookies = new BrowserCookieManager(client)
 
-		await expect(cookies.list(['https://example.com/application'])).resolves.toEqual([])
-		await expect(cookies.list(['https://example.com/app/page'])).resolves.toMatchObject([
+		await expect(cookies.cookies(['https://example.com/application'])).resolves.toEqual([])
+		await expect(cookies.cookies(['https://example.com/app/page'])).resolves.toMatchObject([
 			{ name: 'path', site: undefined },
 		])
 	})

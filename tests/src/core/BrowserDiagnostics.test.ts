@@ -1,11 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError } from '@src/core'
-import { createConnectedCDPClient, createScreenshotWriter, replyOk } from '../../setup.js'
+import { createConnectedCDPClient, createRecordingWriter, replyOk } from '../../setup.js'
 
 describe('BrowserDiagnostics', () => {
 	it('streams a trace to bytes and persists the completed result', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		const writer = createScreenshotWriter()
+		const writer = createRecordingWriter()
 		replyOk(transport, 'Tracing.start')
 		transport.onSend('Tracing.end', (message) => {
 			transport.reply(message.id, {})
@@ -209,8 +209,8 @@ describe('BrowserDiagnostics', () => {
 		expect(await page.diagnostics.performance.metrics()).toEqual([
 			{ name: 'TaskDuration', value: 1.25 },
 		])
-		await page.diagnostics.performance.start(100)
-		const profile = await page.diagnostics.performance.stop()
+		await page.diagnostics.profiler.start(100)
+		const profile = await page.diagnostics.profiler.stop()
 
 		expect(profile).toMatchObject({
 			start: 1,
@@ -233,9 +233,9 @@ describe('BrowserDiagnostics', () => {
 		transport.onSend('Profiler.start', (message) => transport.fail(message.id, 'start failed'))
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
-		await expect(page.diagnostics.performance.start()).rejects.toThrow('start failed')
+		await expect(page.diagnostics.profiler.start()).rejects.toThrow('start failed')
 
-		expect(page.diagnostics.performance.active).toBe(false)
+		expect(page.diagnostics.profiler.active).toBe(false)
 		expect(transport.sent.some((message) => message.method === 'Profiler.disable')).toBe(true)
 	})
 })

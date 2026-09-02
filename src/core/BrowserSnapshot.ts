@@ -12,7 +12,17 @@ import { isInteger } from '@orkestrel/contract'
 import { BrowserError } from './errors.js'
 import { isBrowserNodeQuery, matchesBrowserNode } from './helpers.js'
 
-/** A navigable, serializable browser DOM snapshot. */
+/**
+ * A navigable, serializable browser DOM snapshot.
+ *
+ * @example
+ * ```ts
+ * import { BrowserSnapshot } from '@orkestrel/browser'
+ *
+ * const snapshot = new BrowserSnapshot({ documents, styles: ['display'] })
+ * const main = snapshot.find({ name: 'main', visible: true })
+ * ```
+ */
 export class BrowserSnapshot implements BrowserSnapshotInterface {
 	// Documents are fixed and frozen at construction, so the derived owner index cannot go stale.
 	#owners: ReadonlyMap<number, BrowserNode> | undefined
@@ -153,7 +163,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		const segments: string[] = []
 
 		for (const current of chain) {
-			if (current.type !== 1) {
+			if (current.category !== 1) {
 				segments.push(`${current.name.toLowerCase()}:${current.index}`)
 				continue
 			}

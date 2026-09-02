@@ -1,6 +1,6 @@
 import type { BrowserWorkerCategory, BrowserWorkerInterface, CDPClientInterface } from './types.js'
 import { BROWSER_RESULT_LIMIT } from './constants.js'
-import { guardEvaluateExpression } from './compilers.js'
+import { compileGuardedEvaluateExpression } from './compilers.js'
 import { readEvaluationResult } from './helpers.js'
 import { BrowserError } from './errors.js'
 
@@ -47,19 +47,18 @@ export class BrowserWorker implements BrowserWorkerInterface {
 			await this.#client.send(
 				'Runtime.evaluate',
 				{
-					expression: guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT),
+					expression: compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT),
 					returnByValue: true,
 					awaitPromise: true,
 				},
-				this.#session,
-				timeout,
+				{ session: this.#session, ...(timeout !== undefined ? { timeout } : {}) },
 			),
 		)
 	}
 
 	async send(method: string, params?: Readonly<Record<string, unknown>>): Promise<unknown> {
 		this.#assert()
-		return await this.#client.send(method, params, this.#session)
+		return await this.#client.send(method, params, { session: this.#session })
 	}
 
 	detach(): void {

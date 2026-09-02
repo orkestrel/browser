@@ -9,6 +9,15 @@ import { BrowserLocator } from './BrowserLocator.js'
 
 /**
  * Semantic locator factory for one frame.
+ *
+ * @example
+ * ```ts
+ * import { BrowserSelectorManager } from '@orkestrel/browser'
+ *
+ * const selectors = new BrowserSelectorManager(page)
+ * await selectors.role('button', { name: 'Save' }).click()
+ * await selectors.testId('checkout').click()
+ * ```
  */
 export class BrowserSelectorManager implements BrowserSelectorManagerInterface {
 	readonly #frame: BrowserFrameInterface
@@ -54,7 +63,7 @@ export class BrowserSelectorManager implements BrowserSelectorManagerInterface {
 		})
 	}
 
-	test(value: string): BrowserLocatorInterface {
-		return new BrowserLocator(this.#frame, { selector: 'test', value })
+	testId(value: string): BrowserLocatorInterface {
+		return new BrowserLocator(this.#frame, { selector: 'testId', value })
 	}
 }

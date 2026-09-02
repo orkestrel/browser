@@ -24,18 +24,15 @@ export type BrowserStatus = 'idle' | 'connecting' | 'connected' | 'disconnected'
  *
  * @remarks
  * Returned by `discover()` to report whether an existing browser is
- * reachable via CDP without actually connecting to it.
+ * reachable through CDP without actually connecting to it. A defined
+ * `endpoint` is the whole answer — no separate flag repeats it.
  *
- * - `found` — true when a browser responded on the CDP endpoint
- * - `endpoint` — the CDP WebSocket URL when found
+ * - `endpoint` — the CDP WebSocket URL, or undefined when nothing answered
  * - `browser` — browser product name reported by the endpoint
- * - `connection` — the connection mode that would be used
  */
 export interface BrowserDiscoveryResult {
-	readonly found: boolean
 	readonly endpoint: string | undefined
 	readonly browser: string | undefined
-	readonly connection: BrowserConnection | undefined
 }
 
 /**
@@ -236,7 +233,6 @@ export interface BrowserInterface {
 	 * active attachment, and `undefined` when no session is represented.
 	 */
 	readonly owned: boolean | undefined
-	readonly connected: boolean
 	/**
 	 * The process serving this session's CDP endpoint, if any, while it is
 	 * believed alive.

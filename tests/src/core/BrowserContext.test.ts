@@ -209,7 +209,7 @@ describe('BrowserContext', () => {
 			await context.sync([
 				createTarget({ id: 't1' }),
 				createTarget({ id: 't2' }),
-				createTarget({ id: 't3', type: 'iframe' }),
+				createTarget({ id: 't3', category: 'iframe' }),
 			])
 
 			expect(context.pages()).toHaveLength(2)

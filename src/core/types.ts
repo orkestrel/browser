@@ -37,11 +37,28 @@ export interface CDPTransportInterface {
 // === CDP client
 
 /**
+ * Event map for a {@link CDPClientInterface}.
+ *
+ * @remarks
+ * `connect` fires once the transport started and dispatch began; `close`
+ * fires after an explicit teardown; `drop` fires when the transport ended
+ * without a close request; `error` carries a transport-level fault (unknown
+ * shape — narrow before use).
+ */
+export type CDPClientEventMap = {
+	readonly connect: readonly []
+	readonly close: readonly []
+	readonly drop: readonly []
+	readonly error: readonly [error: unknown]
+}
+
+/**
  * Options for creating a CDPClient.
  *
  * @remarks
  * - `transport` — the text pipe the client sends/receives JSON-RPC frames over
  * - `timeout` — ms before a pending request or connection attempt fails (default from constants)
+ * - `on` — initial event listeners wired at construction
  * - `error` — receives a subscriber's throw with the CDP event method that
  *   raised it; without it a broken handler fails silently, because a throwing
  *   subscriber is never allowed to reach its siblings or the dispatch loop
@@ -49,16 +66,35 @@ export interface CDPTransportInterface {
 export interface CDPClientOptions {
 	readonly transport: CDPTransportInterface
 	readonly timeout?: number
+	readonly on?: EmitterHooks<CDPClientEventMap>
 	readonly error?: EmitterErrorHandler
+}
+
+/**
+ * Options for one CDP method call.
+ *
+ * @remarks
+ * - `session` — scope the call to one attached CDP session
+ * - `timeout` — ms before this one request fails, overriding the client-wide default
+ */
+export interface CDPSendOptions {
+	readonly session?: string
+	readonly timeout?: number
 }
 
 /** Handler invoked for a subscribed CDP event with its params record. */
 export type CDPHandler = (params: Readonly<Record<string, unknown>>) => void
 
-/** One entry of the CDP `Target.getTargets` result. */
+/**
+ * One entry of the CDP `Target.getTargets` result.
+ *
+ * @remarks
+ * `category` mirrors the protocol's `type` field — `'page'`, `'worker'`,
+ * `'browser'`, and the rest of Chromium's target categories.
+ */
 export interface CDPTarget {
 	readonly id: string
-	readonly type: string
+	readonly category: string
 	readonly title: string
 	readonly url: string
 }
@@ -67,6 +103,7 @@ export interface CDPTarget {
  * Lightweight Chrome DevTools Protocol client over a {@link CDPTransportInterface}.
  *
  * @remarks
+ * - `emitter` — subscribe to the client's own connection lifecycle
  * - `connected` — true while the transport is active
  * - `connect` — start the transport and begin dispatching
  * - `reconnect` — close and re-establish the transport
@@ -78,56 +115,50 @@ export interface CDPTarget {
  * - `close` — tear down the transport and reject all pending requests
  */
 export interface CDPClientInterface {
+	readonly emitter: EmitterInterface<CDPClientEventMap>
 	readonly connected: boolean
 	connect(): Promise<void>
 	reconnect(): Promise<void>
 	send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		session?: string,
-		timeout?: number,
+		options?: CDPSendOptions,
 	): Promise<unknown>
 	subscribe(method: string, handler: CDPHandler, session?: string): void
 	unsubscribe(method: string, handler: CDPHandler, session?: string): void
 	close(): Promise<void>
 }
 
-// === Browser flight
+// === Browser transition
 
-/** The work one {@link BrowserFlightInterface} transition performs. */
-export type BrowserFlightFunction<T> = () => Promise<T>
+/** The work one {@link BrowserTransitionInterface} transition performs. */
+export type BrowserTransitionFunction<T> = () => Promise<T>
 
 /**
  * One asynchronous transition shared by every caller that arrives while it runs.
  *
  * @remarks
- * `attempt` is the promise of the transition in flight, or undefined when none
+ * `pending` is the promise of the transition in flight, or undefined when none
  * is running; an entity reads it to answer a question about its own state, such
  * as whether a close must wait for an in-flight connect. `execute` starts the
  * work when nothing is in flight, and joins the running transition otherwise.
  */
-export interface BrowserFlightInterface<T> {
-	readonly attempt: Promise<T> | undefined
-	execute(work: BrowserFlightFunction<T>): Promise<T>
+export interface BrowserTransitionInterface<T> {
+	readonly pending: Promise<T> | undefined
+	execute(work: BrowserTransitionFunction<T>): Promise<T>
 }
 
-/** Returns the live pages of the context a manager was constructed against. */
-export type BrowserPagesFunction = () => readonly BrowserPageInterface[]
-
-/** One teardown step run to settlement while the first failure is retained. */
-export type BrowserTeardownFunction = () => Promise<unknown>
-
-// === Screenshot writer
+// === Browser writer
 
 /**
- * Pluggable sink for persisting screenshot bytes to a path.
+ * Pluggable sink for persisting captured browser bytes to a path.
  *
  * @remarks
  * Core never touches a filesystem directly — a page accepts an optional
  * writer (server supplies an `fs`-backed implementation) and calls it when a
- * screenshot request carries a `path`.
+ * screenshot, PDF, trace, or HAR request carries a `path`.
  */
-export interface ScreenshotWriterInterface {
+export interface BrowserWriterInterface {
 	write(path: string, data: Uint8Array): Promise<void>
 }
 
@@ -209,18 +240,69 @@ export interface BrowserNavigationManagerInterface {
  *
  * @remarks
  * - `timeout` — maximum time to wait for the selector in milliseconds
+ * - `strict` — require the selector to resolve to exactly one element
+ * - `force` — skip the actionability checks
+ * - `trial` — run the checks and stop before dispatching input
  */
 export interface BrowserActionOptions {
 	readonly timeout?: number
 	readonly strict?: boolean
 	readonly force?: boolean
 	readonly trial?: boolean
+}
+
+/**
+ * Options shared by every trusted input operation.
+ *
+ * @remarks
+ * - `delay` — milliseconds between the transitions the operation dispatches
+ */
+export interface BrowserInputOptions {
 	readonly delay?: number
+}
+
+/**
+ * Options for a trusted mouse click.
+ *
+ * @remarks
+ * - `button` — pressed mouse button (default `'left'`)
+ * - `count` — click count reported to the page (default `1`)
+ */
+export interface BrowserClickOptions extends BrowserInputOptions {
 	readonly button?: BrowserMouseButton
 	readonly count?: number
-	readonly position?: BrowserPoint
+}
+
+/**
+ * Options for a trusted mouse drag.
+ *
+ * @remarks
+ * - `button` — pressed mouse button (default `'left'`)
+ * - `steps` — interpolated move events between start and end (default `10`)
+ */
+export interface BrowserDragOptions extends BrowserInputOptions {
+	readonly button?: BrowserMouseButton
 	readonly steps?: number
 }
+
+/**
+ * Options for a locator operation that aims at a point inside the element.
+ *
+ * @remarks
+ * - `position` — offset from the element's top-left corner, in CSS pixels
+ */
+export interface BrowserPointerOptions extends BrowserActionOptions {
+	readonly position?: BrowserPoint
+}
+
+/** Options for a locator click, combining element resolution with mouse input. */
+export interface BrowserLocatorClickOptions extends BrowserPointerOptions, BrowserClickOptions {}
+
+/** Options for a locator drag, combining element resolution with mouse input. */
+export interface BrowserLocatorDragOptions extends BrowserPointerOptions, BrowserDragOptions {}
+
+/** Options for locator keyboard entry, combining element resolution with key input. */
+export interface BrowserLocatorTypeOptions extends BrowserActionOptions, BrowserInputOptions {}
 
 /** Element state a frame or page can wait for. */
 export type BrowserWaitState = 'attached' | 'detached' | 'visible' | 'hidden'
@@ -243,13 +325,13 @@ export interface BrowserWaitOptions extends BrowserActionOptions {
  * @remarks
  * - `path` — file path to persist the screenshot to, via the page's writer
  * - `full` — capture the full scrollable page (default `false`)
- * - `type` — image format (default `'png'`)
+ * - `format` — image format (default `'png'`)
  * - `quality` — JPEG quality 0–100 (ignored for PNG)
  */
 export interface BrowserScreenshotOptions {
 	readonly path?: string
 	readonly full?: boolean
-	readonly type?: 'png' | 'jpeg'
+	readonly format?: 'png' | 'jpeg'
 	readonly quality?: number
 	readonly clip?: BrowserRect
 	readonly transparent?: boolean
@@ -287,6 +369,9 @@ export interface BrowserScreenshotResult {
 	readonly bytes: Uint8Array
 	readonly path: string | undefined
 }
+
+/** One teardown step run to settlement while the first failure is retained. */
+export type BrowserTeardownFunction = () => Promise<unknown>
 
 // === Browser handles
 
@@ -472,10 +557,21 @@ export interface BrowserProfile {
 	readonly deltas: readonly number[]
 }
 
-/** Performance metrics and CPU profile lifecycle. */
+/**
+ * Performance-domain metrics.
+ *
+ * @remarks
+ * Each call enables the Performance domain and disables it again, so the
+ * reader holds no protocol state and needs no teardown. Sampled CPU profiling
+ * is {@link BrowserProfilerInterface}, its peer under `diagnostics`.
+ */
 export interface BrowserPerformanceInterface {
-	readonly active: boolean
 	metrics(): Promise<readonly BrowserMetric[]>
+}
+
+/** Sampled CPU profile lifecycle. */
+export interface BrowserProfilerInterface {
+	readonly active: boolean
 	start(interval?: number): Promise<void>
 	stop(): Promise<BrowserProfile>
 	destroy(): Promise<void>
@@ -486,6 +582,7 @@ export interface BrowserDiagnosticsInterface {
 	readonly tracing: BrowserTracingInterface
 	readonly coverage: BrowserCoverageInterface
 	readonly performance: BrowserPerformanceInterface
+	readonly profiler: BrowserProfilerInterface
 	destroy(): Promise<void>
 }
 
@@ -503,8 +600,13 @@ export interface BrowserClockInterface {
 
 // === Browser selectors and locators
 
-/** Selector axis supported by {@link BrowserSelectorManagerInterface}. */
-export type BrowserSelector = 'css' | 'role' | 'text' | 'label' | 'placeholder' | 'test'
+/**
+ * Selector axis supported by {@link BrowserSelectorManagerInterface}.
+ *
+ * @remarks
+ * `testId` mirrors the `data-testid` attribute {@link BROWSER_TEST_ID_ATTRIBUTE} names.
+ */
+export type BrowserSelector = 'css' | 'role' | 'text' | 'label' | 'placeholder' | 'testId'
 
 /** Declarative locator filter applied after selector resolution. */
 export interface BrowserLocatorFilter {
@@ -535,14 +637,6 @@ export interface BrowserTextOptions {
 	readonly exact?: boolean
 }
 
-/** Options for filtering a locator. */
-export interface BrowserFilterOptions extends BrowserLocatorFilter {}
-
-/** Options for locator text extraction. */
-export interface BrowserTextResultOptions {
-	readonly all?: boolean
-}
-
 /** Options for setting files on a file input. */
 export interface BrowserUploadOptions extends BrowserActionOptions {
 	readonly files: readonly string[]
@@ -555,24 +649,25 @@ export interface BrowserLocatorInterface {
 	readonly frame: BrowserFrameInterface
 	readonly query: BrowserQuery
 	locator(selector: string): BrowserLocatorInterface
-	filter(options: BrowserFilterOptions): BrowserLocatorInterface
+	filter(options: BrowserLocatorFilter): BrowserLocatorInterface
 	first(): BrowserLocatorInterface
 	last(): BrowserLocatorInterface
 	item(index: number): BrowserLocatorInterface
 	count(): Promise<number>
 	all(): Promise<readonly BrowserLocatorInterface[]>
-	click(options?: BrowserActionOptions): Promise<void>
+	click(options?: BrowserLocatorClickOptions): Promise<void>
 	fill(value: string, options?: BrowserActionOptions): Promise<void>
 	select(values: readonly string[], options?: BrowserActionOptions): Promise<void>
-	check(options?: BrowserActionOptions): Promise<void>
-	uncheck(options?: BrowserActionOptions): Promise<void>
-	hover(options?: BrowserActionOptions): Promise<void>
+	check(options?: BrowserLocatorClickOptions): Promise<void>
+	uncheck(options?: BrowserLocatorClickOptions): Promise<void>
+	hover(options?: BrowserPointerOptions): Promise<void>
 	focus(options?: BrowserActionOptions): Promise<void>
-	press(key: string, options?: BrowserActionOptions): Promise<void>
-	type(value: string, options?: BrowserActionOptions): Promise<void>
+	press(key: string, options?: BrowserLocatorTypeOptions): Promise<void>
+	type(value: string, options?: BrowserLocatorTypeOptions): Promise<void>
 	clear(options?: BrowserActionOptions): Promise<void>
 	wait(options?: BrowserWaitOptions): Promise<void>
-	text(options?: BrowserTextResultOptions): Promise<string | readonly string[]>
+	text(): Promise<string>
+	texts(): Promise<readonly string[]>
 	html(): Promise<string>
 	value(): Promise<string>
 	attribute(name: string): Promise<string | undefined>
@@ -581,7 +676,7 @@ export interface BrowserLocatorInterface {
 	editable(): Promise<boolean>
 	screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult>
 	upload(options: BrowserUploadOptions): Promise<void>
-	drag(target: BrowserLocatorInterface, options?: BrowserActionOptions): Promise<void>
+	drag(target: BrowserLocatorInterface, options?: BrowserLocatorDragOptions): Promise<void>
 }
 
 /**
@@ -593,7 +688,7 @@ export interface BrowserSelectorManagerInterface {
 	text(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
 	label(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
 	placeholder(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
-	test(value: string): BrowserLocatorInterface
+	testId(value: string): BrowserLocatorInterface
 }
 
 // === Browser input
@@ -628,8 +723,8 @@ export interface BrowserChord {
 export interface BrowserKeyboardInterface {
 	down(key: string): Promise<void>
 	up(key: string): Promise<void>
-	press(key: string, options?: BrowserActionOptions): Promise<void>
-	type(value: string, options?: BrowserActionOptions): Promise<void>
+	press(key: string, options?: BrowserInputOptions): Promise<void>
+	type(value: string, options?: BrowserInputOptions): Promise<void>
 	insert(value: string): Promise<void>
 }
 
@@ -638,8 +733,8 @@ export interface BrowserMouseInterface {
 	move(point: BrowserPoint): Promise<void>
 	down(button?: BrowserMouseButton, count?: number): Promise<void>
 	up(button?: BrowserMouseButton, count?: number): Promise<void>
-	click(point: BrowserPoint, options?: BrowserActionOptions): Promise<void>
-	drag(start: BrowserPoint, end: BrowserPoint, options?: BrowserActionOptions): Promise<void>
+	click(point: BrowserPoint, options?: BrowserClickOptions): Promise<void>
+	drag(start: BrowserPoint, end: BrowserPoint, options?: BrowserDragOptions): Promise<void>
 	wheel(delta: BrowserPoint): Promise<void>
 }
 
@@ -743,7 +838,14 @@ export interface BrowserDownloadStart {
 	readonly frame: string
 }
 
-/** One context download tracked through Chromium's Browser domain. */
+/**
+ * One context download tracked through Chromium's Browser domain.
+ *
+ * @remarks
+ * Progress arrives from the page that owns the download, which drives the
+ * concrete `BrowserDownload`, so the published contract carries the observed
+ * state and `cancel` alone.
+ */
 export interface BrowserDownloadInterface {
 	readonly emitter: EmitterInterface<BrowserDownloadEventMap>
 	readonly id: string
@@ -754,7 +856,6 @@ export interface BrowserDownloadInterface {
 	readonly total: number
 	readonly path: string | undefined
 	cancel(): Promise<void>
-	update(progress: BrowserDownloadProgress): void
 }
 
 /** One console API call. */
@@ -901,15 +1002,18 @@ export type BrowserWebSocketEventMap = {
 	readonly close: readonly [timestamp: number]
 }
 
-/** One observed WebSocket connection. */
+/**
+ * One observed WebSocket connection.
+ *
+ * @remarks
+ * The connection is an observation: a page's network manager reconstructs it
+ * from Network-domain events and drives the concrete `BrowserWebSocket`, so
+ * the published contract carries the identity and the emitter alone.
+ */
 export interface BrowserWebSocketInterface {
 	readonly emitter: EmitterInterface<BrowserWebSocketEventMap>
 	readonly id: string
 	readonly url: string
-	receive(frame: BrowserWebSocketFrame): void
-	transmit(frame: BrowserWebSocketFrame): void
-	fail(message: string): void
-	close(timestamp: number): void
 }
 
 /** Network events emitted by a page's network manager. */
@@ -1155,7 +1259,7 @@ export interface BrowserCookieFilter {
 
 /** Cookie operations scoped to one browser context. */
 export interface BrowserCookieManagerInterface {
-	list(urls?: readonly string[]): Promise<readonly BrowserCookie[]>
+	cookies(urls?: readonly string[]): Promise<readonly BrowserCookie[]>
 	set(cookies: readonly BrowserCookieInput[]): Promise<void>
 	clear(filter?: BrowserCookieFilter): Promise<void>
 }
@@ -1211,10 +1315,19 @@ export interface BrowserGeolocation {
 	readonly accuracy?: number
 }
 
-/** Browser color and media feature overrides. */
+/**
+ * Browser color and media feature overrides.
+ *
+ * @remarks
+ * - `output` — emulated output medium, mirroring the CSS `media` type
+ * - `scheme` — emulated `prefers-color-scheme` value
+ * - `contrast` — emulated `prefers-contrast` value
+ * - `motion` — emulated `prefers-reduced-motion` value
+ * - `colors` — emulated `forced-colors` value, keeping the CSS feature's word
+ */
 export interface BrowserMedia {
-	readonly media?: 'screen' | 'print'
-	readonly color?: 'light' | 'dark' | 'no-preference'
+	readonly output?: 'screen' | 'print'
+	readonly scheme?: 'light' | 'dark' | 'no-preference'
 	readonly contrast?: 'more' | 'less' | 'no-preference'
 	readonly motion?: 'reduce' | 'no-preference'
 	readonly colors?: 'active' | 'none'
@@ -1239,6 +1352,9 @@ export interface BrowserEmulationOptions {
 	readonly headers?: Readonly<Record<string, string>>
 	readonly credentials?: BrowserCredentials
 }
+
+/** Returns the context's live pages at call time. */
+export type BrowserPagesFunction = () => readonly BrowserPageInterface[]
 
 /** Context-scoped emulation configuration. */
 export interface BrowserEmulationManagerInterface {
@@ -1354,6 +1470,19 @@ export interface BrowserCodegenInterface {
 export type BrowserSessionFunction = (frame: string) => Promise<string>
 
 /**
+ * Options for one raw CDP method call issued in a frame's target session.
+ *
+ * @remarks
+ * The frame supplies its own session, so a caller bounds the call and nothing
+ * else.
+ *
+ * - `timeout` — ms before this one request fails, overriding the client-wide default
+ */
+export interface BrowserSendOptions {
+	readonly timeout?: number
+}
+
+/**
  * Serializable frame metadata decoded from CDP `Page.getFrameTree`.
  *
  * @remarks
@@ -1410,7 +1539,7 @@ export interface BrowserFrameInterface {
 	send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		timeout?: number,
+		options?: BrowserSendOptions,
 	): Promise<unknown>
 	subscribe(method: string, handler: CDPHandler): Promise<void>
 	unsubscribe(method: string, handler: CDPHandler): Promise<void>
@@ -1435,14 +1564,20 @@ export interface BrowserLayout {
 	readonly client: BrowserRect | undefined
 }
 
-/** One serializable DOM node decoded from a CDP DOM snapshot. */
+/**
+ * One serializable DOM node decoded from a CDP DOM snapshot.
+ *
+ * @remarks
+ * `category` mirrors the DOM `nodeType` value — `1` for an element, `3` for
+ * text, `9` for a document, and the rest of the DOM node categories.
+ */
 export interface BrowserNode {
 	readonly document: number
 	readonly frame: string
 	readonly index: number
 	readonly id: number | undefined
 	readonly parent: number | undefined
-	readonly type: number
+	readonly category: number
 	readonly name: string
 	readonly value: string
 	readonly attributes: Readonly<Record<string, string>>

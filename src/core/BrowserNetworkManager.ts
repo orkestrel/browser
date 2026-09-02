@@ -7,10 +7,10 @@ import type {
 	BrowserRouteDefinition,
 	BrowserRouteHandler,
 	BrowserRouteQuery,
-	ScreenshotWriterInterface,
+	BrowserWriterInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import { BrowserFlight } from './BrowserFlight.js'
+import { BrowserTransition } from './BrowserTransition.js'
 import { BrowserHARManager } from './BrowserHARManager.js'
 import { BrowserRoute } from './BrowserRoute.js'
 import { BrowserWebSocket } from './BrowserWebSocket.js'
@@ -18,19 +18,31 @@ import {
 	bytesToText,
 	decodeBase64,
 	matchesBrowserRoute,
-	readBrowserRequest,
-	readBrowserRequestFailure,
-	readBrowserResponse,
-	readBrowserWebSocketFrame,
 	settleBrowserTeardown,
 	textToBytes,
 } from './helpers.js'
+import {
+	parseBrowserRequest,
+	parseBrowserRequestFailure,
+	parseBrowserResponse,
+	parseBrowserWebSocketFrame,
+} from './parsers.js'
 import { BrowserError } from './errors.js'
 import { attempt, isFiniteNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
  * Page-scoped Network and Fetch domain lifecycle.
+ *
+ * @example
+ * ```ts
+ * import { BrowserNetworkManager } from '@orkestrel/browser'
+ *
+ * const network = new BrowserNetworkManager(page)
+ * await network.start()
+ * network.emitter.on('response', (response) => log(response.status))
+ * await network.destroy()
+ * ```
  */
 export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	readonly #frame: BrowserFrameInterface
@@ -42,7 +54,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	#started = false
 	#intercepting = false
 	#destroyed = false
-	readonly #starting: BrowserFlight = new BrowserFlight()
+	readonly #starting: BrowserTransition = new BrowserTransition()
 	readonly #requestHandler = this.#handleRequest.bind(this)
 	readonly #responseHandler = this.#handleResponse.bind(this)
 	readonly #failureHandler = this.#handleFailure.bind(this)
@@ -55,7 +67,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	readonly #socketErrorHandler = this.#handleSocketError.bind(this)
 	readonly #socketCloseHandler = this.#handleSocketClose.bind(this)
 
-	constructor(frame: BrowserFrameInterface, writer?: ScreenshotWriterInterface) {
+	constructor(frame: BrowserFrameInterface, writer?: BrowserWriterInterface) {
 		this.#frame = frame
 		this.#emitter = new Emitter()
 		this.#har = new BrowserHARManager(this, writer)
@@ -72,7 +84,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	async start(): Promise<void> {
 		if (this.#destroyed) throw new BrowserError('Browser network manager is destroyed')
 		if (this.#started) return
-		const active = this.#starting.attempt
+		const active = this.#starting.pending
 		if (active !== undefined) {
 			await active
 			return
@@ -176,17 +188,17 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	}
 
 	#handleRequest(params: Readonly<Record<string, unknown>>): void {
-		const request = readBrowserRequest(params)
+		const request = parseBrowserRequest(params)
 		if (request !== undefined) this.#emitter.emit('request', request)
 	}
 
 	#handleResponse(params: Readonly<Record<string, unknown>>): void {
-		const response = readBrowserResponse(params)
+		const response = parseBrowserResponse(params)
 		if (response !== undefined) this.#emitter.emit('response', response)
 	}
 
 	#handleFailure(params: Readonly<Record<string, unknown>>): void {
-		const failure = readBrowserRequestFailure(params)
+		const failure = parseBrowserRequestFailure(params)
 		if (failure !== undefined) this.#emitter.emit('failure', failure)
 	}
 
@@ -213,7 +225,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		const socket = isString(params['requestId'])
 			? this.#sockets.get(params['requestId'])
 			: undefined
-		const frame = readBrowserWebSocketFrame(params)
+		const frame = parseBrowserWebSocketFrame(params)
 		if (socket !== undefined && frame !== undefined) socket.receive(frame)
 	}
 
@@ -221,7 +233,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		const socket = isString(params['requestId'])
 			? this.#sockets.get(params['requestId'])
 			: undefined
-		const frame = readBrowserWebSocketFrame(params)
+		const frame = parseBrowserWebSocketFrame(params)
 		if (socket !== undefined && frame !== undefined) socket.transmit(frame)
 	}
 
@@ -278,7 +290,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	}
 
 	async #route(params: Readonly<Record<string, unknown>>): Promise<void> {
-		const request = readBrowserRequest(params)
+		const request = parseBrowserRequest(params)
 		if (request === undefined) {
 			if (isString(params['requestId'])) {
 				await this.#frame.send('Fetch.failRequest', {

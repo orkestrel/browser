@@ -221,8 +221,8 @@ export function compileStorageClearExpression(): string {
 }
 
 /**
- * Wrap a `Runtime.evaluate` expression so the IN-PAGE code stringifies its
- * own result and throws a recognizable error before an oversized result
+ * Compiles a `Runtime.evaluate` expression so the IN-PAGE code stringifies
+ * its own result and throws a recognizable error before an oversized result
  * would overflow the CDP transport frame.
  *
  * @remarks
@@ -242,7 +242,7 @@ export function compileStorageClearExpression(): string {
  * @param limit - Maximum serialized-character length (see {@link BROWSER_RESULT_LIMIT})
  * @returns The wrapped, guarded expression
  */
-export function guardEvaluateExpression(expression: string, limit: number): string {
+export function compileGuardedEvaluateExpression(expression: string, limit: number): string {
 	return `(() => { const r = (
 ${expression}
 ); const s = JSON.stringify(r); if (typeof s === 'string' && s.length > ${limit}) throw new Error(${JSON.stringify(BROWSER_RESULT_LIMIT_SENTINEL_PREFIX)} + s.length); return r })()`
@@ -409,7 +409,7 @@ export function compileLocatorListExpression(query: BrowserQuery): string {
 				case 'placeholder':
 					found.push(...candidates.filter((element) => matchesText(element.getAttribute('placeholder'), candidate.value, candidate.exact === true)))
 					break
-				case 'test':
+				case 'testId':
 					found.push(...candidates.filter((element) => element.getAttribute(${JSON.stringify(BROWSER_TEST_ID_ATTRIBUTE)}) === candidate.value))
 					break
 			}

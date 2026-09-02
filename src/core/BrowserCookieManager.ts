@@ -11,6 +11,15 @@ import { BrowserError } from './errors.js'
 
 /**
  * Cookie operations isolated to one browser context.
+ *
+ * @example
+ * ```ts
+ * import { BrowserCookieManager } from '@orkestrel/browser'
+ *
+ * const cookies = new BrowserCookieManager(client)
+ * await cookies.set([{ name: 'session', value: 'value', url: 'https://example.com/' }])
+ * const current = await cookies.cookies(['https://example.com/'])
+ * ```
  */
 export class BrowserCookieManager implements BrowserCookieManagerInterface {
 	readonly #client: CDPClientInterface
@@ -21,7 +30,7 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 		this.#context = context
 	}
 
-	async list(urls?: readonly string[]): Promise<readonly BrowserCookie[]> {
+	async cookies(urls?: readonly string[]): Promise<readonly BrowserCookie[]> {
 		const params: Record<string, unknown> = {}
 		if (this.#context !== undefined) params['browserContextId'] = this.#context
 		const result = await this.#client.send('Storage.getCookies', params)
@@ -48,7 +57,7 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 			return
 		}
 
-		const retained = (await this.list()).filter((cookie) => {
+		const retained = (await this.cookies()).filter((cookie) => {
 			if (filter.name !== undefined && cookie.name !== filter.name) return true
 			if (filter.domain !== undefined && cookie.domain !== filter.domain) return true
 			if (filter.path !== undefined && cookie.path !== filter.path) return true

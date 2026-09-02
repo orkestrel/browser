@@ -6,6 +6,7 @@ import type {
 	BrowserKeyboardInterface,
 	BrowserMouseInterface,
 	BrowserSelectorManagerInterface,
+	BrowserSendOptions,
 	BrowserSessionFunction,
 	BrowserTouchInterface,
 	BrowserWaitOptions,
@@ -18,7 +19,7 @@ import { BrowserMouse } from './BrowserMouse.js'
 import { BrowserSelectorManager } from './BrowserSelectorManager.js'
 import { BrowserTouch } from './BrowserTouch.js'
 import { BROWSER_FRAME_WORLD_NAME, BROWSER_RESULT_LIMIT } from './constants.js'
-import { guardEvaluateExpression } from './compilers.js'
+import { compileGuardedEvaluateExpression } from './compilers.js'
 import { readEvaluationResult, requireBrowserString } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { isInteger, isRecord, isString } from '@orkestrel/contract'
@@ -26,6 +27,15 @@ import { createHTML, renderText } from '@orkestrel/html'
 
 /**
  * One attached document frame, evaluated through its own CDP execution world.
+ *
+ * @example
+ * ```ts
+ * import { BrowserFrame } from '@orkestrel/browser'
+ *
+ * const frame = new BrowserFrame(client, 'session-1', 'frame-1', 'https://example.com')
+ * await frame.fill('[name=email]', 'ada@example.com')
+ * const title = await frame.title()
+ * ```
  */
 export class BrowserFrame implements BrowserFrameInterface {
 	readonly #client: CDPClientInterface
@@ -106,7 +116,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 			this.#evaluate('document.title'),
 			this.#captureHTML(),
 			this.#evaluate(
-				guardEvaluateExpression(
+				compileGuardedEvaluateExpression(
 					'document.body ? document.body.innerText : ""',
 					BROWSER_RESULT_LIMIT,
 				),
@@ -151,7 +161,10 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	async evaluate(expression: string, timeout?: number): Promise<unknown> {
 		this.assert()
-		return await this.#evaluate(guardEvaluateExpression(expression, BROWSER_RESULT_LIMIT), timeout)
+		return await this.#evaluate(
+			compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT),
+			timeout,
+		)
 	}
 
 	async handle(expression: string): Promise<BrowserHandleInterface> {
@@ -164,7 +177,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		}
 		const context = await this.#context(session)
 		if (context !== undefined) params['contextId'] = context
-		const result = await this.#client.send('Runtime.evaluate', params, session)
+		const result = await this.#client.send('Runtime.evaluate', params, { session })
 		if (
 			!isRecord(result) ||
 			!isRecord(result['result']) ||
@@ -185,10 +198,13 @@ export class BrowserFrame implements BrowserFrameInterface {
 	async send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		timeout?: number,
+		options?: BrowserSendOptions,
 	): Promise<unknown> {
 		this.assert()
-		return await this.#client.send(method, params, await this.#sessionId(), timeout)
+		return await this.#client.send(method, params, {
+			session: await this.#sessionId(),
+			...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+		})
 	}
 
 	async subscribe(method: string, handler: CDPHandler): Promise<void> {
@@ -217,7 +233,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	async #captureHTML(): Promise<unknown> {
 		return await this.#evaluate(
-			guardEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
+			compileGuardedEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
 		)
 	}
 
@@ -232,7 +248,10 @@ export class BrowserFrame implements BrowserFrameInterface {
 		const context = await this.#context(session, timeout)
 		if (context !== undefined) params['contextId'] = context
 
-		const result = await this.#client.send('Runtime.evaluate', params, session, timeout)
+		const result = await this.#client.send('Runtime.evaluate', params, {
+			session,
+			...(timeout !== undefined ? { timeout } : {}),
+		})
 		return readEvaluationResult(result)
 	}
 
@@ -241,8 +260,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		const world = await this.#client.send(
 			'Page.createIsolatedWorld',
 			{ frameId: this.#id, worldName: BROWSER_FRAME_WORLD_NAME },
-			session,
-			timeout,
+			{ session, ...(timeout !== undefined ? { timeout } : {}) },
 		)
 		if (!isRecord(world) || !isInteger(world['executionContextId'])) {
 			throw new BrowserError('Failed to create frame execution context', undefined, {

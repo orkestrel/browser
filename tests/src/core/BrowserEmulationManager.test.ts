@@ -34,7 +34,7 @@ describe('BrowserEmulationManager', () => {
 			locale: 'fr-FR',
 			timezone: 'Europe/Paris',
 			geolocation: { latitude: 1, longitude: 2, accuracy: 3 },
-			media: { media: 'print', color: 'dark', motion: 'reduce' },
+			media: { output: 'print', scheme: 'dark', motion: 'reduce' },
 			offline: true,
 			headers: { 'x-test': 'one' },
 		})

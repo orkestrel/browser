@@ -8,6 +8,14 @@ import { Emitter } from '@orkestrel/emitter'
 
 /**
  * Observable WebSocket connection reconstructed from Network-domain events.
+ *
+ * @example
+ * ```ts
+ * import { BrowserWebSocket } from '@orkestrel/browser'
+ *
+ * const socket = new BrowserWebSocket('request-1', 'wss://example.com/live')
+ * socket.emitter.on('receive', (frame) => log(frame.data))
+ * ```
  */
 export class BrowserWebSocket implements BrowserWebSocketInterface {
 	readonly #emitter: Emitter<BrowserWebSocketEventMap>

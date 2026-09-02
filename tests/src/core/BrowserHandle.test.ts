@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
-import { BrowserHandle, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
+import { BrowserHandle } from '../../../src/core/BrowserHandle.js'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserHandle', () => {

@@ -8,19 +8,26 @@ import type {
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BROWSER_CODEGEN_BINDING_NAME, BROWSER_CODEGEN_SOURCE } from './constants.js'
-import { BrowserFlight } from './BrowserFlight.js'
+import { BrowserTransition } from './BrowserTransition.js'
 import { compileCodegenScript } from './compilers.js'
-import {
-	normalizeCodegenActions,
-	parseCodegenActionPayload,
-	readCodegenNavigateAction,
-} from './helpers.js'
+import { normalizeCodegenActions } from './helpers.js'
+import { parseCodegenActionPayload, parseCodegenNavigateAction } from './parsers.js'
 import { Emitter } from '@orkestrel/emitter'
 
 // === BrowserCodegen
 
 /**
  * Records page navigation and form interactions and compiles replayable scripts.
+ *
+ * @example
+ * ```ts
+ * import { BrowserCodegen } from '@orkestrel/browser'
+ *
+ * const codegen = new BrowserCodegen(client, 'session-1')
+ * await codegen.start()
+ * const actions = await codegen.stop()
+ * const script = codegen.script({ language: 'typescript' })
+ * ```
  */
 export class BrowserCodegen implements BrowserCodegenInterface {
 	readonly #client: CDPClientInterface
@@ -28,8 +35,8 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	#actions: BrowserCodegenAction[] = []
 	#started = false
 	#destroyed = false
-	readonly #starting: BrowserFlight = new BrowserFlight()
-	readonly #stopping: BrowserFlight<readonly BrowserCodegenAction[]> = new BrowserFlight()
+	readonly #starting: BrowserTransition = new BrowserTransition()
+	readonly #stopping: BrowserTransition<readonly BrowserCodegenAction[]> = new BrowserTransition()
 	#shutdown: Promise<void> | undefined
 	readonly #emitter: Emitter<BrowserCodegenEventMap>
 	readonly #bindingCalledHandler = this.#handleBindingCalled.bind(this)
@@ -58,11 +65,11 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 
 	async start(): Promise<void> {
 		if (this.#destroyed) return
-		const stopping = this.#stopping.attempt
+		const stopping = this.#stopping.pending
 		if (stopping !== undefined) await stopping
 		if (this.#destroyed) return
 		if (this.#started) return
-		const active = this.#starting.attempt
+		const active = this.#starting.pending
 		if (active !== undefined) {
 			await active
 			return
@@ -72,9 +79,9 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	}
 
 	async stop(): Promise<readonly BrowserCodegenAction[]> {
-		await this.#starting.attempt?.catch(() => undefined)
+		await this.#starting.pending?.catch(() => undefined)
 		if (!this.#started) return this.actions()
-		const active = this.#stopping.attempt
+		const active = this.#stopping.pending
 		if (active !== undefined) return await active
 
 		return await this.#stopping.execute(() => this.#stop())
@@ -111,21 +118,21 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		this.#client.subscribe('Page.frameNavigated', this.#frameNavigatedHandler, this.#session)
 
 		try {
-			await this.#client.send('Runtime.enable', undefined, this.#session)
+			await this.#client.send('Runtime.enable', undefined, { session: this.#session })
 			await this.#client.send(
 				'Runtime.addBinding',
 				{ name: BROWSER_CODEGEN_BINDING_NAME },
-				this.#session,
+				{ session: this.#session },
 			)
 			await this.#client.send(
 				'Page.addScriptToEvaluateOnNewDocument',
 				{ source: BROWSER_CODEGEN_SOURCE },
-				this.#session,
+				{ session: this.#session },
 			)
 			await this.#client.send(
 				'Runtime.evaluate',
 				{ expression: BROWSER_CODEGEN_SOURCE, awaitPromise: true },
-				this.#session,
+				{ session: this.#session },
 			)
 			if (this.#destroyed) {
 				this.#unsubscribe()
@@ -171,7 +178,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	}
 
 	#handleFrameNavigated(params: Readonly<Record<string, unknown>>): void {
-		const action = readCodegenNavigateAction(params)
+		const action = parseCodegenNavigateAction(params)
 		if (action === undefined) return
 
 		this.#actions.push(action)

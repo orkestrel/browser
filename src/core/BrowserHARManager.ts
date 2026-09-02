@@ -10,7 +10,7 @@ import type {
 	BrowserRequestFailure,
 	BrowserResponse,
 	BrowserRouteHandler,
-	ScreenshotWriterInterface,
+	BrowserWriterInterface,
 } from './types.js'
 import { BROWSER_HAR_CREATOR } from './constants.js'
 import {
@@ -24,10 +24,19 @@ import { BrowserError } from './errors.js'
 
 /**
  * HTTP archive recording and replay over one page network manager.
+ *
+ * @example
+ * ```ts
+ * import { BrowserHARManager } from '@orkestrel/browser'
+ *
+ * const har = new BrowserHARManager(page.network)
+ * await har.start({ content: true })
+ * const archive = await har.stop() // { log: { version: '1.2', creator, entries } }
+ * ```
  */
 export class BrowserHARManager implements BrowserHARManagerInterface {
 	readonly #network: BrowserNetworkManagerInterface
-	readonly #writer: ScreenshotWriterInterface | undefined
+	readonly #writer: BrowserWriterInterface | undefined
 	readonly #pending: Map<string, BrowserHARPending> = new Map()
 	readonly #entries: BrowserHAREntry[] = []
 	readonly #tasks: Set<Promise<void>> = new Set()
@@ -42,7 +51,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 	readonly #finishHandler = this.#handleFinish.bind(this)
 	readonly #replayHandler: BrowserRouteHandler = this.#handleReplay.bind(this)
 
-	constructor(network: BrowserNetworkManagerInterface, writer?: ScreenshotWriterInterface) {
+	constructor(network: BrowserNetworkManagerInterface, writer?: BrowserWriterInterface) {
 		this.#network = network
 		this.#writer = writer
 	}

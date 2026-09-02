@@ -350,7 +350,9 @@ describe('BrowserFrame', () => {
 			'https://example.com/frame',
 		)
 
-		await expect(frame.send('DOM.getDocument', undefined, 20)).rejects.toSatisfy(isCDPTimeoutError)
+		await expect(frame.send('DOM.getDocument', undefined, { timeout: 20 })).rejects.toSatisfy(
+			isCDPTimeoutError,
+		)
 	})
 
 	it('rejects operations after the CDP client disconnects', async () => {

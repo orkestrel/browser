@@ -23,14 +23,15 @@ import {
 	createBrowserProfile,
 	findSystemBrowsers,
 	findSystemBrowser,
-	findAllInStore,
+	findInStore,
 	parseBrowserEngine,
 	launchBrowserProcess,
-	probeAllPathNames,
+	probePathNames,
 	readFirstLine,
 	removeBrowserProfile,
 	waitForCDPReady,
 	fetchCDPTargets,
+	isBrowserConnectionError,
 } from '@src/server'
 import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
@@ -234,7 +235,7 @@ describe('readFirstLine', () => {
 	})
 })
 
-describe('probeAllPathNames', () => {
+describe('probePathNames', () => {
 	it('returns an existing path for a name PATH resolves more than once', () => {
 		// Plants the same command in two scratch directories and puts both on
 		// PATH, so the real `where`/`which` reports multiple matches. Windows
@@ -252,7 +253,7 @@ describe('probeAllPathNames', () => {
 		const original = process.env['PATH']
 		process.env['PATH'] = [first.path, second.path, original ?? ''].join(delimiter)
 		try {
-			const found = probeAllPathNames([name], process.platform)
+			const found = probePathNames([name], process.platform)
 
 			expect(found).toEqual([join(first.path, file)])
 			expect(existsSync(requireValue(found[0], 'PATH probe returned no path'))).toBe(true)
@@ -262,11 +263,11 @@ describe('probeAllPathNames', () => {
 	})
 
 	it('returns nothing for a name PATH cannot resolve', () => {
-		expect(probeAllPathNames(['orkestrel-browser-absent-fixture'], process.platform)).toEqual([])
+		expect(probePathNames(['orkestrel-browser-absent-fixture'], process.platform)).toEqual([])
 	})
 })
 
-describe('findAllInStore', () => {
+describe('findInStore', () => {
 	it('orders multi-digit browser revisions numerically from newest to oldest', () => {
 		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
 		scratches.push(scratch)
@@ -287,7 +288,7 @@ describe('findAllInStore', () => {
 		for (const relative of relatives) scratch.write(relative, '')
 		const binaries = relatives.map((relative) => join(scratch.path, relative))
 
-		expect(findAllInStore(scratch.path, process.platform)).toEqual([...binaries].reverse())
+		expect(findInStore(scratch.path, process.platform)).toEqual([...binaries].reverse())
 	})
 })
 
@@ -369,23 +370,32 @@ describe('fetchCDPTargets', () => {
 		server = await createCDPTestServer()
 		server.list([{ id: 't1', type: 'page', title: 'Home', url: 'https://example.com' }])
 
-		const targets = await fetchCDPTargets(server.port, 2000)
+		const result = await fetchCDPTargets(server.port, 2000)
 
-		expect(targets).toEqual([{ id: 't1', type: 'page', title: 'Home', url: 'https://example.com' }])
+		expect(result).toEqual({
+			success: true,
+			value: [{ id: 't1', category: 'page', title: 'Home', url: 'https://example.com' }],
+		})
 	})
 
-	it('returns an empty array when the endpoint is unreachable', async () => {
-		const targets = await fetchCDPTargets(19_993, 100)
-		expect(targets).toEqual([])
+	it('reports a coded failure when the endpoint is unreachable', async () => {
+		const result = await fetchCDPTargets(19_993, 100)
+		expect(result.success).toBe(false)
+		if (result.success) throw new Error('An unreachable endpoint must not succeed')
+		expect(isBrowserConnectionError(result.error)).toBe(true)
+		expect(result.error.code).toBe('BROWSER_CONNECTION_ERROR')
 	})
 
 	it('accepts targets with empty title/url', async () => {
 		server = await createCDPTestServer()
 		server.list([{ id: 't2', type: 'page', title: '', url: '' }])
 
-		const targets = await fetchCDPTargets(server.port, 2000)
+		const result = await fetchCDPTargets(server.port, 2000)
 
-		expect(targets).toEqual([{ id: 't2', type: 'page', title: '', url: '' }])
+		expect(result).toEqual({
+			success: true,
+			value: [{ id: 't2', category: 'page', title: '', url: '' }],
+		})
 	})
 
 	it('skips targets missing required string fields instead of substituting sentinels', async () => {
@@ -395,16 +405,19 @@ describe('fetchCDPTargets', () => {
 			{ id: 'missing-url', type: 'page', title: 'Example' },
 		])
 
-		expect(await fetchCDPTargets(server.port, 2000)).toEqual([])
+		expect(await fetchCDPTargets(server.port, 2000)).toEqual({ success: true, value: [] })
 	})
 
 	it('honors an explicit host', async () => {
 		server = await createCDPTestServer()
 		server.list([{ id: 't3', type: 'page', title: '', url: '' }])
 
-		const targets = await fetchCDPTargets(server.port, 2000, '127.0.0.1')
+		const result = await fetchCDPTargets(server.port, 2000, '127.0.0.1')
 
-		expect(targets).toEqual([{ id: 't3', type: 'page', title: '', url: '' }])
+		expect(result).toEqual({
+			success: true,
+			value: [{ id: 't3', category: 'page', title: '', url: '' }],
+		})
 	})
 })
 

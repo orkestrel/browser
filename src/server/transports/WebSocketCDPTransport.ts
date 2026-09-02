@@ -16,7 +16,7 @@ import {
 	WEBSOCKET_READY_OPEN,
 	WEBSOCKET_VERSION,
 } from '@orkestrel/websocket'
-import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserFlight } from '@src/core'
+import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserTransition } from '@src/core'
 import { BrowserConnectionError } from '../errors.js'
 
 // === WebSocketCDPTransport
@@ -29,14 +29,23 @@ import { BrowserConnectionError } from '../errors.js'
  * handling to `@orkestrel/websocket`. Concurrent and repeated `start()` /
  * `close()` calls share their active transition, and a later `start()` opens a
  * fresh socket after the prior one closes.
+ *
+ * @example
+ * ```ts
+ * import { WebSocketCDPTransport } from '@orkestrel/browser/server'
+ *
+ * const transport = new WebSocketCDPTransport({ url: 'ws://127.0.0.1:9222/devtools/browser/abc' })
+ * await transport.start()
+ * await transport.close()
+ * ```
  */
 export class WebSocketCDPTransport implements CDPTransportInterface {
 	readonly #emitter: Emitter<CDPTransportEventMap>
 	readonly #url: string
 	readonly #timeout: number
 	#socket: NodeWebSocketInterface | undefined
-	readonly #starting: BrowserFlight = new BrowserFlight()
-	readonly #closing: BrowserFlight = new BrowserFlight()
+	readonly #starting: BrowserTransition = new BrowserTransition()
+	readonly #closing: BrowserTransition = new BrowserTransition()
 	#request: ClientRequest | undefined
 	#resolve: ((socket: NodeWebSocketInterface) => void) | undefined
 	#reject: ((error: unknown) => void) | undefined
@@ -58,11 +67,11 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	}
 
 	async start(): Promise<void> {
-		const closing = this.#closing.attempt
+		const closing = this.#closing.pending
 		if (closing !== undefined) await closing
 		if (this.#socket?.readyState === WEBSOCKET_READY_OPEN) return
 
-		const active = this.#starting.attempt
+		const active = this.#starting.pending
 		if (active !== undefined) {
 			await active
 			return
@@ -146,7 +155,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 			)
 			request.destroy()
 		}
-		await this.#starting.attempt?.catch(() => undefined)
+		await this.#starting.pending?.catch(() => undefined)
 
 		const socket = this.#socket
 		this.#socket = undefined

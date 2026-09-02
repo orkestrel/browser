@@ -1,4 +1,4 @@
-import type { CDPTransportInterface, ScreenshotWriterInterface } from '@src/core'
+import type { CDPTransportInterface, BrowserWriterInterface } from '@src/core'
 import type { BrowserInterface, BrowserOptions, WebSocketCDPTransportOptions } from './types.js'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { dirname } from 'node:path'
@@ -34,11 +34,11 @@ export function createCDPTransport(options: WebSocketCDPTransportOptions): CDPTr
 }
 
 /**
- * Create a filesystem-backed screenshot writer.
+ * Creates a filesystem-backed browser writer.
  *
- * @returns A {@link ScreenshotWriterInterface} that persists bytes via `node:fs/promises`
+ * @returns A {@link BrowserWriterInterface} that persists bytes through `node:fs/promises`
  */
-export function createScreenshotWriter(): ScreenshotWriterInterface {
+export function createBrowserWriter(): BrowserWriterInterface {
 	return {
 		async write(path: string, data: Uint8Array): Promise<void> {
 			await mkdir(dirname(path), { recursive: true })

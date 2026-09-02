@@ -6,6 +6,16 @@ import { isFiniteNumber } from '@orkestrel/contract'
 
 /**
  * Chromium virtual-time budget controls for deterministic page timers.
+ *
+ * @example
+ * ```ts
+ * import { BrowserClock } from '@orkestrel/browser'
+ *
+ * const clock = new BrowserClock(page)
+ * await clock.install(Date.UTC(2026, 0, 1))
+ * await clock.advance(5_000)
+ * await clock.uninstall()
+ * ```
  */
 export class BrowserClock implements BrowserClockInterface {
 	readonly #frame: BrowserFrameInterface

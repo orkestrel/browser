@@ -1,13 +1,16 @@
 import type {
+	CDPClientEventMap,
 	CDPClientInterface,
 	CDPClientOptions,
 	CDPHandler,
+	CDPSendOptions,
 	CDPTransportInterface,
 } from './types.js'
-import type { EmitterErrorHandler } from '@orkestrel/emitter'
-import { BrowserFlight } from './BrowserFlight.js'
+import type { EmitterErrorHandler, EmitterInterface } from '@orkestrel/emitter'
+import { BrowserTransition } from './BrowserTransition.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { CDPConnectionError, CDPError, CDPTimeoutError } from './errors.js'
+import { Emitter } from '@orkestrel/emitter'
 import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
 
 // === CDPClient
@@ -24,8 +27,19 @@ import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
  * Supports session-scoped event subscriptions: a subscription registered
  * without a session id receives the event whatever session carries it, and a
  * session-scoped subscription receives only its own session's events.
+ *
+ * @example
+ * ```ts
+ * import { CDPClient } from '@orkestrel/browser'
+ *
+ * const client = new CDPClient({ transport })
+ * await client.connect()
+ * const targets = await client.send('Target.getTargets')
+ * await client.close()
+ * ```
  */
 export class CDPClient implements CDPClientInterface {
+	readonly #emitter: Emitter<CDPClientEventMap>
 	readonly #transport: CDPTransportInterface
 	#messageId = 0
 	readonly #pending: Map<
@@ -43,14 +57,22 @@ export class CDPClient implements CDPClientInterface {
 	#wired = false
 	readonly #timeout: number
 	readonly #error: EmitterErrorHandler | undefined
-	readonly #connecting: BrowserFlight = new BrowserFlight()
-	readonly #closing: BrowserFlight = new BrowserFlight()
+	readonly #connecting: BrowserTransition = new BrowserTransition()
+	readonly #closing: BrowserTransition = new BrowserTransition()
 	#closeRequested = false
 
 	constructor(options: CDPClientOptions) {
 		this.#transport = options.transport
 		this.#timeout = options.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		this.#error = options.error
+		this.#emitter = new Emitter({
+			...(options.on !== undefined ? { on: options.on } : {}),
+			...(options.error !== undefined ? { error: options.error } : {}),
+		})
+	}
+
+	get emitter(): EmitterInterface<CDPClientEventMap> {
+		return this.#emitter
 	}
 
 	get connected(): boolean {
@@ -58,10 +80,10 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	async connect(): Promise<void> {
-		const closing = this.#closing.attempt
+		const closing = this.#closing.pending
 		if (closing !== undefined) await closing
 		if (this.#connected) return
-		const active = this.#connecting.attempt
+		const active = this.#connecting.pending
 		if (active !== undefined) return await active
 
 		this.#closeRequested = false
@@ -85,8 +107,7 @@ export class CDPClient implements CDPClientInterface {
 	async send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		session?: string,
-		timeout?: number,
+		options?: CDPSendOptions,
 	): Promise<unknown> {
 		if (!this.#connected) {
 			throw new CDPConnectionError('CDP client is not connected', { method })
@@ -98,12 +119,12 @@ export class CDPClient implements CDPClientInterface {
 		if (params !== undefined) {
 			message['params'] = params
 		}
-		if (session !== undefined) {
-			message['sessionId'] = session
+		if (options?.session !== undefined) {
+			message['sessionId'] = options.session
 		}
 
 		const serialized = JSON.stringify(message)
-		const effectiveTimeout = timeout ?? this.#timeout
+		const effectiveTimeout = options?.timeout ?? this.#timeout
 
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
@@ -193,10 +214,11 @@ export class CDPClient implements CDPClientInterface {
 		}
 
 		this.#connected = true
+		this.#emitter.emit('connect')
 	}
 
 	async #close(): Promise<void> {
-		const connecting = this.#connecting.attempt
+		const connecting = this.#connecting.pending
 		if (connecting !== undefined) {
 			this.#closeRequested = true
 			await connecting.catch(() => undefined)
@@ -223,6 +245,7 @@ export class CDPClient implements CDPClientInterface {
 		} finally {
 			this.#active = false
 		}
+		this.#emitter.emit('close')
 	}
 
 	#nextId(): number {
@@ -240,6 +263,7 @@ export class CDPClient implements CDPClientInterface {
 			entry.reject(new CDPConnectionError('CDP connection closed', { method: entry.method }))
 			this.#pending.delete(id)
 		}
+		this.#emitter.emit('drop')
 	}
 
 	#onError(error: unknown): void {
@@ -254,6 +278,7 @@ export class CDPClient implements CDPClientInterface {
 			)
 			this.#pending.delete(id)
 		}
+		this.#emitter.emit('error', error)
 	}
 
 	#onMessage(data: string): void {

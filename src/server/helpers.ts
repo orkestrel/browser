@@ -1,5 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { CDPTarget } from '@src/core'
+import type { Result } from '@orkestrel/contract'
 import type {
 	BrowserEngine,
 	BrowserProfileResult,
@@ -66,17 +67,17 @@ export function findSystemBrowsers(options?: SystemBrowserOptions): readonly Sys
 
 	const candidates: string[] = []
 
-	candidates.push(...findAllEnvOverrides(env))
+	candidates.push(...findEnvOverrides(env))
 
 	const paths = options?.paths ?? defaultInstallPaths(platform, env)
-	candidates.push(...findAllInstallPaths(paths))
+	candidates.push(...findInstallPaths(paths))
 
 	const names = options?.names ?? BROWSER_EXECUTABLE_NAMES
-	candidates.push(...probeAllPathNames(names, platform))
+	candidates.push(...probePathNames(names, platform))
 
 	const stores = options?.stores ?? defaultStoreBases(env, platform)
 	for (const store of stores) {
-		candidates.push(...findAllInStore(store, platform))
+		candidates.push(...findInStore(store, platform))
 	}
 
 	const seen = new Set<string>()
@@ -171,15 +172,8 @@ export async function removeBrowserProfile(profile: BrowserProfileResult): Promi
 	await rm(path, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 })
 }
 
-/** Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order for an existing file. */
-export function findEnvOverride(
-	env: Readonly<Record<string, string | undefined>>,
-): string | undefined {
-	return findAllEnvOverrides(env)[0]
-}
-
-/** Check the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order, returning every one that exists. */
-export function findAllEnvOverrides(
+/** Checks the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order and returns every one that exists. */
+export function findEnvOverrides(
 	env: Readonly<Record<string, string | undefined>>,
 ): readonly string[] {
 	const found: string[] = []
@@ -218,23 +212,13 @@ export function windowsRoots(env: Readonly<Record<string, string | undefined>>):
 	return roots.filter((root): root is string => root !== undefined)
 }
 
-/** Return the first candidate path that exists on disk. */
-export function findInstallPath(paths: readonly string[]): string | undefined {
-	return findAllInstallPaths(paths)[0]
-}
-
-/** Return every candidate path that exists on disk, in the given order. */
-export function findAllInstallPaths(paths: readonly string[]): readonly string[] {
+/** Returns every candidate path that exists on disk, in the given order. */
+export function findInstallPaths(paths: readonly string[]): readonly string[] {
 	return paths.filter((path) => existsSync(path))
 }
 
-/** Probe PATH (`which`/`where`) for the first resolvable command name. */
-export function probePathNames(names: readonly string[], platform: string): string | undefined {
-	return probeAllPathNames(names, platform)[0]
-}
-
-/** Probe PATH (`which`/`where`) for every resolvable command name, in the given order. */
-export function probeAllPathNames(names: readonly string[], platform: string): readonly string[] {
+/** Probes PATH (`which`/`where`) for every resolvable command name, in the given order. */
+export function probePathNames(names: readonly string[], platform: string): readonly string[] {
 	const finder = platform === 'win32' ? 'where' : 'which'
 	const found: string[] = []
 	for (const name of names) {
@@ -296,13 +280,8 @@ export function defaultStoreBases(
 	return bases
 }
 
-/** Search one store base for the top-level `chromium` link, else the highest-revision `chromium-*` install. */
-export function findInStore(base: string, platform: string): string | undefined {
-	return findAllInStore(base, platform)[0]
-}
-
-/** Search one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first. */
-export function findAllInStore(base: string, platform: string): readonly string[] {
+/** Searches one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first. */
+export function findInStore(base: string, platform: string): readonly string[] {
 	const joiner = platform === 'win32' ? pathWin32.join : pathPosix.join
 	const found: string[] = []
 
@@ -415,18 +394,33 @@ export async function waitForCDPReady(
 }
 
 /**
- * Fetch the current CDP target list from a browser's `/json/list` endpoint.
+ * Fetches the current CDP target list from a browser's `/json/list` endpoint.
+ *
+ * @remarks
+ * The endpoint is a network boundary, so an unreachable host, a non-2xx
+ * response, and a body that is not a JSON array each come back as a failed
+ * `Result` carrying a coded `BrowserConnectionError`. An entry missing a
+ * required string field is skipped rather than failing the whole list.
  *
  * @param port - Port the browser exposes its CDP endpoint on
  * @param timeout - Request timeout in milliseconds
  * @param host - Host the browser exposes its CDP endpoint on (default `127.0.0.1`)
- * @returns Normalized CDP targets
+ * @returns The normalized CDP targets, or the fault that stopped the request
+ *
+ * @example
+ * ```ts
+ * import { fetchCDPTargets } from '@orkestrel/browser/server'
+ *
+ * const result = await fetchCDPTargets(9222, 2000)
+ * if (result.success) log(result.value.length)
+ * else log(result.error.code)
+ * ```
  */
 export async function fetchCDPTargets(
 	port: number,
 	timeout: number,
 	host: string = BROWSER_DEFAULT_HOST,
-): Promise<readonly CDPTarget[]> {
+): Promise<Result<readonly CDPTarget[], BrowserError>> {
 	const url = `${BROWSER_CDP_PROTOCOL}://${host}:${port}${BROWSER_CDP_LIST_PATH}`
 	const controller = new AbortController()
 	const timer = setTimeout(() => controller.abort(), timeout)
@@ -434,10 +428,23 @@ export async function fetchCDPTargets(
 	try {
 		const response = await fetch(url, { signal: controller.signal })
 
-		if (!response.ok) return []
+		if (!response.ok) {
+			return {
+				success: false,
+				error: new BrowserConnectionError('CDP target list request was refused', {
+					url,
+					status: response.status,
+				}),
+			}
+		}
 
 		const list: unknown = await response.json()
-		if (!isArray(list)) return []
+		if (!isArray(list)) {
+			return {
+				success: false,
+				error: new BrowserConnectionError('CDP target list is not a JSON array', { url }),
+			}
+		}
 
 		const targets: CDPTarget[] = []
 		for (const entry of list) {
@@ -453,15 +460,18 @@ export async function fetchCDPTargets(
 
 			targets.push({
 				id: entry['id'],
-				type: entry['type'],
+				category: entry['type'],
 				title: entry['title'],
 				url: entry['url'],
 			})
 		}
 
-		return targets
-	} catch {
-		return []
+		return { success: true, value: targets }
+	} catch (error) {
+		return {
+			success: false,
+			error: new BrowserConnectionError('CDP target list is unreachable', { url, error }),
+		}
 	} finally {
 		clearTimeout(timer)
 	}

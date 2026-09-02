@@ -9,7 +9,7 @@ import {
 	BrowserPage,
 	validateBrowserHAR,
 } from '@src/core'
-import { createConnectedCDPClient, createScreenshotWriter, replyOk } from '../../setup.js'
+import { createConnectedCDPClient, createRecordingWriter, replyOk } from '../../setup.js'
 
 describe('BrowserHARManager', () => {
 	it('stamps archives with the version the manifest declares', () => {
@@ -39,7 +39,7 @@ describe('BrowserHARManager', () => {
 
 	it('records completed exchanges with optional base64 response content and persistence', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		const writer = createScreenshotWriter()
+		const writer = createRecordingWriter()
 		replyOk(transport, 'Network.enable')
 		replyOk(transport, 'Network.getResponseBody', {
 			body: 'hello',

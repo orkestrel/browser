@@ -9,7 +9,7 @@ diagnostics, structured DOM snapshots, content distillation that selects a
 document's article rather than its whole body text, and `BrowserCodegen`)
 never touches `node:*` or the DOM; the Node runtime (`src/server`)
 adapts it with a `WebSocketCDPTransport`, browser process launch/discovery
-(`node:child_process` + `fetch`), a filesystem screenshot writer, and the
+(`node:child_process` + `fetch`), a filesystem browser writer, and the
 `Browser` façade that ties launch → context → page together. Part of the
 `@orkestrel` line.
 
@@ -69,7 +69,7 @@ the environment-agnostic core (`.`) — `CDPClient`, `BrowserContext`,
 `BrowserPage`, `BrowserFrame`, DOM snapshot traversal helpers,
 `BrowserCodegen`, `createCDPClient`, `CDPTransportInterface` —
 and the Node-only server surface (`./server`) — `Browser`, `createBrowser`,
-`createCDPTransport`, `createScreenshotWriter`, `WebSocketCDPTransport`.
+`createCDPTransport`, `createBrowserWriter`, `WebSocketCDPTransport`.
 
 ## License
 

@@ -33,9 +33,9 @@ export function createCDPClient(options: CDPClientOptions): CDPClientInterface {
  *
  * @example
  * ```ts
- * import { createBrowserSnapshot, decodeBrowserSnapshot } from '@orkestrel/browser'
+ * import { createBrowserSnapshot, readBrowserSnapshot } from '@orkestrel/browser'
  *
- * const snapshot = createBrowserSnapshot(decodeBrowserSnapshot(captured, ['display']))
+ * const snapshot = createBrowserSnapshot(readBrowserSnapshot(captured, ['display']))
  * snapshot.find({ name: 'main' })
  * ```
  */

@@ -1,7 +1,7 @@
 /**
  * src/server/factories.ts tests.
  *
- * `createScreenshotWriter` writes real bytes to a real temp directory (no
+ * `createBrowserWriter` writes real bytes to a real temp directory (no
  * fake filesystem). `createCDPTransport` and `createBrowser` are checked for
  * shape and real connectivity against the in-process CDP test server.
  */
@@ -11,7 +11,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createScratch } from '@orkestrel/test/server'
-import { createBrowser, createCDPTransport, createScreenshotWriter } from '@src/server'
+import { createBrowser, createCDPTransport, createBrowserWriter } from '@src/server'
 import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
@@ -25,10 +25,10 @@ afterEach(async () => {
 	scratch = undefined
 })
 
-describe('createScreenshotWriter', () => {
+describe('createBrowserWriter', () => {
 	it('writes real bytes to a real file, creating parent dirs', async () => {
 		scratch = createScratch({ prefix: 'scsr-screenshot-' })
-		const writer = createScreenshotWriter()
+		const writer = createBrowserWriter()
 		const path = join(scratch.path, 'nested', 'shot.png')
 		const bytes = new Uint8Array([137, 80, 78, 71])
 
@@ -40,7 +40,7 @@ describe('createScreenshotWriter', () => {
 
 	it('overwrites an existing file at the same path', async () => {
 		scratch = createScratch({ prefix: 'scsr-screenshot-' })
-		const writer = createScreenshotWriter()
+		const writer = createBrowserWriter()
 		const path = join(scratch.path, 'shot.png')
 
 		await writer.write(path, new Uint8Array([1, 2, 3]))

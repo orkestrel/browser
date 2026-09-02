@@ -1,15 +1,20 @@
 import type {
 	BrowserActionOptions,
 	BrowserActionabilityOptions,
-	BrowserFilterOptions,
 	BrowserFrameInterface,
+	BrowserClickOptions,
+	BrowserDragOptions,
 	BrowserHandleInterface,
+	BrowserLocatorClickOptions,
+	BrowserLocatorDragOptions,
+	BrowserLocatorFilter,
 	BrowserLocatorInterface,
+	BrowserLocatorTypeOptions,
+	BrowserPointerOptions,
 	BrowserPoint,
 	BrowserQuery,
 	BrowserScreenshotOptions,
 	BrowserScreenshotResult,
-	BrowserTextResultOptions,
 	BrowserUploadOptions,
 	BrowserWaitOptions,
 	BrowserWaitState,
@@ -31,13 +36,22 @@ import {
 	decodeBase64,
 	readBrowserQuad,
 	requireBrowserString,
-	validateBrowserActionOptions,
+	validateBrowserInputOptions,
 } from './helpers.js'
 import { BrowserError, BrowserSelectorError } from './errors.js'
 import { isArray, isFiniteNumber, isInteger, isRecord, isString } from '@orkestrel/contract'
 
 /**
  * Reusable strict semantic locator over one frame.
+ *
+ * @example
+ * ```ts
+ * import { BrowserLocator } from '@orkestrel/browser'
+ *
+ * const save = new BrowserLocator(page, { selector: 'role', value: 'button', name: 'Save' })
+ * await save.click({ count: 2 })
+ * const label = await save.text()
+ * ```
  */
 export class BrowserLocator implements BrowserLocatorInterface {
 	readonly #frame: BrowserFrameInterface
@@ -64,7 +78,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		})
 	}
 
-	filter(options: BrowserFilterOptions): BrowserLocatorInterface {
+	filter(options: BrowserLocatorFilter): BrowserLocatorInterface {
 		return new BrowserLocator(this.#frame, { ...this.#query, filter: options })
 	}
 
@@ -100,7 +114,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		return locators
 	}
 
-	async click(options?: BrowserActionOptions): Promise<void> {
+	async click(options?: BrowserLocatorClickOptions): Promise<void> {
 		const handle = await this.#resolve(options, 'visible')
 		try {
 			const point = await this.#point(handle, options, {
@@ -181,7 +195,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		}
 	}
 
-	async check(options?: BrowserActionOptions): Promise<void> {
+	async check(options?: BrowserLocatorClickOptions): Promise<void> {
 		if ((await this.#boolean('checked')) === true) return
 		await this.click(options)
 		if ((await this.#boolean('checked')) !== true) {
@@ -189,7 +203,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		}
 	}
 
-	async uncheck(options?: BrowserActionOptions): Promise<void> {
+	async uncheck(options?: BrowserLocatorClickOptions): Promise<void> {
 		if ((await this.#boolean('checked')) === false) return
 		await this.click(options)
 		if ((await this.#boolean('checked')) !== false) {
@@ -197,7 +211,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		}
 	}
 
-	async hover(options?: BrowserActionOptions): Promise<void> {
+	async hover(options?: BrowserPointerOptions): Promise<void> {
 		const handle = await this.#resolve(options, 'visible')
 		try {
 			const point = await this.#point(handle, options, {
@@ -220,12 +234,12 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		}
 	}
 
-	async press(key: string, options?: BrowserActionOptions): Promise<void> {
+	async press(key: string, options?: BrowserLocatorTypeOptions): Promise<void> {
 		await this.focus(options)
 		if (options?.trial !== true) await this.#frame.keyboard.press(key, options)
 	}
 
-	async type(value: string, options?: BrowserActionOptions): Promise<void> {
+	async type(value: string, options?: BrowserLocatorTypeOptions): Promise<void> {
 		await this.focus(options)
 		if (options?.trial !== true) await this.#frame.keyboard.type(value, options)
 	}
@@ -285,19 +299,21 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		})
 	}
 
-	async text(options?: BrowserTextResultOptions): Promise<string | readonly string[]> {
-		const expression =
-			options?.all === true
-				? `(${compileLocatorListExpression(this.#query)}).map((element) => element.innerText)`
-				: `(${compileLocatorExpression(this.#query)})?.innerText`
-		const value = await this.#frame.evaluate(expression)
-		if (options?.all === true) {
-			if (!isArray(value) || !value.every(isString)) {
-				throw new BrowserError('Browser locator text list is malformed')
-			}
-			return value
-		}
+	async text(): Promise<string> {
+		const value = await this.#frame.evaluate(
+			`(${compileLocatorExpression(this.#query)})?.innerText`,
+		)
 		return requireBrowserString(value, 'Browser locator text')
+	}
+
+	async texts(): Promise<readonly string[]> {
+		const value = await this.#frame.evaluate(
+			`(${compileLocatorListExpression(this.#query)}).map((element) => element.innerText)`,
+		)
+		if (!isArray(value) || !value.every(isString)) {
+			throw new BrowserError('Browser locator text list is malformed')
+		}
+		return value
 	}
 
 	async html(): Promise<string> {
@@ -411,7 +427,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		}
 	}
 
-	async drag(target: BrowserLocatorInterface, options?: BrowserActionOptions): Promise<void> {
+	async drag(target: BrowserLocatorInterface, options?: BrowserLocatorDragOptions): Promise<void> {
 		if (target.frame.id !== this.#frame.id) {
 			throw new BrowserError('Browser drag target must belong to the same frame')
 		}
@@ -444,10 +460,10 @@ export class BrowserLocator implements BrowserLocatorInterface {
 	}
 
 	async #resolve(
-		options: BrowserActionOptions | undefined,
+		options: (BrowserPointerOptions & BrowserClickOptions & BrowserDragOptions) | undefined,
 		state: 'attached' | 'visible',
 	): Promise<BrowserHandleInterface> {
-		validateBrowserActionOptions(options)
+		validateBrowserInputOptions(options)
 		await this.wait({
 			...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
 			...(options?.strict !== undefined ? { strict: options.strict } : {}),
@@ -458,7 +474,7 @@ export class BrowserLocator implements BrowserLocatorInterface {
 
 	async #point(
 		handle: BrowserHandleInterface,
-		options: BrowserActionOptions | undefined,
+		options: BrowserPointerOptions | undefined,
 		actionability: BrowserActionabilityOptions,
 	): Promise<BrowserPoint> {
 		if (options?.force !== true) {

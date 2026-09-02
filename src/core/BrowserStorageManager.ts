@@ -18,6 +18,15 @@ import { attempt } from '@orkestrel/contract'
 
 /**
  * Portable cookie and web-storage state for one browser context.
+ *
+ * @example
+ * ```ts
+ * import { BrowserStorageManager } from '@orkestrel/browser'
+ *
+ * const storage = new BrowserStorageManager(context.cookies, () => context.pages())
+ * const state = await storage.state({ origins: ['https://example.com'] })
+ * await storage.restore(state)
+ * ```
  */
 export class BrowserStorageManager implements BrowserStorageManagerInterface {
 	readonly #cookies: BrowserCookieManagerInterface
@@ -51,7 +60,7 @@ export class BrowserStorageManager implements BrowserStorageManagerInterface {
 			)
 		}
 
-		const cookies: BrowserCookieInput[] = (await this.#cookies.list()).map((cookie) => ({
+		const cookies: BrowserCookieInput[] = (await this.#cookies.cookies()).map((cookie) => ({
 			name: cookie.name,
 			value: cookie.value,
 			domain: cookie.domain,
