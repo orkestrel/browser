@@ -94,7 +94,7 @@ describe('compileGuardedEvaluateExpression', () => {
 		expect(BROWSER_RESULT_LIMIT_PATTERN.exec(pageDescription)).toBeNull()
 	})
 
-	it('recognizes the real guard throw via the anchored, distinctive pattern', () => {
+	it('recognizes the real guard throw through the anchored, distinctive pattern', () => {
 		const description = `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}4200000\n    at <anonymous>:1:100`
 		const match = BROWSER_RESULT_LIMIT_PATTERN.exec(description)
 		expect(match?.[1]).toBe('4200000')
@@ -130,7 +130,7 @@ describe('compileCodegenScript', () => {
 		).toBe(true)
 	})
 
-	it('embeds a selector containing quotes safely via JSON-safe quoting', () => {
+	it('embeds a selector containing quotes safely through JSON-safe quoting', () => {
 		const withQuote: BrowserCodegenAction[] = [{ action: 'click', selector: `div[data-x="y"]` }]
 		const script = compileCodegenScript(withQuote)
 		const expectedLine = `\tawait page.click(${JSON.stringify(`div[data-x="y"]`)})`

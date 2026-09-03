@@ -229,9 +229,9 @@ describe('Browser abort handling', () => {
 	})
 })
 
-// === connect() via CDP discovery (in-process server, no real browser)
+// === connect() through CDP discovery (in-process server, no real browser)
 
-describe('Browser connect() via CDP discovery', () => {
+describe('Browser connect() through CDP discovery', () => {
 	it('connects over CDP when the endpoint reports no targets', async () => {
 		server = await createCDPTestServer()
 		server.list([])
@@ -455,7 +455,7 @@ describe('Browser syncContexts()', () => {
 	})
 })
 
-// === create() — page creation via the CDP test server
+// === create() — page creation through the CDP test server
 
 describe('Browser create()', () => {
 	it('creates a page and emits the page event', async () => {
@@ -709,7 +709,7 @@ describe('Browser launch path', () => {
 		// released, not killed.
 		expect(() => process.kill(pid, 0)).not.toThrow()
 
-		// Reattach via CDP discovery on the same port.
+		// Reattach through CDP discovery on the same port.
 		const reattached = createBrowser({ cdp: { port }, timeout: 5000 })
 		await reattached.connect()
 		expect(reattached.status).toBe('connected')
@@ -1000,7 +1000,7 @@ describe('Browser events', () => {
 		expect(typeof browser.emitter.clear).toBe('function')
 	})
 
-	it('wires construction-time hooks via the on option', () => {
+	it('wires construction-time hooks through the on option', () => {
 		const browser = createBrowser({ on: { discover: ignoreCall } })
 		expect(browser.emitter.count('discover')).toBe(1)
 	})

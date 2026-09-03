@@ -48,7 +48,7 @@ export type CDPSentHandler = (message: CDPSentMessage) => void
  *
  * @remarks
  * `send()` records every frame in `sent` and invokes any handler registered
- * via `onSend` for that method. Tests drive
+ * through `onSend` for that method. Tests drive
  * server-initiated behavior with `reply` / `fail` (correlate a response by
  * id) and `event` (push a CDP event frame), or use the `onSend` hook to
  * script a response the moment a matching request arrives.

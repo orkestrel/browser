@@ -161,7 +161,7 @@ describe('findSystemBrowsers', () => {
 		])
 	})
 
-	it('dedupes a candidate reachable via two sources by normalized path', () => {
+	it('dedupes a candidate reachable through two sources by normalized path', () => {
 		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
 		scratches.push(scratch)
 		const shared = join(scratch.path, 'chrome')

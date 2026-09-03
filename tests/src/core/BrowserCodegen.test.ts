@@ -117,7 +117,7 @@ describe('BrowserCodegen', () => {
 			await expect(codegen.start()).rejects.toThrow('boom')
 			expect(codegen.started).toBe(false)
 
-			// No subscriptions should remain armed after the failed start
+			// No subscriptions remain armed after the failed start
 			transport.event(
 				'Runtime.bindingCalled',
 				createCodegenBindingPayload({ action: 'click', selector: '#x' }),

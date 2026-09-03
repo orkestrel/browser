@@ -452,8 +452,8 @@ export interface RegisteredFakeBrowser {
 const registeredFakeBrowsers: RegisteredFakeBrowser[] = []
 
 /**
- * Guaranteed teardown safety net for every fake browser process created via
- * `createFakeBrowserProcess` — SIGKILLs any still-alive registered pid
+ * Guaranteed teardown safety net for every fake browser process created
+ * through `createFakeBrowserProcess` — SIGKILLs any still-alive registered pid
  * (tolerating a not-yet-written pid file or an already-dead process) and
  * clears the registry. Wire into a top-level `afterEach` alongside each
  * test's own explicit kills.
@@ -513,7 +513,7 @@ export interface FakeBrowserProcessInterface {
 	/** Reads the complete process argument vector recorded at startup. */
 	arguments(): Promise<readonly string[]>
 	/**
-	 * Sever the active CDP WebSocket socket (via an HTTP control request to the
+	 * Sever the active CDP WebSocket socket (through an HTTP control request to the
 	 * fake's own server) while leaving the process itself alive — simulates a
 	 * transport-loss without a process exit. Only meaningful when constructed
 	 * with `serveCDP: true`.
@@ -524,7 +524,7 @@ export interface FakeBrowserProcessInterface {
 /**
  * Write a small, real Node script that stands in for a browser executable in
  * `Browser`'s launch path — no mocking of `child_process`. The script is
- * spawned as `node <script> <cdp-flags...>` (via `executable`/`args`) rather
+ * spawned as `node <script> <cdp-flags...>` (through `executable`/`args`) rather
  * than executed directly, so it is spawnable identically on Windows/macOS/Linux
  * (a directly-spawned shebang script is not portable to Windows).
  *
@@ -536,7 +536,7 @@ export interface FakeBrowserProcessInterface {
  * a descendant carrying the same argv and exiting 0 straight away, so the
  * spawned process is never the one that serves CDP; `unnamed` leaves
  * `SystemInfo.getProcessInfo` unanswered so the endpoint never names the
- * process serving it. With none of these options the process just idles (never
+ * process serving it. With none of these options the process idles (never
  * serves CDP) — useful for launch-failure/abort scenarios.
  * @returns A {@link FakeBrowserProcessInterface}
  */
@@ -557,7 +557,7 @@ export function createFakeBrowserProcess(
 	const argumentsFile = join(scratch.path, 'arguments.json')
 	const portFile = join(scratch.path, 'port.txt')
 
-	// No shebang: the script is spawned via `node <script>`, never executed
+	// No shebang: the script is spawned through `node <script>`, never executed
 	// directly, so it needs no execute bit and no shebang line.
 	const crashLogPath = join(scratch.path, 'crash.log')
 	const lines: string[] = [
@@ -636,7 +636,7 @@ export function createFakeBrowserProcess(
 
 	if (options.serveCDP === true) {
 		// The @orkestrel/websocket package is required by its real installed
-		// .cjs entry point (resolved via `createRequire` at script-GENERATION
+		// .cjs entry point (resolved by using `createRequire` at script-GENERATION
 		// time in this process, then embedded as a JSON-escaped string literal
 		// so it is valid on every platform including Windows backslash paths):
 		// this script runs from a temp dir with no node_modules of its own, and
