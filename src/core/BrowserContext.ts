@@ -1,6 +1,7 @@
 import type {
 	BrowserContextEventMap,
 	BrowserContextInterface,
+	BrowserContextOptions,
 	BrowserCookieManagerInterface,
 	BrowserDownloadOptions,
 	BrowserEmulationManagerInterface,
@@ -55,7 +56,6 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #creating: Set<Promise<BrowserPage>> = new Set()
 	readonly #syncing: BrowserTransition = new BrowserTransition()
 	#shutdown: Promise<void> | undefined
-	#closed = false
 
 	constructor(
 		client: CDPClientInterface,
@@ -64,6 +64,7 @@ export class BrowserContext implements BrowserContextInterface {
 		writer?: BrowserWriterInterface,
 		emulation?: BrowserEmulationOptions,
 		downloads?: BrowserDownloadOptions,
+		options?: BrowserContextOptions,
 	) {
 		this.#client = client
 		if (viewport !== undefined) validateBrowserViewport(viewport)
@@ -71,7 +72,10 @@ export class BrowserContext implements BrowserContextInterface {
 		this.#viewport = viewport
 		this.#writer = writer
 		this.#downloads = downloads
-		this.#emitter = new Emitter()
+		this.#emitter = new Emitter({
+			...(options?.on !== undefined ? { on: options.on } : {}),
+			...(options?.error !== undefined ? { error: options.error } : {}),
+		})
 		this.#cookies = new BrowserCookieManager(client, id)
 		this.#permissions = new BrowserPermissionManager(client, id)
 		this.#storage = new BrowserStorageManager(this.#cookies, () => this.pages())
@@ -113,7 +117,7 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
-		if (this.#closed) throw new BrowserError('Browser context is closed')
+		if (this.#shutdown !== undefined) throw new BrowserError('Browser context is closed')
 
 		const attempt = this.#create(options)
 		this.#creating.add(attempt)
@@ -130,7 +134,7 @@ export class BrowserContext implements BrowserContextInterface {
 			await active
 			active = this.#syncing.pending
 		}
-		if (this.#closed) throw new BrowserError('Browser context is closed')
+		if (this.#shutdown !== undefined) throw new BrowserError('Browser context is closed')
 
 		await this.#syncing.execute(() => this.#sync(targets))
 	}
@@ -139,7 +143,6 @@ export class BrowserContext implements BrowserContextInterface {
 		const active = this.#shutdown
 		if (active !== undefined) return active
 
-		this.#closed = true
 		const shutdown = this.#destroyResources()
 		this.#shutdown = shutdown
 		return shutdown
@@ -149,7 +152,6 @@ export class BrowserContext implements BrowserContextInterface {
 		const active = this.#shutdown
 		if (active !== undefined) return active
 
-		this.#closed = true
 		const shutdown = this.#closeResources()
 		this.#shutdown = shutdown
 		return shutdown
@@ -173,14 +175,16 @@ export class BrowserContext implements BrowserContextInterface {
 
 		try {
 			const viewport = options?.viewport ?? this.#viewport
-			page = await this.#attach(targetId, options?.url ?? 'about:blank', viewport)
+			page = await this.#attach(targetId, options?.url ?? 'about:blank', viewport, options)
 
 			if (options?.url !== undefined && options.url !== 'about:blank') {
 				await page.navigate(options.url, {
 					...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
 				})
 			}
-			if (this.#closed) throw new BrowserError('Browser context closed during page creation')
+			if (this.#shutdown !== undefined) {
+				throw new BrowserError('Browser context closed during page creation')
+			}
 
 			this.#pages.set(targetId, page)
 			this.#emitter.emit('page', page)
@@ -206,11 +210,11 @@ export class BrowserContext implements BrowserContextInterface {
 		}
 
 		for (const target of pageTargets) {
-			if (this.#closed || this.#pages.has(target.id)) continue
+			if (this.#shutdown !== undefined || this.#pages.has(target.id)) continue
 
 			try {
 				const page = await this.#reattach(target.id, target.url, this.#viewport)
-				if (this.#closed) {
+				if (this.#shutdown !== undefined) {
 					await page.destroy()
 					continue
 				}
@@ -226,6 +230,7 @@ export class BrowserContext implements BrowserContextInterface {
 		targetId: string,
 		url: string,
 		viewport: BrowserViewport | undefined,
+		options?: BrowserPageOptions,
 	): Promise<BrowserPage> {
 		let sessionId: string | undefined
 		let page: BrowserPage | undefined
@@ -242,6 +247,8 @@ export class BrowserContext implements BrowserContextInterface {
 				url,
 				frameId,
 				this.#id,
+				undefined,
+				options,
 			)
 			await this.#configurePage(page)
 			await this.#emulation.attach(page)
@@ -425,7 +432,7 @@ export class BrowserContext implements BrowserContextInterface {
 
 	#observe(page: BrowserPage): void {
 		page.emitter.on('popup', (popup) => {
-			if (this.#closed) {
+			if (this.#shutdown !== undefined) {
 				void popup.destroy().catch(() => undefined)
 				return
 			}
@@ -443,7 +450,7 @@ export class BrowserContext implements BrowserContextInterface {
 	async #adoptPopup(popup: BrowserPage): Promise<void> {
 		try {
 			await this.#emulation.attach(popup)
-			if (this.#closed) {
+			if (this.#shutdown !== undefined) {
 				await popup.destroy()
 				return
 			}

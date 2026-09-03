@@ -188,7 +188,7 @@ describe('createCDPTestServer', () => {
 		const versionResponse = await fetch(`${server.url}/json/version`)
 		const version: unknown = await versionResponse.json()
 		expect(readProperty<string>(version, 'webSocketDebuggerUrl')).toBe(
-			`ws://localhost:${server.port}/cdp`,
+			`ws://127.0.0.1:${server.port}/cdp`,
 		)
 
 		const listResponse = await fetch(`${server.url}/json/list`)

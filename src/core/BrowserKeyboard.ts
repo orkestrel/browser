@@ -5,8 +5,8 @@ import type {
 } from './types.js'
 import {
 	computeBrowserModifiers,
+	extractBrowserChord,
 	keyToBrowserInput,
-	parseBrowserChord,
 	validateBrowserInputOptions,
 } from './helpers.js'
 
@@ -66,7 +66,7 @@ export class BrowserKeyboard implements BrowserKeyboardInterface {
 
 	async press(value: string, options?: BrowserInputOptions): Promise<void> {
 		validateBrowserInputOptions(options)
-		const chord = parseBrowserChord(value)
+		const chord = extractBrowserChord(value)
 		for (const modifier of chord.modifiers) await this.down(modifier)
 		try {
 			await this.down(chord.key)

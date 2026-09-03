@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest'
 import type { BrowserPageInterface } from '@src/core'
 import { BrowserContext } from '@src/core'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
-import { createConnectedCDPClient, createTarget, replyOk, scriptCDPAttach } from '../../setup.js'
+import {
+	createConnectedCDPClient,
+	createTarget,
+	replyOk,
+	scriptCDPAttach,
+	throwListenerError,
+} from '../../setup.js'
 
 // === BrowserContext
 
@@ -403,6 +409,29 @@ describe('BrowserContext', () => {
 			await context.destroy()
 
 			await expect(context.create()).rejects.toThrow('Browser context is closed')
+		})
+	})
+
+	describe('emitter options', () => {
+		it('wires the initial listeners named by on and reports a throwing listener to error', async () => {
+			const { client } = await createConnectedCDPClient()
+			const closes = createRecorder<[]>()
+			const failures = createRecorder<[error: unknown, event: string]>()
+			const context = new BrowserContext(
+				client,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				undefined,
+				{ on: { close: closes.handler }, error: failures.handler },
+			)
+			context.emitter.on('close', throwListenerError)
+
+			await context.destroy()
+
+			expect(closes.count).toBe(1)
+			expect(failures.calls.map(([, event]) => event)).toEqual(['close'])
 		})
 	})
 })

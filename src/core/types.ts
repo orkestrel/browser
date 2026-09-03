@@ -185,11 +185,15 @@ export type BrowserWaitUntil = 'commit' | 'load' | 'domcontentloaded'
  * Describes the options for creating a browser page.
  *
  * @remarks
+ * - `on` — initial event listeners wired at construction
+ * - `error` — observer error handler forwarded to the emitter
  * - `url` — navigate to this URL immediately after creation
  * - `viewport` — override the context-level default viewport
  * - `timeout` — navigation timeout for the initial URL
  */
 export interface BrowserPageOptions {
+	readonly on?: EmitterHooks<BrowserPageEventMap>
+	readonly error?: EmitterErrorHandler
 	readonly url?: string
 	readonly viewport?: BrowserViewport
 	readonly timeout?: number
@@ -327,7 +331,7 @@ export interface BrowserWaitOptions extends BrowserActionOptions {
  * Describes the options for taking a page screenshot.
  *
  * @remarks
- * - `path` — file path to persist the screenshot to, via the page's writer
+ * - `path` — file path to persist the screenshot to, through the page's writer
  * - `full` — capture the full scrollable page (default `false`)
  * - `format` — image format (default `'png'`)
  * - `quality` — JPEG quality 0–100 (ignored for PNG)
@@ -367,7 +371,7 @@ export interface BrowserContentResult {
  *
  * @remarks
  * - `bytes` — raw image bytes
- * - `path` — file path if persisted via the page's writer, otherwise undefined
+ * - `path` — file path if persisted through the page's writer, otherwise undefined
  */
 export interface BrowserScreenshotResult {
 	readonly bytes: Uint8Array
@@ -1402,8 +1406,20 @@ export interface BrowserDownloadOptions {
 	readonly named?: boolean
 }
 
-/** Describes the options for creating and configuring an isolated browser context. */
+/**
+ * Describes the options for creating and configuring an isolated browser context.
+ *
+ * @remarks
+ * - `on` — initial event listeners wired at construction
+ * - `error` — observer error handler forwarded to the emitter
+ * - `proxy` — proxy server and bypass list for the context
+ * - `origins` — origins granted universal network access
+ * - `downloads` — download policy for the context
+ * - `emulation` — emulation overrides inherited by every page of the context
+ */
 export interface BrowserContextOptions {
+	readonly on?: EmitterHooks<BrowserContextEventMap>
+	readonly error?: EmitterErrorHandler
 	readonly proxy?: BrowserProxy
 	readonly origins?: readonly string[]
 	readonly downloads?: BrowserDownloadOptions

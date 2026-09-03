@@ -1452,12 +1452,13 @@ export function readBrowserQuad(value: unknown): BrowserQuad {
 }
 
 /**
- * Parses a keyboard chord such as `Control+Shift+P`.
+ * Extracts a keyboard chord such as `Control+Shift+P` into its parts.
  *
  * @param value - Chord source
  * @returns Canonical modifiers and terminal key
+ * @throws Thrown when the chord is empty or names an unsupported modifier.
  */
-export function parseBrowserChord(value: string): BrowserChord {
+export function extractBrowserChord(value: string): BrowserChord {
 	const parts = value.split('+').filter((part) => part.length > 0)
 	const key = parts.pop()
 	if (key === undefined) throw new BrowserError('Browser key chord is empty')
@@ -1796,17 +1797,6 @@ export function readBrowserSnapshot(
 	}
 
 	return { documents, styles: [...styles] }
-}
-
-/**
- * Reads one captured node attribute.
- *
- * @param node - Captured browser node
- * @param name - Attribute name
- * @returns Attribute value, or undefined
- */
-export function attributeOfBrowserNode(node: BrowserNode, name: string): string | undefined {
-	return node.attributes[name]
 }
 
 /**

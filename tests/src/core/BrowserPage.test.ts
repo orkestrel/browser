@@ -39,6 +39,7 @@ import {
 	scriptTrustedSelector,
 	JPEG_BASE64,
 	PNG_BASE64,
+	throwListenerError,
 } from '../../setup.js'
 
 // === BrowserPage
@@ -1151,6 +1152,37 @@ describe('BrowserPage', () => {
 			await expect(page.codegen()).rejects.toSatisfy(isBrowserError)
 			expect(transport.sent).toHaveLength(sent)
 		})
+	})
+})
+
+// === BrowserPage emitter options
+
+describe('BrowserPage emitter options', () => {
+	it('wires the initial listeners named by on and reports a throwing listener to error', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const messages = createRecorder<[message: BrowserConsoleMessage]>()
+		const failures = createRecorder<[error: unknown, event: string]>()
+		const page = new BrowserPage(
+			client,
+			'target-1',
+			'session-1',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			{ on: { console: messages.handler }, error: failures.handler },
+		)
+		page.emitter.on('console', throwListenerError)
+
+		transport.event(
+			'Runtime.consoleAPICalled',
+			{ type: 'log', timestamp: 1, args: [{ value: 'hello' }] },
+			'session-1',
+		)
+
+		expect(messages.calls[0]?.[0]).toMatchObject({ level: 'log', text: 'hello' })
+		expect(failures.calls.map(([, event]) => event)).toEqual(['console'])
 	})
 })
 

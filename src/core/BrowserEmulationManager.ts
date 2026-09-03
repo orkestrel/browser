@@ -129,15 +129,10 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 			})
 		}
 		if (options.offline !== undefined) {
-			await page.send('Network.emulateNetworkConditions', {
-				offline: options.offline,
-				latency: 0,
-				downloadThroughput: -1,
-				uploadThroughput: -1,
-			})
+			await page.network.offline(options.offline)
 		}
 		if (options.headers !== undefined) {
-			await page.send('Network.setExtraHTTPHeaders', { headers: options.headers })
+			await page.network.headers(options.headers)
 		}
 		if (options.credentials !== undefined) {
 			await page.network.credentials(options.credentials)
@@ -165,15 +160,10 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 			await page.send('Emulation.setEmulatedMedia', { media: '', features: [] })
 		}
 		if (options.offline !== undefined) {
-			await page.send('Network.emulateNetworkConditions', {
-				offline: false,
-				latency: 0,
-				downloadThroughput: -1,
-				uploadThroughput: -1,
-			})
+			await page.network.offline(false)
 		}
 		if (options.headers !== undefined) {
-			await page.send('Network.setExtraHTTPHeaders', { headers: {} })
+			await page.network.headers({})
 		}
 		if (options.credentials !== undefined) await page.network.credentials(undefined)
 	}

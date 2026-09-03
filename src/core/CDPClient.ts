@@ -180,7 +180,7 @@ export class CDPClient implements CDPClientInterface {
 	 * Closes the transport and rejects all pending requests.
 	 *
 	 * @remarks
-	 * Subscriptions registered via `subscribe()` are client-level
+	 * Subscriptions registered through `subscribe()` are client-level
 	 * registrations, not connection-level state — they survive `close()`
 	 * (and a subsequent `reconnect()`/`connect()`) and keep firing once the
 	 * transport is active again. Only pending requests are rejected here.

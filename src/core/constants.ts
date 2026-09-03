@@ -212,7 +212,7 @@ export const BROWSER_DEFAULT_VIEWPORT_HEIGHT = 720
 export const BROWSER_CODEGEN_BINDING_NAME = '__orkestrelBrowserCodegen'
 
 /**
- * Holds the in-page recorder script injected via `Page.addScriptToEvaluateOnNewDocument`
+ * Holds the in-page recorder script injected through `Page.addScriptToEvaluateOnNewDocument`
  * and `Runtime.evaluate`.
  *
  * @remarks

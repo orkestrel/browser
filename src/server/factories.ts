@@ -1,9 +1,8 @@
 import type { CDPTransportInterface, BrowserWriterInterface } from '@src/core'
 import type { BrowserInterface, BrowserOptions, WebSocketCDPTransportOptions } from './types.js'
-import { mkdir, writeFile } from 'node:fs/promises'
-import { dirname } from 'node:path'
 import { Browser } from './Browser.js'
 import { WebSocketCDPTransport } from './transports/WebSocketCDPTransport.js'
+import { FileBrowserWriter } from './writers/FileBrowserWriter.js'
 
 /**
  * Creates a raw-CDP Browser façade.
@@ -39,10 +38,5 @@ export function createCDPTransport(options: WebSocketCDPTransportOptions): CDPTr
  * @returns A {@link BrowserWriterInterface} that persists bytes through `node:fs/promises`
  */
 export function createBrowserWriter(): BrowserWriterInterface {
-	return {
-		async write(path: string, data: Uint8Array): Promise<void> {
-			await mkdir(dirname(path), { recursive: true })
-			await writeFile(path, data)
-		},
-	}
+	return new FileBrowserWriter()
 }

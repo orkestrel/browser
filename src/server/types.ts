@@ -122,7 +122,8 @@ export interface BrowserCDPOptions {
  *   an external disconnect (process exit or transport loss); always preceded
  *   by a coded `error` describing the cause
  * - `launch` — a new browser process was launched, carrying the engine
- * - `page` — a new page was created via the `create()` shortcut
+ * - `page` — a new page was created through the `create()` shortcut
+ * - `context` — an isolated browser context was created, carrying the context
  * - `error` — a connection or launch fault
  * - `destroy` — the browser and all resources were torn down
  */
@@ -182,7 +183,7 @@ export interface BrowserOptions {
  * Encapsulates the full raw-CDP browser lifecycle behind a clean interface:
  *
  * **Connection strategy** (executed by `connect()`):
- * 1. If `cdp.endpoint` is set, connect directly via CDP
+ * 1. If `cdp.endpoint` is set, connect directly through CDP
  * 2. Probe `localhost:{cdp.port}` for an existing browser (passive discovery)
  * 3. If found, connect over CDP (preserves the existing browser session)
  * 4. Otherwise, launch a new browser process with raw-CDP flags
@@ -218,6 +219,8 @@ export interface BrowserOptions {
  * **Page management:**
  * - `context(index?)` → one context or first
  * - `contexts()` → all contexts
+ * - `isolate` — create and register an isolated CDP context with validated
+ *   proxy, download, origin, and emulation options
  * - `create(options?)` → shortcut to open a page in the default context
  */
 export interface BrowserInterface {

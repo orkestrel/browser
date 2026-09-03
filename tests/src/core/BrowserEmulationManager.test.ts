@@ -13,6 +13,7 @@ describe('BrowserEmulationManager', () => {
 			'Emulation.setTimezoneOverride',
 			'Emulation.setGeolocationOverride',
 			'Emulation.setEmulatedMedia',
+			'Network.enable',
 			'Network.emulateNetworkConditions',
 			'Network.setExtraHTTPHeaders',
 		]) {
@@ -58,6 +59,58 @@ describe('BrowserEmulationManager', () => {
 				{ name: 'prefers-reduced-motion', value: 'reduce' },
 			],
 		})
+	})
+
+	it('enables the Network domain before overriding offline state and extra headers', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Network.enable',
+			'Network.emulateNetworkConditions',
+			'Network.setExtraHTTPHeaders',
+		]) {
+			replyOk(transport, method)
+		}
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const emulation = new BrowserEmulationManager(() => [page])
+
+		await emulation.apply({ offline: true, headers: { 'x-test': 'one' } })
+
+		const methods = transport.sent.map((message) => message.method)
+		expect(methods.indexOf('Network.enable')).toBeGreaterThanOrEqual(0)
+		expect(methods.indexOf('Network.enable')).toBeLessThan(
+			methods.indexOf('Network.emulateNetworkConditions'),
+		)
+		expect(methods.indexOf('Network.enable')).toBeLessThan(
+			methods.indexOf('Network.setExtraHTTPHeaders'),
+		)
+	})
+
+	it('clears the offline state and extra headers through the page network manager', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Network.enable',
+			'Network.emulateNetworkConditions',
+			'Network.setExtraHTTPHeaders',
+			'Emulation.setLocaleOverride',
+		]) {
+			replyOk(transport, method)
+		}
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const emulation = new BrowserEmulationManager(() => [page])
+
+		await emulation.apply({ offline: true, headers: { 'x-test': 'one' } })
+		await emulation.apply({ locale: 'fr-FR' })
+
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Network.emulateNetworkConditions')
+				.map((message) => message.params?.['offline']),
+		).toEqual([true, false])
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Network.setExtraHTTPHeaders')
+				.map((message) => message.params?.['headers']),
+		).toEqual([{ 'x-test': 'one' }, {}])
 	})
 
 	it('inherits saved options when a later page is attached', async () => {

@@ -19,6 +19,7 @@ import type { CDPSentMessage } from './setup.js'
 import { describe, expect, it } from 'vitest'
 import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
 import {
+	createAttachedPage,
 	createCDPTransport,
 	createCodegenBindingPayload,
 	createConnectedCDPClient,
@@ -32,6 +33,7 @@ import {
 	JPEG_BASE64,
 	PNG_BASE64,
 	readCDPExpression,
+	readCDPParams,
 	replyOk,
 	scriptCDPAttach,
 	scriptEvaluate,
@@ -190,6 +192,41 @@ describe('createConnectedCDPClient', () => {
 		replyOk(transport, 'Browser.getVersion', { product: 'Test/1.0' })
 		await expect(client.send('Browser.getVersion')).resolves.toStrictEqual({ product: 'Test/1.0' })
 		expect(transport.sent.map((message) => message.method)).toStrictEqual(['Browser.getVersion'])
+	})
+})
+
+describe('createAttachedPage', () => {
+	it('returns a page bound to the named session and defaults it to session-1', async () => {
+		const named = await createAttachedPage('session-5')
+		replyOk(named.transport, 'Runtime.evaluate', { result: { value: 3 } })
+
+		await named.page.evaluate('1 + 2')
+		expect(readCDPParams(named.transport, 'Runtime.evaluate')).toHaveLength(1)
+		expect(
+			named.transport.sent.filter((message) => message.method === 'Runtime.evaluate')[0]?.sessionId,
+		).toBe('session-5')
+
+		const defaulted = await createAttachedPage()
+		replyOk(defaulted.transport, 'Runtime.evaluate', { result: { value: 3 } })
+		await defaulted.page.evaluate('1 + 2')
+		expect(
+			defaulted.transport.sent.filter((message) => message.method === 'Runtime.evaluate')[0]
+				?.sessionId,
+		).toBe('session-1')
+	})
+})
+
+describe('readCDPParams', () => {
+	it('collects the params of every matching frame in send order and reports an absent record as empty', async () => {
+		const transport = createCDPTransport()
+
+		await transport.send(JSON.stringify({ id: 1, method: 'Page.navigate', params: { url: 'a' } }))
+		await transport.send(JSON.stringify({ id: 2, method: 'Page.enable' }))
+		await transport.send(JSON.stringify({ id: 3, method: 'Page.navigate', params: { url: 'b' } }))
+
+		expect(readCDPParams(transport, 'Page.navigate')).toStrictEqual([{ url: 'a' }, { url: 'b' }])
+		expect(readCDPParams(transport, 'Page.enable')).toStrictEqual([{}])
+		expect(readCDPParams(transport, 'Page.close')).toStrictEqual([])
 	})
 })
 

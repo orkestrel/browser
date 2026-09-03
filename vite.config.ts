@@ -142,6 +142,23 @@ export const guides = (): UserConfig => ({
 	},
 })
 
+// The live external services this package drives. It starts nothing itself:
+// `scripts/service.sh` provisions, `tests/setupService.ts` proves readiness, and
+// the project stays out of `npm test` because a real service answers it.
+export const service = (): UserConfig => ({
+	resolve,
+	test: {
+		name: { label: 'service', color: 'red' },
+		include: ['tests/service/**/*.test.ts'],
+		setupFiles: ['./tests/setup.ts', './tests/setupService.ts'],
+		environment: 'node',
+		browser: { enabled: false },
+		testTimeout: 120_000,
+		hookTimeout: 120_000,
+		fileParallelism: false,
+	},
+})
+
 export const distribution = (): UserConfig => ({
 	resolve,
 	test: {
@@ -177,6 +194,6 @@ export const probe = (): UserConfig => ({
 export default defineConfig({
 	resolve,
 	test: {
-		projects: [srcCore, srcServer, policy, config, setup, guides, distribution, probe],
+		projects: [srcCore, srcServer, policy, config, setup, guides, service, distribution, probe],
 	},
 })

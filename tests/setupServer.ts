@@ -274,11 +274,11 @@ export class CDPTestServer implements CDPTestServerInterface {
 	}
 
 	get url(): string {
-		return `http://localhost:${this.port}`
+		return `http://127.0.0.1:${this.port}`
 	}
 
 	get endpoint(): string {
-		return `ws://localhost:${this.port}/cdp`
+		return `ws://127.0.0.1:${this.port}/cdp`
 	}
 
 	get received(): readonly CDPServerReceived[] {
@@ -444,7 +444,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 // === Fake browser process (real spawned executable, no mocks)
 
 /** A registered fake-browser fixture, tracked for guaranteed teardown. */
-interface RegisteredFakeBrowser {
+export interface RegisteredFakeBrowser {
 	readonly scratch: ScratchInterface
 	readonly pidNames: readonly string[]
 }

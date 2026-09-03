@@ -34,7 +34,7 @@ export const BROWSER_PROFILE_PREFIX = 'orkestrel-browser-'
 /** Bounds each launched-process exit window during TERM-to-KILL teardown. */
 export const BROWSER_KILL_GRACE_MS = 3_000
 
-/** Bounds the `discover: false` port-occupancy probe before launching — short, since it only needs to detect an already-listening CDP endpoint, not perform full discovery. */
+/** Bounds the `discover: false` port-occupancy probe before launching — short, because it only needs to detect an already-listening CDP endpoint, not perform full discovery. */
 export const BROWSER_PORT_PROBE_TIMEOUT_MS = 200
 
 /** Defers once, briefly, when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event (which libuv may reap slightly later than the socket close) first say over the diagnosis. */

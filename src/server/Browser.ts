@@ -225,6 +225,7 @@ export class Browser implements BrowserInterface {
 			createBrowserWriter(),
 			options?.emulation,
 			options?.downloads,
+			options,
 		)
 
 		try {

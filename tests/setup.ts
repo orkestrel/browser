@@ -5,7 +5,7 @@ import type {
 	CDPTransportInterface,
 	BrowserWriterInterface,
 } from '@src/core'
-import { BrowserCodegen, createCDPClient } from '@src/core'
+import { BrowserCodegen, BrowserPage, createCDPClient } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
@@ -164,6 +164,38 @@ export async function createConnectedCDPClient(): Promise<ConnectedCDPFixture> {
 	const client = createCDPClient({ transport })
 	await client.connect()
 	return { client, transport }
+}
+
+/** A real page attached over the in-memory transport, and the transport driving it. */
+export interface AttachedPageFixture extends ConnectedCDPFixture {
+	readonly page: BrowserPage
+}
+
+/**
+ * Create a real {@link BrowserPage} over a connected in-memory CDP client.
+ *
+ * @param session - Flattened CDP session id the page dispatches on
+ * @returns The page, its client, and the scriptable transport
+ */
+export async function createAttachedPage(session = 'session-1'): Promise<AttachedPageFixture> {
+	const { client, transport } = await createConnectedCDPClient()
+	return { client, transport, page: new BrowserPage(client, 'target-1', session) }
+}
+
+/**
+ * Read the parameter record of every frame the transport recorded for one method.
+ *
+ * @param transport - The fake transport to read
+ * @param method - The CDP method to collect
+ * @returns Each matching frame's params, in send order, with an absent record as `{}`
+ */
+export function readCDPParams(
+	transport: CDPTestTransportInterface,
+	method: string,
+): ReadonlyArray<Readonly<Record<string, unknown>>> {
+	return transport.sent
+		.filter((message) => message.method === method)
+		.map((message) => message.params ?? {})
 }
 
 /**

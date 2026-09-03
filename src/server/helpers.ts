@@ -54,7 +54,7 @@ import {
  *    and the per-OS Playwright cache directory) — the top-level `chromium`
  *    link/binary, then the highest-revision `chromium-*` install found
  *
- * Each candidate is classified into a {@link BrowserEngine} via
+ * Each candidate is classified into a {@link BrowserEngine} through
  * `parseBrowserEngine` (unclassifiable candidates default to `'chromium'`),
  * and `options.engine` (when given) narrows the result to that engine.
  *
@@ -69,15 +69,15 @@ export function findSystemBrowsers(options?: SystemBrowserOptions): readonly Sys
 
 	candidates.push(...findEnvOverrides(env))
 
-	const paths = options?.paths ?? defaultInstallPaths(platform, env)
+	const paths = options?.paths ?? buildInstallPaths(platform, env)
 	candidates.push(...findInstallPaths(paths))
 
 	const names = options?.names ?? BROWSER_EXECUTABLE_NAMES
 	candidates.push(...probePathNames(names, platform))
 
-	const stores = options?.stores ?? defaultStoreBases(env, platform)
+	const stores = options?.stores ?? buildStoreBases(env, platform)
 	for (const store of stores) {
-		candidates.push(...findInStore(store, platform))
+		candidates.push(...findStorePaths(store, platform))
 	}
 
 	const seen = new Set<string>()
@@ -185,13 +185,13 @@ export function findEnvOverrides(
 }
 
 /** Builds the default well-known install-path candidates for a platform, deriving Windows roots from env vars. */
-export function defaultInstallPaths(
+export function buildInstallPaths(
 	platform: string,
 	env: Readonly<Record<string, string | undefined>>,
 ): readonly string[] {
 	if (platform !== 'win32') return BROWSER_EXECUTABLE_PATHS[platform] ?? []
 
-	const roots = windowsRoots(env)
+	const roots = buildWindowsRoots(env)
 	const paths: string[] = []
 	for (const root of roots) {
 		for (const suffix of BROWSER_WINDOWS_SUFFIXES) {
@@ -202,7 +202,9 @@ export function defaultInstallPaths(
 }
 
 /** Derives Windows install roots from env vars, falling back to well-known literals when absent. */
-export function windowsRoots(env: Readonly<Record<string, string | undefined>>): readonly string[] {
+export function buildWindowsRoots(
+	env: Readonly<Record<string, string | undefined>>,
+): readonly string[] {
 	const programFiles = env['PROGRAMFILES'] ?? BROWSER_WINDOWS_ROOT_FALLBACKS['PROGRAMFILES']
 	const programFilesX86 =
 		env['PROGRAMFILES(X86)'] ?? BROWSER_WINDOWS_ROOT_FALLBACKS['PROGRAMFILES(X86)']
@@ -257,7 +259,7 @@ export function readFirstLine(output: string): string | undefined {
 }
 
 /** Builds the default Playwright browser store base directories to search for a managed Chromium. */
-export function defaultStoreBases(
+export function buildStoreBases(
 	env: Readonly<Record<string, string | undefined>>,
 	platform: string,
 ): readonly string[] {
@@ -281,7 +283,7 @@ export function defaultStoreBases(
 }
 
 /** Searches one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first. */
-export function findInStore(base: string, platform: string): readonly string[] {
+export function findStorePaths(base: string, platform: string): readonly string[] {
 	const joiner = platform === 'win32' ? pathWin32.join : pathPosix.join
 	const found: string[] = []
 
@@ -325,7 +327,7 @@ export function launchBrowserProcess(
 	profile?: string,
 	extra?: readonly string[],
 ): ChildProcess {
-	// Caller-supplied args come FIRST so a script path (e.g. `node <script>`,
+	// Caller-supplied args come FIRST so a script path (for example `node <script>`,
 	// used to spawn a Node stand-in executable cross-platform in tests) lands
 	// as an early positional argv entry ahead of the CDP flags below —
 	// Chromium itself accepts flags in any order, so production is unaffected.

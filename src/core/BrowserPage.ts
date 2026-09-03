@@ -14,6 +14,7 @@ import type {
 	BrowserPDFResult,
 	BrowserPageInterface,
 	BrowserPageEventMap,
+	BrowserPageOptions,
 	BrowserResponse,
 	BrowserScreenshotOptions,
 	BrowserScreenshotResult,
@@ -138,6 +139,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		frameId?: string,
 		contextId?: string,
 		opener?: BrowserPageInterface,
+		options?: BrowserPageOptions,
 	) {
 		super(client, sessionId, frameId ?? targetId, url ?? 'about:blank', undefined, undefined, false)
 		this.#client = client
@@ -146,7 +148,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#writer = writer
 		this.#contextId = contextId
 		this.#opener = opener
-		this.#emitter = new Emitter()
+		this.#emitter = new Emitter({
+			...(options?.on !== undefined ? { on: options.on } : {}),
+			...(options?.error !== undefined ? { error: options.error } : {}),
+		})
 		this.#network = new BrowserNetworkManager(this, writer)
 		this.#navigationManager = new BrowserNavigationManager(this)
 		this.#scripts = new BrowserScriptManager(this)

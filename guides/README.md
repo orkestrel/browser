@@ -1,6 +1,6 @@
 # Guides
 
-A dual-axis index into this repository's guides — by concept, and by directory (AGENTS §22).
+A dual-axis index into this repository's guides — by concept, and by directory.
 
 ## By concept
 
@@ -62,6 +62,19 @@ a CDP client sends and receives JSON-RPC frames over). It documents **that
 package's** surface, not anything sourced in this repo; it is kept here for
 the same reason.
 
+[`test.md`](test.md) is a byte-identical mirror of the guide for
+`@orkestrel/test` — the devDependency supplying this repository's shared test
+infrastructure (the call recorder, the real delay, the owned scratch
+directory). It documents **that package's** surface, not anything sourced in
+this repo; it is kept here so a reader of this workspace's suites can see the
+helpers they are built from without leaving this guide set.
+
+[`probe.md`](probe.md) is a byte-identical mirror of the guide for
+`@orkestrel/probe` — the devDependency behind the `prove` tool this
+workspace's agents call to settle a TypeScript claim before relying on it. It
+documents **that package's** surface, not anything sourced in this repo; it is
+kept here for the same reason.
+
 ## See also
 
-- [`AGENTS.md`](../AGENTS.md) — the rules; §22 documentation-as-contracts.
+- [`AGENTS.md`](../AGENTS.md) — the rules, including the documentation contract.

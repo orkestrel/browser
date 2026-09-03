@@ -23,7 +23,7 @@ import {
 	createBrowserProfile,
 	findSystemBrowsers,
 	findSystemBrowser,
-	findInStore,
+	findStorePaths,
 	parseBrowserEngine,
 	launchBrowserProcess,
 	probePathNames,
@@ -267,7 +267,7 @@ describe('probePathNames', () => {
 	})
 })
 
-describe('findInStore', () => {
+describe('findStorePaths', () => {
 	it('orders multi-digit browser revisions numerically from newest to oldest', () => {
 		const scratch = createScratch({ prefix: 'orkestrel-browser-test-' })
 		scratches.push(scratch)
@@ -288,7 +288,7 @@ describe('findInStore', () => {
 		for (const relative of relatives) scratch.write(relative, '')
 		const binaries = relatives.map((relative) => join(scratch.path, relative))
 
-		expect(findInStore(scratch.path, process.platform)).toEqual([...binaries].reverse())
+		expect(findStorePaths(scratch.path, process.platform)).toEqual([...binaries].reverse())
 	})
 })
 
@@ -340,9 +340,9 @@ describe('waitForCDPReady', () => {
 	it('respects the deadline against a hanging endpoint', async () => {
 		server = await createCDPTestServer()
 		server.hang(true)
-		const start = Date.now()
+		const start = performance.now()
 		await expect(waitForCDPReady(server.port, 150)).rejects.toThrow(/did not become ready/)
-		expect(Date.now() - start).toBeLessThan(1000)
+		expect(performance.now() - start).toBeLessThan(1000)
 	})
 
 	it('honors an explicit host', async () => {
@@ -355,13 +355,13 @@ describe('waitForCDPReady', () => {
 		server = await createCDPTestServer()
 		server.hang(true)
 		const controller = new AbortController()
-		const start = Date.now()
+		const start = performance.now()
 		const pending = waitForCDPReady(server.port, 5000, '127.0.0.1', controller.signal)
 
 		controller.abort()
 
 		await expect(pending).rejects.toThrow(/abort/i)
-		expect(Date.now() - start).toBeLessThan(1000)
+		expect(performance.now() - start).toBeLessThan(1000)
 	})
 })
 

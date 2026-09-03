@@ -6,7 +6,6 @@ import type { BrowserCodegenAction } from '@src/core'
 import { describe, it, expect } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
-	attributeOfBrowserNode,
 	BrowserResultLimitError,
 	decodeBase64,
 	readBrowserAttributes,
@@ -411,8 +410,8 @@ describe('snapshot node helpers', () => {
 		expect(matchesBrowserNode(node, { frame: 'frame-child' })).toBe(false)
 		expect(isBrowserNodeVisible(node)).toBe(true)
 		expect(isBrowserNodeVisible(text)).toBe(false)
-		expect(attributeOfBrowserNode(node, 'id')).toBe('hero')
-		expect(attributeOfBrowserNode(node, 'missing')).toBeUndefined()
+		expect(node.attributes['id']).toBe('hero')
+		expect(node.attributes['missing']).toBeUndefined()
 	})
 })
 
