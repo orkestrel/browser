@@ -29,8 +29,14 @@ export type CDPTransportEventMap = {
  */
 export interface CDPTransportInterface {
 	readonly emitter: EmitterInterface<CDPTransportEventMap>
+	/** Opens the underlying connection. */
 	start(): Promise<void>
+	/**
+	 * Writes one raw text frame to the connection. Throws a coded `BrowserConnectionError`
+	 * carrying the transport `url` when called before the connection opens or after it closes.
+	 */
 	send(data: string): Promise<void>
+	/** Closes the underlying connection and releases its resources. */
 	close(): Promise<void>
 }
 
@@ -121,15 +127,25 @@ export interface CDPTarget {
 export interface CDPClientInterface {
 	readonly emitter: EmitterInterface<CDPClientEventMap>
 	readonly connected: boolean
+	/** Starts the transport and begins dispatching. Idempotent. */
 	connect(): Promise<void>
+	/** Closes the transport and re-establishes it. */
 	reconnect(): Promise<void>
+	/**
+	 * Issues a CDP method call with optional params and a trailing `CDPSendOptions` carrying
+	 * the `session` to scope it to and a per-call `timeout` overriding the client-wide
+	 * default; rejects on timeout.
+	 */
 	send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
 		options?: CDPSendOptions,
 	): Promise<unknown>
+	/** Registers a handler for a CDP event, optionally session-scoped. */
 	subscribe(method: string, handler: CDPHandler, session?: string): void
+	/** Removes a handler for a CDP event, optionally session-scoped. */
 	unsubscribe(method: string, handler: CDPHandler, session?: string): void
+	/** Tears down the transport and rejects every pending request. */
 	close(): Promise<void>
 }
 
@@ -149,6 +165,10 @@ export type BrowserTransitionFunction<T> = () => Promise<T>
  */
 export interface BrowserTransitionInterface<T> {
 	readonly pending: Promise<T> | undefined
+	/**
+	 * Starts the work when nothing is in flight, and otherwise joins the running transition
+	 * and returns its result.
+	 */
 	execute(work: BrowserTransitionFunction<T>): Promise<T>
 }
 
@@ -163,6 +183,7 @@ export interface BrowserTransitionInterface<T> {
  * screenshot, PDF, trace, or HAR request carries a `path`.
  */
 export interface BrowserWriterInterface {
+	/** Persists the captured bytes to the given path, creating its parent directories. */
 	write(path: string, data: Uint8Array): Promise<void>
 }
 
@@ -239,7 +260,15 @@ export interface BrowserNavigationWaitOptions {
 
 /** Provides URL and in-page predicate waits associated with one page. */
 export interface BrowserNavigationManagerInterface {
+	/**
+	 * Resolves with the URL of the next navigation matching the `*` and `**` glob pattern.
+	 * Rejects on timeout.
+	 */
 	wait(pattern: string, options?: BrowserNavigationWaitOptions): Promise<string>
+	/**
+	 * Polls an expression in the page until it returns a truthy value, and resolves with that
+	 * value.
+	 */
 	until(expression: string, options?: BrowserNavigationWaitOptions): Promise<unknown>
 }
 
@@ -248,7 +277,7 @@ export interface BrowserNavigationManagerInterface {
  *
  * @remarks
  * - `timeout` — maximum time to wait for the selector in milliseconds
- * - `strict` — require the selector to resolve to exactly one element
+ * - `strict` — require the selector to resolve to exactly one element (default `true`)
  * - `force` — skip the actionability checks
  * - `trial` — run the checks and stop before dispatching input
  */
@@ -388,10 +417,18 @@ export type BrowserTeardownFunction = () => Promise<unknown>
  */
 export interface BrowserHandleInterface {
 	readonly id: string
+	/** Reads the object back by value. */
 	value(): Promise<unknown>
+	/** Runs a function declaration with the handle as `this`, by value. */
 	call(declaration: string, args?: readonly unknown[]): Promise<unknown>
+	/**
+	 * Retains one own property as its own handle, or returns `undefined` when the property is
+	 * absent.
+	 */
 	property(name: string): Promise<BrowserHandleInterface | undefined>
+	/** Reads every own property by value. */
 	properties(): Promise<Readonly<Record<string, unknown>>>
+	/** Releases the retained remote object. Idempotent. */
 	dispose(): Promise<void>
 }
 
@@ -408,10 +445,15 @@ export interface BrowserBindingCall {
 
 /** Manages initialization scripts and host bindings for one page. */
 export interface BrowserScriptManagerInterface {
+	/** Installs a script evaluated on every new document, and returns its identifier. */
 	add(source: string): Promise<string>
+	/** Removes one installed script by identifier. */
 	remove(id: string): Promise<void>
+	/** Binds a host function to a page-global name, callable from page JavaScript. */
 	expose(name: string, handler: BrowserBindingHandler): Promise<void>
+	/** Removes one exposed binding and its installed bridge script. */
 	revoke(name: string): Promise<void>
+	/** Removes every installed script and binding this manager owns. */
 	destroy(): Promise<void>
 }
 
@@ -452,6 +494,7 @@ export interface BrowserAccessibilityOptions {
 
 /** Inspects the accessibility tree. */
 export interface BrowserAccessibilityInterface {
+	/** Reads the full accessibility tree, optionally pruned to the interesting nodes. */
 	snapshot(options?: BrowserAccessibilityOptions): Promise<BrowserAccessibilitySnapshot>
 }
 
@@ -480,8 +523,20 @@ export interface BrowserStreamChunk {
 /** Drives the trace capture lifecycle. */
 export interface BrowserTracingInterface {
 	readonly active: boolean
+	/**
+	 * Begins tracing with the given categories. Throws a `BrowserError` when a trace is
+	 * already active.
+	 */
 	start(options?: BrowserTracingOptions): Promise<void>
+	/**
+	 * Ends tracing, drains the IO stream, and writes it through the page writer when a path
+	 * was set.
+	 */
 	stop(): Promise<BrowserTracingResult>
+	/**
+	 * Stops an active trace, discarding any failure, and does nothing when no trace is
+	 * running.
+	 */
 	destroy(): Promise<void>
 }
 
@@ -528,8 +583,17 @@ export interface BrowserCoverageResult {
 /** Drives the coverage capture lifecycle. */
 export interface BrowserCoverageInterface {
 	readonly active: boolean
+	/**
+	 * Arms the requested domains. Throws a `BrowserError` when collection is already active or
+	 * when neither domain is requested.
+	 */
 	start(options?: BrowserCoverageOptions): Promise<void>
+	/** Reads the collected usage and disarms every domain it armed. */
 	stop(): Promise<BrowserCoverageResult>
+	/**
+	 * Stops an active collector, discarding any failure, and does nothing when no collection
+	 * is running.
+	 */
 	destroy(): Promise<void>
 }
 
@@ -574,14 +638,23 @@ export interface BrowserProfile {
  * is {@link BrowserProfilerInterface}, its peer under `diagnostics`.
  */
 export interface BrowserPerformanceInterface {
+	/** Enables the domain, reads every metric, and disables the domain again. */
 	metrics(): Promise<readonly BrowserMetric[]>
 }
 
 /** Drives the sampled CPU profile lifecycle. */
 export interface BrowserProfilerInterface {
 	readonly active: boolean
+	/**
+	 * Begins sampling, optionally at an explicit positive integer interval in microseconds.
+	 */
 	start(interval?: number): Promise<void>
+	/** Ends sampling and decodes the profile's nodes, samples, and time deltas. */
 	stop(): Promise<BrowserProfile>
+	/**
+	 * Stops an active profiler, discarding any failure, and does nothing when no profile is
+	 * running.
+	 */
 	destroy(): Promise<void>
 }
 
@@ -591,6 +664,7 @@ export interface BrowserDiagnosticsInterface {
 	readonly coverage: BrowserCoverageInterface
 	readonly performance: BrowserPerformanceInterface
 	readonly profiler: BrowserProfilerInterface
+	/** Tears down every diagnostics capability this page's group owns. */
 	destroy(): Promise<void>
 }
 
@@ -599,10 +673,17 @@ export interface BrowserDiagnosticsInterface {
 /** Controls Chromium virtual time for deterministic page timers. */
 export interface BrowserClockInterface {
 	readonly installed: boolean
+	/** Takes over the page clock, optionally seeding it with an epoch time. */
 	install(time?: number): Promise<void>
+	/** Suspends virtual time so no page timer advances. */
 	pause(): Promise<void>
+	/** Continues virtual time after a pause. */
 	resume(): Promise<void>
+	/**
+	 * Moves virtual time forward by the given milliseconds, firing the timers that fall due.
+	 */
 	advance(ms: number): Promise<void>
+	/** Returns the page to the real clock, and does nothing when no clock was installed. */
 	uninstall(): Promise<void>
 }
 
@@ -656,34 +737,69 @@ export interface BrowserUploadOptions extends BrowserActionOptions {
 export interface BrowserLocatorInterface {
 	readonly frame: BrowserFrameInterface
 	readonly query: BrowserQuery
+	/** Narrows to a descendant matching the CSS selector. */
 	locator(selector: string): BrowserLocatorInterface
+	/** Narrows to the matches satisfying the filter. */
 	filter(options: BrowserLocatorFilter): BrowserLocatorInterface
+	/** Narrows to the first match. */
 	first(): BrowserLocatorInterface
+	/** Narrows to the last match. */
 	last(): BrowserLocatorInterface
+	/** Narrows to the match at the given index. */
 	item(index: number): BrowserLocatorInterface
+	/** Counts the current matches. */
 	count(): Promise<number>
+	/** Resolves one indexed locator per current match. */
 	all(): Promise<readonly BrowserLocatorInterface[]>
+	/** Clicks the match with trusted input after its actionability checks pass. */
 	click(options?: BrowserLocatorClickOptions): Promise<void>
+	/** Replaces the match's value with the given text. */
 	fill(value: string, options?: BrowserActionOptions): Promise<void>
+	/** Selects the given option values on the match. */
 	select(values: readonly string[], options?: BrowserActionOptions): Promise<void>
+	/** Clicks the match unless it already reports checked. */
 	check(options?: BrowserLocatorClickOptions): Promise<void>
+	/** Clicks the match unless it already reports unchecked. */
 	uncheck(options?: BrowserLocatorClickOptions): Promise<void>
+	/** Moves trusted pointer input over the match. */
 	hover(options?: BrowserPointerOptions): Promise<void>
+	/** Gives the match keyboard focus. */
 	focus(options?: BrowserActionOptions): Promise<void>
+	/** Focuses the match and presses one key or chord. */
 	press(key: string, options?: BrowserLocatorTypeOptions): Promise<void>
+	/** Focuses the match and types the value one key at a time. */
 	type(value: string, options?: BrowserLocatorTypeOptions): Promise<void>
+	/** Empties the match's value. */
 	clear(options?: BrowserActionOptions): Promise<void>
+	/** Waits until the match reaches the requested state. Rejects on timeout. */
 	wait(options?: BrowserWaitOptions): Promise<void>
+	/** Reads the first match's rendered text. */
 	text(): Promise<string>
+	/** Reads the rendered text of every match. */
 	texts(): Promise<readonly string[]>
+	/** Reads the first match's inner HTML. */
 	html(): Promise<string>
+	/** Reads the first match's form value. */
 	value(): Promise<string>
+	/**
+	 * Reads one attribute of the first match, or returns `undefined` when the match carries
+	 * none.
+	 */
 	attribute(name: string): Promise<string | undefined>
+	/** Reports whether the first match renders a non-empty box. */
 	visible(): Promise<boolean>
+	/** Reports whether the first match accepts input. */
 	enabled(): Promise<boolean>
+	/** Reports whether the first match accepts typed text. */
 	editable(): Promise<boolean>
+	/**
+	 * Captures the first match's box, persisting it through the page writer when a path is
+	 * given.
+	 */
 	screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult>
+	/** Sets the file selection on the matched file input. */
 	upload(options: BrowserUploadOptions): Promise<void>
+	/** Drags the match onto the target locator with trusted pointer input. */
 	drag(target: BrowserLocatorInterface, options?: BrowserLocatorDragOptions): Promise<void>
 }
 
@@ -691,11 +807,17 @@ export interface BrowserLocatorInterface {
  * Groups the locator factories by selector semantics.
  */
 export interface BrowserSelectorManagerInterface {
+	/** Locates by CSS selector. */
 	css(value: string): BrowserLocatorInterface
+	/** Locates by ARIA role, optionally by accessible name and exactness. */
 	role(value: string, options?: BrowserRoleOptions): BrowserLocatorInterface
+	/** Locates by rendered text, optionally exact. */
 	text(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
+	/** Locates a labelled control by its label text, optionally exact. */
 	label(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
+	/** Locates an input by its placeholder text, optionally exact. */
 	placeholder(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
+	/** Locates by the test-id attribute. */
 	testId(value: string): BrowserLocatorInterface
 }
 
@@ -741,25 +863,49 @@ export type BrowserOperationOptions = BrowserPointerOptions &
 
 /** Provides keyboard input operations bound to one frame target session. */
 export interface BrowserKeyboardInterface {
+	/**
+	 * Presses one key and holds it, retaining it in the modifier mask when it is a modifier.
+	 */
 	down(key: string): Promise<void>
+	/**
+	 * Releases one key, dropping it from the modifier mask even when the release frame fails.
+	 */
 	up(key: string): Promise<void>
+	/**
+	 * Presses a chord: holds its modifiers, presses and releases its terminal key, then
+	 * releases the modifiers.
+	 */
 	press(key: string, options?: BrowserInputOptions): Promise<void>
+	/** Types a string as one press and release per character. */
 	type(value: string, options?: BrowserInputOptions): Promise<void>
+	/** Inserts composed text in one frame, firing no per-key events. */
 	insert(value: string): Promise<void>
 }
 
 /** Provides mouse input operations bound to one frame target session. */
 export interface BrowserMouseInterface {
+	/** Moves the pointer to a point, carrying the pressed buttons. */
 	move(point: BrowserPoint): Promise<void>
+	/** Presses a button at the current point, adding it to the pressed mask. */
 	down(button?: BrowserMouseButton, count?: number): Promise<void>
+	/**
+	 * Releases a button at the current point, dropping it from the mask even when the frame
+	 * fails.
+	 */
 	up(button?: BrowserMouseButton, count?: number): Promise<void>
+	/** Moves to the given point, presses, optionally delays, and releases. */
 	click(point: BrowserPoint, options?: BrowserClickOptions): Promise<void>
+	/** Presses at the start, moves in the requested steps to the end, and releases. */
 	drag(start: BrowserPoint, end: BrowserPoint, options?: BrowserDragOptions): Promise<void>
+	/** Sends a wheel delta at the current point. */
 	wheel(delta: BrowserPoint): Promise<void>
 }
 
 /** Provides touch input operations bound to one frame target session. */
 export interface BrowserTouchInterface {
+	/**
+	 * Dispatches a touch start at the point and a touch end, cancelling the touch on failure.
+	 */
 	tap(point: BrowserPoint): Promise<void>
 }
 
@@ -821,14 +967,23 @@ export interface BrowserDialogInterface {
 	readonly category: BrowserDialogCategory
 	readonly message: string
 	readonly default: string
+	/**
+	 * Accepts the dialog, optionally supplying prompt text. Throws once the dialog is handled.
+	 */
 	accept(value?: string): Promise<void>
+	/** Dismisses the dialog. Throws once the dialog is handled. */
 	dismiss(): Promise<void>
 }
 
 /** Represents one intercepted file chooser. */
 export interface BrowserFileChooserInterface {
 	readonly multiple: boolean
+	/**
+	 * Sets the chosen files. Throws when a single-file chooser is given several, and once the
+	 * chooser is already handled.
+	 */
 	upload(files: readonly string[]): Promise<void>
+	/** Clears the selection. Throws once the chooser is already handled. */
 	cancel(): Promise<void>
 }
 
@@ -875,6 +1030,10 @@ export interface BrowserDownloadInterface {
 	readonly received: number
 	readonly total: number
 	readonly path: string | undefined
+	/**
+	 * Sends CDP `Browser.cancelDownload` for this download, and is ignored unless the status
+	 * is still pending.
+	 */
 	cancel(): Promise<void>
 	/** Records one step of the download's progress. The owning page drives it. */
 	update(progress: BrowserDownloadProgress): void
@@ -912,9 +1071,13 @@ export interface BrowserWorkerInterface {
 	readonly id: string
 	readonly url: string
 	readonly category: BrowserWorkerCategory
+	/** Evaluates a guarded expression in the worker and returns its value. */
 	evaluate(expression: string, timeout?: number): Promise<unknown>
+	/** Issues one CDP method call on the worker's session. */
 	send(method: string, params?: Readonly<Record<string, unknown>>): Promise<unknown>
+	/** Stops driving the worker locally without closing its target. */
 	detach(): void
+	/** Closes the worker target, tolerating a worker that already terminated. Idempotent. */
 	close(): Promise<void>
 }
 
@@ -1084,8 +1247,15 @@ export interface BrowserRouteInterface {
 	readonly id: string
 	readonly request: BrowserRequest
 	readonly handled: boolean
+	/** Fails the request with a Chromium error reason, `'Failed'` by default. */
 	abort(reason?: string): Promise<void>
+	/**
+	 * Lets the request proceed, optionally overriding its URL, method, headers, or post body.
+	 */
 	continue(options?: BrowserRouteContinueOptions): Promise<void>
+	/**
+	 * Answers the request locally. Throws when the status is not an integer from 100 to 999.
+	 */
 	fulfill(options: BrowserRouteFulfillOptions): Promise<void>
 }
 
@@ -1220,9 +1390,13 @@ export interface BrowserHARReplayOptions {
 /** Provides HAR recording and replay operations. */
 export interface BrowserHARManagerInterface {
 	readonly recording: boolean
+	/** Begins recording exchanges, optionally capturing response content. */
 	start(options?: BrowserHAROptions): Promise<void>
+	/** Ends recording and returns the archive, writing it when a path was given. */
 	stop(): Promise<BrowserHAR>
+	/** Serves matching requests from an archive instead of from the network. */
 	replay(har: BrowserHAR, options?: BrowserHARReplayOptions): Promise<void>
+	/** Drops the recorded entries and any active replay without ending the recording. */
 	clear(): Promise<void>
 }
 
@@ -1230,15 +1404,25 @@ export interface BrowserHARManagerInterface {
 export interface BrowserNetworkManagerInterface {
 	readonly emitter: EmitterInterface<BrowserNetworkEventMap>
 	readonly har: BrowserHARManagerInterface
+	/** Enables the Network domain and subscribes to its events. Idempotent. */
 	start(): Promise<void>
+	/** Reads one observed response body as bytes. */
 	body(id: string): Promise<Uint8Array>
+	/** Reads one observed response body as text. */
 	text(id: string): Promise<string>
+	/** Reads one observed response body as parsed JSON. */
 	json(id: string): Promise<unknown>
+	/** Intercepts requests matching the query and hands each one to the handler. */
 	route(query: BrowserRouteQuery, handler: BrowserRouteHandler): Promise<void>
+	/** Removes one handler's routes, or every route when given none. */
 	unroute(handler?: BrowserRouteHandler): Promise<void>
+	/** Applies extra HTTP headers to every request the page makes. */
 	headers(headers: Readonly<Record<string, string>>): Promise<void>
+	/** Emulates an offline connection, or restores connectivity. */
 	offline(offline: boolean): Promise<void>
+	/** Applies HTTP basic-auth credentials, or clears them when given none. */
 	credentials(credentials?: BrowserCredentials): Promise<void>
+	/** Removes every route, unsubscribes, and disables the domains this manager enabled. */
 	destroy(): Promise<void>
 }
 
@@ -1290,15 +1474,21 @@ export interface BrowserCookieFilter {
 
 /** Provides cookie operations scoped to one browser context. */
 export interface BrowserCookieManagerInterface {
+	/** Reads the context cookies, optionally narrowed to the given URLs. */
 	cookies(urls?: readonly string[]): Promise<readonly BrowserCookie[]>
+	/** Writes the given cookies into the context. */
 	set(cookies: readonly BrowserCookieInput[]): Promise<void>
+	/** Deletes the context cookies matching the filter, or every cookie when given none. */
 	clear(filter?: BrowserCookieFilter): Promise<void>
 }
 
 /** Provides permission override operations scoped to one browser context. */
 export interface BrowserPermissionManagerInterface {
+	/** Grants each named permission, optionally for one origin, as its own CDP frame. */
 	grant(permissions: readonly string[], origin?: string): Promise<void>
+	/** Denies each named permission, optionally for one origin, as its own CDP frame. */
 	deny(permissions: readonly string[], origin?: string): Promise<void>
+	/** Resets every permission override on the context. */
 	clear(): Promise<void>
 }
 
@@ -1328,8 +1518,11 @@ export interface BrowserStorageOptions {
 
 /** Provides storage-state import, export, and clearing operations. */
 export interface BrowserStorageManagerInterface {
+	/** Reads the context cookies and the per-origin local and session storage. */
 	state(options?: BrowserStorageOptions): Promise<BrowserStorageState>
+	/** Writes a previously read state back into the context. */
 	restore(state: BrowserStorageState): Promise<void>
+	/** Drops the storage of one origin, or of every origin when given none. */
 	clear(origin?: string): Promise<void>
 }
 
@@ -1389,8 +1582,13 @@ export type BrowserPagesFunction = () => readonly BrowserPageInterface[]
 
 /** Configures context-scoped emulation. */
 export interface BrowserEmulationManagerInterface {
+	/**
+	 * Clears the superseded overrides and applies the given ones to every page of the context.
+	 */
 	apply(options: BrowserEmulationOptions): Promise<void>
+	/** Removes every override this manager applied. */
 	clear(): Promise<void>
+	/** Applies the retained overrides to a newly created page. */
 	attach(page: BrowserPageInterface): Promise<void>
 }
 
@@ -1499,11 +1697,20 @@ export interface BrowserCodegenScriptOptions {
 export interface BrowserCodegenInterface {
 	readonly emitter: EmitterInterface<BrowserCodegenEventMap>
 	readonly started: boolean
+	/**
+	 * Begins recording on the page's session. A call after teardown is a silent no-op, because
+	 * a torn-down recorder cannot be restarted and a fresh one is obtained through the page.
+	 */
 	start(): Promise<void>
+	/** Stops recording and returns the captured actions. */
 	stop(): Promise<readonly BrowserCodegenAction[]>
+	/** Returns the current normalized action list. */
 	actions(): readonly BrowserCodegenAction[]
+	/** Compiles the captured actions into a script. */
 	script(options?: BrowserCodegenScriptOptions): string
+	/** Resets the captured action list. */
 	clear(): void
+	/** Tears down the recorder and detaches its CDP listeners. */
 	destroy(): Promise<void>
 }
 
@@ -1570,24 +1777,61 @@ export interface BrowserFrameInterface {
 	readonly keyboard: BrowserKeyboardInterface
 	readonly mouse: BrowserMouseInterface
 	readonly touch: BrowserTouchInterface
+	/** Resolves the frame document title. */
 	title(): Promise<string>
+	/** Extracts the URL, title, HTML, and visible text under the result-size guards. */
 	content(): Promise<BrowserContentResult>
+	/**
+	 * Distills the frame HTML to reader-facing plain text, with boilerplate and hidden regions
+	 * pruned.
+	 */
 	article(): Promise<string>
+	/**
+	 * Clicks a CSS-selector match, strict by default and requiring it visible and enabled.
+	 */
 	click(selector: string, options?: BrowserActionOptions): Promise<void>
+	/**
+	 * Fills an editable input or contenteditable element, strict by default, dispatching input
+	 * and change events.
+	 */
 	fill(selector: string, value: string, options?: BrowserActionOptions): Promise<void>
+	/** Selects options on an enabled `select` element, strict by default. */
 	select(selector: string, values: readonly string[], options?: BrowserActionOptions): Promise<void>
+	/** Evaluates an expression in the frame execution world under the result-size guard. */
 	evaluate(expression: string, timeout?: number): Promise<unknown>
+	/**
+	 * Evaluates an expression by reference and returns a disposable remote object handle.
+	 */
 	handle(expression: string): Promise<BrowserHandleInterface>
+	/** Waits for a selector to reach the attached, detached, visible, or hidden state. */
 	wait(selector: string, options?: BrowserWaitOptions): Promise<void>
+	/**
+	 * Issues a raw CDP method in the frame's current target session, with a trailing
+	 * `BrowserSendOptions` carrying a per-call `timeout` overriding the client-wide default.
+	 */
 	send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
 		options?: BrowserSendOptions,
 	): Promise<unknown>
+	/** Subscribes to a CDP event in the frame's current target session. */
 	subscribe(method: string, handler: CDPHandler): Promise<void>
+	/** Removes a frame-session CDP event subscription. */
 	unsubscribe(method: string, handler: CDPHandler): Promise<void>
+	/**
+	 * Persists bytes through a page writer; a child frame rejects because it owns no writer.
+	 */
 	save(path: string, bytes: Uint8Array): Promise<void>
+	/**
+	 * Throws a coded `BrowserError` when the frame can no longer accept protocol work: a frame
+	 * throws once the CDP client disconnects, and a page also throws once it closes. Every
+	 * other member here calls it first.
+	 */
 	assert(): void
+	/**
+	 * Records an externally observed URL as the frame's current `url`, which a page calls from
+	 * its own `Page.frameNavigated` handler.
+	 */
 	update(url: string): void
 }
 
@@ -1649,7 +1893,10 @@ export interface BrowserDocument {
 	readonly height: number | undefined
 }
 
-/** Describes the serializable input for a navigable browser snapshot. */
+/**
+ * Describes the serializable input for a navigable browser snapshot — the form a
+ * `BrowserSnapshot` is built from and serializes back to.
+ */
 export interface BrowserSnapshotInput {
 	readonly documents: readonly BrowserDocument[]
 	readonly styles: readonly string[]
@@ -1673,23 +1920,64 @@ export interface BrowserWalkOptions {
 /** Names a structural sibling relationship relative to a browser node. */
 export type BrowserSiblingRelation = 'preceding' | 'following'
 
-/** Represents a navigable, serializable snapshot of every document attached to a page. */
+/**
+ * Represents a navigable, serializable snapshot of every document attached to a page,
+ * extending `BrowserSnapshotInput` with walking, structural relationships, search, and path
+ * derivation over plain `BrowserNode` values.
+ */
 export interface BrowserSnapshotInterface extends BrowserSnapshotInput {
+	/**
+	 * Traverses the whole capture, or one subtree when `root` is given and yielded first, in
+	 * `'depth'` order by default or in `'breadth'` order. Visits each node exactly once.
+	 */
 	walk(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown>
+	/** Traverses one node's subtree in depth-first order, excluding the node itself. */
 	descendants(node: BrowserNode): Generator<BrowserNode, void, unknown>
+	/** Resolves the captured document a node belongs to. */
 	document(node: BrowserNode): BrowserDocument | undefined
+	/**
+	 * Returns the direct children of a node, entering a linked iframe's content document.
+	 */
 	children(node: BrowserNode): readonly BrowserNode[]
+	/**
+	 * Returns the structural parent of a node, crossing a document boundary to the owning
+	 * iframe.
+	 */
 	parent(node: BrowserNode): BrowserNode | undefined
+	/**
+	 * Returns the structural siblings of a node; `'preceding'` or `'following'` narrows to one
+	 * side, and omitting the relation returns every sibling but the node itself.
+	 */
 	siblings(node: BrowserNode, relation?: BrowserSiblingRelation): readonly BrowserNode[]
+	/**
+	 * Returns the ancestors of a node, nearest first, across document and iframe boundaries.
+	 */
 	ancestors(node: BrowserNode): readonly BrowserNode[]
+	/**
+	 * Returns the nearest common ancestor of two nodes, counting each node as its own
+	 * candidate.
+	 */
 	common(first: BrowserNode, second: BrowserNode): BrowserNode | undefined
+	/**
+	 * Returns the structural edge count between two nodes, or `undefined` when they share no
+	 * ancestor.
+	 */
 	distance(first: BrowserNode, second: BrowserNode): number | undefined
+	/** Returns the first node matching a `BrowserNodeQuery` or a `BrowserNodePredicate`. */
 	find(query: BrowserNodeQuery | BrowserNodePredicate): BrowserNode | undefined
+	/**
+	 * Returns every matching node, bounded by an optional `limit`; a negative or fractional
+	 * limit throws a coded `BrowserError`.
+	 */
 	filter(query: BrowserNodeQuery | BrowserNodePredicate, limit?: number): readonly BrowserNode[]
+	/**
+	 * Returns the nearest match from a node through its ancestors, testing the node first.
+	 */
 	closest(
 		node: BrowserNode,
 		query: BrowserNodeQuery | BrowserNodePredicate,
 	): BrowserNode | undefined
+	/** Returns a deterministic frame-qualified structural path for one node. */
 	path(node: BrowserNode): string
 }
 
@@ -1733,7 +2021,8 @@ export interface BrowserNodeQuery {
 // === Browser page
 
 /**
- * Abstracts a single top-level browser page.
+ * Abstracts a single top-level browser page, extending `BrowserFrameInterface` with
+ * navigation, screenshots, frame discovery, DOM snapshots, codegen, and target teardown.
  *
  * @remarks
  * Inherits every {@link BrowserFrameInterface} document operation for the
@@ -1760,17 +2049,42 @@ export interface BrowserPageInterface extends BrowserFrameInterface {
 	readonly opener: BrowserPageInterface | undefined
 	readonly target: string
 	readonly closed: boolean
+	/**
+	 * Goes to a URL, waits for the requested load condition, and returns the final URL with
+	 * its response correlation.
+	 */
 	navigate(url: string, options?: BrowserNavigationOptions): Promise<BrowserNavigationResult>
+	/** Reloads the page and returns the final URL with its response correlation. */
 	reload(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult>
+	/**
+	 * Navigates to the previous history entry, or returns the unchanged URL when none exists.
+	 */
 	back(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult>
+	/**
+	 * Navigates to the next history entry, or returns the unchanged URL when none exists.
+	 */
 	forward(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult>
+	/**
+	 * Captures PNG or JPEG bytes, optionally full-page and persisted through an injected
+	 * writer.
+	 */
 	screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult>
+	/** Prints the page to PDF bytes, optionally persisted through the injected writer. */
 	pdf(options?: BrowserPDFOptions): Promise<BrowserPDFResult>
+	/** Looks up a first-class frame by name or URL. */
 	frame(name: string): Promise<BrowserFrameInterface | undefined>
+	/** Decodes the flattened frame tree, main frame first. */
 	frames(): Promise<readonly BrowserFrameInterface[]>
+	/**
+	 * Captures and decodes every attached document, shadow root, template content, layout box,
+	 * and requested computed style.
+	 */
 	snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface>
+	/** Starts the action recorder, or returns the running one. */
 	codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface>
+	/** Releases local resources and detaches without closing the remote target. */
 	destroy(): Promise<void>
+	/** Closes the remote target and releases its resources. */
 	close(): Promise<void>
 }
 
@@ -1797,10 +2111,26 @@ export interface BrowserContextInterface {
 	readonly permissions: BrowserPermissionManagerInterface
 	readonly storage: BrowserStorageManagerInterface
 	readonly emulation: BrowserEmulationManagerInterface
+	/** Returns one page by index, or the first page. */
 	page(index?: number): BrowserPageInterface | undefined
+	/** Returns every page in creation order. */
 	pages(): readonly BrowserPageInterface[]
+	/** Opens a page in this context. */
 	create(options?: BrowserPageOptions): Promise<BrowserPageInterface>
+	/**
+	 * Synchronizes pages from the given CDP targets, which the server discovers and core never
+	 * fetches. Performs a destructive diff rather than an additive merge: a page whose target
+	 * id is missing from `targets` is closed and dropped, and a target that is not yet tracked
+	 * is attached and added.
+	 */
 	sync(targets: readonly CDPTarget[]): Promise<void>
+	/**
+	 * Releases local pages and detaches their sessions without disposing the remote browser
+	 * context.
+	 */
 	destroy(): Promise<void>
+	/**
+	 * Closes remote pages, disposes the remote browser context, and releases local resources.
+	 */
 	close(): Promise<void>
 }

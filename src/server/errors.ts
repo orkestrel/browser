@@ -4,7 +4,8 @@ import { isInstance } from '@orkestrel/contract'
 // === Server browser errors
 
 /**
- * Reports that a CDP connection, discovery, or launch attempt failed.
+ * Reports that a CDP connection, discovery, or launch attempt failed, under the code
+ * `BROWSER_CONNECTION_ERROR`.
  */
 export class BrowserConnectionError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -14,7 +15,8 @@ export class BrowserConnectionError extends BrowserError {
 }
 
 /**
- * Reports that an operation requiring an active connection was attempted while disconnected.
+ * Reports that an operation requiring an active connection was attempted while disconnected,
+ * under the code `BROWSER_NOT_CONNECTED_ERROR`.
  */
 export class BrowserNotConnectedError extends BrowserError {
 	constructor(context?: Readonly<Record<string, unknown>>) {
@@ -24,7 +26,8 @@ export class BrowserNotConnectedError extends BrowserError {
 }
 
 /**
- * Reports that an operation was attempted after the Browser was destroyed.
+ * Reports that an operation was attempted after the browser wrapper was destroyed, under the
+ * code `BROWSER_DESTROYED_ERROR`.
  */
 export class BrowserDestroyedError extends BrowserError {
 	constructor(context?: Readonly<Record<string, unknown>>) {
@@ -36,7 +39,7 @@ export class BrowserDestroyedError extends BrowserError {
 // === Server browser type guards
 
 /**
- * Narrows an unknown value to BrowserConnectionError.
+ * Narrows an unknown value to a `BrowserConnectionError`.
  *
  * @param value - Value to check
  * @returns True if value is a BrowserConnectionError instance; false otherwise
@@ -46,7 +49,7 @@ export function isBrowserConnectionError(value: unknown): value is BrowserConnec
 }
 
 /**
- * Narrows an unknown value to BrowserNotConnectedError.
+ * Narrows an unknown value to a `BrowserNotConnectedError`.
  *
  * @param value - Value to check
  * @returns True if value is a BrowserNotConnectedError instance; false otherwise
@@ -56,7 +59,7 @@ export function isBrowserNotConnectedError(value: unknown): value is BrowserNotC
 }
 
 /**
- * Narrows an unknown value to BrowserDestroyedError.
+ * Narrows an unknown value to a `BrowserDestroyedError`.
  *
  * @param value - Value to check
  * @returns True if value is a BrowserDestroyedError instance; false otherwise

@@ -1,16 +1,13 @@
 # @orkestrel/browser
 
-A typed [Chrome DevTools Protocol](https://chromedevtools.github.io/devtools-protocol/)
-browser automation library for the `@orkestrel` line. The environment-agnostic
-core (`src/core` — `CDPClient` speaking the CDP wire protocol over an injected
-`CDPTransportInterface`, plus `BrowserContext`, `BrowserPage`, and
-`BrowserFrame`, semantic locators, trusted input, network/HAR controls,
-diagnostics, structured DOM snapshots, content distillation that selects a
-document's article rather than its whole body text, and `BrowserCodegen`)
-never touches `node:*` or the DOM; the Node runtime (`src/server`)
-adapts it with a `WebSocketCDPTransport`, browser process launch/discovery
-(`node:child_process` + `fetch`), a filesystem browser writer, and the
-`Browser` façade that ties launch → context → page together. Part of the
+> A lightweight Chrome DevTools Protocol automation layer for Chromium-family
+> browsers: an environment-agnostic core that drives pages, frames, locators, and
+> DOM snapshots over an injected transport, and a Node runtime that finds,
+> launches, and connects to the browser itself.
+
+Connect to a running browser or launch one with the `createBrowser` function, open a page in its
+default context, and drive that page through locators, trusted input, network control, and DOM
+snapshots. Inject your own `CDPTransportInterface` where the runtime is not Node. Part of the
 `@orkestrel` line.
 
 ## Install
@@ -64,7 +61,7 @@ patterns — see [`guides/browser.md`](guides/browser.md).
 
 ## Package
 
-Published with two entry points per the `exports` field in `package.json`:
+Published with the entry points the `exports` field in `package.json` names:
 the environment-agnostic core (`.`) — `CDPClient`, `BrowserContext`,
 `BrowserPage`, `BrowserFrame`, DOM snapshot traversal helpers,
 `BrowserCodegen`, `createCDPClient`, `CDPTransportInterface` —

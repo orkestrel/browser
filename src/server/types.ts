@@ -250,16 +250,55 @@ export interface BrowserInterface {
 	 * until `destroy()` or an observed process exit clears it.
 	 */
 	readonly pid: number | undefined
+	/**
+	 * Probes CDP passively, changing no connection state and neither launching nor attaching,
+	 * and emits a `discover` event with the result.
+	 */
 	discover(): Promise<BrowserDiscoveryResult>
+	/**
+	 * Establishes a connection through the endpoint, then discovery, then a launch.
+	 * Idempotent.
+	 */
 	connect(): Promise<void>
 	/** Assumes responsibility for terminating the connected browser. */
 	adopt(): void
+	/**
+	 * Detaches the client-side transport while the remote browser keeps running. A merely
+	 * attached CDP session forgets the endpoint and its ownership becomes `undefined`. A
+	 * launched or explicitly adopted session retains ownership and its endpoint, so the same
+	 * instance can reconnect and stays responsible for eventual termination. Transport loss
+	 * while an owned browser remains alive is resumable the same way.
+	 */
 	disconnect(): Promise<void>
+	/** Returns one context by index, or the first. */
 	context(index?: number): BrowserContextInterface | undefined
+	/** Returns every context. */
 	contexts(): readonly BrowserContextInterface[]
+	/**
+	 * Creates and registers an isolated CDP context with validated proxy, download, origin,
+	 * and emulation options.
+	 */
 	isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface>
+	/** Opens a page in the default context. */
 	create(options?: BrowserPageOptions): Promise<BrowserPageInterface>
+	/**
+	 * Releases local resources. A launched browser has the process serving its CDP endpoint
+	 * terminated and its exit awaited — on POSIX that terminate reaches the launch's whole
+	 * process group and awaits its drain, and on Windows it terminates one process by
+	 * identifier, the spawned process or the one a launcher handed the endpoint to — which
+	 * leaves the profile unlocked before cleanup. An adopted attachment is sent CDP
+	 * `Browser.close`. A merely attached browser is detached locally and nothing more, because
+	 * other clients may share its targets. Idempotent.
+	 */
 	destroy(): Promise<void>
+	/**
+	 * Shuts the remote browser down: sends CDP `Browser.close` best-effort whether attached or
+	 * owned, and for an owned browser also awaits the exit of the process serving the CDP
+	 * endpoint plus its POSIX process-group drain, escalating to a kill only where needed.
+	 * Then closes every tracked context and page, sending remote `Target.closeTarget` and
+	 * `disposeBrowserContext` whatever the ownership, before releasing the CDP client. This is
+	 * the way to shut down a browser the instance does not own and still wants terminated.
+	 */
 	close(): Promise<void>
 }
 

@@ -396,7 +396,8 @@ export async function waitForCDPReady(
 }
 
 /**
- * Fetches the current CDP target list from a browser's `/json/list` endpoint.
+ * Fetches the current CDP target list from a browser's `/json/list` endpoint, as a `Result`
+ * carrying either the targets or a coded `BrowserConnectionError`.
  *
  * @remarks
  * The endpoint is a network boundary, so an unreachable host, a non-2xx

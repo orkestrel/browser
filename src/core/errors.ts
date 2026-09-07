@@ -3,11 +3,11 @@ import { isInstance } from '@orkestrel/contract'
 // === Browser errors
 
 /**
- * Represents the base error for all browser automation operations.
+ * Represents the base error for all browser automation operations, carrying the code
+ * `BROWSER_ERROR` and a `context` record.
  *
  * @remarks
- * Carries a machine-readable `code` and optional `context` so
- * callers can branch in a `catch` without parsing message strings.
+ * A caller branches in a `catch` on the `code` rather than parsing message strings.
  */
 export class BrowserError extends Error {
 	readonly code: string
@@ -26,7 +26,8 @@ export class BrowserError extends Error {
 }
 
 /**
- * Reports that a selector-based lookup or wait timed out without the element appearing.
+ * Reports that a selector-based lookup or wait timed out without the element appearing, under
+ * the code `BROWSER_SELECTOR_ERROR`.
  */
 export class BrowserSelectorError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -36,7 +37,9 @@ export class BrowserSelectorError extends BrowserError {
 }
 
 /**
- * Reports that a CDP request received an error response from the remote endpoint.
+ * Reports that a CDP request received an error response from the remote endpoint, under the
+ * code `BROWSER_CDP_ERROR`, with the `method`, the CDP `code`, the `message`, and any `data`
+ * in its context.
  *
  * @remarks
  * Carries the originating `method` plus the CDP error's own `code`,
@@ -51,9 +54,9 @@ export class CDPError extends BrowserError {
 }
 
 /**
- * Reports that a CDP request could not be sent or completed because the client was not in
- * a connectable state (not connected, closed while connecting, or the
- * connection dropped mid-request).
+ * Reports that a CDP request could not be sent or completed because the client was not in a
+ * connectable state — not connected, closed while connecting, or the connection dropped mid-
+ * request — under the code `BROWSER_CDP_CONNECTION_ERROR`.
  */
 export class CDPConnectionError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -63,7 +66,8 @@ export class CDPConnectionError extends BrowserError {
 }
 
 /**
- * Reports that a pending CDP request was not answered within its timeout window.
+ * Reports that a pending CDP request was not answered within its timeout window, under the
+ * code `BROWSER_CDP_TIMEOUT_ERROR`.
  */
 export class CDPTimeoutError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -73,8 +77,9 @@ export class CDPTimeoutError extends BrowserError {
 }
 
 /**
- * Reports that an `evaluate()`/`content()` result exceeded {@link BROWSER_RESULT_LIMIT}
- * and was rejected in-page before it could overflow the CDP transport frame.
+ * Reports that an `evaluate()`/`content()` result exceeded `BROWSER_RESULT_LIMIT` and was
+ * rejected in-page before it could overflow the CDP transport frame, under the code
+ * `BROWSER_RESULT_LIMIT_ERROR`.
  */
 export class BrowserResultLimitError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -86,7 +91,7 @@ export class BrowserResultLimitError extends BrowserError {
 // === Browser type guards
 
 /**
- * Narrows an unknown value to BrowserError.
+ * Narrows an unknown value to a `BrowserError`.
  *
  * @param value - Value to check
  * @returns True if value is a BrowserError instance; false otherwise
@@ -96,7 +101,7 @@ export function isBrowserError(value: unknown): value is BrowserError {
 }
 
 /**
- * Narrows an unknown value to BrowserSelectorError.
+ * Narrows an unknown value to a `BrowserSelectorError`.
  *
  * @param value - Value to check
  * @returns True if value is a BrowserSelectorError instance; false otherwise
@@ -106,7 +111,7 @@ export function isBrowserSelectorError(value: unknown): value is BrowserSelector
 }
 
 /**
- * Narrows an unknown value to CDPError.
+ * Narrows an unknown value to a `CDPError`.
  *
  * @param value - Value to check
  * @returns True if value is a CDPError instance; false otherwise
@@ -116,7 +121,7 @@ export function isCDPError(value: unknown): value is CDPError {
 }
 
 /**
- * Narrows an unknown value to CDPConnectionError.
+ * Narrows an unknown value to a `CDPConnectionError`.
  *
  * @param value - Value to check
  * @returns True if value is a CDPConnectionError instance; false otherwise
@@ -126,7 +131,7 @@ export function isCDPConnectionError(value: unknown): value is CDPConnectionErro
 }
 
 /**
- * Narrows an unknown value to CDPTimeoutError.
+ * Narrows an unknown value to a `CDPTimeoutError`.
  *
  * @param value - Value to check
  * @returns True if value is a CDPTimeoutError instance; false otherwise
@@ -136,7 +141,7 @@ export function isCDPTimeoutError(value: unknown): value is CDPTimeoutError {
 }
 
 /**
- * Narrows an unknown value to BrowserResultLimitError.
+ * Narrows an unknown value to a `BrowserResultLimitError`.
  *
  * @param value - Value to check
  * @returns True if value is a BrowserResultLimitError instance; false otherwise

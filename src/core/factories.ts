@@ -8,7 +8,7 @@ import { BrowserSnapshot } from './BrowserSnapshot.js'
 import { CDPClient } from './CDPClient.js'
 
 /**
- * Creates a CDP client bound to the given transport.
+ * Creates a `CDPClientInterface` bound to the given `CDPTransportInterface`.
  *
  * @param options - The transport (and optional timeout) the client uses
  * @returns A {@link CDPClientInterface}
@@ -26,7 +26,7 @@ export function createCDPClient(options: CDPClientOptions): CDPClientInterface {
 }
 
 /**
- * Creates a navigable browser snapshot from decoded serializable data.
+ * Creates a navigable `BrowserSnapshotInterface` over decoded `BrowserSnapshotInput` data.
  *
  * @param input - Captured documents and computed-style names
  * @returns A {@link BrowserSnapshotInterface}

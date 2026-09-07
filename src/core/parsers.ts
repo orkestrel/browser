@@ -491,8 +491,8 @@ export function parseCodegenActionPayload(payload: unknown): BrowserCodegenActio
 }
 
 /**
- * Coerces a `Page.frameNavigated` CDP event to a `navigate` codegen action, or
- * `undefined` off-shape.
+ * Coerces a `Page.frameNavigated` CDP event to a `navigate` codegen action, or `undefined`
+ * off-shape and for every frame but the top-level one.
  *
  * @remarks
  * Only the top-level (main) frame's navigation is recorded — a frame
@@ -543,8 +543,7 @@ export function parseSnapshotString(
 }
 
 /**
- * Coerces a CDP snapshot rectangle to a `BrowserRect`, or `undefined`
- * off-shape.
+ * Coerces a four-number CSS-pixel rectangle to a `BrowserRect`, or `undefined` off-shape.
  *
  * @param value - Candidate four-number array
  * @returns A rectangle, or undefined

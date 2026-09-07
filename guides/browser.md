@@ -1,27 +1,28 @@
 # Browser
 
-> A lightweight Chrome DevTools Protocol (CDP) automation layer, split into an
-> environment-agnostic **core** and a Node **server** runtime. **Core**
-> (`@orkestrel/browser`) is pure logic over an injected `CDPTransportInterface`
-> — no `WebSocket`, no `node:*`, no filesystem — so it runs identically in
-> Node or a browser: `CDPClient` frames JSON-RPC-shaped CDP messages over the
-> transport, `BrowserContext` / `BrowserPage` model a CDP browser context and
-> its pages, `BrowserSnapshot` turns a captured DOM snapshot into navigable
-> serializable data, `BrowserCodegen` records page interactions for later
-> script compilation. One capability reaches past the protocol: `article()`
-> distills a captured document to its reader-facing prose through
-> `@orkestrel/html` — content selection, not another whole-body text dump.
-> **Server** (`@orkestrel/browser/server`) supplies the missing
-> environment pieces: `WebSocketCDPTransport` (a Node `WebSocket`-backed CDP
-> transport), `Browser` (discovery → connect → launch lifecycle, spawning a
-> real Chromium-family process when nothing is already listening), and a
-> filesystem-backed browser writer. Source:
-> [`src/core`](../src/core) (through `@src/core`) +
-> [`src/server`](../src/server) (through `@src/server`).
+> A lightweight Chrome DevTools Protocol automation layer for Chromium-family
+> browsers: an environment-agnostic core that drives pages, frames, locators, and
+> DOM snapshots over an injected transport, and a Node runtime that finds,
+> launches, and connects to the browser itself.
+
+`CDPClient` frames JSON-RPC-shaped CDP messages over the transport, `BrowserContext` and
+`BrowserPage` model a CDP browser context and its pages, `BrowserSnapshot` turns a captured DOM
+snapshot into navigable serializable data, and `BrowserCodegen` records page interactions for later
+script compilation — none of it touching `WebSocket`, `node:*`, or a filesystem, so the same code
+runs under Node or in a page. One capability reaches past the protocol: `article()` distills a
+captured document to its reader-facing prose through `@orkestrel/html`, selecting content rather
+than dumping the whole body's text. The Node pieces are `WebSocketCDPTransport`, a `WebSocket`-backed
+CDP transport; `Browser`, which spawns a real Chromium-family process when nothing is already
+listening on the CDP endpoint; and a filesystem-backed browser writer. Import the first surface from
+`@orkestrel/browser` and the second from `@orkestrel/browser/server`. Source:
+[`src/core`](../src/core) (through `@src/core`) and [`src/server`](../src/server) (through
+`@src/server`).
 
 ## Surface
 
-Server quickstart — connect to (or launch) a browser, open a page, drive it:
+### Connect to a browser and drive a page
+
+Connect to an already-running browser, or launch one, then open a page and drive it:
 
 ```ts
 import { createBrowser } from '@orkestrel/browser/server'
@@ -50,60 +51,64 @@ await client.close()
 
 #### Factories
 
-| API                     | Kind     | Summary                                                                                 |
-| ----------------------- | -------- | --------------------------------------------------------------------------------------- |
-| `createCDPClient`       | function | Create a `CDPClientInterface` bound to the given `CDPTransportInterface`.               |
-| `createBrowserSnapshot` | function | Create a navigable `BrowserSnapshotInterface` over decoded `BrowserSnapshotInput` data. |
+| API                     | Kind     | Summary                                                                                  |
+| ----------------------- | -------- | ---------------------------------------------------------------------------------------- |
+| `createCDPClient`       | function | Creates a `CDPClientInterface` bound to the given `CDPTransportInterface`.               |
+| `createBrowserSnapshot` | function | Creates a navigable `BrowserSnapshotInterface` over decoded `BrowserSnapshotInput` data. |
 
-#### Entities
+#### Classes
 
-| API               | Kind  | Summary                                                                                                                                   |
-| ----------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `CDPClient`       | class | Lightweight CDP client over a `CDPTransportInterface` — JSON-RPC framing, `connect` / `send` / `subscribe` / `close`.                     |
-| `BrowserContext`  | class | Isolated browser session over a CDP browser context — manages its `BrowserPage`s (`page` / `pages` / `create` / `sync`).                  |
-| `BrowserFrame`    | class | One attached document frame with isolated-world evaluation and frame-scoped actions over its current CDP session.                         |
-| `BrowserPage`     | class | A single browser page or frame — navigation, content extraction, screenshot, element interaction, codegen.                                |
-| `BrowserCodegen`  | class | Records page interactions (navigate/click/fill/select) through CDP bindings, for later compilation into a replayable script.              |
-| `BrowserSnapshot` | class | A navigable, serializable capture of every attached document — walking, structural relationships, search, and paths over plain node data. |
+| API               | Kind  | Summary                                                                                |
+| ----------------- | ----- | -------------------------------------------------------------------------------------- |
+| `CDPClient`       | class | Provides a lightweight Chrome DevTools Protocol client over a `CDPTransportInterface`. |
+| `BrowserContext`  | class | Owns pages and shared state inside one Chromium browser context.                       |
+| `BrowserFrame`    | class | Represents one attached document frame, evaluated through its own CDP execution world. |
+| `BrowserPage`     | class | Represents a top-level browser page, including its target lifecycle and child frames.  |
+| `BrowserCodegen`  | class | Records page navigation and form interactions and compiles replayable scripts.         |
+| `BrowserSnapshot` | class | Represents a navigable, serializable browser DOM snapshot.                             |
 
 #### Constants
 
-| Constant                               | Kind  | Value                                                                                                                                                                                                                                             |
-| -------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BROWSER_DEFAULT_TIMEOUT_MS`           | const | `30000` — default timeout for connection, requests, and navigation.                                                                                                                                                                               |
-| `BROWSER_WAIT_POLL_INTERVAL_MS`        | const | `100` — the interval (ms) every in-page DOM wait polls at, the slack a wait adds to its own CDP call timeout, and the delay between host-side CDP readiness probes.                                                                               |
-| `BROWSER_DEFAULT_VIEWPORT_WIDTH`       | const | `1280` — default viewport width in pixels.                                                                                                                                                                                                        |
-| `BROWSER_DEFAULT_VIEWPORT_HEIGHT`      | const | `720` — default viewport height in pixels.                                                                                                                                                                                                        |
-| `BROWSER_CODEGEN_BINDING_NAME`         | const | `'__orkestrelBrowserCodegen'` — name of the CDP runtime binding the recorder script calls.                                                                                                                                                        |
-| `BROWSER_CODEGEN_SOURCE`               | const | The in-page recorder script source injected through CDP to capture click/fill/select actions (a `contenteditable` fill is captured through `input` events same as inputs/textareas).                                                              |
-| `BASE64_CHARS`                         | const | The 64-character base64 alphabet used to build the decode lookup table.                                                                                                                                                                           |
-| `BASE64_LOOKUP`                        | const | Frozen character → 6-bit value lookup table derived from `BASE64_CHARS`.                                                                                                                                                                          |
-| `BROWSER_RESULT_LIMIT`                 | const | `2_500_000` — maximum serialized-character length (UTF-16, not transport bytes) for an `evaluate()`/`content()` result, enforced in-page before the result reaches CDP (kept well under the ~3-4MB transport ceiling for UTF-8/framing headroom). |
-| `BROWSER_RESULT_LIMIT_SENTINEL_PREFIX` | const | `'[[ORKESTREL_BROWSER_RESULT_LIMIT]]'` — distinctive prefix for the in-page result-limit sentinel error, immediately followed by the serialized length.                                                                                           |
-| `BROWSER_RESULT_LIMIT_PATTERN`         | const | Regex anchored on `(?:Uncaught )?Error: [[ORKESTREL_BROWSER_RESULT_LIMIT]](\d+)`, recognizing only the guard's own sentinel throw (not a page error that merely mentions similar text).                                                           |
-| `BROWSER_STOP_LOADING_TIMEOUT_MS`      | const | `1_000` — short cap (ms) on the best-effort `Page.stopLoading` call issued after a failed `navigate()`, so a wedged renderer cannot stretch the failure path out to the full per-call timeout.                                                    |
-| `BROWSER_FRAME_WORLD_NAME`             | const | `'__orkestrelBrowserFrame'` — isolated-world name used for frame-scoped evaluation.                                                                                                                                                               |
-| `BROWSER_SNAPSHOT_NODE_LIMIT`          | const | `100_000` — default aggregate node limit for a decoded DOM snapshot.                                                                                                                                                                              |
+A `Shape` cell holds the constant's declared type.
+
+| Constant                               | Kind  | Shape                              | Summary                                                                                                                                                                                                                                                                                                                     |
+| -------------------------------------- | ----- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROWSER_DEFAULT_TIMEOUT_MS`           | const | `number`                           | Sets the default timeout for browser connection, requests, and navigation, `30_000` milliseconds.                                                                                                                                                                                                                           |
+| `BROWSER_WAIT_POLL_INTERVAL_MS`        | const | `number`                           | Sets the poll interval while waiting for a selector to appear, `100` milliseconds.                                                                                                                                                                                                                                          |
+| `BROWSER_DEFAULT_VIEWPORT_WIDTH`       | const | `number`                           | Sets the default viewport width, `1280` pixels.                                                                                                                                                                                                                                                                             |
+| `BROWSER_DEFAULT_VIEWPORT_HEIGHT`      | const | `number`                           | Sets the default viewport height, `720` pixels.                                                                                                                                                                                                                                                                             |
+| `BROWSER_CODEGEN_BINDING_NAME`         | const | `string`                           | Names the CDP runtime binding the codegen recorder script calls into, `'__orkestrelBrowserCodegen'`.                                                                                                                                                                                                                        |
+| `BROWSER_CODEGEN_SOURCE`               | const | `string`                           | Holds the in-page recorder script injected through `Page.addScriptToEvaluateOnNewDocument` and `Runtime.evaluate`.                                                                                                                                                                                                          |
+| `BASE64_CHARS`                         | const | `string`                           | Holds the index-ordered base64 alphabet used to build `BASE64_LOOKUP`.                                                                                                                                                                                                                                                      |
+| `BASE64_LOOKUP`                        | const | `Readonly<Record<string, number>>` | Maps each base64 character to its 6-bit value, derived from `BASE64_CHARS`.                                                                                                                                                                                                                                                 |
+| `BROWSER_RESULT_LIMIT`                 | const | `number`                           | Caps the serialized-character length for an `evaluate()`/`content()` result at `2_500_000`, enforced in-page before the result is returned to CDP.                                                                                                                                                                          |
+| `BROWSER_RESULT_LIMIT_SENTINEL_PREFIX` | const | `string`                           | Names the distinctive prefix for the in-page result-limit sentinel error, `'[[ORKESTREL_BROWSER_RESULT_LIMIT]]'`, immediately followed by the serialized length.                                                                                                                                                            |
+| `BROWSER_RESULT_LIMIT_PATTERN`         | const | `RegExp`                           | Matches the in-page result-limit sentinel error message, anchored immediately after the `Error:` (optionally `Uncaught Error:`) prefix that Chromium prepends to a thrown error's description, so the guard's own throw is recognized only at the start of the message rather than wherever the substring happens to occur. |
+| `BROWSER_STOP_LOADING_TIMEOUT_MS`      | const | `number`                           | Bounds the best-effort `Page.stopLoading` call issued after a failed `navigate()` at `1_000` milliseconds.                                                                                                                                                                                                                  |
+| `BROWSER_FRAME_WORLD_NAME`             | const | `string`                           | Names the isolated world used for iframe evaluation, `'__orkestrelBrowserFrame'`.                                                                                                                                                                                                                                           |
+| `BROWSER_SNAPSHOT_NODE_LIMIT`          | const | `number`                           | Sets the default maximum node count accepted from a decoded CDP DOM snapshot, `100_000`.                                                                                                                                                                                                                                    |
 
 #### Errors
 
-| Error                     | Kind  | Extends        | Code                           | Summary                                                                                                                                                                         |
-| ------------------------- | ----- | -------------- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BrowserError`            | class | `Error`        | `BROWSER_ERROR`                | Base error for all browser automation operations (`code` + `context`).                                                                                                          |
-| `BrowserSelectorError`    | class | `BrowserError` | `BROWSER_SELECTOR_ERROR`       | A selector-based lookup or wait timed out without the element appearing.                                                                                                        |
-| `CDPError`                | class | `BrowserError` | `BROWSER_CDP_ERROR`            | A CDP request received an error response from the remote endpoint (context carries `method` / CDP `code` / `message` / `data`).                                                 |
-| `CDPConnectionError`      | class | `BrowserError` | `BROWSER_CDP_CONNECTION_ERROR` | A CDP request could not be sent or completed because the client was not in a connectable state (not connected, closed while connecting, or the connection dropped mid-request). |
-| `CDPTimeoutError`         | class | `BrowserError` | `BROWSER_CDP_TIMEOUT_ERROR`    | A pending CDP request was not answered within its timeout window.                                                                                                               |
-| `BrowserResultLimitError` | class | `BrowserError` | `BROWSER_RESULT_LIMIT_ERROR`   | An `evaluate()`/`content()` result exceeded `BROWSER_RESULT_LIMIT` and was rejected in-page before it could overflow the CDP transport frame.                                   |
+| Error                     | Kind  | Signature              | Summary                                                                                                                                                                                                                                       |
+| ------------------------- | ----- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BrowserError`            | class | `extends Error`        | Represents the base error for all browser automation operations, carrying the code `BROWSER_ERROR` and a `context` record.                                                                                                                    |
+| `BrowserSelectorError`    | class | `extends BrowserError` | Reports that a selector-based lookup or wait timed out without the element appearing, under the code `BROWSER_SELECTOR_ERROR`.                                                                                                                |
+| `CDPError`                | class | `extends BrowserError` | Reports that a CDP request received an error response from the remote endpoint, under the code `BROWSER_CDP_ERROR`, with the `method`, the CDP `code`, the `message`, and any `data` in its context.                                          |
+| `CDPConnectionError`      | class | `extends BrowserError` | Reports that a CDP request could not be sent or completed because the client was not in a connectable state — not connected, closed while connecting, or the connection dropped mid- request — under the code `BROWSER_CDP_CONNECTION_ERROR`. |
+| `CDPTimeoutError`         | class | `extends BrowserError` | Reports that a pending CDP request was not answered within its timeout window, under the code `BROWSER_CDP_TIMEOUT_ERROR`.                                                                                                                    |
+| `BrowserResultLimitError` | class | `extends BrowserError` | Reports that an `evaluate()`/`content()` result exceeded `BROWSER_RESULT_LIMIT` and was rejected in-page before it could overflow the CDP transport frame, under the code `BROWSER_RESULT_LIMIT_ERROR`.                                       |
 
-| Guard                       | Kind     | Narrows to                |
-| --------------------------- | -------- | ------------------------- |
-| `isBrowserError`            | function | `BrowserError`            |
-| `isBrowserSelectorError`    | function | `BrowserSelectorError`    |
-| `isCDPError`                | function | `CDPError`                |
-| `isCDPConnectionError`      | function | `CDPConnectionError`      |
-| `isCDPTimeoutError`         | function | `CDPTimeoutError`         |
-| `isBrowserResultLimitError` | function | `BrowserResultLimitError` |
+In a guard table a `Shape` cell holds the type the guard narrows to.
+
+| Guard                       | Kind     | Shape                     | Summary                                                  |
+| --------------------------- | -------- | ------------------------- | -------------------------------------------------------- |
+| `isBrowserError`            | function | `BrowserError`            | Narrows an unknown value to a `BrowserError`.            |
+| `isBrowserSelectorError`    | function | `BrowserSelectorError`    | Narrows an unknown value to a `BrowserSelectorError`.    |
+| `isCDPError`                | function | `CDPError`                | Narrows an unknown value to a `CDPError`.                |
+| `isCDPConnectionError`      | function | `CDPConnectionError`      | Narrows an unknown value to a `CDPConnectionError`.      |
+| `isCDPTimeoutError`         | function | `CDPTimeoutError`         | Narrows an unknown value to a `CDPTimeoutError`.         |
+| `isBrowserResultLimitError` | function | `BrowserResultLimitError` | Narrows an unknown value to a `BrowserResultLimitError`. |
 
 ```ts
 try {
@@ -120,35 +125,35 @@ try {
 
 #### Helpers
 
-| API                                | Kind     | Summary                                                                                                                                                                                            |
-| ---------------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `decodeBase64`                     | function | Decode a base64-encoded string into raw bytes (pure JS, no `Buffer`/`atob` — runs identically Node/browser).                                                                                       |
-| `compileGuardedEvaluateExpression` | function | Compile a `Runtime.evaluate` expression so the in-page code stringifies its own result and throws a recognizable sentinel error before an oversized result would overflow the CDP transport frame. |
-| `normalizeCodegenActions`          | function | Collapse consecutive `fill` actions on the same selector into the latest value.                                                                                                                    |
-| `parseCodegenActionPayload`        | function | Coerce a codegen binding payload string to a `BrowserCodegenAction`, or `undefined` off-shape.                                                                                                     |
-| `parseCodegenNavigateAction`       | function | Coerce a `Page.frameNavigated` CDP event to a `navigate` codegen action, or `undefined` off-shape and for every frame but the top-level one.                                                       |
-| `compileCodegenScript`             | function | Compile recorded codegen actions into a replayable JavaScript or TypeScript script.                                                                                                                |
-| `readEvaluationResult`             | function | Read a `Runtime.evaluate` result. Throws a `BrowserError` on a failed evaluation, and a `BrowserResultLimitError` past the guarded result size.                                                    |
-| `requireBrowserString`             | function | Narrow a browser-evaluated value to a required string.                                                                                                                                             |
-| `readBrowserFrames`                | function | Read `Page.getFrameTree` into depth-first frame metadata, skipping every off-shape frame.                                                                                                          |
-| `compileAttachedWaitExpression`    | function | Compile an in-page attached-state wait.                                                                                                                                                            |
-| `compileDetachedWaitExpression`    | function | Compile an in-page detached-state wait.                                                                                                                                                            |
-| `compileVisibleWaitExpression`     | function | Compile an in-page visible-state wait.                                                                                                                                                             |
-| `compileHiddenWaitExpression`      | function | Compile an in-page hidden-state wait.                                                                                                                                                              |
-| `compileClickExpression`           | function | Compile a strict, visibility-checked click expression.                                                                                                                                             |
-| `compileFillExpression`            | function | Compile a strict, editable fill expression.                                                                                                                                                        |
-| `compileSelectExpression`          | function | Compile a strict select expression.                                                                                                                                                                |
-| `parseNumberArray`                 | function | Coerce an unknown protocol value to an all-number array, or `undefined` off-shape.                                                                                                                 |
-| `parseSnapshotString`              | function | Coerce one DOMSnapshot string-table index to its string, or `undefined` off-shape.                                                                                                                 |
-| `readRareStringData`               | function | Read sparse CDP string data into a node-index map, skipping every off-shape entry.                                                                                                                 |
-| `readRareBooleanData`              | function | Read sparse CDP boolean indexes into a set, skipping every off-shape entry.                                                                                                                        |
-| `readRareIntegerData`              | function | Read sparse CDP integer data into a node-index map, skipping every off-shape entry.                                                                                                                |
-| `parseBrowserRect`                 | function | Coerce a four-number CSS-pixel rectangle to a `BrowserRect`, or `undefined` off-shape.                                                                                                             |
-| `readBrowserAttributes`            | function | Read flattened name/value indexes into a frozen attribute record, skipping every off-shape pair.                                                                                                   |
-| `readBrowserSnapshot`              | function | Read a `DOMSnapshot.captureSnapshot` response into a serializable `BrowserSnapshotInput`. Throws a `BrowserError` off-shape, and a `BrowserResultLimitError` past the configured node limit.       |
-| `isBrowserNodeQuery`               | function | Test whether a browser-node matcher is a declarative query rather than a predicate.                                                                                                                |
-| `matchesBrowserNode`               | function | Match a node against a declarative query.                                                                                                                                                          |
-| `isBrowserNodeVisible`             | function | Test whether a node has a non-empty captured layout box.                                                                                                                                           |
+| API                                | Kind     | Summary                                                                                                                                                                                             |
+| ---------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `decodeBase64`                     | function | Decodes a base64-encoded string into raw bytes.                                                                                                                                                     |
+| `compileGuardedEvaluateExpression` | function | Compiles a `Runtime.evaluate` expression so the in-page code stringifies its own result and throws a recognizable sentinel error before an oversized result would overflow the CDP transport frame. |
+| `normalizeCodegenActions`          | function | Normalizes recorded codegen actions, collapsing consecutive `fill` actions on the same selector into the latest value.                                                                              |
+| `parseCodegenActionPayload`        | function | Coerces a codegen binding payload string to a `BrowserCodegenAction`, or `undefined` off-shape.                                                                                                     |
+| `parseCodegenNavigateAction`       | function | Coerces a `Page.frameNavigated` CDP event to a `navigate` codegen action, or `undefined` off-shape and for every frame but the top-level one.                                                       |
+| `compileCodegenScript`             | function | Compiles recorded codegen actions into a replayable JavaScript or TypeScript script.                                                                                                                |
+| `readEvaluationResult`             | function | Decodes one CDP `Runtime.evaluate` result, throwing a `BrowserError` on a failed evaluation and a `BrowserResultLimitError` past the guarded result size.                                           |
+| `requireBrowserString`             | function | Requires an evaluated browser value to be a string.                                                                                                                                                 |
+| `readBrowserFrames`                | function | Decodes a flattened CDP `Page.getFrameTree` result into depth-first frame metadata, skipping every off-shape frame.                                                                                 |
+| `compileAttachedWaitExpression`    | function | Compiles an in-page wait for an attached selector.                                                                                                                                                  |
+| `compileDetachedWaitExpression`    | function | Compiles an in-page wait for a detached selector.                                                                                                                                                   |
+| `compileVisibleWaitExpression`     | function | Compiles an in-page wait for a visible selector.                                                                                                                                                    |
+| `compileHiddenWaitExpression`      | function | Compiles an in-page wait for a hidden selector.                                                                                                                                                     |
+| `compileClickExpression`           | function | Compiles a strict, visibility-checked click expression.                                                                                                                                             |
+| `compileFillExpression`            | function | Compiles a strict, editable fill expression.                                                                                                                                                        |
+| `compileSelectExpression`          | function | Compiles a strict select expression.                                                                                                                                                                |
+| `parseNumberArray`                 | function | Coerces an unknown value to an all-number array, or `undefined` off-shape.                                                                                                                          |
+| `parseSnapshotString`              | function | Coerces one CDP snapshot string-table index to its string, or `undefined` off-shape.                                                                                                                |
+| `readRareStringData`               | function | Decodes CDP snapshot sparse string data into a node-index map, skipping every off-shape entry.                                                                                                      |
+| `readRareBooleanData`              | function | Decodes CDP snapshot sparse boolean data into a set of node indexes, skipping every off- shape entry.                                                                                               |
+| `readRareIntegerData`              | function | Decodes CDP snapshot sparse integer data into a node-index map, skipping every off-shape entry.                                                                                                     |
+| `parseBrowserRect`                 | function | Coerces a four-number CSS-pixel rectangle to a `BrowserRect`, or `undefined` off-shape.                                                                                                             |
+| `readBrowserAttributes`            | function | Decodes flattened CDP node attributes into a frozen record, skipping every off-shape pair.                                                                                                          |
+| `readBrowserSnapshot`              | function | Decodes a CDP `DOMSnapshot.captureSnapshot` result into a serializable `BrowserSnapshotInput`, throwing a `BrowserError` off-shape and a `BrowserResultLimitError` past the configured node limit.  |
+| `isBrowserNodeQuery`               | function | Tests whether a browser-node matcher is a declarative query rather than a predicate.                                                                                                                |
+| `matchesBrowserNode`               | function | Tests a captured node against a declarative query.                                                                                                                                                  |
+| `isBrowserNodeVisible`             | function | Tests whether a captured node has a non-empty rendered layout box.                                                                                                                                  |
 
 ```ts
 import {
@@ -213,51 +218,53 @@ family's — see [`BrowserSnapshotInterface`](#browsersnapshotinterface) below.
 
 #### Types
 
-| Type                          | Kind      | Shape                                                                                                                                                                                                                                                                                    |
-| ----------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `CDPTransportEventMap`        | type      | `{ message: [data: string]; close: []; error: [error: unknown] }` — the transport's observable surface.                                                                                                                                                                                  |
-| `CDPTransportInterface`       | interface | `emitter` data member + `start` / `send` / `close` methods — the dumb text pipe a `CDPClientInterface` sends/receives JSON-RPC frames over.                                                                                                                                              |
-| `CDPClientOptions`            | interface | `{ transport: CDPTransportInterface; timeout?: number; on?: EmitterHooks<CDPClientEventMap>; error?: EmitterErrorHandler }` — options for `createCDPClient`; `error` receives a subscriber throw with the CDP event method, or with the lifecycle event name for a lifecycle subscriber. |
-| `CDPHandler`                  | type      | `(params: Readonly<Record<string, unknown>>) => void` — handler invoked for a subscribed CDP event.                                                                                                                                                                                      |
-| `CDPClientEventMap`           | type      | `{ connect: []; close: []; drop: []; error: [error: unknown] }` — the client's own connection lifecycle.                                                                                                                                                                                 |
-| `CDPTarget`                   | interface | `{ id: string; category: string; title: string; url: string }` — one entry of the CDP `Target.getTargets` result; `category` mirrors the protocol's `type` field.                                                                                                                        |
-| `CDPClientInterface`          | interface | `emitter` / `connected` data members + `connect` / `reconnect` / `send` / `subscribe` / `unsubscribe` / `close` methods (`send` takes a trailing `CDPSendOptions`).                                                                                                                      |
-| `CDPSendOptions`              | interface | `{ session?: string; timeout?: number }` — options for one CDP method call.                                                                                                                                                                                                              |
-| `BrowserWriterInterface`      | interface | `write(path, data)` — pluggable sink for persisting captured browser bytes to a path; core never touches a filesystem directly.                                                                                                                                                          |
-| `BrowserViewport`             | interface | `{ width: number; height: number }` — viewport dimensions for a browser page.                                                                                                                                                                                                            |
-| `BrowserWaitUntil`            | type      | `'commit' \| 'load' \| 'domcontentloaded'` — page load condition for navigation (the CDP load event `navigate()` awaits).                                                                                                                                                                |
-| `BrowserPageOptions`          | interface | `{ on?; error?; url?; viewport?; timeout? }` — options for creating a browser page.                                                                                                                                                                                                      |
-| `BrowserNavigationOptions`    | interface | `{ condition?: BrowserWaitUntil; timeout? }` — options for page navigation (default `'load'`).                                                                                                                                                                                           |
-| `BrowserActionOptions`        | interface | `{ timeout?; strict?; force?; trial? }` — options for strict-by-default element interaction.                                                                                                                                                                                             |
-| `BrowserWaitState`            | type      | `'attached' \| 'detached' \| 'visible' \| 'hidden'` — selector state awaited by a frame.                                                                                                                                                                                                 |
-| `BrowserWaitOptions`          | interface | `{ timeout?; strict?; state? }` — options for selector-state waits.                                                                                                                                                                                                                      |
-| `BrowserScreenshotOptions`    | interface | `{ path?; full?; format?: 'png' \| 'jpeg'; quality? }` — options for taking a page screenshot.                                                                                                                                                                                           |
-| `BrowserContentResult`        | interface | `{ url: string; title: string; html: string; text: string }` — result of page content extraction.                                                                                                                                                                                        |
-| `BrowserScreenshotResult`     | interface | `{ bytes: Uint8Array; path: string \| undefined }` — result of a page screenshot.                                                                                                                                                                                                        |
-| `BrowserCodegenAction`        | type      | Discriminated union — `navigate` / `click` / `fill` / `select` — one recorded browser action.                                                                                                                                                                                            |
-| `BrowserCodegenEventMap`      | type      | `{ start: []; stop: [actions]; action: [action]; clear: [] }` — the observable surface of a `BrowserCodegenInterface`.                                                                                                                                                                   |
-| `BrowserCodegenOptions`       | interface | `{ on?: EmitterHooks<BrowserCodegenEventMap>; error?: EmitterErrorHandler }` — options for creating a BrowserCodegen recorder.                                                                                                                                                           |
-| `BrowserCodegenLanguage`      | type      | `'javascript' \| 'typescript'` — target language for a compiled codegen script.                                                                                                                                                                                                          |
-| `BrowserCodegenScriptOptions` | interface | `{ language?: BrowserCodegenLanguage }` — options for compiling recorded actions into a script (default `'javascript'`).                                                                                                                                                                 |
-| `BrowserCodegenInterface`     | interface | `emitter` / `started` data members + `start` / `stop` / `actions` / `script` / `clear` / `destroy` methods.                                                                                                                                                                              |
-| `BrowserSessionFunction`      | type      | `(frame: string) => Promise<string>` — resolves the current CDP target session for a frame.                                                                                                                                                                                              |
-| `BrowserFrameInfo`            | interface | Serializable `id` / `parent` / `name` / `url` metadata decoded from `Page.getFrameTree`.                                                                                                                                                                                                 |
-| `BrowserFrameInterface`       | interface | Frame metadata plus title/content/actions/evaluation/waiting, usability assertion, observed-URL recording, and raw frame-session CDP access.                                                                                                                                             |
-| `BrowserSendOptions`          | interface | `{ timeout?: number }` — options for one raw CDP call in a frame's target session.                                                                                                                                                                                                       |
-| `BrowserRect`                 | type      | Readonly `[x, y, width, height]` CSS-pixel tuple.                                                                                                                                                                                                                                        |
-| `BrowserLayout`               | interface | Optional layout box, computed styles, text, paint order, and DOM rectangles for a snapshot node.                                                                                                                                                                                         |
-| `BrowserNode`                 | interface | One flattened serializable DOM node, including attributes, sparse state, frame identity, layout, and the `category` that mirrors the DOM `nodeType`.                                                                                                                                     |
-| `BrowserDocument`             | interface | One captured document with frame metadata, dimensions, and nodes.                                                                                                                                                                                                                        |
-| `BrowserSnapshotInput`        | interface | `{ documents; styles }` — every captured document plus the requested computed-style names; the serializable form a `BrowserSnapshot` is built from and serializes back to.                                                                                                               |
-| `BrowserWalkOrder`            | type      | `'depth' \| 'breadth'` — structural ordering for a snapshot walk.                                                                                                                                                                                                                        |
-| `BrowserWalkOptions`          | interface | `{ root?; order? }` — optional subtree root (included in the walk) and traversal order (default `'depth'`).                                                                                                                                                                              |
-| `BrowserSiblingRelation`      | type      | `'preceding' \| 'following'` — structural sibling side relative to a node.                                                                                                                                                                                                               |
-| `BrowserSnapshotInterface`    | interface | Extends `BrowserSnapshotInput`; adds walking, structural relationships, search, and path derivation over plain `BrowserNode` values.                                                                                                                                                     |
-| `BrowserSnapshotOptions`      | interface | `{ styles?; paint?; rects?; limit? }` — DOM snapshot capture and decoding controls.                                                                                                                                                                                                      |
-| `BrowserNodePredicate`        | type      | `(node: BrowserNode) => boolean` — traversal/search predicate.                                                                                                                                                                                                                           |
-| `BrowserNodeQuery`            | interface | Declarative name/text/attribute/frame/visibility/clickability matcher.                                                                                                                                                                                                                   |
-| `BrowserPageInterface`        | interface | Extends `BrowserFrameInterface`; adds `closed` plus navigation, screenshots, frame discovery, DOM snapshots, codegen, and target teardown.                                                                                                                                               |
-| `BrowserContextInterface`     | interface | `emitter` / `id` / `cookies` / `permissions` / `storage` / `emulation` data members + `page` / `pages` / `create` / `sync` / `destroy` / `close` methods.                                                                                                                                |
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
+
+| Type                          | Kind      | Shape                                                                                                                                                                                                                                     | Summary                                                                                                                                                                                                                   |
+| ----------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `CDPTransportEventMap`        | type      | `{ message, close, error }`                                                                                                                                                                                                               | Maps the events emitted by a `CDPTransportInterface` — the raw text pipe a `CDPClientInterface` sends and receives JSON-RPC frames over.                                                                                  |
+| `CDPTransportInterface`       | interface | `{ emitter } plus start, send, close`                                                                                                                                                                                                     | Represents a dumb text transport CDPClient sends and receives JSON-RPC frames over.                                                                                                                                       |
+| `CDPClientOptions`            | interface | `{ transport, timeout?, on?, error? }`                                                                                                                                                                                                    | Describes the options for creating a CDPClient.                                                                                                                                                                           |
+| `CDPHandler`                  | type      | `(params: Readonly<Record<string, unknown>>) => void`                                                                                                                                                                                     | Receives a subscribed CDP event with its params record.                                                                                                                                                                   |
+| `CDPClientEventMap`           | type      | `{ connect, close, drop, error }`                                                                                                                                                                                                         | Maps the events a `CDPClientInterface` emits.                                                                                                                                                                             |
+| `CDPTarget`                   | interface | `{ id, category, title, url }`                                                                                                                                                                                                            | Represents one entry of the CDP `Target.getTargets` result.                                                                                                                                                               |
+| `CDPClientInterface`          | interface | `{ emitter, connected } plus connect, reconnect, send, subscribe, unsubscribe, close`                                                                                                                                                     | Provides a lightweight Chrome DevTools Protocol client over a `CDPTransportInterface`.                                                                                                                                    |
+| `CDPSendOptions`              | interface | `{ session?, timeout? }`                                                                                                                                                                                                                  | Describes the options for one CDP method call.                                                                                                                                                                            |
+| `BrowserWriterInterface`      | interface | `{} plus write`                                                                                                                                                                                                                           | Provides a pluggable sink for persisting captured browser bytes to a path.                                                                                                                                                |
+| `BrowserViewport`             | interface | `{ width, height, scale?, mobile?, touch?, landscape? }`                                                                                                                                                                                  | Describes the viewport dimensions for a browser page.                                                                                                                                                                     |
+| `BrowserWaitUntil`            | type      | `'commit' \| 'load' \| 'domcontentloaded'`                                                                                                                                                                                                | Names the page load condition for navigation — the CDP load event awaited by `navigate()`.                                                                                                                                |
+| `BrowserPageOptions`          | interface | `{ on?, error?, url?, viewport?, timeout? }`                                                                                                                                                                                              | Describes the options for creating a browser page.                                                                                                                                                                        |
+| `BrowserNavigationOptions`    | interface | `{ condition?, timeout? }`                                                                                                                                                                                                                | Describes the options for page navigation.                                                                                                                                                                                |
+| `BrowserActionOptions`        | interface | `{ timeout?, strict?, force?, trial? }`                                                                                                                                                                                                   | Describes the options for element interaction (click, fill, select, wait).                                                                                                                                                |
+| `BrowserWaitState`            | type      | `'attached' \| 'detached' \| 'visible' \| 'hidden'`                                                                                                                                                                                       | Names an element state a frame or page can wait for.                                                                                                                                                                      |
+| `BrowserWaitOptions`          | interface | `BrowserActionOptions plus { state? }`                                                                                                                                                                                                    | Describes the options for waiting on an element.                                                                                                                                                                          |
+| `BrowserScreenshotOptions`    | interface | `{ path?, full?, format?, quality?, clip?, transparent?, animations?, caret?, scale?, mask?, color? }`                                                                                                                                    | Describes the options for taking a page screenshot.                                                                                                                                                                       |
+| `BrowserContentResult`        | interface | `{ url, title, html, text }`                                                                                                                                                                                                              | Describes the result of page content extraction.                                                                                                                                                                          |
+| `BrowserScreenshotResult`     | interface | `{ bytes, path }`                                                                                                                                                                                                                         | Describes the result of a page screenshot.                                                                                                                                                                                |
+| `BrowserCodegenAction`        | type      | `{ action: 'navigate', url } \| { action: 'click', selector } \| { action: 'fill', selector, value } \| { action: 'select', selector, values }`                                                                                           | Represents one recorded browser action captured during a codegen session.                                                                                                                                                 |
+| `BrowserCodegenEventMap`      | type      | `{ start, stop, action, clear }`                                                                                                                                                                                                          | Maps the events a `BrowserCodegenInterface` emits.                                                                                                                                                                        |
+| `BrowserCodegenOptions`       | interface | `{ on?, error? }`                                                                                                                                                                                                                         | Describes the options for creating a BrowserCodegen recorder.                                                                                                                                                             |
+| `BrowserCodegenLanguage`      | type      | `'javascript' \| 'typescript'`                                                                                                                                                                                                            | Names the target language for a compiled codegen script.                                                                                                                                                                  |
+| `BrowserCodegenScriptOptions` | interface | `{ language? }`                                                                                                                                                                                                                           | Describes the options for compiling recorded actions into a script.                                                                                                                                                       |
+| `BrowserCodegenInterface`     | interface | `{ emitter, started } plus start, stop, actions, script, clear, destroy`                                                                                                                                                                  | Records page interactions (navigation, click, fill, select) as a session runs, for later compilation into a replayable script.                                                                                            |
+| `BrowserSessionFunction`      | type      | `(frame: string) => Promise<string>`                                                                                                                                                                                                      | Resolves the current CDP session for a frame id.                                                                                                                                                                          |
+| `BrowserFrameInfo`            | interface | `{ id, parent, name, url }`                                                                                                                                                                                                               | Describes serializable frame metadata decoded from CDP `Page.getFrameTree`.                                                                                                                                               |
+| `BrowserFrameInterface`       | interface | `{ id, parent, name, url, selectors, keyboard, mouse, touch } plus title, content, article, click, fill, select, evaluate, handle, wait, send, subscribe, unsubscribe, save, assert, update`                                              | Provides the operations shared by a top-level page and an iframe document.                                                                                                                                                |
+| `BrowserSendOptions`          | interface | `{ timeout? }`                                                                                                                                                                                                                            | Describes the options for one raw CDP method call issued in a frame's target session.                                                                                                                                     |
+| `BrowserRect`                 | type      | `readonly [x: number, y: number, width: number, height: number]`                                                                                                                                                                          | Represents a rectangle in CSS pixels: x, y, width, height.                                                                                                                                                                |
+| `BrowserLayout`               | interface | `{ bounds, styles, text, paint, offset, scroll, client }`                                                                                                                                                                                 | Describes layout data associated with one captured DOM node.                                                                                                                                                              |
+| `BrowserNode`                 | interface | `{ document, frame, index, id, parent, category, name, value, attributes, text, input, checked, selected, clickable, shadow, content, pseudo, source, origin, layout }`                                                                   | Represents one serializable DOM node decoded from a CDP DOM snapshot.                                                                                                                                                     |
+| `BrowserDocument`             | interface | `{ index, frame, url, title, nodes, scroll, width, height }`                                                                                                                                                                              | Represents one document captured in a CDP DOM snapshot.                                                                                                                                                                   |
+| `BrowserSnapshotInput`        | interface | `{ documents, styles }`                                                                                                                                                                                                                   | Describes the serializable input for a navigable browser snapshot — the form a `BrowserSnapshot` is built from and serializes back to.                                                                                    |
+| `BrowserWalkOrder`            | type      | `'depth' \| 'breadth'`                                                                                                                                                                                                                    | Names the structural ordering for a browser snapshot walk.                                                                                                                                                                |
+| `BrowserWalkOptions`          | interface | `{ root?, order? }`                                                                                                                                                                                                                       | Describes the options for walking a browser snapshot.                                                                                                                                                                     |
+| `BrowserSiblingRelation`      | type      | `'preceding' \| 'following'`                                                                                                                                                                                                              | Names a structural sibling relationship relative to a browser node.                                                                                                                                                       |
+| `BrowserSnapshotInterface`    | interface | `BrowserSnapshotInput plus walk, descendants, document, children, parent, siblings, ancestors, common, distance, find, filter, closest, path`                                                                                             | Represents a navigable, serializable snapshot of every document attached to a page, extending `BrowserSnapshotInput` with walking, structural relationships, search, and path derivation over plain `BrowserNode` values. |
+| `BrowserSnapshotOptions`      | interface | `{ styles?, paint?, rects?, limit? }`                                                                                                                                                                                                     | Describes the options configuring capture through `BrowserPageInterface` `snapshot()`. The snapshot entity's creation input is `BrowserSnapshotInput`.                                                                    |
+| `BrowserNodePredicate`        | type      | `(node: BrowserNode) => boolean`                                                                                                                                                                                                          | Names the predicate form accepted by `BrowserSnapshotInterface` find, filter, and closest methods.                                                                                                                        |
+| `BrowserNodeQuery`            | interface | `{ name?, text?, attributes?, frame?, visible?, clickable? }`                                                                                                                                                                             | Describes a declarative browser-node matcher used by `matchesBrowserNode`.                                                                                                                                                |
+| `BrowserPageInterface`        | interface | `BrowserFrameInterface plus { emitter, network, navigation, scripts, accessibility, diagnostics, clock, opener, target, closed } plus navigate, reload, back, forward, screenshot, pdf, frame, frames, snapshot, codegen, destroy, close` | Abstracts a single top-level browser page, extending `BrowserFrameInterface` with navigation, screenshots, frame discovery, DOM snapshots, codegen, and target teardown.                                                  |
+| `BrowserContextInterface`     | interface | `{ emitter, id, cookies, permissions, storage, emulation } plus page, pages, create, sync, destroy, close`                                                                                                                                | Represents an isolated browser session over a CDP browser context.                                                                                                                                                        |
 
 ### Server
 
@@ -276,62 +283,66 @@ await browser.destroy() // closes the process and releases resources
 
 #### Factories
 
-| API                   | Kind     | Summary                                                                                             |
-| --------------------- | -------- | --------------------------------------------------------------------------------------------------- |
-| `createBrowser`       | function | Create a raw-CDP `BrowserInterface` façade with discovery, connection, and lifecycle management.    |
-| `createCDPTransport`  | function | Create a Node `WebSocket`-backed `CDPTransportInterface` for the given CDP debugger URL.            |
-| `createBrowserWriter` | function | Create a filesystem-backed `BrowserWriterInterface` that persists bytes through `node:fs/promises`. |
+| API                   | Kind     | Summary                                                                                              |
+| --------------------- | -------- | ---------------------------------------------------------------------------------------------------- |
+| `createBrowser`       | function | Creates a raw-CDP `BrowserInterface` façade with discovery, connection, and lifecycle management.    |
+| `createCDPTransport`  | function | Creates a Node `WebSocket`-backed `CDPTransportInterface` for the given CDP debugger URL.            |
+| `createBrowserWriter` | function | Creates a filesystem-backed `BrowserWriterInterface` that persists bytes through `node:fs/promises`. |
 
-#### Entities
+#### Classes
 
-| API                     | Kind  | Summary                                                                                                     |
-| ----------------------- | ----- | ----------------------------------------------------------------------------------------------------------- |
-| `Browser`               | class | Browser wrapper with discovery, connection management, and lifecycle control (discover → connect → launch). |
-| `WebSocketCDPTransport` | class | Node `WebSocket`-backed `CDPTransportInterface` — connects to a CDP WebSocket debugger URL.                 |
-| `FileBrowserWriter`     | class | Filesystem-backed `BrowserWriterInterface` — persists captured bytes, creating missing parent directories.  |
+| API                     | Kind  | Summary                                                                       |
+| ----------------------- | ----- | ----------------------------------------------------------------------------- |
+| `Browser`               | class | Discovers, launches, connects to, and owns Chromium-family browser sessions.  |
+| `WebSocketCDPTransport` | class | Provides a raw CDP text transport backed by `@orkestrel/websocket`.           |
+| `FileBrowserWriter`     | class | Persists captured browser bytes to the filesystem through `node:fs/promises`. |
 
 #### Constants
 
-| Constant                          | Kind  | Value                                                                                                                                                                                                                  |
-| --------------------------------- | ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BROWSER_DEFAULT_CDP_PORT`        | const | `9222` — default CDP port probed for an existing browser and used for launches.                                                                                                                                        |
-| `BROWSER_DEFAULT_HOST`            | const | `'127.0.0.1'` — default host probed/launched on (avoids `localhost` resolving to `::1`).                                                                                                                               |
-| `BROWSER_CDP_PROTOCOL`            | const | `'http'` — protocol prefix for CDP discovery requests.                                                                                                                                                                 |
-| `BROWSER_CDP_VERSION_PATH`        | const | `'/json/version'` — path appended to the CDP host to fetch version metadata.                                                                                                                                           |
-| `BROWSER_CDP_LIST_PATH`           | const | `'/json/list'` — path appended to the CDP host to list open targets.                                                                                                                                                   |
-| `BROWSER_LAUNCH_ARGS`             | const | Frozen flags always passed to a launched browser process, alongside the caller's own.                                                                                                                                  |
-| `BROWSER_HEADLESS_ARG`            | const | `'--headless=new'` — flag enabling headless mode on a launched browser process.                                                                                                                                        |
-| `BROWSER_PROFILE_PREFIX`          | const | `'orkestrel-browser-'` — guarded prefix for isolated launch profiles created beneath the operating-system temp directory.                                                                                              |
-| `BROWSER_KILL_GRACE_MS`           | const | `3000` — bound for each launched-process exit window during TERM-to-KILL teardown. `destroy()` may apply it before and after hard-kill escalation; `close()` can first apply it while waiting for CDP `Browser.close`. |
-| `BROWSER_PORT_PROBE_TIMEOUT_MS`   | const | `200` — bound for the `discover: false` port-occupancy probe before launching (short — it only needs to detect an already-listening CDP endpoint).                                                                     |
-| `BROWSER_TRANSPORT_LOSS_DEFER_MS` | const | `50` — brief defer applied once when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event first say over the diagnosis.                                                     |
-| `BROWSER_PROCESS_EXIT_CAUSE`      | const | `'process-exit'` — machine-readable error-context cause for an owned browser process exiting.                                                                                                                          |
-| `BROWSER_TRANSPORT_LOSS_CAUSE`    | const | `'transport-loss'` — machine-readable error-context cause for CDP transport loss while the browser remains alive.                                                                                                      |
-| `BROWSER_ENV_PATH_KEYS`           | const | Frozen list of env vars checked (in order) for an explicit browser executable path override (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`).                                                                             |
-| `BROWSER_EXECUTABLE_PATHS`        | const | Frozen record of well-known Chrome/Chromium/Edge paths with no platform-specific root, keyed by `process.platform` (win32 is empty — see `BROWSER_WINDOWS_SUFFIXES`).                                                  |
-| `BROWSER_WINDOWS_SUFFIXES`        | const | Frozen list of Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root.                                                                                                    |
-| `BROWSER_WINDOWS_ROOT_FALLBACKS`  | const | Frozen record of fallback Windows install roots used when `PROGRAMFILES` / `PROGRAMFILES(X86)` are unset.                                                                                                              |
-| `BROWSER_EXECUTABLE_NAMES`        | const | Frozen list of command names probed on PATH when no well-known executable path exists.                                                                                                                                 |
-| `BROWSER_STORE_ENV_KEY`           | const | `'PLAYWRIGHT_BROWSERS_PATH'` — env var naming an additional Playwright browser store base directory.                                                                                                                   |
-| `BROWSER_STORE_DEFAULT_DIRS`      | const | Frozen list of well-known Playwright browser store base directories (for example `/opt/pw-browsers`).                                                                                                                  |
-| `BROWSER_STORE_CACHE_DIRS`        | const | Frozen record of the per-OS default Playwright cache directory, relative to the home directory.                                                                                                                        |
-| `BROWSER_STORE_LINK_NAME`         | const | `'chromium'` — name of the top-level Chromium symlink/binary inside a browser store base.                                                                                                                              |
-| `BROWSER_STORE_GLOBS`             | const | Frozen record of the glob pattern matching a versioned Chromium binary, keyed by `process.platform`.                                                                                                                   |
-| `BROWSER_ENGINE_HINTS`            | const | Frozen record of case-insensitive substrings identifying an executable's engine, keyed by `BrowserEngine` (checked edge → chromium → chrome by `parseBrowserEngine`).                                                  |
+A `Shape` cell holds the constant's declared type.
+
+| Constant                          | Kind  | Shape                                                | Summary                                                                                                                                                                                                                          |
+| --------------------------------- | ----- | ---------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROWSER_DEFAULT_CDP_PORT`        | const | `number`                                             | Sets the default CDP port probed for an existing browser and used for launches, `9222`.                                                                                                                                          |
+| `BROWSER_DEFAULT_HOST`            | const | `string`                                             | Sets the default host probed for an existing browser and used for launches, `'127.0.0.1'`, which avoids `localhost` resolving to `::1` when Chromium binds `127.0.0.1`.                                                          |
+| `BROWSER_CDP_PROTOCOL`            | const | `string`                                             | Names the protocol prefix for CDP discovery requests, `'http'`.                                                                                                                                                                  |
+| `BROWSER_CDP_VERSION_PATH`        | const | `string`                                             | Names the path appended to the CDP host to fetch version metadata, `'/json/version'`, which is where endpoint discovery reads.                                                                                                   |
+| `BROWSER_CDP_LIST_PATH`           | const | `string`                                             | Names the path appended to the CDP host to list open targets — pages, workers, and every other target category Chromium reports — `'/json/list'`.                                                                                |
+| `BROWSER_LAUNCH_ARGS`             | const | `readonly string[]`                                  | Lists the flags always passed to a launched browser process, alongside the caller's own.                                                                                                                                         |
+| `BROWSER_HEADLESS_ARG`            | const | `string`                                             | Names the flag that enables headless mode on a launched browser process, `'--headless=new'`.                                                                                                                                     |
+| `BROWSER_PROFILE_PREFIX`          | const | `string`                                             | Names the prefix for isolated browser profiles created beneath the operating-system temp directory, `'orkestrel-browser-'`.                                                                                                      |
+| `BROWSER_KILL_GRACE_MS`           | const | `number`                                             | Bounds each launched-process exit window during TERM-to-KILL teardown at `3_000` milliseconds.                                                                                                                                   |
+| `BROWSER_PORT_PROBE_TIMEOUT_MS`   | const | `number`                                             | Bounds the `discover: false` port-occupancy probe before launching at `200` milliseconds, which is short because the probe only needs to detect an already-listening CDP endpoint rather than perform full discovery.            |
+| `BROWSER_TRANSPORT_LOSS_DEFER_MS` | const | `number`                                             | Defers once for `50` milliseconds when a transport loss is observed on an owned process, giving a near-simultaneous process-exit event, which libuv may reap slightly later than the socket close, first say over the diagnosis. |
+| `BROWSER_PROCESS_EXIT_CAUSE`      | const | `string`                                             | Names the machine-readable error-context cause for an owned browser process exiting, `'process-exit'`.                                                                                                                           |
+| `BROWSER_TRANSPORT_LOSS_CAUSE`    | const | `string`                                             | Names the machine-readable error-context cause for a CDP transport disconnecting while its browser remains alive, `'transport-loss'`.                                                                                            |
+| `BROWSER_ENV_PATH_KEYS`           | const | `readonly string[]`                                  | Lists the environment variables checked, in order, for an explicit browser executable path override: `PLAYWRIGHT_EXECUTABLE_PATH`, then `CHROME_PATH`.                                                                           |
+| `BROWSER_EXECUTABLE_PATHS`        | const | `Readonly<Record<string, readonly string[]>>`        | Lists the well-known Chrome/Chromium/Edge executable paths with no platform-specific root, keyed by `process.platform`, leaving `win32` empty because its roots come from `BROWSER_WINDOWS_SUFFIXES`.                            |
+| `BROWSER_WINDOWS_SUFFIXES`        | const | `readonly string[]`                                  | Lists the Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root (`PROGRAMFILES`, `PROGRAMFILES(X86)`, `LOCALAPPDATA`).                                                             |
+| `BROWSER_WINDOWS_ROOT_FALLBACKS`  | const | `Readonly<Record<string, string>>`                   | Lists the fallback Windows install roots used when `PROGRAMFILES`, `PROGRAMFILES(X86)`, or `LOCALAPPDATA` is absent.                                                                                                             |
+| `BROWSER_EXECUTABLE_NAMES`        | const | `readonly string[]`                                  | Lists the command names probed on PATH when no well-known executable path exists.                                                                                                                                                |
+| `BROWSER_STORE_ENV_KEY`           | const | `string`                                             | Names the environment variable that carries an additional Playwright browser store base directory, `'PLAYWRIGHT_BROWSERS_PATH'`.                                                                                                 |
+| `BROWSER_STORE_DEFAULT_DIRS`      | const | `readonly string[]`                                  | Lists the well-known Playwright browser store base directories checked in addition to `PLAYWRIGHT_BROWSERS_PATH`, starting with `/opt/pw-browsers`.                                                                              |
+| `BROWSER_STORE_CACHE_DIRS`        | const | `Readonly<Record<string, string>>`                   | Names the per-OS default Playwright browser cache directory, relative to the home directory (win32 uses `LOCALAPPDATA` directly).                                                                                                |
+| `BROWSER_STORE_LINK_NAME`         | const | `string`                                             | Names the top-level Chromium symlink or binary Playwright maintains inside a browser store base, `'chromium'`.                                                                                                                   |
+| `BROWSER_STORE_GLOBS`             | const | `Readonly<Record<string, string>>`                   | Names the glob pattern (relative to a store base) matching a versioned Chromium binary, keyed by `process.platform`.                                                                                                             |
+| `BROWSER_ENGINE_HINTS`            | const | `Readonly<Record<BrowserEngine, readonly string[]>>` | Lists the case-insensitive substrings identifying an executable path/name's browser engine, checked by `parseBrowserEngine` in the order `edge` → `chromium` → `chrome`.                                                         |
 
 #### Errors
 
-| Error                      | Kind  | Extends        | Code                          | Summary                                                                       |
-| -------------------------- | ----- | -------------- | ----------------------------- | ----------------------------------------------------------------------------- |
-| `BrowserConnectionError`   | class | `BrowserError` | `BROWSER_CONNECTION_ERROR`    | A CDP connection, discovery, or launch attempt failed.                        |
-| `BrowserNotConnectedError` | class | `BrowserError` | `BROWSER_NOT_CONNECTED_ERROR` | An operation requiring an active connection was attempted while disconnected. |
-| `BrowserDestroyedError`    | class | `BrowserError` | `BROWSER_DESTROYED_ERROR`     | An operation was attempted after the Browser was destroyed.                   |
+| Error                      | Kind  | Signature              | Summary                                                                                                                                  |
+| -------------------------- | ----- | ---------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
+| `BrowserConnectionError`   | class | `extends BrowserError` | Reports that a CDP connection, discovery, or launch attempt failed, under the code `BROWSER_CONNECTION_ERROR`.                           |
+| `BrowserNotConnectedError` | class | `extends BrowserError` | Reports that an operation requiring an active connection was attempted while disconnected, under the code `BROWSER_NOT_CONNECTED_ERROR`. |
+| `BrowserDestroyedError`    | class | `extends BrowserError` | Reports that an operation was attempted after the browser wrapper was destroyed, under the code `BROWSER_DESTROYED_ERROR`.               |
 
-| Guard                        | Kind     | Narrows to                 |
-| ---------------------------- | -------- | -------------------------- |
-| `isBrowserConnectionError`   | function | `BrowserConnectionError`   |
-| `isBrowserNotConnectedError` | function | `BrowserNotConnectedError` |
-| `isBrowserDestroyedError`    | function | `BrowserDestroyedError`    |
+In a guard table a `Shape` cell holds the type the guard narrows to.
+
+| Guard                        | Kind     | Shape                      | Summary                                                   |
+| ---------------------------- | -------- | -------------------------- | --------------------------------------------------------- |
+| `isBrowserConnectionError`   | function | `BrowserConnectionError`   | Narrows an unknown value to a `BrowserConnectionError`.   |
+| `isBrowserNotConnectedError` | function | `BrowserNotConnectedError` | Narrows an unknown value to a `BrowserNotConnectedError`. |
+| `isBrowserDestroyedError`    | function | `BrowserDestroyedError`    | Narrows an unknown value to a `BrowserDestroyedError`.    |
 
 ```ts
 try {
@@ -345,26 +356,26 @@ try {
 
 #### Helpers
 
-| API                       | Kind     | Summary                                                                                                                                                                                                                                                                                                                                                        |
-| ------------------------- | -------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `findSystemBrowsers`      | function | Enumerate every Chrome/Chromium/Edge executable discoverable (env override → well-known install paths → PATH probe → Playwright browser stores), deduplicated by normalized path; each entry classified into a `SystemBrowser`, optionally narrowed by `options.engine` — unclassifiable executables default to engine `'chromium'` rather than being dropped. |
-| `findSystemBrowser`       | function | The first entry of `findSystemBrowsers`; may return `undefined`.                                                                                                                                                                                                                                                                                               |
-| `parseBrowserEngine`      | function | Classify an executable path/name into a `BrowserEngine` by case-insensitive hint (edge → chromium → chrome); may return `undefined`.                                                                                                                                                                                                                           |
-| `normalizeExecutablePath` | function | Normalize an executable path for cross-source deduplication (case-insensitive on Windows).                                                                                                                                                                                                                                                                     |
-| `browserToEngine`         | function | Classify a `/json/version` `Browser` string into a `BrowserEngine` (`Edg/` → edge, `Chrome/` → chrome, else chromium).                                                                                                                                                                                                                                         |
-| `createBrowserProfile`    | function | Resolve a caller-owned persistent profile or create an isolated temporary user-data directory.                                                                                                                                                                                                                                                                 |
-| `removeBrowserProfile`    | function | Remove a library-owned isolated profile after validating its guarded temp-directory shape; persistent profiles are untouched.                                                                                                                                                                                                                                  |
-| `findEnvOverrides`        | function | Check the env-override keys in order, returning every one that exists.                                                                                                                                                                                                                                                                                         |
-| `buildInstallPaths`       | function | Build the default well-known install-path candidates for a platform, deriving Windows roots from env vars.                                                                                                                                                                                                                                                     |
-| `buildWindowsRoots`       | function | Derive Windows install roots from env vars, falling back to well-known literals when absent.                                                                                                                                                                                                                                                                   |
-| `findInstallPaths`        | function | Return every candidate path that exists on disk, in the given order.                                                                                                                                                                                                                                                                                           |
-| `probePathNames`          | function | Probe PATH for every resolvable command name, in the given order.                                                                                                                                                                                                                                                                                              |
-| `readFirstLine`           | function | Return the first non-empty line of a command's output without its surrounding whitespace, so a `where` match on Windows keeps no trailing carriage return; may return `undefined`.                                                                                                                                                                             |
-| `buildStoreBases`         | function | Build the default Playwright browser store base directories to search for a managed Chromium.                                                                                                                                                                                                                                                                  |
-| `findStorePaths`          | function | Search one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first.                                                                                                                                                                                                                                                |
-| `launchBrowserProcess`    | function | Launch a browser process with raw-CDP debugging flags; a POSIX launch is detached into its own process group so teardown reaches every Chromium subprocess, and a Windows launch is not detached so teardown signals one process by identifier — the spawned process, or the one the launcher handed the endpoint to. Returns the spawned `ChildProcess`.      |
-| `waitForCDPReady`         | function | Poll a browser's CDP version endpoint until it responds or the timeout elapses; returns the debugger URL.                                                                                                                                                                                                                                                      |
-| `fetchCDPTargets`         | function | Fetch and normalize the current CDP target list from a browser's `/json/list` endpoint, as a `Result` carrying either the targets or a coded `BrowserConnectionError`.                                                                                                                                                                                         |
+| API                       | Kind     | Summary                                                                                                                                                    |
+| ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `findSystemBrowsers`      | function | Enumerates every Chrome/Chromium/Edge executable discoverable on this machine, deduplicated by normalized absolute path.                                   |
+| `findSystemBrowser`       | function | Locates a Chrome/Chromium/Edge executable on this machine — the first entry of `findSystemBrowsers`.                                                       |
+| `parseBrowserEngine`      | function | Classifies an executable path/name into a `BrowserEngine` by case-insensitive hint, checked in the order edge → chromium → chrome.                         |
+| `normalizeExecutablePath` | function | Normalizes an executable path for cross-source deduplication (case-insensitive on Windows).                                                                |
+| `browserToEngine`         | function | Classifies a `/json/version` `Browser` string into a `BrowserEngine` (`Edg/` → edge, `Chrome/` → chrome, else chromium).                                   |
+| `createBrowserProfile`    | function | Resolves a persistent caller profile or creates an isolated temporary one.                                                                                 |
+| `removeBrowserProfile`    | function | Removes a library-owned isolated browser profile.                                                                                                          |
+| `findEnvOverrides`        | function | Checks the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order and returns every one that exists.                                     |
+| `buildInstallPaths`       | function | Builds the default well-known install-path candidates for a platform, deriving Windows roots from env vars.                                                |
+| `buildWindowsRoots`       | function | Derives Windows install roots from env vars, falling back to well-known literals when absent.                                                              |
+| `findInstallPaths`        | function | Returns every candidate path that exists on disk, in the given order.                                                                                      |
+| `probePathNames`          | function | Probes PATH (`which`/`where`) for every resolvable command name, in the given order.                                                                       |
+| `readFirstLine`           | function | Returns the first non-empty line of a command's output, without its surrounding whitespace.                                                                |
+| `buildStoreBases`         | function | Builds the default Playwright browser store base directories to search for a managed Chromium.                                                             |
+| `findStorePaths`          | function | Searches one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first.                                          |
+| `launchBrowserProcess`    | function | Launches a browser process with raw-CDP debugging flags.                                                                                                   |
+| `waitForCDPReady`         | function | Polls a browser's CDP version endpoint until it responds or the timeout elapses.                                                                           |
+| `fetchCDPTargets`         | function | Fetches the current CDP target list from a browser's `/json/list` endpoint, as a `Result` carrying either the targets or a coded `BrowserConnectionError`. |
 
 ```ts
 import {
@@ -422,20 +433,22 @@ if (found !== undefined) {
 
 #### Types
 
-| Type                           | Kind      | Shape                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
-| ------------------------------ | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BrowserEngine`                | type      | `'chromium' \| 'chrome' \| 'edge'` — the supported browser engines (raw CDP targets Chromium-family browsers only).                                                                                                                                                                                                                                                                                                                                                                                                                                                                      |
-| `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'` — how the browser connection was established.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'` — lifecycle status of a browser wrapper.                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `BrowserDiscoveryResult`       | interface | `{ endpoint: string \| undefined; browser: string \| undefined }` — result of passive browser discovery; a defined `endpoint` is the whole answer.                                                                                                                                                                                                                                                                                                                                                                                                                                       |
-| `SystemBrowserOptions`         | interface | `{ env?; paths?; names?; stores?; engine? }` — overrides for `findSystemBrowsers`'s candidate sources (env-override keys/Windows roots, install paths, PATH-probe names, Playwright store base dirs) plus an engine filter; each field replaces its category's default, an explicit `[]`/`{}` disables it.                                                                                                                                                                                                                                                                               |
-| `SystemBrowser`                | type      | `{ executable: string; engine: BrowserEngine }` — one discovered browser executable, as returned by `findSystemBrowsers`/`findSystemBrowser`.                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `BrowserProfileResult`         | interface | `{ path: string; temporary: boolean }` — resolved launch profile and its ownership state.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
-| `BrowserCDPOptions`            | interface | `{ port?: number; host?: string; endpoint?: string; discover?: boolean }` — CDP connection configuration (`host` defaults to `BROWSER_DEFAULT_HOST`; `discover` defaults to `true` — `false` skips passive discovery, probes the port, and rejects if something is already listening there instead of silently attaching to it).                                                                                                                                                                                                                                                         |
-| `BrowserEventMap`              | type      | `{ idle: []; discover: [result]; connect: [connection]; disconnect: []; launch: [engine]; page: [page]; context: [context]; error: [error]; destroy: [] }`.                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `BrowserOptions`               | interface | `{ on?; error?; headless?; executable?; profile?; cdp?; timeout?; viewport?; signal?; args?; engine?; browsers? }` — options for `createBrowser` (`engine` prefers a browser engine for discovery when launching; ignored once `connect()` launches a process — before that, the `engine` getter may still reflect the supplied `engine` option even if `executable` is also set; `browsers` supplies `SystemBrowserOptions` candidate-source overrides consulted when launch discovery runs, ignored when `executable` is given, and `engine` takes precedence over `browsers.engine`). |
-| `BrowserInterface`             | interface | `emitter` / `engine` / `status` / `connection` / `owned` / `pid` data members + `discover` / `connect` / `adopt` / `disconnect` / `context` / `contexts` / `isolate` / `create` / `destroy` / `close` methods.                                                                                                                                                                                                                                                                                                                                                                           |
-| `WebSocketCDPTransportOptions` | interface | `{ on?; error?; url: string; timeout?: number }` — options for creating a WebSocketCDPTransport.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`.
+
+| Type                           | Kind      | Shape                                                                                                                                               | Summary                                                                                         |
+| ------------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `BrowserEngine`                | type      | `'chromium' \| 'chrome' \| 'edge'`                                                                                                                  | Names a supported browser engine (raw CDP targets Chromium-family browsers only).               |
+| `BrowserConnection`            | type      | `'cdp' \| 'launch' \| 'persistent'`                                                                                                                 | Names how the browser connection was established.                                               |
+| `BrowserStatus`                | type      | `'idle' \| 'connecting' \| 'connected' \| 'disconnected' \| 'error'`                                                                                | Names the lifecycle status of a browser wrapper.                                                |
+| `BrowserDiscoveryResult`       | interface | `{ endpoint, browser }`                                                                                                                             | Describes the result of passive browser discovery.                                              |
+| `SystemBrowserOptions`         | interface | `{ env?, paths?, names?, stores?, engine? }`                                                                                                        | Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources. |
+| `SystemBrowser`                | type      | `{ executable, engine }`                                                                                                                            | Represents one discovered browser executable on this machine.                                   |
+| `BrowserProfileResult`         | interface | `{ path, temporary }`                                                                                                                               | Describes the resolved browser profile directory used for a Chromium-family launch.             |
+| `BrowserCDPOptions`            | interface | `{ port?, host?, endpoint?, discover? }`                                                                                                            | Configures the CDP (Chrome DevTools Protocol) connection.                                       |
+| `BrowserEventMap`              | type      | `{ idle, discover, connect, disconnect, launch, page, context, error, destroy }`                                                                    | Maps the events a `BrowserInterface` emits.                                                     |
+| `BrowserOptions`               | interface | `{ on?, error?, headless?, executable?, profile?, cdp?, timeout?, viewport?, signal?, args?, engine?, browsers? }`                                  | Describes the options for creating a Browser.                                                   |
+| `BrowserInterface`             | interface | `{ emitter, engine, status, connection, owned, pid } plus discover, connect, adopt, disconnect, context, contexts, isolate, create, destroy, close` | Wraps a browser with discovery, connection management, and lifecycle control.                   |
+| `WebSocketCDPTransportOptions` | interface | `{ on?, error?, url, timeout? }`                                                                                                                    | Describes the options for creating a WebSocketCDPTransport.                                     |
 
 ### Extended Chromium automation surface
 
@@ -446,119 +459,119 @@ validation, scraping, and compilation can be tested without a browser.
 
 #### Extended constants and entities
 
-| API                            | Kind  | Summary                                                            |
-| ------------------------------ | ----- | ------------------------------------------------------------------ |
-| `BROWSER_HAR_CREATOR`          | const | Frozen HAR 1.2 creator identity for persisted network archives.    |
-| `BROWSER_KEY_MODIFIERS`        | const | Frozen Chromium keyboard modifier bit map.                         |
-| `BROWSER_MOUSE_BUTTON_MASKS`   | const | Frozen Chromium pressed-button bit map.                            |
-| `BROWSER_SCREENSHOT_ATTRIBUTE` | const | Temporary attribute used to scope screenshot preparation styles.   |
-| `BROWSER_STABLE_FRAME_COUNT`   | const | Consecutive animation frames required by the stability check.      |
-| `BROWSER_TEST_ID_ATTRIBUTE`    | const | Attribute used by test-id locators.                                |
-| `BROWSER_VISIBILITY_SOURCE`    | const | In-page visibility predicate source shared by every compiler.      |
-| `BrowserAccessibility`         | class | Accessibility-domain snapshot reader.                              |
-| `BrowserClock`                 | class | Chromium virtual-time lifecycle.                                   |
-| `BrowserCookieManager`         | class | Context-scoped cookie manager.                                     |
-| `BrowserCoverage`              | class | JavaScript and CSS coverage lifecycle.                             |
-| `BrowserDiagnostics`           | class | Tracing, coverage, and performance composition root.               |
-| `BrowserEmulationManager`      | class | Context-inherited Chromium emulation overrides.                    |
-| `BrowserHARManager`            | class | HAR 1.2 recording, persistence, and replay.                        |
-| `BrowserKeyboard`              | class | Trusted Chromium keyboard input.                                   |
-| `BrowserLocator`               | class | Strict, reusable, shadow-aware locator.                            |
-| `BrowserMouse`                 | class | Trusted Chromium mouse input.                                      |
-| `BrowserNavigationManager`     | class | URL/function waits and navigation-response observation.            |
-| `BrowserNetworkManager`        | class | Network observation, bodies, interception, auth, HAR, and sockets. |
-| `BrowserPerformance`           | class | Performance-domain metrics reader.                                 |
-| `BrowserPermissionManager`     | class | Context permission overrides.                                      |
-| `BrowserProfiler`              | class | Sampled CPU-profile lifecycle.                                     |
-| `BrowserScriptManager`         | class | Init scripts and host bindings.                                    |
-| `BrowserSelectorManager`       | class | CSS and semantic locator factory.                                  |
-| `BrowserStorageManager`        | class | Cookie and web-storage state import/export.                        |
-| `BrowserTouch`                 | class | Trusted Chromium touch input.                                      |
-| `BrowserTracing`               | class | Trace stream capture and persistence.                              |
-| `BrowserTransition`            | class | One asynchronous transition shared by every caller that joins it.  |
-| `BrowserWebSocket`             | class | Observable WebSocket lifecycle.                                    |
+| API                            | Kind  | Summary                                                                                                                                            |
+| ------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROWSER_HAR_CREATOR`          | const | Names the tool identity embedded in HAR 1.2 documents.                                                                                             |
+| `BROWSER_KEY_MODIFIERS`        | const | Maps a canonical modifier name to its CDP Input modifier bit value.                                                                                |
+| `BROWSER_MOUSE_BUTTON_MASKS`   | const | Maps each public mouse button to its CDP Input pressed-button bit value.                                                                           |
+| `BROWSER_SCREENSHOT_ATTRIBUTE` | const | Names the attribute that tags temporary screenshot styles and masks.                                                                               |
+| `BROWSER_STABLE_FRAME_COUNT`   | const | Sets the number of animation frames whose element bounds must agree before trusted input.                                                          |
+| `BROWSER_TEST_ID_ATTRIBUTE`    | const | Names the attribute the semantic test-id selector uses.                                                                                            |
+| `BROWSER_VISIBILITY_SOURCE`    | const | Holds the in-page visibility predicate source, over a `style` computed style and a `rect` bounding box already in scope at the interpolation site. |
+| `BrowserAccessibility`         | class | Captures Chromium Accessibility-domain snapshots for one page.                                                                                     |
+| `BrowserClock`                 | class | Controls the Chromium virtual-time budget for deterministic page timers.                                                                           |
+| `BrowserCookieManager`         | class | Performs cookie operations isolated to one browser context.                                                                                        |
+| `BrowserCoverage`              | class | Collects JavaScript precise coverage and CSS rule usage for one page target.                                                                       |
+| `BrowserDiagnostics`           | class | Groups the diagnostic subentities beneath one page.                                                                                                |
+| `BrowserEmulationManager`      | class | Applies rendering, identity, location, and network emulation for context pages.                                                                    |
+| `BrowserHARManager`            | class | Records and replays HTTP archives over one page network manager.                                                                                   |
+| `BrowserKeyboard`              | class | Sends trusted keyboard input through Chromium's CDP Input domain.                                                                                  |
+| `BrowserLocator`               | class | Represents a reusable strict semantic locator over one frame.                                                                                      |
+| `BrowserMouse`                 | class | Sends trusted mouse input through Chromium's CDP Input domain.                                                                                     |
+| `BrowserNavigationManager`     | class | Runs URL and page-predicate waits resilient to ordinary navigation events.                                                                         |
+| `BrowserNetworkManager`        | class | Drives the page-scoped Network and Fetch domain lifecycle.                                                                                         |
+| `BrowserPerformance`           | class | Reads Performance-domain metrics for one frame.                                                                                                    |
+| `BrowserPermissionManager`     | class | Applies permission overrides isolated to one browser context.                                                                                      |
+| `BrowserProfiler`              | class | Records sampled JavaScript CPU profiles over one frame's Profiler domain.                                                                          |
+| `BrowserScriptManager`         | class | Installs new-document scripts and promise-based host functions for one page.                                                                       |
+| `BrowserSelectorManager`       | class | Creates semantic locators for one frame.                                                                                                           |
+| `BrowserStorageManager`        | class | Imports, exports, and clears cookie and web-storage state for one browser context.                                                                 |
+| `BrowserTouch`                 | class | Sends trusted touch input through Chromium's CDP Input domain.                                                                                     |
+| `BrowserTracing`               | class | Captures Chromium traces streamed through the IO domain.                                                                                           |
+| `BrowserTransition`            | class | Runs one asynchronous transition at a time, shared by every caller that joins it.                                                                  |
+| `BrowserWebSocket`             | class | Represents an observable WebSocket connection reconstructed from Network-domain events.                                                            |
 
 #### Extended helpers
 
-| API                                      | Kind     | Summary                                                                                                                                                               |
-| ---------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `browserHARHeadersToRecord`              | function | Convert HAR header entries to a Fetch header record.                                                                                                                  |
-| `browserHeadersToProtocol`               | function | Convert a header record to CDP name/value entries.                                                                                                                    |
-| `browserPDFToParams`                     | function | Validate and compile PDF options to CDP parameters.                                                                                                                   |
-| `browserScreenshotToParams`              | function | Validate and compile screenshot options to CDP parameters.                                                                                                            |
-| `bytesToText`                            | function | Decode UTF-8 bytes.                                                                                                                                                   |
-| `compileActionabilityFunction`           | function | Compile element actionability checks for a remote handle.                                                                                                             |
-| `compileAttachedLocatorWaitExpression`   | function | Compile a strict locator attached-state wait.                                                                                                                         |
-| `compileBrowserBindingCleanup`           | function | Compile host-binding cleanup in a page.                                                                                                                               |
-| `compileBrowserBindingResult`            | function | Compile host-binding settlement in a page.                                                                                                                            |
-| `compileBrowserBindingSource`            | function | Compile a page-side host-binding facade.                                                                                                                              |
-| `compileDetachedLocatorWaitExpression`   | function | Compile a strict locator detached-state wait.                                                                                                                         |
-| `compileFunctionWaitExpression`          | function | Compile an auto-retrying page predicate.                                                                                                                              |
-| `compileHiddenLocatorWaitExpression`     | function | Compile a strict locator hidden-state wait.                                                                                                                           |
-| `compileLocatorExpression`               | function | Compile a query that returns its first element.                                                                                                                       |
-| `compileLocatorListExpression`           | function | Compile a deep, open-shadow-aware semantic query.                                                                                                                     |
-| `compileScreenshotCleanupExpression`     | function | Compile cleanup for temporary screenshot styles.                                                                                                                      |
-| `compileScreenshotPreparationExpression` | function | Compile screenshot masking, caret, and animation preparation.                                                                                                         |
-| `compileStorageClearExpression`          | function | Compile origin storage clearing.                                                                                                                                      |
-| `compileStorageReadExpression`           | function | Compile origin storage extraction.                                                                                                                                    |
-| `compileStorageRestoreExpression`        | function | Compile origin storage restoration.                                                                                                                                   |
-| `compileVisibleLocatorWaitExpression`    | function | Compile a strict locator visible-state wait.                                                                                                                          |
-| `computeBrowserButtons`                  | function | Compute the current Chromium mouse button bit mask.                                                                                                                   |
-| `computeBrowserModifiers`                | function | Compute Chromium keyboard modifier bits.                                                                                                                              |
-| `concatBytes`                            | function | Concatenate byte chunks without a runtime-specific buffer.                                                                                                            |
-| `cookieToProtocol`                       | function | Validate and project a public cookie into CDP input.                                                                                                                  |
-| `createBrowserHAREntry`                  | function | Build one standards-shaped HAR 1.2 exchange entry.                                                                                                                    |
-| `encodeBase64`                           | function | Encode bytes as base64 without Node or DOM globals.                                                                                                                   |
-| `extractBrowserChord`                    | function | Extract a keyboard chord such as `Control+Shift+P` into canonical modifiers and a terminal key. Throws a `BrowserError` on an empty chord or an unsupported modifier. |
-| `keyToBrowserInput`                      | function | Normalize a key token to Chromium input metadata.                                                                                                                     |
-| `matchesBrowserCookieURL`                | function | Match a cookie against a URL using domain/path/security rules.                                                                                                        |
-| `matchesBrowserRoute`                    | function | Match an observed request against route criteria.                                                                                                                     |
-| `matchesBrowserURL`                      | function | Match a URL against the supported `*`/`**` glob grammar.                                                                                                              |
-| `mediaToFeatures`                        | function | Project public media options to Chromium feature entries.                                                                                                             |
-| `parseBrowserAXString`                   | function | Coerce a string-valued Accessibility AXValue to a string, or `undefined` off-shape.                                                                                   |
-| `parseBrowserBindingCall`                | function | Coerce a Runtime binding invocation to a `BrowserBindingCall`, or `undefined` off-shape.                                                                              |
-| `parseBrowserConsoleMessage`             | function | Coerce a `Runtime.consoleAPICalled` event to a `BrowserConsoleMessage`, or `undefined` off-shape.                                                                     |
-| `parseBrowserCookiePartition`            | function | Coerce a cookie partition key to a `BrowserCookiePartition`, or `undefined` off-shape.                                                                                |
-| `parseBrowserDownloadProgress`           | function | Coerce a `Browser.downloadProgress` event to a `BrowserDownloadProgress`, or `undefined` off-shape.                                                                   |
-| `parseBrowserDownloadStart`              | function | Coerce a `Browser.downloadWillBegin` event to a `BrowserDownloadStart`, or `undefined` off-shape.                                                                     |
-| `parseBrowserPageError`                  | function | Coerce a `Runtime.exceptionThrown` event to a `BrowserPageError`, or `undefined` off-shape.                                                                           |
-| `parseBrowserRequest`                    | function | Coerce a `Network.requestWillBeSent` or `Fetch.requestPaused` event to a `BrowserRequest`, or `undefined` off-shape.                                                  |
-| `parseBrowserRequestFailure`             | function | Coerce a `Network.loadingFailed` event to a `BrowserRequestFailure`, or `undefined` off-shape.                                                                        |
-| `parseBrowserResponse`                   | function | Coerce a `Network.responseReceived` event to a `BrowserResponse`, or `undefined` off-shape.                                                                           |
-| `parseBrowserResponseRecord`             | function | Coerce a Chromium response object plus its event identity to a `BrowserResponse`, or `undefined` off-shape.                                                           |
-| `parseBrowserSecurity`                   | function | Coerce Chromium TLS security details to a `BrowserSecurity`, or `undefined` off-shape.                                                                                |
-| `parseBrowserTiming`                     | function | Coerce Chromium response timing to a `BrowserTiming`, or `undefined` off-shape.                                                                                       |
-| `parseBrowserTimingRange`                | function | Coerce one named start/end pair of Chromium network timing to a `BrowserTimingRange`, or `undefined` off-shape.                                                       |
-| `parseBrowserWebSocketFrame`             | function | Coerce a WebSocket frame event to a `BrowserWebSocketFrame`, or `undefined` off-shape.                                                                                |
-| `readBrowserAXValue`                     | function | Read the underlying value of an Accessibility AXValue, `undefined` when the record carries none.                                                                      |
-| `readBrowserAccessibility`               | function | Read an `Accessibility.getFullAXTree` response into a snapshot. Throws a `BrowserError` off-shape.                                                                    |
-| `readBrowserCookie`                      | function | Read one Chromium cookie. Throws a `BrowserError` off-shape.                                                                                                          |
-| `readBrowserCookies`                     | function | Read a `Network.getCookies` response into cookies. Throws a `BrowserError` off-shape.                                                                                 |
-| `readBrowserCoverageRanges`              | function | Read and normalize coverage ranges. Throws a `BrowserError` off-shape.                                                                                                |
-| `readBrowserHeaders`                     | function | Read a Chromium Headers object into string values, skipping every entry that is neither a string nor a finite number.                                                 |
-| `readBrowserMetrics`                     | function | Read Performance-domain metrics. Throws a `BrowserError` off-shape.                                                                                                   |
-| `readBrowserProfile`                     | function | Read a sampled CPU profile. Throws a `BrowserError` off-shape.                                                                                                        |
-| `readBrowserProfileFrame`                | function | Read one CPU-profile call frame. Throws a `BrowserError` off-shape.                                                                                                   |
-| `readBrowserQuad`                        | function | Read the first `DOM.getContentQuads` quad and its center. Throws a `BrowserError` off-shape.                                                                          |
-| `readBrowserRemoteValue`                 | function | Read a Runtime remote value, falling back to its unserializable form and its description, `undefined` when it carries none.                                           |
-| `readBrowserScriptCoverage`              | function | Read JavaScript coverage. Throws a `BrowserError` off-shape.                                                                                                          |
-| `readBrowserScriptIdentifier`            | function | Read an installed init-script identifier. Throws a `BrowserError` off-shape.                                                                                          |
-| `readBrowserStack`                       | function | Read a Chromium runtime stack trace, skipping every off-shape call frame.                                                                                             |
-| `readBrowserStorageEntries`              | function | Read origin storage entries. Throws a `BrowserError` off-shape.                                                                                                       |
-| `readBrowserStorageOrigin`               | function | Read an origin storage result. Throws a `BrowserError` off-shape.                                                                                                     |
-| `readBrowserStreamChunk`                 | function | Read one `IO.read` response. Throws a `BrowserError` off-shape.                                                                                                       |
-| `readBrowserStyleCoverage`               | function | Read CSS coverage. Throws a `BrowserError` off-shape.                                                                                                                 |
-| `settleBrowserTeardown`                  | function | Run teardown steps to settlement and return the first failure.                                                                                                        |
-| `textToBytes`                            | function | Encode UTF-8 text.                                                                                                                                                    |
-| `validateBrowserAccessibilityOptions`    | function | Validate accessibility snapshot bounds.                                                                                                                               |
-| `validateBrowserContextOptions`          | function | Validate isolated-context configuration before CDP mutation.                                                                                                          |
-| `validateBrowserEmulationOptions`        | function | Validate emulation configuration before partial application.                                                                                                          |
-| `validateBrowserHAR`                     | function | Validate the HAR 1.2 fields required for replay.                                                                                                                      |
-| `validateBrowserInputOptions`            | function | Validate the bounded delay, count, steps, and position of one trusted-input operation.                                                                                |
-| `validateBrowserPoint`                   | function | Validate finite viewport coordinates.                                                                                                                                 |
-| `validateBrowserRange`                   | function | Validate an optional finite numeric range.                                                                                                                            |
-| `validateBrowserTimeout`                 | function | Validate a non-negative finite timeout.                                                                                                                               |
-| `validateBrowserViewport`                | function | Validate dimensions and device scale.                                                                                                                                 |
+| API                                      | Kind     | Summary                                                                                                                                                   |
+| ---------------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `browserHARHeadersToRecord`              | function | Converts HAR name/value headers into a Fetch-domain header record.                                                                                        |
+| `browserHeadersToProtocol`               | function | Converts a header record to Fetch-domain name/value entries.                                                                                              |
+| `browserPDFToParams`                     | function | Validates and compiles Page.printToPDF parameters.                                                                                                        |
+| `browserScreenshotToParams`              | function | Validates and compiles basic Page.captureScreenshot parameters.                                                                                           |
+| `bytesToText`                            | function | Decodes UTF-8 bytes as text.                                                                                                                              |
+| `compileActionabilityFunction`           | function | Compiles the element-side actionability pass used before trusted input.                                                                                   |
+| `compileAttachedLocatorWaitExpression`   | function | Compiles an attached-state locator wait.                                                                                                                  |
+| `compileBrowserBindingCleanup`           | function | Compiles current-document cleanup for one page-side host binding facade.                                                                                  |
+| `compileBrowserBindingResult`            | function | Compiles delivery of a host binding result to one execution context.                                                                                      |
+| `compileBrowserBindingSource`            | function | Compiles the page-side promise facade for one Runtime binding.                                                                                            |
+| `compileDetachedLocatorWaitExpression`   | function | Compiles a detached-state locator wait.                                                                                                                   |
+| `compileFunctionWaitExpression`          | function | Compiles an auto-retrying in-page predicate wait.                                                                                                         |
+| `compileHiddenLocatorWaitExpression`     | function | Compiles a hidden-state locator wait.                                                                                                                     |
+| `compileLocatorExpression`               | function | Compiles a deep locator query returning its first match.                                                                                                  |
+| `compileLocatorListExpression`           | function | Compiles a deep, shadow-aware locator query returning every match.                                                                                        |
+| `compileScreenshotCleanupExpression`     | function | Compiles cleanup for temporary screenshot styles and masks.                                                                                               |
+| `compileScreenshotPreparationExpression` | function | Compiles temporary animation, caret, and mask setup for a screenshot.                                                                                     |
+| `compileStorageClearExpression`          | function | Compiles an expression that clears local and session storage.                                                                                             |
+| `compileStorageReadExpression`           | function | Compiles an expression that serializes local and session storage.                                                                                         |
+| `compileStorageRestoreExpression`        | function | Compiles an expression that restores one origin's web storage.                                                                                            |
+| `compileVisibleLocatorWaitExpression`    | function | Compiles a visible-state locator wait.                                                                                                                    |
+| `computeBrowserButtons`                  | function | Computes the CDP Input pressed-button bitmask.                                                                                                            |
+| `computeBrowserModifiers`                | function | Computes the CDP Input modifier bitmask.                                                                                                                  |
+| `concatBytes`                            | function | Concatenates byte chunks without Node-specific buffers.                                                                                                   |
+| `cookieToProtocol`                       | function | Converts a typed cookie input into Chromium protocol fields.                                                                                              |
+| `createBrowserHAREntry`                  | function | Builds a standards-shaped HAR 1.2 entry from one observed exchange.                                                                                       |
+| `encodeBase64`                           | function | Encodes raw bytes as base64 without relying on Node or DOM globals.                                                                                       |
+| `extractBrowserChord`                    | function | Extracts a keyboard chord such as `Control+Shift+P` into its parts, throwing a `BrowserError` on an empty chord or an unsupported modifier.               |
+| `keyToBrowserInput`                      | function | Normalizes one key to CDP keyboard event data.                                                                                                            |
+| `matchesBrowserCookieURL`                | function | Matches a decoded cookie against one request URL.                                                                                                         |
+| `matchesBrowserRoute`                    | function | Matches a request against route criteria.                                                                                                                 |
+| `matchesBrowserURL`                      | function | Matches a URL using Chromium-style `*` and `**` glob segments.                                                                                            |
+| `mediaToFeatures`                        | function | Converts typed media preferences to Chromium emulated media features.                                                                                     |
+| `parseBrowserAXString`                   | function | Coerces a string-valued Accessibility-domain AXValue to a string, or `undefined` off-shape.                                                               |
+| `parseBrowserBindingCall`                | function | Coerces one Runtime binding invocation to a `BrowserBindingCall`, or `undefined` off-shape.                                                               |
+| `parseBrowserConsoleMessage`             | function | Coerces one `Runtime.consoleAPICalled` event to a `BrowserConsoleMessage`, or `undefined` off-shape.                                                      |
+| `parseBrowserCookiePartition`            | function | Coerces an optional Chromium cookie partition key to a `BrowserCookiePartition`, or `undefined` off-shape.                                                |
+| `parseBrowserDownloadProgress`           | function | Coerces one `Browser.downloadProgress` event to a `BrowserDownloadProgress`, or `undefined` off-shape.                                                    |
+| `parseBrowserDownloadStart`              | function | Coerces one `Browser.downloadWillBegin` event to a `BrowserDownloadStart`, or `undefined` off-shape.                                                      |
+| `parseBrowserPageError`                  | function | Coerces one `Runtime.exceptionThrown` event to a `BrowserPageError`, or `undefined` off-shape.                                                            |
+| `parseBrowserRequest`                    | function | Coerces one `Network.requestWillBeSent` or `Fetch.requestPaused` event to a `BrowserRequest`, or `undefined` off-shape.                                   |
+| `parseBrowserRequestFailure`             | function | Coerces one `Network.loadingFailed` event to a `BrowserRequestFailure`, or `undefined` off-shape.                                                         |
+| `parseBrowserResponse`                   | function | Coerces one `Network.responseReceived` event to a `BrowserResponse`, or `undefined` off-shape.                                                            |
+| `parseBrowserResponseRecord`             | function | Coerces one Chromium response object plus its event identity to a `BrowserResponse`, or `undefined` off-shape.                                            |
+| `parseBrowserSecurity`                   | function | Coerces Chromium TLS security details to a `BrowserSecurity`, or `undefined` off-shape.                                                                   |
+| `parseBrowserTiming`                     | function | Coerces Chromium response timing to a `BrowserTiming`, or `undefined` off-shape.                                                                          |
+| `parseBrowserTimingRange`                | function | Coerces one named start/end pair of Chromium network timing to a `BrowserTimingRange`, or `undefined` off-shape.                                          |
+| `parseBrowserWebSocketFrame`             | function | Coerces one WebSocket frame event to a `BrowserWebSocketFrame`, or `undefined` off-shape.                                                                 |
+| `readBrowserAXValue`                     | function | Decodes an Accessibility-domain AXValue, or `undefined` when the record carries none.                                                                     |
+| `readBrowserAccessibility`               | function | Decodes Accessibility-domain nodes into a flat serializable tree, throwing a `BrowserError` off-shape.                                                    |
+| `readBrowserCookie`                      | function | Decodes one Chromium cookie, throwing a `BrowserError` off-shape.                                                                                         |
+| `readBrowserCookies`                     | function | Decodes the cookies `Storage.getCookies` returns, throwing a `BrowserError` off-shape.                                                                    |
+| `readBrowserCoverageRanges`              | function | Decodes and normalizes coverage ranges, throwing a `BrowserError` off-shape.                                                                              |
+| `readBrowserHeaders`                     | function | Decodes a Chromium Headers object into string values, skipping every entry that is neither a string nor a finite number.                                  |
+| `readBrowserMetrics`                     | function | Decodes Performance-domain metrics, throwing a `BrowserError` off-shape.                                                                                  |
+| `readBrowserProfile`                     | function | Decodes one CPU profile, throwing a `BrowserError` off-shape.                                                                                             |
+| `readBrowserProfileFrame`                | function | Decodes a CPU profile call frame, throwing a `BrowserError` off-shape.                                                                                    |
+| `readBrowserQuad`                        | function | Decodes the first `DOM.getContentQuads` quad and its center, throwing a `BrowserError` off- shape.                                                        |
+| `readBrowserRemoteValue`                 | function | Decodes a Runtime remote object's printable value, falling back to its unserializable form and then its description, or `undefined` when it carries none. |
+| `readBrowserScriptCoverage`              | function | Decodes JavaScript precise coverage, throwing a `BrowserError` off-shape.                                                                                 |
+| `readBrowserScriptIdentifier`            | function | Decodes the `Page.addScriptToEvaluateOnNewDocument` result, throwing a `BrowserError` off- shape.                                                         |
+| `readBrowserStack`                       | function | Decodes a Chromium runtime stack trace, skipping every off-shape call frame.                                                                              |
+| `readBrowserStorageEntries`              | function | Decodes a list of web-storage entries, throwing a `BrowserError` off-shape.                                                                               |
+| `readBrowserStorageOrigin`               | function | Decodes one in-page web-storage snapshot, throwing a `BrowserError` off-shape.                                                                            |
+| `readBrowserStreamChunk`                 | function | Decodes one `IO.read` response, throwing a `BrowserError` off-shape.                                                                                      |
+| `readBrowserStyleCoverage`               | function | Decodes CSS rule usage, throwing a `BrowserError` off-shape.                                                                                              |
+| `settleBrowserTeardown`                  | function | Awaits every teardown step in order and returns the first failure.                                                                                        |
+| `textToBytes`                            | function | Encodes UTF-8 text as bytes.                                                                                                                              |
+| `validateBrowserAccessibilityOptions`    | function | Validates Accessibility-domain snapshot bounds.                                                                                                           |
+| `validateBrowserContextOptions`          | function | Validates isolated-context options before creating remote state.                                                                                          |
+| `validateBrowserEmulationOptions`        | function | Validates context emulation boundaries before partial application.                                                                                        |
+| `validateBrowserHAR`                     | function | Validates the HAR 1.2 fields required for deterministic replay.                                                                                           |
+| `validateBrowserInputOptions`            | function | Validates the bounded delay, count, steps, and position of one trusted-input operation.                                                                   |
+| `validateBrowserPoint`                   | function | Validates viewport input coordinates.                                                                                                                     |
+| `validateBrowserRange`                   | function | Validates a finite numeric range.                                                                                                                         |
+| `validateBrowserTimeout`                 | function | Validates a public browser timeout before protocol work begins.                                                                                           |
+| `validateBrowserViewport`                | function | Validates Chromium viewport metrics.                                                                                                                      |
 
 The pure helpers can be composed around captured CDP payloads without creating
 a browser entity. This compact fixture sketch intentionally shows every
@@ -765,142 +778,144 @@ validateBrowserViewport({ width: 1280, height: 720 })
 
 #### Extended types
 
-| API                                 | Kind      | Summary                                                                                          |
-| ----------------------------------- | --------- | ------------------------------------------------------------------------------------------------ |
-| `BrowserAXNode`                     | interface | Decoded Chromium accessibility node.                                                             |
-| `BrowserAccessibilityInterface`     | interface | Accessibility snapshot contract.                                                                 |
-| `BrowserAccessibilityOptions`       | interface | Root/depth accessibility options.                                                                |
-| `BrowserAccessibilitySnapshot`      | interface | Serializable accessibility forest.                                                               |
-| `BrowserActionabilityOptions`       | interface | Internal actionability checks and optional position.                                             |
-| `BrowserBindingCall`                | interface | One decoded page-to-host binding call.                                                           |
-| `BrowserBindingHandler`             | type      | Host function exposed to a page.                                                                 |
-| `BrowserChord`                      | interface | Parsed keyboard modifiers and key.                                                               |
-| `BrowserClickOptions`               | interface | Mouse button, click count, and inter-transition delay for a click.                               |
-| `BrowserClockInterface`             | interface | Chromium virtual-time contract.                                                                  |
-| `BrowserConsoleMessage`             | interface | Typed page console event.                                                                        |
-| `BrowserContextEventMap`            | type      | Context page/close events.                                                                       |
-| `BrowserContextOptions`             | interface | Emitter hook, proxy, origin, download, and emulation context options.                            |
-| `BrowserCookie`                     | interface | Cookie returned by Chromium.                                                                     |
-| `BrowserCookieFilter`               | interface | Name/domain/path cookie-clear filter.                                                            |
-| `BrowserCookieInput`                | interface | Cookie creation input.                                                                           |
-| `BrowserCookieManagerInterface`     | interface | Context cookie contract: `cookies` / `set` / `clear`.                                            |
-| `BrowserCookiePartition`            | interface | Partitioned-cookie key.                                                                          |
-| `BrowserCoverageInterface`          | interface | JavaScript/CSS coverage lifecycle.                                                               |
-| `BrowserCoverageOptions`            | interface | Coverage collection options.                                                                     |
-| `BrowserCoverageRange`              | interface | Covered source range and execution count.                                                        |
-| `BrowserCoverageResult`             | interface | Combined script/style coverage result.                                                           |
-| `BrowserCredentials`                | interface | HTTP basic-auth credentials.                                                                     |
-| `BrowserDiagnosticsInterface`       | interface | Diagnostics group contract: `tracing` / `coverage` / `performance` / `profiler`.                 |
-| `BrowserDialogCategory`             | type      | JavaScript dialog category.                                                                      |
-| `BrowserDialogInterface`            | interface | Dialog data and settlement contract.                                                             |
-| `BrowserDownloadEventMap`           | type      | Download progress/finish/abort events.                                                           |
-| `BrowserDownloadInterface`          | interface | Download state, `cancel`, and the progress update its page drives.                               |
-| `BrowserDownloadOptions`            | interface | Context download path/policy.                                                                    |
-| `BrowserDownloadProgress`           | interface | Decoded download progress event.                                                                 |
-| `BrowserDownloadStart`              | interface | Decoded download creation event.                                                                 |
-| `BrowserDownloadStatus`             | type      | Download lifecycle state.                                                                        |
-| `BrowserDragOptions`                | interface | Mouse button, interpolation steps, and inter-move delay for a drag.                              |
-| `BrowserEmulationManagerInterface`  | interface | Context emulation lifecycle.                                                                     |
-| `BrowserEmulationOptions`           | interface | Viewport, identity, location, media, network, and auth emulation.                                |
-| `BrowserFileChooserInterface`       | interface | File chooser metadata and file selection.                                                        |
-| `BrowserFunctionCoverage`           | interface | Per-function JavaScript coverage.                                                                |
-| `BrowserGeolocation`                | interface | Latitude, longitude, and accuracy override.                                                      |
-| `BrowserHAR`                        | interface | Standards-shaped HAR 1.2 document.                                                               |
-| `BrowserHARContent`                 | interface | HAR response body metadata.                                                                      |
-| `BrowserHARCookie`                  | interface | HAR cookie value.                                                                                |
-| `BrowserHARCreator`                 | interface | HAR creator name/version.                                                                        |
-| `BrowserHAREntry`                   | interface | One HAR HTTP exchange.                                                                           |
-| `BrowserHARLog`                     | interface | HAR version, creator, and entries.                                                               |
-| `BrowserHARManagerInterface`        | interface | HAR recording/replay contract.                                                                   |
-| `BrowserHAROptions`                 | interface | HAR content/persistence options.                                                                 |
-| `BrowserHARPending`                 | interface | Request state awaiting completion.                                                               |
-| `BrowserHARPost`                    | interface | HAR request body metadata.                                                                       |
-| `BrowserHARReplayOptions`           | interface | Archive-miss replay behavior.                                                                    |
-| `BrowserHARRequest`                 | interface | HAR 1.2 request.                                                                                 |
-| `BrowserHARResponse`                | interface | HAR 1.2 response.                                                                                |
-| `BrowserHARTimings`                 | interface | HAR 1.2 phase timings.                                                                           |
-| `BrowserHARValue`                   | interface | HAR name/value entry.                                                                            |
-| `BrowserHandleInterface`            | interface | Remote object evaluation/disposal contract.                                                      |
-| `BrowserInputOptions`               | interface | The delay every trusted input operation shares.                                                  |
-| `BrowserKey`                        | interface | Normalized Chromium keyboard input data.                                                         |
-| `BrowserKeyboardInterface`          | interface | Trusted keyboard input contract.                                                                 |
-| `BrowserLocatorClickOptions`        | interface | Element resolution plus mouse-click input.                                                       |
-| `BrowserLocatorDragOptions`         | interface | Element resolution plus mouse-drag input.                                                        |
-| `BrowserLocatorFilter`              | interface | Serializable locator filter.                                                                     |
-| `BrowserLocatorInterface`           | interface | Reusable strict locator contract, including `text` and `texts`.                                  |
-| `BrowserLocatorTypeOptions`         | interface | Element resolution plus key input.                                                               |
-| `BrowserMargin`                     | interface | PDF paper margins.                                                                               |
-| `BrowserMedia`                      | interface | Media and user-preference emulation: `output`, `scheme`, `contrast`, `motion`, `colors`.         |
-| `BrowserMetric`                     | interface | Named performance metric.                                                                        |
-| `BrowserMouseButton`                | type      | Supported Chromium mouse button.                                                                 |
-| `BrowserMouseInterface`             | interface | Trusted mouse input contract.                                                                    |
-| `BrowserNavigationManagerInterface` | interface | Navigation observation/wait contract.                                                            |
-| `BrowserNavigationResult`           | interface | Final navigation URL and matching response.                                                      |
-| `BrowserNavigationWait`             | interface | Pending URL-pattern waiter state.                                                                |
-| `BrowserNavigationWaitOptions`      | interface | URL/function navigation wait options.                                                            |
-| `BrowserNavigationWatch`            | interface | Pending request/response correlation state.                                                      |
-| `BrowserNetworkEventMap`            | type      | Request/response/failure/finish/socket events.                                                   |
-| `BrowserNetworkManagerInterface`    | interface | Page network lifecycle contract.                                                                 |
-| `BrowserOperationOptions`           | type      | Every option a trusted-input operation can carry.                                                |
-| `BrowserPDFOptions`                 | interface | Chromium print-to-PDF options.                                                                   |
-| `BrowserPDFResult`                  | interface | PDF bytes and optional path.                                                                     |
-| `BrowserPageError`                  | interface | Uncaught page exception.                                                                         |
-| `BrowserPageEventMap`               | type      | Page, frame, target, input, and network events.                                                  |
-| `BrowserPagesFunction`              | type      | Returns a context's live pages at call time.                                                     |
-| `BrowserPerformanceInterface`       | interface | Performance-domain metrics contract.                                                             |
-| `BrowserPermissionManagerInterface` | interface | Context permission contract.                                                                     |
-| `BrowserPoint`                      | interface | CSS-pixel coordinate.                                                                            |
-| `BrowserPointerOptions`             | interface | Element resolution plus an in-element target point.                                              |
-| `BrowserProfile`                    | interface | Sampled CPU profile.                                                                             |
-| `BrowserProfileFrame`               | interface | CPU-profile call frame.                                                                          |
-| `BrowserProfileNode`                | interface | CPU-profile call-tree node.                                                                      |
-| `BrowserProfilerInterface`          | interface | Sampled CPU-profile lifecycle contract.                                                          |
-| `BrowserProxy`                      | interface | Context proxy server and bypass list.                                                            |
-| `BrowserQuad`                       | interface | Element content quad and actionable center.                                                      |
-| `BrowserQuery`                      | interface | Serializable locator query tree.                                                                 |
-| `BrowserRequest`                    | interface | Observed HTTP request.                                                                           |
-| `BrowserRequestFailure`             | interface | Observed request failure.                                                                        |
-| `BrowserResponse`                   | interface | Observed HTTP response with timing/security metadata.                                            |
-| `BrowserRoleOptions`                | interface | Role locator accessible-name options.                                                            |
-| `BrowserRouteContinueOptions`       | interface | Request continuation overrides.                                                                  |
-| `BrowserRouteDefinition`            | interface | Installed route query/handler.                                                                   |
-| `BrowserRouteFulfillOptions`        | interface | Synthetic response options.                                                                      |
-| `BrowserRouteHandler`               | type      | Function handling a paused request.                                                              |
-| `BrowserRouteInterface`             | interface | Paused-request settlement contract.                                                              |
-| `BrowserRouteQuery`                 | interface | URL/method/resource route criteria.                                                              |
-| `BrowserSameSite`                   | type      | Cookie same-site policy.                                                                         |
-| `BrowserScreenshotScale`            | type      | CSS/device screenshot coordinate scale.                                                          |
-| `BrowserScriptCoverage`             | interface | Per-script JavaScript coverage.                                                                  |
-| `BrowserScriptEntry`                | interface | Installed script and optional binding owner.                                                     |
-| `BrowserScriptManagerInterface`     | interface | Init-script/binding lifecycle contract.                                                          |
-| `BrowserSecurity`                   | interface | TLS protocol, issuer, and validity.                                                              |
-| `BrowserSelector`                   | type      | CSS/role/text/label/placeholder/testId locator axis.                                             |
-| `BrowserSelectorManagerInterface`   | interface | Semantic locator factory contract: `css` / `role` / `text` / `label` / `placeholder` / `testId`. |
-| `BrowserStackFrame`                 | interface | Browser-side exception stack frame.                                                              |
-| `BrowserStorageEntry`               | interface | Web-storage key/value pair.                                                                      |
-| `BrowserStorageManagerInterface`    | interface | Storage state lifecycle contract.                                                                |
-| `BrowserStorageOptions`             | interface | Origins selected for storage capture.                                                            |
-| `BrowserStorageOrigin`              | interface | Local/session storage for one origin.                                                            |
-| `BrowserStorageState`               | interface | Cookies and selected web-storage origins.                                                        |
-| `BrowserStreamChunk`                | interface | Decoded CDP IO chunk.                                                                            |
-| `BrowserStyleCoverage`              | interface | Per-style-sheet CSS coverage.                                                                    |
-| `BrowserTeardownFunction`           | type      | One teardown step run to settlement.                                                             |
-| `BrowserTextOptions`                | interface | Exactness for text-like locators.                                                                |
-| `BrowserTiming`                     | interface | CDP network timing phases.                                                                       |
-| `BrowserTimingRange`                | interface | Start/end pair for one network timing phase.                                                     |
-| `BrowserTouchInterface`             | interface | Trusted touch input contract.                                                                    |
-| `BrowserTracingInterface`           | interface | Chromium tracing lifecycle contract.                                                             |
-| `BrowserTracingOptions`             | interface | Categories/screenshots/sampling/path tracing options.                                            |
-| `BrowserTracingResult`              | interface | Trace bytes and optional path.                                                                   |
-| `BrowserTransitionFunction`         | type      | The work one transition performs.                                                                |
-| `BrowserTransitionInterface`        | interface | One shared asynchronous transition contract.                                                     |
-| `BrowserUploadOptions`              | interface | File paths plus action options.                                                                  |
-| `BrowserUserAgent`                  | interface | User-agent string/language/platform override.                                                    |
-| `BrowserWebSocketEventMap`          | type      | WebSocket frame/error/close events.                                                              |
-| `BrowserWebSocketFrame`             | interface | WebSocket opcode/payload/mask/timestamp.                                                         |
-| `BrowserWebSocketInterface`         | interface | Observable WebSocket contract — identity, emitter, and the frame updates its manager drives.     |
-| `BrowserWorkerCategory`             | type      | Dedicated/service/shared worker category.                                                        |
-| `BrowserWorkerInterface`            | interface | Attached worker evaluation/CDP contract.                                                         |
+A `Shape` cell holds an interface's data members as bare names in braces, `?` marking an optional member and `plus` introducing its call-signature members, and a type alias's own type literal with a union's arms escaped as `\|`. An extended interface's name comes before `plus`, with the members it adds after.
+
+| API                                 | Kind      | Shape                                                                                                                                                                                                                                          | Summary                                                                                        |
+| ----------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------- |
+| `BrowserAXNode`                     | interface | `{ id, parent, children, backend, frame, ignored, role, name, description, value, properties }`                                                                                                                                                | Represents one decoded Chromium accessibility node.                                            |
+| `BrowserAccessibilityInterface`     | interface | `{} plus snapshot`                                                                                                                                                                                                                             | Inspects the accessibility tree.                                                               |
+| `BrowserAccessibilityOptions`       | interface | `{ root?, depth? }`                                                                                                                                                                                                                            | Describes the options for an accessibility snapshot.                                           |
+| `BrowserAccessibilitySnapshot`      | interface | `{ roots, nodes }`                                                                                                                                                                                                                             | Describes a serializable accessibility-tree snapshot.                                          |
+| `BrowserActionabilityOptions`       | interface | `{ visible?, stable?, events?, enabled?, editable?, position? }`                                                                                                                                                                               | Describes the actionability checks performed before locator input.                             |
+| `BrowserBindingCall`                | interface | `{ id, name, args, context }`                                                                                                                                                                                                                  | Describes a decoded page-to-host binding call.                                                 |
+| `BrowserBindingHandler`             | type      | `(...args: unknown[]) => unknown \| Promise<unknown>`                                                                                                                                                                                          | Runs a host function exposed into page JavaScript.                                             |
+| `BrowserChord`                      | interface | `{ modifiers, key }`                                                                                                                                                                                                                           | Describes a parsed keyboard chord.                                                             |
+| `BrowserClickOptions`               | interface | `BrowserInputOptions plus { button?, count? }`                                                                                                                                                                                                 | Describes the options for a trusted mouse click.                                               |
+| `BrowserClockInterface`             | interface | `{ installed } plus install, pause, resume, advance, uninstall`                                                                                                                                                                                | Controls Chromium virtual time for deterministic page timers.                                  |
+| `BrowserConsoleMessage`             | interface | `{ level, text, values, timestamp, stack }`                                                                                                                                                                                                    | Represents one console API call.                                                               |
+| `BrowserContextEventMap`            | type      | `{ page, close }`                                                                                                                                                                                                                              | Maps the browser-context lifecycle events.                                                     |
+| `BrowserContextOptions`             | interface | `{ on?, error?, proxy?, origins?, downloads?, emulation? }`                                                                                                                                                                                    | Describes the options for creating and configuring an isolated browser context.                |
+| `BrowserCookie`                     | interface | `{ name, value, domain, path, expires, http, secure, site, partition }`                                                                                                                                                                        | Represents one cookie returned from a browser context.                                         |
+| `BrowserCookieFilter`               | interface | `{ name?, domain?, path? }`                                                                                                                                                                                                                    | Describes optional narrowing criteria for clearing context cookies.                            |
+| `BrowserCookieInput`                | interface | `{ name, value, url?, domain?, path?, expires?, http?, secure?, site?, priority?, partition? }`                                                                                                                                                | Describes the input used to create or replace a browser cookie.                                |
+| `BrowserCookieManagerInterface`     | interface | `{} plus cookies, set, clear`                                                                                                                                                                                                                  | Provides cookie operations scoped to one browser context.                                      |
+| `BrowserCookiePartition`            | interface | `{ site, ancestor? }`                                                                                                                                                                                                                          | Describes a cookie partition key used by CHIPS-partitioned cookies.                            |
+| `BrowserCoverageInterface`          | interface | `{ active } plus start, stop, destroy`                                                                                                                                                                                                         | Drives the coverage capture lifecycle.                                                         |
+| `BrowserCoverageOptions`            | interface | `{ javascript?, css?, detailed? }`                                                                                                                                                                                                             | Describes the options for a coverage capture.                                                  |
+| `BrowserCoverageRange`              | interface | `{ start, end, count }`                                                                                                                                                                                                                        | Describes a source range reported by JavaScript or CSS coverage.                               |
+| `BrowserCoverageResult`             | interface | `{ scripts, styles }`                                                                                                                                                                                                                          | Describes combined JavaScript and CSS usage.                                                   |
+| `BrowserCredentials`                | interface | `{ username, password }`                                                                                                                                                                                                                       | Describes the HTTP basic-auth credentials applied to context pages.                            |
+| `BrowserDiagnosticsInterface`       | interface | `{ tracing, coverage, performance, profiler } plus destroy`                                                                                                                                                                                    | Groups the diagnostics by capability.                                                          |
+| `BrowserDialogCategory`             | type      | `'alert' \| 'confirm' \| 'prompt' \| 'beforeunload'`                                                                                                                                                                                           | Names a JavaScript dialog category reported by Chromium.                                       |
+| `BrowserDialogInterface`            | interface | `{ category, message, default } plus accept, dismiss`                                                                                                                                                                                          | Represents one active JavaScript dialog.                                                       |
+| `BrowserDownloadEventMap`           | type      | `{ progress, complete, cancel }`                                                                                                                                                                                                               | Maps the download progress events.                                                             |
+| `BrowserDownloadInterface`          | interface | `{ emitter, id, url, name, status, received, total, path } plus cancel, update`                                                                                                                                                                | Represents one context download tracked through Chromium's Browser domain.                     |
+| `BrowserDownloadOptions`            | interface | `{ path, named? }`                                                                                                                                                                                                                             | Describes the download policy for a browser context.                                           |
+| `BrowserDownloadProgress`           | interface | `{ status, received, total, path? }`                                                                                                                                                                                                           | Describes a protocol-neutral download progress update.                                         |
+| `BrowserDownloadStart`              | interface | `{ id, url, name, frame }`                                                                                                                                                                                                                     | Describes a decoded `Browser.downloadWillBegin` event.                                         |
+| `BrowserDownloadStatus`             | type      | `'pending' \| 'complete' \| 'cancelled'`                                                                                                                                                                                                       | Names a download lifecycle phase.                                                              |
+| `BrowserDragOptions`                | interface | `BrowserInputOptions plus { button?, steps? }`                                                                                                                                                                                                 | Describes the options for a trusted mouse drag.                                                |
+| `BrowserEmulationManagerInterface`  | interface | `{} plus apply, clear, attach`                                                                                                                                                                                                                 | Configures context-scoped emulation.                                                           |
+| `BrowserEmulationOptions`           | interface | `{ viewport?, user?, locale?, timezone?, geolocation?, media?, offline?, headers?, credentials? }`                                                                                                                                             | Describes network and rendering overrides inherited by context pages.                          |
+| `BrowserFileChooserInterface`       | interface | `{ multiple } plus upload, cancel`                                                                                                                                                                                                             | Represents one intercepted file chooser.                                                       |
+| `BrowserFunctionCoverage`           | interface | `{ name, ranges, block }`                                                                                                                                                                                                                      | Describes function coverage inside one script.                                                 |
+| `BrowserGeolocation`                | interface | `{ latitude, longitude, accuracy? }`                                                                                                                                                                                                           | Describes a geographic location override.                                                      |
+| `BrowserHAR`                        | interface | `{ log }`                                                                                                                                                                                                                                      | Describes the standards-shaped HAR 1.2 document produced by the network manager.               |
+| `BrowserHARContent`                 | interface | `{ size, mimeType, text?, encoding? }`                                                                                                                                                                                                         | Describes response body metadata in an HTTP archive.                                           |
+| `BrowserHARCookie`                  | interface | `BrowserHARValue plus { path?, domain?, expires?, httpOnly?, secure? }`                                                                                                                                                                        | Represents one cookie in an HTTP archive.                                                      |
+| `BrowserHARCreator`                 | interface | `{ name, version }`                                                                                                                                                                                                                            | Describes the tool identity embedded in an HTTP archive.                                       |
+| `BrowserHAREntry`                   | interface | `{ startedDateTime, time, request, response, cache, timings }`                                                                                                                                                                                 | Represents one completed HTTP exchange in a HAR recording.                                     |
+| `BrowserHARLog`                     | interface | `{ version, creator, entries }`                                                                                                                                                                                                                | Describes the HAR 1.2 log object.                                                              |
+| `BrowserHARManagerInterface`        | interface | `{ recording } plus start, stop, replay, clear`                                                                                                                                                                                                | Provides HAR recording and replay operations.                                                  |
+| `BrowserHAROptions`                 | interface | `{ path?, content? }`                                                                                                                                                                                                                          | Describes the options for a HAR recording.                                                     |
+| `BrowserHARPending`                 | interface | `{ request, started, response }`                                                                                                                                                                                                               | Holds recording state until a request finishes; a new value replaces it on each update.        |
+| `BrowserHARPost`                    | interface | `{ mimeType, text }`                                                                                                                                                                                                                           | Describes request body metadata in an HTTP archive.                                            |
+| `BrowserHARReplayOptions`           | interface | `{ fallback? }`                                                                                                                                                                                                                                | Describes HAR replay behavior.                                                                 |
+| `BrowserHARRequest`                 | interface | `{ method, url, httpVersion, cookies, headers, queryString, postData?, headersSize, bodySize }`                                                                                                                                                | Describes a HAR 1.2 request entry.                                                             |
+| `BrowserHARResponse`                | interface | `{ status, statusText, httpVersion, cookies, headers, content, redirectURL, headersSize, bodySize }`                                                                                                                                           | Describes a HAR 1.2 response entry.                                                            |
+| `BrowserHARTimings`                 | interface | `{ blocked, dns, connect, send, wait, receive, ssl }`                                                                                                                                                                                          | Holds HAR 1.2 phase timings in milliseconds.                                                   |
+| `BrowserHARValue`                   | interface | `{ name, value }`                                                                                                                                                                                                                              | Represents one name/value pair in an HTTP archive.                                             |
+| `BrowserHandleInterface`            | interface | `{ id } plus value, call, property, properties, dispose`                                                                                                                                                                                       | Represents a remote JavaScript object retained in one frame execution context.                 |
+| `BrowserInputOptions`               | interface | `{ delay? }`                                                                                                                                                                                                                                   | Describes the options shared by every trusted input operation.                                 |
+| `BrowserKey`                        | interface | `{ key, code, text, number }`                                                                                                                                                                                                                  | Describes normalized CDP keyboard key data.                                                    |
+| `BrowserKeyboardInterface`          | interface | `{} plus down, up, press, type, insert`                                                                                                                                                                                                        | Provides keyboard input operations bound to one frame target session.                          |
+| `BrowserLocatorClickOptions`        | interface | `BrowserPointerOptions plus BrowserClickOptions`                                                                                                                                                                                               | Describes the options for a locator click, combining element resolution with mouse input.      |
+| `BrowserLocatorDragOptions`         | interface | `BrowserPointerOptions plus BrowserDragOptions`                                                                                                                                                                                                | Describes the options for a locator drag, combining element resolution with mouse input.       |
+| `BrowserLocatorFilter`              | interface | `{ text?, exact?, visible? }`                                                                                                                                                                                                                  | Describes a declarative locator filter applied after selector resolution.                      |
+| `BrowserLocatorInterface`           | interface | `{ frame, query } plus locator, filter, first, last, item, count, all, click, fill, select, check, uncheck, hover, focus, press, type, clear, wait, text, texts, html, value, attribute, visible, enabled, editable, screenshot, upload, drag` | Represents a reusable strict locator over one frame.                                           |
+| `BrowserLocatorTypeOptions`         | interface | `BrowserActionOptions plus BrowserInputOptions`                                                                                                                                                                                                | Describes the options for locator keyboard entry, combining element resolution with key input. |
+| `BrowserMargin`                     | interface | `{ top?, right?, bottom?, left? }`                                                                                                                                                                                                             | Describes the paper margin lengths accepted by Chromium print-to-PDF.                          |
+| `BrowserMedia`                      | interface | `{ output?, scheme?, contrast?, motion?, colors? }`                                                                                                                                                                                            | Describes browser color and media feature overrides.                                           |
+| `BrowserMetric`                     | interface | `{ name, value }`                                                                                                                                                                                                                              | Represents one Performance-domain metric.                                                      |
+| `BrowserMouseButton`                | type      | `'left' \| 'middle' \| 'right' \| 'back' \| 'forward'`                                                                                                                                                                                         | Names a mouse button understood by Chromium's Input domain.                                    |
+| `BrowserMouseInterface`             | interface | `{} plus move, down, up, click, drag, wheel`                                                                                                                                                                                                   | Provides mouse input operations bound to one frame target session.                             |
+| `BrowserNavigationManagerInterface` | interface | `{} plus wait, until`                                                                                                                                                                                                                          | Provides URL and in-page predicate waits associated with one page.                             |
+| `BrowserNavigationResult`           | interface | `{ url, response, same }`                                                                                                                                                                                                                      | Describes the outcome of a top-level navigation command.                                       |
+| `BrowserNavigationWait`             | interface | `{ pattern, timer, resolve, reject }`                                                                                                                                                                                                          | Represents one pending URL-pattern wait.                                                       |
+| `BrowserNavigationWaitOptions`      | interface | `{ timeout? }`                                                                                                                                                                                                                                 | Describes the options for URL and predicate waits.                                             |
+| `BrowserNavigationWatch`            | interface | `{ responses }`                                                                                                                                                                                                                                | Holds the state retained while correlating navigation with Network events.                     |
+| `BrowserNetworkEventMap`            | type      | `{ request, response, failure, finish, socket }`                                                                                                                                                                                               | Maps the network events a page's network manager emits.                                        |
+| `BrowserNetworkManagerInterface`    | interface | `{ emitter, har } plus start, body, text, json, route, unroute, headers, offline, credentials, destroy`                                                                                                                                        | Provides page-scoped network observation and interception.                                     |
+| `BrowserOperationOptions`           | type      | `BrowserPointerOptions & BrowserClickOptions & BrowserDragOptions`                                                                                                                                                                             | Collects every option a trusted-input operation can carry.                                     |
+| `BrowserPDFOptions`                 | interface | `{ path?, landscape?, background?, scale?, width?, height?, margin?, ranges?, header?, footer?, tagged?, outline? }`                                                                                                                           | Describes the options for printing a Chromium page to PDF.                                     |
+| `BrowserPDFResult`                  | interface | `{ bytes, path }`                                                                                                                                                                                                                              | Describes the result of printing a page to PDF.                                                |
+| `BrowserPageError`                  | interface | `{ message, stack, timestamp }`                                                                                                                                                                                                                | Represents one uncaught page exception.                                                        |
+| `BrowserPageEventMap`               | type      | `{ navigate, attach, detach, popup, dialog, chooser, download, console, error, crash, worker, request, response, failure, socket, close }`                                                                                                     | Maps the typed page, frame, target, and user-visible browser events.                           |
+| `BrowserPagesFunction`              | type      | `() => readonly BrowserPageInterface[]`                                                                                                                                                                                                        | Returns the context's live pages at call time.                                                 |
+| `BrowserPerformanceInterface`       | interface | `{} plus metrics`                                                                                                                                                                                                                              | Reads Performance-domain metrics.                                                              |
+| `BrowserPermissionManagerInterface` | interface | `{} plus grant, deny, clear`                                                                                                                                                                                                                   | Provides permission override operations scoped to one browser context.                         |
+| `BrowserPoint`                      | interface | `{ x, y }`                                                                                                                                                                                                                                     | Describes a point in viewport CSS pixels.                                                      |
+| `BrowserPointerOptions`             | interface | `BrowserActionOptions plus { position? }`                                                                                                                                                                                                      | Describes the options for a locator operation that aims at a point inside the element.         |
+| `BrowserProfile`                    | interface | `{ start, end, nodes, samples, deltas }`                                                                                                                                                                                                       | Describes a sampled CPU profile.                                                               |
+| `BrowserProfileFrame`               | interface | `{ function, script, url, line, column }`                                                                                                                                                                                                      | Describes a JavaScript call frame from a CPU profile.                                          |
+| `BrowserProfileNode`                | interface | `{ id, frame, hit, children }`                                                                                                                                                                                                                 | Represents one node in a sampled CPU profile.                                                  |
+| `BrowserProfilerInterface`          | interface | `{ active } plus start, stop, destroy`                                                                                                                                                                                                         | Drives the sampled CPU profile lifecycle.                                                      |
+| `BrowserProxy`                      | interface | `{ server, bypass? }`                                                                                                                                                                                                                          | Describes proxy settings used when creating an isolated browser context.                       |
+| `BrowserQuad`                       | interface | `{ points, center }`                                                                                                                                                                                                                           | Describes a decoded content quad and its actionable center.                                    |
+| `BrowserQuery`                      | interface | `{ selector, value, name?, exact?, parent?, filter?, index? }`                                                                                                                                                                                 | Describes a serializable selector query, including optional ancestry and filtering.            |
+| `BrowserRequest`                    | interface | `{ id, loader, frame, url, method, headers, post, resource, timestamp, walltime, redirect }`                                                                                                                                                   | Represents one observed browser request.                                                       |
+| `BrowserRequestFailure`             | interface | `{ id, error, cancelled, blocked }`                                                                                                                                                                                                            | Represents one failed browser request.                                                         |
+| `BrowserResponse`                   | interface | `{ id, loader, frame, url, status, phrase, headers, mime, protocol, address, port, cached, worker, timestamp, timing, security }`                                                                                                              | Represents one observed browser response.                                                      |
+| `BrowserRoleOptions`                | interface | `{ name?, exact? }`                                                                                                                                                                                                                            | Describes the options for role-based locator creation.                                         |
+| `BrowserRouteContinueOptions`       | interface | `{ url?, method?, headers?, post? }`                                                                                                                                                                                                           | Describes the overrides supplied when continuing an intercepted request.                       |
+| `BrowserRouteDefinition`            | interface | `{ query, handler }`                                                                                                                                                                                                                           | Represents one installed network route.                                                        |
+| `BrowserRouteFulfillOptions`        | interface | `{ status?, phrase?, headers?, body? }`                                                                                                                                                                                                        | Describes the synthetic response supplied when fulfilling an intercepted request.              |
+| `BrowserRouteHandler`               | type      | `(route: BrowserRouteInterface) => void \| Promise<void>`                                                                                                                                                                                      | Runs for a matching intercepted request.                                                       |
+| `BrowserRouteInterface`             | interface | `{ id, request, handled } plus abort, continue, fulfill`                                                                                                                                                                                       | Represents one paused Fetch-domain request.                                                    |
+| `BrowserRouteQuery`                 | interface | `{ url?, method?, resource? }`                                                                                                                                                                                                                 | Describes route matching criteria. Omitted fields match all values.                            |
+| `BrowserSameSite`                   | type      | `'Strict' \| 'Lax' \| 'None'`                                                                                                                                                                                                                  | Names a cookie same-site policy understood by Chromium.                                        |
+| `BrowserScreenshotScale`            | type      | `'css' \| 'device'`                                                                                                                                                                                                                            | Names a screenshot coordinate scale.                                                           |
+| `BrowserScriptCoverage`             | interface | `{ id, url, functions }`                                                                                                                                                                                                                       | Describes JavaScript script coverage.                                                          |
+| `BrowserScriptEntry`                | interface | `{ source, binding }`                                                                                                                                                                                                                          | Represents one installed new-document script and its optional host binding owner.              |
+| `BrowserScriptManagerInterface`     | interface | `{} plus add, remove, expose, revoke, destroy`                                                                                                                                                                                                 | Manages initialization scripts and host bindings for one page.                                 |
+| `BrowserSecurity`                   | interface | `{ protocol, issuer, from, to }`                                                                                                                                                                                                               | Describes the TLS details supplied with a browser response.                                    |
+| `BrowserSelector`                   | type      | `'css' \| 'role' \| 'text' \| 'label' \| 'placeholder' \| 'testId'`                                                                                                                                                                            | Names a selector axis supported by `BrowserSelectorManagerInterface`.                          |
+| `BrowserSelectorManagerInterface`   | interface | `{} plus css, role, text, label, placeholder, testId`                                                                                                                                                                                          | Groups the locator factories by selector semantics.                                            |
+| `BrowserStackFrame`                 | interface | `{ url, function, line, column }`                                                                                                                                                                                                              | Represents one browser-side stack frame.                                                       |
+| `BrowserStorageEntry`               | interface | `{ name, value }`                                                                                                                                                                                                                              | Represents one key/value pair from web storage.                                                |
+| `BrowserStorageManagerInterface`    | interface | `{} plus state, restore, clear`                                                                                                                                                                                                                | Provides storage-state import, export, and clearing operations.                                |
+| `BrowserStorageOptions`             | interface | `{ origins? }`                                                                                                                                                                                                                                 | Describes the options for collecting storage state from selected origins.                      |
+| `BrowserStorageOrigin`              | interface | `{ origin, local, session }`                                                                                                                                                                                                                   | Describes an origin-scoped local and session storage snapshot.                                 |
+| `BrowserStorageState`               | interface | `{ cookies, origins }`                                                                                                                                                                                                                         | Describes a portable browser authentication and storage snapshot.                              |
+| `BrowserStreamChunk`                | interface | `{ bytes, eof }`                                                                                                                                                                                                                               | Represents one decoded IO stream read.                                                         |
+| `BrowserStyleCoverage`              | interface | `{ id, ranges }`                                                                                                                                                                                                                               | Describes CSS stylesheet coverage.                                                             |
+| `BrowserTeardownFunction`           | type      | `() => Promise<unknown>`                                                                                                                                                                                                                       | Runs one teardown step to settlement while the first failure is retained.                      |
+| `BrowserTextOptions`                | interface | `{ exact? }`                                                                                                                                                                                                                                   | Describes the options for text-like locator creation.                                          |
+| `BrowserTiming`                     | interface | `{ request, proxy, dns, connect, ssl, send, receive }`                                                                                                                                                                                         | Holds network timing values in milliseconds relative to request time.                          |
+| `BrowserTimingRange`                | interface | `{ start, end }`                                                                                                                                                                                                                               | Describes the start/end pair for one network timing phase.                                     |
+| `BrowserTouchInterface`             | interface | `{} plus tap`                                                                                                                                                                                                                                  | Provides touch input operations bound to one frame target session.                             |
+| `BrowserTracingInterface`           | interface | `{ active } plus start, stop, destroy`                                                                                                                                                                                                         | Drives the trace capture lifecycle.                                                            |
+| `BrowserTracingOptions`             | interface | `{ path?, categories?, screenshots?, sampling? }`                                                                                                                                                                                              | Describes the options for a Chromium trace capture.                                            |
+| `BrowserTracingResult`              | interface | `{ bytes, path }`                                                                                                                                                                                                                              | Describes the result of a trace capture.                                                       |
+| `BrowserTransitionFunction`         | type      | `() => Promise<T>`                                                                                                                                                                                                                             | Runs the work one `BrowserTransitionInterface` transition performs.                            |
+| `BrowserTransitionInterface`        | interface | `{ pending } plus execute`                                                                                                                                                                                                                     | Represents one asynchronous transition shared by every caller that arrives while it runs.      |
+| `BrowserUploadOptions`              | interface | `BrowserActionOptions plus { files }`                                                                                                                                                                                                          | Describes the options for setting files on a file input.                                       |
+| `BrowserUserAgent`                  | interface | `{ value, language?, platform? }`                                                                                                                                                                                                              | Describes user-agent metadata accepted by Chromium emulation.                                  |
+| `BrowserWebSocketEventMap`          | type      | `{ receive, transmit, error, close }`                                                                                                                                                                                                          | Maps the WebSocket lifecycle events.                                                           |
+| `BrowserWebSocketFrame`             | interface | `{ opcode, data, masked, timestamp }`                                                                                                                                                                                                          | Describes a WebSocket frame payload.                                                           |
+| `BrowserWebSocketInterface`         | interface | `{ emitter, id, url } plus receive, transmit, fail, close`                                                                                                                                                                                     | Represents one observed WebSocket connection.                                                  |
+| `BrowserWorkerCategory`             | type      | `'worker' \| 'service_worker' \| 'shared_worker'`                                                                                                                                                                                              | Names a worker target category.                                                                |
+| `BrowserWorkerInterface`            | interface | `{ id, url, category } plus evaluate, send, detach, close`                                                                                                                                                                                     | Represents a script worker attached to a page target.                                          |
 
 ## Methods
 
@@ -908,7 +923,7 @@ The public methods of the layer's behavioral interfaces — every call-signature
 member listed (their `readonly` data members stay Surface rows). The Core and
 Server tables come first, then one table per behavioral interface the Extended
 Chromium automation surface introduces, in source declaration order. Each
-implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
+implementing class exposes exactly its interface's methods: `CDPClient` ↔
 `CDPClientInterface`, `BrowserContext` ↔ `BrowserContextInterface`,
 `BrowserFrame` ↔ `BrowserFrameInterface`, `BrowserPage` ↔
 `BrowserPageInterface`, `BrowserSnapshot` ↔ `BrowserSnapshotInterface`,
@@ -942,11 +957,11 @@ implementing class exposes EXACTLY its interface's methods: `CDPClient` ↔
 
 The text pipe a `CDPClientInterface` sends and receives JSON-RPC frames over.
 
-| Method  | Returns         | Behavior                                                                                                                                                        |
-| ------- | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start` | `Promise<void>` | Open the underlying connection.                                                                                                                                 |
-| `send`  | `Promise<void>` | Write one raw text frame to the connection. Throws a coded `BrowserConnectionError` carrying the transport `url` if called before `start()` or after `close()`. |
-| `close` | `Promise<void>` | Close the underlying connection and release resources.                                                                                                          |
+| Method  | Returns         | Summary                                                                                                                                                                       |
+| ------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start` | `Promise<void>` | Opens the underlying connection.                                                                                                                                              |
+| `send`  | `Promise<void>` | Writes one raw text frame to the connection. Throws a coded `BrowserConnectionError` carrying the transport `url` when called before the connection opens or after it closes. |
+| `close` | `Promise<void>` | Closes the underlying connection and releases its resources.                                                                                                                  |
 
 ```ts
 transport.emitter.on('message', (data) => log(data))
@@ -969,14 +984,14 @@ not connection-level state — they survive `close()` and a subsequent
 `close()` while a `connect()` is still in flight rejects that in-flight
 connect attempt.
 
-| Method        | Returns            | Behavior                                                                                                                                                                                            |
-| ------------- | ------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `connect`     | `Promise<void>`    | Start the transport and begin dispatching. Idempotent.                                                                                                                                              |
-| `reconnect`   | `Promise<void>`    | Close and re-establish the transport.                                                                                                                                                               |
-| `send`        | `Promise<unknown>` | Issue a CDP method call with optional params and a trailing `CDPSendOptions` carrying the `session` to scope it to and a per-call `timeout` overriding the client-wide default; rejects on timeout. |
-| `subscribe`   | `void`             | Register a handler for a CDP event, optionally session-scoped.                                                                                                                                      |
-| `unsubscribe` | `void`             | Remove a handler for a CDP event, optionally session-scoped.                                                                                                                                        |
-| `close`       | `Promise<void>`    | Tear down the transport and reject all pending requests.                                                                                                                                            |
+| Method        | Returns            | Summary                                                                                                                                                                                              |
+| ------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connect`     | `Promise<void>`    | Starts the transport and begins dispatching. Idempotent.                                                                                                                                             |
+| `reconnect`   | `Promise<void>`    | Closes the transport and re-establishes it.                                                                                                                                                          |
+| `send`        | `Promise<unknown>` | Issues a CDP method call with optional params and a trailing `CDPSendOptions` carrying the `session` to scope it to and a per-call `timeout` overriding the client-wide default; rejects on timeout. |
+| `subscribe`   | `void`             | Registers a handler for a CDP event, optionally session-scoped.                                                                                                                                      |
+| `unsubscribe` | `void`             | Removes a handler for a CDP event, optionally session-scoped.                                                                                                                                        |
+| `close`       | `Promise<void>`    | Tears down the transport and rejects every pending request.                                                                                                                                          |
 
 ```ts
 import { createCDPClient } from '@orkestrel/browser'
@@ -996,14 +1011,14 @@ await client.close()
 An isolated browser session over a CDP browser context; follows the manager
 accessor pattern (`page(index?)` / `pages()`).
 
-| Method    | Returns                             | Behavior                                                                                                                                                                                                                                                                                                 |
-| --------- | ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `page`    | `BrowserPageInterface \| undefined` | One page by index, or the first page.                                                                                                                                                                                                                                                                    |
-| `pages`   | `readonly BrowserPageInterface[]`   | All pages in creation order.                                                                                                                                                                                                                                                                             |
-| `create`  | `Promise<BrowserPageInterface>`     | Open a new page in this context.                                                                                                                                                                                                                                                                         |
-| `sync`    | `Promise<void>`                     | Synchronize pages from the given CDP targets (server discovers the targets, core never fetches them). Performs a destructive diff, not an additive merge: pages whose target id is missing from `targets` are closed and dropped; pages present in `targets` but not yet tracked are attached and added. |
-| `destroy` | `Promise<void>`                     | Release local pages and detach their sessions without disposing the remote browser context.                                                                                                                                                                                                              |
-| `close`   | `Promise<void>`                     | Close remote pages, dispose the remote browser context, and release local resources.                                                                                                                                                                                                                     |
+| Method    | Returns                             | Summary                                                                                                                                                                                                                                                                                          |
+| --------- | ----------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `page`    | `BrowserPageInterface \| undefined` | Returns one page by index, or the first page.                                                                                                                                                                                                                                                    |
+| `pages`   | `readonly BrowserPageInterface[]`   | Returns every page in creation order.                                                                                                                                                                                                                                                            |
+| `create`  | `Promise<BrowserPageInterface>`     | Opens a page in this context.                                                                                                                                                                                                                                                                    |
+| `sync`    | `Promise<void>`                     | Synchronizes pages from the given CDP targets, which the server discovers and core never fetches. Performs a destructive diff rather than an additive merge: a page whose target id is missing from `targets` is closed and dropped, and a target that is not yet tracked is attached and added. |
+| `destroy` | `Promise<void>`                     | Releases local pages and detaches their sessions without disposing the remote browser context.                                                                                                                                                                                                   |
+| `close`   | `Promise<void>`                     | Closes remote pages, disposes the remote browser context, and releases local resources.                                                                                                                                                                                                          |
 
 ```ts
 const ctx = browser.context()
@@ -1020,23 +1035,23 @@ evaluation uses a named isolated world and automatically follows an attached
 out-of-process iframe session when Chromium splits the frame into another
 target.
 
-| Method        | Returns                           | Behavior                                                                                                                                                                                                                           |
-| ------------- | --------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `title`       | `Promise<string>`                 | Resolve the frame document title.                                                                                                                                                                                                  |
-| `content`     | `Promise<BrowserContentResult>`   | Extract URL, title, HTML, and visible text with result-size guards.                                                                                                                                                                |
-| `article`     | `Promise<string>`                 | Distill the frame HTML to reader-facing plain text, boilerplate and hidden regions pruned.                                                                                                                                         |
-| `click`       | `Promise<void>`                   | Strict-by-default visible and enabled CSS-selector click.                                                                                                                                                                          |
-| `fill`        | `Promise<void>`                   | Strict-by-default editable input or contenteditable fill, dispatching input/change events.                                                                                                                                         |
-| `select`      | `Promise<void>`                   | Strict-by-default option selection on an enabled `<select>`.                                                                                                                                                                       |
-| `evaluate`    | `Promise<unknown>`                | Evaluate an expression in the frame execution world with result-size guarding.                                                                                                                                                     |
-| `handle`      | `Promise<BrowserHandleInterface>` | Evaluate an expression by reference and return a disposable remote object handle.                                                                                                                                                  |
-| `wait`        | `Promise<void>`                   | Wait for attached, detached, visible, or hidden selector state.                                                                                                                                                                    |
-| `send`        | `Promise<unknown>`                | Issue a raw CDP method in the frame's current target session, with a trailing `BrowserSendOptions` carrying a per-call `timeout` overriding the client-wide default.                                                               |
-| `subscribe`   | `Promise<void>`                   | Subscribe to a CDP event in the frame's current target session.                                                                                                                                                                    |
-| `unsubscribe` | `Promise<void>`                   | Remove a frame-session CDP event subscription.                                                                                                                                                                                     |
-| `save`        | `Promise<void>`                   | Persist bytes through a page writer; child frames reject because they own no writer.                                                                                                                                               |
-| `assert`      | `void`                            | Throw a coded `BrowserError` when the frame can no longer accept protocol work: `BrowserFrame` throws once the CDP client disconnects, and `BrowserPage` also throws once the page closes. Every other method here calls it first. |
-| `update`      | `void`                            | Record an externally observed URL as the frame's current `url`. `BrowserPage` calls it from its own `Page.frameNavigated` handler.                                                                                                 |
+| Method        | Returns                           | Summary                                                                                                                                                                                                         |
+| ------------- | --------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`       | `Promise<string>`                 | Resolves the frame document title.                                                                                                                                                                              |
+| `content`     | `Promise<BrowserContentResult>`   | Extracts the URL, title, HTML, and visible text under the result-size guards.                                                                                                                                   |
+| `article`     | `Promise<string>`                 | Distills the frame HTML to reader-facing plain text, with boilerplate and hidden regions pruned.                                                                                                                |
+| `click`       | `Promise<void>`                   | Clicks a CSS-selector match, strict by default and requiring it visible and enabled.                                                                                                                            |
+| `fill`        | `Promise<void>`                   | Fills an editable input or contenteditable element, strict by default, dispatching input and change events.                                                                                                     |
+| `select`      | `Promise<void>`                   | Selects options on an enabled `select` element, strict by default.                                                                                                                                              |
+| `evaluate`    | `Promise<unknown>`                | Evaluates an expression in the frame execution world under the result-size guard.                                                                                                                               |
+| `handle`      | `Promise<BrowserHandleInterface>` | Evaluates an expression by reference and returns a disposable remote object handle.                                                                                                                             |
+| `wait`        | `Promise<void>`                   | Waits for a selector to reach the attached, detached, visible, or hidden state.                                                                                                                                 |
+| `send`        | `Promise<unknown>`                | Issues a raw CDP method in the frame's current target session, with a trailing `BrowserSendOptions` carrying a per-call `timeout` overriding the client-wide default.                                           |
+| `subscribe`   | `Promise<void>`                   | Subscribes to a CDP event in the frame's current target session.                                                                                                                                                |
+| `unsubscribe` | `Promise<void>`                   | Removes a frame-session CDP event subscription.                                                                                                                                                                 |
+| `save`        | `Promise<void>`                   | Persists bytes through a page writer; a child frame rejects because it owns no writer.                                                                                                                          |
+| `assert`      | `void`                            | Throws a coded `BrowserError` when the frame can no longer accept protocol work: a frame throws once the CDP client disconnects, and a page also throws once it closes. Every other member here calls it first. |
+| `update`      | `void`                            | Records an externally observed URL as the frame's current `url`, which a page calls from its own `Page.frameNavigated` handler.                                                                                 |
 
 ```ts
 const child = await page.frame('checkout')
@@ -1066,35 +1081,35 @@ A top-level page. Its page/target-specific operations come first, then every
 member it inherits from `BrowserFrameInterface`, whose own behavior the table
 above states.
 
-| Method        | Returns                                       | Behavior                                                                                                          |
-| ------------- | --------------------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
-| `navigate`    | `Promise<BrowserNavigationResult>`            | Go to a URL, wait for the requested load condition, and return final URL/response correlation.                    |
-| `reload`      | `Promise<BrowserNavigationResult>`            | Reload and return final URL/response correlation.                                                                 |
-| `back`        | `Promise<BrowserNavigationResult>`            | Navigate to the previous history entry, or return the unchanged URL when none exists.                             |
-| `forward`     | `Promise<BrowserNavigationResult>`            | Navigate to the next history entry, or return the unchanged URL when none exists.                                 |
-| `screenshot`  | `Promise<BrowserScreenshotResult>`            | Capture PNG/JPEG bytes, optionally full-page and persisted through an injected writer.                            |
-| `pdf`         | `Promise<BrowserPDFResult>`                   | Print the page to PDF bytes, optionally persisted through the injected writer.                                    |
-| `frame`       | `Promise<BrowserFrameInterface \| undefined>` | Look up a first-class frame by name or URL.                                                                       |
-| `frames`      | `Promise<readonly BrowserFrameInterface[]>`   | Decode the flattened frame tree, main frame first.                                                                |
-| `snapshot`    | `Promise<BrowserSnapshotInterface>`           | Capture and decode all attached documents, shadow roots, template contents, layout, and optional computed styles. |
-| `codegen`     | `Promise<BrowserCodegenInterface>`            | Start or return the current action recorder.                                                                      |
-| `destroy`     | `Promise<void>`                               | Release local resources and detach without closing the remote target.                                             |
-| `close`       | `Promise<void>`                               | Close the remote target and release resources.                                                                    |
-| `title`       | `Promise<string>`                             | Inherited from `BrowserFrameInterface`.                                                                           |
-| `content`     | `Promise<BrowserContentResult>`               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `article`     | `Promise<string>`                             | Inherited from `BrowserFrameInterface`.                                                                           |
-| `click`       | `Promise<void>`                               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `fill`        | `Promise<void>`                               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `select`      | `Promise<void>`                               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `evaluate`    | `Promise<unknown>`                            | Inherited from `BrowserFrameInterface`.                                                                           |
-| `handle`      | `Promise<BrowserHandleInterface>`             | Inherited from `BrowserFrameInterface`.                                                                           |
-| `wait`        | `Promise<void>`                               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `send`        | `Promise<unknown>`                            | Inherited from `BrowserFrameInterface`.                                                                           |
-| `subscribe`   | `Promise<void>`                               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `unsubscribe` | `Promise<void>`                               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `save`        | `Promise<void>`                               | Inherited from `BrowserFrameInterface`.                                                                           |
-| `assert`      | `void`                                        | Inherited from `BrowserFrameInterface`.                                                                           |
-| `update`      | `void`                                        | Inherited from `BrowserFrameInterface`.                                                                           |
+| Method        | Returns                                       | Summary                                                                                                                                                                                                         |
+| ------------- | --------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `navigate`    | `Promise<BrowserNavigationResult>`            | Goes to a URL, waits for the requested load condition, and returns the final URL with its response correlation.                                                                                                 |
+| `reload`      | `Promise<BrowserNavigationResult>`            | Reloads the page and returns the final URL with its response correlation.                                                                                                                                       |
+| `back`        | `Promise<BrowserNavigationResult>`            | Navigates to the previous history entry, or returns the unchanged URL when none exists.                                                                                                                         |
+| `forward`     | `Promise<BrowserNavigationResult>`            | Navigates to the next history entry, or returns the unchanged URL when none exists.                                                                                                                             |
+| `screenshot`  | `Promise<BrowserScreenshotResult>`            | Captures PNG or JPEG bytes, optionally full-page and persisted through an injected writer.                                                                                                                      |
+| `pdf`         | `Promise<BrowserPDFResult>`                   | Prints the page to PDF bytes, optionally persisted through the injected writer.                                                                                                                                 |
+| `frame`       | `Promise<BrowserFrameInterface \| undefined>` | Looks up a first-class frame by name or URL.                                                                                                                                                                    |
+| `frames`      | `Promise<readonly BrowserFrameInterface[]>`   | Decodes the flattened frame tree, main frame first.                                                                                                                                                             |
+| `snapshot`    | `Promise<BrowserSnapshotInterface>`           | Captures and decodes every attached document, shadow root, template content, layout box, and requested computed style.                                                                                          |
+| `codegen`     | `Promise<BrowserCodegenInterface>`            | Starts the action recorder, or returns the running one.                                                                                                                                                         |
+| `destroy`     | `Promise<void>`                               | Releases local resources and detaches without closing the remote target.                                                                                                                                        |
+| `close`       | `Promise<void>`                               | Closes the remote target and releases its resources.                                                                                                                                                            |
+| `title`       | `Promise<string>`                             | Resolves the frame document title.                                                                                                                                                                              |
+| `content`     | `Promise<BrowserContentResult>`               | Extracts the URL, title, HTML, and visible text under the result-size guards.                                                                                                                                   |
+| `article`     | `Promise<string>`                             | Distills the frame HTML to reader-facing plain text, with boilerplate and hidden regions pruned.                                                                                                                |
+| `click`       | `Promise<void>`                               | Clicks a CSS-selector match, strict by default and requiring it visible and enabled.                                                                                                                            |
+| `fill`        | `Promise<void>`                               | Fills an editable input or contenteditable element, strict by default, dispatching input and change events.                                                                                                     |
+| `select`      | `Promise<void>`                               | Selects options on an enabled `select` element, strict by default.                                                                                                                                              |
+| `evaluate`    | `Promise<unknown>`                            | Evaluates an expression in the frame execution world under the result-size guard.                                                                                                                               |
+| `handle`      | `Promise<BrowserHandleInterface>`             | Evaluates an expression by reference and returns a disposable remote object handle.                                                                                                                             |
+| `wait`        | `Promise<void>`                               | Waits for a selector to reach the attached, detached, visible, or hidden state.                                                                                                                                 |
+| `send`        | `Promise<unknown>`                            | Issues a raw CDP method in the frame's current target session, with a trailing `BrowserSendOptions` carrying a per-call `timeout` overriding the client-wide default.                                           |
+| `subscribe`   | `Promise<void>`                               | Subscribes to a CDP event in the frame's current target session.                                                                                                                                                |
+| `unsubscribe` | `Promise<void>`                               | Removes a frame-session CDP event subscription.                                                                                                                                                                 |
+| `save`        | `Promise<void>`                               | Persists bytes through a page writer; a child frame rejects because it owns no writer.                                                                                                                          |
+| `assert`      | `void`                                        | Throws a coded `BrowserError` when the frame can no longer accept protocol work: a frame throws once the CDP client disconnects, and a page also throws once it closes. Every other member here calls it first. |
+| `update`      | `void`                                        | Records an externally observed URL as the frame's current `url`, which a page calls from its own `Page.frameNavigated` handler.                                                                                 |
 
 ```ts
 await page.navigate('https://example.com')
@@ -1117,7 +1132,7 @@ await page.close()
 
 #### `BrowserSnapshotInterface`
 
-One page capture as navigable data. Its two `readonly` members — `documents`
+One page capture as navigable data. Its `readonly` members — `documents`
 and `styles`, inherited from the Surface `BrowserSnapshotInput` row — are the
 entire serialized form; every method below derives structure from them on
 demand, storing nothing that could drift. Nodes stay
@@ -1126,21 +1141,21 @@ so a snapshot survives `JSON.stringify` and comes back through
 `createBrowserSnapshot`. Walks are lazy generators, so `find` stops at the
 first match and `filter` stops at its limit.
 
-| Method        | Returns                                 | Behavior                                                                                                                                                                     |
-| ------------- | --------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `walk`        | `Generator<BrowserNode, void, unknown>` | Traverse the whole capture, or one subtree when `root` is given (the root is yielded first), in `'depth'` (default) or `'breadth'` order. Each node is visited exactly once. |
-| `descendants` | `Generator<BrowserNode, void, unknown>` | Traverse one node's subtree in depth-first order, excluding the node itself.                                                                                                 |
-| `document`    | `BrowserDocument \| undefined`          | Resolve the captured document a node belongs to.                                                                                                                             |
-| `children`    | `readonly BrowserNode[]`                | Direct children, entering a linked iframe's content document.                                                                                                                |
-| `parent`      | `BrowserNode \| undefined`              | Structural parent, crossing a document boundary to the owning iframe.                                                                                                        |
-| `siblings`    | `readonly BrowserNode[]`                | Structural siblings — `'preceding'` or `'following'` narrows to one side; omitting the relation returns every sibling except the node itself.                                |
-| `ancestors`   | `readonly BrowserNode[]`                | Nearest-first ancestors across document and iframe boundaries.                                                                                                               |
-| `common`      | `BrowserNode \| undefined`              | Nearest common ancestor of two nodes, counting each node as its own candidate.                                                                                               |
-| `distance`    | `number \| undefined`                   | Structural edge count between two nodes; `undefined` when they share no ancestor.                                                                                            |
-| `find`        | `BrowserNode \| undefined`              | First node matching a `BrowserNodeQuery` or a `BrowserNodePredicate`.                                                                                                        |
-| `filter`      | `readonly BrowserNode[]`                | Every matching node, bounded by an optional `limit`; a negative or fractional limit throws a coded `BrowserError`.                                                           |
-| `closest`     | `BrowserNode \| undefined`              | Nearest match from a node through its ancestors, testing the node first.                                                                                                     |
-| `path`        | `string`                                | Deterministic frame-qualified structural path for one node.                                                                                                                  |
+| Method        | Returns                                 | Summary                                                                                                                                                                   |
+| ------------- | --------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `walk`        | `Generator<BrowserNode, void, unknown>` | Traverses the whole capture, or one subtree when `root` is given and yielded first, in `'depth'` order by default or in `'breadth'` order. Visits each node exactly once. |
+| `descendants` | `Generator<BrowserNode, void, unknown>` | Traverses one node's subtree in depth-first order, excluding the node itself.                                                                                             |
+| `document`    | `BrowserDocument \| undefined`          | Resolves the captured document a node belongs to.                                                                                                                         |
+| `children`    | `readonly BrowserNode[]`                | Returns the direct children of a node, entering a linked iframe's content document.                                                                                       |
+| `parent`      | `BrowserNode \| undefined`              | Returns the structural parent of a node, crossing a document boundary to the owning iframe.                                                                               |
+| `siblings`    | `readonly BrowserNode[]`                | Returns the structural siblings of a node; `'preceding'` or `'following'` narrows to one side, and omitting the relation returns every sibling but the node itself.       |
+| `ancestors`   | `readonly BrowserNode[]`                | Returns the ancestors of a node, nearest first, across document and iframe boundaries.                                                                                    |
+| `common`      | `BrowserNode \| undefined`              | Returns the nearest common ancestor of two nodes, counting each node as its own candidate.                                                                                |
+| `distance`    | `number \| undefined`                   | Returns the structural edge count between two nodes, or `undefined` when they share no ancestor.                                                                          |
+| `find`        | `BrowserNode \| undefined`              | Returns the first node matching a `BrowserNodeQuery` or a `BrowserNodePredicate`.                                                                                         |
+| `filter`      | `readonly BrowserNode[]`                | Returns every matching node, bounded by an optional `limit`; a negative or fractional limit throws a coded `BrowserError`.                                                |
+| `closest`     | `BrowserNode \| undefined`              | Returns the nearest match from a node through its ancestors, testing the node first.                                                                                      |
+| `path`        | `string`                                | Returns a deterministic frame-qualified structural path for one node.                                                                                                     |
 
 ```ts
 import type { BrowserSnapshotInput } from '@orkestrel/browser'
@@ -1177,14 +1192,14 @@ if (main !== undefined && heading !== undefined) {
 Records page interactions as a session runs, for later compilation into a
 replayable script.
 
-| Method    | Returns                                    | Behavior                                                                                                                                                                                                            |
-| --------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `start`   | `Promise<void>`                            | Begin recording on the page's session. Calling `start()` after `destroy()` is a silent no-op — a destroyed `BrowserCodegenInterface` cannot be restarted; a new recorder must be obtained through `page.codegen()`. |
-| `stop`    | `Promise<readonly BrowserCodegenAction[]>` | Stop recording and return the captured actions.                                                                                                                                                                     |
-| `actions` | `readonly BrowserCodegenAction[]`          | Current normalized action list.                                                                                                                                                                                     |
-| `script`  | `string`                                   | Compile the captured actions into a script.                                                                                                                                                                         |
-| `clear`   | `void`                                     | Reset the captured action list.                                                                                                                                                                                     |
-| `destroy` | `Promise<void>`                            | Tear down the recorder and detach CDP listeners.                                                                                                                                                                    |
+| Method    | Returns                                    | Summary                                                                                                                                                                         |
+| --------- | ------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `start`   | `Promise<void>`                            | Begins recording on the page's session. A call after teardown is a silent no-op, because a torn-down recorder cannot be restarted and a fresh one is obtained through the page. |
+| `stop`    | `Promise<readonly BrowserCodegenAction[]>` | Stops recording and returns the captured actions.                                                                                                                               |
+| `actions` | `readonly BrowserCodegenAction[]`          | Returns the current normalized action list.                                                                                                                                     |
+| `script`  | `string`                                   | Compiles the captured actions into a script.                                                                                                                                    |
+| `clear`   | `void`                                     | Resets the captured action list.                                                                                                                                                |
+| `destroy` | `Promise<void>`                            | Tears down the recorder and detaches its CDP listeners.                                                                                                                         |
 
 ```ts
 const codegen = await page.codegen()
@@ -1203,9 +1218,9 @@ unnecessary is the entity's own state — and holds one `BrowserTransition` per
 transition, so the in-flight identity check is written once instead of once per
 lifecycle.
 
-| Method    | Returns      | Behavior                                                                                               |
-| --------- | ------------ | ------------------------------------------------------------------------------------------------------ |
-| `execute` | `Promise<T>` | Start the work when nothing is in flight, otherwise join the running transition and return its result. |
+| Method    | Returns      | Summary                                                                                                       |
+| --------- | ------------ | ------------------------------------------------------------------------------------------------------------- |
+| `execute` | `Promise<T>` | Starts the work when nothing is in flight, and otherwise joins the running transition and returns its result. |
 
 ```ts
 import { BrowserTransition } from '@orkestrel/browser'
@@ -1221,18 +1236,18 @@ Browser wrapper with discovery, connection management, and lifecycle control.
 Connection strategy (executed by `connect()`): explicit `cdp.endpoint` →
 passive discovery on `cdp.port` → launch a new process.
 
-| Method       | Returns                                | Behavior                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| ------------ | -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `discover`   | `Promise<BrowserDiscoveryResult>`      | Passive CDP probe — does not change connection state or launch/attach anything, but emits a `discover` event with the result.                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `connect`    | `Promise<void>`                        | Establish a connection using the strategy above (endpoint → discovery → launch). Idempotent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
-| `adopt`      | `void`                                 | Assume responsibility for terminating the connected browser. This is explicit for a CDP attachment; launched browsers are owned automatically. Rejects unless a live connection supplies an endpoint to retain.                                                                                                                                                                                                                                                                                                                                                                                            |
-| `disconnect` | `Promise<void>`                        | Detach the client-side transport while the remote browser keeps running. A merely attached CDP session forgets the endpoint and ownership becomes `undefined`. Every launched or explicitly adopted session retains ownership and its endpoint, so the SAME instance can reconnect and remains responsible for eventual termination. Transport loss while an owned browser remains alive is likewise resumable.                                                                                                                                                                                            |
-| `context`    | `BrowserContextInterface \| undefined` | One context by index, or the first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
-| `contexts`   | `readonly BrowserContextInterface[]`   | All contexts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                              |
-| `isolate`    | `Promise<BrowserContextInterface>`     | Create and register an isolated CDP context with validated proxy, download, origin, and emulation options.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
-| `create`     | `Promise<BrowserPageInterface>`        | Shortcut to open a page in the default context.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| `destroy`    | `Promise<void>`                        | Release local resources. For a launched browser this terminates the process serving its CDP endpoint and awaits its exit — on POSIX that terminate reaches the launch's whole process group and awaits its drain, and on Windows it terminates one process by identifier, the spawned process or the one a launcher handed the endpoint to — which leaves the profile unlocked before cleanup. For an adopted attachment it sends CDP `Browser.close`. For a merely attached browser this is a LOCAL DETACH ONLY because other clients may share its targets. Idempotent.                                  |
-| `close`      | `Promise<void>`                        | Graceful REMOTE shutdown: best-effort sends CDP `Browser.close` (whether attached or owned), and when owned also awaits the exit of the process serving the CDP endpoint plus its POSIX process-group drain (escalating to a kill only if needed), then closes every tracked context/page (sending remote `Target.closeTarget`/`disposeBrowserContext` regardless of ownership — unlike `destroy()`, which skips remote context/page closes on a non-owned CDP-attached browser) before releasing the CDP client. Use this to shut down a browser this instance doesn't own but wants to terminate anyway. |
+| Method       | Returns                                | Summary                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 |
+| ------------ | -------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `discover`   | `Promise<BrowserDiscoveryResult>`      | Probes CDP passively, changing no connection state and neither launching nor attaching, and emits a `discover` event with the result.                                                                                                                                                                                                                                                                                                                                                                                                                                   |
+| `connect`    | `Promise<void>`                        | Establishes a connection through the endpoint, then discovery, then a launch. Idempotent.                                                                                                                                                                                                                                                                                                                                                                                                                                                                               |
+| `adopt`      | `void`                                 | Assumes responsibility for terminating the connected browser.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `disconnect` | `Promise<void>`                        | Detaches the client-side transport while the remote browser keeps running. A merely attached CDP session forgets the endpoint and its ownership becomes `undefined`. A launched or explicitly adopted session retains ownership and its endpoint, so the same instance can reconnect and stays responsible for eventual termination. Transport loss while an owned browser remains alive is resumable the same way.                                                                                                                                                     |
+| `context`    | `BrowserContextInterface \| undefined` | Returns one context by index, or the first.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| `contexts`   | `readonly BrowserContextInterface[]`   | Returns every context.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                  |
+| `isolate`    | `Promise<BrowserContextInterface>`     | Creates and registers an isolated CDP context with validated proxy, download, origin, and emulation options.                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| `create`     | `Promise<BrowserPageInterface>`        | Opens a page in the default context.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    |
+| `destroy`    | `Promise<void>`                        | Releases local resources. A launched browser has the process serving its CDP endpoint terminated and its exit awaited — on POSIX that terminate reaches the launch's whole process group and awaits its drain, and on Windows it terminates one process by identifier, the spawned process or the one a launcher handed the endpoint to — which leaves the profile unlocked before cleanup. An adopted attachment is sent CDP `Browser.close`. A merely attached browser is detached locally and nothing more, because other clients may share its targets. Idempotent. |
+| `close`      | `Promise<void>`                        | Shuts the remote browser down: sends CDP `Browser.close` best-effort whether attached or owned, and for an owned browser also awaits the exit of the process serving the CDP endpoint plus its POSIX process-group drain, escalating to a kill only where needed. Then closes every tracked context and page, sending remote `Target.closeTarget` and `disposeBrowserContext` whatever the ownership, before releasing the CDP client. This is the way to shut down a browser the instance does not own and still wants terminated.                                     |
 
 ```ts
 import { createBrowser } from '@orkestrel/browser/server'
@@ -1257,12 +1272,12 @@ One WebSocket connection a page's network manager reconstructs from
 Network-domain events. The manager owns the connection and drives every method
 here; a consumer reads `id` and `url` and subscribes through `emitter`.
 
-| Method     | Returns | Behavior                                                                                                           |
-| ---------- | ------- | ------------------------------------------------------------------------------------------------------------------ |
-| `receive`  | `void`  | Emit `receive` for one frame the page received. Ignored after `close`.                                             |
-| `transmit` | `void`  | Emit `transmit` for one frame the page sent. Ignored after `close`.                                                |
-| `fail`     | `void`  | Emit `error` with the connection's fault message. Ignored after `close`.                                           |
-| `close`    | `void`  | Emit `close` with the closing timestamp, then destroy the emitter. Every later call on this connection is ignored. |
+| Method     | Returns | Summary                                                                                        |
+| ---------- | ------- | ---------------------------------------------------------------------------------------------- |
+| `receive`  | `void`  | Reports one received frame. The page's network manager drives it.                              |
+| `transmit` | `void`  | Reports one sent frame. The page's network manager drives it.                                  |
+| `fail`     | `void`  | Reports a connection fault. The page's network manager drives it.                              |
+| `close`    | `void`  | Reports the connection closing and destroys the emitter. The page's network manager drives it. |
 
 ```ts
 page.network.emitter.on('socket', (socket) => {
@@ -1285,10 +1300,10 @@ One context download tracked through Chromium's Browser domain. The owning page
 drives `update` from `Browser.downloadProgress`; a consumer calls `cancel` and
 reads the observed state.
 
-| Method   | Returns         | Behavior                                                                                                                                                      |
-| -------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `cancel` | `Promise<void>` | Send CDP `Browser.cancelDownload` for this download. Ignored unless the status is still `pending`.                                                            |
-| `update` | `void`          | Record one progress update, emit `progress`, and settle the download by emitting `complete` or `cancel` and destroying the emitter. Ignored after it settles. |
+| Method   | Returns         | Summary                                                                                                  |
+| -------- | --------------- | -------------------------------------------------------------------------------------------------------- |
+| `cancel` | `Promise<void>` | Sends CDP `Browser.cancelDownload` for this download, and is ignored unless the status is still pending. |
+| `update` | `void`          | Records one step of the download's progress. The owning page drives it.                                  |
 
 ```ts
 page.emitter.on('download', (download) => {
@@ -1308,9 +1323,9 @@ await download.cancel() // ignored once the download settled
 The pluggable sink a page persists captured bytes through. Core never touches a
 filesystem; server supplies `FileBrowserWriter`.
 
-| Method  | Returns         | Behavior                                                            |
-| ------- | --------------- | ------------------------------------------------------------------- |
-| `write` | `Promise<void>` | Persist the captured bytes to the given path, creating its parents. |
+| Method  | Returns         | Summary                                                                         |
+| ------- | --------------- | ------------------------------------------------------------------------------- |
+| `write` | `Promise<void>` | Persists the captured bytes to the given path, creating its parent directories. |
 
 ```ts
 import { FileBrowserWriter } from '@orkestrel/browser/server'
@@ -1324,10 +1339,10 @@ await writer.write('shots/hero.png', new Uint8Array([137, 80, 78, 71]))
 Waits for a navigation the page performs on its own, rather than one the caller
 started.
 
-| Method  | Returns            | Behavior                                                                                            |
-| ------- | ------------------ | --------------------------------------------------------------------------------------------------- |
-| `wait`  | `Promise<string>`  | Resolve with the URL of the next navigation matching the `*`/`**` glob pattern. Rejects on timeout. |
-| `until` | `Promise<unknown>` | Poll an expression in the page until it returns a truthy value, and resolve with it.                |
+| Method  | Returns            | Summary                                                                                                  |
+| ------- | ------------------ | -------------------------------------------------------------------------------------------------------- |
+| `wait`  | `Promise<string>`  | Resolves with the URL of the next navigation matching the `*` and `**` glob pattern. Rejects on timeout. |
+| `until` | `Promise<unknown>` | Polls an expression in the page until it returns a truthy value, and resolves with that value.           |
 
 ```ts
 const navigated = page.navigation.wait('**/checkout')
@@ -1340,13 +1355,13 @@ await page.navigation.until('document.readyState === "complete"')
 
 A retained remote JavaScript object. Release it with `dispose` when done.
 
-| Method       | Returns                                        | Behavior                                                               |
-| ------------ | ---------------------------------------------- | ---------------------------------------------------------------------- |
-| `value`      | `Promise<unknown>`                             | Read the object back by value.                                         |
-| `call`       | `Promise<unknown>`                             | Run a function declaration with the handle as `this`, by value.        |
-| `property`   | `Promise<BrowserHandleInterface \| undefined>` | Retain one own property as its own handle, or `undefined` when absent. |
-| `properties` | `Promise<Readonly<Record<string, unknown>>>`   | Read every own property by value.                                      |
-| `dispose`    | `Promise<void>`                                | Release the retained remote object. Idempotent.                        |
+| Method       | Returns                                        | Summary                                                                                         |
+| ------------ | ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| `value`      | `Promise<unknown>`                             | Reads the object back by value.                                                                 |
+| `call`       | `Promise<unknown>`                             | Runs a function declaration with the handle as `this`, by value.                                |
+| `property`   | `Promise<BrowserHandleInterface \| undefined>` | Retains one own property as its own handle, or returns `undefined` when the property is absent. |
+| `properties` | `Promise<Readonly<Record<string, unknown>>>`   | Reads every own property by value.                                                              |
+| `dispose`    | `Promise<void>`                                | Releases the retained remote object. Idempotent.                                                |
 
 ```ts
 const handle = await page.handle('document.body')
@@ -1362,13 +1377,13 @@ await handle.dispose()
 
 Installs new-document scripts and exposes host functions into page JavaScript.
 
-| Method    | Returns           | Behavior                                                                    |
-| --------- | ----------------- | --------------------------------------------------------------------------- |
-| `add`     | `Promise<string>` | Install a script evaluated on every new document, returning its identifier. |
-| `remove`  | `Promise<void>`   | Remove one installed script by identifier.                                  |
-| `expose`  | `Promise<void>`   | Bind a host function to a page-global name, callable from page JavaScript.  |
-| `revoke`  | `Promise<void>`   | Remove one exposed binding and its installed bridge script.                 |
-| `destroy` | `Promise<void>`   | Remove every installed script and binding this manager owns.                |
+| Method    | Returns           | Summary                                                                        |
+| --------- | ----------------- | ------------------------------------------------------------------------------ |
+| `add`     | `Promise<string>` | Installs a script evaluated on every new document, and returns its identifier. |
+| `remove`  | `Promise<void>`   | Removes one installed script by identifier.                                    |
+| `expose`  | `Promise<void>`   | Binds a host function to a page-global name, callable from page JavaScript.    |
+| `revoke`  | `Promise<void>`   | Removes one exposed binding and its installed bridge script.                   |
+| `destroy` | `Promise<void>`   | Removes every installed script and binding this manager owns.                  |
 
 ```ts
 const id = await page.scripts.add('window.__seeded = true')
@@ -1383,9 +1398,9 @@ await page.scripts.destroy()
 
 Reads the page's accessibility tree as a serializable snapshot.
 
-| Method     | Returns                                 | Behavior                                                                |
-| ---------- | --------------------------------------- | ----------------------------------------------------------------------- |
-| `snapshot` | `Promise<BrowserAccessibilitySnapshot>` | Read the full AX tree, optionally pruned to the interesting nodes only. |
+| Method     | Returns                                 | Summary                                                                        |
+| ---------- | --------------------------------------- | ------------------------------------------------------------------------------ |
+| `snapshot` | `Promise<BrowserAccessibilitySnapshot>` | Reads the full accessibility tree, optionally pruned to the interesting nodes. |
 
 ```ts
 const tree = await page.accessibility.snapshot({ interesting: true })
@@ -1396,11 +1411,11 @@ log(tree.nodes.map((node) => node.name))
 
 Captures a Chromium trace streamed back through the IO domain.
 
-| Method    | Returns                         | Behavior                                                                                    |
-| --------- | ------------------------------- | ------------------------------------------------------------------------------------------- |
-| `start`   | `Promise<void>`                 | Begin tracing with the given categories. Throws a `BrowserError` when already active.       |
-| `stop`    | `Promise<BrowserTracingResult>` | End tracing, drain the IO stream, and write it through the page writer when a path was set. |
-| `destroy` | `Promise<void>`                 | Stop an active trace, discarding any failure. A no-op when nothing is tracing.              |
+| Method    | Returns                         | Summary                                                                                           |
+| --------- | ------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `start`   | `Promise<void>`                 | Begins tracing with the given categories. Throws a `BrowserError` when a trace is already active. |
+| `stop`    | `Promise<BrowserTracingResult>` | Ends tracing, drains the IO stream, and writes it through the page writer when a path was set.    |
+| `destroy` | `Promise<void>`                 | Stops an active trace, discarding any failure, and does nothing when no trace is running.         |
 
 ```ts
 await page.diagnostics.tracing.start({ screenshots: true })
@@ -1412,11 +1427,11 @@ await page.diagnostics.tracing.destroy()
 
 Collects JavaScript precise coverage and CSS rule usage together.
 
-| Method    | Returns                          | Behavior                                                                                     |
-| --------- | -------------------------------- | -------------------------------------------------------------------------------------------- |
-| `start`   | `Promise<void>`                  | Arm the requested domains. Throws a `BrowserError` when already active or when both are off. |
-| `stop`    | `Promise<BrowserCoverageResult>` | Read the collected usage and disarm every domain it armed.                                   |
-| `destroy` | `Promise<void>`                  | Stop an active collector, discarding any failure. A no-op when nothing is collecting.        |
+| Method    | Returns                          | Summary                                                                                                                    |
+| --------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------- |
+| `start`   | `Promise<void>`                  | Arms the requested domains. Throws a `BrowserError` when collection is already active or when neither domain is requested. |
+| `stop`    | `Promise<BrowserCoverageResult>` | Reads the collected usage and disarms every domain it armed.                                                               |
+| `destroy` | `Promise<void>`                  | Stops an active collector, discarding any failure, and does nothing when no collection is running.                         |
 
 ```ts
 await page.diagnostics.coverage.start({ javascript: true, css: true })
@@ -1428,9 +1443,9 @@ await page.diagnostics.coverage.destroy()
 
 Reads Performance-domain metrics for one frame.
 
-| Method    | Returns                             | Behavior                                                    |
-| --------- | ----------------------------------- | ----------------------------------------------------------- |
-| `metrics` | `Promise<readonly BrowserMetric[]>` | Enable the domain, read every metric, and disable it again. |
+| Method    | Returns                             | Summary                                                                |
+| --------- | ----------------------------------- | ---------------------------------------------------------------------- |
+| `metrics` | `Promise<readonly BrowserMetric[]>` | Enables the domain, reads every metric, and disables the domain again. |
 
 ```ts
 const metrics = await page.diagnostics.performance.metrics()
@@ -1441,11 +1456,11 @@ log(metrics.map((metric) => [metric.name, metric.value]))
 
 Records a sampled JavaScript CPU profile.
 
-| Method    | Returns                   | Behavior                                                                             |
-| --------- | ------------------------- | ------------------------------------------------------------------------------------ |
-| `start`   | `Promise<void>`           | Begin sampling, optionally at an explicit positive integer interval in microseconds. |
-| `stop`    | `Promise<BrowserProfile>` | End sampling and decode the profile's nodes, samples, and time deltas.               |
-| `destroy` | `Promise<void>`           | Stop an active profiler, discarding any failure. A no-op when nothing is profiling.  |
+| Method    | Returns                   | Summary                                                                                        |
+| --------- | ------------------------- | ---------------------------------------------------------------------------------------------- |
+| `start`   | `Promise<void>`           | Begins sampling, optionally at an explicit positive integer interval in microseconds.          |
+| `stop`    | `Promise<BrowserProfile>` | Ends sampling and decodes the profile's nodes, samples, and time deltas.                       |
+| `destroy` | `Promise<void>`           | Stops an active profiler, discarding any failure, and does nothing when no profile is running. |
 
 ```ts
 await page.diagnostics.profiler.start(100)
@@ -1458,9 +1473,9 @@ await page.diagnostics.profiler.destroy()
 Groups the per-page diagnostics capabilities and owns their teardown. `tracing`,
 `coverage`, `performance`, and `profiler` are Surface data members.
 
-| Method    | Returns         | Behavior                                                       |
-| --------- | --------------- | -------------------------------------------------------------- |
-| `destroy` | `Promise<void>` | Tear down every diagnostics capability this page's group owns. |
+| Method    | Returns         | Summary                                                         |
+| --------- | --------------- | --------------------------------------------------------------- |
+| `destroy` | `Promise<void>` | Tears down every diagnostics capability this page's group owns. |
 
 ```ts
 await page.diagnostics.destroy()
@@ -1470,13 +1485,13 @@ await page.diagnostics.destroy()
 
 Controls Chromium virtual time so page timers become deterministic.
 
-| Method      | Returns         | Behavior                                                                |
-| ----------- | --------------- | ----------------------------------------------------------------------- |
-| `install`   | `Promise<void>` | Take over the page clock, optionally seeding it with an epoch time.     |
-| `pause`     | `Promise<void>` | Suspend virtual time so no page timer advances.                         |
-| `resume`    | `Promise<void>` | Continue virtual time after a pause.                                    |
-| `advance`   | `Promise<void>` | Move virtual time forward by the given milliseconds, firing due timers. |
-| `uninstall` | `Promise<void>` | Return the page to the real clock. A no-op when nothing was installed.  |
+| Method      | Returns         | Summary                                                                                |
+| ----------- | --------------- | -------------------------------------------------------------------------------------- |
+| `install`   | `Promise<void>` | Takes over the page clock, optionally seeding it with an epoch time.                   |
+| `pause`     | `Promise<void>` | Suspends virtual time so no page timer advances.                                       |
+| `resume`    | `Promise<void>` | Continues virtual time after a pause.                                                  |
+| `advance`   | `Promise<void>` | Moves virtual time forward by the given milliseconds, firing the timers that fall due. |
+| `uninstall` | `Promise<void>` | Returns the page to the real clock, and does nothing when no clock was installed.      |
 
 ```ts
 await page.clock.install(Date.parse('2026-01-01T00:00:00Z'))
@@ -1491,37 +1506,37 @@ await page.clock.uninstall()
 A lazily resolved element query. Every accessor returns a new locator rather than
 mutating this one, and every action re-resolves the query before acting.
 
-| Method       | Returns                                       | Behavior                                                                                   |
-| ------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------ |
-| `locator`    | `BrowserLocatorInterface`                     | Narrow to a descendant matching the CSS selector.                                          |
-| `filter`     | `BrowserLocatorInterface`                     | Narrow to the matches satisfying the filter.                                               |
-| `first`      | `BrowserLocatorInterface`                     | Narrow to the first match.                                                                 |
-| `last`       | `BrowserLocatorInterface`                     | Narrow to the last match.                                                                  |
-| `item`       | `BrowserLocatorInterface`                     | Narrow to the match at the given index.                                                    |
-| `count`      | `Promise<number>`                             | Count the current matches.                                                                 |
-| `all`        | `Promise<readonly BrowserLocatorInterface[]>` | Resolve one indexed locator per current match.                                             |
-| `click`      | `Promise<void>`                               | Click the match with trusted input after its actionability checks pass.                    |
-| `fill`       | `Promise<void>`                               | Replace the match's value with the given text.                                             |
-| `select`     | `Promise<void>`                               | Select the given option values on the match.                                               |
-| `check`      | `Promise<void>`                               | Click the match unless it already reports checked.                                         |
-| `uncheck`    | `Promise<void>`                               | Click the match unless it already reports unchecked.                                       |
-| `hover`      | `Promise<void>`                               | Move trusted pointer input over the match.                                                 |
-| `focus`      | `Promise<void>`                               | Give the match keyboard focus.                                                             |
-| `press`      | `Promise<void>`                               | Focus the match and press one key or chord.                                                |
-| `type`       | `Promise<void>`                               | Focus the match and type the value one key at a time.                                      |
-| `clear`      | `Promise<void>`                               | Empty the match's value.                                                                   |
-| `wait`       | `Promise<void>`                               | Wait until the match reaches the requested state. Rejects on timeout.                      |
-| `text`       | `Promise<string>`                             | Read the first match's rendered text.                                                      |
-| `texts`      | `Promise<readonly string[]>`                  | Read the rendered text of every match.                                                     |
-| `html`       | `Promise<string>`                             | Read the first match's inner HTML.                                                         |
-| `value`      | `Promise<string>`                             | Read the first match's form value.                                                         |
-| `attribute`  | `Promise<string \| undefined>`                | Read one attribute of the first match, or `undefined` when it carries none.                |
-| `visible`    | `Promise<boolean>`                            | True if the first match renders a non-empty box; false otherwise.                          |
-| `enabled`    | `Promise<boolean>`                            | True if the first match accepts input; false otherwise.                                    |
-| `editable`   | `Promise<boolean>`                            | True if the first match accepts typed text; false otherwise.                               |
-| `screenshot` | `Promise<BrowserScreenshotResult>`            | Capture the first match's box, persisting it through the page writer when a path is given. |
-| `upload`     | `Promise<void>`                               | Set the file selection on the matched file input.                                          |
-| `drag`       | `Promise<void>`                               | Drag the match onto the target locator with trusted pointer input.                         |
+| Method       | Returns                                       | Summary                                                                                     |
+| ------------ | --------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `locator`    | `BrowserLocatorInterface`                     | Narrows to a descendant matching the CSS selector.                                          |
+| `filter`     | `BrowserLocatorInterface`                     | Narrows to the matches satisfying the filter.                                               |
+| `first`      | `BrowserLocatorInterface`                     | Narrows to the first match.                                                                 |
+| `last`       | `BrowserLocatorInterface`                     | Narrows to the last match.                                                                  |
+| `item`       | `BrowserLocatorInterface`                     | Narrows to the match at the given index.                                                    |
+| `count`      | `Promise<number>`                             | Counts the current matches.                                                                 |
+| `all`        | `Promise<readonly BrowserLocatorInterface[]>` | Resolves one indexed locator per current match.                                             |
+| `click`      | `Promise<void>`                               | Clicks the match with trusted input after its actionability checks pass.                    |
+| `fill`       | `Promise<void>`                               | Replaces the match's value with the given text.                                             |
+| `select`     | `Promise<void>`                               | Selects the given option values on the match.                                               |
+| `check`      | `Promise<void>`                               | Clicks the match unless it already reports checked.                                         |
+| `uncheck`    | `Promise<void>`                               | Clicks the match unless it already reports unchecked.                                       |
+| `hover`      | `Promise<void>`                               | Moves trusted pointer input over the match.                                                 |
+| `focus`      | `Promise<void>`                               | Gives the match keyboard focus.                                                             |
+| `press`      | `Promise<void>`                               | Focuses the match and presses one key or chord.                                             |
+| `type`       | `Promise<void>`                               | Focuses the match and types the value one key at a time.                                    |
+| `clear`      | `Promise<void>`                               | Empties the match's value.                                                                  |
+| `wait`       | `Promise<void>`                               | Waits until the match reaches the requested state. Rejects on timeout.                      |
+| `text`       | `Promise<string>`                             | Reads the first match's rendered text.                                                      |
+| `texts`      | `Promise<readonly string[]>`                  | Reads the rendered text of every match.                                                     |
+| `html`       | `Promise<string>`                             | Reads the first match's inner HTML.                                                         |
+| `value`      | `Promise<string>`                             | Reads the first match's form value.                                                         |
+| `attribute`  | `Promise<string \| undefined>`                | Reads one attribute of the first match, or returns `undefined` when the match carries none. |
+| `visible`    | `Promise<boolean>`                            | Reports whether the first match renders a non-empty box.                                    |
+| `enabled`    | `Promise<boolean>`                            | Reports whether the first match accepts input.                                              |
+| `editable`   | `Promise<boolean>`                            | Reports whether the first match accepts typed text.                                         |
+| `screenshot` | `Promise<BrowserScreenshotResult>`            | Captures the first match's box, persisting it through the page writer when a path is given. |
+| `upload`     | `Promise<void>`                               | Sets the file selection on the matched file input.                                          |
+| `drag`       | `Promise<void>`                               | Drags the match onto the target locator with trusted pointer input.                         |
 
 ```ts
 const rows = page.selectors.role('row')
@@ -1555,14 +1570,14 @@ await first.drag(last)
 Creates one locator per selector semantics. Every accessor is pure — it builds a
 query and performs no protocol call.
 
-| Method        | Returns                   | Behavior                                                          |
-| ------------- | ------------------------- | ----------------------------------------------------------------- |
-| `css`         | `BrowserLocatorInterface` | Locate by CSS selector.                                           |
-| `role`        | `BrowserLocatorInterface` | Locate by ARIA role, optionally by accessible name and exactness. |
-| `text`        | `BrowserLocatorInterface` | Locate by rendered text, optionally exact.                        |
-| `label`       | `BrowserLocatorInterface` | Locate a labelled control by its label text, optionally exact.    |
-| `placeholder` | `BrowserLocatorInterface` | Locate an input by its placeholder text, optionally exact.        |
-| `testId`      | `BrowserLocatorInterface` | Locate by the `data-testid` attribute.                            |
+| Method        | Returns                   | Summary                                                            |
+| ------------- | ------------------------- | ------------------------------------------------------------------ |
+| `css`         | `BrowserLocatorInterface` | Locates by CSS selector.                                           |
+| `role`        | `BrowserLocatorInterface` | Locates by ARIA role, optionally by accessible name and exactness. |
+| `text`        | `BrowserLocatorInterface` | Locates by rendered text, optionally exact.                        |
+| `label`       | `BrowserLocatorInterface` | Locates a labelled control by its label text, optionally exact.    |
+| `placeholder` | `BrowserLocatorInterface` | Locates an input by its placeholder text, optionally exact.        |
+| `testId`      | `BrowserLocatorInterface` | Locates by the test-id attribute.                                  |
 
 ```ts
 await page.selectors.css('#hero').click()
@@ -1578,13 +1593,13 @@ await page.selectors.testId('checkout').click()
 Sends trusted keyboard input on the frame's own session. Held modifiers persist
 between calls until released.
 
-| Method   | Returns         | Behavior                                                                                           |
-| -------- | --------------- | -------------------------------------------------------------------------------------------------- |
-| `down`   | `Promise<void>` | Press one key and hold it, retaining it in the modifier mask when it is a modifier.                |
-| `up`     | `Promise<void>` | Release one key, dropping it from the modifier mask even when the release frame fails.             |
-| `press`  | `Promise<void>` | Press a chord: hold its modifiers, press and release its terminal key, then release the modifiers. |
-| `type`   | `Promise<void>` | Type a string as one press and release per character.                                              |
-| `insert` | `Promise<void>` | Insert composed text in one frame, firing no per-key events.                                       |
+| Method   | Returns         | Summary                                                                                                   |
+| -------- | --------------- | --------------------------------------------------------------------------------------------------------- |
+| `down`   | `Promise<void>` | Presses one key and holds it, retaining it in the modifier mask when it is a modifier.                    |
+| `up`     | `Promise<void>` | Releases one key, dropping it from the modifier mask even when the release frame fails.                   |
+| `press`  | `Promise<void>` | Presses a chord: holds its modifiers, presses and releases its terminal key, then releases the modifiers. |
+| `type`   | `Promise<void>` | Types a string as one press and release per character.                                                    |
+| `insert` | `Promise<void>` | Inserts composed text in one frame, firing no per-key events.                                             |
 
 ```ts
 await page.keyboard.down('Shift')
@@ -1599,14 +1614,14 @@ await page.keyboard.insert('pasted text')
 Sends trusted mouse input on the frame's own session, tracking the pointer
 position and the pressed-button mask between calls.
 
-| Method  | Returns         | Behavior                                                                                    |
-| ------- | --------------- | ------------------------------------------------------------------------------------------- |
-| `move`  | `Promise<void>` | Move the pointer to a point, carrying the pressed buttons.                                  |
-| `down`  | `Promise<void>` | Press a button at the current point, adding it to the pressed mask.                         |
-| `up`    | `Promise<void>` | Release a button at the current point, dropping it from the mask even when the frame fails. |
-| `click` | `Promise<void>` | Move, press, optionally delay, and release at the given point.                              |
-| `drag`  | `Promise<void>` | Press at the start, move in the requested steps to the end, and release.                    |
-| `wheel` | `Promise<void>` | Send a wheel delta at the current point.                                                    |
+| Method  | Returns         | Summary                                                                                      |
+| ------- | --------------- | -------------------------------------------------------------------------------------------- |
+| `move`  | `Promise<void>` | Moves the pointer to a point, carrying the pressed buttons.                                  |
+| `down`  | `Promise<void>` | Presses a button at the current point, adding it to the pressed mask.                        |
+| `up`    | `Promise<void>` | Releases a button at the current point, dropping it from the mask even when the frame fails. |
+| `click` | `Promise<void>` | Moves to the given point, presses, optionally delays, and releases.                          |
+| `drag`  | `Promise<void>` | Presses at the start, moves in the requested steps to the end, and releases.                 |
+| `wheel` | `Promise<void>` | Sends a wheel delta at the current point.                                                    |
 
 ```ts
 await page.mouse.move({ x: 50, y: 20 })
@@ -1621,9 +1636,9 @@ await page.mouse.wheel({ x: 0, y: -120 })
 
 Sends trusted touch input on the frame's own session.
 
-| Method | Returns         | Behavior                                                                              |
-| ------ | --------------- | ------------------------------------------------------------------------------------- |
-| `tap`  | `Promise<void>` | Dispatch a touch start at the point and a touch end, cancelling the touch on failure. |
+| Method | Returns         | Summary                                                                                 |
+| ------ | --------------- | --------------------------------------------------------------------------------------- |
+| `tap`  | `Promise<void>` | Dispatches a touch start at the point and a touch end, cancelling the touch on failure. |
 
 ```ts
 await page.touch.tap({ x: 120, y: 240 })
@@ -1634,10 +1649,10 @@ await page.touch.tap({ x: 120, y: 240 })
 One JavaScript dialog awaiting a decision. `category`, `message`, and `default`
 are Surface data members.
 
-| Method    | Returns         | Behavior                                                                                |
-| --------- | --------------- | --------------------------------------------------------------------------------------- |
-| `accept`  | `Promise<void>` | Accept the dialog, optionally supplying prompt text. Throws once the dialog is handled. |
-| `dismiss` | `Promise<void>` | Dismiss the dialog. Throws once the dialog is handled.                                  |
+| Method    | Returns         | Summary                                                                                  |
+| --------- | --------------- | ---------------------------------------------------------------------------------------- |
+| `accept`  | `Promise<void>` | Accepts the dialog, optionally supplying prompt text. Throws once the dialog is handled. |
+| `dismiss` | `Promise<void>` | Dismisses the dialog. Throws once the dialog is handled.                                 |
 
 ```ts
 page.emitter.on('dialog', async (dialog) => {
@@ -1650,10 +1665,10 @@ page.emitter.on('dialog', async (dialog) => {
 
 One intercepted file input selection. `multiple` is a Surface data member.
 
-| Method   | Returns         | Behavior                                                                                           |
-| -------- | --------------- | -------------------------------------------------------------------------------------------------- |
-| `upload` | `Promise<void>` | Set the chosen files. Throws when a single-file chooser is given several, or once already handled. |
-| `cancel` | `Promise<void>` | Clear the selection. Throws once already handled.                                                  |
+| Method   | Returns         | Summary                                                                                                             |
+| -------- | --------------- | ------------------------------------------------------------------------------------------------------------------- |
+| `upload` | `Promise<void>` | Sets the chosen files. Throws when a single-file chooser is given several, and once the chooser is already handled. |
+| `cancel` | `Promise<void>` | Clears the selection. Throws once the chooser is already handled.                                                   |
 
 ```ts
 page.emitter.on('chooser', async (chooser) => {
@@ -1667,12 +1682,12 @@ page.emitter.on('chooser', async (chooser) => {
 A dedicated, shared, or service worker attached through its own flattened
 session. `id`, `url`, and `category` are Surface data members.
 
-| Method     | Returns            | Behavior                                                                          |
-| ---------- | ------------------ | --------------------------------------------------------------------------------- |
-| `evaluate` | `Promise<unknown>` | Evaluate a guarded expression in the worker and return its value.                 |
-| `send`     | `Promise<unknown>` | Issue one CDP method call on the worker's session.                                |
-| `detach`   | `void`             | Stop driving the worker locally without closing its target.                       |
-| `close`    | `Promise<void>`    | Close the worker target, tolerating a worker that already terminated. Idempotent. |
+| Method     | Returns            | Summary                                                                            |
+| ---------- | ------------------ | ---------------------------------------------------------------------------------- |
+| `evaluate` | `Promise<unknown>` | Evaluates a guarded expression in the worker and returns its value.                |
+| `send`     | `Promise<unknown>` | Issues one CDP method call on the worker's session.                                |
+| `detach`   | `void`             | Stops driving the worker locally without closing its target.                       |
+| `close`    | `Promise<void>`    | Closes the worker target, tolerating a worker that already terminated. Idempotent. |
 
 ```ts
 page.emitter.on('worker', async (worker) => {
@@ -1688,11 +1703,11 @@ page.emitter.on('worker', async (worker) => {
 One paused request, decided exactly once. `id`, `request`, and `handled` are
 Surface data members.
 
-| Method     | Returns         | Behavior                                                                               |
-| ---------- | --------------- | -------------------------------------------------------------------------------------- |
-| `abort`    | `Promise<void>` | Fail the request with a Chromium error reason. Default: `'Failed'`.                    |
-| `continue` | `Promise<void>` | Let the request proceed, optionally overriding its url, method, headers, or post body. |
-| `fulfill`  | `Promise<void>` | Answer the request locally. Throws when the status is not an integer from 100 to 999.  |
+| Method     | Returns         | Summary                                                                                 |
+| ---------- | --------------- | --------------------------------------------------------------------------------------- |
+| `abort`    | `Promise<void>` | Fails the request with a Chromium error reason, `'Failed'` by default.                  |
+| `continue` | `Promise<void>` | Lets the request proceed, optionally overriding its URL, method, headers, or post body. |
+| `fulfill`  | `Promise<void>` | Answers the request locally. Throws when the status is not an integer from 100 to 999.  |
 
 ```ts
 await page.network.route({ url: '**/api' }, async (route) => {
@@ -1708,12 +1723,12 @@ await page.network.route({ url: '**/pass' }, (route) => route.continue({ method:
 Records observed exchanges as a HAR 1.2 archive and replays one back.
 `recording` is a Surface data member.
 
-| Method   | Returns               | Behavior                                                                      |
-| -------- | --------------------- | ----------------------------------------------------------------------------- |
-| `start`  | `Promise<void>`       | Begin recording exchanges, optionally capturing response content.             |
-| `stop`   | `Promise<BrowserHAR>` | End recording and return the archive, writing it when a path was given.       |
-| `replay` | `Promise<void>`       | Serve matching requests from an archive instead of the network.               |
-| `clear`  | `Promise<void>`       | Drop the recorded entries and any active replay without ending the recording. |
+| Method   | Returns               | Summary                                                                        |
+| -------- | --------------------- | ------------------------------------------------------------------------------ |
+| `start`  | `Promise<void>`       | Begins recording exchanges, optionally capturing response content.             |
+| `stop`   | `Promise<BrowserHAR>` | Ends recording and returns the archive, writing it when a path was given.      |
+| `replay` | `Promise<void>`       | Serves matching requests from an archive instead of from the network.          |
+| `clear`  | `Promise<void>`       | Drops the recorded entries and any active replay without ending the recording. |
 
 ```ts
 await page.network.har.start({ content: true })
@@ -1728,18 +1743,18 @@ Page-scoped network observation and interception. `emitter` and `har` are
 Surface data members. Every method starts the Network domain first, so the page
 begins reporting `request` / `response` / `failure` from the first call.
 
-| Method        | Returns               | Behavior                                                                       |
-| ------------- | --------------------- | ------------------------------------------------------------------------------ |
-| `start`       | `Promise<void>`       | Enable the Network domain and subscribe to its events. Idempotent.             |
-| `body`        | `Promise<Uint8Array>` | Read one observed response body as bytes.                                      |
-| `text`        | `Promise<string>`     | Read one observed response body as text.                                       |
-| `json`        | `Promise<unknown>`    | Read one observed response body as parsed JSON.                                |
-| `route`       | `Promise<void>`       | Intercept requests matching the query and hand each to the handler.            |
-| `unroute`     | `Promise<void>`       | Remove one handler's routes, or every route when given none.                   |
-| `headers`     | `Promise<void>`       | Apply extra HTTP headers to every request the page makes.                      |
-| `offline`     | `Promise<void>`       | Emulate offline or restore connectivity.                                       |
-| `credentials` | `Promise<void>`       | Apply HTTP basic-auth credentials, or clear them when given none.              |
-| `destroy`     | `Promise<void>`       | Remove every route, unsubscribe, and disable the domains this manager enabled. |
+| Method        | Returns               | Summary                                                                           |
+| ------------- | --------------------- | --------------------------------------------------------------------------------- |
+| `start`       | `Promise<void>`       | Enables the Network domain and subscribes to its events. Idempotent.              |
+| `body`        | `Promise<Uint8Array>` | Reads one observed response body as bytes.                                        |
+| `text`        | `Promise<string>`     | Reads one observed response body as text.                                         |
+| `json`        | `Promise<unknown>`    | Reads one observed response body as parsed JSON.                                  |
+| `route`       | `Promise<void>`       | Intercepts requests matching the query and hands each one to the handler.         |
+| `unroute`     | `Promise<void>`       | Removes one handler's routes, or every route when given none.                     |
+| `headers`     | `Promise<void>`       | Applies extra HTTP headers to every request the page makes.                       |
+| `offline`     | `Promise<void>`       | Emulates an offline connection, or restores connectivity.                         |
+| `credentials` | `Promise<void>`       | Applies HTTP basic-auth credentials, or clears them when given none.              |
+| `destroy`     | `Promise<void>`       | Removes every route, unsubscribes, and disables the domains this manager enabled. |
 
 ```ts
 await page.network.start()
@@ -1761,11 +1776,11 @@ await page.network.destroy()
 
 Cookie state scoped to one browser context.
 
-| Method    | Returns                             | Behavior                                                                   |
-| --------- | ----------------------------------- | -------------------------------------------------------------------------- |
-| `cookies` | `Promise<readonly BrowserCookie[]>` | Read the context cookies, optionally narrowed to the given URLs.           |
-| `set`     | `Promise<void>`                     | Write the given cookies into the context.                                  |
-| `clear`   | `Promise<void>`                     | Delete the context cookies matching the filter, or every cookie with none. |
+| Method    | Returns                             | Summary                                                                           |
+| --------- | ----------------------------------- | --------------------------------------------------------------------------------- |
+| `cookies` | `Promise<readonly BrowserCookie[]>` | Reads the context cookies, optionally narrowed to the given URLs.                 |
+| `set`     | `Promise<void>`                     | Writes the given cookies into the context.                                        |
+| `clear`   | `Promise<void>`                     | Deletes the context cookies matching the filter, or every cookie when given none. |
 
 ```ts
 await context.cookies.set([{ name: 'session', value: 'abc', url: 'https://example.com/' }])
@@ -1777,11 +1792,11 @@ await context.cookies.clear({ name: 'session' })
 
 Permission overrides scoped to one browser context.
 
-| Method  | Returns         | Behavior                                                                      |
-| ------- | --------------- | ----------------------------------------------------------------------------- |
-| `grant` | `Promise<void>` | Grant each named permission, optionally for one origin, as its own CDP frame. |
-| `deny`  | `Promise<void>` | Deny each named permission, optionally for one origin, as its own CDP frame.  |
-| `clear` | `Promise<void>` | Reset every permission override on the context.                               |
+| Method  | Returns         | Summary                                                                        |
+| ------- | --------------- | ------------------------------------------------------------------------------ |
+| `grant` | `Promise<void>` | Grants each named permission, optionally for one origin, as its own CDP frame. |
+| `deny`  | `Promise<void>` | Denies each named permission, optionally for one origin, as its own CDP frame. |
+| `clear` | `Promise<void>` | Resets every permission override on the context.                               |
 
 ```ts
 await context.permissions.grant(['geolocation'], 'https://example.com')
@@ -1793,11 +1808,11 @@ await context.permissions.clear()
 
 Cookie and web-storage state for one browser context, as one serializable value.
 
-| Method    | Returns                        | Behavior                                                               |
-| --------- | ------------------------------ | ---------------------------------------------------------------------- |
-| `state`   | `Promise<BrowserStorageState>` | Read the context cookies and the per-origin local and session storage. |
-| `restore` | `Promise<void>`                | Write a previously read state back into the context.                   |
-| `clear`   | `Promise<void>`                | Drop the storage of one origin, or of every origin when given none.    |
+| Method    | Returns                        | Summary                                                                 |
+| --------- | ------------------------------ | ----------------------------------------------------------------------- |
+| `state`   | `Promise<BrowserStorageState>` | Reads the context cookies and the per-origin local and session storage. |
+| `restore` | `Promise<void>`                | Writes a previously read state back into the context.                   |
+| `clear`   | `Promise<void>`                | Drops the storage of one origin, or of every origin when given none.    |
 
 ```ts
 const state = await context.storage.state({ origins: ['https://example.com'] })
@@ -1811,11 +1826,11 @@ Emulation overrides inherited by every page of one context. The offline and
 header overrides route through each page's network manager, so applying either
 starts that page's Network domain.
 
-| Method   | Returns         | Behavior                                                                              |
-| -------- | --------------- | ------------------------------------------------------------------------------------- |
-| `apply`  | `Promise<void>` | Clear the superseded overrides and apply the given ones to every page of the context. |
-| `clear`  | `Promise<void>` | Remove every override this manager applied.                                           |
-| `attach` | `Promise<void>` | Apply the retained overrides to a newly created page.                                 |
+| Method   | Returns         | Summary                                                                                  |
+| -------- | --------------- | ---------------------------------------------------------------------------------------- |
+| `apply`  | `Promise<void>` | Clears the superseded overrides and applies the given ones to every page of the context. |
+| `clear`  | `Promise<void>` | Removes every override this manager applied.                                             |
+| `attach` | `Promise<void>` | Applies the retained overrides to a newly created page.                                  |
 
 ```ts
 await context.emulation.apply({ locale: 'fr-FR', offline: true, headers: { 'x-test': 'one' } })
@@ -1827,16 +1842,16 @@ await context.emulation.clear()
 
 These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `browser.md`:
 
-1. **DOC ↔ SOURCE bijection.** Every `function` / `class` / `const` /
+1. **Doc ↔ source bijection.** Every `function` / `class` / `const` /
    `interface` / `type` / error row in the `### Core` and `### Server`
    `## Surface` tables is a real export of the browser layer (`src/core` or
    `src/server`), and every export of either appears as a Surface row —
-   exhaustive, both directions.
+   exhaustive in each direction.
 2. **Core is environment-agnostic.** `src/core` imports only
    `@orkestrel/emitter`, `@orkestrel/contract`, and `@orkestrel/html` — no
    `node:*`, no `WebSocket`, no filesystem. `@orkestrel/html` is string → AST →
    string work with no host of its own, so `article()` distills a captured
-   document without leaving core: `content()` and `article()` share ONE
+   document without leaving core: `content()` and `article()` share one
    size-guarded `outerHTML` capture, and `article()` evaluates nothing else —
    no URL, no title, no body text. Every CDP method call
    and event flows through the injected `CDPTransportInterface`; core never
@@ -1879,7 +1894,7 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    and the thrown `BrowserConnectionError` carries the requested `engine` in
    `context` when no matching browser is found; launch discovery also consults
    `BrowserOptions.browsers` candidate-source overrides when given. A
-   `disconnect()` on either kind of launch retains process ownership WITHOUT
+   `disconnect()` on either kind of launch retains process ownership without
    killing it — the same instance can reconnect through the retained endpoint
    and remains responsible for termination. `BrowserCDPOptions.discover`
    (default `true`) set to `false` skips passive discovery and probes the
@@ -1894,7 +1909,7 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    through `@orkestrel/emitter`'s emitter, never a domain event. An external
    disconnect (transport loss while an owned process stays alive, or the
    owned process exiting on its own) always emits a coded `error` before
-   `disconnect`; transport loss with the process still alive is RESUMABLE —
+   `disconnect`; transport loss with the process still alive is resumable —
    the browser is not killed and the same `Browser` instance can `connect()`
    again (for example, rediscovering it over CDP), while a process exit is terminal
    for that instance.
@@ -1908,11 +1923,11 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
 8. **Oversized evaluate/content results fail clean, never crash the session.**
    `BrowserPage.evaluate()` wraps its expression with
    `compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT)`, and
-   `.content()` wraps BOTH its HTML (`outerHTML`) and visible-text
+   `.content()` wraps its HTML (`outerHTML`) and its visible-text
    (`innerText`) sub-evaluations the same way — only `title` and `url` are
-   NOT size-guarded. `article()` shares that one HTML capture and so inherits
+   not size-guarded. `article()` shares that one HTML capture and so inherits
    its guard exactly: an oversized document fails `content()` and `article()`
-   identically. It does NOT inherit the body-text guard, because it never
+   identically. It does not inherit the body-text guard, because it never
    evaluates `innerText` — a document whose visible text alone exceeds the
    limit fails `content()` while `article()` still returns.
    The guard stringifies the in-page result and throws a
@@ -1932,7 +1947,7 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
    (bare `async function run(page) {...}`) or `'typescript'`
    (`import('@orkestrel/browser').BrowserPageInterface`-typed) per
    `BrowserCodegenScriptOptions.language` (default `'javascript'`).
-10. **DOC ↔ SOURCE method bijection.** The `## Methods` tables list exactly
+10. **Doc ↔ source method bijection.** The `## Methods` tables list exactly
     the public methods of each behavioral interface — `CDPTransportInterface`,
     `CDPClientInterface`, `BrowserContextInterface`, `BrowserFrameInterface`,
     `BrowserPageInterface`, `BrowserSnapshotInterface`,
@@ -1951,7 +1966,7 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
     `BrowserRouteInterface`, `BrowserHARManagerInterface`,
     `BrowserNetworkManagerInterface`, `BrowserCookieManagerInterface`,
     `BrowserPermissionManagerInterface`, `BrowserStorageManagerInterface`,
-    `BrowserEmulationManagerInterface` — exhaustive, both directions, and each
+    `BrowserEmulationManagerInterface` — exhaustive in each direction, and each
     implementing class (`WebSocketCDPTransport`, `CDPClient`, `BrowserContext`,
     `BrowserFrame`, `BrowserPage`, `BrowserSnapshot`, `BrowserCodegen`,
     `BrowserTransition`, `Browser`, `BrowserWebSocket`, `BrowserDownload`,
@@ -2001,8 +2016,8 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
     same kill sequence if an owned process fails to exit within the grace
     period — the graceful path for shutting down a browser this instance may
     not own. In the worst case an owned, unresponsive process tree makes
-    `close()` apply `BROWSER_KILL_GRACE_MS` three times: after
-    `Browser.close`, after `SIGTERM`, and after `SIGKILL`.
+    `close()` apply `BROWSER_KILL_GRACE_MS` after `Browser.close`, again after
+    `SIGTERM`, and again after `SIGKILL`.
     `BrowserInterface.owned` is `true` for a launched or explicitly adopted
     session, `false` for an active attachment, and `undefined` when no session
     is represented. `BrowserInterface.pid` is the id of the process serving the
@@ -2028,13 +2043,14 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
     rejects after a best-effort CDP `Browser.close`, rather than owning a
     browser it cannot terminate.
 14. **A snapshot is serializable data plus navigation.** `BrowserSnapshot`
-    holds exactly the two `BrowserSnapshotInput` members, so
+    holds exactly the `BrowserSnapshotInput` members `documents` and `styles`, so
     `JSON.stringify(snapshot)` yields `{ documents, styles }` and nothing else,
     and `createBrowserSnapshot(parsed)` turns that JSON back into a navigable
     entity whose walks and `path()` results match the original's. Navigation
     reads plain data: every method takes and returns bare `BrowserNode` values,
-    never a wrapper node entity, and the constructor copies and freezes both
-    arrays so a caller's later mutation cannot reach the snapshot. Containment
+    never a wrapper node entity, and the constructor copies and freezes the
+    `documents` and `styles` arrays so a caller's later mutation cannot reach the
+    snapshot. Containment
     is derived, not declared — a node contains a candidate exactly when
     `snapshot.ancestors(candidate)` includes it — so no membership flag or
     `contains`-style member can drift from the ancestry walk.
@@ -2077,7 +2093,7 @@ await codegen.destroy()
 A `'persistent'` (profile-backed) launch survives `disconnect()` — the
 browser process keeps running, so a later `Browser` can reattach to it through
 CDP discovery on the same fixed port. A reattached instance connects as
-`'cdp'`, so its own `destroy()` is a LOCAL DETACH ONLY — it never sends a
+`'cdp'`, so its own `destroy()` detaches locally and does nothing more — it never sends a
 remote close, because another client may still be using the browser:
 
 ```ts
@@ -2088,7 +2104,7 @@ const browser = createBrowser({ profile: './profile', cdp: { port } })
 await browser.connect() // launches (no browser yet listening on `port`)
 const pid = browser.pid // supervise this process externally if desired
 
-await browser.disconnect() // retains ownership WITHOUT killing the browser
+await browser.disconnect() // retains ownership without killing the browser
 
 // ...later, in this process or another...
 const reattached = createBrowser({ cdp: { port } })
@@ -2097,13 +2113,13 @@ const urls = reattached
 	.context()
 	?.pages()
 	.map((page) => page.url) // correct immediately, no navigate()/content() needed
-await reattached.destroy() // LOCAL DETACH ONLY — the browser process keeps running
+await reattached.destroy() // detaches locally and nothing more; the browser process keeps running
 await browser.destroy() // the original owner terminates and awaits its process
 ```
 
 An ephemeral launch (no `profile`) can also disconnect and reconnect while its
 owning `Browser` instance and process remain alive. A transport-loss disconnect
-is likewise resumable — the SAME `browser` instance can `connect()` again
+is likewise resumable — the same `browser` instance can `connect()` again
 without a fresh `createBrowser()`.
 
 When the original owner is unavailable, a connected CDP client can explicitly
@@ -2131,7 +2147,7 @@ before falling back to the kill-escalation `destroy()` uses:
 const reattached = createBrowser({ cdp: { port } })
 await reattached.connect() // discovers the still-running browser over CDP
 
-await reattached.close() // best-effort CDP Browser.close; because this instance never owned the process, it does NOT wait for the remote exit
+await reattached.close() // best-effort CDP Browser.close; because this instance never owned the process, it does not wait for the remote exit
 // a further connect() on this instance throws BrowserDestroyedError, same as after destroy()
 ```
 
@@ -2151,3 +2167,19 @@ client.subscribe('Page.frameNavigated', (params) => log(params))
 
 await client.close()
 ```
+
+## Tests
+
+- [`tests/guides.test.ts`](../tests/guides.test.ts) — the `## Surface` ↔ `src/core` and `src/server` bijection over value and type exports, each `## Methods` table against its interface's call-signature members, and the equality gate: every `Summary` cell against its declaration's description paragraph, the titled `Connect to a browser and drive a page` fence against the `@example` block of that title (pinned so the titled pair cannot be retired silently), and the README pitch against this guide's tagline.
+- [`tests/src/core/CDPClient.test.ts`](../tests/src/core/CDPClient.test.ts) and [`tests/src/core/factories.test.ts`](../tests/src/core/factories.test.ts) — the JSON-RPC framing, session scoping, timeout, reconnect, and teardown paths of `CDPClient` over an in-memory transport, and the factories that build it.
+- [`tests/src/core/BrowserContext.test.ts`](../tests/src/core/BrowserContext.test.ts), [`tests/src/core/BrowserPage.test.ts`](../tests/src/core/BrowserPage.test.ts), [`tests/src/core/BrowserFrame.test.ts`](../tests/src/core/BrowserFrame.test.ts), and [`tests/src/core/BrowserTransition.test.ts`](../tests/src/core/BrowserTransition.test.ts) — the context, page, and frame lifecycles, the destructive target diff `sync()` performs, and the shared transition every joining caller awaits.
+- [`tests/src/core/BrowserLocator.test.ts`](../tests/src/core/BrowserLocator.test.ts), [`tests/src/core/BrowserSelectorManager.test.ts`](../tests/src/core/BrowserSelectorManager.test.ts), [`tests/src/core/BrowserHandle.test.ts`](../tests/src/core/BrowserHandle.test.ts), and [`tests/src/core/compilers.test.ts`](../tests/src/core/compilers.test.ts) — strict semantic location, remote-handle retention and disposal, and the in-page expressions the click, fill, select, wait, and visibility compilers emit.
+- [`tests/src/core/BrowserKeyboard.test.ts`](../tests/src/core/BrowserKeyboard.test.ts), [`tests/src/core/BrowserMouse.test.ts`](../tests/src/core/BrowserMouse.test.ts), and [`tests/src/core/BrowserTouch.test.ts`](../tests/src/core/BrowserTouch.test.ts) — trusted keyboard, mouse, and touch input, the modifier and pressed-button masks they carry, and the chord grammar `extractBrowserChord` accepts.
+- [`tests/src/core/BrowserNetworkManager.test.ts`](../tests/src/core/BrowserNetworkManager.test.ts), [`tests/src/core/BrowserRoute.test.ts`](../tests/src/core/BrowserRoute.test.ts), [`tests/src/core/BrowserHARManager.test.ts`](../tests/src/core/BrowserHARManager.test.ts), [`tests/src/core/BrowserWebSocket.test.ts`](../tests/src/core/BrowserWebSocket.test.ts), and [`tests/src/core/BrowserDownload.test.ts`](../tests/src/core/BrowserDownload.test.ts) — request observation, interception and fulfilment, HAR recording and replay, observed WebSocket frames, and download progress.
+- [`tests/src/core/BrowserSnapshot.test.ts`](../tests/src/core/BrowserSnapshot.test.ts), [`tests/src/core/BrowserAccessibility.test.ts`](../tests/src/core/BrowserAccessibility.test.ts), and [`tests/src/core/parsers.test.ts`](../tests/src/core/parsers.test.ts) — snapshot walking, structural relationships, search, and paths; accessibility-tree capture; and the coercions every protocol parser applies to off-shape input.
+- [`tests/src/core/BrowserClock.test.ts`](../tests/src/core/BrowserClock.test.ts), [`tests/src/core/BrowserCoverage.test.ts`](../tests/src/core/BrowserCoverage.test.ts), [`tests/src/core/BrowserProfiler.test.ts`](../tests/src/core/BrowserProfiler.test.ts), [`tests/src/core/BrowserTracing.test.ts`](../tests/src/core/BrowserTracing.test.ts), [`tests/src/core/BrowserPerformance.test.ts`](../tests/src/core/BrowserPerformance.test.ts), and [`tests/src/core/BrowserDiagnostics.test.ts`](../tests/src/core/BrowserDiagnostics.test.ts) — the virtual clock and the diagnostics capabilities beneath one page, including the teardown that discards a failure from an already-stopped capability.
+- [`tests/src/core/BrowserCookieManager.test.ts`](../tests/src/core/BrowserCookieManager.test.ts), [`tests/src/core/BrowserStorageManager.test.ts`](../tests/src/core/BrowserStorageManager.test.ts), [`tests/src/core/BrowserPermissionManager.test.ts`](../tests/src/core/BrowserPermissionManager.test.ts), and [`tests/src/core/BrowserEmulationManager.test.ts`](../tests/src/core/BrowserEmulationManager.test.ts) — the context-scoped cookie, web-storage, permission, and emulation overrides, and the overrides a newly created page inherits.
+- [`tests/src/core/BrowserScriptManager.test.ts`](../tests/src/core/BrowserScriptManager.test.ts), [`tests/src/core/BrowserCodegen.test.ts`](../tests/src/core/BrowserCodegen.test.ts), [`tests/src/core/BrowserDialog.test.ts`](../tests/src/core/BrowserDialog.test.ts), [`tests/src/core/BrowserFileChooser.test.ts`](../tests/src/core/BrowserFileChooser.test.ts), [`tests/src/core/BrowserWorker.test.ts`](../tests/src/core/BrowserWorker.test.ts), and [`tests/src/core/BrowserNavigationManager.test.ts`](../tests/src/core/BrowserNavigationManager.test.ts) — init scripts and host bindings, action recording and script compilation, dialog and file-chooser handling, attached workers, and the URL and predicate waits that survive ordinary navigation events.
+- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts) and [`tests/src/core/errors.test.ts`](../tests/src/core/errors.test.ts) — the pure decoders, validators, and compilers of `src/core`, and the guards that narrow a caught value to each core error.
+- [`tests/src/server/Browser.test.ts`](../tests/src/server/Browser.test.ts), [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts), [`tests/src/server/factories.test.ts`](../tests/src/server/factories.test.ts), and [`tests/src/server/errors.test.ts`](../tests/src/server/errors.test.ts) — the discover, connect, launch, adopt, disconnect, destroy, and close lifecycle against a spawned stand-in process; system-browser discovery, profile resolution, and CDP readiness polling; and the guards that narrow a caught value to each server error.
+- [`tests/src/server/transports/WebSocketCDPTransport.test.ts`](../tests/src/server/transports/WebSocketCDPTransport.test.ts) and [`tests/src/server/writers/FileBrowserWriter.test.ts`](../tests/src/server/writers/FileBrowserWriter.test.ts) — the `WebSocket`-backed transport against a real in-process CDP server, and the filesystem writer that creates its missing parent directories.

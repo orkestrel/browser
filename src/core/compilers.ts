@@ -221,9 +221,9 @@ export function compileStorageClearExpression(): string {
 }
 
 /**
- * Compiles a `Runtime.evaluate` expression so the IN-PAGE code stringifies
- * its own result and throws a recognizable error before an oversized result
- * would overflow the CDP transport frame.
+ * Compiles a `Runtime.evaluate` expression so the in-page code stringifies its own result and
+ * throws a recognizable sentinel error before an oversized result would overflow the CDP
+ * transport frame.
  *
  * @remarks
  * A result whose `JSON.stringify` length exceeds `limit` throws
@@ -249,7 +249,7 @@ ${expression}
 }
 
 /**
- * Compiles recorded codegen actions into a replayable script.
+ * Compiles recorded codegen actions into a replayable JavaScript or TypeScript script.
  *
  * @remarks
  * Emits one statement per action against a `page` object shaped like

@@ -80,12 +80,15 @@ export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze({
 
 // === Browser
 
-/** Sets the default timeout in milliseconds for browser connection, requests, and navigation. */
+/**
+ * Sets the default timeout for browser connection, requests, and navigation, `30_000`
+ * milliseconds.
+ */
 export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
 
 /**
- * Caps the serialized-character length for an `evaluate()`/`content()` result,
- * enforced IN-PAGE before the result is returned to CDP.
+ * Caps the serialized-character length for an `evaluate()`/`content()` result at `2_500_000`,
+ * enforced in-page before the result is returned to CDP.
  *
  * @remarks
  * This counts UTF-16 STRING LENGTH (`String#length`), not transport BYTES —
@@ -105,8 +108,8 @@ export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
 export const BROWSER_RESULT_LIMIT = 2_500_000
 
 /**
- * Names the distinctive prefix for the in-page result-limit sentinel error, immediately
- * followed by the serialized length.
+ * Names the distinctive prefix for the in-page result-limit sentinel error,
+ * `'[[ORKESTREL_BROWSER_RESULT_LIMIT]]'`, immediately followed by the serialized length.
  *
  * @remarks
  * Deliberately unlikely to appear in a page's own thrown error text (unlike
@@ -117,23 +120,24 @@ export const BROWSER_RESULT_LIMIT = 2_500_000
 export const BROWSER_RESULT_LIMIT_SENTINEL_PREFIX = '[[ORKESTREL_BROWSER_RESULT_LIMIT]]'
 
 /**
- * Matches the in-page result-limit sentinel error message, anchored
- * immediately after the `Error: ` (optionally `Uncaught Error: `) prefix that
- * Chromium prepends to a thrown error's description — so the guard's own
- * throw is recognized only at the message START, not wherever the substring
- * happens to occur.
+ * Matches the in-page result-limit sentinel error message, anchored immediately after the
+ * `Error:` (optionally `Uncaught Error:`) prefix that Chromium prepends to a thrown error's
+ * description, so the guard's own throw is recognized only at the start of the message rather
+ * than wherever the substring happens to occur.
  */
 export const BROWSER_RESULT_LIMIT_PATTERN = new RegExp(
 	`^(?:Uncaught )?Error: \\[\\[ORKESTREL_BROWSER_RESULT_LIMIT\\]\\](\\d+)`,
 )
 
-/** Sets the poll interval in milliseconds while waiting for a selector to appear. */
+/** Sets the poll interval while waiting for a selector to appear, `100` milliseconds. */
 export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
 
-/** Sets the default maximum node count accepted from a decoded CDP DOM snapshot. */
+/**
+ * Sets the default maximum node count accepted from a decoded CDP DOM snapshot, `100_000`.
+ */
 export const BROWSER_SNAPSHOT_NODE_LIMIT = 100_000
 
-/** Names the isolated world used for iframe evaluation. */
+/** Names the isolated world used for iframe evaluation, `'__orkestrelBrowserFrame'`. */
 export const BROWSER_FRAME_WORLD_NAME = '__orkestrelBrowserFrame'
 
 /** Names the attribute the semantic test-id selector uses. */
@@ -189,8 +193,8 @@ export const BROWSER_HAR_CREATOR = Object.freeze({
 export const BROWSER_SCREENSHOT_ATTRIBUTE = 'data-orkestrel-screenshot'
 
 /**
- * Bounds (in milliseconds) the best-effort `Page.stopLoading` call issued
- * after a failed `navigate()`.
+ * Bounds the best-effort `Page.stopLoading` call issued after a failed `navigate()` at `1_000`
+ * milliseconds.
  *
  * @remarks
  * A wedged renderer can make the underlying CDP call hang for the full
@@ -200,15 +204,18 @@ export const BROWSER_SCREENSHOT_ATTRIBUTE = 'data-orkestrel-screenshot'
  */
 export const BROWSER_STOP_LOADING_TIMEOUT_MS = 1_000
 
-/** Sets the default viewport width in pixels. */
+/** Sets the default viewport width, `1280` pixels. */
 export const BROWSER_DEFAULT_VIEWPORT_WIDTH = 1280
 
-/** Sets the default viewport height in pixels. */
+/** Sets the default viewport height, `720` pixels. */
 export const BROWSER_DEFAULT_VIEWPORT_HEIGHT = 720
 
 // === Browser codegen
 
-/** Names the CDP runtime binding the codegen recorder script calls into. */
+/**
+ * Names the CDP runtime binding the codegen recorder script calls into,
+ * `'__orkestrelBrowserCodegen'`.
+ */
 export const BROWSER_CODEGEN_BINDING_NAME = '__orkestrelBrowserCodegen'
 
 /**
@@ -219,7 +226,9 @@ export const BROWSER_CODEGEN_BINDING_NAME = '__orkestrelBrowserCodegen'
  * Attaches capturing-phase listeners for `click`, `input` (fill), and
  * `change` (select) on `document`, builds a stable CSS selector for the
  * target element, and forwards each action to the CDP binding
- * ({@link BROWSER_CODEGEN_BINDING_NAME}) as a JSON string payload. Guarded to
+ * ({@link BROWSER_CODEGEN_BINDING_NAME}) as a JSON string payload. A `contenteditable`
+ * fill is captured through `input` events, the same way an input or a textarea is.
+ * Guarded to
  * install exactly once per document (`window[name]` sentinel) so repeated
  * injection on every new document is idempotent.
  */

@@ -158,7 +158,8 @@ export function browserHeadersToProtocol(
 }
 
 /**
- * Decodes a Chromium Headers object into string values.
+ * Decodes a Chromium Headers object into string values, skipping every entry that is neither a
+ * string nor a finite number.
  *
  * @param value - Unknown headers
  * @returns Frozen-compatible header record
@@ -472,7 +473,8 @@ export function matchesBrowserURL(url: string, pattern: string): boolean {
 }
 
 /**
- * Decodes the `Page.addScriptToEvaluateOnNewDocument` result.
+ * Decodes the `Page.addScriptToEvaluateOnNewDocument` result, throwing a `BrowserError` off-
+ * shape.
  *
  * @param value - Unknown protocol result
  * @returns Script identifier
@@ -496,7 +498,7 @@ export function validateBrowserPoint(point: BrowserPoint): void {
 }
 
 /**
- * Validates the bounded keys of one trusted-input operation.
+ * Validates the bounded delay, count, steps, and position of one trusted-input operation.
  *
  * @remarks
  * The parameter is `BrowserOperationOptions`, so one validator answers for a
@@ -764,7 +766,8 @@ export function validateBrowserRange(
 }
 
 /**
- * Decodes Accessibility-domain nodes into a flat serializable tree.
+ * Decodes Accessibility-domain nodes into a flat serializable tree, throwing a `BrowserError`
+ * off-shape.
  *
  * @param value - Unknown full or partial AX-tree result
  * @returns Valid accessibility snapshot
@@ -807,7 +810,7 @@ export function readBrowserAccessibility(value: unknown): BrowserAccessibilitySn
 }
 
 /**
- * Decodes an Accessibility-domain AXValue.
+ * Decodes an Accessibility-domain AXValue, or `undefined` when the record carries none.
  *
  * @param value - Unknown AX value
  * @returns Underlying value
@@ -834,7 +837,7 @@ export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
 }
 
 /**
- * Decodes one `IO.read` response.
+ * Decodes one `IO.read` response, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown protocol result
  * @returns Valid stream chunk
@@ -851,7 +854,7 @@ export function readBrowserStreamChunk(value: unknown): BrowserStreamChunk {
 }
 
 /**
- * Decodes JavaScript precise coverage.
+ * Decodes JavaScript precise coverage, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown `Profiler.takePreciseCoverage` result
  * @returns Script coverage
@@ -891,7 +894,7 @@ export function readBrowserScriptCoverage(value: unknown): readonly BrowserScrip
 }
 
 /**
- * Decodes CSS rule usage.
+ * Decodes CSS rule usage, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown `CSS.stopRuleUsageTracking` result
  * @returns Stylesheet coverage
@@ -924,7 +927,7 @@ export function readBrowserStyleCoverage(value: unknown): readonly BrowserStyleC
 }
 
 /**
- * Decodes coverage ranges.
+ * Decodes and normalizes coverage ranges, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown ranges
  * @param script - Script index for diagnostics
@@ -961,7 +964,7 @@ export function readBrowserCoverageRanges(
 }
 
 /**
- * Decodes Performance-domain metrics.
+ * Decodes Performance-domain metrics, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown metrics result
  * @returns Valid metrics
@@ -979,7 +982,7 @@ export function readBrowserMetrics(value: unknown): readonly BrowserMetric[] {
 }
 
 /**
- * Decodes one CPU profile.
+ * Decodes one CPU profile, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown `Profiler.stop` result
  * @returns Valid profile
@@ -1036,7 +1039,7 @@ export function readBrowserProfile(value: unknown): BrowserProfile {
 }
 
 /**
- * Decodes a CPU profile call frame.
+ * Decodes a CPU profile call frame, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown call frame
  * @param node - Node index for diagnostics
@@ -1109,7 +1112,7 @@ export function cookieToProtocol(cookie: BrowserCookieInput): Readonly<Record<st
 }
 
 /**
- * Decodes cookies returned by `Storage.getCookies`.
+ * Decodes the cookies `Storage.getCookies` returns, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown protocol result
  * @returns Valid cookies
@@ -1122,7 +1125,7 @@ export function readBrowserCookies(value: unknown): readonly BrowserCookie[] {
 }
 
 /**
- * Decodes one Chromium cookie.
+ * Decodes one Chromium cookie, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown cookie record
  * @param index - Source array position for diagnostics
@@ -1182,7 +1185,7 @@ export function matchesBrowserCookieURL(cookie: BrowserCookie, value: string): b
 }
 
 /**
- * Decodes one in-page web-storage snapshot.
+ * Decodes one in-page web-storage snapshot, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown evaluation result
  * @param origin - Origin represented by the result
@@ -1199,7 +1202,7 @@ export function readBrowserStorageOrigin(value: unknown, origin: string): Browse
 }
 
 /**
- * Decodes a list of web-storage entries.
+ * Decodes a list of web-storage entries, throwing a `BrowserError` off-shape.
  *
  * @param value - Unknown entry list
  * @param origin - Origin used for diagnostics
@@ -1252,7 +1255,7 @@ export function mediaToFeatures(
 }
 
 /**
- * Decodes a Chromium runtime stack trace.
+ * Decodes a Chromium runtime stack trace, skipping every off-shape call frame.
  *
  * @param value - Unknown stack trace or call-frame list
  * @returns Valid stack frames
@@ -1282,7 +1285,8 @@ export function readBrowserStack(value: unknown): readonly BrowserStackFrame[] {
 }
 
 /**
- * Decodes a Runtime remote object's printable value.
+ * Decodes a Runtime remote object's printable value, falling back to its unserializable form
+ * and then its description, or `undefined` when it carries none.
  *
  * @param value - Unknown remote object
  * @returns By-value data or a description
@@ -1296,7 +1300,8 @@ export function readBrowserRemoteValue(value: unknown): unknown {
 }
 
 /**
- * Decodes one CDP `Runtime.evaluate` result.
+ * Decodes one CDP `Runtime.evaluate` result, throwing a `BrowserError` on a failed evaluation
+ * and a `BrowserResultLimitError` past the guarded result size.
  *
  * @param value - Unknown CDP result
  * @returns The returned by-value payload, or undefined
@@ -1338,13 +1343,12 @@ export function requireBrowserString(value: unknown, field: string): string {
 }
 
 /**
- * Normalizes a raw list of recorded codegen actions.
+ * Normalizes recorded codegen actions, collapsing consecutive `fill` actions on the same
+ * selector into the latest value.
  *
  * @remarks
- * Collapses consecutive `fill` actions on the same selector into the latest
- * value (a text input fires one `input` event per keystroke) so the
- * compiled script reflects the final typed value rather than every
- * intermediate keystroke.
+ * A text input fires one `input` event per keystroke, so the compiled script reflects
+ * the final typed value rather than every intermediate keystroke.
  *
  * @param actions - Raw recorded actions, in capture order
  * @returns Normalized actions, in the same order
@@ -1372,7 +1376,8 @@ export function normalizeCodegenActions(
 }
 
 /**
- * Decodes a flattened CDP `Page.getFrameTree` result.
+ * Decodes a flattened CDP `Page.getFrameTree` result into depth-first frame metadata, skipping
+ * every off-shape frame.
  *
  * @param value - Unknown CDP result
  * @returns Frame metadata in depth-first, main-frame-first order
@@ -1409,7 +1414,8 @@ export function readBrowserFrames(value: unknown): readonly BrowserFrameInfo[] {
 }
 
 /**
- * Decodes the first `DOM.getContentQuads` quad and its center.
+ * Decodes the first `DOM.getContentQuads` quad and its center, throwing a `BrowserError` off-
+ * shape.
  *
  * @param value - Unknown CDP result
  * @returns Decoded quad
@@ -1452,7 +1458,8 @@ export function readBrowserQuad(value: unknown): BrowserQuad {
 }
 
 /**
- * Extracts a keyboard chord such as `Control+Shift+P` into its parts.
+ * Extracts a keyboard chord such as `Control+Shift+P` into its parts, throwing a
+ * `BrowserError` on an empty chord or an unsupported modifier.
  *
  * @param value - Chord source
  * @returns Canonical modifiers and terminal key
@@ -1549,7 +1556,8 @@ export function keyToBrowserInput(value: string): BrowserKey {
 }
 
 /**
- * Decodes CDP snapshot sparse string data.
+ * Decodes CDP snapshot sparse string data into a node-index map, skipping every off-shape
+ * entry.
  *
  * @param value - Sparse `{ index, value }` record
  * @param strings - Snapshot string table
@@ -1574,7 +1582,8 @@ export function readRareStringData(
 }
 
 /**
- * Decodes CDP snapshot sparse boolean data.
+ * Decodes CDP snapshot sparse boolean data into a set of node indexes, skipping every off-
+ * shape entry.
  *
  * @param value - Sparse `{ index }` record
  * @returns Set of node indexes whose value is true
@@ -1585,7 +1594,8 @@ export function readRareBooleanData(value: unknown): ReadonlySet<number> {
 }
 
 /**
- * Decodes CDP snapshot sparse integer data.
+ * Decodes CDP snapshot sparse integer data into a node-index map, skipping every off-shape
+ * entry.
  *
  * @param value - Sparse `{ index, value }` record
  * @returns Node-index to integer map
@@ -1606,7 +1616,7 @@ export function readRareIntegerData(value: unknown): ReadonlyMap<number, number>
 }
 
 /**
- * Decodes flattened CDP node attributes.
+ * Decodes flattened CDP node attributes into a frozen record, skipping every off-shape pair.
  *
  * @param value - Candidate string-index array
  * @param strings - Snapshot string table
@@ -1629,7 +1639,9 @@ export function readBrowserAttributes(
 }
 
 /**
- * Decodes a CDP `DOMSnapshot.captureSnapshot` result.
+ * Decodes a CDP `DOMSnapshot.captureSnapshot` result into a serializable
+ * `BrowserSnapshotInput`, throwing a `BrowserError` off-shape and a `BrowserResultLimitError`
+ * past the configured node limit.
  *
  * @param value - Unknown CDP result
  * @param styles - Requested computed-style names, in protocol order
@@ -1800,7 +1812,7 @@ export function readBrowserSnapshot(
 }
 
 /**
- * Tests whether a browser-node matcher is a declarative query.
+ * Tests whether a browser-node matcher is a declarative query rather than a predicate.
  *
  * @param value - Browser-node query or predicate
  * @returns True if the matcher is a declarative query; false otherwise
