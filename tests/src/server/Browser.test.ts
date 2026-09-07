@@ -1406,7 +1406,7 @@ describe('Browser cdp.discover option', () => {
 	})
 })
 
-// === abort mid-connect (robustness-3) leaves no orphaned process
+// === abort mid-connect leaves no orphaned process
 
 describe('Browser abort mid-connect', () => {
 	it('rejects promptly and leaves no live process', async () => {
@@ -1516,7 +1516,7 @@ describe('Browser destroy() kill escalation', () => {
 	)
 })
 
-// === host option (robustness-7)
+// === host option
 
 describe('Browser host option', () => {
 	it('honors an explicit host for discovery and connection', async () => {

@@ -252,7 +252,7 @@ export interface BrowserInterface {
 	readonly pid: number | undefined
 	discover(): Promise<BrowserDiscoveryResult>
 	connect(): Promise<void>
-	/** Assumes responsibility for terminating the currently connected browser. */
+	/** Assumes responsibility for terminating the connected browser. */
 	adopt(): void
 	disconnect(): Promise<void>
 	context(index?: number): BrowserContextInterface | undefined

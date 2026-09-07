@@ -1496,7 +1496,7 @@ export function computeBrowserModifiers(modifiers: readonly string[]): number {
 /**
  * Computes the CDP Input pressed-button bitmask.
  *
- * @param buttons - Currently pressed public mouse buttons
+ * @param buttons - Pressed public mouse buttons
  * @returns Combined CDP pressed-button mask
  */
 export function computeBrowserButtons(buttons: readonly BrowserMouseButton[]): number {

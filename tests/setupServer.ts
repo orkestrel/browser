@@ -13,8 +13,8 @@ import { createScratch, isRunning } from '@orkestrel/test/server'
 import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
 
 /**
- * Whether this platform delivers `SIGTERM` as a catchable signal a process can
- * trap and outlive.
+ * Reports whether this platform delivers `SIGTERM` as a catchable signal a
+ * process can trap and outlive.
  *
  * @remarks
  * Windows has no such signal: Node maps `SIGTERM` there onto an unconditional
@@ -25,11 +25,11 @@ import { createTeardown, requireValue, retryUntil, waitForCondition } from '@ork
 export const COOPERATIVE_SIGTERM = process.platform !== 'win32'
 
 /**
- * Reserve a free localhost port by binding an ephemeral server to port 0 and
+ * Reserves a free localhost port by binding an ephemeral server to port 0 and
  * immediately closing it — avoids hardcoded test ports colliding across
  * parallel/aborted runs.
  *
- * @returns A currently-free TCP port number
+ * @returns A free TCP port number
  */
 export async function reservePort(): Promise<number> {
 	const probe = createNetServer()
@@ -41,7 +41,7 @@ export async function reservePort(): Promise<number> {
 	return port
 }
 
-/** Read the bound TCP port or throw when the server has no address. */
+/** Reads the bound TCP port, or throws when the server has no address. */
 export function readServerPort(server: NetServer): number {
 	const address: AddressInfo | string | null = server.address()
 	if (typeof address !== 'object' || address === null) {
@@ -53,7 +53,7 @@ export function readServerPort(server: NetServer): number {
 // === Server-only test helpers (AGENTS §16.1 — node:* allowed here)
 
 /**
- * Wait until a process exits.
+ * Waits until a process exits.
  *
  * @param pid - Process identifier to observe
  * @param timeout - Maximum wait in milliseconds
@@ -68,32 +68,32 @@ export function waitForProcessExit(pid: number, timeout = 5000): Promise<void> {
 
 const tempDirectoryTeardown = createTeardown()
 
-/** Allocate and register a temporary scratch directory for deterministic test teardown. */
+/** Allocates and registers a temporary scratch directory for deterministic test teardown. */
 export function createTempDirectory(prefix = 'orkestrel-browser-test-'): ScratchInterface {
 	const scratch = createScratch({ prefix })
 	tempDirectoryTeardown.add(() => scratch.destroy())
 	return scratch
 }
 
-/** Remove every registered test directory. */
+/** Removes every registered test directory. */
 export function destroyTempDirectories(): Promise<void> {
 	return tempDirectoryTeardown.destroy()
 }
 
-/** Raw TCP fixture that accepts connections without completing a handshake. */
+/** Accepts raw TCP connections without completing a handshake. */
 export interface StallServerInterface {
 	readonly endpoint: string
 	close(): Promise<void>
 }
 
-/** Start a raw TCP server that leaves every accepted connection open. */
+/** Starts a raw TCP server that leaves every accepted connection open. */
 export async function createStallServer(): Promise<StallServerInterface> {
 	const server = new StallServer()
 	await server.start()
 	return server
 }
 
-/** Stateful implementation of the stalling TCP fixture. */
+/** Implements the stalling TCP fixture and holds its socket state. */
 export class StallServer implements StallServerInterface {
 	readonly #server: NetServer
 	readonly #sockets = new Set<Socket>()
@@ -134,18 +134,18 @@ export class StallServer implements StallServerInterface {
 	}
 }
 
-/** Restartable raw TCP proxy fixture used to sever and restore a connection. */
+/** Severs and restores a connection through a restartable raw TCP proxy. */
 export interface TCPProxyInterface {
 	start(host: string, port: number): Promise<void>
 	stop(): Promise<void>
 }
 
-/** Create a restartable TCP proxy bound to a fixed local port. */
+/** Creates a restartable TCP proxy bound to a fixed local port. */
 export function createTCPProxy(port: number): TCPProxyInterface {
 	return new TCPProxy(port)
 }
 
-/** Stateful implementation of the restartable TCP proxy fixture. */
+/** Implements the restartable TCP proxy fixture and holds its socket state. */
 export class TCPProxy implements TCPProxyInterface {
 	readonly #port: number
 	readonly #sockets = new Set<Socket>()
@@ -198,18 +198,18 @@ export class TCPProxy implements TCPProxyInterface {
 
 // === In-process CDP test server (HTTP discovery endpoints + WS CDP transport)
 
-/** A CDP JSON-RPC request frame received by the test server. */
+/** Describes one CDP JSON-RPC request frame the test server received. */
 export interface CDPServerReceived {
 	readonly id: number
 	readonly method: string
 	readonly params: Readonly<Record<string, unknown>> | undefined
 }
 
-/** Handler that computes an auto-reply result for a scripted CDP method. */
+/** Computes an auto-reply result for a scripted CDP method. */
 export type CDPServerReplyHandler = (params: Readonly<Record<string, unknown>>) => unknown
 
 /**
- * An in-process HTTP+WebSocket server speaking just enough raw CDP to drive
+ * Serves enough raw CDP over HTTP and WebSocket to drive
  * `Browser`/`WebSocketCDPTransport` end-to-end in tests — real sockets, no
  * mocks. Exposes `/json/version` and `/json/list` (scriptable) plus a `/cdp`
  * WebSocket endpoint that records every request and lets tests script
@@ -220,7 +220,7 @@ export interface CDPTestServerInterface {
 	readonly url: string
 	readonly endpoint: string
 	readonly received: readonly CDPServerReceived[]
-	/** Count of currently open WebSocket sockets (for close-propagation assertions). */
+	/** Count of open WebSocket sockets (for close-propagation assertions). */
 	readonly sockets: number
 	/** Set the targets returned by `/json/list` (drives `fetchCDPTargets`/`syncContexts`). */
 	list(targets: readonly unknown[]): void
@@ -239,7 +239,7 @@ export interface CDPTestServerInterface {
 }
 
 /**
- * Start an in-process CDP test server on a free localhost port.
+ * Starts an in-process CDP test server on a free localhost port.
  *
  * @returns A {@link CDPTestServerInterface}
  */
@@ -249,7 +249,7 @@ export async function createCDPTestServer(): Promise<CDPTestServerInterface> {
 	return server
 }
 
-/** Real HTTP and WebSocket fixture implementing the test CDP surface. */
+/** Implements the test CDP surface over a real HTTP and WebSocket server. */
 export class CDPTestServer implements CDPTestServerInterface {
 	readonly #server: HTTPServer
 	readonly #received: CDPServerReceived[] = []
@@ -443,7 +443,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 // === Fake browser process (real spawned executable, no mocks)
 
-/** A registered fake-browser fixture, tracked for guaranteed teardown. */
+/** Tracks one registered fake-browser fixture for teardown. */
 export interface RegisteredFakeBrowser {
 	readonly scratch: ScratchInterface
 	readonly pidNames: readonly string[]
@@ -452,10 +452,10 @@ export interface RegisteredFakeBrowser {
 const registeredFakeBrowsers: RegisteredFakeBrowser[] = []
 
 /**
- * Guaranteed teardown safety net for every fake browser process created
- * through `createFakeBrowserProcess` — SIGKILLs any still-alive registered pid
- * (tolerating a not-yet-written pid file or an already-dead process) and
- * clears the registry. Wire into a top-level `afterEach` alongside each
+ * Clears the fake-browser registry, sending `SIGKILL` to every still-alive
+ * registered pid — the teardown safety net for every process created through
+ * `createFakeBrowserProcess`, tolerating a not-yet-written pid file or an
+ * already-dead process. Wire into a top-level `afterEach` alongside each
  * test's own explicit kills.
  */
 export async function destroyFakeBrowsers(): Promise<void> {
@@ -481,7 +481,7 @@ export async function destroyFakeBrowsers(): Promise<void> {
 }
 
 /**
- * Read a fixture process identifier after its spawned script has published it.
+ * Reads a fixture process identifier after its spawned script has published it.
  *
  * @param scratch - The fixture's owned scratch directory
  * @param name - Root-relative pid file name written by the fixture process
@@ -498,7 +498,7 @@ export function readFixtureProcessId(scratch: ScratchInterface, name: string): P
 	)
 }
 
-/** A real, spawned stand-in "browser" process for exercising Browser's launch path. */
+/** Describes a real, spawned stand-in "browser" process for exercising Browser's launch path. */
 export interface FakeBrowserProcessInterface {
 	/** The Node executable path (used as `BrowserOptions.executable`) — spawnable identically on every platform. */
 	readonly executable: string
@@ -522,7 +522,7 @@ export interface FakeBrowserProcessInterface {
 }
 
 /**
- * Write a small, real Node script that stands in for a browser executable in
+ * Writes a small, real Node script that stands in for a browser executable in
  * `Browser`'s launch path — no mocking of `child_process`. The script is
  * spawned as `node <script> <cdp-flags...>` (through `executable`/`args`) rather
  * than executed directly, so it is spawnable identically on Windows/macOS/Linux

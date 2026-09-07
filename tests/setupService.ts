@@ -16,7 +16,7 @@ import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/se
 import { findSystemBrowser } from '@src/server'
 
 /**
- * Container-safe launch flags shared by every live-browser proof.
+ * Lists the container-safe launch flags every live-browser proof shares.
  *
  * @remarks
  * Headless Chromium running as root — the common case in a sandboxed container — needs
@@ -33,7 +33,7 @@ export const SERVICE_BROWSER_ARGS: readonly string[] = Object.freeze([
 export const SERVICE_ENGINE_ENV_KEY = 'BROWSER_COMPATIBILITY_ENGINE'
 
 /**
- * Resolve the engine service discovery narrows to, from a requested value.
+ * Resolves the engine service discovery narrows to, from a requested value.
  *
  * @param value - The requested engine name, normally read from `SERVICE_ENGINE_ENV_KEY`
  * @returns The engine when the value names a supported one; `undefined` otherwise, which
@@ -44,7 +44,7 @@ export function resolveServiceEngine(value: string | undefined): BrowserEngine |
 }
 
 /**
- * Resolve the live browser a service proof drives, or throw naming what to install.
+ * Resolves the live browser a service proof drives, or throws naming what to install.
  *
  * @param options - Candidate-source overrides; discovery narrows to the engine
  * `SERVICE_ENGINE_ENV_KEY` names when absent

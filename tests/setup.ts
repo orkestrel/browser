@@ -9,22 +9,22 @@ import { BrowserCodegen, BrowserPage, createCDPClient } from '@src/core'
 import { isRecord } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
-/** Ignore an intentional callback invocation. */
+/** Ignores an intentional callback invocation. */
 export function ignoreCall(): void {
 	return undefined
 }
 
-/** Ignore an intentional asynchronous callback invocation. */
+/** Ignores an intentional asynchronous callback invocation. */
 export function ignoreAsyncCall(): Promise<void> {
 	return Promise.resolve()
 }
 
-/** Throw the stable listener failure used by emitter containment tests. */
+/** Throws the stable listener failure emitter containment tests use. */
 export function throwListenerError(): never {
 	throw new Error('listener failed')
 }
 
-/** Evaluate a JavaScript expression fixture and expose its result as unknown. */
+/** Evaluates a JavaScript expression fixture and exposes its result as unknown. */
 export function evaluateJavaScript(expression: string): unknown {
 	const evaluator = new Function(`return (${expression})`)
 	return Reflect.apply(evaluator, undefined, [])
@@ -32,7 +32,7 @@ export function evaluateJavaScript(expression: string): unknown {
 
 // === Fake CDP transport
 
-/** One JSON-RPC frame recorded by the fake transport's `send()`. */
+/** Describes one JSON-RPC frame the fake transport's `send()` recorded. */
 export interface CDPSentMessage {
 	readonly id: number
 	readonly method: string
@@ -40,11 +40,11 @@ export interface CDPSentMessage {
 	readonly sessionId: string | undefined
 }
 
-/** Handler invoked synchronously when the fake transport observes a matching `send()`. */
+/** Runs synchronously when the fake transport observes a matching `send()`. */
 export type CDPSentHandler = (message: CDPSentMessage) => void
 
 /**
- * An in-memory {@link CDPTransportInterface} for tests, plus scripting hooks.
+ * Implements {@link CDPTransportInterface} in memory for tests, plus scripting hooks.
  *
  * @remarks
  * `send()` records every frame in `sent` and invokes any handler registered
@@ -69,14 +69,14 @@ export interface CDPTestTransportInterface extends CDPTransportInterface {
 	errorRemote(error: unknown): void
 }
 
-/** A connected client and the transport used to drive it. */
+/** Pairs a connected client with the transport that drives it. */
 export interface ConnectedCDPFixture {
 	readonly client: CDPClientInterface
 	readonly transport: CDPTestTransportInterface
 }
 
 /**
- * Create a fake in-memory CDP transport for driving a real {@link CDPClient}
+ * Creates a fake in-memory CDP transport for driving a real {@link CDPClient}
  * end-to-end in tests — no network, no mocks of CDPClient behavior itself.
  *
  * @returns A {@link CDPTestTransportInterface}
@@ -155,7 +155,7 @@ export function createCDPTransport(): CDPTestTransportInterface {
 }
 
 /**
- * Create and connect a real CDP client over the in-memory test transport.
+ * Creates and connects a real CDP client over the in-memory test transport.
  *
  * @returns The connected client and its scriptable transport
  */
@@ -166,13 +166,13 @@ export async function createConnectedCDPClient(): Promise<ConnectedCDPFixture> {
 	return { client, transport }
 }
 
-/** A real page attached over the in-memory transport, and the transport driving it. */
+/** Pairs a real page attached over the in-memory transport with the transport driving it. */
 export interface AttachedPageFixture extends ConnectedCDPFixture {
 	readonly page: BrowserPage
 }
 
 /**
- * Create a real {@link BrowserPage} over a connected in-memory CDP client.
+ * Creates a real {@link BrowserPage} over a connected in-memory CDP client.
  *
  * @param session - Flattened CDP session id the page dispatches on
  * @returns The page, its client, and the scriptable transport
@@ -183,7 +183,7 @@ export async function createAttachedPage(session = 'session-1'): Promise<Attache
 }
 
 /**
- * Read the parameter record of every frame the transport recorded for one method.
+ * Reads the parameter record of every frame the transport recorded for one method.
  *
  * @param transport - The fake transport to read
  * @param method - The CDP method to collect
@@ -199,7 +199,7 @@ export function readCDPParams(
 }
 
 /**
- * Script an automatic success reply for the next (and every subsequent)
+ * Scripts an automatic success reply for the next (and every subsequent)
  * `send()` matching `method`, replying with `result`.
  *
  * @param transport - The fake transport to script
@@ -214,7 +214,7 @@ export function replyOk(
 	transport.onSend(method, (message) => transport.reply(message.id, result))
 }
 
-/** Script the target attach and required domain-enable handshake. */
+/** Scripts the target attach and required domain-enable handshake. */
 export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 'session-1'): void {
 	replyOk(transport, 'Target.attachToTarget', { sessionId: session })
 	replyOk(transport, 'Page.enable')
@@ -230,13 +230,13 @@ export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 
 	replyOk(transport, 'Emulation.setTouchEmulationEnabled')
 }
 
-/** Read a sent Runtime expression without a type assertion. */
+/** Reads a sent Runtime expression without a type assertion. */
 export function readCDPExpression(message: CDPSentMessage | undefined): string | undefined {
 	const expression = message?.params?.['expression']
 	return typeof expression === 'string' ? expression : undefined
 }
 
-/** Script a selector lookup that resolves as present. */
+/** Scripts a selector lookup that resolves as present. */
 export function scriptSelectorPresent(
 	transport: CDPTestTransportInterface,
 	selector: string,
@@ -252,7 +252,7 @@ export function scriptSelectorPresent(
 }
 
 /**
- * Script the complete trusted-input path for one present selector.
+ * Scripts the complete trusted-input path for one present selector.
  *
  * @param transport - Fake transport
  * @param selector - Selector resolved by the locator
@@ -282,7 +282,7 @@ export function scriptTrustedSelector(
 	replyOk(transport, 'Runtime.releaseObject')
 }
 
-/** Script the nested frame tree shared by page frame tests. */
+/** Scripts the nested frame tree page frame tests share. */
 export function scriptFrameTree(transport: CDPTestTransportInterface): void {
 	replyOk(transport, 'Page.getFrameTree', {
 		frameTree: {
@@ -311,12 +311,12 @@ export function scriptFrameTree(transport: CDPTestTransportInterface): void {
 	})
 }
 
-/** A fully started codegen fixture. */
+/** Describes a fully started codegen fixture. */
 export interface StartedCodegenFixture extends ConnectedCDPFixture {
 	readonly codegen: BrowserCodegen
 }
 
-/** Create a connected client with a started codegen recorder. */
+/** Creates a connected client with a started codegen recorder. */
 export async function createStartedCodegen(session = 'session-1'): Promise<StartedCodegenFixture> {
 	const { client, transport } = await createConnectedCDPClient()
 	replyOk(transport, 'Runtime.enable')
@@ -329,7 +329,7 @@ export async function createStartedCodegen(session = 'session-1'): Promise<Start
 	return { client, transport, codegen }
 }
 
-/** Create the CDP payload delivered by the codegen binding. */
+/** Creates the CDP payload the codegen binding delivers. */
 export function createCodegenBindingPayload(
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
@@ -337,7 +337,7 @@ export function createCodegenBindingPayload(
 }
 
 /**
- * Script a `Runtime.evaluate` response keyed by a predicate over the sent
+ * Scripts a `Runtime.evaluate` response keyed by a predicate over the sent
  * expression — each call replies with `value` (wrapped as a CDP remote
  * object) the first time a pending `Runtime.evaluate` frame's `expression`
  * param satisfies `matches`.
@@ -362,7 +362,7 @@ export function scriptEvaluate(
 // === Fixtures
 
 /**
- * Build a {@link CDPTarget} fixture, overriding any fields.
+ * Builds a {@link CDPTarget} fixture, overriding any fields.
  *
  * @param overrides - Fields to override on the default fixture
  * @returns A CDPTarget
@@ -378,7 +378,7 @@ export function createTarget(overrides?: Partial<CDPTarget>): CDPTarget {
 }
 
 /**
- * Build a two-document `DOMSnapshot.captureSnapshot` result with sparse node
+ * Builds a two-document `DOMSnapshot.captureSnapshot` result with sparse node
  * metadata, layout, styles, and an iframe content-document link.
  *
  * @returns A protocol-shaped DOM snapshot result
@@ -491,7 +491,7 @@ export function createDOMSnapshotResult(): unknown {
 
 // === Recording writer
 
-/** A {@link BrowserWriterInterface} recording every `write()` call. */
+/** Extends {@link BrowserWriterInterface} with a record of every `write()` call. */
 export interface RecordingWriterInterface extends BrowserWriterInterface {
 	readonly calls: ReadonlyArray<{ readonly path: string; readonly data: Uint8Array }>
 }
@@ -515,8 +515,8 @@ export function createRecordingWriter(): RecordingWriterInterface {
 
 // === Base64 fixtures (plain-JS encoded, no Buffer)
 
-/** Base64 for bytes `[137, 80, 78, 71, 13]` (PNG-signature-prefixed). */
+/** Encodes bytes `[137, 80, 78, 71, 13]` as base64 (PNG-signature-prefixed). */
 export const PNG_BASE64 = 'iVBORw0='
 
-/** Base64 for bytes `[255, 216, 255, 224]` (JPEG-signature-prefixed). */
+/** Encodes bytes `[255, 216, 255, 224]` as base64 (JPEG-signature-prefixed). */
 export const JPEG_BASE64 = '/9j/4A=='
