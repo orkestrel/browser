@@ -461,15 +461,17 @@ validation, scraping, and compilation can be tested without a browser.
 
 #### Extended constants
 
-| API                            | Kind  | Summary                                                                                                                                            |
-| ------------------------------ | ----- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BROWSER_HAR_CREATOR`          | const | Names the tool identity embedded in HAR 1.2 documents.                                                                                             |
-| `BROWSER_KEY_MODIFIERS`        | const | Maps a canonical modifier name to its CDP Input modifier bit value.                                                                                |
-| `BROWSER_MOUSE_BUTTON_MASKS`   | const | Maps each public mouse button to its CDP Input pressed-button bit value.                                                                           |
-| `BROWSER_SCREENSHOT_ATTRIBUTE` | const | Names the attribute that tags temporary screenshot styles and masks.                                                                               |
-| `BROWSER_STABLE_FRAME_COUNT`   | const | Sets the number of animation frames whose element bounds must agree before trusted input.                                                          |
-| `BROWSER_TEST_ID_ATTRIBUTE`    | const | Names the attribute the semantic test-id selector uses.                                                                                            |
-| `BROWSER_VISIBILITY_SOURCE`    | const | Holds the in-page visibility predicate source, over a `style` computed style and a `rect` bounding box already in scope at the interpolation site. |
+A `Shape` cell holds the constant's declared type.
+
+| API                            | Kind  | Shape                                          | Summary                                                                                                                                            |
+| ------------------------------ | ----- | ---------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `BROWSER_HAR_CREATOR`          | const | `{ name, version }`                            | Names the tool identity embedded in HAR 1.2 documents.                                                                                             |
+| `BROWSER_KEY_MODIFIERS`        | const | `Readonly<Record<string, number>>`             | Maps a canonical modifier name to its CDP Input modifier bit value.                                                                                |
+| `BROWSER_MOUSE_BUTTON_MASKS`   | const | `Readonly<Record<BrowserMouseButton, number>>` | Maps each public mouse button to its CDP Input pressed-button bit value.                                                                           |
+| `BROWSER_SCREENSHOT_ATTRIBUTE` | const | `string`                                       | Names the attribute that tags temporary screenshot styles and masks.                                                                               |
+| `BROWSER_STABLE_FRAME_COUNT`   | const | `number`                                       | Sets the number of animation frames whose element bounds must agree before trusted input.                                                          |
+| `BROWSER_TEST_ID_ATTRIBUTE`    | const | `string`                                       | Names the attribute the semantic test-id selector uses.                                                                                            |
+| `BROWSER_VISIBILITY_SOURCE`    | const | `string`                                       | Holds the in-page visibility predicate source, over a `style` computed style and a `rect` bounding box already in scope at the interpolation site. |
 
 #### Extended classes
 
@@ -2066,6 +2068,9 @@ These invariants hold across the browser layer (`src/core` + `src/server`) ↔ `
 
 ### Automate a page end-to-end
 
+This demonstration launches a headless browser, fills and submits a search form, waits for the
+results, and reads the resulting content.
+
 ```ts
 import { createBrowser } from '@orkestrel/browser/server'
 
@@ -2082,6 +2087,9 @@ await browser.destroy()
 ```
 
 ### Record and replay interactions with codegen
+
+This demonstration records a click and a fill on a page, then compiles the recorded actions into
+a replayable script.
 
 ```ts
 const page = await browser.create({ url: 'https://example.com' })

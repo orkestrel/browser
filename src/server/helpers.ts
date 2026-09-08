@@ -327,9 +327,9 @@ export function launchBrowserProcess(
 	profile?: string,
 	extra?: readonly string[],
 ): ChildProcess {
-	// Caller-supplied args come FIRST so a script path (for example `node <script>`,
+	// Caller-supplied args come first so a script path (for example `node <script>`,
 	// used to spawn a Node stand-in executable cross-platform in tests) lands
-	// as an early positional argv entry ahead of the CDP flags below —
+	// as an early positional argv entry ahead of the CDP flags that follow —
 	// Chromium itself accepts flags in any order, so production is unaffected.
 	const args: string[] = []
 	if (extra !== undefined) args.push(...extra)
