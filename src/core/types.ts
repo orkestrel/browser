@@ -18,7 +18,7 @@ export type CDPTransportEventMap = {
 }
 
 /**
- * Represents a dumb text transport CDPClient sends and receives JSON-RPC frames over.
+ * Represents the text pipe a `CDPClient` sends and receives JSON-RPC frames over.
  *
  * @remarks
  * The transport owns the connection (WebSocket, pipe, or any other duplex
@@ -60,7 +60,7 @@ export type CDPClientEventMap = {
 }
 
 /**
- * Describes the options for creating a CDPClient.
+ * Describes the options for creating a `CDPClient` instance.
  *
  * @remarks
  * - `transport` — the text pipe the client sends/receives JSON-RPC frames over
@@ -203,7 +203,7 @@ export interface BrowserViewport {
 export type BrowserWaitUntil = 'commit' | 'load' | 'domcontentloaded'
 
 /**
- * Describes the options for creating a browser page.
+ * Describes the options for creating a `BrowserPage` instance.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction
@@ -1656,7 +1656,7 @@ export type BrowserCodegenEventMap = {
 }
 
 /**
- * Describes the options for creating a BrowserCodegen recorder.
+ * Describes the options for creating a `BrowserCodegen` recorder.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction

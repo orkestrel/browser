@@ -91,7 +91,7 @@ export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
  * enforced in-page before the result is returned to CDP.
  *
  * @remarks
- * This counts UTF-16 STRING LENGTH (`String#length`), not transport BYTES —
+ * This counts UTF-16 string length (`String#length`), not transport bytes —
  * the actual CDP frame is UTF-8 encoded (up to 3 bytes/char for common
  * multibyte content) and carries additional JSON/CDP framing overhead on top
  * of the raw content. A `Runtime.evaluate` result above this size, once
@@ -121,15 +121,25 @@ export const BROWSER_RESULT_LIMIT_SENTINEL_PREFIX = '[[ORKESTREL_BROWSER_RESULT_
 
 /**
  * Matches the in-page result-limit sentinel error message, anchored immediately after the
- * `Error:` (optionally `Uncaught Error:`) prefix that Chromium prepends to a thrown error's
- * description, so the guard's own throw is recognized only at the start of the message rather
- * than wherever the substring happens to occur.
+ * `Error:` (optionally `Uncaught Error:`) prefix Chromium prepends to a thrown error's
+ * description, `/^(?:Uncaught )?Error: \[\[ORKESTREL_BROWSER_RESULT_LIMIT\]\](\d+)/`.
+ *
+ * @remarks
+ * The anchor matches the guard's own throw only at the start of the message, rather than
+ * wherever the substring happens to occur.
  */
 export const BROWSER_RESULT_LIMIT_PATTERN = new RegExp(
 	`^(?:Uncaught )?Error: \\[\\[ORKESTREL_BROWSER_RESULT_LIMIT\\]\\](\\d+)`,
 )
 
-/** Sets the poll interval while waiting for a selector to appear, `100` milliseconds. */
+/**
+ * Sets the poll interval while waiting for a selector to appear, `100` milliseconds.
+ *
+ * @remarks
+ * A wait adds the same interval as slack to its own CDP call timeout, so the in-page poll
+ * expires before the call carrying it. Host-side CDP readiness probes wait it out between
+ * attempts.
+ */
 export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
 
 /**
@@ -223,14 +233,12 @@ export const BROWSER_CODEGEN_BINDING_NAME = '__orkestrelBrowserCodegen'
  * and `Runtime.evaluate`.
  *
  * @remarks
- * Attaches capturing-phase listeners for `click`, `input` (fill), and
- * `change` (select) on `document`, builds a stable CSS selector for the
- * target element, and forwards each action to the CDP binding
- * ({@link BROWSER_CODEGEN_BINDING_NAME}) as a JSON string payload. A `contenteditable`
- * fill is captured through `input` events, the same way an input or a textarea is.
- * Guarded to
- * install exactly once per document (`window[name]` sentinel) so repeated
- * injection on every new document is idempotent.
+ * Attaches capturing-phase listeners for `click`, `input` (fill), and `change` (select) on
+ * `document`, builds a stable CSS selector for the target element, and forwards each action
+ * to the CDP binding ({@link BROWSER_CODEGEN_BINDING_NAME}) as a JSON string payload. A
+ * `contenteditable` fill is captured through `input` events, the same way an input or a
+ * textarea is. Guarded to install exactly once per document (`window[name]` sentinel) so
+ * repeated injection on every new document is idempotent.
  */
 export const BROWSER_CODEGEN_SOURCE = `(() => {
 	const bindingName = ${JSON.stringify(BROWSER_CODEGEN_BINDING_NAME)}

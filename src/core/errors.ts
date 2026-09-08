@@ -42,9 +42,7 @@ export class BrowserSelectorError extends BrowserError {
  * in its context.
  *
  * @remarks
- * Carries the originating `method` plus the CDP error's own `code`,
- * `message`, and `data` (when present) in `context`, so callers can branch
- * on the protocol-level error instead of parsing the message string.
+ * Branch on the protocol-level error in `context` instead of parsing the message string.
  */
 export class CDPError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -55,8 +53,8 @@ export class CDPError extends BrowserError {
 
 /**
  * Reports that a CDP request could not be sent or completed because the client was not in a
- * connectable state — not connected, closed while connecting, or the connection dropped mid-
- * request — under the code `BROWSER_CDP_CONNECTION_ERROR`.
+ * connectable state — not connected, closed while connecting, or the connection dropped
+ * mid-request — under the code `BROWSER_CDP_CONNECTION_ERROR`.
  */
 export class CDPConnectionError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
@@ -77,8 +75,8 @@ export class CDPTimeoutError extends BrowserError {
 }
 
 /**
- * Reports that an `evaluate()`/`content()` result exceeded `BROWSER_RESULT_LIMIT` and was
- * rejected in-page before it could overflow the CDP transport frame, under the code
+ * Reports that an `evaluate()`/`content()` result exceeded {@link BROWSER_RESULT_LIMIT} and
+ * was rejected in-page before it could overflow the CDP transport frame, under the code
  * `BROWSER_RESULT_LIMIT_ERROR`.
  */
 export class BrowserResultLimitError extends BrowserError {

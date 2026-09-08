@@ -473,8 +473,8 @@ export function matchesBrowserURL(url: string, pattern: string): boolean {
 }
 
 /**
- * Decodes the `Page.addScriptToEvaluateOnNewDocument` result, throwing a `BrowserError` off-
- * shape.
+ * Decodes the `Page.addScriptToEvaluateOnNewDocument` result, throwing a `BrowserError`
+ * off-shape.
  *
  * @param value - Unknown protocol result
  * @returns Script identifier
@@ -1414,8 +1414,8 @@ export function readBrowserFrames(value: unknown): readonly BrowserFrameInfo[] {
 }
 
 /**
- * Decodes the first `DOM.getContentQuads` quad and its center, throwing a `BrowserError` off-
- * shape.
+ * Decodes the first `DOM.getContentQuads` quad and its center, throwing a `BrowserError`
+ * off-shape.
  *
  * @param value - Unknown CDP result
  * @returns Decoded quad
@@ -1582,8 +1582,8 @@ export function readRareStringData(
 }
 
 /**
- * Decodes CDP snapshot sparse boolean data into a set of node indexes, skipping every off-
- * shape entry.
+ * Decodes CDP snapshot sparse boolean data into a set of node indexes, skipping every
+ * off-shape entry.
  *
  * @param value - Sparse `{ index }` record
  * @returns Set of node indexes whose value is true

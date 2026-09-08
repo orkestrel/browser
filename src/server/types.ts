@@ -140,7 +140,7 @@ export type BrowserEventMap = {
 }
 
 /**
- * Describes the options for creating a Browser.
+ * Describes the options for creating a `Browser` instance.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction
@@ -207,9 +207,9 @@ export interface BrowserOptions {
  *   pages/contexts, then kills and awaits the process serving the CDP endpoint
  *   plus its POSIX process group. On an adopted browser it sends
  *   `Browser.close`. On a merely
- *   attached browser this is a LOCAL DETACH ONLY because other clients may
+ *   attached browser this is a local detach only, because other clients may
  *   share its targets. Idempotent.
- * - `close` — graceful REMOTE shutdown: best-effort sends CDP `Browser.close`
+ * - `close` — graceful remote shutdown: best-effort sends CDP `Browser.close`
  *   (works whether attached or owned), and when owned also awaits the exit of
  *   the process serving the CDP endpoint plus its POSIX process-group drain
  *   (escalating to a kill only if needed), then performs the same local cleanup
@@ -305,7 +305,7 @@ export interface BrowserInterface {
 // === WebSocket CDP transport
 
 /**
- * Describes the options for creating a WebSocketCDPTransport.
+ * Describes the options for creating a `WebSocketCDPTransport` instance.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction

@@ -13,7 +13,7 @@ import { BrowserProfiler } from './BrowserProfiler.js'
 import { BrowserTracing } from './BrowserTracing.js'
 
 /**
- * Groups the diagnostic subentities beneath one page.
+ * Groups the tracing, coverage, performance, and profiler classes beneath one page.
  *
  * @example
  * ```ts

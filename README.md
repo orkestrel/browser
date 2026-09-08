@@ -44,19 +44,18 @@ Drive the same protocol from any environment by injecting your own transport
 over the environment-agnostic core:
 
 ```ts
-import { CDPClient } from '@orkestrel/browser'
-import type { CDPTransportInterface } from '@orkestrel/browser'
+import { createCDPClient } from '@orkestrel/browser'
 
-const transport: CDPTransportInterface = /* your injected transport */
-const client = new CDPClient({ transport })
+const client = createCDPClient({ transport }) // transport: CDPTransportInterface
 await client.connect()
 const result = await client.send('Page.navigate', { url: 'https://example.com' })
+await client.close()
 ```
 
 ## Guide
 
-For the full surface — the CDP dispatch core, the `BrowserContext` /
-`BrowserPage` / `BrowserCodegen` entities, the server transports, and usage
+For the full surface — the CDP dispatch core, the `BrowserContext`,
+`BrowserPage`, and `BrowserCodegen` classes, the server transports, and usage
 patterns — see [`guides/browser.md`](guides/browser.md).
 
 ## Package
