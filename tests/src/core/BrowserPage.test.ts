@@ -27,7 +27,7 @@ import {
 } from '@src/core'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
-	createCDPTransport,
+	createCDPTestTransport,
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
 	createRecordingWriter,
@@ -182,7 +182,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('bounds the Page.navigate send itself with the per-call timeout, not the client default', async () => {
-			const transport = createCDPTransport()
+			const transport = createCDPTestTransport()
 			// Client-wide default is large — only the per-call navigate timeout
 			// bounds this request.
 			const client = createCDPClient({ transport, timeout: 10_000 })
@@ -234,7 +234,7 @@ describe('BrowserPage', () => {
 		})
 
 		it('sends a best-effort Page.stopLoading when the Page.navigate send itself times out', async () => {
-			const transport = createCDPTransport()
+			const transport = createCDPTestTransport()
 			const client = createCDPClient({ transport, timeout: 10_000 })
 			await client.connect()
 			replyOk(transport, 'Page.stopLoading', {})

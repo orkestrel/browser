@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { BrowserCodegen, createCDPClient } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
 import {
-	createCDPTransport,
+	createCDPTestTransport,
 	createCodegenBindingPayload,
 	createStartedCodegen,
 	replyOk,
@@ -27,7 +27,7 @@ describe('BrowserCodegen', () => {
 
 		it('emits start exactly once', async () => {
 			const recorder = createRecorder<[]>()
-			const transport = createCDPTransport()
+			const transport = createCDPTestTransport()
 			const client = createCDPClient({ transport })
 			await client.connect()
 			replyOk(transport, 'Runtime.enable')
@@ -52,7 +52,7 @@ describe('BrowserCodegen', () => {
 		})
 
 		it('shares one in-flight start across concurrent callers', async () => {
-			const transport = createCDPTransport()
+			const transport = createCDPTestTransport()
 			const client = createCDPClient({ transport })
 			await client.connect()
 			let enableId: number | undefined
@@ -78,7 +78,7 @@ describe('BrowserCodegen', () => {
 		})
 
 		it('forwards listener failures to the configured emitter error handler', async () => {
-			const transport = createCDPTransport()
+			const transport = createCDPTestTransport()
 			const client = createCDPClient({ transport })
 			await client.connect()
 			replyOk(transport, 'Runtime.enable')
@@ -99,7 +99,7 @@ describe('BrowserCodegen', () => {
 		})
 
 		it('unsubscribes everything armed and allows a retry after a failed start()', async () => {
-			const transport = createCDPTransport()
+			const transport = createCDPTestTransport()
 			const client = createCDPClient({ transport })
 			await client.connect()
 
@@ -326,7 +326,7 @@ describe('BrowserCodegen', () => {
 		})
 
 		it('is a no-op returning the current snapshot when never started', async () => {
-			const transport = createCDPTransport()
+			const transport = createCDPTestTransport()
 			const client = createCDPClient({ transport })
 			await client.connect()
 

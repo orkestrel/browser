@@ -9,7 +9,7 @@
 import { describe, expect, it } from 'vitest'
 import { BrowserWorker } from '../../../src/core/BrowserWorker.js'
 import {
-	createCDPTransport,
+	createCDPTestTransport,
 	createConnectedCDPClient,
 	readCDPParams,
 	replyOk,
@@ -113,7 +113,7 @@ describe('BrowserWorker', () => {
 	})
 
 	it('refuses every call while its client is disconnected', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const client = createCDPClient({ transport })
 		const worker = new BrowserWorker(
 			client,

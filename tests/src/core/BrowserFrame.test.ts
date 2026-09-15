@@ -12,7 +12,7 @@ import {
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
 import {
-	createCDPTransport,
+	createCDPTestTransport,
 	createConnectedCDPClient,
 	readCDPExpression,
 	replyOk,
@@ -338,7 +338,7 @@ describe('BrowserFrame', () => {
 	})
 
 	it('bounds one send with its own timeout instead of the client default', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		// The client-wide default is far beyond the test timeout, so only the
 		// per-call argument can settle this never-answered request.
 		const client = createCDPClient({ transport, timeout: 600_000 })

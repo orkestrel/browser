@@ -9,12 +9,12 @@
 import { describe, it, expect } from 'vitest'
 import { createCDPClient } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
-import { createCDPTransport, replyOk } from '../../setup.js'
+import { createCDPTestTransport, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
 describe('createCDPClient', () => {
 	it('returns a CDPClientInterface shape', () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const client = createCDPClient({ transport })
 
 		expect(client.connected).toBe(false)
@@ -27,7 +27,7 @@ describe('createCDPClient', () => {
 	})
 
 	it('connect() starts the provided transport', async () => {
-		const transport: CDPTestTransportInterface = createCDPTransport()
+		const transport: CDPTestTransportInterface = createCDPTestTransport()
 		const client: CDPClientInterface = createCDPClient({ transport })
 
 		expect(transport.started).toBe(false)
@@ -37,7 +37,7 @@ describe('createCDPClient', () => {
 	})
 
 	it('send() routes the request through the provided transport', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const client = createCDPClient({ transport })
 		await client.connect()
 		replyOk(transport, 'Target.getTargets', { targetInfos: [] })
@@ -50,7 +50,7 @@ describe('createCDPClient', () => {
 	})
 
 	it('connected reflects the client lifecycle across connect and close', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const client = createCDPClient({ transport })
 
 		expect(client.connected).toBe(false)

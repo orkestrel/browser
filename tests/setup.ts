@@ -81,7 +81,7 @@ export interface ConnectedCDPFixture {
  *
  * @returns A {@link CDPTestTransportInterface}
  */
-export function createCDPTransport(): CDPTestTransportInterface {
+export function createCDPTestTransport(): CDPTestTransportInterface {
 	const emitter = new Emitter<CDPTransportEventMap>()
 	const sent: CDPSentMessage[] = []
 	const handlers = new Map<string, CDPSentHandler[]>()
@@ -160,7 +160,7 @@ export function createCDPTransport(): CDPTestTransportInterface {
  * @returns The connected client and its scriptable transport
  */
 export async function createConnectedCDPClient(): Promise<ConnectedCDPFixture> {
-	const transport = createCDPTransport()
+	const transport = createCDPTestTransport()
 	const client = createCDPClient({ transport })
 	await client.connect()
 	return { client, transport }

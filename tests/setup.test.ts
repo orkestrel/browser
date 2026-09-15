@@ -20,7 +20,7 @@ import { describe, expect, it } from 'vitest'
 import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
 import {
 	createAttachedPage,
-	createCDPTransport,
+	createCDPTestTransport,
 	createCodegenBindingPayload,
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
@@ -45,9 +45,9 @@ import {
 
 // === Fake CDP transport
 
-describe('createCDPTransport', () => {
+describe('createCDPTestTransport', () => {
 	it('decomposes a request frame into the recorded message and skips a frame carrying no request', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 
 		await transport.send(
 			JSON.stringify({
@@ -74,7 +74,7 @@ describe('createCDPTransport', () => {
 	})
 
 	it('reports started and closed across the transport lifecycle', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 
 		expect([transport.started, transport.closed]).toStrictEqual([false, false])
 
@@ -89,7 +89,7 @@ describe('createCDPTransport', () => {
 	})
 
 	it('invokes every handler registered for the sent method in registration order and no other', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const order: string[] = []
 
 		transport.onSend('Page.enable', () => order.push('enable-first'))
@@ -102,7 +102,7 @@ describe('createCDPTransport', () => {
 	})
 
 	it('hands the sent message to its handler', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const recorder = createRecorder<readonly [CDPSentMessage]>()
 
 		transport.onSend('Runtime.evaluate', recorder.handler)
@@ -128,7 +128,7 @@ describe('createCDPTransport', () => {
 	})
 
 	it('correlates a reply and a failure to the request identifier', () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const messages = createRecorder<readonly [string]>()
 		transport.emitter.on('message', messages.handler)
 
@@ -143,7 +143,7 @@ describe('createCDPTransport', () => {
 	})
 
 	it('frames an event with defaulted parameters and an optional session', () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const messages = createRecorder<readonly [string]>()
 		transport.emitter.on('message', messages.handler)
 
@@ -166,7 +166,7 @@ describe('createCDPTransport', () => {
 	})
 
 	it('delivers a remote close and a remote error to the transport emitter', () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 		const closes = createRecorder<readonly []>()
 		const errors = createRecorder<readonly [unknown]>()
 		transport.emitter.on('close', closes.handler)
@@ -218,7 +218,7 @@ describe('createAttachedPage', () => {
 
 describe('readCDPParams', () => {
 	it('collects the params of every matching frame in send order and reports an absent record as empty', async () => {
-		const transport = createCDPTransport()
+		const transport = createCDPTestTransport()
 
 		await transport.send(JSON.stringify({ id: 1, method: 'Page.navigate', params: { url: 'a' } }))
 		await transport.send(JSON.stringify({ id: 2, method: 'Page.enable' }))

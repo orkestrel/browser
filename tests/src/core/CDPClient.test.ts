@@ -10,7 +10,7 @@ import {
 	CDPTimeoutError,
 } from '@src/core'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
-import { createCDPTransport, replyOk } from '../../setup.js'
+import { createCDPTestTransport, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
 // === CDPClient
@@ -20,7 +20,7 @@ describe('CDPClient', () => {
 	let client: CDPClientInterface
 
 	beforeEach(() => {
-		transport = createCDPTransport()
+		transport = createCDPTestTransport()
 		client = createCDPClient({ transport })
 	})
 
