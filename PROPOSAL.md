@@ -13,7 +13,7 @@ spending tokens on markup.
 > want to improve for agents to use, i feel like it needs to be the right arm for an agent, it
 > needs to hold the html ast, parsing it for use within itself and making it manageable for the
 > agent, even going as far as bringing in the markdown package and making it optional to have the
-> html filtered and converted to markdown to save on token and making it easier for the agent to
+> html filtered and converted to markdown to save on token so the agent can read it.
 > read. I feel like the browser might be a separate idea, but I need to make sure of the tool and
 > mcp package first and if we can ground those first and solidify what I am looking for them let's
 > use our experience from that to improve browser as described.
@@ -90,7 +90,7 @@ information, so this work needs measured bounds and explicit freshness semantics
   bumps when it implements, because a runtime edge on Markdown moves its published surface, and
   `@orkestrel/ollama` re-pins afterwards.
 
-## What the 2026-09-15 campaign settled that this work should build on
+## What the 2026-09-15 campaign settled that this work can build on
 
 That campaign grounded `@orkestrel/tool` and `@orkestrel/mcp` first, which is the sequencing the
 owner asked for, and it left four things this work can stand on.

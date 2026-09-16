@@ -18,7 +18,6 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, matchesGlob, relative as relativePath, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { isArray, isObject } from '@orkestrel/contract'
 import { parseSync } from 'vite'
 import { stripPolicyCode, textToPolicyHits } from '../configs/policy.js'
 
@@ -409,7 +408,7 @@ export function normalizePolicyFilename(root: string, filename: string): string 
  * primitive.
  */
 export function isPolicyRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-	return isObject(value) && !isArray(value)
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 /**
