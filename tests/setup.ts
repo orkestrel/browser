@@ -6,7 +6,7 @@ import type {
 	BrowserWriterInterface,
 } from '@src/core'
 import { BrowserCodegen, BrowserPage, createCDPClient } from '@src/core'
-import { isRecord } from '@orkestrel/contract'
+import { isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 /** Ignores an intentional callback invocation. */
@@ -107,11 +107,11 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 			const parsed: unknown = JSON.parse(data)
 			if (!isRecord(parsed)) return
 
-			if (typeof parsed['id'] !== 'number' || typeof parsed['method'] !== 'string') return
+			if (!isNumber(parsed['id']) || !isString(parsed['method'])) return
 			const id = parsed['id']
 			const method = parsed['method']
 			const params = isRecord(parsed['params']) ? parsed['params'] : undefined
-			const sessionId = typeof parsed['sessionId'] === 'string' ? parsed['sessionId'] : undefined
+			const sessionId = isString(parsed['sessionId']) ? parsed['sessionId'] : undefined
 			const message: CDPSentMessage = { id, method, params, sessionId }
 
 			sent.push(message)
@@ -233,7 +233,7 @@ export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 
 /** Reads a sent Runtime expression without a type assertion. */
 export function readCDPExpression(message: CDPSentMessage | undefined): string | undefined {
 	const expression = message?.params?.['expression']
-	return typeof expression === 'string' ? expression : undefined
+	return isString(expression) ? expression : undefined
 }
 
 /** Scripts a selector lookup that resolves as present. */
@@ -266,7 +266,7 @@ export function scriptTrustedSelector(
 		const expression = message.params?.['expression']
 		if (
 			message.params?.['returnByValue'] === false &&
-			typeof expression === 'string' &&
+			isString(expression) &&
 			expression.includes(JSON.stringify(selector))
 		) {
 			transport.reply(message.id, { result: { objectId: 'object-1' } })
@@ -353,7 +353,7 @@ export function scriptEvaluate(
 ): void {
 	transport.onSend('Runtime.evaluate', (message) => {
 		const expression = message.params?.['expression']
-		if (typeof expression === 'string' && matches(expression)) {
+		if (isString(expression) && matches(expression)) {
 			transport.reply(message.id, { result: { value } })
 		}
 	})

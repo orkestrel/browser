@@ -25,7 +25,7 @@ import {
 	isString,
 	parseArray,
 	parseEnum,
-	parseJSON,
+	parseJSONAs,
 } from '@orkestrel/contract'
 import {
 	readBrowserAXValue,
@@ -285,9 +285,9 @@ export function parseBrowserBindingCall(value: unknown): BrowserBindingCall | un
 	) {
 		return undefined
 	}
-	const payload = parseJSON(value['payload'])
+	const payload = parseJSONAs(value['payload'], isRecord)
 	if (
-		!isRecord(payload) ||
+		payload === undefined ||
 		!isString(payload['id']) ||
 		!isString(payload['name']) ||
 		!isArray(payload['args']) ||
@@ -468,8 +468,8 @@ export function parseBrowserDownloadProgress(
  */
 export function parseCodegenActionPayload(payload: unknown): BrowserCodegenAction | undefined {
 	if (!isString(payload)) return undefined
-	const parsed = parseJSON(payload)
-	if (!isRecord(parsed)) return undefined
+	const parsed = parseJSONAs(payload, isRecord)
+	if (parsed === undefined) return undefined
 
 	const action = parseEnum(parsed['action'], ['click', 'fill', 'select'])
 	const selector = parsed['selector']
@@ -520,10 +520,7 @@ export function parseCodegenNavigateAction(
  * @returns The number array, or undefined
  */
 export function parseNumberArray(value: unknown): readonly number[] | undefined {
-	if (!isArray(value) || !value.every(isFiniteNumber)) {
-		return undefined
-	}
-	return value
+	return parseArray(value, isFiniteNumber)
 }
 
 /**

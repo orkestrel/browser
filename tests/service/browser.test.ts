@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createBrowser } from '@src/server'
 import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError, compileCodegenScript } from '@src/core'
-import { isRecord } from '@orkestrel/contract'
+import { isRecord, isString } from '@orkestrel/contract'
 import { createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
@@ -388,7 +388,7 @@ describe('Browser real launch', () => {
 			const versionResponse = await fetch(`http://127.0.0.1:${cdpPort}/json/version`)
 			const versionJson: unknown = await versionResponse.json()
 			const webSocketDebuggerUrl =
-				isRecord(versionJson) && typeof versionJson['webSocketDebuggerUrl'] === 'string'
+				isRecord(versionJson) && isString(versionJson['webSocketDebuggerUrl'])
 					? versionJson['webSocketDebuggerUrl']
 					: undefined
 			expect(webSocketDebuggerUrl).toBeDefined()

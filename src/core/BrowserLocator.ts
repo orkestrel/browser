@@ -38,7 +38,7 @@ import {
 	validateBrowserInputOptions,
 } from './helpers.js'
 import { BrowserError, BrowserSelectorError } from './errors.js'
-import { isArray, isFiniteNumber, isInteger, isRecord, isString } from '@orkestrel/contract'
+import { isFiniteNumber, isInteger, isRecord, isString, parseArray } from '@orkestrel/contract'
 
 /**
  * Represents a reusable strict semantic locator over one frame.
@@ -309,10 +309,11 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		const value = await this.#frame.evaluate(
 			`(${compileLocatorListExpression(this.#query)}).map((element) => element.innerText)`,
 		)
-		if (!isArray(value) || !value.every(isString)) {
+		const texts = parseArray(value, isString)
+		if (texts === undefined) {
 			throw new BrowserError('Browser locator text list is malformed')
 		}
-		return value
+		return texts
 	}
 
 	async html(): Promise<string> {

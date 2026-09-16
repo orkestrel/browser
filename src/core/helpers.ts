@@ -1661,11 +1661,10 @@ export function readBrowserSnapshot(
 	if (!isRecord(value) || !isArray(value['strings']) || !isArray(value['documents'])) {
 		throw new BrowserError('Malformed DOMSnapshot.captureSnapshot result')
 	}
-	if (!value['strings'].every(isString)) {
+	const strings = parseArray(value['strings'], isString)
+	if (strings === undefined) {
 		throw new BrowserError('Malformed DOMSnapshot string table')
 	}
-
-	const strings: readonly string[] = value['strings']
 	let count = 0
 	for (const document of value['documents']) {
 		if (!isRecord(document) || !isRecord(document['nodes'])) continue

@@ -7,7 +7,16 @@ import { createServer } from 'node:http'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
-import { isRecord, isString } from '@orkestrel/contract'
+import {
+	isFunction,
+	isInteger,
+	isNumber,
+	isObject,
+	isRecord,
+	isString,
+	parseArray,
+	parseJSON,
+} from '@orkestrel/contract'
 import { createNodeWebSocket } from '@orkestrel/websocket'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
@@ -44,7 +53,7 @@ export async function reservePort(): Promise<number> {
 /** Reads the bound TCP port, or throws when the server has no address. */
 export function readServerPort(server: NetServer): number {
 	const address: AddressInfo | string | null = server.address()
-	if (typeof address !== 'object' || address === null) {
+	if (!isObject(address)) {
 		throw new Error('Test server did not bind a TCP port')
 	}
 	return address.port
@@ -360,7 +369,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 	#upgrade(request: IncomingMessage, socket: Duplex, head: Buffer): void {
 		const key = request.headers['sec-websocket-key']
-		if (typeof key !== 'string') {
+		if (!isString(key)) {
 			socket.destroy()
 			return
 		}
@@ -376,17 +385,8 @@ export class CDPTestServer implements CDPTestServerInterface {
 	}
 
 	#message(text: string): void {
-		let parsed: unknown
-		try {
-			parsed = JSON.parse(text)
-		} catch {
-			return
-		}
-		if (
-			!isRecord(parsed) ||
-			typeof parsed['id'] !== 'number' ||
-			typeof parsed['method'] !== 'string'
-		) {
+		const parsed = parseJSON(text)
+		if (!isRecord(parsed) || !isNumber(parsed['id']) || !isString(parsed['method'])) {
 			return
 		}
 
@@ -432,7 +432,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 		if (!this.#scripts.has(method)) return
 		const scripted = this.#scripts.get(method)
-		const result = typeof scripted === 'function' ? scripted(params ?? {}) : scripted
+		const result = isFunction(scripted) ? scripted(params ?? {}) : scripted
 		this.#send({ id, result })
 	}
 
@@ -493,7 +493,7 @@ export function readFixtureProcessId(scratch: ScratchInterface, name: string): P
 	return retryUntil(
 		`the fake browser pid at ${join(scratch.path, name)}`,
 		() => Number(scratch.read(name)?.trim()),
-		(pid) => Number.isInteger(pid) && pid > 0,
+		(pid) => isInteger(pid) && pid > 0,
 		{ attempts: 50, interval: 20, budget: 1000 },
 	)
 }
@@ -720,8 +720,8 @@ export function createFakeBrowserProcess(
 				`the fake browser argument vector at ${argumentsFile}`,
 				() => {
 					const text = scratch.read('arguments.json')
-					const parsed: unknown = text === undefined ? undefined : JSON.parse(text)
-					return Array.isArray(parsed) && parsed.every(isString) ? parsed : undefined
+					const parsed = text === undefined ? undefined : parseJSON(text)
+					return parsed === undefined ? undefined : parseArray(parsed, isString)
 				},
 				(value) => value !== undefined,
 				{ attempts: 50, interval: 20, budget: 1000 },
@@ -735,7 +735,7 @@ export function createFakeBrowserProcess(
 			const dropPort = await retryUntil(
 				`the fake browser listening port at ${portFile}`,
 				() => Number(scratch.read('port.txt')?.trim()),
-				(port) => Number.isInteger(port) && port > 0,
+				(port) => isInteger(port) && port > 0,
 				{ attempts: 50, interval: 20, budget: 1000 },
 			)
 			await fetch(`http://127.0.0.1:${dropPort}/__drop`)
