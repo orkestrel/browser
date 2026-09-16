@@ -89,13 +89,13 @@
 		"@orkestrel/contract": "^0.0.17",
 		"@orkestrel/emitter": "^0.0.10",
 		"@orkestrel/html": "^0.0.10",
-		"@orkestrel/websocket": "^0.0.12"
+		"@orkestrel/websocket": "^0.0.13"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.1",
 		"@orkestrel/guide": "^0.0.19",
-		"@orkestrel/probe": "^0.0.14",
-		"@orkestrel/scaffold": "^0.0.69",
+		"@orkestrel/probe": "^0.0.15",
+		"@orkestrel/scaffold": "^0.0.70",
 		"@orkestrel/test": "^0.0.15",
 		"@types/node": "^26.6.0",
 		"oxfmt": "^0.68.0",
