@@ -88,7 +88,7 @@
 	"dependencies": {
 		"@orkestrel/contract": "^0.0.17",
 		"@orkestrel/emitter": "^0.0.10",
-		"@orkestrel/html": "^0.0.9",
+		"@orkestrel/html": "^0.0.10",
 		"@orkestrel/websocket": "^0.0.12"
 	},
 	"devDependencies": {
