@@ -510,6 +510,10 @@ export interface FakeBrowserProcessInterface {
 	descendant(): Promise<number>
 	/** Reads the PID of the re-executed process serving CDP, requested through `launcher`. */
 	browser(): Promise<number>
+	/** Reads the WebSocket endpoint the serving fake announced on standard error, from the port it bound. */
+	endpoint(): Promise<string>
+	/** Reads the request paths the fake's HTTP server has served, in arrival order. */
+	requests(): Promise<readonly string[]>
 	/** Reads the complete process argument vector recorded at startup. */
 	arguments(): Promise<readonly string[]>
 	/**
@@ -536,7 +540,9 @@ export interface FakeBrowserProcessInterface {
  * a descendant carrying the same argv and exiting 0 straight away, so the
  * spawned process is never the one that serves CDP; `unnamed` leaves
  * `SystemInfo.getProcessInfo` unanswered so the endpoint never names the
- * process serving it. With none of these options the process idles (never
+ * process serving it; `split` prints the endpoint line in two chunks; `crlf` ends
+ * it `\r\n`; `flood` writes 1 MB to stderr after readiness; `mute` closes the
+ * serving process's stderr without printing the line and serves nothing. With none of these options the process idles (never
  * serves CDP) — useful for launch-failure/abort scenarios.
  * @returns A {@link FakeBrowserProcessInterface}
  */
@@ -547,6 +553,10 @@ export function createFakeBrowserProcess(
 		readonly descendant?: boolean
 		readonly launcher?: boolean
 		readonly unnamed?: boolean
+		readonly split?: boolean
+		readonly crlf?: boolean
+		readonly flood?: boolean
+		readonly mute?: boolean
 	} = {},
 ): FakeBrowserProcessInterface {
 	const scratch = createScratch({ prefix: 'orkestrel-browser-fake-' })
@@ -556,6 +566,7 @@ export function createFakeBrowserProcess(
 	const browserFile = join(scratch.path, 'browser.txt')
 	const argumentsFile = join(scratch.path, 'arguments.json')
 	const portFile = join(scratch.path, 'port.txt')
+	const requestsFile = join(scratch.path, 'requests.txt')
 
 	// No shebang: the script is spawned through `node <script>`, never executed
 	// directly, so it needs no execute bit and no shebang line.
@@ -580,7 +591,7 @@ export function createFakeBrowserProcess(
 				// abruptly, so the re-executed process is detached there. POSIX
 				// keeps it undetached, which leaves it in the launcher's process
 				// group exactly as a real Chromium subprocess would be.
-				"\tconst __child = require('child_process').spawn(process.execPath, [__filename, '--orkestrel-relaunched', ...process.argv.slice(2)], { stdio: 'ignore', detached: process.platform === 'win32' })",
+				"\tconst __child = require('child_process').spawn(process.execPath, [__filename, '--orkestrel-relaunched', ...process.argv.slice(2)], { stdio: ['ignore', 'ignore', 'inherit'], detached: process.platform === 'win32' })",
 				'\t__child.unref()',
 				'\tprocess.exit(0)',
 				'}',
@@ -634,6 +645,10 @@ export function createFakeBrowserProcess(
 				].join('\n'),
 	)
 
+	if (options.mute === true) {
+		lines.push("require('fs').closeSync(2)")
+	}
+
 	if (options.serveCDP === true) {
 		// The @orkestrel/websocket package is required by its real installed
 		// .cjs entry point (resolved by using `createRequire` at script-GENERATION
@@ -651,6 +666,7 @@ export function createFakeBrowserProcess(
 				"const port = Number(portArg.split('=')[1])",
 				'let activeWS',
 				'const server = http.createServer((req, res) => {',
+				`\trequire('fs').appendFileSync(${JSON.stringify(requestsFile)}, req.url + '\\n')`,
 				"\tif (req.url.startsWith('/json/version')) {",
 				"\t\tres.writeHead(200, { 'content-type': 'application/json' })",
 				"\t\tres.end(JSON.stringify({ webSocketDebuggerUrl: 'ws://127.0.0.1:' + port + '/cdp', Browser: 'Fake/1.0' }))",
@@ -680,6 +696,8 @@ export function createFakeBrowserProcess(
 				"\t\t\tif (msg.method === 'Browser.close') {",
 				'\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: {} }))',
 				'\t\t\t\tsetImmediate(() => process.exit(0))',
+				"\t\t\t} else if (msg.method === 'Browser.getVersion') {",
+				"\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: { product: 'Fake/1.0' } }))",
 				"\t\t\t} else if (msg.method === 'Target.getTargets') {",
 				'\t\t\t\tws.send(JSON.stringify({ id: msg.id, result: { targetInfos: [] } }))',
 				`\t\t\t} else if (msg.method === 'SystemInfo.getProcessInfo' && ${String(options.unnamed !== true)}) {`,
@@ -692,9 +710,21 @@ export function createFakeBrowserProcess(
 				'\t})',
 				'})',
 				"server.on('error', (e) => { console.error('fake-browser listen error: ' + e.message); process.exit(12) })",
-				"server.listen(port, '127.0.0.1', () => { require('fs').writeFileSync(" +
-					JSON.stringify(portFile) +
-					', String(port)) })',
+				"server.listen(port, '127.0.0.1', () => {",
+				'\tconst bound = server.address().port',
+				`\trequire('fs').writeFileSync(${JSON.stringify(portFile)}, String(bound))`,
+				"\tconst line = 'DevTools listening on ws://127.0.0.1:' + bound + '/devtools/browser/FAKE'",
+				`\tconst end = ${options.crlf === true ? "'\\r\\n'" : "'\\n'"}`,
+				...(options.split === true
+					? [
+							'\tprocess.stderr.write(line.slice(0, 20))',
+							'\tsetTimeout(() => process.stderr.write(line.slice(20) + end), 50)',
+						]
+					: ['\tprocess.stderr.write(line + end)']),
+				...(options.flood === true
+					? ["\tsetTimeout(() => process.stderr.write('x'.repeat(1024 * 1024) + '\\n'), 100)"]
+					: []),
+				'})',
 			].join('\n'),
 		)
 	}
@@ -730,6 +760,18 @@ export function createFakeBrowserProcess(
 				argv,
 				`Fake browser process never wrote its arguments to ${argumentsFile}`,
 			)
+		},
+		async endpoint(): Promise<string> {
+			const port = await retryUntil(
+				`the fake browser listening port at ${portFile}`,
+				() => Number(scratch.read('port.txt')?.trim()),
+				(value) => isInteger(value) && value > 0,
+				{ attempts: 50, interval: 20, budget: 1000 },
+			)
+			return `ws://127.0.0.1:${port}/devtools/browser/FAKE`
+		},
+		async requests(): Promise<readonly string[]> {
+			return (scratch.read('requests.txt') ?? '').split('\n').filter((line) => line.length > 0)
 		},
 		async dropSocket(): Promise<void> {
 			const dropPort = await retryUntil(

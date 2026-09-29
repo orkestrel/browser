@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import type { Readable } from 'node:stream'
 import type { CDPTarget } from '@src/core'
 import type { Result } from '@orkestrel/contract'
 import type {
@@ -12,13 +13,12 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, win32 as pathWin32, posix as pathPosix } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { setTimeout as waitForTimeout } from 'node:timers/promises'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
-import { BROWSER_WAIT_POLL_INTERVAL_MS, BrowserConnectionError, BrowserError } from '@src/core'
+import { BrowserConnectionError, BrowserError } from '@src/core'
 import {
 	BROWSER_CDP_PROTOCOL,
-	BROWSER_CDP_VERSION_PATH,
 	BROWSER_CDP_LIST_PATH,
+	BROWSER_DEVTOOLS_PATTERN,
 	BROWSER_ENV_PATH_KEYS,
 	BROWSER_EXECUTABLE_PATHS,
 	BROWSER_EXECUTABLE_NAMES,
@@ -313,15 +313,15 @@ export function findStorePaths(base: string, platform: string): readonly string[
  * subprocesses with it, so that single signal drains the tree.
  *
  * @param executable - Absolute path to the browser executable
- * @param port - Port the browser exposes its CDP endpoint on
+ * @param port - Port the browser exposes its CDP endpoint on, or undefined for a port the operating system picks
  * @param headless - Whether to launch in headless mode
  * @param profile - Optional user-data-dir for a persistent profile
  * @param extra - Additional command-line flags
- * @returns The spawned ChildProcess
+ * @returns The spawned ChildProcess, whose standard error carries the endpoint line `readBrowserEndpoint` reads
  */
 export function launchBrowserProcess(
 	executable: string,
-	port: number,
+	port: number | undefined,
 	headless: boolean,
 	profile?: string,
 	extra?: readonly string[],
@@ -332,66 +332,67 @@ export function launchBrowserProcess(
 	// Chromium itself accepts flags in any order, so production is unaffected.
 	const args: string[] = []
 	if (extra !== undefined) args.push(...extra)
-	args.push(`--remote-debugging-port=${port}`, ...BROWSER_LAUNCH_ARGS)
+	args.push(`--remote-debugging-port=${port ?? 0}`, ...BROWSER_LAUNCH_ARGS)
 
 	if (headless) args.push(BROWSER_HEADLESS_ARG)
 	if (profile !== undefined) args.push(`--user-data-dir=${profile}`)
 
 	return spawn(executable, args, {
-		stdio: 'ignore',
+		stdio: ['ignore', 'ignore', 'pipe'],
 		detached: process.platform !== 'win32',
 	})
 }
 
 /**
- * Polls a browser's CDP version endpoint until it responds or the timeout elapses.
+ * Reads the CDP endpoint a launched browser announces on its standard error.
  *
- * @param port - Port the browser exposes its CDP endpoint on
- * @param timeout - Maximum time to wait in milliseconds
- * @param host - Host the browser exposes its CDP endpoint on (default `127.0.0.1`)
- * @param signal - Optional external abort; an abort while waiting rethrows rather than resolving
- * @returns The browser's WebSocket debugger URL
+ * @remarks
+ * Chromium prints `DevTools listening on ws://HOST:PORT/devtools/browser/ID` after it binds the
+ * debugging port. The read splits arriving text on line breaks across chunks, so a line split
+ * between two chunks and a line ending `\r\n` both resolve. After resolving, the stream keeps
+ * draining until it closes so the browser's logging never fills the pipe.
  *
- * @throws When the endpoint does not become ready before the timeout
+ * @param stream - The browser's standard error
+ * @param signal - Abort that rejects the read with its reason
+ * @returns The `ws://` endpoint the browser announced
+ *
+ * @throws When the stream closes without the line, or the signal aborts first
  */
-export async function waitForCDPReady(
-	port: number,
-	timeout: number,
-	host: string = BROWSER_DEFAULT_HOST,
-	signal?: AbortSignal,
-): Promise<string> {
-	const url = `${BROWSER_CDP_PROTOCOL}://${host}:${port}${BROWSER_CDP_VERSION_PATH}`
-	const deadline = Date.now() + timeout
+export function readBrowserEndpoint(stream: Readable, signal: AbortSignal): Promise<string> {
+	const read = Promise.withResolvers<string>()
+	let pending = ''
+	let found = false
 
-	while (Date.now() < deadline) {
-		signal?.throwIfAborted()
-		const remaining = Math.max(0, deadline - Date.now())
-		const requestSignal =
-			signal === undefined
-				? AbortSignal.timeout(remaining)
-				: AbortSignal.any([signal, AbortSignal.timeout(remaining)])
-
-		try {
-			const response = await fetch(url, { signal: requestSignal })
-			if (response.ok) {
-				const info: unknown = await response.json()
-				if (isRecord(info) && isString(info['webSocketDebuggerUrl'])) {
-					return info['webSocketDebuggerUrl']
-				}
-			}
-		} catch (error) {
-			if (signal?.aborted === true) throw error
-			// Not ready yet — keep polling
+	if (signal.aborted) read.reject(signal.reason)
+	signal.addEventListener('abort', () => read.reject(signal.reason), { once: true })
+	stream.on('error', read.reject)
+	stream.setEncoding('utf8')
+	stream.on('data', (chunk) => {
+		if (found || !isString(chunk)) return
+		const lines = (pending + chunk).split(/\r\n|\n/)
+		pending = lines.pop() ?? ''
+		for (const line of lines) {
+			const endpoint = BROWSER_DEVTOOLS_PATTERN.exec(line)?.[1]
+			if (endpoint === undefined) continue
+			found = true
+			pending = ''
+			read.resolve(endpoint)
+			return
 		}
+	})
+	stream.on('close', () => {
+		const endpoint = found ? undefined : BROWSER_DEVTOOLS_PATTERN.exec(pending)?.[1]
+		if (endpoint !== undefined) read.resolve(endpoint)
+		else {
+			read.reject(
+				new BrowserConnectionError(
+					'Browser closed its standard error before reporting a CDP endpoint',
+				),
+			)
+		}
+	})
 
-		const delay = Math.min(BROWSER_WAIT_POLL_INTERVAL_MS, Math.max(0, deadline - Date.now()))
-		if (delay > 0) await waitForTimeout(delay, undefined, { signal })
-	}
-
-	throw new BrowserConnectionError(
-		`CDP endpoint on port ${port} did not become ready within ${timeout}ms`,
-		{ port, timeout },
-	)
+	return read.promise
 }
 
 /**

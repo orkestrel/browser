@@ -14,13 +14,14 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { existsSync } from 'node:fs'
 import {
 	createBrowser,
+	createCDPTransport,
 	BrowserDestroyedError,
 	BrowserNotConnectedError,
 	BROWSER_PROCESS_EXIT_CAUSE,
 	BROWSER_TRANSPORT_LOSS_CAUSE,
 	BROWSER_TRANSPORT_LOSS_DEFER_MS,
 } from '@src/server'
-import { BrowserConnectionError, isBrowserConnectionError } from '@src/core'
+import { BrowserConnectionError, CDPClient, isBrowserConnectionError } from '@src/core'
 import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
@@ -817,6 +818,146 @@ describe('Browser launcher hand-off', () => {
 		await waitForProcessExit(serving)
 		expect(isRunning(serving)).toBe(false)
 	}, 20_000)
+})
+
+describe('Browser launch readiness from standard error', () => {
+	it('resolves without any GET /json/version during the launch', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(await fake.requests()).not.toContain('/json/version')
+		await browser.destroy()
+	})
+
+	it('passes an explicit port through and reads the endpoint carrying it', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true })
+		const port = await reservePort()
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(await fake.arguments()).toContain(`--remote-debugging-port=${port}`)
+		expect(await fake.endpoint()).toContain(`:${port}/`)
+		await browser.destroy()
+	})
+
+	it('passes port 0 when no port is given and connects to the port the line names', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true })
+		const browser = createBrowser({ executable: fake.executable, args: fake.args, timeout: 5000 })
+
+		await browser.connect()
+		expect(await fake.arguments()).toContain('--remote-debugging-port=0')
+		expect(await fake.endpoint()).not.toContain(':0/')
+		await browser.destroy()
+	})
+
+	it('resolves a line split across two chunks', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true, split: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+		await browser.destroy()
+	})
+
+	it('resolves a line ending with a carriage return and a line feed', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true, crlf: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		expect(browser.status).toBe('connected')
+		await browser.destroy()
+	})
+
+	it('rejects with the reason when the launch aborts before the line', async () => {
+		const fake = createFakeBrowserProcess()
+		const controller = new AbortController()
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 10_000,
+			signal: controller.signal,
+		})
+
+		const pending = browser.connect()
+		await fake.pid()
+		controller.abort()
+		await expect(pending).rejects.toThrow('Connection aborted')
+		expect(browser.pid).toBeUndefined()
+	}, 20_000)
+
+	it('rejects within the timeout when the process never prints the line', async () => {
+		const fake = createFakeBrowserProcess()
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 500,
+		})
+
+		await expect(browser.connect()).rejects.toThrow('did not report a CDP endpoint within 500ms')
+		expect(browser.pid).toBeUndefined()
+	}, 20_000)
+
+	it('rejects with the readiness failure when the re-executed process closes the pipe without the line', async () => {
+		const fake = createFakeBrowserProcess({ launcher: true, mute: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 10_000,
+		})
+
+		const start = performance.now()
+		await expect(browser.connect()).rejects.toThrow(/before reporting a CDP endpoint/)
+		expect(performance.now() - start).toBeLessThan(9000)
+		expect(browser.pid).toBeUndefined()
+	}, 20_000)
+
+	it('answers Browser.getVersion after 1 MB of standard error output', async () => {
+		const fake = createFakeBrowserProcess({ serveCDP: true, flood: true })
+		const browser = createBrowser({
+			executable: fake.executable,
+			args: fake.args,
+			cdp: { port: await reservePort() },
+			timeout: 5000,
+		})
+
+		await browser.connect()
+		const transport = createCDPTransport({ url: await fake.endpoint(), timeout: 5000 })
+		const client = new CDPClient({ transport, timeout: 5000 })
+		await client.connect()
+		try {
+			await waitForDelay(400)
+			await expect(client.send('Browser.getVersion')).resolves.toStrictEqual({
+				product: 'Fake/1.0',
+			})
+		} finally {
+			await client.close()
+			await browser.destroy()
+		}
+	})
 })
 
 describe('Browser pid', () => {

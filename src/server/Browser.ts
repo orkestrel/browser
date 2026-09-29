@@ -26,7 +26,6 @@ import {
 	BrowserContext,
 	BrowserTransition,
 	BROWSER_DEFAULT_TIMEOUT_MS,
-	BROWSER_WAIT_POLL_INTERVAL_MS,
 	CDPClient,
 	isBrowserConnectionError,
 	validateBrowserContextOptions,
@@ -37,6 +36,7 @@ import {
 	BROWSER_CDP_VERSION_PATH,
 	BROWSER_DEFAULT_CDP_PORT,
 	BROWSER_DEFAULT_HOST,
+	BROWSER_DRAIN_INTERVAL_MS,
 	BROWSER_KILL_GRACE_MS,
 	BROWSER_PORT_PROBE_TIMEOUT_MS,
 	BROWSER_PROCESS_EXIT_CAUSE,
@@ -49,8 +49,8 @@ import {
 	findSystemBrowser,
 	launchBrowserProcess,
 	parseBrowserEngine,
+	readBrowserEndpoint,
 	removeBrowserProfile,
-	waitForCDPReady,
 } from './helpers.js'
 import { createCDPTransport, createBrowserWriter } from './factories.js'
 
@@ -628,7 +628,7 @@ export class Browser implements BrowserInterface {
 		try {
 			process = launchBrowserProcess(
 				executable,
-				this.#cdpPort,
+				this.#options.cdp?.port,
 				this.#options.headless ?? true,
 				profile.path,
 				this.#options.args,
@@ -724,16 +724,39 @@ export class Browser implements BrowserInterface {
 		args?: readonly string[],
 	): Promise<string> {
 		const context = { executable, args }
+		const timeout = this.#timeout()
 		const controller = new AbortController()
-		const signal = AbortSignal.any([controller.signal, this.#signal()])
-		const ready = waitForCDPReady(this.#cdpPort, this.#timeout(), this.#cdpHost, signal)
-		const exited = once(process, 'exit', { signal }).then((values) => {
+		const deadline = AbortSignal.timeout(timeout)
+		const signal = AbortSignal.any([controller.signal, this.#signal(), deadline])
+		const stderr = process.stderr
+		if (stderr === null) {
+			throw new BrowserConnectionError('The browser process has no standard error to read', context)
+		}
+		const exit = once(process, 'exit', { signal })
+		void exit.catch(() => undefined)
+		const ready = readBrowserEndpoint(stderr, signal).catch(async (error: unknown) => {
+			// A stream that closes without the line ends the launch, and the exit
+			// that closed it names the cause: a nonzero exit is the launch-exit
+			// fault, while a clean exit leaves the readiness failure standing.
+			if (signal.aborted) throw error
+			const values = await exit
+			if (values[0] === 0 && values[1] === null) throw error
+			throw new BrowserConnectionError(
+				this.#formatLaunchExit(
+					isInteger(values[0]) ? values[0] : null,
+					isString(values[1]) ? values[1] : null,
+				),
+				context,
+			)
+		})
+		const exited = exit.then((values) => {
 			const code = isInteger(values[0]) ? values[0] : null
 			const exitSignal = isString(values[1]) ? values[1] : null
 			// A launcher that re-executes the browser exits cleanly and hands the
-			// endpoint to the process it spawned, so a clean exit ends the child
-			// rather than the launch. Keep waiting for the endpoint on the same
-			// readiness budget, which still fails loudly when none appears.
+			// inherited standard error to the process it spawned, so a clean exit
+			// ends the child rather than the launch. Keep reading the same pipe on
+			// the same readiness budget, which still fails when the line never
+			// arrives.
 			if (code === 0 && exitSignal === null) return ready
 			throw new BrowserConnectionError(this.#formatLaunchExit(code, exitSignal), context)
 		})
@@ -743,6 +766,12 @@ export class Browser implements BrowserInterface {
 		} catch (error) {
 			if (isBrowserConnectionError(error)) throw error
 			if (this.#signal().aborted) throw new BrowserConnectionError('Connection aborted', context)
+			if (deadline.aborted) {
+				throw new BrowserConnectionError(
+					`Browser did not report a CDP endpoint within ${timeout}ms`,
+					{ ...context, timeout },
+				)
+			}
 
 			const message = isError(error) ? error.message : String(error)
 			throw new BrowserConnectionError(message, context)
@@ -1053,15 +1082,22 @@ export class Browser implements BrowserInterface {
 		}
 	}
 
+	/**
+	 * Waits within a bound for the rest of a terminated process group, or the process a
+	 * launcher handed the endpoint to, to disappear.
+	 *
+	 * @remarks
+	 * This is the one interval loop in the server. Node raises an exit event for the direct
+	 * child only, so no event source reports the remainder of a POSIX process group or a
+	 * handed-off process, and the drain probes on `BROWSER_DRAIN_INTERVAL_MS` until the
+	 * remainder is gone or `timeout` elapses.
+	 */
 	async #waitForRemainderWithin(
 		process: ChildProcess,
 		timeout: number,
 	): Promise<boolean | undefined> {
 		const deadline = performance.now() + timeout
 		let confirmed = false
-		// Node observes only the direct child, and neither the rest of a POSIX
-		// process group nor a process the launcher handed the endpoint to raises
-		// an exit event here, so bound the drain probe.
 		while (true) {
 			const alive = this.#inspectRemainder(process)
 			if (alive === false) return true
@@ -1069,7 +1105,7 @@ export class Browser implements BrowserInterface {
 			const remaining = deadline - performance.now()
 			if (remaining <= 0) return confirmed ? false : undefined
 			await new Promise<void>((resolve) =>
-				setTimeout(resolve, Math.min(BROWSER_WAIT_POLL_INTERVAL_MS, remaining)),
+				setTimeout(resolve, Math.min(BROWSER_DRAIN_INTERVAL_MS, remaining)),
 			)
 		}
 	}

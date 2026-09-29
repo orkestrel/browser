@@ -1,7 +1,7 @@
 /**
  * src/server/helpers.ts tests.
  *
- * `fetchCDPTargets` / `waitForCDPReady` are exercised against a real
+ * `fetchCDPTargets` is exercised against a real
  * in-process HTTP server (`createCDPTestServer`). `findSystemBrowsers` /
  * `findSystemBrowser` are exercised through their `SystemBrowserOptions`
  * override bag with real temp files/dirs (`node:fs`) so every assertion is
@@ -16,6 +16,7 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import { describe, it, expect, afterEach } from 'vitest'
 import { chmodSync, existsSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
+import { PassThrough } from 'node:stream'
 import { join, dirname, delimiter } from 'node:path'
 import { requireValue } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
@@ -29,7 +30,7 @@ import {
 	probePathNames,
 	readFirstLine,
 	removeBrowserProfile,
-	waitForCDPReady,
+	readBrowserEndpoint,
 	fetchCDPTargets,
 } from '@src/server'
 import { isBrowserConnectionError } from '@src/core'
@@ -326,42 +327,64 @@ describe('parseBrowserEngine', () => {
 	})
 })
 
-describe('waitForCDPReady', () => {
-	it('resolves the WebSocket debugger URL once the endpoint is ready', async () => {
-		server = await createCDPTestServer()
-		const url = await waitForCDPReady(server.port, 2000)
-		expect(url).toBe(server.endpoint)
+describe('readBrowserEndpoint', () => {
+	const line = 'DevTools listening on ws://127.0.0.1:41234/devtools/browser/ID'
+
+	it('resolves the endpoint a complete line names', async () => {
+		const stream = new PassThrough()
+		const pending = readBrowserEndpoint(stream, new AbortController().signal)
+		stream.write(`[noise] starting\n${line}\n`)
+		expect(await pending).toBe('ws://127.0.0.1:41234/devtools/browser/ID')
 	})
 
-	it('throws when the endpoint never becomes ready before the timeout', async () => {
-		await expect(waitForCDPReady(19_992, 100)).rejects.toThrow(/did not become ready/)
+	it('resolves a line split across two chunks', async () => {
+		const stream = new PassThrough()
+		const pending = readBrowserEndpoint(stream, new AbortController().signal)
+		stream.write(line.slice(0, 20))
+		stream.write(`${line.slice(20)}\n`)
+		expect(await pending).toBe('ws://127.0.0.1:41234/devtools/browser/ID')
 	})
 
-	it('respects the deadline against a hanging endpoint', async () => {
-		server = await createCDPTestServer()
-		server.hang(true)
-		const start = performance.now()
-		await expect(waitForCDPReady(server.port, 150)).rejects.toThrow(/did not become ready/)
-		expect(performance.now() - start).toBeLessThan(1000)
+	it('resolves a line ending with a carriage return and a line feed', async () => {
+		const stream = new PassThrough()
+		const pending = readBrowserEndpoint(stream, new AbortController().signal)
+		stream.write(`${line}\r\n`)
+		expect(await pending).toBe('ws://127.0.0.1:41234/devtools/browser/ID')
 	})
 
-	it('honors an explicit host', async () => {
-		server = await createCDPTestServer()
-		const url = await waitForCDPReady(server.port, 2000, '127.0.0.1')
-		expect(url).toBe(server.endpoint)
+	it('keeps draining the stream after it resolves', async () => {
+		const stream = new PassThrough({ highWaterMark: 16 })
+		const pending = readBrowserEndpoint(stream, new AbortController().signal)
+		stream.write(`${line}\n`)
+		await pending
+		const flooded = new Promise<void>((resolve) =>
+			stream.write('x'.repeat(1024 * 1024), () => resolve()),
+		)
+		await flooded
+		expect(stream.readableLength).toBe(0)
 	})
 
-	it('aborts an in-flight endpoint request promptly', async () => {
-		server = await createCDPTestServer()
-		server.hang(true)
+	it('rejects with the readiness failure when the stream ends without the line', async () => {
+		const stream = new PassThrough()
+		const pending = readBrowserEndpoint(stream, new AbortController().signal)
+		stream.end('[noise] starting\n')
+		await expect(pending).rejects.toThrow(/before reporting a CDP endpoint/)
+		await expect(pending).rejects.toSatisfy(isBrowserConnectionError)
+	})
+
+	it('rejects with the reason when the signal aborts', async () => {
+		const stream = new PassThrough()
 		const controller = new AbortController()
-		const start = performance.now()
-		const pending = waitForCDPReady(server.port, 5000, '127.0.0.1', controller.signal)
+		const pending = readBrowserEndpoint(stream, controller.signal)
+		controller.abort(new Error('stopped by the caller'))
+		await expect(pending).rejects.toThrow('stopped by the caller')
+	})
 
-		controller.abort()
-
-		await expect(pending).rejects.toThrow(/abort/i)
-		expect(performance.now() - start).toBeLessThan(1000)
+	it('rejects with the reason when the signal is already aborted', async () => {
+		const stream = new PassThrough()
+		await expect(
+			readBrowserEndpoint(stream, AbortSignal.abort(new Error('early'))),
+		).rejects.toThrow('early')
 	})
 })
 
@@ -438,6 +461,17 @@ describe('launchBrowserProcess', () => {
 			expect(process.spawnargs).toContain('--no-first-run')
 			expect(process.spawnargs).toContain('--no-default-browser-check')
 			expect(process.spawnargs).toContain('--extra-flag')
+		} finally {
+			process.kill()
+		}
+	})
+
+	it('passes port 0 and pipes standard error when no port is given', () => {
+		const process = launchBrowserProcess(globalThis.process.execPath, undefined, true)
+		try {
+			expect(process.spawnargs).toContain('--remote-debugging-port=0')
+			expect(process.stderr).not.toBeNull()
+			expect(process.stdout).toBeNull()
 		} finally {
 			process.kill()
 		}

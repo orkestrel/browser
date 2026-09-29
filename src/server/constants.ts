@@ -61,6 +61,27 @@ export const BROWSER_KILL_GRACE_MS = 3_000
 export const BROWSER_PORT_PROBE_TIMEOUT_MS = 200
 
 /**
+ * Matches the stderr line Chromium prints when its CDP endpoint accepts connections, and
+ * captures the `ws://` endpoint the line names.
+ *
+ * @remarks
+ * Chromium prints the line only when launched with `--remote-debugging-port`, which is why an
+ * owned launch always passes that flag.
+ */
+export const BROWSER_DEVTOOLS_PATTERN = /DevTools listening on (ws:\/\/\S+)/
+
+/**
+ * Sets the interval in milliseconds between liveness probes of a terminated browser process
+ * group.
+ *
+ * @remarks
+ * Node raises an exit event for the direct child only. Neither the rest of a POSIX process
+ * group nor a process a launcher handed the endpoint to raises one, so the bounded drain in
+ * `Browser` probes on this interval until the group is gone or the grace period ends.
+ */
+export const BROWSER_DRAIN_INTERVAL_MS = 100
+
+/**
  * Defers once for `50` milliseconds when a transport loss is observed on an owned process,
  * giving a near-simultaneous process-exit event, which libuv may reap slightly later than the
  * socket close, first say over the diagnosis.
