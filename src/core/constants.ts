@@ -328,3 +328,8 @@ export const BROWSER_CODEGEN_SOURCE = `(() => {
 		true,
 	)
 })()`
+/** Identifies the CDP method-not-found response when WebMCP is absent. */
+export const BROWSER_REGISTRY_ABSENT_CODE = -32601
+
+/** Bounds adopted tool JSON output and error messages to 4096 UTF-16 code units. */
+export const BROWSER_REGISTRY_OUTPUT_LIMIT = 4096

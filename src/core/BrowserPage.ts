@@ -16,6 +16,7 @@ import type {
 	BrowserPageInterface,
 	BrowserPageEventMap,
 	BrowserPageOptions,
+	BrowserRegistryInterface,
 	BrowserResponse,
 	BrowserScreenshotOptions,
 	BrowserScreenshotResult,
@@ -31,6 +32,7 @@ import type {
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCodegen } from './BrowserCodegen.js'
+import { BrowserRegistry } from './BrowserRegistry.js'
 import { BrowserTransition } from './BrowserTransition.js'
 import { BrowserAccessibility } from './BrowserAccessibility.js'
 import { BrowserClock } from './BrowserClock.js'
@@ -123,6 +125,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#floor = 0
 	#closed = false
 	#codegen: BrowserCodegen | undefined
+	#registry: BrowserRegistry | undefined
 	readonly #codegenStart: BrowserTransition<BrowserCodegen> = new BrowserTransition()
 	#navigation: Promise<BrowserNavigationResult> | undefined
 	#closing: Promise<void> | undefined
@@ -228,6 +231,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	get network(): BrowserNetworkManagerInterface {
 		return this.#network
+	}
+
+	get registry(): BrowserRegistryInterface {
+		this.assert()
+		this.#registry ??= new BrowserRegistry(this, this.#client, this.#sessionId, this.#frameIds)
+		return this.#registry
 	}
 
 	get navigation(): BrowserNavigationManagerInterface {
@@ -664,6 +673,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	async #releaseResources(): Promise<void> {
 		this.#cancelLoad()
+		await this.#registry?.destroy().catch(() => undefined)
 		await this.#codegenStart.pending?.catch(() => undefined)
 		await this.#scripts.destroy().catch(() => undefined)
 		await this.#diagnostics.destroy().catch(() => undefined)

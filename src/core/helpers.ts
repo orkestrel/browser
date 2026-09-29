@@ -61,6 +61,7 @@ import {
 	BASE64_CHARS,
 	BASE64_LOOKUP,
 	BROWSER_RESULT_LIMIT,
+	BROWSER_REGISTRY_OUTPUT_LIMIT,
 	BROWSER_RESULT_LIMIT_PATTERN,
 	BROWSER_SNAPSHOT_NODE_LIMIT,
 	BROWSER_KEY_MODIFIERS,
@@ -74,6 +75,50 @@ import {
 	parseNumberArray,
 	parseSnapshotString,
 } from './parsers.js'
+
+/**
+ * Renders tool strings unchanged, content-array text blocks joined, and other values as bounded JSON.
+ * @param value - Untrusted tool output
+ * @returns Rendered output; non-serializable values receive a bounded diagnostic
+ */
+export function renderBrowserToolOutput(value: unknown): string {
+	if (isString(value)) return value
+	if (isArray(value) && value.every((block) => isRecord(block) && isString(block['type']))) {
+		return value
+			.filter(isRecord)
+			.filter((block) => block['type'] === 'text' && isString(block['text']))
+			.map((block) => block['text'])
+			.join('\n')
+	}
+	const rendered = attempt(() => JSON.stringify(value))
+	return (
+		rendered.success ? (rendered.value ?? String(value)) : '[Unserializable tool output]'
+	).slice(0, BROWSER_REGISTRY_OUTPUT_LIMIT)
+}
+
+/**
+ * Derives the advertised input schema from an authored one, adding a required `what` parameter when the schema requires nothing.
+ * @param schema - Authored input schema, or undefined for a parameterless tool
+ * @returns An advertised schema, or undefined when the authored `what` parameter is optional
+ * @remarks The caller strips only a synthetic `what` parameter before invoking the page tool.
+ */
+export function deriveBrowserToolSchema(
+	schema: Readonly<Record<string, unknown>> | undefined,
+): Readonly<Record<string, unknown>> | undefined {
+	const properties = isRecord(schema?.['properties']) ? schema['properties'] : {}
+	const required = isArray(schema?.['required']) ? schema['required'].filter(isString) : []
+	if (Object.hasOwn(properties, 'what') && !required.includes('what')) return undefined
+	if (required.length > 0) return schema
+	return {
+		...schema,
+		type: 'object',
+		properties: {
+			...properties,
+			what: { type: 'string', description: 'Describe the purpose of this action.' },
+		},
+		required: ['what'],
+	}
+}
 
 /**
  * Decodes a base64-encoded string into raw bytes.

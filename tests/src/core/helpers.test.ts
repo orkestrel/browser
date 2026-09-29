@@ -7,6 +7,9 @@ import { describe, it, expect } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
 	BrowserError,
+	renderBrowserToolOutput,
+	deriveBrowserToolSchema,
+	BROWSER_REGISTRY_OUTPUT_LIMIT,
 	BrowserResultLimitError,
 	decodeBase64,
 	extractBrowserSlice,
@@ -34,6 +37,57 @@ import {
 	BASE64_CHARS,
 } from '@src/core'
 import { createDOMSnapshotResult, JPEG_BASE64, PNG_BASE64 } from '../../setup.js'
+
+describe('WebMCP adoption helpers', () => {
+	it('renders an ordinary array as JSON rather than treating it as MCP content', () => {
+		expect(renderBrowserToolOutput([1, 2])).toBe('[1,2]')
+	})
+
+	it('renders strings, content arrays, and bounded record output', () => {
+		expect(renderBrowserToolOutput('result')).toBe('result')
+		expect(
+			renderBrowserToolOutput([
+				{ type: 'text', text: 'first' },
+				{ type: 'image', data: 'ignored' },
+				{ type: 'text', text: 'second' },
+			]),
+		).toBe('first\nsecond')
+		expect(renderBrowserToolOutput({ found: true })).toBe('{"found":true}')
+		expect(renderBrowserToolOutput({ text: 'x'.repeat(1024 * 1024) })).toHaveLength(
+			BROWSER_REGISTRY_OUTPUT_LIMIT,
+		)
+		expect(renderBrowserToolOutput(undefined)).toBe('undefined')
+		const cycle: Record<string, unknown> = {}
+		cycle['self'] = cycle
+		expect(renderBrowserToolOutput(cycle)).toBe('[Unserializable tool output]')
+	})
+
+	it('adds a synthetic required what without mutating the authored schema', () => {
+		expect(deriveBrowserToolSchema(undefined)?.['required']).toEqual(['what'])
+		const schema = { type: 'object', properties: { query: { type: 'string' } }, required: [] }
+		const result = deriveBrowserToolSchema(schema)
+		expect(result?.['required']).toEqual(['what'])
+		expect(result?.['properties']).toHaveProperty('query')
+		expect(result?.['properties']).toHaveProperty('what')
+		expect(schema.required).toEqual([])
+		expect(schema.properties).not.toHaveProperty('what')
+	})
+
+	it('retains required parameters and refuses an optional authored what', () => {
+		const schema = { type: 'object', properties: { what: { type: 'string' } }, required: ['what'] }
+		expect(deriveBrowserToolSchema(schema)).toBe(schema)
+		expect(
+			deriveBrowserToolSchema({ type: 'object', properties: { what: { type: 'string' } } }),
+		).toBeUndefined()
+		expect(
+			deriveBrowserToolSchema({
+				type: 'object',
+				properties: { what: { type: 'string' } },
+				required: ['query'],
+			}),
+		).toBeUndefined()
+	})
+})
 
 describe('decodeBase64', () => {
 	it('decodes a small literal to its exact bytes', () => {

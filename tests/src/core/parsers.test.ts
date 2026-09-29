@@ -4,6 +4,10 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+	parseBrowserTool,
+	parseBrowserRemoval,
+	parseBrowserInvocation,
+	parseBrowserInvocationResult,
 	parseBrowserConsoleMessage,
 	parseBrowserRect,
 	parseBrowserSecurity,
@@ -14,6 +18,110 @@ import {
 	parseNumberArray,
 	parseSnapshotString,
 } from '@src/core'
+
+describe('WebMCP parsers', () => {
+	it('decodes protocol tools, annotations, removals, and invocations', () => {
+		expect(
+			parseBrowserTool({
+				name: 'search',
+				description: 'Search',
+				frameId: 'main',
+				inputSchema: { type: 'object' },
+				backendNodeId: 12,
+				annotations: {
+					readOnly: true,
+					untrustedContent: false,
+					consequential: true,
+					debugging: false,
+					autosubmit: true,
+				},
+			}),
+		).toEqual({
+			name: 'search',
+			description: 'Search',
+			frame: 'main',
+			schema: { type: 'object' },
+			node: 12,
+			annotation: {
+				readOnly: true,
+				untrustedContent: false,
+				consequential: true,
+				debugging: false,
+				autosubmit: true,
+			},
+		})
+		expect(
+			parseBrowserTool({
+				name: 'search',
+				description: 'Search',
+				frameId: 'main',
+				annotations: { readOnly: 'true' },
+			}),
+		).toEqual({
+			name: 'search',
+			description: 'Search',
+			frame: 'main',
+			schema: undefined,
+			node: undefined,
+			annotation: {},
+		})
+		expect(parseBrowserRemoval({ name: 'search', frameId: 'child' })).toEqual({
+			name: 'search',
+			frame: 'child',
+		})
+		expect(
+			parseBrowserInvocation({
+				invocationId: 'call',
+				toolName: 'search',
+				frameId: 'main',
+				input: '{"query":"book"}',
+			}),
+		).toEqual({ id: 'call', tool: 'search', frame: 'main', input: '{"query":"book"}' })
+	})
+
+	it('preserves unknown output and statuses and falls back to exception descriptions', () => {
+		const output = { content: [{ type: 'image', source: 'untrusted' }] }
+		expect(
+			parseBrowserInvocationResult({ invocationId: 'call', status: 'Completed', output })?.output,
+		).toBe(output)
+		expect(
+			parseBrowserInvocationResult({
+				invocationId: 'call',
+				status: 'Error',
+				exception: { description: 'Exception detail' },
+			}),
+		).toEqual({ id: 'call', status: 'Error', output: undefined, error: 'Exception detail' })
+		expect(
+			parseBrowserInvocationResult({
+				invocationId: 'call',
+				status: 'Error',
+				errorText: '',
+				exception: { description: 'ignored' },
+			})?.error,
+		).toBe('')
+		expect(parseBrowserInvocationResult({ invocationId: 'call', status: 'Canceled' })?.status).toBe(
+			'Canceled',
+		)
+		expect(
+			parseBrowserInvocationResult({ invocationId: 'call', status: 'FutureStatus' })?.status,
+		).toBe('FutureStatus')
+	})
+
+	it('refuses malformed required fields', () => {
+		expect(parseBrowserTool(undefined)).toBeUndefined()
+		expect(parseBrowserTool({ name: 'search', frameId: 'main' })).toBeUndefined()
+		expect(parseBrowserRemoval({ name: 'search', frameId: 4 })).toBeUndefined()
+		expect(
+			parseBrowserInvocation({
+				invocationId: 'call',
+				toolName: 'search',
+				frameId: 'main',
+				input: {},
+			}),
+		).toBeUndefined()
+		expect(parseBrowserInvocationResult({ invocationId: 'call', status: 2 })).toBeUndefined()
+	})
+})
 
 describe('network timing parsers', () => {
 	it('decodes finite ordered phases and omits Chromium unavailable sentinels', () => {
