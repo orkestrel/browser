@@ -1,9 +1,12 @@
 import type {
+	BrowserReadingInput,
+	BrowserReadingInterface,
 	BrowserSnapshotInput,
 	BrowserSnapshotInterface,
 	CDPClientInterface,
 	CDPClientOptions,
 } from './types.js'
+import { BrowserReading } from './BrowserReading.js'
 import { BrowserSnapshot } from './BrowserSnapshot.js'
 import { CDPClient } from './CDPClient.js'
 
@@ -41,4 +44,30 @@ export function createCDPClient(options: CDPClientOptions): CDPClientInterface {
  */
 export function createBrowserSnapshot(input: BrowserSnapshotInput): BrowserSnapshotInterface {
 	return new BrowserSnapshot(input)
+}
+
+/**
+ * Creates a `BrowserReadingInterface` over a captured document, parsing its HTML one time.
+ *
+ * @remarks
+ * A reading built with a `navigation` source reports `stale` when that source's epoch differs
+ * from the `epoch` recorded at capture; a reading built without one never does.
+ *
+ * @param input - The document URL, title, and HTML, and the optional navigation epoch
+ * @returns A {@link BrowserReadingInterface}
+ *
+ * @example
+ * ```ts
+ * import { createBrowserReading } from '@orkestrel/browser'
+ *
+ * const reading = createBrowserReading({
+ * 	url: 'https://example.com/',
+ * 	title: 'Example',
+ * 	html: '<nav>Menu</nav><main><p>Body</p></main>',
+ * })
+ * reading.text({ distill: false }) // { text: 'Menu\nBody', offset: 0, total: 9 }
+ * ```
+ */
+export function createBrowserReading(input: BrowserReadingInput): BrowserReadingInterface {
+	return new BrowserReading(input)
 }

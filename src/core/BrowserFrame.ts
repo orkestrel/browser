@@ -1,32 +1,41 @@
 import type {
 	BrowserActionOptions,
-	BrowserContentResult,
+	BrowserEpochFunction,
 	BrowserFrameInterface,
 	BrowserHandleInterface,
 	BrowserKeyboardInterface,
 	BrowserMouseInterface,
+	BrowserReadingInterface,
 	BrowserSelectorManagerInterface,
 	BrowserCallOptions,
 	BrowserSessionFunction,
 	BrowserTouchInterface,
 	BrowserWaitOptions,
+	BrowserWorldFunction,
 	CDPHandler,
 	CDPClientInterface,
 } from './types.js'
 import { BrowserHandle } from './BrowserHandle.js'
 import { BrowserKeyboard } from './BrowserKeyboard.js'
 import { BrowserMouse } from './BrowserMouse.js'
+import { BrowserReading } from './BrowserReading.js'
 import { BrowserSelectorManager } from './BrowserSelectorManager.js'
 import { BrowserTouch } from './BrowserTouch.js'
 import { BROWSER_FRAME_WORLD_NAME, BROWSER_RESULT_LIMIT } from './constants.js'
-import { compileGuardedEvaluateExpression } from './compilers.js'
-import { readEvaluationResult, requireBrowserString } from './helpers.js'
+import { compileGuardedEvaluateExpression, compileReadFunction } from './compilers.js'
+import { readBrowserWorld, readEvaluationResult, requireBrowserString } from './helpers.js'
 import { BrowserError } from './errors.js'
-import { isInteger, isRecord, isString } from '@orkestrel/contract'
-import { createHTML, renderText } from '@orkestrel/html'
+import { isRecord, isString } from '@orkestrel/contract'
 
 /**
  * Represents one attached document frame, evaluated through its own CDP execution world.
+ *
+ * @remarks
+ * The optional `epoch` constructor parameter reads the frame's navigation counter, which lets
+ * `read()` mark a reading stale after a later navigation. The optional `world` parameter
+ * resolves a cached isolated-world context, which lets a page share one world across reads.
+ * A standalone frame built with neither returns readings whose `stale` stays `false`, because
+ * no navigation counter is available to it, and creates a fresh world for each read.
  *
  * @example
  * ```ts
@@ -44,6 +53,8 @@ export class BrowserFrame implements BrowserFrameInterface {
 	readonly #parent: string | undefined
 	readonly #name: string | undefined
 	readonly #isolated: boolean
+	readonly #epoch: BrowserEpochFunction | undefined
+	readonly #world: BrowserWorldFunction | undefined
 	readonly #selectors: BrowserSelectorManager
 	readonly #keyboard: BrowserKeyboard
 	readonly #mouse: BrowserMouse
@@ -58,6 +69,8 @@ export class BrowserFrame implements BrowserFrameInterface {
 		parent?: string,
 		name?: string,
 		isolated = true,
+		epoch?: BrowserEpochFunction,
+		world?: BrowserWorldFunction,
 	) {
 		this.#client = client
 		this.#session = session
@@ -66,6 +79,8 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#parent = parent
 		this.#name = name
 		this.#isolated = isolated
+		this.#epoch = epoch
+		this.#world = world
 		this.#selectors = new BrowserSelectorManager(this)
 		this.#keyboard = new BrowserKeyboard(this)
 		this.#mouse = new BrowserMouse(this)
@@ -110,34 +125,49 @@ export class BrowserFrame implements BrowserFrameInterface {
 		return requireBrowserString(result, 'Document title')
 	}
 
-	async content(): Promise<BrowserContentResult> {
+	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
 		this.assert()
-		const [title, html, text, currentUrl] = await Promise.all([
-			this.#evaluate('document.title'),
-			this.#captureHTML(),
-			this.#evaluate(
-				compileGuardedEvaluateExpression(
-					'document.body ? document.body.innerText : ""',
+		// The epoch is sampled before the capture is issued, so a navigation that lands while the
+		// evaluation is in flight leaves the reading stale rather than current.
+		const epoch = this.#epoch?.()
+		options?.signal?.throwIfAborted()
+		const session = await this.#sessionId()
+		const context =
+			this.#world === undefined
+				? await this.#create(session, options)
+				: await this.#world(session, options)
+		const result = await this.#client.send(
+			'Runtime.evaluate',
+			{
+				expression: compileGuardedEvaluateExpression(
+					`(${compileReadFunction()})()`,
 					BROWSER_RESULT_LIMIT,
 				),
-			),
-			this.#evaluate('location.href'),
-		])
-
-		const url = requireBrowserString(currentUrl, 'Document URL')
-		this.#url = url
-		return {
-			url,
-			title: requireBrowserString(title, 'Document title'),
-			html: requireBrowserString(html, 'Document HTML'),
-			text: requireBrowserString(text, 'Document text'),
+				returnByValue: true,
+				awaitPromise: true,
+				contextId: context,
+			},
+			{ session, ...options },
+		)
+		const capture = readEvaluationResult(result)
+		if (
+			!isRecord(capture) ||
+			!isString(capture['url']) ||
+			!isString(capture['title']) ||
+			!isString(capture['html'])
+		) {
+			throw new BrowserError('Browser read capture is malformed', undefined, { frame: this.#id })
 		}
-	}
-
-	async article(): Promise<string> {
-		this.assert()
-		const html = requireBrowserString(await this.#captureHTML(), 'Document HTML')
-		return renderText(createHTML(html).distill().document)
+		// A capture that a navigation overtook must not regress the frame URL the navigation set.
+		if (this.#epoch === undefined || this.#epoch() === epoch) this.#url = capture['url']
+		return new BrowserReading({
+			url: capture['url'],
+			title: capture['title'],
+			html: capture['html'],
+			...(epoch === undefined || this.#epoch === undefined
+				? {}
+				: { epoch, navigation: this.#epoch }),
+		})
 	}
 
 	async click(selector: string, options?: BrowserActionOptions): Promise<void> {
@@ -234,12 +264,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#url = url
 	}
 
-	async #captureHTML(): Promise<unknown> {
-		return await this.#evaluate(
-			compileGuardedEvaluateExpression('document.documentElement.outerHTML', BROWSER_RESULT_LIMIT),
-		)
-	}
-
 	async #evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {
 		const session = await this.#sessionId()
 		const params: Record<string, unknown> = {
@@ -260,17 +284,16 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	async #context(session: string, options?: BrowserCallOptions): Promise<number | undefined> {
 		if (!this.#isolated) return undefined
+		return await this.#create(session, options)
+	}
+
+	async #create(session: string, options?: BrowserCallOptions): Promise<number> {
 		const world = await this.#client.send(
 			'Page.createIsolatedWorld',
 			{ frameId: this.#id, worldName: BROWSER_FRAME_WORLD_NAME },
 			{ session, ...options },
 		)
-		if (!isRecord(world) || !isInteger(world['executionContextId'])) {
-			throw new BrowserError('Failed to create frame execution context', undefined, {
-				frame: this.#id,
-			})
-		}
-		return world['executionContextId']
+		return readBrowserWorld(world, this.#id)
 	}
 
 	async #sessionId(): Promise<string> {

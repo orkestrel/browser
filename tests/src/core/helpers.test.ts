@@ -6,8 +6,10 @@ import type { BrowserCodegenAction } from '@src/core'
 import { describe, it, expect } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
+	BrowserError,
 	BrowserResultLimitError,
 	decodeBase64,
+	extractBrowserSlice,
 	readBrowserAttributes,
 	readBrowserSnapshot,
 	readRareBooleanData,
@@ -24,6 +26,7 @@ import {
 	readBrowserFrames,
 	readBrowserHeaders,
 	readBrowserProfile,
+	readBrowserWorld,
 	readEvaluationResult,
 	requireBrowserString,
 	compileCodegenScript,
@@ -260,6 +263,105 @@ describe('evaluation result helpers', () => {
 			'Document title failed: no string value returned',
 		)
 	})
+})
+
+describe('readBrowserWorld', () => {
+	it('returns the execution context id of a created isolated world', () => {
+		expect(readBrowserWorld({ executionContextId: 42 }, 'frame-1')).toBe(42)
+	})
+
+	it.each([undefined, {}, { executionContextId: '42' }, { executionContextId: 4.2 }])(
+		'throws a browser error naming the frame for the malformed reply %j',
+		(reply) => {
+			const result = attempt(() => readBrowserWorld(reply, 'frame-1'))
+
+			expect(result.success).toBe(false)
+			if (result.success) return
+			expect(result.error).toBeInstanceOf(BrowserError)
+			expect(result.error instanceof BrowserError ? result.error.context : undefined).toEqual({
+				frame: 'frame-1',
+			})
+		},
+	)
+})
+
+describe('extractBrowserSlice', () => {
+	it('returns the whole text from offset 0 when no bound is given', () => {
+		expect(extractBrowserSlice('alpha\nbeta')).toEqual({
+			text: 'alpha\nbeta',
+			offset: 0,
+			total: 10,
+		})
+	})
+
+	it('ends a bounded slice after the last line break inside its window', () => {
+		expect(extractBrowserSlice('alpha\nbeta\ngamma', 0, 12)).toEqual({
+			text: 'alpha\nbeta\n',
+			offset: 0,
+			total: 16,
+		})
+	})
+
+	it('hard-cuts at the limit when no line break lies past the offset', () => {
+		expect(extractBrowserSlice('abcdefgh', 0, 3)).toEqual({ text: 'abc', offset: 0, total: 8 })
+		expect(extractBrowserSlice('\nabcdef', 0, 3)).toEqual({ text: '\nab', offset: 0, total: 7 })
+	})
+
+	it('returns the rest of the text when the window reaches its end', () => {
+		expect(extractBrowserSlice('alpha\nbeta\ngamma', 11, 12)).toEqual({
+			text: 'gamma',
+			offset: 11,
+			total: 16,
+		})
+	})
+
+	it('returns an empty slice at or past the end of the text', () => {
+		expect(extractBrowserSlice('alpha', 5, 3)).toEqual({ text: '', offset: 5, total: 5 })
+		expect(extractBrowserSlice('alpha', 9)).toEqual({ text: '', offset: 9, total: 5 })
+		expect(extractBrowserSlice('', 0, 4)).toEqual({ text: '', offset: 0, total: 0 })
+	})
+
+	it('keeps a surrogate pair whole at a hard cut and still advances past a lone pair', () => {
+		const faces = '\u{1F600}\u{1F600}'
+
+		expect(extractBrowserSlice(faces, 0, 3).text).toBe('\u{1F600}')
+		expect(extractBrowserSlice(faces, 0, 1).text).toBe('\uD83D')
+	})
+
+	it('keeps an unpaired high surrogate at a hard cut', () => {
+		expect(extractBrowserSlice('a\uD800bc', 0, 2).text).toBe('a\uD800')
+	})
+
+	it('concatenates successive slices back into the text, each within the limit', () => {
+		const source = ['a'.repeat(7), 'b'.repeat(2), 'c'.repeat(11), '', 'd'.repeat(3)].join('\n')
+		const parts: string[] = []
+		let offset = 0
+		while (offset < source.length) {
+			const slice = extractBrowserSlice(source, offset, 5)
+			expect(slice.text.length).toBeGreaterThan(0)
+			expect(slice.text.length).toBeLessThanOrEqual(5)
+			expect(slice.total).toBe(source.length)
+			parts.push(slice.text)
+			offset += slice.text.length
+		}
+
+		expect(parts.join('')).toBe(source)
+		expect(parts).toEqual(['aaaaa', 'aa\n', 'bb\n', 'ccccc', 'ccccc', 'c\n\n', 'ddd'])
+	})
+
+	it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+		'throws a browser error for the offset %s',
+		(offset) => {
+			expect(() => extractBrowserSlice('alpha', offset)).toThrow(BrowserError)
+		},
+	)
+
+	it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+		'throws a browser error for the limit %s',
+		(limit) => {
+			expect(() => extractBrowserSlice('alpha', 0, limit)).toThrow(BrowserError)
+		},
+	)
 })
 
 describe('snapshot decoders', () => {

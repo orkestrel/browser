@@ -24,6 +24,8 @@ import {
 	BROWSER_RESULT_LIMIT,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
+	compileGuardedEvaluateExpression,
+	compileReadFunction,
 } from '@src/core'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
@@ -46,7 +48,7 @@ import {
 
 describe('BrowserPage', () => {
 	describe('url seeding', () => {
-		it('reports a seeded url immediately, before any navigate()/content() call', async () => {
+		it('reports a seeded url immediately, before any navigate() or read() call', async () => {
 			const { client } = await createConnectedCDPClient()
 
 			const page = new BrowserPage(
@@ -326,86 +328,402 @@ describe('BrowserPage', () => {
 		})
 	})
 
-	describe('content()', () => {
-		it('returns url, title, html, and text', async () => {
+	describe('read()', () => {
+		it('captures in one cached isolated world while evaluate stays in the main world', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Content Test')
-			scriptEvaluate(
-				transport,
-				(expression) => expression.includes('outerHTML'),
-				'<p>Hello World</p>',
-			)
-			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'Hello World')
-			scriptEvaluate(
-				transport,
-				(expression) => expression === 'location.href',
-				'https://example.com/page',
-			)
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/page',
+				title: 'Read Test',
+				html: '<main><p>Hello World</p></main>',
+			})
+			scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const result = await page.content()
+			const reading = await page.read()
+			await page.read()
+			expect(await page.evaluate('1 + 1')).toBe(2)
 
-			expect(result.title).toBe('Content Test')
-			expect(result.html).toBe('<p>Hello World</p>')
-			expect(result.text).toBe('Hello World')
-			expect(result.url).toBe('https://example.com/page')
+			expect(reading.title).toBe('Read Test')
+			expect(reading.text().text).toBe('Hello World')
+			expect(page.url).toBe('https://example.com/page')
+			const worlds = transport.sent.filter(
+				(message) => message.method === 'Page.createIsolatedWorld',
+			)
+			expect(worlds.map((message) => [message.sessionId, message.params?.['frameId']])).toEqual([
+				['session-1', 'main-1'],
+			])
+			expect(
+				transport.sent
+					.filter((message) => message.method === 'Runtime.evaluate')
+					.map((message) => message.params?.['contextId']),
+			).toEqual([5, 5, undefined])
 		})
 
-		it.each([{ field: 'title' }, { field: 'html' }, { field: 'text' }, { field: 'url' }])(
-			'rejects a malformed $field result instead of substituting a sentinel',
-			async ({ field }) => {
-				const { client, transport } = await createConnectedCDPClient()
-				scriptEvaluate(
-					transport,
-					(expression) => expression === 'document.title',
-					field === 'title' ? undefined : 'Title',
-				)
-				scriptEvaluate(
-					transport,
-					(expression) => expression.includes('outerHTML'),
-					field === 'html' ? undefined : '<p>Text</p>',
-				)
-				scriptEvaluate(
-					transport,
-					(expression) => expression.includes('innerText'),
-					field === 'text' ? undefined : 'Text',
-				)
-				scriptEvaluate(
-					transport,
-					(expression) => expression === 'location.href',
-					field === 'url' ? undefined : 'https://example.com/',
-				)
-
-				const page = new BrowserPage(client, 'target-1', 'session-1')
-
-				await expect(page.content()).rejects.toSatisfy(isBrowserError)
-			},
-		)
-
-		it('maps an oversized outerHTML result to a coded BrowserResultLimitError', async () => {
+		it('drops the cached world when its context is destroyed or every context is cleared', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
-			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'text')
-			scriptEvaluate(
-				transport,
-				(expression) => expression === 'location.href',
-				'https://example.com/',
+			const contexts = [5, 6, 7]
+			transport.onSend('Page.createIsolatedWorld', (message) =>
+				transport.reply(message.id, { executionContextId: contexts.shift() }),
 			)
-			transport.onSend('Runtime.evaluate', (message) => {
-				const expression = message.params?.['expression']
-				if (typeof expression === 'string' && expression.includes('outerHTML')) {
-					transport.reply(message.id, {
-						exceptionDetails: {
-							exception: {
-								description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}3500000`,
-							},
-						},
-					})
-				}
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/page',
+				title: 'Worlds',
+				html: '<p>Body</p>',
 			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 
+			await page.read()
+			transport.event('Runtime.executionContextDestroyed', { executionContextId: 99 }, 'session-1')
+			await page.read()
+			transport.event('Runtime.executionContextDestroyed', { executionContextId: 5 }, 'session-1')
+			await page.read()
+			transport.event('Runtime.executionContextsCleared', {}, 'session-1')
+			await page.read()
+
+			expect(
+				transport.sent
+					.filter((message) => message.method === 'Runtime.evaluate')
+					.map((message) => message.params?.['contextId']),
+			).toEqual([5, 5, 6, 7])
+		})
+
+		it('marks a reading stale on a cross-document navigation of its frame and of no other frame', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/',
+				title: 'Frames',
+				html: '<p>Body</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			const [, child, grandchild] = await page.frames()
+			const main = await page.read()
+			const childReading = await requireValue(child).read()
+			const grandchildReading = await requireValue(grandchild).read()
+
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'child-1', url: 'https://example.com/child/next' } },
+				'session-1',
+			)
+
+			expect(childReading.stale).toBe(true)
+			expect(grandchildReading.stale).toBe(false)
+			expect(main.stale).toBe(false)
+		})
+
+		it('marks a reading stale on a same-document navigation of its frame and of no other frame', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/',
+				title: 'Frames',
+				html: '<p>Body</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			const [, child, grandchild] = await page.frames()
+			const main = await page.read()
+			const childReading = await requireValue(child).read()
+			const grandchildReading = await requireValue(grandchild).read()
+
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'grandchild-1', url: 'https://example.com/grandchild#part' },
+				'session-1',
+			)
+
+			expect(grandchildReading.stale).toBe(true)
+			expect(childReading.stale).toBe(false)
+			expect(main.stale).toBe(false)
+		})
+
+		it('marks the page reading stale on both navigation kinds of the page frame', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/',
+				title: 'Frames',
+				html: '<p>Body</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			const [, child] = await page.frames()
+			const before = await page.read()
+			const childReading = await requireValue(child).read()
+
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'main-1', url: 'https://example.com/#pushed' },
+				'session-1',
+			)
+
+			expect(before.stale).toBe(true)
+			expect(childReading.stale).toBe(false)
+			const after = await page.read()
+			expect(after.stale).toBe(false)
+
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'main-1', url: 'https://example.com/next' } },
+				'session-1',
+			)
+
+			expect(after.stale).toBe(true)
+			expect(childReading.stale).toBe(true)
+			expect((await page.read()).stale).toBe(false)
+		})
+
+		it('marks a reading stale when its frame detaches or its page closes', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			replyOk(transport, 'Target.closeTarget')
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/',
+				title: 'Frames',
+				html: '<p>Body</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			const [, child] = await page.frames()
+			const main = await page.read()
+			const childReading = await requireValue(child).read()
+
+			transport.event('Page.frameDetached', { frameId: 'child-1' }, 'session-1')
+
+			expect(childReading.stale).toBe(true)
+			expect(main.stale).toBe(false)
+
+			await page.close()
+
+			expect(main.stale).toBe(true)
+		})
+
+		it('follows an out-of-process frame on its own session until it detaches', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.enable')
+			replyOk(transport, 'Runtime.enable')
+			const contexts = [84, 85]
+			transport.onSend('Page.createIsolatedWorld', (message) =>
+				transport.reply(message.id, { executionContextId: contexts.shift() }),
+			)
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://other.example/embed',
+				title: 'Embed',
+				html: '<p>Embedded</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+			page.emitter.on('session', sessions.handler)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-oopif',
+					targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/embed' },
+				},
+				'session-1',
+			)
+			await waitForCondition('the session event was delivered', () => sessions.count === 1)
+			const frame = requireValue(sessions.calls[0]?.[0])
+
+			const first = await frame.read()
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'oopif-7', url: 'https://other.example/embed#part' },
+				'session-oopif',
+			)
+			const second = await frame.read()
+			transport.event('Runtime.executionContextsCleared', {}, 'session-oopif')
+			await frame.read()
+			transport.event(
+				'Target.detachedFromTarget',
+				{ sessionId: 'session-oopif', targetId: 'oopif-7' },
+				'session-1',
+			)
+
+			expect(first.stale).toBe(true)
+			expect(second.stale).toBe(true)
+			const evaluations = transport.sent.filter((message) => message.method === 'Runtime.evaluate')
+			expect(evaluations.map((message) => message.sessionId)).toEqual([
+				'session-oopif',
+				'session-oopif',
+				'session-oopif',
+			])
+			expect(evaluations.map((message) => message.params?.['contextId'])).toEqual([84, 84, 85])
+		})
+
+		it('marks a reading stale when frame detachment arrives on the iframe session', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.enable')
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://other.example/embed',
+				title: 'Embed',
+				html: '<p>Embedded</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+			page.emitter.on('session', sessions.handler)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-oopif',
+					targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/embed' },
+				},
+				'session-1',
+			)
+			await waitForCondition('the session event was delivered', () => sessions.count === 1)
+			const reading = await requireValue(sessions.calls[0]?.[0]).read()
+			expect(reading.stale).toBe(false)
+
+			transport.event('Page.frameDetached', { frameId: 'oopif-7' }, 'session-oopif')
+
+			expect(reading.stale).toBe(true)
+		})
+
+		it('shares one pending world creation between concurrent reads', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const creations: number[] = []
+			transport.onSend('Page.createIsolatedWorld', (message) => creations.push(message.id))
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/',
+				title: 'Home',
+				html: '<p>Body</p>',
+			})
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const thrown: unknown = await page.content().catch((caught: unknown) => caught)
+
+			const reads = Promise.all([page.read(), page.read()])
+			await waitForCondition('the creation was sent', () => creations.length > 0)
+			const first = creations[0]
+			transport.reply(requireValue(first), { executionContextId: 61 })
+			await reads
+
+			expect(creations).toHaveLength(1)
+			expect(
+				transport.sent
+					.filter((message) => message.method === 'Runtime.evaluate')
+					.map((message) => message.params?.['contextId']),
+			).toEqual([61, 61])
+		})
+
+		it('discards a world whose creation a context clear overtook', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const creations: number[] = []
+			transport.onSend('Page.createIsolatedWorld', (message) => creations.push(message.id))
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/',
+				title: 'Home',
+				html: '<p>Body</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			const pending = page.read()
+			await waitForCondition('the creation was sent', () => creations.length === 1)
+			transport.event('Runtime.executionContextsCleared', {}, 'session-1')
+			transport.reply(requireValue(creations[0]), { executionContextId: 61 })
+			await pending
+			const next = page.read()
+			await waitForCondition('a fresh creation was sent', () => creations.length === 2)
+			transport.reply(requireValue(creations[1]), { executionContextId: 62 })
+			await next
+
+			expect(creations).toHaveLength(2)
+		})
+
+		it('scopes a context clear to the session that emitted it', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
+			replyOk(transport, 'Page.enable')
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
+			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+				url: 'https://example.com/',
+				title: 'Home',
+				html: '<p>Body</p>',
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+			page.emitter.on('session', sessions.handler)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-oopif',
+					targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/embed' },
+				},
+				'session-1',
+			)
+			await waitForCondition('the session event was delivered', () => sessions.count === 1)
+			const iframe = requireValue(sessions.calls[0]?.[0])
+			const creationCount = (): number =>
+				transport.sent.filter((message) => message.method === 'Page.createIsolatedWorld').length
+			await page.read()
+			await iframe.read()
+			expect(creationCount()).toBe(2)
+
+			transport.event('Runtime.executionContextsCleared', {}, 'session-oopif')
+			await page.read()
+			expect(creationCount()).toBe(2)
+			await iframe.read()
+			expect(creationCount()).toBe(3)
+		})
+
+		it('keeps the frame url of a navigation that overtook the capture', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			const captures: number[] = []
+			transport.onSend('Runtime.evaluate', (message) => captures.push(message.id))
+			const page = new BrowserPage(
+				client,
+				'target-1',
+				'session-1',
+				undefined,
+				'https://example.com/a',
+				'main-1',
+			)
+
+			const pending = page.read()
+			await waitForCondition('the capture was sent', () => captures.length === 1)
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'main-1', url: 'https://example.com/b' },
+				'session-1',
+			)
+			transport.reply(requireValue(captures[0]), {
+				result: {
+					value: { url: 'https://example.com/a', title: 'A', html: '<p>A</p>' },
+				},
+			})
+			const reading = await pending
+
+			expect(reading.url).toBe('https://example.com/a')
+			expect(reading.stale).toBe(true)
+			expect(page.url).toBe('https://example.com/b')
+		})
+
+		it('maps an oversized capture to a coded BrowserResultLimitError', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			transport.onSend('Runtime.evaluate', (message) => {
+				transport.reply(message.id, {
+					exceptionDetails: {
+						exception: {
+							description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}3500000`,
+						},
+					},
+				})
+			})
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+
+			const thrown: unknown = await page.read().catch((caught: unknown) => caught)
+			const evaluation = transport.sent.find((message) => message.method === 'Runtime.evaluate')
+			expect(evaluation?.params?.['expression']).toBe(
+				compileGuardedEvaluateExpression(`(${compileReadFunction()})()`, BROWSER_RESULT_LIMIT),
+			)
 
 			expect(isBrowserResultLimitError(thrown)).toBe(true)
 			expect(
@@ -413,88 +731,15 @@ describe('BrowserPage', () => {
 			).toBe(3500000)
 		})
 
-		it('maps an oversized innerText result to a coded BrowserResultLimitError', async () => {
+		it('rejects a read with an aborted signal with its reason and sends nothing', async () => {
 			const { client, transport } = await createConnectedCDPClient()
-			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
-			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), '<p></p>')
-			scriptEvaluate(
-				transport,
-				(expression) => expression === 'location.href',
-				'https://example.com/',
-			)
-			transport.onSend('Runtime.evaluate', (message) => {
-				const expression = message.params?.['expression']
-				if (typeof expression === 'string' && expression.includes('innerText')) {
-					transport.reply(message.id, {
-						exceptionDetails: {
-							exception: {
-								description: `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}4200000`,
-							},
-						},
-					})
-				}
-			})
-
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const thrown: unknown = await page.content().catch((caught: unknown) => caught)
+			const reason = new Error('tool cancelled')
+			const controller = new AbortController()
+			controller.abort(reason)
 
-			expect(isBrowserResultLimitError(thrown)).toBe(true)
-			expect(
-				thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined,
-			).toBe(4200000)
-		})
-
-		it('sends the innerText expression wrapped in the result-limit guard', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Test')
-			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), '<p></p>')
-			scriptEvaluate(transport, (expression) => expression.includes('innerText'), 'text')
-			scriptEvaluate(
-				transport,
-				(expression) => expression === 'location.href',
-				'https://example.com/',
-			)
-
-			let sentTextExpression: string | undefined
-			transport.onSend('Runtime.evaluate', (message) => {
-				const expression = message.params?.['expression']
-				if (typeof expression === 'string' && expression.includes('innerText')) {
-					sentTextExpression = expression
-				}
-			})
-
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await page.content()
-
-			expect(sentTextExpression).toContain(BROWSER_RESULT_LIMIT_SENTINEL_PREFIX)
-		})
-
-		it('serves inherited article distillation through the page', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptEvaluate(transport, (expression) => expression === 'document.title', 'Article')
-			scriptEvaluate(
-				transport,
-				(expression) => expression.includes('outerHTML'),
-				'<html><body><nav>Navigation</nav><main><article><h1>Article</h1><p>Page body.</p></article></main><footer>Footer</footer></body></html>',
-			)
-			scriptEvaluate(
-				transport,
-				(expression) => expression.includes('innerText'),
-				'Navigation\nArticle\nPage body.\nFooter',
-			)
-			scriptEvaluate(
-				transport,
-				(expression) => expression === 'location.href',
-				'https://example.com/article',
-			)
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-
-			const content = await page.content()
-			const article = await page.article()
-
-			expect(article).toBe('Article\nPage body.')
-			expect(article).not.toBe(content.text)
-			expect(article).not.toContain('Navigation')
+			await expect(page.read({ signal: controller.signal })).rejects.toBe(reason)
+			expect(transport.sent).toEqual([])
 		})
 	})
 

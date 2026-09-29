@@ -218,6 +218,24 @@ ${expression}
 }
 
 /**
+ * Compiles the in-page function that reads the document's URL, title, and serialized HTML.
+ *
+ * @remarks
+ * The declaration takes no arguments and returns `{ url, title, html }` from `location.href`,
+ * `document.title`, and `document.documentElement.outerHTML`, with `html` empty for a document
+ * that has no root element. Call it inside {@link compileGuardedEvaluateExpression} to bound the
+ * result under {@link BROWSER_RESULT_LIMIT}.
+ *
+ * @returns A function declaration source
+ */
+export function compileReadFunction(): string {
+	return `function() {
+	const root = document.documentElement
+	return { url: location.href, title: document.title, html: root ? root.outerHTML : '' }
+}`
+}
+
+/**
  * Compiles recorded codegen actions into a replayable JavaScript or TypeScript script.
  *
  * @remarks

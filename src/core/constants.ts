@@ -87,7 +87,7 @@ export const BASE64_LOOKUP: Readonly<Record<string, number>> = Object.freeze({
 export const BROWSER_DEFAULT_TIMEOUT_MS = 30_000
 
 /**
- * Caps the serialized-character length for an `evaluate()`/`content()` result at `2_500_000`,
+ * Caps the serialized-character length for an `evaluate()`/`read()` result at `2_500_000`,
  * enforced in-page before the result is returned to CDP.
  *
  * @remarks

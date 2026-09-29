@@ -1,4 +1,5 @@
 import type {
+	BrowserCallOptions,
 	BrowserCodegenInterface,
 	BrowserCodegenOptions,
 	BrowserClockInterface,
@@ -25,6 +26,7 @@ import type {
 	BrowserWorkerCategory,
 	BrowserAccessibilityInterface,
 	CDPClientInterface,
+	CDPHandler,
 	BrowserWriterInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -45,6 +47,7 @@ import { BrowserWorker } from './BrowserWorker.js'
 import { BrowserError } from './errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_FRAME_WORLD_NAME,
 	BROWSER_SNAPSHOT_NODE_LIMIT,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
 } from './constants.js'
@@ -58,6 +61,7 @@ import {
 	browserPDFToParams,
 	browserScreenshotToParams,
 	readBrowserFrames,
+	readBrowserWorld,
 	requireBrowserString,
 	validateBrowserTimeout,
 } from './helpers.js'
@@ -103,6 +107,20 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #downloads: Map<string, BrowserDownload> = new Map()
 	readonly #workers: Map<string, BrowserWorker> = new Map()
 	readonly #popups: Map<string, BrowserPage> = new Map()
+	// A frame with no entry has not changed since the last page-frame document change, whose
+	// epoch `#floor` holds, so the map holds only the frames of the current document.
+	readonly #epochs: Map<string, number> = new Map()
+	readonly #worlds: Map<string, { readonly session: string; readonly context: number }> = new Map()
+	// A pending creation records its session so a context-cleared event on that session can
+	// invalidate it before it publishes.
+	readonly #creating: Map<string, { readonly session: string; readonly promise: Promise<number> }> =
+		new Map()
+	readonly #runtimeHandlers: Map<
+		string,
+		{ readonly destroyed: CDPHandler; readonly cleared: CDPHandler }
+	> = new Map()
+	#epoch = 0
+	#floor = 0
 	#closed = false
 	#codegen: BrowserCodegen | undefined
 	readonly #codegenStart: BrowserTransition<BrowserCodegen> = new BrowserTransition()
@@ -144,7 +162,17 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		opener?: BrowserPageInterface,
 		options?: BrowserPageOptions,
 	) {
-		super(client, sessionId, frameId ?? targetId, url ?? 'about:blank', undefined, undefined, false)
+		super(
+			client,
+			sessionId,
+			frameId ?? targetId,
+			url ?? 'about:blank',
+			undefined,
+			undefined,
+			false,
+			() => this.#epochOf(this.id),
+			(session, call) => this.#world(this.id, session, call),
+		)
 		this.#client = client
 		this.#targetId = targetId
 		this.#sessionId = sessionId
@@ -187,6 +215,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.subscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.subscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
 		this.#client.subscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
+		const runtime = this.#runtimeHandlersFor(this.#sessionId)
+		this.#client.subscribe('Runtime.executionContextDestroyed', runtime.destroyed, this.#sessionId)
+		this.#client.subscribe('Runtime.executionContextsCleared', runtime.cleared, this.#sessionId)
 		this.#client.subscribe('Browser.downloadWillBegin', this.#downloadHandler)
 		this.#client.subscribe('Browser.downloadProgress', this.#downloadProgressHandler)
 	}
@@ -648,6 +679,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#codegen = undefined
 		}
 
+		this.#advancePage()
+		for (const session of this.#frameIds.keys()) this.#unwatchSession(session)
 		this.#frameSessions.clear()
 		this.#frameIds.clear()
 		this.#iframes.clear()
@@ -671,6 +704,13 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.unsubscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.unsubscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
 		this.#client.unsubscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
+		const runtime = this.#runtimeHandlersFor(this.#sessionId)
+		this.#client.unsubscribe(
+			'Runtime.executionContextDestroyed',
+			runtime.destroyed,
+			this.#sessionId,
+		)
+		this.#client.unsubscribe('Runtime.executionContextsCleared', runtime.cleared, this.#sessionId)
 		this.#client.unsubscribe('Browser.downloadWillBegin', this.#downloadHandler)
 		this.#client.unsubscribe('Browser.downloadProgress', this.#downloadProgressHandler)
 		if (!this.#emitter.destroyed) {
@@ -687,7 +727,98 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			frame.url,
 			frame.parent,
 			frame.name,
+			true,
+			() => this.#epochOf(frame.id),
+			(session, call) => this.#world(frame.id, session, call),
 		)
+	}
+
+	#epochOf(frame: string): number {
+		return this.#epochs.get(frame) ?? this.#floor
+	}
+
+	#advanceFrame(frame: string): void {
+		this.#epoch += 1
+		this.#epochs.set(frame, this.#epoch)
+	}
+
+	// A page-frame document change replaces every frame document, so it advances them together.
+	#advancePage(): void {
+		this.#epoch += 1
+		this.#floor = this.#epoch
+		this.#epochs.clear()
+		this.#worlds.clear()
+		this.#creating.clear()
+	}
+
+	#world(frame: string, session: string, options?: BrowserCallOptions): Promise<number> {
+		const cached = this.#worlds.get(frame)
+		if (cached !== undefined) return Promise.resolve(cached.context)
+		const existing = this.#creating.get(frame)
+		if (existing !== undefined) return existing.promise
+		const pending: Promise<number> = this.#client
+			.send(
+				'Page.createIsolatedWorld',
+				{ frameId: frame, worldName: BROWSER_FRAME_WORLD_NAME },
+				{ session, ...options },
+			)
+			.then(this.#decodeWorld.bind(this, frame))
+		this.#creating.set(frame, { session, promise: pending })
+		void pending.then(
+			this.#publishWorld.bind(this, frame, session, pending),
+			this.#settleWorld.bind(this, frame, pending),
+		)
+		return pending
+	}
+
+	#decodeWorld(frame: string, world: unknown): number {
+		return readBrowserWorld(world, frame)
+	}
+
+	// Publication requires the creation to be the frame's current one, so an invalidation that
+	// landed while the request was in flight discards its context.
+	#publishWorld(frame: string, session: string, pending: Promise<number>, context: number): void {
+		if (this.#creating.get(frame)?.promise === pending && !this.#closed) {
+			this.#worlds.set(frame, { session, context })
+		}
+		this.#settleWorld(frame, pending)
+	}
+
+	#settleWorld(frame: string, pending: Promise<number>): void {
+		if (this.#creating.get(frame)?.promise === pending) this.#creating.delete(frame)
+	}
+
+	#runtimeHandlersFor(session: string): {
+		readonly destroyed: CDPHandler
+		readonly cleared: CDPHandler
+	} {
+		const existing = this.#runtimeHandlers.get(session)
+		if (existing !== undefined) return existing
+		const created = {
+			destroyed: this.#handleContextDestroyed.bind(this, session),
+			cleared: this.#handleContextsCleared.bind(this, session),
+		}
+		this.#runtimeHandlers.set(session, created)
+		return created
+	}
+
+	#watchSession(session: string): void {
+		this.#client.subscribe('Page.frameDetached', this.#frameDetachedHandler, session)
+		this.#client.subscribe('Page.frameNavigated', this.#frameNavigatedHandler, session)
+		this.#client.subscribe('Page.navigatedWithinDocument', this.#sameDocumentHandler, session)
+		const runtime = this.#runtimeHandlersFor(session)
+		this.#client.subscribe('Runtime.executionContextDestroyed', runtime.destroyed, session)
+		this.#client.subscribe('Runtime.executionContextsCleared', runtime.cleared, session)
+	}
+
+	#unwatchSession(session: string): void {
+		this.#client.unsubscribe('Page.frameDetached', this.#frameDetachedHandler, session)
+		this.#client.unsubscribe('Page.frameNavigated', this.#frameNavigatedHandler, session)
+		this.#client.unsubscribe('Page.navigatedWithinDocument', this.#sameDocumentHandler, session)
+		const runtime = this.#runtimeHandlersFor(session)
+		this.#client.unsubscribe('Runtime.executionContextDestroyed', runtime.destroyed, session)
+		this.#client.unsubscribe('Runtime.executionContextsCleared', runtime.cleared, session)
+		this.#runtimeHandlers.delete(session)
 	}
 
 	async #resolveFrameSession(frame: string): Promise<string> {
@@ -828,6 +959,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				frame,
 				'about:blank',
 				isString(parent) ? parent : undefined,
+				undefined,
+				true,
+				() => this.#epochOf(frame),
+				(session, call) => this.#world(frame, session, call),
 			),
 		)
 	}
@@ -835,15 +970,23 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#handleFrameNavigated(params: Readonly<Record<string, unknown>>): void {
 		const frame = params['frame']
 		if (!isRecord(frame) || !isString(frame['id']) || !isString(frame['url'])) return
-		if (frame['id'] === this.id) {
-			if (isString(frame['loaderId'])) this.#loader = frame['loaderId']
-			this.update(frame['url'])
-			this.#emitter.emit('navigate', frame['url'], false)
+		if (frame['id'] !== this.id) {
+			this.#advanceFrame(frame['id'])
+			this.#worlds.delete(frame['id'])
+			this.#creating.delete(frame['id'])
+			return
 		}
+		this.#advancePage()
+		if (isString(frame['loaderId'])) this.#loader = frame['loaderId']
+		this.update(frame['url'])
+		this.#emitter.emit('navigate', frame['url'], false)
 	}
 
 	#handleSameDocument(params: Readonly<Record<string, unknown>>): void {
-		if (params['frameId'] !== this.id || !isString(params['url'])) return
+		const frame = params['frameId']
+		if (!isString(frame)) return
+		this.#advanceFrame(frame)
+		if (frame !== this.id || !isString(params['url'])) return
 		this.update(params['url'])
 		this.#emitter.emit('navigate', params['url'], true)
 	}
@@ -852,6 +995,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const frame = params['frameId']
 		if (!isString(frame)) return
 		this.#frameSessions.delete(frame)
+		this.#advanceFrame(frame)
+		this.#worlds.delete(frame)
+		this.#creating.delete(frame)
 		this.#emitter.emit('detach', frame)
 	}
 
@@ -958,6 +1104,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			name: undefined,
 			url: isString(target['url']) ? target['url'] : 'about:blank',
 		}
+		this.#worlds.delete(frame)
+		this.#creating.delete(frame)
+		this.#watchSession(session)
 		const attempt = this.#enableFrameSession(session)
 		this.#frameSessions.set(frame, attempt)
 		this.#frameIds.set(session, frame)
@@ -970,6 +1119,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			() => {
 				if (this.#frameSessions.get(frame) === attempt) this.#frameSessions.delete(frame)
 				if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
+				this.#unwatchSession(session)
 				void this.#detachChild(session)
 			},
 		)
@@ -996,10 +1146,29 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				? this.#frameIds.get(session)
 				: undefined
 		if (frame !== undefined) {
-			this.#frameSessions.delete(frame)
+			if (this.#frameSessions.delete(frame)) this.#advanceFrame(frame)
 			this.#iframes.delete(frame)
+			this.#worlds.delete(frame)
+			this.#creating.delete(frame)
 		}
-		if (isString(session)) this.#frameIds.delete(session)
+		if (isString(session) && this.#frameIds.delete(session)) this.#unwatchSession(session)
+	}
+
+	#handleContextDestroyed(session: string, params: Readonly<Record<string, unknown>>): void {
+		const context = params['executionContextId']
+		if (!isInteger(context)) return
+		for (const [frame, world] of this.#worlds) {
+			if (world.session === session && world.context === context) this.#worlds.delete(frame)
+		}
+	}
+
+	#handleContextsCleared(session: string): void {
+		for (const [frame, world] of this.#worlds) {
+			if (world.session === session) this.#worlds.delete(frame)
+		}
+		for (const [frame, pending] of this.#creating) {
+			if (pending.session === session) this.#creating.delete(frame)
+		}
 	}
 
 	#waitForLoadEvent(condition: BrowserWaitUntil, timeout: number): Promise<void> {

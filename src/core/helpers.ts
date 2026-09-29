@@ -33,6 +33,7 @@ import type {
 	BrowserRequest,
 	BrowserRouteQuery,
 	BrowserQuad,
+	BrowserReadResult,
 	BrowserSnapshotInput,
 	BrowserScriptCoverage,
 	BrowserScreenshotOptions,
@@ -1340,6 +1341,66 @@ export function readEvaluationResult(value: unknown): unknown {
 export function requireBrowserString(value: unknown, field: string): string {
 	if (isString(value)) return value
 	throw new BrowserError(`${field} failed: no string value returned`)
+}
+
+/**
+ * Reads the execution context id from a CDP `Page.createIsolatedWorld` reply.
+ *
+ * @param value - Unknown CDP result
+ * @param frame - The frame id the world was created for, which the error context names
+ * @returns The execution context id of the created world
+ * @throws Thrown when the reply carries no integer `executionContextId`.
+ */
+export function readBrowserWorld(value: unknown, frame: string): number {
+	if (isRecord(value) && isInteger(value['executionContextId'])) {
+		return value['executionContextId']
+	}
+	throw new BrowserError('Failed to create frame execution context', undefined, { frame })
+}
+
+/**
+ * Extracts one bounded slice of a projected text, cutting after a line break where one fits.
+ *
+ * @remarks
+ * `offset` and `limit` count UTF-16 code units. A slice whose window reaches the end of the text
+ * holds the rest of it. Otherwise the slice ends after the last line break inside
+ * `offset` to `offset + limit` that lies past `offset`, and at `offset + limit` when none does. A
+ * hard cut that would end on the high half of a surrogate pair ends one unit earlier, unless that
+ * empties the slice. An `offset` at or past the end yields an empty slice.
+ *
+ * @param text - The whole projection
+ * @param offset - The index the slice starts at. Default: `0`
+ * @param limit - The most characters the slice holds. Default: unbounded
+ * @returns The slice, its start, and the length of the whole text
+ * @throws Thrown when `offset` is not a non-negative integer or `limit` is not a positive integer.
+ *
+ * @example
+ * ```ts
+ * import { extractBrowserSlice } from '@orkestrel/browser'
+ *
+ * extractBrowserSlice('alpha\nbeta\ngamma', 0, 12) // { text: 'alpha\nbeta\n', offset: 0, total: 16 }
+ * ```
+ */
+export function extractBrowserSlice(text: string, offset = 0, limit?: number): BrowserReadResult {
+	if (!isInteger(offset) || offset < 0) {
+		throw new BrowserError('Browser read offset must be a non-negative integer', undefined, {
+			offset,
+		})
+	}
+	if (limit !== undefined && (!isInteger(limit) || limit < 1)) {
+		throw new BrowserError('Browser read limit must be a positive integer', undefined, { limit })
+	}
+	const total = text.length
+	if (limit === undefined || offset + limit >= total) {
+		return { text: text.slice(offset), offset, total }
+	}
+	const window = text.slice(offset, offset + limit)
+	const line = window.lastIndexOf('\n')
+	if (line > 0) return { text: window.slice(0, line + 1), offset, total }
+	const last = window.charCodeAt(limit - 1)
+	const next = text.charCodeAt(offset + limit)
+	const split = limit > 1 && last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff
+	return { text: split ? window.slice(0, -1) : window, offset, total }
 }
 
 /**

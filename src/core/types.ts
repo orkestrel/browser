@@ -1,4 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { HTMLInterface } from '@orkestrel/html'
 
 // === CDP transport
 
@@ -385,22 +386,6 @@ export interface BrowserScreenshotOptions {
 	readonly scale?: BrowserScreenshotScale
 	readonly mask?: readonly BrowserLocatorInterface[]
 	readonly color?: string
-}
-
-/**
- * Describes the result of page content extraction.
- *
- * @remarks
- * - `url` — current page URL after navigation
- * - `title` — document title
- * - `html` — full HTML source
- * - `text` — visible text content (no markup)
- */
-export interface BrowserContentResult {
-	readonly url: string
-	readonly title: string
-	readonly html: string
-	readonly text: string
 }
 
 /**
@@ -1731,10 +1716,119 @@ export interface BrowserCodegenInterface {
 	destroy(): Promise<void>
 }
 
+// === Browser reading
+
+/**
+ * Describes the options for one slice of a reading's Markdown or plain-text projection.
+ *
+ * @remarks
+ * - `distill` — if `true`, projects the distilled document; if `false`, projects the whole
+ *   document. Default: `true`
+ * - `offset` — the character index the slice starts at, a non-negative integer. Default: `0`
+ * - `limit` — the most characters the slice holds, a positive integer. Default: unbounded
+ *
+ * Characters are UTF-16 code units, the unit `String.prototype.length` counts.
+ */
+export interface BrowserReadOptions {
+	readonly distill?: boolean
+	readonly offset?: number
+	readonly limit?: number
+}
+
+/**
+ * Describes one slice of a reading's projection.
+ *
+ * @remarks
+ * - `text` — the characters of the slice
+ * - `offset` — the character index the slice starts at
+ * - `total` — the character count of the whole projection
+ *
+ * The projection continues past the slice while `offset + text.length < total`, and the next
+ * slice starts at that sum.
+ */
+export interface BrowserReadResult {
+	readonly text: string
+	readonly offset: number
+	readonly total: number
+}
+
+/**
+ * Reads the navigation epoch of the frame a reading was captured from.
+ *
+ * @returns The frame's current navigation epoch
+ */
+export type BrowserEpochFunction = () => number
+
+/**
+ * Describes the captured document a reading is built from.
+ *
+ * @remarks
+ * - `url` — the document URL, which distillation resolves relative links against
+ * - `title` — the document title
+ * - `html` — the serialized document HTML
+ * - `epoch` — the navigation epoch recorded when the capture was issued. Default: the value
+ *   `navigation` returns at construction
+ * - `navigation` — reads the source's navigation epoch at the moment of the call; a reading
+ *   built without it never reports stale
+ */
+export interface BrowserReadingInput {
+	readonly url: string
+	readonly title: string
+	readonly html: string
+	readonly epoch?: number
+	readonly navigation?: BrowserEpochFunction
+}
+
+/**
+ * Represents one captured document, parsed one time and projected to Markdown or plain text in
+ * bounded slices.
+ *
+ * @remarks
+ * - `url` — the document URL at capture
+ * - `title` — the document title at capture
+ * - `html` — the parsed document handle every projection reads
+ * - `stale` — true when the source frame has navigated or detached since the capture; false
+ *   otherwise
+ *
+ * Each projection runs over `html.distill({ base: url })` by default and over the whole document
+ * with `distill: false`. A reading computes each projection one time and cuts every slice from
+ * it, so successive slices of one reading and mode share one `total`.
+ */
+export interface BrowserReadingInterface {
+	readonly url: string
+	readonly title: string
+	readonly html: HTMLInterface
+	readonly stale: boolean
+	/**
+	 * Returns a slice of the document rendered as Markdown. A bounded slice ends after the
+	 * last line break in its window when one lies past `offset`, and at `limit` characters
+	 * otherwise.
+	 */
+	markdown(options?: BrowserReadOptions): BrowserReadResult
+	/**
+	 * Returns a slice of the document rendered as structural plain text, cut by the rule
+	 * `markdown` applies.
+	 */
+	text(options?: BrowserReadOptions): BrowserReadResult
+}
+
 // === Browser frame
 
 /** Resolves the current CDP session for a frame id. */
 export type BrowserSessionFunction = (frame: string) => Promise<string>
+
+/**
+ * Resolves the isolated-world execution context a page caches for one frame document, creating
+ * the world on the given session when none is cached.
+ *
+ * @param session - The CDP session that owns the frame
+ * @param options - The deadline and signal for the creation call
+ * @returns The isolated-world execution context id
+ */
+export type BrowserWorldFunction = (
+	session: string,
+	options?: BrowserCallOptions,
+) => Promise<number>
 
 /**
  * Describes the options every asynchronous page, frame, handle, and worker call accepts.
@@ -1773,8 +1867,7 @@ export interface BrowserFrameInfo {
  * - `name` — frame `name`/`id`, undefined when absent
  * - `url` — current frame URL
  * - `title` — resolve the document title
- * - `content` — extract page URL, title, HTML, and visible text
- * - `article` — the page's reader-facing prose, boilerplate and hidden regions pruned (not `content()`'s whole-body text)
+ * - `read` — capture the document URL, title, and HTML as a reading
  * - `click` — click an element matching the selector
  * - `fill` — type text into an input element
  * - `select` — choose option(s) in a `<select>` element
@@ -1795,13 +1888,14 @@ export interface BrowserFrameInterface {
 	readonly touch: BrowserTouchInterface
 	/** Resolves the frame document title. */
 	title(options?: BrowserCallOptions): Promise<string>
-	/** Extracts the URL, title, HTML, and visible text under the result-size guards. */
-	content(): Promise<BrowserContentResult>
 	/**
-	 * Distills the frame HTML to reader-facing plain text, with boilerplate and hidden regions
-	 * pruned.
+	 * Captures the document URL, title, and HTML in one size-guarded evaluation in the frame's
+	 * isolated world and returns them as a reading whose `stale` flag tracks later navigations.
+	 * A frame constructed without an epoch source (a standalone `BrowserFrame` with no `epoch`
+	 * argument) returns readings whose `stale` stays `false`, because no navigation counter is
+	 * available to it.
 	 */
-	article(): Promise<string>
+	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
 	/**
 	 * Clicks a CSS-selector match, strict by default and requiring it visible and enabled.
 	 */

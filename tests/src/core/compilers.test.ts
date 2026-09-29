@@ -11,6 +11,7 @@ import {
 	compileClickExpression,
 	compileCodegenScript,
 	compileHiddenWaitExpression,
+	compileReadFunction,
 	compileSelectExpression,
 	compileVisibleWaitExpression,
 	compileGuardedEvaluateExpression,
@@ -98,6 +99,34 @@ describe('compileGuardedEvaluateExpression', () => {
 		const description = `Uncaught Error: ${BROWSER_RESULT_LIMIT_SENTINEL_PREFIX}4200000\n    at <anonymous>:1:100`
 		const match = BROWSER_RESULT_LIMIT_PATTERN.exec(description)
 		expect(match?.[1]).toBe('4200000')
+	})
+})
+
+describe('compileReadFunction', () => {
+	it('reads the url, title, and root html of the document it runs against', () => {
+		const read = new Function('document', 'location', `return (${compileReadFunction()})()`)
+
+		expect(
+			Reflect.apply(read, undefined, [
+				{ title: 'Field notes', documentElement: { outerHTML: '<html><body>Notes</body></html>' } },
+				{ href: 'https://example.com/notes' },
+			]),
+		).toEqual({
+			url: 'https://example.com/notes',
+			title: 'Field notes',
+			html: '<html><body>Notes</body></html>',
+		})
+	})
+
+	it('reads an empty html for a document without a root element', () => {
+		const read = new Function('document', 'location', `return (${compileReadFunction()})()`)
+
+		expect(
+			Reflect.apply(read, undefined, [
+				{ title: '', documentElement: null },
+				{ href: 'about:blank' },
+			]),
+		).toEqual({ url: 'about:blank', title: '', html: '' })
 	})
 })
 

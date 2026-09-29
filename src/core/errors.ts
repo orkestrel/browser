@@ -75,7 +75,7 @@ export class CDPTimeoutError extends BrowserError {
 }
 
 /**
- * Reports that an `evaluate()`/`content()` result exceeded {@link BROWSER_RESULT_LIMIT} and
+ * Reports that an `evaluate()`/`read()` result exceeded {@link BROWSER_RESULT_LIMIT} and
  * was rejected in-page before it could overflow the CDP transport frame, under the code
  * `BROWSER_RESULT_LIMIT_ERROR`.
  */

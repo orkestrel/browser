@@ -63,10 +63,10 @@ describe('Browser real launch', () => {
 
 			const page = await browser.create({ url })
 			const title = await page.title()
-			const content = await page.content()
+			const reading = await page.read()
 
 			expect(title).toBe('Real Launch')
-			expect(content.text).toContain('Hello')
+			expect(reading.text().text).toContain('Hello')
 		} finally {
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
 		}
@@ -240,8 +240,8 @@ describe('Browser real launch', () => {
 		expect(browser.status).toBe('connected')
 
 		const page = await browser.create()
-		const content = await page.content()
-		expect(content.url).toBe('about:blank')
+		const reading = await page.read()
+		expect(reading.url).toBe('about:blank')
 	})
 
 	// === hardening (real Chromium) — proves the audit's confirmed defects are fixed
@@ -272,9 +272,13 @@ describe('Browser real launch', () => {
 		expect(() => process.kill(livePid, 0)).not.toThrow()
 	})
 
-	it('content() on a huge DOM never crashes the session', async () => {
-		const httpServer = createServer((_req, res) => {
+	it('read() on a huge DOM rejects with a result-limit error and keeps the session alive', async () => {
+		const httpServer = createServer((req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
+			if (req.url === '/small') {
+				res.end('<html><body><p>Small document</p></body></html>')
+				return
+			}
 			res.end(
 				`<html><body><div id="big">${'a'.repeat(BROWSER_RESULT_LIMIT + 500_000)}</div></body></html>`,
 			)
@@ -295,24 +299,18 @@ describe('Browser real launch', () => {
 			await browser.connect()
 			const page = await browser.create({ url })
 
-			let contentError: unknown
-			try {
-				await page.content()
-			} catch (error) {
-				contentError = error
-			}
-
-			// Either a clean result or a coded BrowserResultLimitError is
-			// acceptable — anything else (or a crashed session) is a failure.
-			expect(contentError === undefined || isBrowserResultLimitError(contentError)).toBe(true)
+			await expect(page.read()).rejects.toSatisfy(isBrowserResultLimitError)
 			expect(browser.status).toBe('connected')
 			expect(await page.evaluate('1 + 1')).toBe(2)
+
+			await page.navigate(`${url}small`)
+			expect((await page.read()).html).not.toBe('')
 		} finally {
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
 		}
 	})
 
-	it('reattaching over CDP reports the correct page url immediately, before navigate()/content()', async () => {
+	it('reattaching over CDP reports the correct page url immediately, before navigate() or read()', async () => {
 		const httpServer = createServer((_req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
 			res.end('<html><head><title>Reattach Fidelity</title></head><body>Hi</body></html>')
