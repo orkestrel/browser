@@ -1,4 +1,5 @@
-import { WebSocketCDPTransport, isBrowserConnectionError } from '@src/server'
+import { isBrowserConnectionError } from '@src/core'
+import { WebSocketCDPTransport } from '@src/server'
 import { describe, expect, it } from 'vitest'
 
 describe('WebSocketCDPTransport', () => {

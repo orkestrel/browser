@@ -31,8 +31,8 @@ import {
 	removeBrowserProfile,
 	waitForCDPReady,
 	fetchCDPTargets,
-	isBrowserConnectionError,
 } from '@src/server'
+import { isBrowserConnectionError } from '@src/core'
 import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 

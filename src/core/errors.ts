@@ -147,3 +147,24 @@ export function isCDPTimeoutError(value: unknown): value is CDPTimeoutError {
 export function isBrowserResultLimitError(value: unknown): value is BrowserResultLimitError {
 	return isInstance(value, BrowserResultLimitError)
 }
+
+/**
+ * Reports that a CDP connection, discovery, or launch attempt failed, under the code
+ * `BROWSER_CONNECTION_ERROR`.
+ */
+export class BrowserConnectionError extends BrowserError {
+	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
+		super(message, 'BROWSER_CONNECTION_ERROR', context)
+		this.name = 'BrowserConnectionError'
+	}
+}
+
+/**
+ * Narrows an unknown value to a `BrowserConnectionError`.
+ *
+ * @param value - Value to check
+ * @returns True if value is a BrowserConnectionError instance; false otherwise
+ */
+export function isBrowserConnectionError(value: unknown): value is BrowserConnectionError {
+	return isInstance(value, BrowserConnectionError)
+}

@@ -444,7 +444,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		let loader: string | undefined
 
 		try {
-			const result = await this.send('Page.navigate', { url }, { timeout })
+			const result = await this.send(
+				'Page.navigate',
+				{ url },
+				{ timeout, ...(options?.signal !== undefined ? { signal: options.signal } : {}) },
+			)
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
 			}

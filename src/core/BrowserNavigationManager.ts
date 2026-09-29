@@ -58,10 +58,9 @@ export class BrowserNavigationManager implements BrowserNavigationManagerInterfa
 
 	async until(expression: string, options?: BrowserNavigationWaitOptions): Promise<unknown> {
 		const timeout = this.#timeout(options)
-		const result = await this.#page.evaluate(
-			compileFunctionWaitExpression(expression, timeout),
-			timeout + BROWSER_WAIT_POLL_INTERVAL_MS,
-		)
+		const result = await this.#page.evaluate(compileFunctionWaitExpression(expression, timeout), {
+			timeout: timeout + BROWSER_WAIT_POLL_INTERVAL_MS,
+		})
 		if (result !== false) return result
 		throw new BrowserError('Browser predicate wait timed out', 'BROWSER_NAVIGATION_TIMEOUT', {
 			expression,

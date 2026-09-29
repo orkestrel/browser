@@ -14,8 +14,7 @@ import { basename, dirname, join, resolve, win32 as pathWin32, posix as pathPosi
 import { spawn, spawnSync } from 'node:child_process'
 import { setTimeout as waitForTimeout } from 'node:timers/promises'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
-import { BROWSER_WAIT_POLL_INTERVAL_MS, BrowserError } from '@src/core'
-import { BrowserConnectionError } from './errors.js'
+import { BROWSER_WAIT_POLL_INTERVAL_MS, BrowserConnectionError, BrowserError } from '@src/core'
 import {
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_CDP_VERSION_PATH,

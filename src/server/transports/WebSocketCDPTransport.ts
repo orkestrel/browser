@@ -16,8 +16,7 @@ import {
 	WEBSOCKET_READY_OPEN,
 	WEBSOCKET_VERSION,
 } from '@orkestrel/websocket'
-import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserTransition } from '@src/core'
-import { BrowserConnectionError } from '../errors.js'
+import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserConnectionError, BrowserTransition } from '@src/core'
 
 // === WebSocketCDPTransport
 

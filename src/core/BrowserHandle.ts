@@ -1,4 +1,4 @@
-import type { BrowserHandleInterface, CDPClientInterface } from './types.js'
+import type { BrowserCallOptions, BrowserHandleInterface, CDPClientInterface } from './types.js'
 import { BrowserError } from './errors.js'
 import { readEvaluationResult } from './helpers.js'
 import { isRecord, isString } from '@orkestrel/contract'
@@ -22,11 +22,15 @@ export class BrowserHandle implements BrowserHandleInterface {
 		return this.#id
 	}
 
-	async value(): Promise<unknown> {
-		return await this.call('function() { return this }')
+	async value(options?: BrowserCallOptions): Promise<unknown> {
+		return await this.call('function() { return this }', undefined, options)
 	}
 
-	async call(declaration: string, args?: readonly unknown[]): Promise<unknown> {
+	async call(
+		declaration: string,
+		args?: readonly unknown[],
+		options?: BrowserCallOptions,
+	): Promise<unknown> {
 		this.#assert()
 		const result = await this.#client.send(
 			'Runtime.callFunctionOn',
@@ -37,12 +41,15 @@ export class BrowserHandle implements BrowserHandleInterface {
 				awaitPromise: true,
 				returnByValue: true,
 			},
-			{ session: this.#session },
+			{ session: this.#session, ...options },
 		)
 		return readEvaluationResult(result)
 	}
 
-	async property(name: string): Promise<BrowserHandleInterface | undefined> {
+	async property(
+		name: string,
+		options?: BrowserCallOptions,
+	): Promise<BrowserHandleInterface | undefined> {
 		this.#assert()
 		const result = await this.#client.send(
 			'Runtime.callFunctionOn',
@@ -53,16 +60,18 @@ export class BrowserHandle implements BrowserHandleInterface {
 				awaitPromise: true,
 				returnByValue: false,
 			},
-			{ session: this.#session },
+			{ session: this.#session, ...options },
 		)
 		if (!isRecord(result) || !isRecord(result['result'])) return undefined
 		const id = result['result']['objectId']
 		return isString(id) ? new BrowserHandle(this.#client, this.#session, id) : undefined
 	}
 
-	async properties(): Promise<Readonly<Record<string, unknown>>> {
+	async properties(options?: BrowserCallOptions): Promise<Readonly<Record<string, unknown>>> {
 		const value = await this.call(
 			'function() { const values = {}; for (const key of Object.keys(this)) values[key] = this[key]; return values }',
+			undefined,
+			options,
 		)
 		if (!isRecord(value)) {
 			throw new BrowserError('Browser handle properties did not resolve to an object')

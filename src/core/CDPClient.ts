@@ -49,6 +49,8 @@ export class CDPClient implements CDPClientInterface {
 			resolve: (value: unknown) => void
 			reject: (reason: unknown) => void
 			timer: ReturnType<typeof setTimeout>
+			signal: AbortSignal | undefined
+			listener: (() => void) | undefined
 		}
 	> = new Map()
 	readonly #subscriptions: Map<string | undefined, Map<string, Set<CDPHandler>>> = new Map()
@@ -116,6 +118,7 @@ export class CDPClient implements CDPClientInterface {
 		if (!this.#connected) {
 			throw new CDPConnectionError('CDP client is not connected', { method })
 		}
+		if (options?.signal?.aborted === true) throw options.signal.reason
 
 		const id = this.#nextId()
 		const message: Record<string, unknown> = { id, method }
@@ -129,24 +132,23 @@ export class CDPClient implements CDPClientInterface {
 
 		const serialized = JSON.stringify(message)
 		const effectiveTimeout = options?.timeout ?? this.#timeout
+		const signal = options?.signal
 
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
-				this.#pending.delete(id)
-				reject(
+				this.#settle(id)?.reject(
 					new CDPTimeoutError(`CDP request timed out: ${method}`, {
 						method,
 						timeout: effectiveTimeout,
 					}),
 				)
 			}, effectiveTimeout)
-
-			this.#pending.set(id, { method, resolve, reject, timer })
+			const listener = signal === undefined ? undefined : this.#abort(id, signal)
+			this.#pending.set(id, { method, resolve, reject, timer, signal, listener })
+			if (listener !== undefined) signal?.addEventListener('abort', listener, { once: true })
 
 			this.#transport.send(serialized).catch((thrown: unknown) => {
-				this.#pending.delete(id)
-				clearTimeout(timer)
-				reject(thrown)
+				this.#settle(id)?.reject(thrown)
 			})
 		})
 	}
@@ -241,9 +243,9 @@ export class CDPClient implements CDPClientInterface {
 
 		// Reject all pending requests
 		for (const [id, entry] of this.#pending) {
-			clearTimeout(entry.timer)
-			entry.reject(new CDPConnectionError('CDP connection closed', { method: entry.method }))
-			this.#pending.delete(id)
+			this.#settle(id)?.reject(
+				new CDPConnectionError('CDP connection closed', { method: entry.method }),
+			)
 		}
 
 		this.#expected = true
@@ -253,6 +255,29 @@ export class CDPClient implements CDPClientInterface {
 			this.#active = false
 		}
 		this.#emitter.emit('close')
+	}
+
+	// A settled or already-removed entry makes the returned listener a no-op.
+	#abort(id: number, signal: AbortSignal): () => void {
+		return () => {
+			this.#settle(id)?.reject(signal.reason)
+		}
+	}
+
+	// Takes one request out of flight: the entry leaves the map, its timer stops, and the abort
+	// listener it holds on the caller's signal is released, so every settlement path leaves the
+	// signal as it found it. The caller resolves or rejects the returned entry.
+	#settle(
+		id: number,
+	):
+		| { method: string; resolve: (value: unknown) => void; reject: (reason: unknown) => void }
+		| undefined {
+		const entry = this.#pending.get(id)
+		if (entry === undefined) return undefined
+		this.#pending.delete(id)
+		clearTimeout(entry.timer)
+		if (entry.listener !== undefined) entry.signal?.removeEventListener('abort', entry.listener)
+		return entry
 	}
 
 	#nextId(): number {
@@ -266,9 +291,9 @@ export class CDPClient implements CDPClientInterface {
 
 		// Reject all pending requests
 		for (const [id, entry] of this.#pending) {
-			clearTimeout(entry.timer)
-			entry.reject(new CDPConnectionError('CDP connection closed', { method: entry.method }))
-			this.#pending.delete(id)
+			this.#settle(id)?.reject(
+				new CDPConnectionError('CDP connection closed', { method: entry.method }),
+			)
 		}
 		if (!this.#expected) this.#emitter.emit('drop')
 	}
@@ -276,14 +301,12 @@ export class CDPClient implements CDPClientInterface {
 	#onError(error: unknown): void {
 		this.#connected = false
 		for (const [id, entry] of this.#pending) {
-			clearTimeout(entry.timer)
-			entry.reject(
+			this.#settle(id)?.reject(
 				new CDPConnectionError(`CDP connection failed: ${String(error)}`, {
 					method: entry.method,
 					error,
 				}),
 			)
-			this.#pending.delete(id)
 		}
 		this.#emitter.emit('error', error)
 	}
@@ -295,11 +318,8 @@ export class CDPClient implements CDPClientInterface {
 		// Response to a pending request
 		if (isInteger(parsed['id'])) {
 			const id = parsed['id']
-			const entry = this.#pending.get(id)
+			const entry = this.#settle(id)
 			if (entry !== undefined) {
-				this.#pending.delete(id)
-				clearTimeout(entry.timer)
-
 				const errorValue = parsed['error']
 				if (isRecord(errorValue)) {
 					const message = isString(errorValue['message']) ? errorValue['message'] : 'CDP error'

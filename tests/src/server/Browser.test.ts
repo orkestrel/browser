@@ -16,12 +16,11 @@ import {
 	createBrowser,
 	BrowserDestroyedError,
 	BrowserNotConnectedError,
-	BrowserConnectionError,
-	isBrowserConnectionError,
 	BROWSER_PROCESS_EXIT_CAUSE,
 	BROWSER_TRANSPORT_LOSS_CAUSE,
 	BROWSER_TRANSPORT_LOSS_DEFER_MS,
 } from '@src/server'
+import { BrowserConnectionError, isBrowserConnectionError } from '@src/core'
 import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {

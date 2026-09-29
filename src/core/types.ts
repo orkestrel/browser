@@ -86,10 +86,12 @@ export interface CDPClientOptions {
  * @remarks
  * - `session` — scope the call to one attached CDP session
  * - `timeout` — ms before this one request fails, overriding the client-wide default
+ * - `signal` — aborts this one request; the promise rejects with `signal.reason`
  */
 export interface CDPSendOptions {
 	readonly session?: string
 	readonly timeout?: number
+	readonly signal?: AbortSignal
 }
 
 /** Receives a subscribed CDP event with its params record. */
@@ -133,8 +135,8 @@ export interface CDPClientInterface {
 	reconnect(): Promise<void>
 	/**
 	 * Issues a CDP method call with optional params and a trailing `CDPSendOptions` carrying
-	 * the `session` to scope it to and a per-call `timeout` overriding the client-wide
-	 * default; rejects on timeout.
+	 * the `session` to scope it to, a per-call `timeout` overriding the client-wide
+	 * default, and a `signal` that aborts the call; rejects on timeout or abort.
 	 */
 	send(
 		method: string,
@@ -227,10 +229,10 @@ export interface BrowserPageOptions {
  * - `condition` — page load condition to wait for (default `'load'`)
  * - `timeout` — bounds the whole navigate call (the `Page.navigate` send
  *   itself plus the load-event wait), in milliseconds
+ * - `signal` — aborts the `Page.navigate` send
  */
-export interface BrowserNavigationOptions {
+export interface BrowserNavigationOptions extends BrowserCallOptions {
 	readonly condition?: BrowserWaitUntil
-	readonly timeout?: number
 }
 
 /** Describes the outcome of a top-level navigation command. */
@@ -418,16 +420,20 @@ export type BrowserTeardownFunction = () => Promise<unknown>
 export interface BrowserHandleInterface {
 	readonly id: string
 	/** Reads the object back by value. */
-	value(): Promise<unknown>
+	value(options?: BrowserCallOptions): Promise<unknown>
 	/** Runs a function declaration with the handle as `this`, by value. */
-	call(declaration: string, args?: readonly unknown[]): Promise<unknown>
+	call(
+		declaration: string,
+		args?: readonly unknown[],
+		options?: BrowserCallOptions,
+	): Promise<unknown>
 	/**
 	 * Retains one own property as its own handle, or returns `undefined` when the property is
 	 * absent.
 	 */
-	property(name: string): Promise<BrowserHandleInterface | undefined>
+	property(name: string, options?: BrowserCallOptions): Promise<BrowserHandleInterface | undefined>
 	/** Reads every own property by value. */
-	properties(): Promise<Readonly<Record<string, unknown>>>
+	properties(options?: BrowserCallOptions): Promise<Readonly<Record<string, unknown>>>
 	/** Releases the retained remote object. Idempotent. */
 	dispose(): Promise<void>
 }
@@ -1072,9 +1078,13 @@ export interface BrowserWorkerInterface {
 	readonly url: string
 	readonly category: BrowserWorkerCategory
 	/** Evaluates a guarded expression in the worker and returns its value. */
-	evaluate(expression: string, timeout?: number): Promise<unknown>
+	evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown>
 	/** Issues one CDP method call on the worker's session. */
-	send(method: string, params?: Readonly<Record<string, unknown>>): Promise<unknown>
+	send(
+		method: string,
+		params?: Readonly<Record<string, unknown>>,
+		options?: BrowserCallOptions,
+	): Promise<unknown>
 	/** Stops driving the worker locally without closing its target. */
 	detach(): void
 	/** Closes the worker target, tolerating a worker that already terminated. Idempotent. */
@@ -1720,16 +1730,15 @@ export interface BrowserCodegenInterface {
 export type BrowserSessionFunction = (frame: string) => Promise<string>
 
 /**
- * Describes the options for one raw CDP method call issued in a frame's target session.
+ * Describes the options every asynchronous page, frame, handle, and worker call accepts.
  *
  * @remarks
- * The frame supplies its own session, so a caller bounds the call and nothing
- * else.
- *
- * - `timeout` — ms before this one request fails, overriding the client-wide default
+ * - `timeout` — ms before this one call fails, overriding the client-wide default
+ * - `signal` — aborts this one call; the promise rejects with `signal.reason`
  */
-export interface BrowserSendOptions {
+export interface BrowserCallOptions {
 	readonly timeout?: number
+	readonly signal?: AbortSignal
 }
 
 /**
@@ -1778,7 +1787,7 @@ export interface BrowserFrameInterface {
 	readonly mouse: BrowserMouseInterface
 	readonly touch: BrowserTouchInterface
 	/** Resolves the frame document title. */
-	title(): Promise<string>
+	title(options?: BrowserCallOptions): Promise<string>
 	/** Extracts the URL, title, HTML, and visible text under the result-size guards. */
 	content(): Promise<BrowserContentResult>
 	/**
@@ -1798,21 +1807,22 @@ export interface BrowserFrameInterface {
 	/** Selects options on an enabled `select` element, strict by default. */
 	select(selector: string, values: readonly string[], options?: BrowserActionOptions): Promise<void>
 	/** Evaluates an expression in the frame execution world under the result-size guard. */
-	evaluate(expression: string, timeout?: number): Promise<unknown>
+	evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown>
 	/**
 	 * Evaluates an expression by reference and returns a disposable remote object handle.
 	 */
-	handle(expression: string): Promise<BrowserHandleInterface>
+	handle(expression: string, options?: BrowserCallOptions): Promise<BrowserHandleInterface>
 	/** Waits for a selector to reach the attached, detached, visible, or hidden state. */
 	wait(selector: string, options?: BrowserWaitOptions): Promise<void>
 	/**
 	 * Issues a raw CDP method in the frame's current target session, with a trailing
-	 * `BrowserSendOptions` carrying a per-call `timeout` overriding the client-wide default.
+	 * `BrowserCallOptions` carrying a per-call `timeout` overriding the client-wide default and a
+	 * `signal` that aborts the call.
 	 */
 	send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		options?: BrowserSendOptions,
+		options?: BrowserCallOptions,
 	): Promise<unknown>
 	/** Subscribes to a CDP event in the frame's current target session. */
 	subscribe(method: string, handler: CDPHandler): Promise<void>

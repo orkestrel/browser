@@ -279,7 +279,9 @@ export class BrowserLocator implements BrowserLocatorInterface {
 		const expression = this.#waitExpression(state, options?.strict ?? true, timeout)
 		let found: unknown
 		try {
-			found = await this.#frame.evaluate(expression, timeout + BROWSER_WAIT_POLL_INTERVAL_MS)
+			found = await this.#frame.evaluate(expression, {
+				timeout: timeout + BROWSER_WAIT_POLL_INTERVAL_MS,
+			})
 		} catch (error) {
 			throw new BrowserSelectorError('Browser locator wait failed', {
 				query: this.#query,

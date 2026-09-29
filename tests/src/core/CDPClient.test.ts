@@ -9,6 +9,7 @@ import {
 	CDPConnectionError,
 	CDPTimeoutError,
 } from '@src/core'
+import { getEventListeners } from 'node:events'
 import { createRecorder, waitForDelay } from '@orkestrel/test'
 import { createCDPTestTransport, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
@@ -169,6 +170,77 @@ describe('CDPClient', () => {
 			expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
 			// The 10s client-wide default never bounded this call.
 			expect(elapsed).toBeLessThan(1_000)
+		})
+	})
+
+	describe('send() with a signal', () => {
+		it('rejects with the signal reason before sending when already aborted', async () => {
+			await client.connect()
+			const reason = new Error('cancelled early')
+			const controller = new AbortController()
+			controller.abort(reason)
+
+			await expect(
+				client.send('Never.sent', undefined, { signal: controller.signal }),
+			).rejects.toBe(reason)
+			expect(transport.sent).toEqual([])
+		})
+
+		it('rejects with the reason on a later abort, clears the timer, and ignores a late reply', async () => {
+			await client.connect()
+			const countTimers = (): number =>
+				process.getActiveResourcesInfo().filter((name) => name === 'Timeout').length
+			const baseline = countTimers()
+			const reason = new Error('cancelled late')
+			const controller = new AbortController()
+			const caught = client
+				.send('Slow.call', undefined, { signal: controller.signal })
+				.catch((thrown: unknown) => thrown)
+			await waitForDelay(0)
+			const id = transport.sent[0]?.id
+			expect(id).toBeDefined()
+			expect(countTimers()).toBe(baseline + 1)
+
+			controller.abort(reason)
+
+			expect(await caught).toBe(reason)
+			expect(countTimers()).toBe(baseline)
+			transport.reply(id ?? 0, { late: true })
+			expect(await caught).toBe(reason)
+		})
+
+		it('releases the abort listener when the request settles by reply, so a reused signal holds none', async () => {
+			await client.connect()
+			const controller = new AbortController()
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+			const first = client.send('First.call', undefined, { signal: controller.signal })
+			await waitForDelay(0)
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1)
+			transport.reply(transport.sent[0]?.id ?? 0, { ok: true })
+			await first
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+			// control: a second call on the same signal adds exactly one listener again, and the
+			// abort after it settles rejects nothing
+			const second = client.send('Second.call', undefined, { signal: controller.signal })
+			await waitForDelay(0)
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1)
+			transport.reply(transport.sent[1]?.id ?? 0, { ok: true })
+			await expect(second).resolves.toEqual({ ok: true })
+			controller.abort(new Error('after settle'))
+			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+		})
+	})
+
+	describe('test transport fail()', () => {
+		it('writes a numeric code into the CDPError context', async () => {
+			await client.connect()
+			const pending = client.send('Missing.method').catch((thrown: unknown) => thrown)
+			await waitForDelay(0)
+			transport.fail(transport.sent[0]?.id ?? 0, 'not found', -32601)
+
+			const thrown = await pending
+			expect(isCDPError(thrown)).toBe(true)
+			expect(thrown instanceof CDPError ? thrown.context?.['code'] : undefined).toBe(-32601)
 		})
 	})
 

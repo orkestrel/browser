@@ -6,7 +6,7 @@ import type {
 	BrowserKeyboardInterface,
 	BrowserMouseInterface,
 	BrowserSelectorManagerInterface,
-	BrowserSendOptions,
+	BrowserCallOptions,
 	BrowserSessionFunction,
 	BrowserTouchInterface,
 	BrowserWaitOptions,
@@ -104,9 +104,9 @@ export class BrowserFrame implements BrowserFrameInterface {
 		return this.#touch
 	}
 
-	async title(): Promise<string> {
+	async title(options?: BrowserCallOptions): Promise<string> {
 		this.assert()
-		const result = await this.#evaluate('document.title')
+		const result = await this.#evaluate('document.title', options)
 		return requireBrowserString(result, 'Document title')
 	}
 
@@ -159,15 +159,15 @@ export class BrowserFrame implements BrowserFrameInterface {
 		await this.#selectors.css(selector).select(values, options)
 	}
 
-	async evaluate(expression: string, timeout?: number): Promise<unknown> {
+	async evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {
 		this.assert()
 		return await this.#evaluate(
 			compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT),
-			timeout,
+			options,
 		)
 	}
 
-	async handle(expression: string): Promise<BrowserHandleInterface> {
+	async handle(expression: string, options?: BrowserCallOptions): Promise<BrowserHandleInterface> {
 		this.assert()
 		const session = await this.#sessionId()
 		const params: Record<string, unknown> = {
@@ -175,9 +175,12 @@ export class BrowserFrame implements BrowserFrameInterface {
 			returnByValue: false,
 			awaitPromise: true,
 		}
-		const context = await this.#context(session)
+		const context = await this.#context(session, options)
 		if (context !== undefined) params['contextId'] = context
-		const result = await this.#client.send('Runtime.evaluate', params, { session })
+		const result = await this.#client.send('Runtime.evaluate', params, {
+			session,
+			...options,
+		})
 		if (
 			!isRecord(result) ||
 			!isRecord(result['result']) ||
@@ -198,12 +201,12 @@ export class BrowserFrame implements BrowserFrameInterface {
 	async send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
-		options?: BrowserSendOptions,
+		options?: BrowserCallOptions,
 	): Promise<unknown> {
 		this.assert()
 		return await this.#client.send(method, params, {
 			session: await this.#sessionId(),
-			...(options?.timeout !== undefined ? { timeout: options.timeout } : {}),
+			...options,
 		})
 	}
 
@@ -237,7 +240,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		)
 	}
 
-	async #evaluate(expression: string, timeout?: number): Promise<unknown> {
+	async #evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {
 		const session = await this.#sessionId()
 		const params: Record<string, unknown> = {
 			expression,
@@ -245,22 +248,22 @@ export class BrowserFrame implements BrowserFrameInterface {
 			awaitPromise: true,
 		}
 
-		const context = await this.#context(session, timeout)
+		const context = await this.#context(session, options)
 		if (context !== undefined) params['contextId'] = context
 
 		const result = await this.#client.send('Runtime.evaluate', params, {
 			session,
-			...(timeout !== undefined ? { timeout } : {}),
+			...options,
 		})
 		return readEvaluationResult(result)
 	}
 
-	async #context(session: string, timeout?: number): Promise<number | undefined> {
+	async #context(session: string, options?: BrowserCallOptions): Promise<number | undefined> {
 		if (!this.#isolated) return undefined
 		const world = await this.#client.send(
 			'Page.createIsolatedWorld',
 			{ frameId: this.#id, worldName: BROWSER_FRAME_WORLD_NAME },
-			{ session, ...(timeout !== undefined ? { timeout } : {}) },
+			{ session, ...options },
 		)
 		if (!isRecord(world) || !isInteger(world['executionContextId'])) {
 			throw new BrowserError('Failed to create frame execution context', undefined, {

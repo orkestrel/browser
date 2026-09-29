@@ -22,19 +22,16 @@ import { addAbortListener, once } from 'node:events'
 import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
+	BrowserConnectionError,
 	BrowserContext,
 	BrowserTransition,
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	BROWSER_WAIT_POLL_INTERVAL_MS,
 	CDPClient,
+	isBrowserConnectionError,
 	validateBrowserContextOptions,
 } from '@src/core'
-import {
-	BrowserConnectionError,
-	BrowserDestroyedError,
-	BrowserNotConnectedError,
-	isBrowserConnectionError,
-} from './errors.js'
+import { BrowserDestroyedError, BrowserNotConnectedError } from './errors.js'
 import {
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_CDP_VERSION_PATH,

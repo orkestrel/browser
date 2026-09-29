@@ -395,4 +395,38 @@ describe('BrowserFrame', () => {
 
 		expect(frame.url).toBe('https://example.com/frame/next')
 	})
+	it('forwards a signal from send, evaluate, and handle to the client', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
+		const frame = new BrowserFrame(
+			client,
+			'session-child',
+			'frame-child',
+			'https://example.com/frame',
+		)
+		const reason = new Error('tool cancelled')
+		const controller = new AbortController()
+		const settled = [
+			frame.send('DOM.getDocument', undefined, { signal: controller.signal }),
+			frame.evaluate('1 + 1', { signal: controller.signal }),
+			frame.handle('document', { signal: controller.signal }),
+		].map((call) => call.catch((thrown: unknown) => thrown))
+		await new Promise((resolve) => setTimeout(resolve, 10))
+		controller.abort(reason)
+
+		expect(await Promise.all(settled)).toEqual([reason, reason, reason])
+	})
+
+	it('keeps the evaluate timeout behavior', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
+		const frame = new BrowserFrame(
+			client,
+			'session-child',
+			'frame-child',
+			'https://example.com/frame',
+		)
+
+		await expect(frame.evaluate('1', { timeout: 20 })).rejects.toSatisfy(isCDPTimeoutError)
+	})
 })

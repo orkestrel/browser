@@ -1,4 +1,9 @@
-import type { BrowserWorkerCategory, BrowserWorkerInterface, CDPClientInterface } from './types.js'
+import type {
+	BrowserCallOptions,
+	BrowserWorkerCategory,
+	BrowserWorkerInterface,
+	CDPClientInterface,
+} from './types.js'
 import { BROWSER_RESULT_LIMIT } from './constants.js'
 import { compileGuardedEvaluateExpression } from './compilers.js'
 import { readEvaluationResult } from './helpers.js'
@@ -41,7 +46,7 @@ export class BrowserWorker implements BrowserWorkerInterface {
 		return this.#category
 	}
 
-	async evaluate(expression: string, timeout?: number): Promise<unknown> {
+	async evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {
 		this.#assert()
 		return readEvaluationResult(
 			await this.#client.send(
@@ -51,14 +56,18 @@ export class BrowserWorker implements BrowserWorkerInterface {
 					returnByValue: true,
 					awaitPromise: true,
 				},
-				{ session: this.#session, ...(timeout !== undefined ? { timeout } : {}) },
+				{ session: this.#session, ...options },
 			),
 		)
 	}
 
-	async send(method: string, params?: Readonly<Record<string, unknown>>): Promise<unknown> {
+	async send(
+		method: string,
+		params?: Readonly<Record<string, unknown>>,
+		options?: BrowserCallOptions,
+	): Promise<unknown> {
 		this.#assert()
-		return await this.#client.send(method, params, { session: this.#session })
+		return await this.#client.send(method, params, { session: this.#session, ...options })
 	}
 
 	detach(): void {

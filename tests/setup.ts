@@ -63,7 +63,7 @@ export interface CDPTestTransportInterface extends CDPTransportInterface {
 	readonly closed: boolean
 	onSend(method: string, handler: CDPSentHandler): void
 	reply(id: number, result: unknown): void
-	fail(id: number, message: string): void
+	fail(id: number, message: string, code?: number): void
 	event(method: string, params?: Readonly<Record<string, unknown>>, sessionId?: string): void
 	closeRemote(): void
 	errorRemote(error: unknown): void
@@ -137,8 +137,9 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 		reply(id: number, result: unknown): void {
 			emitter.emit('message', JSON.stringify({ id, result }))
 		},
-		fail(id: number, message: string): void {
-			emitter.emit('message', JSON.stringify({ id, error: { message } }))
+		fail(id: number, message: string, code?: number): void {
+			const error = code === undefined ? { message } : { code, message }
+			emitter.emit('message', JSON.stringify({ id, error }))
 		},
 		event(method: string, params?: Readonly<Record<string, unknown>>, sessionId?: string): void {
 			const frame: Record<string, unknown> = { method, params: params ?? {} }
