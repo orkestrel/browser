@@ -15,7 +15,7 @@ The owner's goals map to the design as follows.
 - **Drive through CDP, with no pulled-in binaries.** The server face launches or attaches to the host's browser; no dependency downloads a browser. The one development-only exception is ruled under "Decisions", D2.
 - **Environment agnosticism.** `src/core` compiles against `ESNext` and `WebWorker` with no DOM and no Node; `src/browser` adds the DOM face; `src/server` adds Node. Every entity that can live in core does.
 - **Native browser control from inside the browser.** `src/browser` drives a document with `HTMLElement.click()`, native value setters, `form.requestSubmit()`, and `MutationObserver`, and reports what an untrusted event cannot do rather than faking it.
-- **A better WebMCP, inside or outside the browser.** Outside, `page.registry` mirrors the page's tools through the `WebMCP` domain. Inside, the DOM toolset's native tools are `ToolInterface` values that `@orkestrel/mcp`'s `createModelContext().publish` hands to built-in agents, and the same bridge's `adopt()` feeds page tools into the toolset. The agent calls native browser tools and outside tools through one registry.
+- **Replace WebMCP, stay aligned with it, and adapt to it.** The fleet's own surfaces are primary: an agent drives any page through this package's vocabulary with no cooperation from the page, and a page that offers tools does so through `@orkestrel/tool` values published over `@orkestrel/mcp`'s page and scope servers. WebMCP is one more door onto the same idea, and it is expected to ship in browsers, so the package adapts to it in both directions and proves its alignment with a dated conformance suite (see "Relation to WebMCP"). The agent calls native browser tools, page tools, and outside tools through one registry.
 - **Tuned for a small model.** The vocabulary is the one that passed with a 2-billion-parameter model, and the run-derived rules are contract.
 - **Clean breaks.** No alias, wrapper, or deprecation shim survives; every consumer is updated in the same change.
 
@@ -51,6 +51,24 @@ The following list names each placement, the view it drives, and how it reaches 
 - **Page driving a document.** `createDocumentToolset(options)` from `@orkestrel/browser/browser` drives `options.document`, which is required. The supported topology is a realm that survives the driven document's navigation: a page driving a same-origin child document (an `iframe` it owns, or a window it opened), or an extension page driving a document through a content script it can re-create. A toolset that drives its own realm's document cannot return from an action that navigates it (`HTMLElement.click()` on an ordinary link, `form.requestSubmit()` on an ordinary form); the guide states that limit, and the factory refuses `globalThis.document` unless `options.own` is `true`. Page tools arrive through `options.source`, a `BrowserToolSourceInterface` that `@orkestrel/mcp`'s `ModelContextInterface` satisfies structurally (type probe, exit 0). Outside tools arrive through the consumer's MCP client from `@orkestrel/mcp/browser`. Built-in browser agents receive the toolset's `native` tools through the same bridge's `publish`; publishing the whole manager would re-register the page's own adopted tools as proxies of themselves (`../mcp/src/browser/ModelContext.ts:206-209`, `../mcp/src/browser/types.ts:466-470`), so the guide names `native` as what a consumer publishes.
 - **Dedicated or service worker, and extension pages.** A worker has no `document`, so it drives a browser over CDP: `createCDPClient({ transport: createSocketCDPTransport({ url }) })` with the native `WebSocket`, then `createBrowserToolset(page)`. The driven Chromium must be started with `--remote-allow-origins` naming the caller's origin. `chrome.debugger` as a transport is deferred until its `sessionId` routing is read (see "Limits").
 - **Content script.** It runs in an isolated world, and P5 shows an isolated world cannot see `document.modelContext`, so it cannot adopt the page's WebMCP tools. That is a recorded limit.
+
+### Relation to WebMCP
+
+The owner's stance on 2026-09-29: the fleet's packages replace WebMCP rather than wrap it, keep up with it because browsers are expected to adopt it, and carry conformance tests and adapters for it, as `@orkestrel/mcp` does for the Model Context Protocol. The design applies that stance in three parts.
+
+- **Replace.** The primary surfaces are the fleet's own: `@orkestrel/tool` is the tool model, `@orkestrel/mcp`'s `createPageServer` and `createScopeServer` are how a page publishes tools to an agent over a message port, and this package's toolset is how an agent drives any page, whether or not the page registers anything. No entity in this package is named after WebMCP, and no member of the agent vocabulary depends on a WebMCP registry being present: `look`, `read`, `click`, `type`, `press`, `navigate`, `wait`, and `dialog` run against Chromium 141, which ships no registry (P1, P15).
+- **Adapt.** Two adapters carry WebMCP tools into that model, one per direction the specification defines, and a third reads the declarative form. As in mcp, an adapter is named in prose and carries no `Adapter` or `Bridge` suffix in an identifier.
+- **Stay aligned.** `tests/conformance.test.ts`, the fixed home for where a package drifts from the official tooling it tracks (`../scaffold/.claude/rules/tests.md:56`), becomes this package's `conformance` project in `npm test`, following the mcp precedent of a digest-pinned, revision-dated mirror compared coordinate by coordinate (`../mcp/tests/setupConformance.ts:165-174`, `../mcp/tests/mirrors/ext-tasks-2026-07-28-schema.json:1-4`). Two mirrors are vendored as fetched bytes under `tests/mirrors/`, exempt from the prose rules (`../scaffold/.claude/rules/writing.md:30`): the `WebMCP` domain slice of `browser_protocol.json` at a named `devtools-protocol` revision, and the WebIDL block of the specification at a named `index.bs` revision. Each mirror is pinned by its raw-byte SHA-256 in a constant, so a changed byte reddens at module load before a row runs. The rows are listed under U17. A drift is ruled, never patched around: the mirror is refreshed to the newer revision, every row that reddens is re-ruled as implement, retain, or exclude, and the guide's "Declared conformance gaps" section names each exclusion with its closer, as mcp's guide does for its bridge (`../mcp/guides/mcp.md:4901`).
+
+The following table names each adapter, its owner, and its proof.
+
+| Adapter                                           | Owner and entity                                                                                               | What it translates                                                                                                                                                                                                                                                                                | Proof                                                                                                                                                |
+| ------------------------------------------------- | -------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Outside the browser: the `WebMCP` protocol domain | This package, `BrowserRegistry` at `page.registry`                                                             | The domain's `Tool`, `Annotation`, `RemovedTool`, `InvocationStatus`, the four commands, and the four events into `BrowserTool`, `BrowserInvocation`, `BrowserInvocationResult`, and adopted `ToolInterface` values; `readOnly` to `pure`, `consequential` to `consequential`, `untrusted` always | U6 against the in-memory transport and `CDPTestServer`; U17 rows against the vendored domain; the live case a limit until a host ships the domain    |
+| Inside the browser: `document.modelContext`       | `@orkestrel/mcp`, `createModelContext` (publish and adopt), consumed here through `BrowserToolSourceInterface` | `ToolInterface` values into `registerTool` descriptors and `RegisteredTool` records back into `ToolInterface` values; `readOnlyHint`, `untrustedContentHint`, and `consequentialHint` each way                                                                                                    | mcp's own suite against its IDL-faithful double; U17 composes the real bridge with this package's DOM toolset against this package's double under D3 |
+| The declarative form                              | This package, the element managers                                                                             | A registered tool's `backendNodeId` (CDP) or a form's `toolname` attribute (DOM) into the outline mark `[tool=NAME]`, so the model sees which form a page tool submits                                                                                                                            | U4 and U10                                                                                                                                           |
+
+Two readings bound the alignment on 2026-09-29. The specification draft of that date declares `ontoolactivated`, `ontoolcancel`, `ToolActivatedEvent`, `ToolCancelEvent`, and a `debugging` annotation that mcp 0.0.33's bridge, read on 2026-09-15, does not name (`../mcp/src/browser/types.ts:218-233`, `../mcp/src/browser/constants.ts:22`); refreshing the bridge is mcp's unit, and the rows here that need those members are declared gaps until it lands. The specification repository carries no test suite of its own, so nothing official can be run against this package; the vendored coordinates are the authority until one exists.
 
 ### Page surface after the redesign
 
@@ -297,7 +315,7 @@ P13 sizes on a bloated 10 025-character page: the document-order outline is 1 44
 
 ### WebMCP outside the browser
 
-`page.registry` is `BrowserRegistry`, which drives the experimental `WebMCP` domain and only that domain. Its contract is shown in the following fence.
+`page.registry` is `BrowserRegistry`, the adapter over the experimental `WebMCP` protocol domain and only that domain. Its contract is shown in the following fence.
 
 ```ts
 export interface BrowserToolAnnotation {
@@ -374,7 +392,7 @@ export interface BrowserToolSourceInterface {
 
 ### WebMCP inside the browser
 
-This package adds the DOM-native tool set and no registry client of its own. `createDocumentToolset({ document, source })` accepts any `BrowserToolSourceInterface`; `@orkestrel/mcp`'s `createModelContext()` returns a `ModelContextInterface` whose `emitter` and `adopt()` satisfy that shape structurally (type probe, `tsc --strict`, exit 0, with a refused control; promoted under D3). A consumer publishes `toolset.native` with the same bridge's `publish` for built-in agents, or hosts the manager with `createPageServer` or `createScopeServer`. The bridge's annotations carry no `debugging` flag (`../mcp/src/browser/types.ts:229-233`, the 2026-09-15 surface), so a `debugging` page tool reaches the DOM placement until the bridge reports the flag; that is a recorded limit. The in-browser composition against a real `document.modelContext` is a recorded limit until a host registry exists (see "Limits").
+This package adds the DOM-native tool set and no registry client of its own. `createDocumentToolset({ document, source })` accepts any `BrowserToolSourceInterface`; `@orkestrel/mcp`'s `createModelContext()` returns a `ModelContextInterface` whose `emitter` and `adopt()` satisfy that shape structurally (type probe, `tsc --strict`, exit 0, with a refused control; promoted under D3). A consumer publishes `toolset.native` with the same bridge's `publish` for built-in agents, or hosts the manager with `createPageServer` or `createScopeServer`. The bridge's annotations carry no `debugging` flag (`../mcp/src/browser/types.ts:229-233`, the 2026-09-15 surface), so a `debugging` page tool reaches the DOM placement until the bridge reports the flag; that is a recorded limit and a declared conformance gap whose closer is mcp's refresh. The DOM outline marks a form carrying a `toolname` attribute as `[tool=NAME]`, which is the declarative form's adapter and needs no registry. The in-browser composition against a real `document.modelContext` is a recorded limit until a host registry exists (see "Limits").
 
 ### Event and invalidation model
 
@@ -452,7 +470,7 @@ Each edge is ruled as follows.
 
 - `@orkestrel/tool` `^0.0.17`, runtime (D1): `ToolInterface`, `ToolContext`, `ToolAnnotations`, `createTool`, `createToolManager`. Never re-exported (`../scaffold/.claude/rules/architecture.md:161`).
 - `@orkestrel/markdown` `^0.0.16`, runtime: `htmlToMarkdown`, `renderMarkdown`. It pins `@orkestrel/html` `^0.0.11`, as this package does.
-- `@orkestrel/mcp` `^0.0.33`, development only (D3), for the type test.
+- `@orkestrel/mcp` `^0.0.33`, development only (D3), for the type test and the conformance composition in U17.
 - `playwright` and `@vitest/browser-playwright`, development (D2).
 - No other package and no browser binary.
 
@@ -460,7 +478,7 @@ Every added bare name is prefixed `Browser` or qualified by its face, so none co
 
 ### Blast radius
 
-`@orkestrel/browser` goes from `0.0.18` to `0.0.19` and gains the `./browser` export. `@orkestrel/ollama` pins `^0.0.18` (`/home/user/orkestrel/ollama/package.json:84`), and a caret on `0.0.x` admits that version alone, so it re-pins to `^0.0.19`. Of its calls, one shape breaks: `page.evaluate(expression, timeout)` becomes `page.evaluate(expression, { timeout })` at six sites, `/home/user/orkestrel/ollama/tests/setupServer.ts:1128` and `:1441`, and four in `/home/user/orkestrel/ollama/tests/service/page.test.ts`; the stub at `/home/user/orkestrel/ollama/tests/setupServer.test.ts:678` and its assertion change with them, and the TSDoc at `/home/user/orkestrel/ollama/tests/setupServer.ts:1088-1089`, `:1167-1174`, and `:1208-1213`, which records that page commands take no signal, is rewritten. The consumer's guide mirror `/home/user/orkestrel/ollama/guides/browser.md` is refreshed from the 0.0.19 guide. `createBrowser`, `connect`, `create`, `network.start`, `navigate(url, { timeout })`, `destroy`, and `findSystemBrowser` are unchanged, and the consumer subscribes no `navigate` listener. The scaffold catalog row for `browser` gains `tool` and `markdown` edges in a scaffold commit. No other fleet package declares this one.
+`@orkestrel/browser` goes from `0.0.18` to `0.0.19` and gains the `./browser` export. `@orkestrel/ollama` pins `^0.0.18` (`/home/user/orkestrel/ollama/package.json:84`), and a caret on `0.0.x` admits that version alone, so it re-pins to `^0.0.19`. Of its calls, one shape breaks: `page.evaluate(expression, timeout)` becomes `page.evaluate(expression, { timeout })` at six sites, `/home/user/orkestrel/ollama/tests/setupServer.ts:1128` and `:1441`, and four in `/home/user/orkestrel/ollama/tests/service/page.test.ts`; the stub at `/home/user/orkestrel/ollama/tests/setupServer.test.ts:678` and its assertion change with them, and the TSDoc at `/home/user/orkestrel/ollama/tests/setupServer.ts:1088-1089`, `:1167-1174`, and `:1208-1213`, which records that page commands take no signal, is rewritten. The consumer's guide mirror `/home/user/orkestrel/ollama/guides/browser.md` is refreshed from the 0.0.19 guide. `createBrowser`, `connect`, `create`, `network.start`, `navigate(url, { timeout })`, `destroy`, and `findSystemBrowser` are unchanged, and the consumer subscribes no `navigate` listener. The scaffold catalog row for `browser` gains `tool` and `markdown` edges in a scaffold commit. No other fleet package declares this one. One fleet finding is handed to mcp's own campaign rather than fixed here: its bridge lags the 2026-09-29 draft on `toolactivated`, `toolcancel`, and `debugging`.
 
 ## Rulings
 
@@ -491,6 +509,8 @@ Both design lanes raised judgment calls, and the falsify round added findings. E
 23. **`BrowserFileChooser.cancel` becomes `dismiss`.** The dialog verb, not a synonym of `abort`.
 24. **The DOM toolset drives a document the caller names, never `globalThis.document` by default.** A toolset whose own realm navigates cannot return from the action that navigated it; the safe topology is a realm that survives the driven document.
 25. **`native` is what a consumer publishes.** Publishing the manager would re-register the page's own tools as proxies.
+26. **The fleet replaces WebMCP; this package adapts to it in both directions.** The owner's stance of 2026-09-29. No export is named after WebMCP, the vocabulary needs no registry, and the two adapters plus the declarative mark are the whole WebMCP surface.
+27. **Alignment is a digest-pinned conformance project, not a claim.** `tests/conformance.test.ts` compares the registry's contracts against vendored, revision-dated mirrors of the protocol domain and the WebIDL, the mcp precedent; a drift reddens a named row and is ruled, never patched around.
 
 ## Evidence
 
@@ -545,7 +565,8 @@ The status readings follow, taken from the specification, the Chrome intent, and
 - Specification draft of 2026-09-29: registry `document.modelContext`; `registerTool`, `getTools`, `executeTool`; events `toolchange`, `toolactivated`, `toolcancel`; annotations `readOnlyHint`, `untrustedContentHint`, `consequentialHint`, `debugging`; names of 1 to 128 characters from alphanumerics, underscore, hyphen, and period; the `tools` Permissions-Policy feature.
 - Chrome intent to experiment (blink-dev, 2026-05-15): dev trial M146, origin trial M149 to M156, ship target M157; the intent names `Navigator.modelContext` while the specification names `document.modelContext`. Flag `chrome://flags/#enable-webmcp-testing`.
 - The `WebMCP` protocol domain (tip of tree, experimental): `enable`, `disable`, `invokeTool`, `cancelInvocation`; `toolsAdded`, `toolsRemoved`, `toolInvoked`, `toolResponded`; a `Tool` carries `frameId`, `backendNodeId?`, and the five annotations. Puppeteer's `page.webmcp` and Chrome DevTools MCP 1.10.1 drive it; the latter needs Chrome 150 with `--enable-features=WebMCP`. Chromium 141 predates the domain (P15).
-- `@orkestrel/mcp` 0.0.33 declares the 2026-09-15 surface: `toolchange` only, no `debugging`, `executeTool` typed `Promise<unknown>`.
+- `@orkestrel/mcp` 0.0.33 declares the 2026-09-15 surface: `toolchange` only, no `debugging`, `executeTool` typed `Promise<unknown>`; its bridge is proven against an IDL-faithful double (`../mcp/tests/fixtures/modelContext.ts`) and a `describe.runIf(isWebMCPDocument(document))` block that no shipping browser collects.
+- The specification repository (`webmachinelearning/webmcp`, read 2026-09-29) holds no test or web-platform-tests directory; the WebIDL and the README disagree on `executeTool`'s result (`Promise<DOMString>` against a `{ content: [...] }` sample), which `renderBrowserToolOutput` accepts either way.
 
 ### The falsify round
 
@@ -730,8 +751,8 @@ This unit promotes the probes into service proofs.
 This unit rewrites the guide for the three faces.
 
 - **Engine:** `opus`.
-- **Owns:** `guides/browser.md` (the scope header at `guides/browser.md:1852`; Surface for three faces; Methods tables for every behavioral interface; Contract rewritten: invariants 2, 5, 6, 7, 8, 9, 10, and 13 for the changes, plus the reference, reading, registry, serialization, dialog, trusted-input, reserved-name, own-document, `alert()`, `debugging`, and `WebMCP` host invariants and limits; Patterns "Drive a page with a small model" with the system prompt, "Host the toolset over MCP", and "Publish native tools to a page"), `README.md`, `tests/guides.test.ts`, `PROPOSAL.md` (deleted, with this ruling in the commit).
-- **Depends on:** U11.
+- **Owns:** `guides/browser.md` (the scope header at `guides/browser.md:1852`; Surface for three faces; Methods tables for every behavioral interface; Contract rewritten: invariants 2, 5, 6, 7, 8, 9, 10, and 13 for the changes, plus the reference, reading, registry, serialization, dialog, trusted-input, reserved-name, own-document, `alert()`, `debugging`, and `WebMCP` host invariants and limits; a "Relation to WebMCP" section with the adapter table; a "Declared conformance gaps" section naming each excluded row and its closer, as mcp's guide does; Patterns "Drive a page with a small model" with the system prompt, "Host the toolset over MCP", and "Publish native tools to a page"), `README.md`, `tests/guides.test.ts`, `PROPOSAL.md` (deleted, with this ruling in the commit).
+- **Depends on:** U11, U17.
 - **Acceptance:**
   1. `npm run test:guides` exits 0; every fence imports `@orkestrel/browser`, `@orkestrel/browser/browser`, or `@orkestrel/browser/server`.
   2. Invariant 2 names `markdown` and `tool`; invariant 5 names `readBrowserEndpoint` and not `waitForCDPReady`; invariant 6 names the retained codegen emitter and the added page events; invariant 9 describes the retargeted script; invariant 13 describes the inherited-pipe hand-off; a Grep of the guide for `waitForCDPReady|BrowserLocator|BrowserSelector|\.until\(|\.cancel\(` matches nothing.
@@ -744,7 +765,7 @@ This unit reads the gates bare.
 - **Engine:** `verifier`.
 - **Owns:** nothing.
 - **Depends on:** U12.
-- **Acceptance:** `npm run format:check`, `npm run lint:check`, `npm run check`, `npm run build`, `npm test`, `npm run test:distribution -- --mode release`, and `npm run test:service` exit 0, each run bare; a Grep of `src` for `setInterval` matches nothing, and the only condition-testing `setTimeout` loop is the process-group drain.
+- **Acceptance:** `npm run format:check`, `npm run lint:check`, `npm run check`, `npm run build`, `npm test` (which runs `test:conformance`), `npm run test:distribution -- --mode release`, and `npm run test:service` exit 0, each run bare; a Grep of `src` for `setInterval` matches nothing, and the only condition-testing `setTimeout` loop is the process-group drain.
 
 ### U14 `consumer`
 
@@ -773,9 +794,25 @@ This unit is the campaign's one review pass.
 - **Depends on:** U14, U15.
 - **Acceptance:** every required finding resolved and the affected gates rerun green.
 
+### U17 `conformance`
+
+This unit pins the package's alignment with WebMCP against vendored, dated mirrors.
+
+- **Engine:** `astra`, with an objective `reviewer`.
+- **Owns:** `tests/conformance.test.ts`, `tests/setupConformance.ts` and `tests/setupConformance.test.ts` (the mirror readers, their digest constants, and the coordinate row tables), `tests/mirrors/webmcp-domain-REVISION.json` (the `WebMCP` domain slice of `browser_protocol.json`, fetched bytes, `REVISION` the `devtools-protocol` commit), `tests/mirrors/webmcp-idl-DATE.bs` (the `ModelContext` WebIDL blocks of `index.bs`, fetched bytes, `DATE` the draft date), `tests/fixtures/modelContext.ts` (this package's IDL-faithful double of `document.modelContext`, member for member, with the same header exemption mcp's carries), `tests/src/browser/conformance.test.ts` (the composition cases under the Playwright provider), `vite.config.ts` and `package.json` (the `conformance` project and `test:conformance`, chained into `npm test`), `src/browser/elements/BrowserDOMElementManager.ts` and `src/core/elements/BrowserElementManager.ts` (the `[tool=NAME]` marks).
+- **Depends on:** U6, U10.
+- **Acceptance:**
+  1. `npm run test:conformance` exits 0 in Node with the browser disabled, and `npm test` runs it; `tests/setupConformance.test.ts` proves a mirror whose bytes differ from the pinned digest throws at module load, with a control mirror that loads.
+  2. Domain rows: every property of the mirror's `Tool`, `Annotation`, and `RemovedTool` types and every value of `InvocationStatus` is one `parseBrowserTool` and `parseBrowserInvocationResult` name, and the parsers name nothing the mirror lacks; the four command names the registry sends and the four event names it subscribes each exist in the mirror; the `invokeTool` description still states the response precedes tool events; the `toolResponded.output` description still names it untrusted.
+  3. IDL rows: the mirror's `ModelContext` block declares `registerTool`, `getTools`, `executeTool`, `ontoolchange`, `ontoolactivated`, and `ontoolcancel`; `ToolAnnotations` declares `readOnlyHint`, `untrustedContentHint`, `consequentialHint`, and `debugging`; `executeTool` returns `Promise<DOMString>`; the name rule reads 1 to 128 code points of ASCII alphanumerics, `_`, `-`, and `.`; each row is ruled implement, retain, or exclude in a table the test reads, and every exclusion names its closer.
+  4. Mapping rows: `readOnly` to `pure`, `consequential` to `consequential`, `untrusted` always `true`, `debugging` to skip, and `autosubmit` and `backendNodeId` to the `[tool=NAME]` mark are asserted from the registry's adoption on a mirror-shaped tool; a name with a period is skipped and the declared gap names the provider charset as the reason.
+  5. Composition rows under the Playwright provider: `createModelContext` from the installed `@orkestrel/mcp` over this package's double, publishing `toolset.native`, registers exactly the seven generic descriptors with the projected hints and touches no registration the double already held; `createDocumentToolset({ document, source: bridge })` adopts a page tool the double registers with `untrusted` true and `pure` from `readOnlyHint`; a `toolchange` from the double re-adopts; a `describe.runIf(isWebMCPDocument(document))` block holds the same cases against a real registry, and the absence path asserts `bridge !== undefined` equals `'modelContext' in document` so a host that ships the registry reddens rather than skipping.
+  6. The DOM outline marks a form carrying `toolname="search-cars"` as `e5 form "Search cars" [tool=search-cars]`, and the CDP outline marks a form whose registered tool carries its `backendNodeId` the same way.
+  7. A Grep of `src` for `WebMCP|ModelContext` in an exported name matches nothing.
+
 ### Exit criterion
 
-The campaign closes when every unit's acceptance holds, the gates in U13 are green on this host, the ollama page proof is green on `^0.0.19`, the real-model criteria in U15 are met and recorded with their logs, and the guide's Contract lists the `WebMCP` live proof as a limit naming its host.
+The campaign closes when every unit's acceptance holds, the gates in U13 are green on this host, the ollama page proof is green on `^0.0.19`, the real-model criteria in U15 are met and recorded with their logs, the conformance rows in U17 are green against mirrors whose revisions the guide names, and the guide's Contract lists the `WebMCP` live proof as a limit naming its host.
 
 ## Limits and risks
 
@@ -787,7 +824,9 @@ The following readings are missing, each with what settles it.
 - The stderr pipe through Microsoft Edge's Windows launcher re-exec: a launch on a Windows host with Edge.
 - The DOM role and name computation against Chromium's: U11's comparison asserts the interactive set, not exact text.
 - A `pushState` in the DOM placement on a browser without the Navigation API: no event marks the reading stale.
-- The `debugging` flag in the DOM placement: mcp 0.0.33's bridge does not carry it.
+- The `debugging` flag, `toolactivated`, and `toolcancel` in the DOM placement: mcp 0.0.33's bridge does not carry them; declared conformance gaps until mcp refreshes its bridge.
+- The specification's registry location (`Document` in the draft, `Navigator` in the Chrome intent) and `executeTool`'s result shape: settled by a shipping Chrome, and pinned by the mirror revision until then.
+- A page tool whose name carries a period is skipped, because the provider charset excludes it; the declared gap names the rule.
 
 The following risks are carried with their outcomes.
 
@@ -810,3 +849,4 @@ The following list records which bench produced what; `.orkestrel/browser/ledger
 - Two blind design lanes on Opus 5.5 (subjective and objective, Astra dark at dispatch): reconciled here; every tension ruled under "Rulings".
 - Probes: 20 runtime cases and 1 type case by the Orchestrator; 4 real-model runs through `@orkestrel/agent` and `@orkestrel/ollama`.
 - Falsify round: the Opus `reviewer` (subjective lane) and the GPT-6 Astra `analyst` (objective lane) over 20 numbered claims; both lanes' findings are reproduced, ruled, and carried into the units; the two unresolved claims are settled by P18 and P19.
+- WebMCP alignment read (after the owner's ruling of 2026-09-29): three blind readers over mcp's bridge and tests, the WebMCP surface, and the fleet's fixture and conformance rules, followed by one adversarial verify pass over the "Relation to WebMCP" section and U17.

@@ -165,3 +165,13 @@ Reproduced before acting: the sixth consumer `evaluate` site (`/home/user/orkest
 
 - D1, D2, and D3 authorized in the owner's words: "let's go with your recommendations for the decisions that were left".
 - Stance on WebMCP, in the owner's words: "we are not wrapping webmcp, our packages are meant to replace it, although we want to make sure we are keeping up with it and trying not to stray too far from it since it most likely will be adopted into browsers soon enough, so we can work in some conformance tests to make sure we are aligned with it and even work in adapters for it, similar to how we have for MCP and other orkestrel packages." Carried into the proposal as a "Relation to WebMCP" section, an adapter map, and a conformance unit.
+
+## WebMCP alignment read and reframe (2026-09-29, after the owner's ruling)
+
+| Lane | Role, engine | Report | Reading |
+| --- | --- | --- | --- |
+| mcp bridge | native reader (workflow `webmcp-alignment-read`) | `tmp/units/webmcp-read-bridge.md` (78 facts, 8 gaps) | mcp 0.0.33 ships `createModelContext` (publish, adopt, destroy), a three-hint mapping each way, an IDL-faithful double at `tests/fixtures/modelContext.ts`, a `runIf(isWebMCPDocument(document))` native block, and a "WebMCP parity" guide section with 18 rows; it names none of `toolactivated`, `toolcancel`, or `debugging`; "conformance" in mcp is the MCP-wire runner only |
+| WebMCP surface | `researcher` | `tmp/units/webmcp-read-surface.md` (25 facts, 9 gaps) | the domain's types, commands, and events read from the vendored JSON; the draft IDL (summarised fetch, 2026-09-29) with `executeTool` returning `Promise<DOMString>`, the name rule 1–128 of `[A-Za-z0-9_.-]`, the `tools` Permissions-Policy feature; the specification repository carries no test directory; Puppeteer and DevTools MCP versions that introduced WebMCP support unfound |
+| fleet rules | native reader | `tmp/units/webmcp-read-rules.md` (71 facts, 8 gaps) | `tests/conformance.test.ts` is the fixed drift-proof home, its own project in `npm test`; a foreign-surface double is the one permitted substitution; a vendored mirror is fetched bytes, refreshed never rewritten; mcp pins mirrors by dated filename and SHA-256 digest; no rule names `adapter` as an identifier; no fleet conformance project runs in the browser environment |
+
+- Reframe written into `PROPOSAL.md`: Goals bullet, "Relation to WebMCP" (replace, adapt, stay aligned; the adapter table), rulings 26 and 27, U17 `conformance`, U12 and U13 amendments, evidence and limits rows. One reader citation corrected (`../mcp/src/browser/constants.ts:22`). Verify pass: workflow `webmcp-alignment-verify`, three blind refuters (spec accuracy, fleet rules, coherence).
