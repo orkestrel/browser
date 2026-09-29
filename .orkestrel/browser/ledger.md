@@ -175,3 +175,7 @@ Reproduced before acting: the sixth consumer `evaluate` site (`/home/user/orkest
 | fleet rules | native reader | `tmp/units/webmcp-read-rules.md` (71 facts, 8 gaps) | `tests/conformance.test.ts` is the fixed drift-proof home, its own project in `npm test`; a foreign-surface double is the one permitted substitution; a vendored mirror is fetched bytes, refreshed never rewritten; mcp pins mirrors by dated filename and SHA-256 digest; no rule names `adapter` as an identifier; no fleet conformance project runs in the browser environment |
 
 - Reframe written into `PROPOSAL.md`: Goals bullet, "Relation to WebMCP" (replace, adapt, stay aligned; the adapter table), rulings 26 and 27, U17 `conformance`, U12 and U13 amendments, evidence and limits rows. One reader citation corrected (`../mcp/src/browser/constants.ts:22`). Verify pass: workflow `webmcp-alignment-verify`, three blind refuters (spec accuracy, fleet rules, coherence).
+
+## Routing rule (owner, 2026-09-29)
+
+- No subagent or workflow agent runs on the session model (Fable). Every dispatch names its engine: Opus 5.5 for a subjective or judgment-bearing lane, Sonnet for a mechanical unit or verifier, GPT-6 Astra or Cursor Grok through their drivers. The `webmcp-alignment-read` and `webmcp-alignment-verify` workflows launched before this rule inherited the session model; the owner let the verify pass finish.
