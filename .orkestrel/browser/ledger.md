@@ -179,3 +179,14 @@ Reproduced before acting: the sixth consumer `evaluate` site (`/home/user/orkest
 ## Routing rule (owner, 2026-09-29)
 
 - No subagent or workflow agent runs on the session model (Fable). Every dispatch names its engine: Opus 5.5 for a subjective or judgment-bearing lane, Sonnet for a mechanical unit or verifier, GPT-6 Astra or Cursor Grok through their drivers. The `webmcp-alignment-read` and `webmcp-alignment-verify` workflows launched before this rule inherited the session model; the owner let the verify pass finish.
+
+## Verify pass on the WebMCP reframe (workflow `webmcp-alignment-verify`, 2026-09-29)
+
+| Lens | Verdict | Findings | Record |
+| --- | --- | --- | --- |
+| spec accuracy | FAIL | 1 blocking, 7 required, 6 optional | `.orkestrel/browser/webmcp-alignment-findings.md` |
+| fleet rules | FAIL | 2 blocking, 6 required, 4 optional | same file |
+| coherence | FAIL | 2 blocking, 8 required, 4 optional | same file |
+
+- Reproduced the blocking accuracy finding by fetch (curl, 2026-09-29): `wpt/webmcp/META.yml`, `wpt/webmcp/idlharness.https.window.js`, `wpt/interfaces/webmcp.idl` (2 136 bytes; `ontoolchange` alone, three hints), and `webmcp/index.bs` (86 547 bytes; line 20 `Test Suite: https://wpt.fyi/results/webmcp`; lines 622–623 `ontoolactivated`, `ontoolcancel`; line 1118 `debugging`; line 158 the 1-to-128 name rule). Digests: `index.bs` `e6c9b979…`, `webmcp.idl` `eddabc79…` (full values in `tmp/webmcp/`).
+- Every blocking and required finding accepted and written into `PROPOSAL.md`; the optional ones accepted as wording. Rulings in `.orkestrel/browser/webmcp-alignment-verdict.md`. After the patch: `cite.ts` 54 citations, 0 unresolved; `test:policy`, `format:check` exit 0; structure and term sweeps clean.
