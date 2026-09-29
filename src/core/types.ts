@@ -1,4 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { ToolInterface } from '@orkestrel/tool'
 
 // === CDP transport
 
@@ -1748,6 +1749,92 @@ export interface BrowserCallOptions {
 	readonly signal?: AbortSignal
 }
 
+/** Transliterates the WebMCP protocol's `Annotation` type, retaining its wire spelling. */
+export interface BrowserToolAnnotation {
+	readonly readOnly?: boolean
+	readonly untrustedContent?: boolean
+	readonly consequential?: boolean
+	readonly debugging?: boolean
+	readonly autosubmit?: boolean
+}
+
+/** Describes a registered WebMCP tool and its owning document. */
+export interface BrowserTool {
+	readonly name: string
+	readonly description: string
+	readonly schema: Readonly<Record<string, unknown>> | undefined
+	readonly annotation: BrowserToolAnnotation
+	readonly frame: string
+	readonly node: number | undefined
+}
+
+/** Identifies a removed WebMCP tool by document and name. */
+export interface BrowserToolRemoval {
+	readonly frame: string
+	readonly name: string
+}
+
+/** Describes a WebMCP invocation observed on the protocol. */
+export interface BrowserInvocation {
+	readonly id: string
+	readonly tool: string
+	readonly frame: string
+	readonly input: string
+}
+
+/** Carries a terminal WebMCP status and its untrusted output or error. */
+export interface BrowserInvocationResult {
+	readonly id: string
+	readonly status: string
+	readonly output: unknown
+	readonly error: string | undefined
+}
+
+/** Maps registry changes and observed WebMCP invocation events. */
+export type BrowserRegistryEventMap = {
+	readonly change: readonly []
+	readonly invoke: readonly [invocation: BrowserInvocation]
+	readonly respond: readonly [result: BrowserInvocationResult]
+}
+
+/** Configures registry listeners and listener-error handling. */
+export interface BrowserRegistryOptions {
+	readonly on?: EmitterHooks<BrowserRegistryEventMap>
+	readonly error?: EmitterErrorHandler
+}
+
+/** Mirrors the experimental WebMCP protocol domain for a page. */
+export interface BrowserRegistryInterface {
+	readonly emitter: EmitterInterface<BrowserRegistryEventMap>
+	/** Enables observation; returns `false` only when the protocol domain is absent. */
+	start(options?: BrowserCallOptions): Promise<boolean>
+	/** Finds a tool; an omitted frame prefers the main document, then registration order. */
+	tool(name: string, frame?: string): BrowserTool | undefined
+	/** Returns every registered tool, including shadowed frame registrations. */
+	tools(): readonly BrowserTool[]
+	/** Projects tools as untrusted executable tools, omitting optional-what schemas. */
+	adopt(): Promise<readonly ToolInterface[]>
+	/** Invokes a tool and awaits its terminal event; rejects on abort, invalidation, or timeout. */
+	execute(
+		tool: BrowserTool,
+		input: Readonly<Record<string, unknown>>,
+		options?: BrowserCallOptions,
+	): Promise<BrowserInvocationResult>
+	/** Disables every enabled session, unsubscribes, and rejects pending invocations. */
+	destroy(): Promise<void>
+}
+
+/** Holds one unsettled registry execution and its resource cleanup. */
+export interface BrowserRegistryPending {
+	readonly frame: string
+	readonly session: string
+	readonly signal: AbortSignal | undefined
+	readonly controller: AbortController
+	readonly timer: ReturnType<typeof setTimeout>
+	readonly resolve: (result: BrowserInvocationResult) => void
+	readonly reject: (error: unknown) => void
+}
+
 /**
  * Describes serializable frame metadata decoded from CDP `Page.getFrameTree`.
  *
@@ -2057,6 +2144,7 @@ export interface BrowserNodeQuery {
  */
 export interface BrowserPageInterface extends BrowserFrameInterface {
 	readonly emitter: EmitterInterface<BrowserPageEventMap>
+	readonly registry: BrowserRegistryInterface
 	readonly network: BrowserNetworkManagerInterface
 	readonly navigation: BrowserNavigationManagerInterface
 	readonly scripts: BrowserScriptManagerInterface

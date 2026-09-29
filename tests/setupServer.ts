@@ -17,7 +17,11 @@ import {
 	parseArray,
 	parseJSON,
 } from '@orkestrel/contract'
-import { createNodeWebSocket } from '@orkestrel/websocket'
+import {
+	createNodeWebSocket,
+	encodeWebSocketFrame,
+	WEBSOCKET_OPCODE_TEXT,
+} from '@orkestrel/websocket'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
 
@@ -217,6 +221,12 @@ export interface CDPServerReceived {
 /** Computes an auto-reply result for a scripted CDP method. */
 export type CDPServerReplyHandler = (params: Readonly<Record<string, unknown>>) => unknown
 
+/** Describes a WebMCP fixture's registrations and terminal invocation event. */
+export interface CDPRegistryScript {
+	readonly tools: readonly unknown[]
+	readonly result: Readonly<Record<string, unknown>>
+}
+
 /**
  * Serves enough raw CDP over HTTP and WebSocket to drive
  * `Browser`/`WebSocketCDPTransport` end-to-end in tests — real sockets, no
@@ -235,6 +245,8 @@ export interface CDPTestServerInterface {
 	list(targets: readonly unknown[]): void
 	/** Script an automatic reply for every request matching `method`. */
 	script(method: string, result: unknown | CDPServerReplyHandler): void
+	/** Scripts WebMCP with a command response and terminal event in one socket write. */
+	advertise(tools: readonly unknown[], result: Readonly<Record<string, unknown>>): void
 	/** Send a success reply for a specific request id over the active WebSocket. */
 	reply(id: number, result: unknown): void
 	/** Send an error reply for a specific request id over the active WebSocket. */
@@ -266,6 +278,8 @@ export class CDPTestServer implements CDPTestServerInterface {
 	readonly #sockets = new Set<NodeWebSocketInterface>()
 	#targets: readonly unknown[] = []
 	#active: NodeWebSocketInterface | undefined
+	#socket: Duplex | undefined
+	#registry: CDPRegistryScript | undefined
 	#port: number | undefined
 	#hanging = false
 	#closed = false
@@ -315,6 +329,10 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 	script(method: string, result: unknown | CDPServerReplyHandler): void {
 		this.#scripts.set(method, result)
+	}
+
+	advertise(tools: readonly unknown[], result: Readonly<Record<string, unknown>>): void {
+		this.#registry = { tools, result }
 	}
 
 	reply(id: number, result: unknown): void {
@@ -376,11 +394,15 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 		const webSocket = createNodeWebSocket({ socket, key, head })
 		this.#active = webSocket
+		this.#socket = socket
 		this.#sockets.add(webSocket)
 		webSocket.emitter.on('message', (text) => this.#message(text))
 		webSocket.emitter.on('close', () => {
 			this.#sockets.delete(webSocket)
-			if (this.#active === webSocket) this.#active = undefined
+			if (this.#active === webSocket) {
+				this.#active = undefined
+				this.#socket = undefined
+			}
 		})
 	}
 
@@ -394,6 +416,39 @@ export class CDPTestServer implements CDPTestServerInterface {
 		const method = parsed['method']
 		const params = isRecord(parsed['params']) ? parsed['params'] : undefined
 		this.#received.push({ id, method, params })
+
+		if (this.#registry !== undefined && method.startsWith('WebMCP.')) {
+			const sessionId = parsed['sessionId']
+			if (method === 'WebMCP.enable') {
+				this.#send({ id, result: {} })
+				this.#send({
+					method: 'WebMCP.toolsAdded',
+					params: { tools: this.#registry.tools },
+					sessionId,
+				})
+			} else if (method === 'WebMCP.invokeTool') {
+				const invocationId = `invocation-${id}`
+				this.#socket?.write(
+					Buffer.concat([
+						encodeWebSocketFrame(
+							WEBSOCKET_OPCODE_TEXT,
+							JSON.stringify({ id, result: { invocationId } }),
+						),
+						encodeWebSocketFrame(
+							WEBSOCKET_OPCODE_TEXT,
+							JSON.stringify({
+								method: 'WebMCP.toolResponded',
+								params: { ...this.#registry.result, invocationId },
+								sessionId,
+							}),
+						),
+					]),
+				)
+			} else if (method === 'WebMCP.disable' || method === 'WebMCP.cancelInvocation') {
+				this.#send({ id, result: {} })
+			}
+			return
+		}
 
 		if (method === 'Target.getTargets' && !this.#scripts.has(method)) {
 			const targetInfos = this.#targets.filter(isRecord).map((target) => ({

@@ -33,6 +33,7 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class BrowserDownload',
 	'class BrowserFileChooser',
 	'class BrowserHandle',
+	'class BrowserRegistry',
 	'class BrowserRoute',
 	'class BrowserWorker',
 ])

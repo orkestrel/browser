@@ -1,4 +1,8 @@
 import type {
+	BrowserTool,
+	BrowserToolRemoval,
+	BrowserInvocation,
+	BrowserInvocationResult,
 	BrowserBindingCall,
 	BrowserCodegenAction,
 	BrowserConsoleMessage,
@@ -33,6 +37,91 @@ import {
 	readBrowserRemoteValue,
 	readBrowserStack,
 } from './helpers.js'
+
+/**
+ * Coerces a WebMCP `Tool` object to its browser-domain representation.
+ * @param value - Unknown protocol tool
+ * @returns The decoded tool, or undefined when required fields are malformed
+ */
+export function parseBrowserTool(value: unknown): BrowserTool | undefined {
+	if (
+		!isRecord(value) ||
+		!isString(value['name']) ||
+		!isString(value['description']) ||
+		!isString(value['frameId'])
+	)
+		return undefined
+	const hints = isRecord(value['annotations']) ? value['annotations'] : {}
+	return {
+		name: value['name'],
+		description: value['description'],
+		frame: value['frameId'],
+		schema: isRecord(value['inputSchema']) ? value['inputSchema'] : undefined,
+		node: isInteger(value['backendNodeId']) ? value['backendNodeId'] : undefined,
+		annotation: {
+			...(isBoolean(hints['readOnly']) ? { readOnly: hints['readOnly'] } : {}),
+			...(isBoolean(hints['untrustedContent'])
+				? { untrustedContent: hints['untrustedContent'] }
+				: {}),
+			...(isBoolean(hints['consequential']) ? { consequential: hints['consequential'] } : {}),
+			...(isBoolean(hints['debugging']) ? { debugging: hints['debugging'] } : {}),
+			...(isBoolean(hints['autosubmit']) ? { autosubmit: hints['autosubmit'] } : {}),
+		},
+	}
+}
+
+/**
+ * Coerces a WebMCP `RemovedTool` object to its document and name key.
+ * @param value - Unknown protocol removal
+ * @returns The decoded key, or undefined when malformed
+ */
+export function parseBrowserRemoval(value: unknown): BrowserToolRemoval | undefined {
+	if (!isRecord(value) || !isString(value['name']) || !isString(value['frameId'])) return undefined
+	return { frame: value['frameId'], name: value['name'] }
+}
+
+/**
+ * Coerces a WebMCP `toolInvoked` event without parsing its authored input text.
+ * @param value - Unknown event parameters
+ * @returns The invocation, or undefined when malformed
+ */
+export function parseBrowserInvocation(value: unknown): BrowserInvocation | undefined {
+	if (
+		!isRecord(value) ||
+		!isString(value['invocationId']) ||
+		!isString(value['toolName']) ||
+		!isString(value['frameId']) ||
+		!isString(value['input'])
+	)
+		return undefined
+	return {
+		id: value['invocationId'],
+		tool: value['toolName'],
+		frame: value['frameId'],
+		input: value['input'],
+	}
+}
+
+/**
+ * Coerces a WebMCP `toolResponded` event, preserving output and terminal status.
+ * @param value - Unknown event parameters
+ * @returns The result, or undefined when required fields are malformed
+ */
+export function parseBrowserInvocationResult(value: unknown): BrowserInvocationResult | undefined {
+	if (!isRecord(value) || !isString(value['invocationId']) || !isString(value['status']))
+		return undefined
+	const exception = isRecord(value['exception']) ? value['exception'] : undefined
+	return {
+		id: value['invocationId'],
+		status: value['status'],
+		output: value['output'],
+		error: isString(value['errorText'])
+			? value['errorText']
+			: isString(exception?.['description'])
+				? exception['description']
+				: undefined,
+	}
+}
 
 /**
  * Coerces one `Network.requestWillBeSent` or `Fetch.requestPaused` event to a

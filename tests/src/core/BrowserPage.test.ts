@@ -45,6 +45,29 @@ import {
 // === BrowserPage
 
 describe('BrowserPage', () => {
+	it('owns a lazy registry and destroys it before detaching the page', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		try {
+			expect(transport.sent).toEqual([])
+			const registry = page.registry
+			expect(page.registry).toBe(registry)
+			expect(transport.sent).toEqual([])
+			for (const method of ['WebMCP.enable', 'WebMCP.disable', 'Target.detachFromTarget'])
+				replyOk(transport, method)
+			await registry.start()
+			await page.destroy()
+			expect(registry.emitter.destroyed).toBe(true)
+			expect(transport.sent.map((message) => message.method)).toEqual([
+				'WebMCP.enable',
+				'WebMCP.disable',
+				'Target.detachFromTarget',
+			])
+		} finally {
+			await client.close()
+		}
+	})
+
 	describe('url seeding', () => {
 		it('reports a seeded url immediately, before any navigate()/content() call', async () => {
 			const { client } = await createConnectedCDPClient()
