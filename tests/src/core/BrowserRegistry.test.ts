@@ -623,7 +623,7 @@ describe('BrowserRegistry', () => {
 				)
 			}
 			await waitForDelay()
-			transport.sent.length = 0
+			const offset = transport.sent.length
 			let held: number | undefined
 			transport.onSend('WebMCP.enable', (message) => {
 				if (message.sessionId === 'child-a-session') held = message.id
@@ -637,10 +637,12 @@ describe('BrowserRegistry', () => {
 			expect(await starting).toMatchObject({ message: expect.stringContaining('destroyed') })
 			await destroyed
 			expect(
-				transport.sent.filter(
-					(message) =>
-						message.method === 'WebMCP.enable' && message.sessionId === 'child-b-session',
-				),
+				transport.sent
+					.slice(offset)
+					.filter(
+						(message) =>
+							message.method === 'WebMCP.enable' && message.sessionId === 'child-b-session',
+					),
 			).toHaveLength(0)
 			transport.event(
 				'WebMCP.toolsAdded',
