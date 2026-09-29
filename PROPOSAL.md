@@ -19,13 +19,13 @@ The owner's goals map to the design as follows.
 - **Tuned for a small model.** The vocabulary is the one that passed with a 2-billion-parameter model, and the run-derived rules are contract.
 - **Clean breaks.** No alias, wrapper, or deprecation shim survives; every consumer is updated in the same change.
 
-## Decisions the owner ratifies with this proposal
+## Decisions the owner ratified
 
-Three rows need the owner's word because a rule forbids the executor from deciding them (`../scaffold/AGENTS.md:36`). Approving this proposal authorizes each row marked "authorize".
+Three rows needed the owner's word because a rule forbids the executor from deciding them (`../scaffold/AGENTS.md:36`). The owner authorized all three on 2026-09-29 ("let's go with your recommendations for the decisions that were left"), so each is settled and the units depend on it.
 
-- **D1. `@orkestrel/tool` at runtime.** The vocabulary ships as `ToolInterface` values and the toolset fills a `ToolManagerInterface`; without the edge the package would declare a second tool shape, which the reuse rule forbids (`../scaffold/AGENTS.md:43`). `tool` is L2 and `browser` stays L3. Recommended: authorize.
-- **D2. `playwright` and `@vitest/browser-playwright` as development dependencies.** Creating `src/browser` forces the `src:browser` project with `tests/setupBrowser.ts` (`tests/config.test.ts:153-158`), whose provider is Playwright's Chromium. `@orkestrel/mcp` already carries both (`../mcp/package.json:117,120`), the provider resolves the host's `/opt/pw-browsers` store, and `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` keeps the postinstall from fetching. Nothing ships in `dependencies`. Recommended: authorize.
-- **D3. `@orkestrel/mcp` as a development dependency, for one type test.** The claim that mcp's `ModelContextInterface` satisfies `BrowserToolSourceInterface` structurally is proven by a type probe that cannot be promoted without importing mcp's types (`../scaffold/.claude/rules/tests.md:138-140`). The edge is development-only, creates no runtime cycle, and pins the guide's claim. Recommended: authorize; if refused, the guide states the fit as a reading of mcp 0.0.33 rather than a proof.
+- **D1. `@orkestrel/tool` at runtime.** The vocabulary ships as `ToolInterface` values and the toolset fills a `ToolManagerInterface`; without the edge the package would declare a second tool shape, which the reuse rule forbids (`../scaffold/AGENTS.md:43`). `tool` is L2 and `browser` stays L3. Authorized.
+- **D2. `playwright` and `@vitest/browser-playwright` as development dependencies.** Creating `src/browser` forces the `src:browser` project with `tests/setupBrowser.ts` (`tests/config.test.ts:153-158`), whose provider is Playwright's Chromium. `@orkestrel/mcp` already carries both (`../mcp/package.json:117,120`), the provider resolves the host's `/opt/pw-browsers` store, and `PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1` keeps the postinstall from fetching. Nothing ships in `dependencies`. Authorized.
+- **D3. `@orkestrel/mcp` as a development dependency, for one type test.** The claim that mcp's `ModelContextInterface` satisfies `BrowserToolSourceInterface` structurally is proven by a type probe that cannot be promoted without importing mcp's types (`../scaffold/.claude/rules/tests.md:138-140`). The edge is development-only, creates no runtime cycle, and pins the guide's claim. Authorized; it also carries the conformance cases that compose mcp's bridge with this package's DOM toolset.
 
 `@orkestrel/markdown` at runtime is authorized by the standing proposal and stays. No runtime edge to `@orkestrel/mcp` is added in either direction.
 

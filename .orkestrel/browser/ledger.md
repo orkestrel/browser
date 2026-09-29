@@ -160,3 +160,8 @@ Reproduced before acting: the sixth consumer `evaluate` site (`/home/user/orkest
 
 - `PROPOSAL.md` rewritten from `tmp/units/design-reconciled.md` with every accepted falsify finding ruled in (812 lines after `oxfmt`; `cite.ts`: 42 citations, 0 unresolved; `test:policy`, `format:check`, and `test:guides` exit 0).
 - Records promoted into `.orkestrel/browser/`: this ledger, the design brief, both design-lane proposals, the claims file, both audit answers, and the audit verdict. Probe sources and logs stay under `tmp/` (ignored) until `sweep.ts --tmp` after the campaign's last live unit.
+
+## Owner rulings (2026-09-29, after the first landing)
+
+- D1, D2, and D3 authorized in the owner's words: "let's go with your recommendations for the decisions that were left".
+- Stance on WebMCP, in the owner's words: "we are not wrapping webmcp, our packages are meant to replace it, although we want to make sure we are keeping up with it and trying not to stray too far from it since it most likely will be adopted into browsers soon enough, so we can work in some conformance tests to make sure we are aligned with it and even work in adapters for it, similar to how we have for MCP and other orkestrel packages." Carried into the proposal as a "Relation to WebMCP" section, an adapter map, and a conformance unit.
