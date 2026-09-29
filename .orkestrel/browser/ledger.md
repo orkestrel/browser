@@ -190,3 +190,11 @@ Reproduced before acting: the sixth consumer `evaluate` site (`/home/user/orkest
 
 - Reproduced the blocking accuracy finding by fetch (curl, 2026-09-29): `wpt/webmcp/META.yml`, `wpt/webmcp/idlharness.https.window.js`, `wpt/interfaces/webmcp.idl` (2 136 bytes; `ontoolchange` alone, three hints), and `webmcp/index.bs` (86 547 bytes; line 20 `Test Suite: https://wpt.fyi/results/webmcp`; lines 622–623 `ontoolactivated`, `ontoolcancel`; line 1118 `debugging`; line 158 the 1-to-128 name rule). Digests: `index.bs` `e6c9b979…`, `webmcp.idl` `eddabc79…` (full values in `tmp/webmcp/`).
 - Every blocking and required finding accepted and written into `PROPOSAL.md`; the optional ones accepted as wording. Rulings in `.orkestrel/browser/webmcp-alignment-verdict.md`. After the patch: `cite.ts` 54 citations, 0 unresolved; `test:policy`, `format:check` exit 0; structure and term sweeps clean.
+
+## Implementation campaign (opened 2026-09-29, after the owner's "get to work")
+
+- Plan: `.orkestrel/browser/plan.md`. Order: mcp M1–M3 first (bridge refresh, drift, pack), browser U1 and U8 beside them, then the proposal's order, ollama U14–U15, one falsify round, the publish wave.
+- mcp baseline on this host: `npm run check` exit 0; `npm run test:conformance` before a build: 45 passed, 2 failed (every client scenario 0 passed, because the client under test imports the built `dist/`, absent in a fresh checkout); rerun after `npm run build` recorded in the next row.
+- M1 `bridge-refresh`: brief `tmp/codex/m1-bridge-refresh-brief.md` (in the mcp checkout; `brief.ts --check` 40 checked, 0 missing), launched detached through `launch.ts` (pid file beside the journal), sandbox `workspace-write` rooted at `/home/user/mcp` with the installed scaffold copy as the canon.
+- U1 `signal`: `builder` (Sonnet) in the browser checkout, brief inline in the dispatch.
+- mcp baseline after `npm run build` (exit 0): `npm run test:conformance` 47 passed, 0 failed, exit 0, on this host on 2026-09-29 at runner `@modelcontextprotocol/conformance` 0.2.0-alpha.11 against revision 2026-07-28; the test's recorded tally is 147 passed / 0 failed (`tests/conformance.test.ts:318`), so the README's 23 (alpha.10) and the guide's 110 are the stale copies M2 corrects.
