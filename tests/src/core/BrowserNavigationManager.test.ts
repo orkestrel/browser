@@ -1,6 +1,7 @@
 import type { BrowserNavigationResult } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError } from '@src/core'
+import { waitForDelay } from '@orkestrel/test'
 import { createConnectedCDPClient, replyOk, scriptEvaluate } from '../../setup.js'
 
 describe('BrowserNavigationManager', () => {
@@ -163,15 +164,132 @@ describe('BrowserNavigationManager', () => {
 		await expect(second).rejects.toThrow('page closed')
 	})
 
-	it('waits on an in-page predicate and rejects invalid timeouts', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		scriptEvaluate(transport, (expression) => expression.includes('document.readyState'), 'ready')
+	it('rejects an invalid wait timeout', async () => {
+		const { client } = await createConnectedCDPClient()
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
-		await expect(
-			page.navigation.until(`() => document.readyState === 'complete' && 'ready'`),
-		).resolves.toBe('ready')
 		await expect(page.navigation.wait('*', { timeout: -1 })).rejects.toSatisfy(isBrowserError)
+		await expect(page.navigation.idle({ timeout: -1 })).rejects.toSatisfy(isBrowserError)
+	})
+
+	it('resolves a URL wait on a same-document navigation', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(
+			client,
+			'target-1',
+			'session-1',
+			undefined,
+			'https://example.com/start',
+			'frame-1',
+		)
+		const pending = page.navigation.wait('**#pushed')
+
+		transport.event(
+			'Page.navigatedWithinDocument',
+			{ frameId: 'frame-1', url: 'https://example.com/start#pushed' },
+			'session-1',
+		)
+
+		await expect(pending).resolves.toBe('https://example.com/start#pushed')
+	})
+
+	it('rejects a parked wait with the abort reason and releases its listener', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(
+			client,
+			'target-1',
+			'session-1',
+			undefined,
+			'https://example.com/start',
+			'frame-1',
+		)
+		const reason = new Error('stop waiting')
+		const controller = new AbortController()
+		const pending = page.navigation.wait('**/never', { signal: controller.signal })
+		const idling = page.navigation.idle({ signal: controller.signal })
+
+		controller.abort(reason)
+
+		await expect(pending).rejects.toBe(reason)
+		await expect(idling).rejects.toBe(reason)
+		await expect(page.navigation.wait('**/never', { signal: controller.signal })).rejects.toBe(
+			reason,
+		)
+		transport.event(
+			'Page.frameNavigated',
+			{ frame: { id: 'frame-1', url: 'https://example.com/never' } },
+			'session-1',
+		)
+	})
+
+	it('resolves idle on networkIdle for the current loader and ignores a stale loader', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+		transport.event(
+			'Page.frameNavigated',
+			{ frame: { id: 'frame-1', url: 'https://example.com/', loaderId: 'loader-2' } },
+			'session-1',
+		)
+		let settled = false
+		const idling = page.navigation.idle().then(() => {
+			settled = true
+		})
+
+		transport.event(
+			'Page.lifecycleEvent',
+			{ frameId: 'frame-1', loaderId: 'loader-1', name: 'networkIdle', timestamp: 1 },
+			'session-1',
+		)
+		transport.event(
+			'Page.lifecycleEvent',
+			{ frameId: 'frame-1', loaderId: 'loader-2', name: 'load', timestamp: 1 },
+			'session-1',
+		)
+		await waitForDelay(20)
+		expect(settled).toBe(false)
+
+		transport.event(
+			'Page.lifecycleEvent',
+			{ frameId: 'frame-1', loaderId: 'loader-2', name: 'networkIdle', timestamp: 2 },
+			'session-1',
+		)
+		await idling
+		expect(settled).toBe(true)
+	})
+
+	it('completes navigate with the idle condition on the loader the reply names', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		transport.onSend('Page.navigate', (message) => {
+			transport.reply(message.id, { loaderId: 'loader-5' })
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'frame-1', loaderId: 'loader-4', name: 'networkIdle', timestamp: 1 },
+				'session-1',
+			)
+		})
+		scriptEvaluate(
+			transport,
+			(expression) => expression.includes('location.href'),
+			'https://example.com/',
+		)
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+		let settled = false
+		const navigating = page
+			.navigate('https://example.com/', { condition: 'idle' })
+			.then((result) => {
+				settled = true
+				return result
+			})
+
+		await waitForDelay(20)
+		expect(settled).toBe(false)
+		transport.event(
+			'Page.lifecycleEvent',
+			{ frameId: 'frame-1', loaderId: 'loader-5', name: 'networkIdle', timestamp: 2 },
+			'session-1',
+		)
+
+		await expect(navigating).resolves.toMatchObject({ url: 'https://example.com/', same: false })
 	})
 
 	it('returns a typed no-op result when history has no entry in that direction', async () => {

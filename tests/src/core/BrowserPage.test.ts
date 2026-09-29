@@ -1410,6 +1410,7 @@ describe('BrowserPage events', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
 		replyOk(transport, 'Page.getFrameTree', {
 			frameTree: { frame: { id: 'popup-frame', url: 'https://example.com/popup' } },
 		})
@@ -1440,6 +1441,14 @@ describe('BrowserPage events', () => {
 			url: 'https://example.com/popup',
 		})
 		expect(popup?.opener).toBe(page)
+		expect(
+			transport.sent.some(
+				(message) =>
+					message.method === 'Page.setLifecycleEventsEnabled' &&
+					message.sessionId === 'popup-session' &&
+					message.params?.['enabled'] === true,
+			),
+		).toBe(true)
 	})
 
 	it('emits frame attach/detach and crash lifecycle events', async () => {
@@ -1525,5 +1534,115 @@ describe('BrowserPage events', () => {
 			id: 'socket-1',
 			url: 'wss://example.com/socket',
 		})
+	})
+})
+
+describe('BrowserPage navigation and session events', () => {
+	it('emits a cross-document payload for the page frame and nothing for a child frame', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+		const navigations = createRecorder<[url: string, same: boolean]>()
+		page.emitter.on('navigate', navigations.handler)
+
+		transport.event(
+			'Page.frameNavigated',
+			{ frame: { id: 'child-9', url: 'https://example.com/child' } },
+			'session-1',
+		)
+		transport.event(
+			'Page.frameNavigated',
+			{ frame: { id: 'frame-1', url: 'https://example.com/next' } },
+			'session-1',
+		)
+
+		expect(navigations.calls).toEqual([['https://example.com/next', false]])
+		expect(page.url).toBe('https://example.com/next')
+	})
+
+	it('updates the url and emits a same-document payload outside a navigation wait', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+		const navigations = createRecorder<[url: string, same: boolean]>()
+		page.emitter.on('navigate', navigations.handler)
+
+		transport.event(
+			'Page.navigatedWithinDocument',
+			{ frameId: 'child-9', url: 'https://example.com/#child' },
+			'session-1',
+		)
+		transport.event(
+			'Page.navigatedWithinDocument',
+			{ frameId: 'frame-1', url: 'https://example.com/#pushed' },
+			'session-1',
+		)
+
+		expect(navigations.calls).toEqual([['https://example.com/#pushed', true]])
+		expect(page.url).toBe('https://example.com/#pushed')
+	})
+
+	it('emits session after both domains enable, lists the frame beside the tree, and drops it on detach', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptFrameTree(transport)
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
+		scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'session-oopif',
+				targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/embed' },
+			},
+			'session-1',
+		)
+		await waitForCondition('the session event was delivered', () => sessions.count === 1)
+
+		const methods = transport.sent
+			.filter((message) => message.sessionId === 'session-oopif')
+			.map((message) => message.method)
+		expect(methods).toEqual(['Page.enable', 'Runtime.enable'])
+		const frame = requireValue(sessions.calls[0]?.[0])
+		expect(frame.id).toBe('oopif-7')
+		expect(frame.url).toBe('https://other.example/embed')
+		expect(await frame.evaluate('40 + 2')).toBe(42)
+		expect(
+			transport.sent.findLast((message) => message.method === 'Runtime.evaluate')?.sessionId,
+		).toBe('session-oopif')
+		const listed = (await page.frames()).map((entry) => entry.id)
+		expect(listed).toContain('oopif-7')
+		expect(listed.length).toBeGreaterThan(1)
+
+		transport.event(
+			'Target.detachedFromTarget',
+			{ sessionId: 'session-oopif', targetId: 'oopif-7' },
+			'session-1',
+		)
+		expect((await page.frames()).map((entry) => entry.id)).not.toContain('oopif-7')
+	})
+
+	it('emits no session when the iframe domain enable fails', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptFrameTree(transport)
+		transport.onSend('Page.enable', (message) => transport.fail(message.id, 'enable failed'))
+		replyOk(transport, 'Target.detachFromTarget')
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+
+		transport.event(
+			'Target.attachedToTarget',
+			{ sessionId: 'session-oopif', targetInfo: { type: 'iframe', targetId: 'oopif-7' } },
+			'session-1',
+		)
+		await waitForCondition('the failed session detached', () =>
+			transport.sent.some((message) => message.method === 'Target.detachFromTarget'),
+		)
+
+		expect(sessions.count).toBe(0)
+		expect((await page.frames()).map((entry) => entry.id)).not.toContain('oopif-7')
 	})
 })

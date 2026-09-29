@@ -219,6 +219,7 @@ export function replyOk(
 export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 'session-1'): void {
 	replyOk(transport, 'Target.attachToTarget', { sessionId: session })
 	replyOk(transport, 'Page.enable')
+	replyOk(transport, 'Page.setLifecycleEventsEnabled')
 	replyOk(transport, 'Runtime.enable')
 	replyOk(transport, 'Network.enable')
 	replyOk(transport, 'Network.disable')

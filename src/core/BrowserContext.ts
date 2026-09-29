@@ -366,6 +366,7 @@ export class BrowserContext implements BrowserContextInterface {
 			flatten: true,
 		})
 		await page.send('Page.setInterceptFileChooserDialog', { enabled: true })
+		await page.send('Page.setLifecycleEventsEnabled', { enabled: true })
 		const download: Record<string, unknown> = {
 			behavior:
 				this.#downloads === undefined

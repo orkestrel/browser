@@ -1377,16 +1377,20 @@ export function normalizeCodegenActions(
 
 /**
  * Decodes a flattened CDP `Page.getFrameTree` result into depth-first frame metadata, skipping
- * every off-shape frame.
+ * every off-shape frame, then appends each attached out-of-process iframe target the tree does
+ * not list.
  *
  * @param value - Unknown CDP result
- * @returns Frame metadata in depth-first, main-frame-first order
+ * @param targets - Attached iframe targets, each described as a frame
+ * @returns Frame metadata in depth-first, main-frame-first order, then the unlisted targets
  */
-export function readBrowserFrames(value: unknown): readonly BrowserFrameInfo[] {
-	if (!isRecord(value) || !isRecord(value['frameTree'])) return []
-
+export function readBrowserFrames(
+	value: unknown,
+	targets: readonly BrowserFrameInfo[] = [],
+): readonly BrowserFrameInfo[] {
 	const frames: BrowserFrameInfo[] = []
-	const stack: Array<Readonly<Record<string, unknown>>> = [value['frameTree']]
+	const stack: Array<Readonly<Record<string, unknown>>> =
+		isRecord(value) && isRecord(value['frameTree']) ? [value['frameTree']] : []
 
 	while (stack.length > 0) {
 		const node = stack.pop()
@@ -1410,6 +1414,9 @@ export function readBrowserFrames(value: unknown): readonly BrowserFrameInfo[] {
 		}
 	}
 
+	for (const target of targets) {
+		if (!frames.some((frame) => frame.id === target.id)) frames.push(target)
+	}
 	return frames
 }
 

@@ -423,6 +423,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 				method === 'Network.disable' ||
 				method === 'Emulation.setTouchEmulationEnabled' ||
 				method === 'Page.setInterceptFileChooserDialog' ||
+				method === 'Page.setLifecycleEventsEnabled' ||
 				method === 'Browser.setDownloadBehavior') &&
 			!this.#scripts.has(method)
 		) {

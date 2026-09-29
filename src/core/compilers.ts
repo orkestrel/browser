@@ -16,37 +16,6 @@ import {
 } from './constants.js'
 
 /**
- * Compiles an auto-retrying in-page predicate wait.
- *
- * @param expression - Value or function expression
- * @param timeout - Maximum wait in milliseconds
- * @returns Promise expression resolving to the first truthy value or false
- */
-export function compileFunctionWaitExpression(expression: string, timeout: number): string {
-	return `new Promise((resolve, reject) => {
-	const deadline = performance.now() + ${timeout}
-	const predicate = (${expression})
-	const check = async () => {
-		try {
-			const value = typeof predicate === 'function' ? await predicate() : await predicate
-			if (value) {
-				resolve(value)
-				return
-			}
-			if (performance.now() >= deadline) {
-				resolve(false)
-				return
-			}
-			setTimeout(check, ${BROWSER_WAIT_POLL_INTERVAL_MS})
-		} catch (error) {
-			reject(error)
-		}
-	}
-	void check()
-})`
-}
-
-/**
  * Compiles the page-side promise facade for one Runtime binding.
  *
  * @param name - Binding identifier

@@ -99,6 +99,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #clock: BrowserClock
 	readonly #frameSessions: Map<string, Promise<string>> = new Map()
 	readonly #frameIds: Map<string, string> = new Map()
+	readonly #iframes: Map<string, BrowserFrameInfo> = new Map()
 	readonly #downloads: Map<string, BrowserDownload> = new Map()
 	readonly #workers: Map<string, BrowserWorker> = new Map()
 	readonly #popups: Map<string, BrowserPage> = new Map()
@@ -110,6 +111,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#releasing: Promise<void> | undefined
 	#loadEvents: readonly string[] = []
 	#sameDocument = false
+	#loader: string | undefined
 	#loadTimer: ReturnType<typeof setTimeout> | undefined
 	#loadResolve: (() => void) | undefined
 	#loadReject: ((error: unknown) => void) | undefined
@@ -119,6 +121,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #loadHandler = this.#handleLoad.bind(this)
 	readonly #frameAttachedHandler = this.#handleFrameAttached.bind(this)
 	readonly #frameNavigatedHandler = this.#handleFrameNavigated.bind(this)
+	readonly #sameDocumentHandler = this.#handleSameDocument.bind(this)
 	readonly #frameDetachedHandler = this.#handleFrameDetached.bind(this)
 	readonly #dialogHandler = this.#handleDialog.bind(this)
 	readonly #chooserHandler = this.#handleChooser.bind(this)
@@ -153,7 +156,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			...(options?.error !== undefined ? { error: options.error } : {}),
 		})
 		this.#network = new BrowserNetworkManager(this, writer)
-		this.#navigationManager = new BrowserNavigationManager(this)
+		this.#navigationManager = new BrowserNavigationManager(
+			this,
+			client,
+			sessionId,
+			() => this.#loader,
+		)
 		this.#scripts = new BrowserScriptManager(this)
 		this.#accessibility = new BrowserAccessibility(this)
 		this.#diagnostics = new BrowserDiagnostics(this, writer)
@@ -168,6 +176,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.subscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
 		this.#client.subscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
 		this.#client.subscribe('Page.frameNavigated', this.#frameNavigatedHandler, this.#sessionId)
+		this.#client.subscribe(
+			'Page.navigatedWithinDocument',
+			this.#sameDocumentHandler,
+			this.#sessionId,
+		)
 		this.#client.subscribe('Page.frameDetached', this.#frameDetachedHandler, this.#sessionId)
 		this.#client.subscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
 		this.#client.subscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
@@ -375,7 +388,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	async frames(): Promise<readonly BrowserFrameInterface[]> {
 		this.assert()
 		const result = await this.send('Page.getFrameTree')
-		return readBrowserFrames(result).map((frame) => this.#frame(frame))
+		return readBrowserFrames(result, [...this.#iframes.values()]).map((frame) => this.#frame(frame))
 	}
 
 	async snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface> {
@@ -452,7 +465,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
 			}
-			if (isRecord(result) && isString(result['loaderId'])) loader = result['loaderId']
+			if (isRecord(result) && isString(result['loaderId'])) {
+				loader = result['loaderId']
+				this.#loader = loader
+			}
 			await wait
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
@@ -634,6 +650,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 		this.#frameSessions.clear()
 		this.#frameIds.clear()
+		this.#iframes.clear()
 		for (const worker of this.#workers.values()) worker.detach()
 		this.#workers.clear()
 		this.#popups.clear()
@@ -643,6 +660,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.unsubscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
 		this.#client.unsubscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
 		this.#client.unsubscribe('Page.frameNavigated', this.#frameNavigatedHandler, this.#sessionId)
+		this.#client.unsubscribe(
+			'Page.navigatedWithinDocument',
+			this.#sameDocumentHandler,
+			this.#sessionId,
+		)
 		this.#client.unsubscribe('Page.frameDetached', this.#frameDetachedHandler, this.#sessionId)
 		this.#client.unsubscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
 		this.#client.unsubscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
@@ -705,6 +727,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		try {
 			await this.#client.send('Page.enable', undefined, { session })
 			await this.#client.send('Runtime.enable', undefined, { session })
+			await this.#client.send('Page.setLifecycleEventsEnabled', { enabled: true }, { session })
 			const result = await this.#client.send('Page.getFrameTree', undefined, { session })
 			const frame = readBrowserFrames(result)[0]
 			if (frame === undefined || this.#closed) {
@@ -766,6 +789,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	#handleLoad(params: Readonly<Record<string, unknown>>): void {
+		if (isString(params['name'])) {
+			if (params['name'] === 'networkIdle' && this.#loader !== undefined) {
+				if (params['loaderId'] === this.#loader) this.#resolveLoad()
+			}
+			return
+		}
 		if (this.#loadEvents.includes('Page.navigatedWithinDocument')) {
 			const frame = params['frameId']
 			if (isString(frame) && frame === this.id) {
@@ -807,9 +836,16 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const frame = params['frame']
 		if (!isRecord(frame) || !isString(frame['id']) || !isString(frame['url'])) return
 		if (frame['id'] === this.id) {
+			if (isString(frame['loaderId'])) this.#loader = frame['loaderId']
 			this.update(frame['url'])
-			this.#emitter.emit('navigate', frame['url'])
+			this.#emitter.emit('navigate', frame['url'], false)
 		}
+	}
+
+	#handleSameDocument(params: Readonly<Record<string, unknown>>): void {
+		if (params['frameId'] !== this.id || !isString(params['url'])) return
+		this.update(params['url'])
+		this.#emitter.emit('navigate', params['url'], true)
 	}
 
 	#handleFrameDetached(params: Readonly<Record<string, unknown>>): void {
@@ -916,14 +952,27 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		if (category !== 'iframe') return
 
 		const frame = target['targetId']
+		const info: BrowserFrameInfo = {
+			id: frame,
+			parent: undefined,
+			name: undefined,
+			url: isString(target['url']) ? target['url'] : 'about:blank',
+		}
 		const attempt = this.#enableFrameSession(session)
 		this.#frameSessions.set(frame, attempt)
 		this.#frameIds.set(session, frame)
-		void attempt.catch(() => {
-			if (this.#frameSessions.get(frame) === attempt) this.#frameSessions.delete(frame)
-			if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
-			void this.#detachChild(session)
-		})
+		void attempt.then(
+			() => {
+				if (this.#closed || this.#frameSessions.get(frame) !== attempt) return
+				this.#iframes.set(frame, info)
+				this.#emitter.emit('session', this.#frame(info))
+			},
+			() => {
+				if (this.#frameSessions.get(frame) === attempt) this.#frameSessions.delete(frame)
+				if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
+				void this.#detachChild(session)
+			},
+		)
 	}
 
 	#handleDetached(params: Readonly<Record<string, unknown>>): void {
@@ -946,7 +995,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			: isString(session)
 				? this.#frameIds.get(session)
 				: undefined
-		if (frame !== undefined) this.#frameSessions.delete(frame)
+		if (frame !== undefined) {
+			this.#frameSessions.delete(frame)
+			this.#iframes.delete(frame)
+		}
 		if (isString(session)) this.#frameIds.delete(session)
 	}
 
@@ -956,9 +1008,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				? 'Page.frameNavigated'
 				: condition === 'domcontentloaded'
 					? 'Page.domContentEventFired'
-					: 'Page.loadEventFired'
+					: condition === 'idle'
+						? 'Page.lifecycleEvent'
+						: 'Page.loadEventFired'
 		const deferred = Promise.withResolvers<void>()
 		this.#sameDocument = false
+		if (condition === 'idle') this.#loader = undefined
 		this.#loadEvents = [eventName, 'Page.navigatedWithinDocument']
 		this.#loadResolve = deferred.resolve
 		this.#loadReject = deferred.reject

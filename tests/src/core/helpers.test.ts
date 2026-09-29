@@ -114,6 +114,24 @@ describe('frame helpers', () => {
 		])
 	})
 
+	it('appends attached iframe targets the tree does not list and skips one it lists', () => {
+		const listed = { id: 'main', parent: undefined, name: undefined, url: 'https://example.com' }
+		const target = {
+			id: 'oopif-1',
+			parent: undefined,
+			name: undefined,
+			url: 'https://other.example',
+		}
+
+		expect(
+			readBrowserFrames({ frameTree: { frame: { id: 'main', url: 'https://example.com' } } }, [
+				listed,
+				target,
+			]),
+		).toEqual([listed, target])
+		expect(readBrowserFrames(undefined, [target])).toEqual([target])
+	})
+
 	it('returns no frames for malformed trees and skips malformed children', () => {
 		expect(readBrowserFrames(undefined)).toEqual([])
 		expect(readBrowserFrames({ frameTree: [] })).toEqual([])

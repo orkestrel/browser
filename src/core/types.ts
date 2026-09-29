@@ -202,7 +202,7 @@ export interface BrowserViewport {
 }
 
 /** Names the page load condition for navigation — the CDP load event awaited by `navigate()`. */
-export type BrowserWaitUntil = 'commit' | 'load' | 'domcontentloaded'
+export type BrowserWaitUntil = 'commit' | 'load' | 'domcontentloaded' | 'idle'
 
 /**
  * Describes the options for creating a `BrowserPage` instance.
@@ -247,31 +247,37 @@ export interface BrowserNavigationWatch {
 	readonly responses: readonly BrowserResponse[]
 }
 
-/** Represents one pending URL-pattern wait. */
+/**
+ * Represents one pending navigation or network-idle wait.
+ *
+ * @remarks
+ * - `pattern` — the URL glob, undefined for a network-idle wait
+ * - `listener` — the abort listener registered on `signal`, undefined without a signal
+ */
 export interface BrowserNavigationWait {
-	readonly pattern: string
+	readonly pattern: string | undefined
 	readonly timer: ReturnType<typeof setTimeout>
+	readonly signal: AbortSignal | undefined
+	readonly listener: (() => void) | undefined
 	readonly resolve: (url: string) => void
 	readonly reject: (error: unknown) => void
 }
 
-/** Describes the options for URL and predicate waits. */
-export interface BrowserNavigationWaitOptions {
-	readonly timeout?: number
-}
+/** Reads the loader id of the page's current document, undefined before the first commit. */
+export type BrowserLoaderFunction = () => string | undefined
 
-/** Provides URL and in-page predicate waits associated with one page. */
+/** Provides URL and network-idle waits associated with one page. */
 export interface BrowserNavigationManagerInterface {
 	/**
-	 * Resolves with the URL of the next navigation matching the `*` and `**` glob pattern.
-	 * Rejects on timeout.
+	 * Resolves with the URL of the next navigation, same-document ones included, matching the `*`
+	 * and `**` glob pattern. Rejects on timeout, and with `signal.reason` on abort.
 	 */
-	wait(pattern: string, options?: BrowserNavigationWaitOptions): Promise<string>
+	wait(pattern: string, options?: BrowserCallOptions): Promise<string>
 	/**
-	 * Polls an expression in the page until it returns a truthy value, and resolves with that
-	 * value.
+	 * Resolves on the next `networkIdle` lifecycle event of the page's current loader. Rejects on
+	 * timeout, and with `signal.reason` on abort.
 	 */
-	until(expression: string, options?: BrowserNavigationWaitOptions): Promise<unknown>
+	idle(options?: BrowserCallOptions): Promise<void>
 }
 
 /**
@@ -1093,7 +1099,8 @@ export interface BrowserWorkerInterface {
 
 /** Maps the typed page, frame, target, and user-visible browser events. */
 export type BrowserPageEventMap = {
-	readonly navigate: readonly [url: string]
+	readonly navigate: readonly [url: string, same: boolean]
+	readonly session: readonly [frame: BrowserFrameInterface]
 	readonly attach: readonly [frame: BrowserFrameInterface]
 	readonly detach: readonly [frame: string]
 	readonly popup: readonly [page: BrowserPageInterface]

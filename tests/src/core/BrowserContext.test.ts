@@ -339,6 +339,7 @@ describe('BrowserContext', () => {
 			})
 			replyOk(transport, 'Target.setAutoAttach')
 			replyOk(transport, 'Page.setInterceptFileChooserDialog')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
 			replyOk(transport, 'Browser.setDownloadBehavior')
 			replyOk(transport, 'Network.enable')
 			replyOk(transport, 'Target.detachFromTarget')
