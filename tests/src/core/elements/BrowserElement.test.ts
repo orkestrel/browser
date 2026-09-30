@@ -278,6 +278,46 @@ describe('trusted element actions', () => {
 		},
 	)
 
+	it('catches a collected frame owner whose box model refusal leaks instead of GONE naming look', async () => {
+		const { page, client } = await createBrowserElementFixture({
+			failure: { method: 'DOM.getBoxModel', message: 'No node found for given backend id' },
+		})
+		try {
+			await page.elements.outline()
+			const child = requireValue(page.elements.element('e6'))
+			expect(child.name).toBe('Save')
+			const rejection = await child.click().catch((error: unknown) => error)
+			expect(rejection).toSatisfy(isBrowserElementError)
+			expect(rejection).toMatchObject({
+				code: 'BROWSER_ELEMENT_ERROR',
+				context: { reference: 'e6', reason: 'GONE' },
+				message: 'Element e6 is gone because the page changed; call look for fresh refs.',
+			})
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches classifying an unrelated frame owner box model refusal as an element refusal', async () => {
+		const { page, client } = await createBrowserElementFixture({
+			failure: { method: 'DOM.getBoxModel', message: 'Internal error' },
+		})
+		try {
+			await page.elements.outline()
+			const rejection = await requireValue(page.elements.element('e6'))
+				.click()
+				.catch((error: unknown) => error)
+			expect(rejection).toSatisfy(isCDPError)
+			expect(rejection).not.toSatisfy(isBrowserElementError)
+			expect(rejection).toMatchObject({
+				message: 'Internal error',
+				context: { method: 'DOM.getBoxModel', message: 'Internal error' },
+			})
+		} finally {
+			await client.close()
+		}
+	})
+
 	it('catches disabled actionability being ignored', async () => {
 		const { page, client } = await createBrowserElementFixture({
 			actionability: 'Element is disabled',

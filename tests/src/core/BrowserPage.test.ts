@@ -39,6 +39,7 @@ import {
 	replyOk,
 	scriptEvaluate,
 	scriptFrameTree,
+	FRAME_TREE_FIXTURE,
 	JPEG_BASE64,
 	PNG_BASE64,
 	throwListenerError,
@@ -2379,7 +2380,20 @@ describe('BrowserPage out-of-process frame sessions', () => {
 
 	it('catches the attach continuation overwriting a navigation that preceded its enable completion', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		scriptFrameTree(transport)
+		scriptFrameTree(
+			transport,
+			new Map([
+				[
+					'session-oopif',
+					{
+						id: 'oopif-7',
+						parentId: 'main-1',
+						name: 'checkout',
+						url: 'https://other.example/embed',
+					},
+				],
+			]),
+		)
 		const enables: number[] = []
 		transport.onSend('Page.enable', (message) => enables.push(message.id))
 		replyOk(transport, 'Runtime.enable')
@@ -2512,6 +2526,170 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		expect((await page.frames()).find((entry) => entry.id === 'oopif-7')?.url).toBe(
 			'https://other.example/start',
 		)
+	})
+
+	it('catches the frame tree snapshot overwriting a newer navigation delivered in the same read', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		transport.onSend('Page.getFrameTree', (message) => {
+			if (message.sessionId !== 'session-oopif') {
+				transport.reply(message.id, FRAME_TREE_FIXTURE)
+				return
+			}
+			transport.reply(message.id, {
+				frameTree: {
+					frame: { id: 'oopif-7', parentId: 'main-1', url: 'https://other.example/start' },
+				},
+			})
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'oopif-7', parentId: 'main-1', url: 'https://other.example/next' } },
+				'session-oopif',
+			)
+		})
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+
+		transport.event(
+			'Target.attachedToTarget',
+			{ sessionId: 'session-oopif', targetInfo: { type: 'iframe', targetId: 'oopif-7', url: '' } },
+			'session-1',
+		)
+		await waitForCondition('the session event was delivered', () => sessions.count === 1)
+
+		expect(requireValue(sessions.calls[0]?.[0]).url).toBe('https://other.example/next')
+		expect((await page.frames()).find((entry) => entry.id === 'oopif-7')?.url).toBe(
+			'https://other.example/next',
+		)
+	})
+
+	it('catches a superseded session detach deleting the frame its replacement owns', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptFrameTree(transport)
+		const held: number[] = []
+		transport.onSend('Page.enable', (message) => {
+			if (message.sessionId === 'session-first') held.push(message.id)
+			else transport.reply(message.id, {})
+		})
+		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Target.detachFromTarget')
+		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
+		scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+
+		transport.event(
+			'Target.attachedToTarget',
+			{ sessionId: 'session-first', targetInfo: { type: 'iframe', targetId: 'oopif-7', url: '' } },
+			'session-1',
+		)
+		transport.event('Page.frameDetached', { frameId: 'oopif-7', reason: 'swap' }, 'session-1')
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'session-second',
+				targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/embed' },
+			},
+			'session-1',
+		)
+		transport.event(
+			'Target.detachedFromTarget',
+			{ sessionId: 'session-first', targetId: 'oopif-7' },
+			'session-1',
+		)
+		await waitForCondition(
+			'the replacement session event was delivered',
+			() => sessions.count === 1,
+		)
+		transport.reply(requireValue(held[0]), {})
+		await waitForDelay(10)
+
+		expect(sessions.count).toBe(1)
+		expect((await page.frames()).find((entry) => entry.id === 'oopif-7')?.url).toBe(
+			'https://other.example/embed',
+		)
+		expect(await requireValue(sessions.calls[0]?.[0]).evaluate('40 + 2')).toBe(42)
+		expect(
+			transport.sent.findLast((message) => message.method === 'Runtime.evaluate')?.sessionId,
+		).toBe('session-second')
+	})
+
+	it('catches a superseded session navigation overwriting the URL its replacement owns', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptFrameTree(transport)
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'session-first',
+				targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/first' },
+			},
+			'session-1',
+		)
+		await waitForCondition('the first session event was delivered', () => sessions.count === 1)
+		transport.event('Page.frameDetached', { frameId: 'oopif-7', reason: 'swap' }, 'session-1')
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'session-second',
+				targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/second' },
+			},
+			'session-1',
+		)
+		await waitForCondition('the second session event was delivered', () => sessions.count === 2)
+
+		transport.event(
+			'Page.frameNavigated',
+			{ frame: { id: 'oopif-7', url: 'https://other.example/stale' } },
+			'session-first',
+		)
+		const stale = (await page.frames()).find((entry) => entry.id === 'oopif-7')?.url
+		transport.event(
+			'Page.frameNavigated',
+			{ frame: { id: 'oopif-7', url: 'https://other.example/fresh' } },
+			'session-second',
+		)
+		const fresh = (await page.frames()).filter((entry) => entry.id === 'oopif-7')
+
+		expect(stale).toBe('https://other.example/second')
+		expect(fresh.map((entry) => entry.url)).toEqual(['https://other.example/fresh'])
+	})
+
+	it('catches a same-document navigation of the frame session leaving its listed URL stale', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptFrameTree(transport)
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'session-oopif',
+				targetInfo: { type: 'iframe', targetId: 'oopif-7', url: 'https://other.example/embed' },
+			},
+			'session-1',
+		)
+		await waitForCondition('the session event was delivered', () => sessions.count === 1)
+
+		transport.event(
+			'Page.navigatedWithinDocument',
+			{ frameId: 'oopif-7', url: 'https://other.example/embed#review' },
+			'session-oopif',
+		)
+
+		expect((await page.frames()).find((entry) => entry.id === 'oopif-7')?.url).toBe(
+			'https://other.example/embed#review',
+		)
+		expect((await page.frame('https://other.example/embed#review'))?.id).toBe('oopif-7')
 	})
 })
 
@@ -2659,4 +2837,60 @@ describe('BrowserPage history under the back-forward cache', () => {
 		transport.event('Page.loadEventFired', {}, 'session-1')
 		await expect(going).resolves.toMatchObject({ url: 'https://example.com/form' })
 	})
+	it('catches forward() resolving on a restore after its signal aborted', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Page.getNavigationHistory', {
+			currentIndex: 0,
+			entries: [
+				{ id: 1, url: 'https://example.com/form' },
+				{ id: 2, url: 'https://example.com/article' },
+			],
+		})
+		replyOk(transport, 'Page.navigateToHistoryEntry')
+		replyOk(transport, 'Page.stopLoading')
+		scriptEvaluate(
+			transport,
+			(expression) => expression.includes('location.href'),
+			'https://example.com/article',
+		)
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+		const controller = new AbortController()
+		const reason = new Error('The caller left')
+		const going = page
+			.forward({ signal: controller.signal, timeout: 2_000 })
+			.catch((error: unknown) => error)
+		await waitForCondition('the history entry was acknowledged', () =>
+			transport.sent.some((message) => message.method === 'Page.navigateToHistoryEntry'),
+		)
+		await waitForDelay(10)
+
+		controller.abort(reason)
+		transport.event(
+			'Page.frameNavigated',
+			{
+				type: 'BackForwardCacheRestore',
+				frame: { id: 'frame-1', url: 'https://example.com/article', loaderId: 'restored' },
+			},
+			'session-1',
+		)
+
+		expect(await going).toBe(reason)
+		expect(transport.sent.some((message) => message.method === 'Page.stopLoading')).toBe(true)
+	})
+
+	it.each(['back', 'forward'] as const)(
+		'catches %s() sending a history command under an already-aborted signal',
+		async (direction) => {
+			const { client, transport } = await createConnectedCDPClient()
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+			const controller = new AbortController()
+			const reason = new Error('The caller left first')
+			controller.abort(reason)
+
+			await expect(page[direction]({ signal: controller.signal, timeout: 500 })).rejects.toBe(
+				reason,
+			)
+			expect(transport.sent.map((message) => message.method)).toEqual([])
+		},
+	)
 })

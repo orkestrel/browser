@@ -199,7 +199,10 @@ export class BrowserElement implements BrowserPageElementInterface {
 		if (!isRecord(result) || !isArray(result['quads']) || result['quads'].length === 0)
 			throw new BrowserElementError(this.reference, 'HIDDEN')
 		const quad = readBrowserQuad(result)
-		const center = await this.#input.point(this.#input.frame, quad.center, options)
+		// The frame owners' box models are read here, so a collected owner reaches the classifier too.
+		const center = await this.#input
+			.point(this.#input.frame, quad.center, options)
+			.catch(this.#failure.bind(this, options))
 		const x = center.x - quad.center.x
 		const y = center.y - quad.center.y
 		return {

@@ -86,6 +86,28 @@ describe('element protocol and compiler fixtures', () => {
 		}
 	})
 
+	it('catches a box model refusal that the failure option does not deliver', async () => {
+		const refused = await createBrowserElementFixture({
+			failure: { method: 'DOM.getBoxModel', message: 'No node found for given backend id' },
+		})
+		const answered = await createBrowserElementFixture()
+		try {
+			const refusal = await refused.page
+				.send('DOM.getBoxModel', { backendNodeId: 13 })
+				.catch((caught: unknown) => caught)
+			expect(readProperty(refusal, 'message')).toBe('No node found for given backend id')
+			expect(await answered.page.send('DOM.getBoxModel', { backendNodeId: 13 })).toEqual({
+				model: {
+					border: [220, 160, 420, 160, 420, 360, 220, 360],
+					content: [230, 170, 410, 170, 410, 350, 230, 350],
+				},
+			})
+		} finally {
+			await refused.client.close()
+			await answered.client.close()
+		}
+	})
+
 	it('catches a fixture that answers WebMCP.enable as present or answers a withheld release or option call', async () => {
 		const withheld: CDPSentMessage[] = []
 		const { page, client, transport } = await createBrowserElementFixture({
@@ -507,6 +529,26 @@ describe('scriptFrameTree', () => {
 			'https://example.com/grandchild',
 		])
 		expect([childFrame['name'], grandchildFrame['name']]).toStrictEqual(['child-frame', ''])
+	})
+
+	it('answers a named frame session with its own root and every other session with the page tree', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptFrameTree(
+			transport,
+			new Map([['session-oopif', { id: 'oopif-7', url: 'https://other.example/embed' }]]),
+		)
+
+		const own = await client.send('Page.getFrameTree', undefined, { session: 'session-oopif' })
+		const page = await client.send('Page.getFrameTree', undefined, { session: 'session-1' })
+		const bare = await client.send('Page.getFrameTree')
+
+		expect(own).toStrictEqual({
+			frameTree: { frame: { id: 'oopif-7', url: 'https://other.example/embed' } },
+		})
+		for (const tree of [page, bare])
+			expect(
+				readProperty(readProperty<Readonly<Record<string, unknown>>>(tree, 'frameTree'), 'frame'),
+			).toStrictEqual({ id: 'main-1', url: 'https://example.com/' })
 	})
 })
 
