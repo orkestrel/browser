@@ -43,6 +43,57 @@ export function readBrowserCompiledTimers(expression: string): readonly BrowserC
 	return timers
 }
 
+/** Reports what a compiled wait registered, disconnected, and resolved after its deadline ran. */
+export interface BrowserCompiledRun {
+	readonly timers: readonly BrowserCompiledTimer[]
+	readonly disconnects: number
+	readonly result: unknown
+}
+
+/**
+ * Evaluates a compiled wait, records every timer registration, and runs the first timer callback once.
+ * @param expression - Compiler output resolving through its deadline
+ * @returns Every registration, the observer disconnect count, and the resolved value
+ */
+export async function runBrowserCompiledTimers(expression: string): Promise<BrowserCompiledRun> {
+	const timers: BrowserCompiledTimer[] = []
+	const callbacks: Array<() => void> = []
+	const counts = { disconnects: 0 }
+	class RecordingObserver {
+		observe(): void {
+			return undefined
+		}
+		disconnect(): void {
+			counts.disconnects += 1
+		}
+	}
+	const evaluator = new Function(
+		'observer',
+		'timers',
+		'callbacks',
+		`
+		const globalThis = {}
+		const MutationObserver = observer
+		const document = { body: { innerText: '' } }
+		const requestAnimationFrame = () => 0
+		const cancelAnimationFrame = () => undefined
+		const clearTimeout = () => undefined
+		const setTimeout = (callback, delay) => {
+			callbacks.push(callback)
+			return timers.push({ name: 'setTimeout', delay: delay === undefined ? undefined : String(delay) })
+		}
+		return (${expression})
+	`,
+	)
+	const pending: unknown = Reflect.apply(evaluator, undefined, [
+		RecordingObserver,
+		timers,
+		callbacks,
+	])
+	callbacks[0]?.()
+	return { timers, disconnects: counts.disconnects, result: await pending }
+}
+
 /** Supplies inert observer methods to the compiler timer-argument instrument. */
 export class BrowserCompiledObserver {
 	observe(): void {

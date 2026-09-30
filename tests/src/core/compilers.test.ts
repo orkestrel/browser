@@ -16,7 +16,12 @@ import {
 	compileScreenshotPreparationExpression,
 	compileGuardedEvaluateExpression,
 } from '@src/core'
-import { evaluateJavaScript, evaluateBrowserHit, readBrowserCompiledTimers } from '../../setup.js'
+import {
+	evaluateJavaScript,
+	evaluateBrowserHit,
+	readBrowserCompiledTimers,
+	runBrowserCompiledTimers,
+} from '../../setup.js'
 
 describe('element compilers', () => {
 	it('catches polling, duplicate timers, and a deadline placed in the wrong argument', () => {
@@ -31,6 +36,27 @@ describe('element compilers', () => {
 			expect(expression).toContain('requestAnimationFrame(check)')
 			expect(expression).toContain('observer?.disconnect()')
 		}
+	})
+
+	it('registers one timer, runs its deadline once without re-arming, and disconnects the observer', async () => {
+		for (const expression of [
+			compileTextWaitExpression('ready', 73, 'text'),
+			compileQueryWaitExpression(73, 'query'),
+		]) {
+			const run = await runBrowserCompiledTimers(expression)
+			expect(run.result).toBe(false)
+			expect(run.timers).toEqual([{ name: 'setTimeout', delay: '73' }])
+			expect(run.disconnects).toBe(1)
+		}
+	})
+
+	it('reports a re-armed timer from a deadline callback that registers another', async () => {
+		const rearming = `new Promise((resolve) => {
+	const arm = () => setTimeout(() => { arm(); resolve(false) }, 5)
+	arm()
+})`
+		const run = await runBrowserCompiledTimers(rearming)
+		expect(run.timers).toHaveLength(2)
 	})
 
 	it('catches dropping selection, label fallback, dispatched change, or descendant hit support', () => {

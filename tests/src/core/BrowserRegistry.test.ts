@@ -592,6 +592,8 @@ describe('BrowserRegistry', () => {
 				() =>
 					transport.sent.filter((message) => message.method === 'WebMCP.invokeTool').length === 2,
 			)
+			const changes = createRecorder<[]>()
+			registry.emitter.on('change', changes.handler)
 			await registry.destroy()
 			expect(await rejected).toMatchObject({ message: expect.stringContaining('destroyed') })
 			expect(
@@ -602,6 +604,31 @@ describe('BrowserRegistry', () => {
 			).toEqual(['child-session', 'session-1'])
 			expect(registry.tools()).toEqual([])
 			await expect(registry.start()).rejects.toThrow('destroyed')
+
+			const changed = changes.calls.length
+			const sent = transport.sent.length
+			for (const sessionId of ['session-1', 'child-session']) {
+				transport.event(
+					'WebMCP.toolsAdded',
+					{ tools: [{ name: 'late', description: 'Late', frameId: page.id }] },
+					sessionId,
+				)
+				transport.event(
+					'Page.frameNavigated',
+					{ frame: { id: 'child', url: 'https://example.com/late' } },
+					sessionId,
+				)
+			}
+			await waitForDelay()
+			expect(registry.tools()).toEqual([])
+			expect(changes.calls).toHaveLength(changed)
+			expect(
+				transport.sent
+					.slice(sent)
+					.filter(
+						(message) => message.method === 'WebMCP.enable' || message.method === 'WebMCP.disable',
+					),
+			).toEqual([])
 		} finally {
 			await client.close()
 		}
