@@ -4,9 +4,10 @@
 // and the module objects a real runtime hands a consumer. Nothing here names this
 // package, one of its exports, or how many there are, so the proof stays true as
 // the published surface moves.
+import type { PlaywrightProviderOptions } from '@vitest/browser-playwright'
+import type { Browser } from 'playwright'
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
-import { isArray, isObject, isString } from '@orkestrel/contract'
 import { spawnSync } from 'node:child_process'
 import {
 	existsSync,
@@ -18,10 +19,14 @@ import {
 	statSync,
 	writeFileSync,
 } from 'node:fs'
+import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { chromium } from 'playwright'
+import { build } from 'vite'
+import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
@@ -37,7 +42,8 @@ const TSC = createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/ts
 // rather than an exit code a caller can read. Every following argument is a literal or
 // a path this file built, so the shell has nothing to escape.
 const SHELL = process.platform === 'win32'
-// `prepublishOnly` runs this proof as `npm run test:distribution -- --mode release`.
+// `prepublishOnly` runs this proof as `npm run test:distribution -- --mode release`,
+// and the root configuration's project factories carry that mode into this project.
 // Release is the publish gate, so evidence it cannot obtain fails there and skips
 // everywhere else: a gate that passes on missing evidence proves nothing.
 const RELEASE = import.meta.env.MODE === 'release'
@@ -147,21 +153,22 @@ const FORMATS: ReadonlyArray<readonly [extension: string, format: Format]> = [
 
 // One published subpath, resolved to what this proof can drive: the specifier a
 // consumer writes, whether the declarations its consumer formats resolve at all,
-// whether its target is a browser bundle, and whether it answers `import` and
-// `require` at all.
+// whether the exports map answers the browser condition with a target of its own,
+// whether it answers `import` and `require` at all, and whether the target that
+// `require` answers with is one that a CommonJS consumer loads.
 interface Entry {
 	readonly subpath: string
 	readonly specifier: string
 	readonly mapping: unknown
 	readonly declaration: {
-		readonly module: boolean
-		readonly commonjs: boolean
-		readonly browser: boolean
+		readonly importable: boolean
+		readonly requirable: boolean
+		readonly browsable: boolean
 	}
-	readonly browser: boolean
-	readonly module: boolean
-	readonly commonjs: boolean
-	readonly required: boolean
+	readonly browsable: boolean
+	readonly importable: boolean
+	readonly requirable: boolean
+	readonly loadable: boolean
 }
 
 // The installed tree every claim is read from. Every subpath the exports map names
@@ -179,11 +186,18 @@ interface Stage {
 }
 
 function isRecord(value: unknown): value is Readonly<Record<string, unknown>> {
-	return isObject(value) && !isArray(value)
+	return typeof value === 'object' && value !== null && !Array.isArray(value)
 }
 
 function isNames(value: unknown): value is readonly string[] {
-	return isArray(value) && value.every((name) => isString(name))
+	return Array.isArray(value) && value.every((name) => typeof name === 'string')
+}
+
+// A fallback list, which is what Node reads an array in an exports entry as. The
+// narrowing is what the following walkers need: `Array.isArray` widens an `unknown`
+// member to `any`, and an entry read that way is not read at all.
+function isList(value: unknown): value is readonly unknown[] {
+	return Array.isArray(value)
 }
 
 // Whether a string is a valid package target. Node rejects a target outside the
@@ -245,7 +259,7 @@ function resolvePackageTarget(
 	conditions: readonly string[],
 ): TargetResolution | undefined {
 	if (typeof entry === 'string') return { target: entry }
-	if (isArray(entry)) {
+	if (isList(entry)) {
 		for (const member of entry) {
 			const resolved = resolvePackageTarget(member, conditions)
 			if (resolved !== undefined && isPackageTarget(resolved.target)) return resolved
@@ -300,7 +314,7 @@ function resolveDeclaration(
 	installed: string,
 ): string | undefined {
 	if (typeof entry === 'string') return targetToDeclaration(entry, installed)
-	if (isArray(entry)) {
+	if (isList(entry)) {
 		for (const member of entry) {
 			const resolved = resolveDeclaration(member, conditions, installed)
 			if (resolved !== undefined) return resolved
@@ -376,7 +390,7 @@ function declaresCommonJS(entry: unknown, installed: string): boolean {
 // Node rejects during package-target validation, because no reader can take them.
 function collectTargets(entry: unknown): readonly string[] {
 	if (typeof entry === 'string') return [entry]
-	if (isArray(entry)) return entry.flatMap(collectTargets).filter(isPackageTarget)
+	if (isList(entry)) return entry.flatMap(collectTargets).filter(isPackageTarget)
 	if (!isRecord(entry)) return []
 	return Object.values(entry).flatMap((nested) => collectTargets(nested))
 }
@@ -427,7 +441,7 @@ function selectEntries(entries: readonly Entry[], conditions: readonly string[])
 	return entries.filter(
 		(entry) =>
 			resolveTarget(entry.mapping, conditions) !== undefined &&
-			(!conditions.includes('require') || entry.commonjs),
+			(!conditions.includes('require') || entry.loadable),
 	)
 }
 
@@ -440,13 +454,13 @@ function selectDrivers(entry: Entry, format: Format): readonly Resolution[] {
 	)
 }
 
-// Require-loadable entries that declare CommonJS support but a typed CommonJS
-// consumer cannot compile against. A default branch resolving under the require
-// condition set makes no CommonJS claim.
+// Requirable entries that declare CommonJS support but a typed CommonJS consumer
+// cannot compile against. A default branch resolving under the require condition
+// set makes no CommonJS claim.
 function selectUntypable(entries: readonly Entry[], installed: string): readonly Entry[] {
 	return entries.filter(
 		(entry) =>
-			entry.required &&
+			entry.requirable &&
 			isRecord(entry.mapping) &&
 			Object.hasOwn(entry.mapping, 'require') &&
 			!declaresCommonJS(entry.mapping, installed),
@@ -582,6 +596,102 @@ function driveRuntime(stage: Stage, specifier: string, driver: string): readonly
 	return published
 }
 
+const BROWSER_PAGE = `<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="UTF-8" />
+		<title>Distribution</title>
+	</head>
+	<body>
+		<script type="module" src="./main.js"></script>
+	</body>
+</html>
+`
+
+function readContentType(path: string): string {
+	if (path.endsWith('.html')) return 'text/html'
+	if (path.endsWith('.js')) return 'text/javascript'
+	if (path.endsWith('.css')) return 'text/css'
+	if (path.endsWith('.json') || path.endsWith('.map')) return 'application/json'
+	return 'application/octet-stream'
+}
+
+// `resolveBrowser` answers with provider options and never reports absence: its
+// last resort is a channel nothing verified. So the launch is attempted and its
+// rejection classified, rather than probed for and ruled on.
+function describeBrowser(options: PlaywrightProviderOptions): string {
+	const endpoint = options.connectOptions?.wsEndpoint
+	if (endpoint !== undefined) return `the browser server at ${endpoint}`
+	const executable = options.launchOptions?.executablePath
+	if (executable !== undefined) return `the executable at ${executable}`
+	const channel = options.launchOptions?.channel
+	if (channel !== undefined) return `the ${channel} channel`
+	return 'the Chromium Playwright installed for itself'
+}
+
+async function launchBrowser(options: PlaywrightProviderOptions): Promise<Browser> {
+	const endpoint = options.connectOptions?.wsEndpoint
+	if (endpoint !== undefined) return chromium.connect(endpoint)
+	return chromium.launch({ ...options.launchOptions, headless: true })
+}
+
+// A consumer of one installed browser entry, bundled by the Vite toolchain this
+// workspace already declares. Nothing is stubbed: the bundle resolves the installed
+// package and its whole transitive graph as an application consuming it would.
+async function bundleEntry(stage: Stage, entry: Entry): Promise<string> {
+	const page = join(stage.consumer, 'pages', entry.subpath.replaceAll(/[^\w]+/gu, '-'))
+	const specifier = JSON.stringify(entry.specifier)
+	writeFile(join(page, 'index.html'), BROWSER_PAGE)
+	writeFile(
+		join(page, 'main.js'),
+		`import * as entry from ${specifier}\nglobalThis.subject = Object.keys(entry).sort()\n`,
+	)
+	await build({
+		base: './',
+		build: { emptyOutDir: true, outDir: 'bundle' },
+		configFile: false,
+		logLevel: 'error',
+		root: page,
+	})
+	return join(page, 'bundle')
+}
+
+// The key set the bundled module publishes in a real browser, read off the page
+// once it has loaded over a loopback server. A module that never evaluated
+// publishes nothing, and a page error is raised rather than compared away.
+async function readBrowserExports(browser: Browser, bundle: string): Promise<readonly string[]> {
+	const server = createServer((request, response) => {
+		const asked = request.url === undefined || request.url === '/' ? '/index.html' : request.url
+		const path = join(bundle, decodeURIComponent(asked))
+		if (!path.startsWith(bundle) || !existsSync(path)) {
+			response.writeHead(404)
+			response.end()
+			return
+		}
+		response.writeHead(200, { 'content-type': readContentType(path) })
+		response.end(readFileSync(path))
+	})
+	try {
+		await new Promise<void>((settle) => {
+			server.listen(0, '127.0.0.1', settle)
+		})
+		const address = server.address()
+		if (address === null || typeof address === 'string') {
+			throw new Error('The bundle server bound no port')
+		}
+		const page = await browser.newPage()
+		const failures: string[] = []
+		page.on('pageerror', (error) => failures.push(String(error)))
+		await page.goto(`http://127.0.0.1:${String(address.port)}/`, { waitUntil: 'load' })
+		const published: unknown = await page.evaluate('globalThis.subject')
+		if (failures.length > 0) throw new Error(`The bundle raised ${failures.join(' | ')}`)
+		if (!isNames(published)) throw new Error('The bundled module published no name list')
+		return published
+	} finally {
+		server.close()
+	}
+}
+
 // Pack this workspace, install the archive into an isolated consumer, and read the
 // published surface back off the installed tree. Every later claim reads this
 // result, so a failure here is raised where it happens rather than once per entry.
@@ -636,25 +746,26 @@ function buildStage(): Stage {
 			else excluded.push(subpath)
 			continue
 		}
-		const imported = resolveTarget(entry, RUNTIME_CONDITIONS.module)
-		const requiredTarget = resolveTarget(entry, RUNTIME_CONDITIONS.commonjs)
+		const importTarget = resolveTarget(entry, RUNTIME_CONDITIONS.module)
+		const requireTarget = resolveTarget(entry, RUNTIME_CONDITIONS.commonjs)
 		const browserTarget = resolveTarget(entry, RUNTIME_CONDITIONS.browser)
-		const browser = resolvesBrowser(entry)
-		const required = requiredTarget !== undefined && !(browser && requiredTarget === browserTarget)
-		const commonjs = required && resolvesCommonJS(entry, installed)
+		const browsable = resolvesBrowser(entry)
+		const shadowed = browsable && requireTarget === browserTarget
+		const requirable = requireTarget !== undefined && !shadowed
+		const loadable = requirable && resolvesCommonJS(entry, installed)
 		entries.push({
 			subpath,
 			specifier: subpath === '.' ? name : `${name}${subpath.slice(1)}`,
 			mapping: entry,
 			declaration: {
-				module: declaration.module !== undefined,
-				commonjs: declaration.commonjs !== undefined,
-				browser: declaration.browser !== undefined,
+				importable: declaration.module !== undefined,
+				requirable: declaration.commonjs !== undefined,
+				browsable: declaration.browser !== undefined,
 			},
-			browser,
-			module: imported !== undefined && !(browser && imported === browserTarget),
-			commonjs,
-			required,
+			browsable,
+			importable: importTarget !== undefined && !(browsable && importTarget === browserTarget),
+			requirable,
+			loadable,
 		})
 	}
 	return { consumer, installed, archives, entries, subpaths, undeclared, excluded, targets }
@@ -805,7 +916,7 @@ describe('installed package consumer', () => {
 		// loads it. Each later drive retires itself for that entry, so this assertion names
 		// the subpath rather than counting it as driven.
 		const unreachable = stage.entries.filter(
-			(entry) => !entry.module && !entry.required && !entry.browser,
+			(entry) => !entry.importable && !entry.requirable && !entry.browsable,
 		)
 		expect(unreachable.map((entry) => entry.subpath)).toStrictEqual([])
 		const untypable = selectUntypable(stage.entries, stage.installed)
@@ -851,37 +962,18 @@ describe('installed package consumer', () => {
 		expect(reported).toStrictEqual([])
 		expect(silent).toStrictEqual([])
 	})
-
-	// This proof drives a Node import and a Node require and carries no browser
-	// branch: the workspace published no browser face when it was written, and the
-	// browser drive measures the packed artifact, so only a published face is owed
-	// one. A private browser application does not select this branch. It declares the
-	// browser launcher and its Vitest browser provider and gets the generated browser
-	// configuration module beside it, but installed browser tooling does not stand for
-	// a published browser face. `vite` selects nothing either, though the branch
-	// imports it: scaffold puts `vite` in every workspace's base development
-	// dependencies, whatever that workspace publishes. The later Node
-	// `it.runIf` predicates retire each matching Node drive for a face published
-	// later, which leaves nothing measuring it. So it reddens here and names the
-	// subpath a browser branch is owed for. A workspace that gains one deletes this
-	// file and runs the `repair` verb, which writes the variant carrying that branch.
-	it('publishes no browser face this proof cannot drive [requires the registry]', (context) => {
-		const stage = requireStage(context)
-		const faces = stage.entries.filter((entry) => entry.browser)
-		expect(faces.map((entry) => entry.subpath)).toStrictEqual([])
-	})
 })
 
 for (const entry of STAGE?.entries ?? []) {
 	describe(`installed entry ${entry.subpath}`, () => {
-		it.runIf(entry.module)(
+		it.runIf(entry.importable)(
 			'publishes what it declares to a Node import, and no more',
 			(context) => {
 				const stage = requireStage(context)
 				// The exports-map walk resolved a declaration a typed importer reads, so an
 				// entry reaching this drive without one is reported for that rather than for
 				// what a consumer of a missing declaration goes on to say.
-				if (!entry.declaration.module) {
+				if (!entry.declaration.importable) {
 					throw new Error(`${entry.subpath} publishes no import declaration`)
 				}
 				const published = driveRuntime(stage, entry.specifier, ESM_DRIVER)
@@ -894,11 +986,11 @@ for (const entry of STAGE?.entries ?? []) {
 			},
 		)
 
-		it.runIf(entry.required)(
+		it.runIf(entry.requirable)(
 			'publishes what it declares to a Node require, and no more',
 			(context) => {
 				const stage = requireStage(context)
-				if (!entry.declaration.commonjs) {
+				if (!entry.declaration.requirable) {
 					throw new Error(`${entry.subpath} publishes no require declaration`)
 				}
 				const published = driveRuntime(stage, entry.specifier, CJS_DRIVER)
@@ -912,6 +1004,37 @@ for (const entry of STAGE?.entries ?? []) {
 					checkSurface(stage, { entry, extension: 'cts', published, driver }),
 				)
 				expect(reported).toStrictEqual([])
+			},
+		)
+
+		it.runIf(entry.browsable)(
+			'publishes what it declares to a real browser, and no more [requires a browser]',
+			async (context) => {
+				const stage = requireStage(context)
+				if (!entry.declaration.browsable) {
+					throw new Error(`${entry.subpath} publishes no browser declaration`)
+				}
+				const options = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
+				const browser = await launchBrowser(options).catch((error: unknown) => {
+					const cause = `${describeBrowser(options)} was rejected: ${String(error)}`
+					if (RELEASE) throw new Error(`The release gate requires a browser, and ${cause}`)
+					return context.skip(`No browser launched. ${cause}`)
+				})
+				try {
+					const bundle = await bundleEntry(stage, entry)
+					const published = await readBrowserExports(browser, bundle)
+					// A browser consumer reads the installed declarations through a bundler, so
+					// that is the one driver this face answers under.
+					const reported = checkSurface(stage, {
+						entry,
+						extension: 'ts',
+						published,
+						driver: BROWSER_DRIVER,
+					})
+					expect(reported).toStrictEqual([])
+				} finally {
+					await browser.close()
+				}
 			},
 		)
 	})
