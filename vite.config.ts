@@ -299,6 +299,20 @@ export function guides(override?: UserConfig): UserConfig {
 	return mergeOverride(project, override)
 }
 
+export function conformance(override?: UserConfig): UserConfig {
+	const project: UserConfig = {
+		resolve,
+		test: {
+			name: { label: 'conformance', color: 'green' },
+			include: ['tests/conformance.test.ts'],
+			setupFiles: ['./tests/setup.ts'],
+			environment: 'node',
+			browser: { enabled: false },
+		},
+	}
+	return mergeOverride(project, override)
+}
+
 // The caller prepares the live external services before this project.
 // `tests/setupService.ts` verifies readiness, and the project stays out of `npm test`
 // because a real service answers it.
@@ -369,6 +383,7 @@ export default defineConfig({
 			setup,
 			setupBrowser,
 			guides,
+			conformance,
 			service,
 			distribution,
 			probe,

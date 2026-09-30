@@ -353,20 +353,33 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 
 	#bind(node: BrowserAXNode, frame: string, session: string, css = false): BrowserOutlineNode {
 		const backend = node.backend
+		const tool =
+			backend === undefined
+				? undefined
+				: this.#input.page.registry
+						.tools()
+						.find((candidate) => candidate.frame === frame && candidate.node === backend)?.name
 		if (
 			backend === undefined ||
-			(!css && (node.ignored || !BROWSER_INTERACTIVE_ROLES.has(node.role ?? '')))
+			(!css &&
+				(node.ignored || (tool === undefined && !BROWSER_INTERACTIVE_ROLES.has(node.role ?? ''))))
 		)
 			return { ...node, frame, session, reference: undefined }
 		const key = `${session}:${backend}`
 		const existing = this.#records.get(key)
 		if (existing !== undefined) {
-			const row = { ...node, frame, session, reference: existing.node.reference }
+			const row = {
+				...node,
+				frame,
+				session,
+				reference: existing.node.reference,
+				...(tool === undefined ? {} : { tool }),
+			}
 			this.#records.set(key, { node: row, element: existing.element })
 			return row
 		}
 		const reference = this.#input.reference()
-		const row = { ...node, frame, session, reference }
+		const row = { ...node, frame, session, reference, ...(tool === undefined ? {} : { tool }) }
 		const element = new BrowserElement({
 			...this.#input,
 			description: this.#description.bind(this, key, row),

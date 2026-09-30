@@ -269,11 +269,12 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 				node = skipBrowserSubtree(walker)
 				continue
 			}
-			const role = computeBrowserRole(node)
+			const tool = node.localName === 'form' ? (node.getAttribute('toolname') ?? '') : ''
+			const role = tool === '' ? computeBrowserRole(node) : 'form'
 			if (
 				!invisible &&
 				role !== undefined &&
-				(BROWSER_INTERACTIVE_ROLES.has(role) || role === 'heading')
+				(BROWSER_INTERACTIVE_ROLES.has(role) || role === 'heading' || tool !== '')
 			) {
 				text = this.#flush(rows, text)
 				rows.push(this.#row(node, role, view, String(rows.length)))
@@ -282,11 +283,6 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 					node = skipBrowserSubtree(walker)
 					continue
 				}
-			}
-			const tool = node.localName === 'form' ? (node.getAttribute('toolname') ?? '') : ''
-			if (tool !== '' && !invisible) {
-				text = this.#flush(rows, text)
-				this.#text(rows, `form ${JSON.stringify(computeBrowserName(node))} [tool=${tool}]`)
 			}
 			const shadow = node.shadowRoot
 			if (shadow !== null) {
@@ -361,6 +357,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		id: string,
 	): BrowserOutlineNode {
 		const name = computeBrowserName(element, role)
+		const tool = element.localName === 'form' ? element.getAttribute('toolname') : null
 		const reference = role === 'heading' ? undefined : this.#bind(element, role, name).reference
 		const input = element instanceof view.HTMLInputElement ? element : undefined
 		const checked =
@@ -389,6 +386,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			description: undefined,
 			value,
 			properties: { checked, disabled: element.matches(':disabled') },
+			...(tool === null || tool === '' ? {} : { tool }),
 			session: '',
 			reference,
 		}

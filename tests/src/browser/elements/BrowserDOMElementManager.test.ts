@@ -85,9 +85,9 @@ describe('BrowserDOMElementManager', () => {
 			const { text } = await view.elements.outline()
 			expect(text.split('\n')).toEqual([
 				'page "" about:srcdoc',
-				'form "Search cars" [tool=search-cars]',
-				'e1 textbox "Make"',
-				'(1 of 1 elements)',
+				'e1 form "Search cars" [tool=search-cars]',
+				'e2 textbox "Make"',
+				'(2 of 2 elements)',
 			])
 		})
 
