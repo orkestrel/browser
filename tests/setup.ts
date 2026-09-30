@@ -554,11 +554,16 @@ export function scriptBrowserElements(
 		'Page.getLayoutMetrics',
 		options?.metrics ?? { cssLayoutViewport: { pageX: 0, pageY: 0 } },
 	)
-	replyOk(transport, 'DOM.getBoxModel', {
-		model: {
-			border: [220, 160, 420, 160, 420, 360, 220, 360],
-			content: [230, 170, 410, 170, 410, 350, 230, 350],
-		},
+	transport.onSend('DOM.getBoxModel', (message) => {
+		if (options?.failure?.method === message.method)
+			transport.fail(message.id, options.failure.message)
+		else
+			transport.reply(message.id, {
+				model: {
+					border: [220, 160, 420, 160, 420, 360, 220, 360],
+					content: [230, 170, 410, 170, 410, 350, 230, 350],
+				},
+			})
 	})
 	replyOk(transport, 'DOM.setFileInputFiles')
 	replyOk(transport, 'Input.insertText')
@@ -991,32 +996,75 @@ export function readCDPExpression(message: CDPSentMessage | undefined): string |
 	return isString(expression) ? expression : undefined
 }
 
-/** Scripts the nested frame tree page frame tests share. */
-export function scriptFrameTree(transport: CDPTestTransportInterface): void {
-	replyOk(transport, 'Page.getFrameTree', {
-		frameTree: {
-			frame: { id: 'main-1', url: 'https://example.com/' },
-			childFrames: [
-				{
-					frame: {
-						id: 'child-1',
-						parentId: 'main-1',
-						name: 'child-frame',
-						url: 'https://example.com/child',
-					},
-					childFrames: [
-						{
-							frame: {
-								id: 'grandchild-1',
-								parentId: 'child-1',
-								name: '',
-								url: 'https://example.com/grandchild',
-							},
-						},
-					],
+/** Lists the page history directions, in the order a history case matrix registers them. */
+export const BROWSER_HISTORY_DIRECTIONS = ['back', 'forward'] as const
+
+/**
+ * Pairs each history direction with the current history index that gives it a target entry and
+ * the URL of the entry it restores, over the two-entry `form` and `article` history.
+ */
+export const BROWSER_HISTORY_RESTORE_CASES = [
+	['back', 1, 'https://example.com/form'],
+	['forward', 0, 'https://example.com/article'],
+] as const
+
+/**
+ * Scripts the `Page.getNavigationHistory` reply over the two-entry `form` and `article` history.
+ * @param transport - The fake transport to script
+ * @param current - The index of the entry the page shows
+ */
+export function scriptBrowserHistory(transport: CDPTestTransportInterface, current: number): void {
+	replyOk(transport, 'Page.getNavigationHistory', {
+		currentIndex: current,
+		entries: [
+			{ id: 1, url: 'https://example.com/form' },
+			{ id: 2, url: 'https://example.com/article' },
+		],
+	})
+}
+
+/** Holds the three-level page frame tree whose child frames name their parent. */
+export const FRAME_TREE_FIXTURE = Object.freeze({
+	frameTree: {
+		frame: { id: 'main-1', url: 'https://example.com/' },
+		childFrames: [
+			{
+				frame: {
+					id: 'child-1',
+					parentId: 'main-1',
+					name: 'child-frame',
+					url: 'https://example.com/child',
 				},
-			],
-		},
+				childFrames: [
+					{
+						frame: {
+							id: 'grandchild-1',
+							parentId: 'child-1',
+							name: '',
+							url: 'https://example.com/grandchild',
+						},
+					},
+				],
+			},
+		],
+	},
+})
+
+/**
+ * Scripts the nested frame tree page frame tests share.
+ * @param transport - The fake transport to script
+ * @param roots - The root frame each named frame session answers with in place of the page tree
+ */
+export function scriptFrameTree(
+	transport: CDPTestTransportInterface,
+	roots: ReadonlyMap<string, Readonly<Record<string, unknown>>> = new Map(),
+): void {
+	transport.onSend('Page.getFrameTree', (message) => {
+		const root = message.sessionId === undefined ? undefined : roots.get(message.sessionId)
+		transport.reply(
+			message.id,
+			root === undefined ? FRAME_TREE_FIXTURE : { frameTree: { frame: root } },
+		)
 	})
 }
 

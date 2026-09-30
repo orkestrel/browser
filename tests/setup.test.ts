@@ -42,7 +42,10 @@ import {
 	replyOk,
 	scriptCDPAttach,
 	scriptEvaluate,
+	scriptBrowserHistory,
 	scriptFrameTree,
+	BROWSER_HISTORY_DIRECTIONS,
+	BROWSER_HISTORY_RESTORE_CASES,
 	throwListenerError,
 } from './setup.js'
 
@@ -83,6 +86,28 @@ describe('element protocol and compiler fixtures', () => {
 			})
 		} finally {
 			await client.close()
+		}
+	})
+
+	it('catches a box model refusal that the failure option does not deliver', async () => {
+		const refused = await createBrowserElementFixture({
+			failure: { method: 'DOM.getBoxModel', message: 'No node found for given backend id' },
+		})
+		const answered = await createBrowserElementFixture()
+		try {
+			const refusal = await refused.page
+				.send('DOM.getBoxModel', { backendNodeId: 13 })
+				.catch((caught: unknown) => caught)
+			expect(readProperty(refusal, 'message')).toBe('No node found for given backend id')
+			expect(await answered.page.send('DOM.getBoxModel', { backendNodeId: 13 })).toEqual({
+				model: {
+					border: [220, 160, 420, 160, 420, 360, 220, 360],
+					content: [230, 170, 410, 170, 410, 350, 230, 350],
+				},
+			})
+		} finally {
+			await refused.client.close()
+			await answered.client.close()
 		}
 	})
 
@@ -475,6 +500,31 @@ describe('scriptEvaluate', () => {
 	})
 })
 
+describe('scriptBrowserHistory', () => {
+	it('answers the two-entry history at the requested index', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptBrowserHistory(transport, 1)
+
+		expect(await client.send('Page.getNavigationHistory')).toStrictEqual({
+			currentIndex: 1,
+			entries: [
+				{ id: 1, url: 'https://example.com/form' },
+				{ id: 2, url: 'https://example.com/article' },
+			],
+		})
+	})
+})
+
+describe('history case matrices', () => {
+	it('lists both directions and pairs each with the index that has its target and the URL it restores', () => {
+		expect(BROWSER_HISTORY_DIRECTIONS).toStrictEqual(['back', 'forward'])
+		expect(BROWSER_HISTORY_RESTORE_CASES).toStrictEqual([
+			['back', 1, 'https://example.com/form'],
+			['forward', 0, 'https://example.com/article'],
+		])
+	})
+})
+
 describe('scriptFrameTree', () => {
 	it('answers a three-level tree whose child frames name their parent and carry their own URL', async () => {
 		const { client, transport } = await createConnectedCDPClient()
@@ -507,6 +557,26 @@ describe('scriptFrameTree', () => {
 			'https://example.com/grandchild',
 		])
 		expect([childFrame['name'], grandchildFrame['name']]).toStrictEqual(['child-frame', ''])
+	})
+
+	it('answers a named frame session with its own root and every other session with the page tree', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptFrameTree(
+			transport,
+			new Map([['session-oopif', { id: 'oopif-7', url: 'https://other.example/embed' }]]),
+		)
+
+		const own = await client.send('Page.getFrameTree', undefined, { session: 'session-oopif' })
+		const page = await client.send('Page.getFrameTree', undefined, { session: 'session-1' })
+		const bare = await client.send('Page.getFrameTree')
+
+		expect(own).toStrictEqual({
+			frameTree: { frame: { id: 'oopif-7', url: 'https://other.example/embed' } },
+		})
+		for (const tree of [page, bare])
+			expect(
+				readProperty(readProperty<Readonly<Record<string, unknown>>>(tree, 'frameTree'), 'frame'),
+			).toStrictEqual({ id: 'main-1', url: 'https://example.com/' })
 	})
 })
 

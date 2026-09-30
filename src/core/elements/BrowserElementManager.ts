@@ -11,6 +11,7 @@ import type {
 	BrowserOutlineOptions,
 	BrowserPageElementInterface,
 	BrowserPoint,
+	CDPHandler,
 } from '../types.js'
 import { BrowserElement } from './BrowserElement.js'
 import { BrowserElementError, BrowserError } from '../errors.js'
@@ -52,20 +53,27 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		string,
 		{ readonly frame: string; readonly session: string; readonly backend: number }
 	>()
-	readonly #sessions = new Set<string>()
+	// Each watched session, the out-of-process frame it owns (none for the page session), and the
+	// invalidation handlers bound to it.
+	readonly #sessions = new Map<
+		string,
+		{
+			readonly frame: string | undefined
+			readonly navigated: CDPHandler
+			readonly detached: CDPHandler
+		}
+	>()
 	readonly #lifetime = new AbortController()
 	#sequence = 0
 	readonly #generations = new Map<string, number>()
 	readonly #queries = new Map<string, Promise<readonly BrowserOutlineNode[]>>()
 	readonly #navigationHandler = this.#navigate.bind(this)
-	readonly #frameHandler = this.#frameChanged.bind(this)
-	readonly #detachHandler = this.#detached.bind(this)
 	readonly #sessionHandler = this.#session.bind(this)
 	readonly #closeHandler = this.#close.bind(this)
 
 	constructor(input: BrowserElementManagerInput) {
 		this.#input = input
-		this.#watch(input.session)
+		this.#watch(input.session, undefined)
 		input.page.emitter.on('navigate', this.#navigationHandler)
 		input.page.emitter.on('session', this.#sessionHandler)
 		input.page.emitter.on('close', this.#closeHandler)
@@ -455,13 +463,23 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		if (!same) this.clear()
 	}
 
-	#frameChanged(params: Readonly<Record<string, unknown>>): void {
+	#frameChanged(session: string, params: Readonly<Record<string, unknown>>): void {
 		if (!isRecord(params['frame']) || !isString(params['frame']['id'])) return
-		this.#drop(params['frame']['id'])
+		if (this.#owns(session, params['frame']['id'])) this.#drop(params['frame']['id'])
 	}
 
-	#detached(params: Readonly<Record<string, unknown>>): void {
-		if (isString(params['frameId'])) this.#drop(params['frameId'])
+	#detached(session: string, params: Readonly<Record<string, unknown>>): void {
+		if (isString(params['frameId']) && this.#owns(session, params['frameId']))
+			this.#drop(params['frameId'])
+	}
+
+	// The page session reports on every frame, including a swap of an out-of-process one; a frame
+	// session reports only on a frame no other session owns.
+	#owns(session: string, frame: string): boolean {
+		if (session === this.#input.session) return true
+		for (const [other, watched] of this.#sessions)
+			if (watched.frame === frame) return other === session
+		return true
 	}
 
 	#drop(frame: string): void {
@@ -475,25 +493,42 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	#session(frame: BrowserFrameInterface): void {
 		void this.#input
 			.resolve(frame.id)
-			.then((session) => this.#watch(session))
+			.then(this.#own.bind(this, frame.id))
 			.catch(() => undefined)
 	}
 
-	#watch(session: string): void {
+	// The page publishes a frame's owning session, so a session that owned the frame before stops
+	// reporting on it here.
+	#own(frame: string, session: string): void {
+		for (const [other, watched] of this.#sessions)
+			if (watched.frame === frame && other !== session) this.#unwatch(other)
+		this.#watch(session, frame)
+	}
+
+	#watch(session: string, frame: string | undefined): void {
 		if (this.#sessions.has(session) || this.#lifetime.signal.aborted) return
-		this.#sessions.add(session)
-		this.#input.client.subscribe('Page.frameNavigated', this.#frameHandler, session)
-		this.#input.client.subscribe('Page.frameDetached', this.#detachHandler, session)
+		const watched = {
+			frame,
+			navigated: this.#frameChanged.bind(this, session),
+			detached: this.#detached.bind(this, session),
+		}
+		this.#sessions.set(session, watched)
+		this.#input.client.subscribe('Page.frameNavigated', watched.navigated, session)
+		this.#input.client.subscribe('Page.frameDetached', watched.detached, session)
+	}
+
+	#unwatch(session: string): void {
+		const watched = this.#sessions.get(session)
+		if (watched === undefined) return
+		this.#input.client.unsubscribe('Page.frameNavigated', watched.navigated, session)
+		this.#input.client.unsubscribe('Page.frameDetached', watched.detached, session)
+		this.#sessions.delete(session)
 	}
 
 	#close(): void {
 		this.clear()
 		this.#lifetime.abort(new BrowserError('Browser session ended'))
-		for (const session of this.#sessions) {
-			this.#input.client.unsubscribe('Page.frameNavigated', this.#frameHandler, session)
-			this.#input.client.unsubscribe('Page.frameDetached', this.#detachHandler, session)
-		}
-		this.#sessions.clear()
+		for (const session of this.#sessions.keys()) this.#unwatch(session)
 		this.#input.page.emitter.off('navigate', this.#navigationHandler)
 		this.#input.page.emitter.off('session', this.#sessionHandler)
 		this.#input.page.emitter.off('close', this.#closeHandler)
