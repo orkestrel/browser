@@ -1,6 +1,7 @@
+import type { BrowserFrameInterface } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { BrowserContext, BrowserPage } from '@src/core'
-import { requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_CHILD_FIXTURE,
@@ -386,6 +387,60 @@ describe('element manager', () => {
 				.filter((element) => Number(element.reference.slice(1)) > maximum)
 			expect(added.map((element) => element.name)).toEqual(['Save'])
 			expect(page.elements.element('e1')).toBe(main)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a retired frame session invalidating the references its replacement captured', async () => {
+		const { page, transport, client } = await createBrowserElementFixture()
+		try {
+			const published = createRecorder<[frame: BrowserFrameInterface]>()
+			page.emitter.on('session', published.handler)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child-again',
+					targetInfo: { targetId: 'child', type: 'iframe', url: 'https://example.test/checkout' },
+				},
+				'session-main',
+			)
+			await waitForCondition('the replacement session was published', () => published.count === 1)
+			await waitForDelay()
+			const captured = transport.sent.length
+			await page.elements.outline()
+			expect(
+				transport.sent
+					.slice(captured)
+					.filter(
+						(message) =>
+							message.method === 'Accessibility.getFullAXTree' &&
+							message.params?.['frameId'] === 'child',
+					)
+					.map((message) => message.sessionId),
+			).toEqual(['session-child-again'])
+			const saved = requireValue(
+				page.elements.elements().find((element) => element.name === 'Save'),
+			)
+
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'child', url: 'https://example.test/stale' } },
+				'session-child',
+			)
+			transport.event(
+				'Target.detachedFromTarget',
+				{ sessionId: 'session-child', targetId: 'child' },
+				'session-main',
+			)
+			expect(page.elements.element(saved.reference)).toBe(saved)
+
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'child', url: 'https://example.test/next' } },
+				'session-child-again',
+			)
+			expect(page.elements.element(saved.reference)).toBeUndefined()
 		} finally {
 			await client.close()
 		}

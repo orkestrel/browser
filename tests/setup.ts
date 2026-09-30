@@ -996,6 +996,33 @@ export function readCDPExpression(message: CDPSentMessage | undefined): string |
 	return isString(expression) ? expression : undefined
 }
 
+/** Lists the page history directions, in the order a history case matrix registers them. */
+export const BROWSER_HISTORY_DIRECTIONS = ['back', 'forward'] as const
+
+/**
+ * Pairs each history direction with the current history index that gives it a target entry and
+ * the URL of the entry it restores, over the two-entry `form` and `article` history.
+ */
+export const BROWSER_HISTORY_RESTORE_CASES = [
+	['back', 1, 'https://example.com/form'],
+	['forward', 0, 'https://example.com/article'],
+] as const
+
+/**
+ * Scripts the `Page.getNavigationHistory` reply over the two-entry `form` and `article` history.
+ * @param transport - The fake transport to script
+ * @param current - The index of the entry the page shows
+ */
+export function scriptBrowserHistory(transport: CDPTestTransportInterface, current: number): void {
+	replyOk(transport, 'Page.getNavigationHistory', {
+		currentIndex: current,
+		entries: [
+			{ id: 1, url: 'https://example.com/form' },
+			{ id: 2, url: 'https://example.com/article' },
+		],
+	})
+}
+
 /** Holds the three-level page frame tree whose child frames name their parent. */
 export const FRAME_TREE_FIXTURE = Object.freeze({
 	frameTree: {

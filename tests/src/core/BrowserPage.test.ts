@@ -38,8 +38,11 @@ import {
 	readCDPExpression,
 	replyOk,
 	scriptEvaluate,
+	scriptBrowserHistory,
 	scriptFrameTree,
 	FRAME_TREE_FIXTURE,
+	BROWSER_HISTORY_DIRECTIONS,
+	BROWSER_HISTORY_RESTORE_CASES,
 	JPEG_BASE64,
 	PNG_BASE64,
 	throwListenerError,
@@ -2389,7 +2392,7 @@ describe('BrowserPage out-of-process frame sessions', () => {
 						id: 'oopif-7',
 						parentId: 'main-1',
 						name: 'checkout',
-						url: 'https://other.example/embed',
+						url: 'https://other.example/start',
 					},
 				],
 			]),
@@ -2414,6 +2417,11 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		transport.reply(requireValue(enables[0]), {})
 		await waitForCondition('the session event was delivered', () => sessions.count === 1)
 
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Page.getFrameTree')
+				.map((message) => message.sessionId),
+		).toEqual(['session-oopif'])
 		expect(requireValue(sessions.calls[0]?.[0]).url).toBe('https://other.example/embed')
 		expect((await page.frames()).find((entry) => entry.id === 'oopif-7')?.url).toBe(
 			'https://other.example/embed',
@@ -2484,6 +2492,11 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		)
 		await waitForCondition('the session event was delivered', () => sessions.count === 1)
 
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Page.getFrameTree')
+				.map((message) => message.sessionId),
+		).toEqual(['session-oopif'])
 		const frame = requireValue(sessions.calls[0]?.[0])
 		expect([frame.id, frame.name, frame.url]).toEqual([
 			'oopif-7',
@@ -2559,6 +2572,11 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		)
 		await waitForCondition('the session event was delivered', () => sessions.count === 1)
 
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Page.getFrameTree')
+				.map((message) => message.sessionId),
+		).toEqual(['session-oopif'])
 		expect(requireValue(sessions.calls[0]?.[0]).url).toBe('https://other.example/next')
 		expect((await page.frames()).find((entry) => entry.id === 'oopif-7')?.url).toBe(
 			'https://other.example/next',
@@ -2694,20 +2712,11 @@ describe('BrowserPage out-of-process frame sessions', () => {
 })
 
 describe('BrowserPage history under the back-forward cache', () => {
-	it.each([
-		['back', 1, 'https://example.com/form'],
-		['forward', 0, 'https://example.com/article'],
-	] as const)(
+	it.each(BROWSER_HISTORY_RESTORE_CASES)(
 		'catches %s() under its default load condition waiting past a restore that fires no load event',
 		async (direction, current, restored) => {
 			const { client, transport } = await createConnectedCDPClient()
-			replyOk(transport, 'Page.getNavigationHistory', {
-				currentIndex: current,
-				entries: [
-					{ id: 1, url: 'https://example.com/form' },
-					{ id: 2, url: 'https://example.com/article' },
-				],
-			})
+			scriptBrowserHistory(transport, current)
 			transport.onSend('Page.navigateToHistoryEntry', (message) => {
 				transport.reply(message.id, {})
 				transport.event(
@@ -2732,13 +2741,7 @@ describe('BrowserPage history under the back-forward cache', () => {
 
 	it('catches back() under the idle condition resolving on a restore before its network idles', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		replyOk(transport, 'Page.getNavigationHistory', {
-			currentIndex: 1,
-			entries: [
-				{ id: 1, url: 'https://example.com/form' },
-				{ id: 2, url: 'https://example.com/article' },
-			],
-		})
+		scriptBrowserHistory(transport, 1)
 		replyOk(transport, 'Page.navigateToHistoryEntry')
 		scriptEvaluate(
 			transport,
@@ -2773,13 +2776,7 @@ describe('BrowserPage history under the back-forward cache', () => {
 
 	it('catches back() under its default load condition resolving at an ordinary commit', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		replyOk(transport, 'Page.getNavigationHistory', {
-			currentIndex: 1,
-			entries: [
-				{ id: 1, url: 'https://example.com/form' },
-				{ id: 2, url: 'https://example.com/article' },
-			],
-		})
+		scriptBrowserHistory(transport, 1)
 		replyOk(transport, 'Page.navigateToHistoryEntry')
 		scriptEvaluate(
 			transport,
@@ -2839,13 +2836,7 @@ describe('BrowserPage history under the back-forward cache', () => {
 	})
 	it('catches forward() resolving on a restore after its signal aborted', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		replyOk(transport, 'Page.getNavigationHistory', {
-			currentIndex: 0,
-			entries: [
-				{ id: 1, url: 'https://example.com/form' },
-				{ id: 2, url: 'https://example.com/article' },
-			],
-		})
+		scriptBrowserHistory(transport, 0)
 		replyOk(transport, 'Page.navigateToHistoryEntry')
 		replyOk(transport, 'Page.stopLoading')
 		scriptEvaluate(
@@ -2875,10 +2866,98 @@ describe('BrowserPage history under the back-forward cache', () => {
 		)
 
 		expect(await going).toBe(reason)
-		expect(transport.sent.some((message) => message.method === 'Page.stopLoading')).toBe(true)
+		expect(transport.sent.filter((message) => message.method === 'Page.stopLoading')).toHaveLength(
+			1,
+		)
 	})
 
-	it.each(['back', 'forward'] as const)(
+	it('catches forward() resolving when its signal aborts in the tick its restore settles the load wait', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptBrowserHistory(transport, 0)
+		replyOk(transport, 'Page.navigateToHistoryEntry')
+		replyOk(transport, 'Page.stopLoading')
+		scriptEvaluate(
+			transport,
+			(expression) => expression.includes('location.href'),
+			'https://example.com/article',
+		)
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+		const controller = new AbortController()
+		const reason = new Error('The caller left after the restore')
+		const going = page
+			.forward({ signal: controller.signal, timeout: 2_000 })
+			.catch((error: unknown) => error)
+		await waitForCondition('the history entry was acknowledged', () =>
+			transport.sent.some((message) => message.method === 'Page.navigateToHistoryEntry'),
+		)
+		await waitForDelay(10)
+
+		transport.event(
+			'Page.frameNavigated',
+			{
+				type: 'BackForwardCacheRestore',
+				frame: { id: 'frame-1', url: 'https://example.com/article', loaderId: 'restored' },
+			},
+			'session-1',
+		)
+		controller.abort(reason)
+
+		expect(await going).toBe(reason)
+		expect(transport.sent.filter((message) => message.method === 'Page.stopLoading')).toHaveLength(
+			1,
+		)
+	})
+
+	it('catches forward() resolving when its signal aborts during the completion read', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptBrowserHistory(transport, 0)
+		transport.onSend('Page.navigateToHistoryEntry', (message) => {
+			transport.reply(message.id, {})
+			transport.event(
+				'Page.frameNavigated',
+				{
+					type: 'BackForwardCacheRestore',
+					frame: { id: 'frame-1', url: 'https://example.com/article', loaderId: 'restored' },
+				},
+				'session-1',
+			)
+		})
+		replyOk(transport, 'Page.stopLoading')
+		const controller = new AbortController()
+		const reason = new Error('The caller left during the read')
+		transport.onSend('Runtime.evaluate', (message) => {
+			controller.abort(reason)
+			transport.reply(message.id, { result: { value: 'https://example.com/article' } })
+		})
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+
+		await expect(page.forward({ signal: controller.signal, timeout: 2_000 })).rejects.toBe(reason)
+		expect(transport.sent.filter((message) => message.method === 'Runtime.evaluate')).toHaveLength(
+			1,
+		)
+		expect(transport.sent.filter((message) => message.method === 'Page.stopLoading')).toHaveLength(
+			1,
+		)
+	})
+
+	it('catches back() on an empty history resolving after its signal aborted with the reply', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const controller = new AbortController()
+		const reason = new Error('The caller left with the reply')
+		transport.onSend('Page.getNavigationHistory', (message) => {
+			transport.reply(message.id, {
+				currentIndex: 0,
+				entries: [{ id: 1, url: 'https://example.com/form' }],
+			})
+			controller.abort(reason)
+		})
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+
+		await expect(page.back({ signal: controller.signal, timeout: 500 })).rejects.toBe(reason)
+		expect(transport.sent.map((message) => message.method)).toEqual(['Page.getNavigationHistory'])
+	})
+
+	it.each(BROWSER_HISTORY_DIRECTIONS)(
 		'catches %s() sending a history command under an already-aborted signal',
 		async (direction) => {
 			const { client, transport } = await createConnectedCDPClient()

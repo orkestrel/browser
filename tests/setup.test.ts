@@ -42,7 +42,10 @@ import {
 	replyOk,
 	scriptCDPAttach,
 	scriptEvaluate,
+	scriptBrowserHistory,
 	scriptFrameTree,
+	BROWSER_HISTORY_DIRECTIONS,
+	BROWSER_HISTORY_RESTORE_CASES,
 	throwListenerError,
 } from './setup.js'
 
@@ -494,6 +497,31 @@ describe('scriptEvaluate', () => {
 		await expect(
 			client.send('Runtime.evaluate', { expression: 'document.title' }, { timeout: 50 }),
 		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
+	})
+})
+
+describe('scriptBrowserHistory', () => {
+	it('answers the two-entry history at the requested index', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptBrowserHistory(transport, 1)
+
+		expect(await client.send('Page.getNavigationHistory')).toStrictEqual({
+			currentIndex: 1,
+			entries: [
+				{ id: 1, url: 'https://example.com/form' },
+				{ id: 2, url: 'https://example.com/article' },
+			],
+		})
+	})
+})
+
+describe('history case matrices', () => {
+	it('lists both directions and pairs each with the index that has its target and the URL it restores', () => {
+		expect(BROWSER_HISTORY_DIRECTIONS).toStrictEqual(['back', 'forward'])
+		expect(BROWSER_HISTORY_RESTORE_CASES).toStrictEqual([
+			['back', 1, 'https://example.com/form'],
+			['forward', 0, 'https://example.com/article'],
+		])
 	})
 })
 
