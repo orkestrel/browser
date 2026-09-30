@@ -1984,6 +1984,11 @@ export const POLICY_SOURCE_DEADLINES: readonly PolicyDeadline[] = Object.freeze(
 		reason: 'trace completion deadline',
 	},
 	{
+		path: 'src/core/BrowserToolset.ts',
+		declaration: '#bounded',
+		reason: 'receipt deadline, cleared by the enclosing race',
+	},
+	{
 		path: 'src/core/BrowserPage.ts',
 		declaration: '#parkReadiness',
 		reason: 'readiness deadline',
