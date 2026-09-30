@@ -109,7 +109,50 @@ describe('BrowserDOMElementManager', () => {
 			expect(rows).toContain('e4 button "Place order" [disabled]')
 			expect(rows).toContain('e5 combobox "Size" value="Large"')
 			expect(rows.join('\n')).not.toContain('hunter2')
-			expect(rows.join('\n')).not.toContain('Small')
+		})
+
+		it('lists a select row followed by one option row per option, named by its label', async () => {
+			const probe = await loadProbeDocument(
+				[
+					'<select aria-label="Size">',
+					'<option value="s">Small</option>',
+					'<option value="m" selected> Medium  size </option>',
+					'<option value="l" label="Large" disabled>L</option>',
+					'</select>',
+					'<button>Next</button>',
+				].join('\n'),
+			)
+			const view = createBrowserDOMView({ document: probe })
+			const { text } = await view.elements.outline()
+			expect(text.split('\n').slice(1)).toEqual([
+				'e1 combobox "Size" value="Medium size"',
+				'e2 option "Small"',
+				'e3 option "Medium size"',
+				'e4 option "Large" [disabled]',
+				'e5 button "Next"',
+				'(5 of 5 elements)',
+			])
+			const options = await view.elements.find({ role: 'option' })
+			expect(options.map((option) => [option.reference, option.name])).toEqual([
+				['e2', 'Small'],
+				['e3', 'Medium size'],
+				['e4', 'Large'],
+			])
+			const [size] = await view.elements.find({ role: 'combobox', name: 'Size' })
+			await requireValue(size, 'select').select(['s'])
+			expect(requireValue(probe.querySelector('select'), 'select').value).toBe('s')
+		})
+
+		it('separates adjacent texts by the whitespace between them and keeps a fragment without any joined', async () => {
+			const probe = await loadProbeDocument(
+				[
+					'<div><label>Gift wrap</label>\n  <label>Message</label></div>',
+					'<p><label>Gift<b>wrap</b></label> <span> for  </span><i>two</i></p>',
+				].join(''),
+			)
+			const view = createBrowserDOMView({ document: probe })
+			const rows = (await view.elements.outline()).text.split('\n')
+			expect(rows.slice(1, -1)).toEqual(['Gift wrap Message', 'Giftwrap for two'])
 		})
 
 		it('separates text in different blocks and joins text within one', async () => {

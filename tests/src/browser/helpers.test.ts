@@ -69,6 +69,21 @@ describe('computeBrowserName', () => {
 		expect(computeBrowserName(element, 'button')).toBe('Text')
 		expect(computeBrowserName(element, 'region')).toBe('')
 	})
+
+	it('names an option by aria-label, then its label attribute, then its collapsed text', () => {
+		const probe = createProbeDocument(
+			[
+				'<select>',
+				'<option aria-label="Tiny" label="T">t</option>',
+				'<option label="Large">L</option>',
+				'<option> Medium  size </option>',
+				'</select>',
+			].join(''),
+		)
+		expect(
+			Array.from(probe.querySelectorAll('option'), (option) => computeBrowserName(option)),
+		).toEqual(['Tiny', 'Large', 'Medium size'])
+	})
 })
 
 describe('computeBrowserText', () => {
@@ -214,6 +229,21 @@ describe('matchesBrowserInvisible', () => {
 		expect(
 			Array.from(probe.querySelectorAll('button'), (button) => matchesBrowserInvisible(button)),
 		).toEqual([true, true, false, false, false, false])
+	})
+
+	it('gives an option and a group of a drop-down select the visibility of that select', () => {
+		const probe = createProbeDocument(
+			[
+				'<select><optgroup label="Sizes"><option>Small</option></optgroup>',
+				'<option style="visibility: hidden">Large</option></select>',
+				'<select style="visibility: hidden"><option>Medium</option></select>',
+			].join(''),
+		)
+		expect(
+			Array.from(probe.querySelectorAll('optgroup, option'), (element) =>
+				matchesBrowserInvisible(element),
+			),
+		).toEqual([false, false, true, true])
 	})
 
 	it('reports nothing invisible in a document without a window', () => {

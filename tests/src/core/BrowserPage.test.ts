@@ -2027,6 +2027,45 @@ describe('BrowserPage events', () => {
 		).toBe(true)
 	})
 
+	it('attaches a page it opened that discovery reports on the browser session and reads the committed URL from its frame tree', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Target.attachToTarget', { sessionId: 'popup-session' })
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Page.getFrameTree', {
+			frameTree: { frame: { id: 'popup-frame', url: 'https://example.com/popup' } },
+		})
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Page.setInterceptFileChooserDialog')
+		replyOk(transport, 'Network.enable')
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const popups = createRecorder<[page: BrowserPageInterface]>()
+		page.emitter.on('popup', popups.handler)
+
+		transport.event('Target.targetCreated', {
+			targetInfo: {
+				targetId: 'popup-1',
+				type: 'page',
+				url: '',
+				openerId: 'target-1',
+				browserContextId: 'default',
+			},
+		})
+		await waitForCondition('the popup event was delivered', () => popups.count === 1)
+
+		expect(popups.calls[0]?.[0]).toMatchObject({
+			target: 'popup-1',
+			url: 'https://example.com/popup',
+			opener: page,
+		})
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Target.attachToTarget')
+				.map((message) => [message.params, message.sessionId]),
+		).toEqual([[{ targetId: 'popup-1', flatten: true }, undefined]])
+	})
+
 	it('emits frame attach/detach and crash lifecycle events', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')

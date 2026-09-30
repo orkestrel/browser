@@ -95,6 +95,13 @@ import { Emitter } from '@orkestrel/emitter'
 /**
  * Represents a top-level browser page, including its target lifecycle and child frames.
  *
+ * @remarks
+ * A page publishes each page it opens through `popup` once: a `Target.targetCreated` report
+ * whose `openerId` names this page is attached on the browser session, so the popup outlives
+ * its opener, and an attachment on this page's session is taken as it arrives; the second arrival
+ * for one target is detached. Discovery reports reach a page only after its connection enables
+ * `Target.setDiscoverTargets`, which `BrowserContext` does.
+ *
  * @example
  * ```ts
  * import { BrowserPage } from '@orkestrel/browser'
@@ -140,6 +147,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #downloads: Map<string, BrowserDownload> = new Map()
 	readonly #workers: Map<string, BrowserWorker> = new Map()
 	readonly #popups: Map<string, BrowserPage> = new Map()
+	// A popup target an attach is initializing, so the attach that arrives second, through discovery
+	// or through an attachment event, initializes nothing.
+	readonly #claimed: Set<string> = new Set()
 	// A frame with no entry has not changed since the last page-frame document change, whose
 	// epoch `#floor` holds, so the map holds only the frames of the current document.
 	readonly #epochs: Map<string, number> = new Map()
@@ -193,6 +203,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #downloadHandler = this.#handleDownload.bind(this)
 	readonly #downloadProgressHandler = this.#handleDownloadProgress.bind(this)
 	readonly #attachedHandler = this.#handleAttached.bind(this)
+	readonly #createdHandler = this.#handleCreated.bind(this)
 	readonly #detachedHandler = this.#handleDetached.bind(this)
 
 	constructor(
@@ -260,6 +271,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#network.emitter.on('socket', (socket) => this.#emitter.emit('socket', socket))
 
 		this.#client.subscribe('Target.targetDestroyed', this.#destroyHandler)
+		this.#client.subscribe('Target.targetCreated', this.#createdHandler)
 		this.#client.subscribe('Target.attachedToTarget', this.#attachedHandler, this.#sessionId)
 		this.#client.subscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
 		this.#client.subscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
@@ -875,8 +887,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		for (const worker of this.#workers.values()) worker.detach()
 		this.#workers.clear()
 		this.#popups.clear()
+		this.#claimed.clear()
 		this.#downloads.clear()
 		this.#client.unsubscribe('Target.targetDestroyed', this.#destroyHandler)
+		this.#client.unsubscribe('Target.targetCreated', this.#createdHandler)
 		this.#client.unsubscribe('Target.attachedToTarget', this.#attachedHandler, this.#sessionId)
 		this.#client.unsubscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
 		this.#client.unsubscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
@@ -1158,7 +1172,28 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 	}
 
-	async #attachPopup(session: string, id: string, url: string): Promise<void> {
+	// Discovery attaches a popup on the browser session, which keeps the popup's session alive after
+	// its opener closes; a session attached through this page's session would end with it.
+	async #discoverPopup(id: string, url: string | undefined): Promise<void> {
+		const result: unknown = await this.#client
+			.send('Target.attachToTarget', { targetId: id, flatten: true })
+			.catch(() => undefined)
+		// A popup can close before the attach reaches it.
+		if (!isRecord(result) || !isString(result['sessionId'])) {
+			this.#claimed.delete(id)
+			return
+		}
+		await this.#attachPopup(result['sessionId'], id, url, undefined)
+	}
+
+	// `owner` is the session the popup's session was attached through, undefined for the browser
+	// session; a discovered popup reports no URL before its first commit, so its frame tree does.
+	async #attachPopup(
+		session: string,
+		id: string,
+		url: string | undefined,
+		owner: string | undefined,
+	): Promise<void> {
 		let popup: BrowserPage | undefined
 		try {
 			await this.#client.send('Page.enable', undefined, { session })
@@ -1167,7 +1202,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			const result = await this.#client.send('Page.getFrameTree', undefined, { session })
 			const frame = readBrowserFrames(result)[0]
 			if (frame === undefined || this.#closed) {
-				await this.#detachChild(session)
+				await this.#detachChild(session, owner)
 				return
 			}
 			popup = new BrowserPage(
@@ -1175,7 +1210,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				id,
 				session,
 				this.#writer,
-				url,
+				url ?? frame.url,
 				frame.id,
 				this.#contextId,
 				this,
@@ -1193,18 +1228,29 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				await popup.destroy()
 				return
 			}
-			this.#popups.set(id, popup)
-			this.#emitter.emit('popup', popup)
+			const published = popup
+			this.#popups.set(id, published)
+			published.emitter.on('close', () => {
+				if (this.#popups.get(id) === published) this.#popups.delete(id)
+			})
+			this.#emitter.emit('popup', published)
 		} catch {
 			// A popup can close before its session initialization completes.
 			if (popup !== undefined) await popup.destroy()
-			else await this.#detachChild(session)
+			else await this.#detachChild(session, owner)
+		} finally {
+			this.#claimed.delete(id)
 		}
 	}
 
-	async #detachChild(session: string): Promise<void> {
+	// A session attached through a page session detaches only through that session.
+	async #detachChild(session: string, owner?: string): Promise<void> {
 		await this.#client
-			.send('Target.detachFromTarget', { sessionId: session })
+			.send(
+				'Target.detachFromTarget',
+				{ sessionId: session },
+				owner === undefined ? undefined : { session: owner },
+			)
 			.catch(() => undefined)
 	}
 
@@ -1414,6 +1460,26 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		if (progress.status !== 'pending') this.#downloads.delete(id)
 	}
 
+	// Chromium 141 reports a `window.open` page only to browser-session discovery, whose
+	// `openerId` names the page that opened it.
+	#handleCreated(params: Readonly<Record<string, unknown>>): void {
+		const target = params['targetInfo']
+		if (
+			!isRecord(target) ||
+			target['type'] !== 'page' ||
+			target['openerId'] !== this.#targetId ||
+			!isString(target['targetId'])
+		)
+			return
+		const context = target['browserContextId']
+		if (this.#contextId !== undefined && isString(context) && context !== this.#contextId) return
+		const id = target['targetId']
+		if (this.#closed || this.#popups.has(id) || this.#claimed.has(id)) return
+		this.#claimed.add(id)
+		const url = target['url']
+		void this.#discoverPopup(id, isString(url) && url !== '' ? url : undefined)
+	}
+
 	#handleAttached(params: Readonly<Record<string, unknown>>): void {
 		const target = params['targetInfo']
 		const session = params['sessionId']
@@ -1432,10 +1498,17 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			return
 		}
 		if (category === 'page') {
+			const id = target['targetId']
+			if (this.#popups.has(id) || this.#claimed.has(id)) {
+				void this.#detachChild(session, this.#sessionId)
+				return
+			}
+			this.#claimed.add(id)
 			void this.#attachPopup(
 				session,
-				target['targetId'],
+				id,
 				isString(target['url']) ? target['url'] : 'about:blank',
+				this.#sessionId,
 			)
 			return
 		}
@@ -1496,7 +1569,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				this.#workers.delete(target)
 			}
 			const popup = this.#popups.get(target)
-			if (popup !== undefined) {
+			// A detached second session of a popup leaves the popup on the session it was published on.
+			if (popup !== undefined && popup.#sessionId === session) {
 				this.#popups.delete(target)
 				void popup.destroy().catch(() => undefined)
 			}

@@ -88,7 +88,8 @@ export function computeBrowserRole(element: Element): string | undefined {
  * The steps follow the accessible-name computation, first match wins: the elements
  * that `aria-labelledby` references in the element's own tree, each through
  * `computeBrowserAlternative` with hidden content admitted when the referenced element is itself
- * hidden (`matchesBrowserOmitted` or `matchesBrowserInvisible`), `aria-label`, the value of an `input` button, the `alt` of an
+ * hidden (`matchesBrowserOmitted` or `matchesBrowserInvisible`), `aria-label`, the `label` of an
+ * `option`, the value of an `input` button, the `alt` of an
  * image, the text of every associated `label`, the element's own content for a role in
  * `BROWSER_CONTENT_NAMED_ROLES`, then the `title` attribute, then the `placeholder` of a text
  * control. Every traversal carries the element as its `target`, so an embedded control
@@ -129,6 +130,10 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
 	if (referenced !== '') return referenced
 	const label = normalizeBrowserName(element.getAttribute('aria-label') ?? '')
 	if (label !== '') return label
+	if (view !== null && element instanceof view.HTMLOptionElement) {
+		const option = normalizeBrowserName(element.label)
+		if (option !== '') return option
+	}
 	const tag = element.localName
 	const type = tag === 'input' ? Reflect.get(element, 'type') : undefined
 	if (type === 'button' || type === 'submit' || type === 'reset') {
@@ -326,7 +331,9 @@ export function matchesBrowserHidden(element: Element): boolean {
  * Any other element is invisible when `checkVisibility` with `visibilityProperty` and
  * `contentVisibilityAuto` reports it, which covers an element without a box and one skipped by
  * `content-visibility: auto`. A descendant can still be visible, so the rule omits the element's
- * own row and text and keeps its subtree. Zero-size and off-screen elements stay visible. An
+ * own row and text and keeps its subtree. An `option` or `optgroup` inside a `select` is
+ * invisible where the `select` is, because a drop-down renders its options outside the page's
+ * boxes. Zero-size and off-screen elements stay visible. An
  * element in a document without a window is never invisible, because nothing renders it.
  *
  * @param element - The element to test
@@ -344,6 +351,13 @@ export function matchesBrowserInvisible(element: Element): boolean {
 	const style = element.ownerDocument.defaultView?.getComputedStyle(element)
 	if (style === undefined) return false
 	if (style.visibility === 'hidden' || style.visibility === 'collapse') return true
+	// A drop-down select renders its options in a popup outside the page's boxes, so an option or
+	// group is visible where its select is.
+	const select =
+		element.localName === 'option' || element.localName === 'optgroup'
+			? element.closest('select')
+			: null
+	if (select !== null) return matchesBrowserInvisible(select)
 	return (
 		style.display !== 'contents' &&
 		!element.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true })

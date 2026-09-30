@@ -452,6 +452,29 @@ describe('scriptCDPAttach', () => {
 			defaulted.client.send('Target.attachToTarget', { targetId: 'target-1' }),
 		).resolves.toStrictEqual({ sessionId: 'session-1' })
 	})
+
+	it('answers discovery, an attach to a mapped target with its own session, and that session with its own frame', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' })
+
+		await expect(
+			client.send('Target.setDiscoverTargets', { discover: true }),
+		).resolves.toStrictEqual({})
+		await expect(
+			client.send('Target.attachToTarget', { targetId: 'popup', flatten: true }),
+		).resolves.toStrictEqual({ sessionId: 'popup-session' })
+		await expect(
+			client.send('Target.attachToTarget', { targetId: 'other', flatten: true }),
+		).resolves.toStrictEqual({ sessionId: 'session-1' })
+		await expect(
+			client.send('Page.getFrameTree', undefined, { session: 'popup-session' }),
+		).resolves.toStrictEqual({
+			frameTree: { frame: { id: 'frame-popup-session', url: 'about:blank' } },
+		})
+		await expect(client.send('Page.getFrameTree')).resolves.toStrictEqual({
+			frameTree: { frame: { id: 'frame-session-1', url: 'about:blank' } },
+		})
+	})
 })
 
 // === Expression scripting

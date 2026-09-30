@@ -973,17 +973,34 @@ export function createBrowserViewDouble(options?: BrowserViewDoubleOptions): Bro
 	return new BrowserViewDouble(options)
 }
 
-/** Scripts the target attach and required domain-enable handshake. */
-export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 'session-1'): void {
-	replyOk(transport, 'Target.attachToTarget', { sessionId: session })
+/**
+ * Scripts target discovery, the target attach, and the required domain-enable handshake.
+ *
+ * @param transport - The fake transport to script
+ * @param session - The session an attach answers with. Default: `session-1`
+ * @param sessions - The session an attach to one target id answers with instead of `session`
+ */
+export function scriptCDPAttach(
+	transport: CDPTestTransportInterface,
+	session = 'session-1',
+	sessions?: Readonly<Record<string, string>>,
+): void {
+	replyOk(transport, 'Target.setDiscoverTargets')
+	transport.onSend('Target.attachToTarget', (message) => {
+		const target = message.params?.['targetId']
+		const named = isString(target) ? sessions?.[target] : undefined
+		transport.reply(message.id, { sessionId: named ?? session })
+	})
 	replyOk(transport, 'Page.enable')
 	replyOk(transport, 'Page.setLifecycleEventsEnabled')
 	replyOk(transport, 'Runtime.enable')
 	replyOk(transport, 'Network.enable')
 	replyOk(transport, 'Network.disable')
-	replyOk(transport, 'Page.getFrameTree', {
-		frameTree: { frame: { id: `frame-${session}`, url: 'about:blank' } },
-	})
+	transport.onSend('Page.getFrameTree', (message) =>
+		transport.reply(message.id, {
+			frameTree: { frame: { id: `frame-${message.sessionId ?? session}`, url: 'about:blank' } },
+		}),
+	)
 	replyOk(transport, 'Target.setAutoAttach')
 	replyOk(transport, 'Page.setInterceptFileChooserDialog')
 	replyOk(transport, 'Browser.setDownloadBehavior')

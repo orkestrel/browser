@@ -33,6 +33,11 @@ import { Emitter } from '@orkestrel/emitter'
 /**
  * Owns pages and shared state inside one Chromium browser context.
  *
+ * @remarks
+ * The first page any context attaches on a connection enables `Target.setDiscoverTargets` for
+ * that connection, so each page learns of the `window.open` pages it opens. The context adopts
+ * every popup its pages publish into `pages()` and emits `page` for it once.
+ *
  * @example
  * ```ts
  * import { BrowserContext } from '@orkestrel/browser'
@@ -43,6 +48,9 @@ import { Emitter } from '@orkestrel/emitter'
  * ```
  */
 export class BrowserContext implements BrowserContextInterface {
+	// Each connection enables target discovery once for every context it carries; a page reads
+	// its popups from the `Target.targetCreated` events discovery reports.
+	static readonly #discovered: WeakSet<CDPClientInterface> = new WeakSet()
 	readonly #client: CDPClientInterface
 	readonly #id: string | undefined
 	readonly #viewport: BrowserViewport | undefined
@@ -346,7 +354,17 @@ export class BrowserContext implements BrowserContextInterface {
 		await this.#syncing.pending?.catch(() => undefined)
 	}
 
+	#discover(): void {
+		const client = this.#client
+		if (BrowserContext.#discovered.has(client)) return
+		BrowserContext.#discovered.add(client)
+		void client
+			.send('Target.setDiscoverTargets', { discover: true })
+			.catch(() => BrowserContext.#discovered.delete(client))
+	}
+
 	async #openSession(targetId: string): Promise<string> {
+		this.#discover()
 		const result: unknown = await this.#client.send('Target.attachToTarget', {
 			targetId,
 			flatten: true,
@@ -461,7 +479,8 @@ export class BrowserContext implements BrowserContextInterface {
 	async #adoptPopup(popup: BrowserPage): Promise<void> {
 		try {
 			await this.#emulation.attach(popup)
-			if (this.#shutdown !== undefined) {
+			// A target `sync` attached as a page while its opener attached it as a popup stays the page.
+			if (this.#shutdown !== undefined || this.#pages.has(popup.target)) {
 				await popup.destroy()
 				return
 			}
