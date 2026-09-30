@@ -40,6 +40,7 @@ import {
 	BROWSER_TOOL_COPY,
 	BROWSER_TOOL_CUT_FOOTER,
 	BROWSER_TOOL_DEADLINE_NOTE,
+	BROWSER_TOOL_HANDLED_STATUS,
 	BROWSER_TOOL_LIMIT,
 	BROWSER_TOOL_NAMES,
 	BROWSER_TOOL_NAME_PATTERN,
@@ -106,8 +107,8 @@ import {
  * submission that kept its default action names its destination frame, and the receipt waits for
  * the navigation the record selects to commit and load under the receipt's deadline; a submission
  * every listener prevented adds no wait. When the reads name no surviving destination and no
- * navigation followed, the receipt's status is `the page handled the submission without
- * navigating` after a prevented submission, and `no form received the submission` when `type`
+ * navigation followed, the receipt's status is `BROWSER_TOOL_HANDLED_STATUS`, which names `wait` as
+ * the next call, after a prevented submission, and `no form received the submission` when `type`
  * with `submit`, or a `press` of Enter that an input a form owns received, recorded none. The
  * page placement's `type` with `submit` ends its action with `and submitted the form` when a read
  * recorded a submission, or when the navigation the receipt settled names `formSubmissionGet` or
@@ -937,7 +938,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					: settled?.stage === 'requested'
 						? `it requested ${settled.url} and the page did not change`
 						: unmoved && submissions.prevented
-							? 'the page handled the submission without navigating'
+							? BROWSER_TOOL_HANDLED_STATUS
 							: unmoved &&
 								  submissions.submitted === false &&
 								  (enter?.explicit === true || (enter !== undefined && submissions.implicit))

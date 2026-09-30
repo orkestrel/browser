@@ -31,6 +31,7 @@ import {
 } from '@orkestrel/test'
 import {
 	BROWSER_TOOL_COPY,
+	BROWSER_TOOL_HANDLED_STATUS,
 	BROWSER_TOOL_NAMES,
 	BrowserContext,
 	BrowserPage,
@@ -1870,7 +1871,7 @@ describe('BrowserToolset', () => {
 				expect(performance.now() - started).toBeLessThan(1_000)
 				expect(
 					result.startsWith(
-						'Clicked e1 link "Home"; the page handled the submission without navigating.\n\npage "Cart" https://example.test/cart\n',
+						'Clicked e1 link "Home"; the page handled the submission without navigating; call wait for the text you expect.\n\npage "Cart" https://example.test/cart\n',
 					),
 				).toBe(true)
 				expect(
@@ -2275,6 +2276,13 @@ describe('BrowserToolset', () => {
 	})
 
 	describe('submission outcomes', () => {
+		it('names wait as the next call in the status of a submission the page handled', () => {
+			expect(BROWSER_TOOL_HANDLED_STATUS).toBe(
+				'the page handled the submission without navigating; call wait for the text you expect',
+			)
+			expect(BROWSER_TOOL_HANDLED_STATUS.endsWith('; call wait for the text you expect')).toBe(true)
+		})
+
 		it.each(BROWSER_SUBMIT_ACTIONS)(
 			'names the page handling of a %s submission a listener prevented, without a navigation wait',
 			async (name, args, action) => {
@@ -2299,7 +2307,7 @@ describe('BrowserToolset', () => {
 					)
 					expect(performance.now() - started).toBeLessThan(1_000)
 					expect(result.split('\n\n', 1)[0]).toBe(
-						`${action}; the page handled the submission without navigating.`,
+						`${action}; the page handled the submission without navigating; call wait for the text you expect.`,
 					)
 					expect(result).toContain('\n\npage "Cart" https://example.test/cart\n')
 				} finally {
