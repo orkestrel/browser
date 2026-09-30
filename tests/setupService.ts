@@ -205,3 +205,78 @@ export function requireCacheRestore(
 			'Precondition failed: the history navigation committed without a back-forward cache restore and without a reported cache miss.',
 		)
 }
+
+/** Describes one element row of a rendered outline: its reference, its role, and its name. */
+export interface ServiceOutlineRow {
+	readonly reference: string
+	readonly role: string
+	readonly name: string
+}
+
+/**
+ * Extracts the element rows of a rendered outline, in row order.
+ *
+ * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
+ * @returns The reference, role, and JSON-decoded name of each row that opens with a reference
+ * such as `e12` followed by a role and a quoted name; heading, text, and summary rows contribute
+ * nothing
+ */
+export function extractOutlineRows(text: string): readonly ServiceOutlineRow[] {
+	return [...text.matchAll(/^(e[1-9]\d*) (\S+) ("(?:[^"\\\n]|\\.)*")/gm)].flatMap((match) => {
+		const [, reference, role, quoted] = match
+		const name: unknown = JSON.parse(quoted ?? '""')
+		return reference === undefined || role === undefined || !isString(name)
+			? []
+			: [{ reference, role, name }]
+	})
+}
+
+/**
+ * Collects the role and name of every element row of a rendered outline, as a sorted list.
+ *
+ * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
+ * @returns One `ROLE "NAME"` entry per element row, with the name JSON-quoted, sorted by code
+ * unit so two outlines that list the same elements in different orders or under different
+ * references collect equal lists
+ */
+export function collectOutlinePairs(text: string): readonly string[] {
+	return extractOutlineRows(text)
+		.map((row) => `${row.role} ${JSON.stringify(row.name)}`)
+		.toSorted()
+}
+
+/**
+ * Returns the reference of the one outline row with a role and a name, or throws.
+ *
+ * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
+ * @param role - The row's role, such as `textbox`
+ * @param name - The row's decoded name, such as `Name`
+ * @returns The row's reference, such as `e3`
+ * @throws Thrown when no row or more than one row carries the role and the name, naming both.
+ */
+export function requireOutlineReference(text: string, role: string, name: string): string {
+	const rows = extractOutlineRows(text).filter((row) => row.role === role && row.name === name)
+	const [row] = rows
+	if (row === undefined || rows.length > 1)
+		throw new Error(
+			`Expected one outline row ${role} ${JSON.stringify(name)} and found ${rows.length}`,
+		)
+	return row.reference
+}
+
+/**
+ * Reads the text a successful tool result carries, or throws with the failure it reports.
+ *
+ * @param result - A `ToolResult` from `ToolManagerInterface.execute`, or its JSON copy read back
+ * from a page
+ * @returns The result's string `value`
+ * @throws Thrown when the result reports a failure, naming its `error`, and when it carries no
+ * string `value`.
+ */
+export function requireToolText(result: unknown): string {
+	if (isRecord(result) && result['success'] === false)
+		throw new Error(`The tool call failed: ${String(result['error'])}`)
+	if (!isRecord(result) || result['success'] !== true || !isString(result['value']))
+		throw new Error('The tool call returned no text')
+	return result['value']
+}
