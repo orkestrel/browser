@@ -1,9 +1,12 @@
+import type { BrowserNameContext } from './types.js'
 import { attempt, isObject, isString } from '@orkestrel/contract'
 import { normalizeBrowserName } from '@src/core'
 import {
 	BROWSER_CONTENT_NAMED_ROLES,
 	BROWSER_CONTEXT_TARGETS,
 	BROWSER_IMPLICIT_ROLES,
+	BROWSER_INTERACTIVE_CONTENT,
+	BROWSER_TYPED_INPUTS,
 } from './constants.js'
 
 // === Browser document
@@ -84,11 +87,12 @@ export function computeBrowserRole(element: Element): string | undefined {
  * @remarks
  * The steps follow the accessible-name computation, first match wins: the elements
  * that `aria-labelledby` references in the element's own tree, each through
- * `computeBrowserAlternative` with hidden content admitted when the referenced element is
- * omitted, `aria-label`, the value of an `input` button, the `alt` of an
+ * `computeBrowserAlternative` with hidden content admitted when the referenced element is itself
+ * hidden (`matchesBrowserOmitted` or `matchesBrowserInvisible`), `aria-label`, the value of an `input` button, the `alt` of an
  * image, the text of every associated `label`, the element's own content for a role in
  * `BROWSER_CONTENT_NAMED_ROLES`, then the `title` attribute, then the `placeholder` of a text
- * control. The `title` step follows content because a tooltip names an element only when nothing
+ * control. Every traversal carries the element as its `target`, so an embedded control
+ * contributes its value unless it is the element being named. The `title` step follows content because a tooltip names an element only when nothing
  * else does.
  *
  * @param element - The element to name
@@ -113,7 +117,12 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
 				const target = id === '' ? null : scope.getElementById(id)
 				return target === null
 					? []
-					: [computeBrowserAlternative(target, matchesBrowserOmitted(target))]
+					: [
+							computeBrowserAlternative(target, {
+								hidden: matchesBrowserOmitted(target) || matchesBrowserInvisible(target),
+								target: element,
+							}),
+						]
 			})
 			.join(' '),
 	)
@@ -136,12 +145,12 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
 	const labelled = normalizeBrowserName(
 		Array.from(scope.querySelectorAll('label'))
 			.filter((candidate) => candidate.control === element)
-			.map((candidate) => computeBrowserText(candidate))
+			.map((candidate) => computeBrowserText(candidate, { target: element }))
 			.join(' '),
 	)
 	if (labelled !== '') return labelled
 	if (role !== undefined && BROWSER_CONTENT_NAMED_ROLES.has(role)) {
-		const content = computeBrowserText(element)
+		const content = computeBrowserText(element, { target: element })
 		if (content !== '') return content
 	}
 	const title = normalizeBrowserName(element.getAttribute('title') ?? '')
@@ -159,8 +168,7 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
  * The text is what `readBrowserContent` reads, normalized.
  *
  * @param root - The element or shadow root whose content is read
- * @param hidden - If `true`, admits hidden content, as a hidden element that `aria-labelledby`
- * references does; if `false`, omits it. Default: `false`
+ * @param context - The traversal context. Default: no hidden content and no target
  * @returns The trimmed, whitespace-collapsed text
  *
  * @example
@@ -171,8 +179,11 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
  * computeBrowserText(link) // 'Cars Search the fleet'
  * ```
  */
-export function computeBrowserText(root: Element | ShadowRoot, hidden = false): string {
-	return normalizeBrowserName(readBrowserContent(root, hidden))
+export function computeBrowserText(
+	root: Element | ShadowRoot,
+	context?: BrowserNameContext,
+): string {
+	return normalizeBrowserName(readBrowserContent(root, context))
 }
 
 /**
@@ -187,7 +198,7 @@ export function computeBrowserText(root: Element | ShadowRoot, hidden = false): 
  * so `<b>Go </b>home` reads `Go home`.
  *
  * @param root - The element or shadow root whose content is read
- * @param hidden - If `true`, admits hidden content; if `false`, omits it. Default: `false`
+ * @param context - The traversal context. Default: no hidden content and no target
  * @returns The untrimmed text
  *
  * @example
@@ -198,7 +209,10 @@ export function computeBrowserText(root: Element | ShadowRoot, hidden = false): 
  * readBrowserContent(label) // 'Go home'
  * ```
  */
-export function readBrowserContent(root: Element | ShadowRoot, hidden = false): string {
+export function readBrowserContent(
+	root: Element | ShadowRoot,
+	context?: BrowserNameContext,
+): string {
 	const view = root.ownerDocument?.defaultView ?? null
 	const shadow = view !== null && root instanceof view.Element ? root.shadowRoot : null
 	const children: readonly Node[] =
@@ -210,7 +224,7 @@ export function readBrowserContent(root: Element | ShadowRoot, hidden = false): 
 	let text = ''
 	let previous = false
 	for (const child of children) {
-		const piece = computeBrowserAlternative(child, hidden)
+		const piece = computeBrowserAlternative(child, context)
 		const block = view !== null && child instanceof view.Element && matchesBrowserBlock(child)
 		if (piece !== '') text += text !== '' && (block || previous) ? ` ${piece}` : piece
 		previous = block
@@ -223,13 +237,16 @@ export function readBrowserContent(root: Element | ShadowRoot, hidden = false): 
  * content.
  *
  * @remarks
- * A text node contributes its data unless its parent is invisible. An element contributes
- * nothing when it is hidden or is a `select`, `textarea`, `script`, or `style`; otherwise its
- * `aria-label`, the `alt` of an image, or its content through `readBrowserContent`.
+ * A text node contributes its data unless its parent is invisible; a parent without a box of its
+ * own, such as a `slot` or a `display: contents` element, is not invisible. An element
+ * contributes nothing when it is hidden or is a `script` or `style`. An embedded control that is
+ * not the context's `target` contributes its value: a text field or a range its `value`, a
+ * `select` its selected options' labels; a password field and the target itself contribute
+ * nothing. Any other element contributes its `aria-label`, the `alt` of an image, or its content
+ * through `readBrowserContent`, and its `title` when those are empty.
  *
  * @param node - The node whose contribution is computed
- * @param hidden - If `true`, admits hidden and invisible content; if `false`, omits it.
- * Default: `false`
+ * @param context - The traversal context. Default: no hidden content and no target
  * @returns The untrimmed contribution
  *
  * @example
@@ -239,8 +256,9 @@ export function readBrowserContent(root: Element | ShadowRoot, hidden = false): 
  * computeBrowserAlternative(image) // 'Save'
  * ```
  */
-export function computeBrowserAlternative(node: Node, hidden = false): string {
+export function computeBrowserAlternative(node: Node, context?: BrowserNameContext): string {
 	const view = node.ownerDocument?.defaultView ?? null
+	const hidden = context?.hidden === true
 	if (view === null) return node.textContent ?? ''
 	if (!(node instanceof view.Element)) {
 		const parent = node.parentElement
@@ -251,12 +269,26 @@ export function computeBrowserAlternative(node: Node, hidden = false): string {
 	}
 	const tag = node.localName
 	if (!hidden && matchesBrowserHidden(node)) return ''
-	if (tag === 'select' || tag === 'textarea' || tag === 'script' || tag === 'style') return ''
+	if (tag === 'script' || tag === 'style') return ''
+	const embedded = node !== context?.target
+	if (node instanceof view.HTMLTextAreaElement) return embedded ? node.value : ''
+	if (node instanceof view.HTMLSelectElement) {
+		return embedded ? Array.from(node.selectedOptions, (option) => option.label).join(' ') : ''
+	}
+	if (
+		node instanceof view.HTMLInputElement &&
+		node.type !== 'password' &&
+		(BROWSER_TYPED_INPUTS.has(node.type) || node.type === 'range')
+	) {
+		return embedded ? node.value : ''
+	}
 	const label = normalizeBrowserName(node.getAttribute('aria-label') ?? '')
 	if (label !== '') return label
-	if (tag === 'img' || tag === 'area' || (tag === 'input' && Reflect.get(node, 'type') === 'image'))
-		return node.getAttribute('alt') ?? ''
-	return readBrowserContent(node, hidden)
+	const content =
+		tag === 'img' || tag === 'area' || (tag === 'input' && Reflect.get(node, 'type') === 'image')
+			? (node.getAttribute('alt') ?? '')
+			: readBrowserContent(node, context)
+	return content.trim() !== '' ? content : (node.getAttribute('title') ?? '')
 }
 
 /**
@@ -285,12 +317,13 @@ export function matchesBrowserHidden(element: Element): boolean {
  * Checks whether an element renders nothing visible of its own.
  *
  * @remarks
- * The test is `checkVisibility` with `visibilityProperty` and `contentVisibilityAuto`, so an
- * element whose computed `visibility` is `hidden` or `collapse`, an element skipped by
- * `content-visibility: auto`, and an element without a box are invisible. A descendant can
- * still be visible, so the rule omits the element's own row and text and keeps its subtree.
- * Zero-size and off-screen elements stay visible. An element in a document without a window is
- * never invisible, because nothing renders it.
+ * An element whose computed `visibility` is `hidden` or `collapse` is invisible. An element with
+ * `display: contents` has no box of its own but renders its descendants, so it is not invisible.
+ * Any other element is invisible when `checkVisibility` with `visibilityProperty` and
+ * `contentVisibilityAuto` reports it, which covers an element without a box and one skipped by
+ * `content-visibility: auto`. A descendant can still be visible, so the rule omits the element's
+ * own row and text and keeps its subtree. Zero-size and off-screen elements stay visible. An
+ * element in a document without a window is never invisible, because nothing renders it.
  *
  * @param element - The element to test
  * @returns True if the element renders nothing visible of its own; false otherwise
@@ -304,15 +337,19 @@ export function matchesBrowserHidden(element: Element): boolean {
  * ```
  */
 export function matchesBrowserInvisible(element: Element): boolean {
+	const style = element.ownerDocument.defaultView?.getComputedStyle(element)
+	if (style === undefined) return false
+	if (style.visibility === 'hidden' || style.visibility === 'collapse') return true
 	return (
-		element.ownerDocument.defaultView !== null &&
+		style.display !== 'contents' &&
 		!element.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true })
 	)
 }
 
 /**
- * Checks whether an element sits in an omitted subtree: the element or an ancestor matches
- * `matchesBrowserHidden`, across shadow hosts and the frame elements of same-origin documents.
+ * Checks whether an element sits in an omitted subtree: the element or a flat-tree ancestor that
+ * `readBrowserParent` reaches matches `matchesBrowserHidden`, through assigned slots, shadow
+ * hosts, and the frame elements of same-origin documents.
  *
  * @param element - The element to test
  * @returns True if the element or an ancestor is hidden; false otherwise
@@ -337,8 +374,9 @@ export function matchesBrowserOmitted(element: Element): boolean {
 }
 
 /**
- * Reads an element's parent in the flat tree: its parent element, the host of the open shadow
- * root it sits at the top of, or the frame element of its same-origin document.
+ * Reads an element's parent in the flat tree: the slot it is assigned to in an open shadow root,
+ * its parent element, the host of the open shadow root it sits at the top of, or the frame
+ * element of its same-origin document.
  *
  * @param element - The element whose parent is read
  * @returns The parent, or `null` at the top of a top-level or cross-origin-framed document
@@ -350,6 +388,7 @@ export function matchesBrowserOmitted(element: Element): boolean {
  * ```
  */
 export function readBrowserParent(element: Element): Element | null {
+	if (element.assignedSlot !== null) return element.assignedSlot
 	if (element.parentElement !== null) return element.parentElement
 	const view: (Window & typeof globalThis) | null = element.ownerDocument.defaultView
 	if (view === null) return null
@@ -464,6 +503,38 @@ export function matchesBrowserPopup(element: Element): boolean {
 		)
 		if (found.success && found.value) return false
 		current = frame.parent === frame ? null : frame.parent
+	}
+	return true
+}
+
+/**
+ * Checks whether a click on an element activates the `label` that contains it, following the
+ * HTML label activation rule.
+ *
+ * @remarks
+ * The click activates the label when the target is the label itself, or when no element on the
+ * path from the target up to the label, the target included, matches
+ * `BROWSER_INTERACTIVE_CONTENT`.
+ *
+ * @param target - The element the click lands on
+ * @param label - The label that contains the target, or the target itself
+ * @returns True if the click activates the label; false otherwise
+ *
+ * @example
+ * ```ts
+ * const label = document.createElement('label')
+ * label.innerHTML = '<a href="#help">Help</a> <span>Photo</span>'
+ * matchesBrowserActivation(label.querySelector('a'), label) // false
+ * matchesBrowserActivation(label.querySelector('span'), label) // true
+ * ```
+ */
+export function matchesBrowserActivation(target: Element, label: Element): boolean {
+	for (
+		let current: Element | null = target;
+		current !== null && current !== label;
+		current = current.parentElement
+	) {
+		if (current.matches(BROWSER_INTERACTIVE_CONTENT)) return false
 	}
 	return true
 }

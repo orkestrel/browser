@@ -6,6 +6,7 @@ import type {
 	SystemBrowserOptions,
 } from '@src/server'
 import type { Server } from 'node:http'
+import type { ScratchInterface } from '@orkestrel/test/server'
 import { createServer, request } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
@@ -38,7 +39,9 @@ export interface BrowserEndpointInterface {
 
 /** Describes the `@src/server` export the launcher loads into its isolated Node-side graph. */
 export interface BrowserServerModuleInterface {
-	createBrowser(options?: BrowserOptions): BrowserInterface
+	createBrowser(
+		options?: BrowserOptions,
+	): Pick<BrowserInterface, 'connect' | 'discover' | 'destroy'>
 }
 
 /** Describes the `tests/setupService.ts` exports the launcher loads beside it. */
@@ -51,6 +54,11 @@ export interface BrowserServiceModuleInterface {
 export interface BrowserLauncherInterface {
 	/** Launches one headless Chromium with the given flags added to the service flags. */
 	launch(args: readonly string[]): Promise<BrowserEndpointInterface>
+	/**
+	 * Reports whether the isolated module graph still watches workspace files: `true` while its
+	 * runner is open, `false` after `close` released it.
+	 */
+	readonly watching: boolean
 	/** Closes the isolated module graph the launcher loaded `createBrowser` through. */
 	close(): Promise<void>
 }
@@ -116,6 +124,9 @@ export async function createBrowserLauncher(): Promise<BrowserLauncherInterface>
 			launch(args: readonly string[]): Promise<BrowserEndpointInterface> {
 				return launchBrowserEndpoint(server, service, args)
 			},
+			get watching(): boolean {
+				return Object.keys(runner.watcher.getWatched()).length > 0
+			},
 			close(): Promise<void> {
 				return runner.close()
 			},
@@ -129,9 +140,17 @@ export async function createBrowserLauncher(): Promise<BrowserLauncherInterface>
 /**
  * Launches a headless Chromium through `createBrowser` with a temporary profile.
  *
+ * @remarks
+ * The launch owns the profile from the moment it is passed in. Every acquisition after it (the
+ * port, the browser, the connection) runs inside one rollback boundary: when a step throws, the
+ * browser is destroyed and the profile removed, even when the destruction rejects, and the
+ * launch rejects with the step's error, or with an `AggregateError` carrying it and the
+ * cleanup's error. The returned `destroy` attempts both releases the same way.
+ *
  * @param server - The loaded `@src/server` module
  * @param service - The loaded service setup module
  * @param args - The launch flags added to the container-safe service flags
+ * @param profile - The scratch directory the browser uses as its profile. Default: a fresh one
  * @returns The browser's CDP endpoint and its teardown
  * @throws Thrown when the host has no Chromium-family browser or the launch reports no endpoint.
  */
@@ -139,31 +158,55 @@ export async function launchBrowserEndpoint(
 	server: BrowserServerModuleInterface,
 	service: BrowserServiceModuleInterface,
 	args: readonly string[],
+	profile: ScratchInterface = createScratch({ prefix: 'orkestrel-browser-global-' }),
 ): Promise<BrowserEndpointInterface> {
-	const profile = createScratch({ prefix: 'orkestrel-browser-global-' })
-	const browser = server.createBrowser({
-		executable: service.requireSystemBrowser().executable,
-		headless: true,
-		profile: profile.path,
-		args: [...service.SERVICE_BROWSER_ARGS, ...args],
-		cdp: { port: await reservePort() },
-		timeout: 20_000,
-	})
+	const teardown = createTeardown()
+	teardown.add(() => profile.destroy())
 	try {
+		const browser = server.createBrowser({
+			executable: service.requireSystemBrowser().executable,
+			headless: true,
+			profile: profile.path,
+			args: [...service.SERVICE_BROWSER_ARGS, ...args],
+			cdp: { port: await reservePort() },
+			timeout: 20_000,
+		})
+		teardown.add(() => browser.destroy())
 		await browser.connect()
 		const { endpoint } = await browser.discover()
 		if (endpoint === undefined) throw new Error('the launched browser reports no CDP endpoint')
 		return {
 			endpoint,
-			async destroy(): Promise<void> {
-				await browser.destroy()
-				profile.destroy()
+			destroy(): Promise<void> {
+				return teardown.destroy()
 			},
 		}
 	} catch (error) {
-		await browser.destroy()
-		profile.destroy()
+		await teardown.destroy().catch((cleanup: unknown) => {
+			throw new AggregateError([error, cleanup], 'The launch failed and its rollback failed', {
+				cause: error,
+			})
+		})
 		throw error
+	}
+}
+
+/**
+ * Creates the minimal browser handle a launch drives, whose connection fails and whose
+ * termination fails or succeeds as given, so a proof can drive the launch's rollback.
+ *
+ * @param connect - The error `connect` rejects with
+ * @param destroy - The error `destroy` rejects with, or `undefined` for a termination that succeeds
+ * @returns The handle `createBrowser` would return
+ */
+export function createFailingBrowser(
+	connect: Error,
+	destroy: Error | undefined,
+): Pick<BrowserInterface, 'connect' | 'discover' | 'destroy'> {
+	return {
+		connect: () => Promise.reject(connect),
+		discover: () => Promise.resolve({ endpoint: undefined, browser: undefined }),
+		destroy: () => (destroy === undefined ? Promise.resolve() : Promise.reject(destroy)),
 	}
 }
 
@@ -225,11 +268,15 @@ export function closeFixtureServer(server: Server): Promise<void> {
  * release even when one rejects.
  *
  * @param project - The Vitest project receiving the fixture origin and the endpoints
+ * @param launch - Acquires the launcher. Default: {@link createBrowserLauncher}
  * @returns A teardown that terminates both browsers, closes the launcher, and closes the server
  * @throws Thrown when a step fails; an `AggregateError` carrying the failure and the rollback's
  * failure when the rollback fails too.
  */
-export async function setup(project: Pick<TestProject, 'provide'>): Promise<() => Promise<void>> {
+export async function setup(
+	project: Pick<TestProject, 'provide'>,
+	launch: () => Promise<BrowserLauncherInterface> = createBrowserLauncher,
+): Promise<() => Promise<void>> {
 	const teardown = createTeardown()
 	try {
 		const server = createServer((_request, response) => {
@@ -245,7 +292,7 @@ export async function setup(project: Pick<TestProject, 'provide'>): Promise<() =
 		const address = server.address()
 		if (address === null || typeof address === 'string')
 			throw new Error('fixture server has no port')
-		const launcher = await createBrowserLauncher()
+		const launcher = await launch()
 		teardown.add(() => launcher.close())
 		const launched = await Promise.allSettled([
 			launcher.launch([REMOTE_ORIGINS_FLAG]),

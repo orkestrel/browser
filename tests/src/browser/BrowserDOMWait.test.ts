@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { isBrowserElementError, isBrowserError } from '@src/core'
 import { BrowserDOMWait, collectBrowserRoots } from '@src/browser'
-import { createRecorder, requireValue, waitForDelay } from '@orkestrel/test'
+import { createRecorder, requireValue, waitForDelay, waitForEvent } from '@orkestrel/test'
 import { createProbeDocument, createProbeElements, loadProbeFrame } from '../../setupBrowser.js'
 
 describe('BrowserDOMWait', () => {
@@ -66,6 +66,54 @@ describe('BrowserDOMWait', () => {
 		const inner = await loadProbeFrame(probe.document, probe.late, '<main></main>')
 		inner.body.insertAdjacentHTML('beforeend', '<button id="inner">Inner</button>')
 		expect((await pending).textContent).toBe('Inner')
+	})
+
+	it('rejects an expired wait before any further check runs', async () => {
+		const probe = createProbeDocument('<main></main>')
+		const checks = createRecorder<[]>()
+		const expired = await new BrowserDOMWait({
+			roots: () => [probe],
+			check: () => {
+				checks.handler()
+				return checks.count > 1 ? 'late' : undefined
+			},
+			timeout: 100,
+			start: performance.now() - 200,
+			subject: 'Expired wait',
+		})
+			.execute()
+			.catch((error: unknown) => error)
+		expect(isBrowserError(expired) && expired.code).toBe('BROWSER_WAIT_TIMEOUT')
+		expect(checks.count).toBe(1)
+	})
+
+	it('observes a replacement frame document and releases the departed one, and nothing after settling', async () => {
+		const probe = await createProbeElements()
+		const first = await loadProbeFrame(probe.document, probe.late, '<p>first</p>')
+		const frame = requireValue(first.defaultView?.frameElement, 'frame')
+		const wait = new BrowserDOMWait({
+			roots: () => collectBrowserRoots(probe.document),
+			check: () =>
+				probe.document.querySelector('iframe')?.contentDocument?.getElementById('done') ??
+				undefined,
+			timeout: 2_000,
+			start: performance.now(),
+			subject: 'Replacement wait',
+		})
+		const pending = wait.execute()
+		expect(wait.roots).toContain(first)
+		const loaded = waitForEvent<[Event]>((listener) => {
+			frame.addEventListener('load', listener, { once: true })
+			return () => frame.removeEventListener('load', listener)
+		}, 'replacement load')
+		frame.setAttribute('srcdoc', '<p>second</p>')
+		await loaded
+		const second = requireValue(probe.document.querySelector('iframe')?.contentDocument, 'second')
+		expect(wait.roots).toContain(second)
+		expect(wait.roots).not.toContain(first)
+		second.body.insertAdjacentHTML('beforeend', '<p id="done">done</p>')
+		await pending
+		expect(wait.roots).toEqual([])
 	})
 
 	it('counts its deadline from start', async () => {

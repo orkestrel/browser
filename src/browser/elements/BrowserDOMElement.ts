@@ -3,7 +3,7 @@ import type { BrowserDOMElementInput, BrowserDOMElementInterface } from '../type
 import { isString } from '@orkestrel/contract'
 import { BrowserElementError, BrowserError, createBrowserReading } from '@src/core'
 import { BROWSER_TYPED_INPUTS } from '../constants.js'
-import { computeBrowserName, computeBrowserRole, matchesBrowserPopup } from '../helpers.js'
+import { computeBrowserName, matchesBrowserActivation, matchesBrowserPopup } from '../helpers.js'
 
 /**
  * Drives a referenced element of a DOM document with untrusted events.
@@ -14,10 +14,12 @@ import { computeBrowserName, computeBrowserRole, matchesBrowserPopup } from '../
  * observes the outcome through a `submit` listener registered across the call. Each action
  * refuses, with a `BrowserElementError` naming the reason, what an untrusted event cannot do: a
  * disabled control, a link or submission that opens another browsing context, a file chooser,
- * and typing into a contenteditable element. A click on a `label`, or inside one, is judged by
- * the label's control as well: a disabled control refuses `DISABLED`, and a file input refuses as
- * a direct click on it does. An element removed from its document, collected,
- * or held across a navigation, reports `GONE`.
+ * and typing into a contenteditable element. A click that activates a `label`, on the label
+ * itself or on a descendant that `matchesBrowserActivation` admits, is judged by the label's
+ * control as well: a disabled control refuses `DISABLED`, and a file input refuses as a direct
+ * click on it does. A click on an interactive descendant of a label keeps only its own checks.
+ * `role` and `name` are the values captured when the reference was bound. Every action on an
+ * element removed from its document, collected, or held across a navigation reports `GONE`.
  *
  * @example
  * ```ts
@@ -38,19 +40,17 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 	}
 
 	get role(): string {
-		const node = this.#input.node.deref()
-		return (node === undefined ? undefined : computeBrowserRole(node)) ?? 'generic'
+		return this.#input.role
 	}
 
 	get name(): string {
-		const node = this.#input.node.deref()
-		return node === undefined ? '' : computeBrowserName(node)
+		return this.#input.name
 	}
 
 	async click(options?: BrowserCallOptions): Promise<void> {
 		const [node, view] = this.#actionable(options)
 		const label = node instanceof view.HTMLLabelElement ? node : node.closest('label')
-		const control = label?.control ?? null
+		const control = label !== null && matchesBrowserActivation(node, label) ? label.control : null
 		if (control !== null && control !== node) {
 			if (control.matches(':disabled')) {
 				throw new BrowserElementError(this.reference, 'DISABLED', 'labels a disabled control')

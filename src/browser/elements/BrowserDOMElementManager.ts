@@ -57,6 +57,12 @@ import {
  * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A CSS query
  * searches the document the view drives, not its child documents or shadow trees.
  *
+ * `wait` parks a `BrowserDOMWait` bound to the view's lifetime over every root that
+ * `collectBrowserRoots` reaches from its scope, reconciled at every observed mutation and frame
+ * `load`. A shadow root attached after the wait began is a declared limit: the wait discovers it
+ * at the next observed mutation or `load`, so a match inserted there with no other observed
+ * change is not seen before the deadline.
+ *
  * @example
  * ```ts
  * const view = createBrowserDOMView({ document: frame.contentDocument })
@@ -157,7 +163,10 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		if (!selected.success) {
 			throw new BrowserError(`CSS query is invalid: ${css}`, 'BROWSER_ELEMENT_QUERY', { css })
 		}
-		const bound = selected.value.map((element) => this.#bind(element))
+		const bound = selected.value.map((element) => {
+			const role = computeBrowserRole(element) ?? 'generic'
+			return this.#bind(element, role, computeBrowserName(element, role))
+		})
 		if (query.role === undefined && query.name === undefined) return bound
 		return matches.filter((element) => bound.includes(element))
 	}
@@ -340,7 +349,8 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		view: Window & typeof globalThis,
 		id: string,
 	): BrowserOutlineNode {
-		const reference = role === 'heading' ? undefined : this.#bind(element).reference
+		const name = computeBrowserName(element, role)
+		const reference = role === 'heading' ? undefined : this.#bind(element, role, name).reference
 		const input = element instanceof view.HTMLInputElement ? element : undefined
 		const checked =
 			input !== undefined && (input.type === 'checkbox' || input.type === 'radio')
@@ -364,7 +374,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			frame: undefined,
 			ignored: false,
 			role,
-			name: computeBrowserName(element, role),
+			name,
 			description: undefined,
 			value,
 			properties: { checked, disabled: element.matches(':disabled') },
@@ -373,7 +383,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		}
 	}
 
-	#bind(element: Element): BrowserDOMElement {
+	#bind(element: Element, role: string, name: string): BrowserDOMElement {
 		const known = this.#identities.get(element)
 		const existing = known === undefined ? undefined : this.#records.get(known)
 		if (existing !== undefined) return existing.element
@@ -382,6 +392,8 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		const node = new WeakRef(element)
 		const created = new BrowserDOMElement({
 			reference,
+			role,
+			name,
 			node,
 			current: this.#holds.bind(this, reference),
 			navigation: this.#epoch.bind(this, new WeakRef(element.ownerDocument)),

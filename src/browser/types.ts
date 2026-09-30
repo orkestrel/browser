@@ -25,6 +25,21 @@ export interface BrowserDocumentOptions {
 }
 
 /**
+ * Carries the accessible-name traversal context.
+ *
+ * @remarks
+ * - `hidden` — if `true`, admits hidden and invisible content, as the hidden-reference exception
+ *   does for a hidden element that `aria-labelledby` references; if `false`, omits it.
+ *   Default: `false`
+ * - `target` — the element whose name is computed; an embedded control that is the target
+ *   contributes nothing, and any other embedded control contributes its value
+ */
+export interface BrowserNameContext {
+	readonly hidden?: boolean
+	readonly target?: Element
+}
+
+/**
  * Provides untrusted DOM actions through a stable element reference.
  *
  * @remarks
@@ -63,6 +78,8 @@ export interface BrowserDOMElementManagerInput {
  *
  * @remarks
  * - `reference` — the reference the manager minted for the element
+ * - `role` — the role captured when the reference was bound
+ * - `name` — the accessible name captured when the reference was bound
  * - `node` — a weak reference to the element the reference names, so a removed element can be
  *   collected; an element that no longer dereferences reports `GONE`
  * - `current` — true while the manager still holds the reference; false otherwise
@@ -71,6 +88,8 @@ export interface BrowserDOMElementManagerInput {
  */
 export interface BrowserDOMElementInput {
 	readonly reference: string
+	readonly role: string
+	readonly name: string
 	readonly node: WeakRef<Element>
 	readonly current: () => boolean
 	readonly navigation: BrowserEpochFunction
@@ -81,8 +100,9 @@ export interface BrowserDOMElementInput {
  *
  * @remarks
  * - `roots` — returns the documents and shadow roots whose mutations re-run the check; the wait
- *   re-reads it after every mutation batch and every `load` in an observed document, and a
- *   `pagehide` in the first root's window fails the wait
+ *   re-reads it after every mutation batch and every `load` in an observed root, observing the
+ *   roots that appeared and releasing the ones that departed, and a `pagehide` in the first
+ *   root's window fails the wait
  * - `check` — returns the value the wait settles on, or `undefined` to keep waiting
  * - `timeout` — ms from `start` before the wait fails
  * - `start` — the `performance.now()` reading the deadline counts from, taken when the calling
@@ -101,6 +121,8 @@ export interface BrowserMutationWait<T> {
 
 /** Settles one wait parked on DOM mutations. */
 export interface BrowserDOMWaitInterface<T> {
+	/** The roots the wait observes at this moment; empty before it parks and after it settles. */
+	readonly roots: readonly Node[]
 	/**
 	 * Resolves the first value the check returns other than `undefined`, then releases every
 	 * observer, the deadline timer, and every listener.

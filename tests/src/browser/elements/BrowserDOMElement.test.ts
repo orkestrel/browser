@@ -69,6 +69,25 @@ describe('BrowserDOMElement', () => {
 			expect(clicks.calls).toEqual([])
 		})
 
+		it('keeps only the target own checks for a click on an interactive descendant of a label', async () => {
+			const probe = await loadProbeDocument(
+				[
+					'<label for="upload"><a href="#help">Help</a> Photo</label><input id="upload" type="file">',
+					'<label>Gift <input type="checkbox" disabled><a href="#terms">Terms</a></label>',
+				].join(''),
+			)
+			const clicks = createRecorder<[unknown]>()
+			probe.addEventListener('click', (event) => {
+				event.preventDefault()
+				clicks.handler(Reflect.get(event.target ?? {}, 'localName'))
+			})
+			const view = createBrowserDOMView({ document: probe })
+			const [help, terms] = await view.elements.find({ css: 'a' })
+			await help?.click()
+			await terms?.click()
+			expect(clicks.calls).toEqual([['a'], ['a']])
+		})
+
 		it('activates a label for a checkbox and toggles the checkbox', async () => {
 			const probe = await loadProbeDocument(
 				'<label role="button">Gift wrap<input type="checkbox"></label>',
@@ -125,27 +144,57 @@ describe('BrowserDOMElement', () => {
 			expect(node.deref()).toBe(probe.save)
 			const bound = new BrowserDOMElement({
 				reference: 'e7',
+				role: 'button',
+				name: 'Save',
 				node,
 				current: () => true,
 				navigation: () => 0,
 			})
 			await bound.click()
 			expect(clicks.calls).toEqual([[false]])
-			expect(bound.name).toBe('Save')
 			const collected = new BrowserDOMElement({
 				reference: 'e8',
+				role: 'button',
+				name: 'Save',
 				node: new CollectedReference(probe.save),
 				current: () => true,
 				navigation: () => 0,
 			})
-			const refusal = await collected.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({
-				reference: 'e8',
-				reason: 'GONE',
-			})
-			expect(collected.role).toBe('generic')
-			expect(collected.name).toBe('')
+			const refusals = await Promise.all(
+				[
+					collected.click(),
+					collected.fill('x'),
+					collected.select(['x']),
+					collected.focus(),
+					collected.read(),
+					collected.submit(),
+				].map((action) =>
+					action.then(
+						() => undefined,
+						(error: unknown) => error,
+					),
+				),
+			)
+			for (const refusal of refusals) {
+				expect(isBrowserElementError(refusal) && refusal.context).toEqual({
+					reference: 'e8',
+					reason: 'GONE',
+				})
+			}
 			expect(clicks.count).toBe(1)
+		})
+
+		it('reports the role and name captured when the reference was bound', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const [save] = await view.elements.find({ role: 'button', name: 'Save' })
+			probe.save.setAttribute('aria-label', 'Store')
+			probe.save.setAttribute('role', 'link')
+			expect(save?.role).toBe('button')
+			expect(save?.name).toBe('Save')
+			probe.save.remove()
+			expect(save?.role).toBe('button')
+			expect(save?.name).toBe('Save')
 		})
 	})
 
@@ -204,11 +253,16 @@ describe('BrowserDOMElement', () => {
 			const select = requireValue(probe.querySelector('select'), 'select')
 			const changes = createRecorder<[string]>()
 			select.addEventListener('change', () => changes.handler(select.value))
+			const bubbled = createRecorder<[string]>()
+			for (const type of ['input', 'change']) {
+				probe.body.addEventListener(type, (event) => bubbled.handler(event.type))
+			}
 			const view = createBrowserDOMView({ document: probe })
 			const size = await findProbeElement(view, 'select')
 			await size.select(['Large'])
 			await size.select(['s'])
 			expect(changes.calls).toEqual([['l'], ['s']])
+			expect(bubbled.calls).toEqual([['input'], ['change'], ['input'], ['change']])
 			const missing = await size.select(['Huge']).catch((error: unknown) => error)
 			const field = await findProbeElement(view, 'input')
 			const text = await field.select(['x']).catch((error: unknown) => error)

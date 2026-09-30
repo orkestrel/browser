@@ -220,12 +220,18 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 						},
 			exposed: exposed.flatMap((origin) => (origin === undefined ? [] : [origin])),
 		})
-		signal?.addEventListener('abort', this.#unregister.bind(this, tool.name), { once: true })
+		// The draft's abort steps unregister the tool and reject the pending registration with the
+		// signal's reason; a rejection after the registration settled changes nothing.
+		const registration = Promise.withResolvers<void>()
+		signal?.addEventListener('abort', this.#abort.bind(this, tool.name, signal, registration), {
+			once: true,
+		})
 		// The draft queues the `toolchange` notification as a task, then queues another task that
 		// resolves the registration, so a listener runs after this call returns and before the
 		// returned promise settles.
 		setTimeout(this.#notify.bind(this), 0)
-		await new Promise<void>((resolve) => setTimeout(resolve, 0))
+		setTimeout(registration.resolve, 0)
+		await registration.promise
 	}
 
 	async getTools(options?: WebMCPToolsOptions): Promise<readonly WebMCPRegisteredTool[]> {
@@ -324,6 +330,11 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 			...(isRecord(parsed) ? { inputSchema: parsed } : {}),
 			...(definition.annotations === undefined ? {} : { annotations: definition.annotations }),
 		}
+	}
+
+	#abort(name: string, signal: AbortSignal, registration: PromiseWithResolvers<void>): void {
+		this.#unregister(name)
+		registration.reject(signal.reason)
 	}
 
 	#unregister(name: string): void {

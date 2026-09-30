@@ -149,3 +149,11 @@ export const BROWSER_TYPED_INPUTS: ReadonlySet<string> = Object.freeze(
 		'week',
 	]),
 )
+
+/**
+ * Selects the HTML interactive content a click inside a `label` can land on without activating
+ * the label: `a` with `href`, `audio` and `video` with `controls`, `button`, `details`, `embed`,
+ * `iframe`, `img` with `usemap`, `input` other than `hidden`, `label`, `select`, and `textarea`.
+ */
+export const BROWSER_INTERACTIVE_CONTENT =
+	'a[href], audio[controls], button, details, embed, iframe, img[usemap], input:not([type="hidden" i]), label, select, textarea, video[controls]'

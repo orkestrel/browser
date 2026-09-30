@@ -283,6 +283,38 @@ export const PROBE_NAME_CASES: ReadonlyArray<ProbeCase<string>> = Object.freeze(
 		css: 'button',
 		expected: 'Close dialog',
 	},
+	{
+		markup: '<input id="amount" value="5"><button aria-labelledby="amount">Wrong</button>',
+		css: 'button',
+		expected: '5',
+	},
+	{
+		markup:
+			'<span id="caption" style="visibility: hidden">Save</span><button aria-labelledby="caption">Wrong</button>',
+		css: 'button',
+		expected: 'Save',
+	},
+	{
+		markup: '<img id="caption" title="Save"><button aria-labelledby="caption">Wrong</button>',
+		css: 'button',
+		expected: 'Save',
+	},
+	{
+		markup:
+			'<div role="button"><template shadowrootmode="open"><span><slot>Save</slot></span></template></div>',
+		css: 'div',
+		expected: 'Save',
+	},
+	{
+		markup: '<button><span style="display: contents">Save</span></button>',
+		css: 'button',
+		expected: 'Save',
+	},
+	{
+		markup: '<label>Email <input value="sam@example.test"></label>',
+		css: 'input',
+		expected: 'Email',
+	},
 	{ markup: '<input type="submit" value="Send">', css: 'input', expected: 'Send' },
 	{ markup: '<input type="submit">', css: 'input', expected: 'Submit' },
 	{ markup: '<input type="reset">', css: 'input', expected: 'Reset' },

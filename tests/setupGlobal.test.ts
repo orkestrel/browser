@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'vitest'
+import { existsSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { isString } from '@orkestrel/contract'
+import { createRecorder } from '@orkestrel/test'
+import { createScratch } from '@orkestrel/test/server'
 import { ignoreCall } from './setup.js'
+import type { BrowserLauncherInterface } from './setupGlobal.js'
 import {
 	closeFixtureServer,
 	createBrowserLauncher,
+	createFailingBrowser,
+	launchBrowserEndpoint,
 	isBrowserServerModule,
 	isBrowserServiceModule,
 	readUpgradeStatus,
@@ -17,11 +23,21 @@ const PAGE_ORIGIN = 'http://page.example'
 describe('setup', () => {
 	it('provides the fixture origin and both browser endpoints, and releases them on teardown', async () => {
 		const provided = new Map<string, unknown>()
-		const teardown = await setup({
-			provide: (key: string, value: unknown) => {
-				provided.set(key, value)
+		const launchers = createRecorder<[BrowserLauncherInterface]>()
+		const teardown = await setup(
+			{
+				provide: (key: string, value: unknown) => {
+					provided.set(key, value)
+				},
 			},
-		})
+			async () => {
+				const launcher = await createBrowserLauncher()
+				launchers.handler(launcher)
+				return launcher
+			},
+		)
+		const [[launcher] = []] = launchers.calls
+		expect(launcher?.watching).toBe(true)
 		const origin = provided.get('server')
 		const endpoint = provided.get('endpoint')
 		const control = provided.get('endpointWithoutFlag')
@@ -48,16 +64,27 @@ describe('setup', () => {
 		await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
 		await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
 		await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
-	}, 20_000)
+		expect(launcher?.watching).toBe(false)
+	})
 
 	it('releases every acquired resource when a later step throws', async () => {
 		const provided = new Map<string, unknown>()
-		const failure = await setup({
-			provide: (key: string, value: unknown) => {
-				provided.set(key, value)
-				if (key === 'endpointWithoutFlag') throw new Error('provide failed')
+		const launchers = createRecorder<[BrowserLauncherInterface]>()
+		const failure = await setup(
+			{
+				provide: (key: string, value: unknown) => {
+					provided.set(key, value)
+					if (key === 'endpointWithoutFlag') throw new Error('provide failed')
+				},
 			},
-		}).catch((error: unknown) => error)
+			async () => {
+				const launcher = await createBrowserLauncher()
+				launchers.handler(launcher)
+				return launcher
+			},
+		).catch((error: unknown) => error)
+		const [[launcher] = []] = launchers.calls
+		expect(launcher?.watching).toBe(false)
 		expect(failure).toBeInstanceOf(Error)
 		expect(failure instanceof Error && failure.message).toBe('provide failed')
 		const origin = provided.get('server')
@@ -69,7 +96,7 @@ describe('setup', () => {
 		await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
 		await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
 		await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
-	}, 20_000)
+	})
 })
 
 describe('closeFixtureServer', () => {
@@ -96,7 +123,44 @@ describe('createBrowserLauncher', () => {
 		} finally {
 			await launcher.close()
 		}
-	}, 20_000)
+	})
+})
+
+describe('launchBrowserEndpoint', () => {
+	it('removes the profile when a step after its creation throws', async () => {
+		const profile = createScratch({ prefix: 'orkestrel-browser-global-' })
+		const failure = await launchBrowserEndpoint(
+			{ createBrowser: () => createFailingBrowser(new Error('unused'), undefined) },
+			{
+				SERVICE_BROWSER_ARGS: [],
+				requireSystemBrowser: () => {
+					throw new Error('no browser on this host')
+				},
+			},
+			[],
+			profile,
+		).catch((error: unknown) => error)
+		expect(failure instanceof Error && failure.message).toBe('no browser on this host')
+		expect(existsSync(profile.path)).toBe(false)
+	})
+
+	it('removes the profile when the browser does not terminate, and reports both failures', async () => {
+		const profile = createScratch({ prefix: 'orkestrel-browser-global-' })
+		const connect = new Error('connect failed')
+		const destroy = new Error('destroy failed')
+		const failure = await launchBrowserEndpoint(
+			{ createBrowser: () => createFailingBrowser(connect, destroy) },
+			{
+				SERVICE_BROWSER_ARGS: [],
+				requireSystemBrowser: () => ({ executable: '/bin/true', engine: 'chromium' }),
+			},
+			[],
+			profile,
+		).catch((error: unknown) => error)
+		expect(failure).toBeInstanceOf(AggregateError)
+		expect(failure instanceof AggregateError && failure.errors).toEqual([connect, destroy])
+		expect(existsSync(profile.path)).toBe(false)
+	})
 })
 
 describe('isBrowserServerModule', () => {

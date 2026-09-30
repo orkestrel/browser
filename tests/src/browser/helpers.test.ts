@@ -7,6 +7,7 @@ import {
 	computeBrowserText,
 	isBrowserDocument,
 	listenBrowserNavigation,
+	matchesBrowserActivation,
 	matchesBrowserBlock,
 	matchesBrowserHidden,
 	matchesBrowserInvisible,
@@ -71,12 +72,12 @@ describe('computeBrowserName', () => {
 })
 
 describe('computeBrowserText', () => {
-	it('joins blocks with a space and skips select and textarea content', () => {
+	it('joins blocks with a space and takes embedded controls by value, not option text', () => {
 		const element = readProbeCase(
-			'<a><div>Cars</div><div>Search the <b>fleet</b></div><select><option>Hidden</option></select><textarea>Draft</textarea></a>',
+			'<a><div>Cars</div><div>Search the <b>fleet</b></div><select><option>Small</option><option selected>Large</option></select> <textarea>Draft</textarea></a>',
 			'a',
 		)
-		expect(computeBrowserText(element)).toBe('Cars Search the fleet')
+		expect(computeBrowserText(element)).toBe('Cars Search the fleet Large Draft')
 	})
 
 	it('falls back to the text content of an element in a document without a window', () => {
@@ -142,9 +143,9 @@ describe('readBrowserBlock', () => {
 describe('computeBrowserAlternative', () => {
 	it('takes an element own alternative before its content, and text node data', () => {
 		const probe = createProbeDocument(
-			'<img id="image" alt="Logo"><span id="label" aria-label="Close">x</span><p id="text">Plain</p><select id="choice"><option>Small</option></select>',
+			'<img id="image" alt="Logo"><span id="label" aria-label="Close">x</span><p id="text">Plain</p><script id="code">run()</script>',
 		)
-		const ids = ['image', 'label', 'text', 'choice']
+		const ids = ['image', 'label', 'text', 'code']
 		expect(
 			ids.map((id) => computeBrowserAlternative(requireValue(probe.getElementById(id), id))),
 		).toEqual(['Logo', 'Close', 'Plain', ''])
@@ -154,12 +155,47 @@ describe('computeBrowserAlternative', () => {
 	it('omits hidden content unless hidden content is admitted', () => {
 		const element = readProbeCase('<p hidden>Secret <span hidden>name</span></p>', 'p')
 		expect(computeBrowserAlternative(element)).toBe('')
-		expect(computeBrowserAlternative(element, true)).toBe('Secret name')
+		expect(computeBrowserAlternative(element, { hidden: true })).toBe('Secret name')
 	})
 
 	it('omits a text node whose parent is invisible', () => {
 		const element = readProbeCase('<p><span style="visibility: hidden">Ghost</span>Shown</p>', 'p')
 		expect(computeBrowserText(element)).toBe('Shown')
+	})
+})
+
+describe('computeBrowserAlternative with a target', () => {
+	it('gives an embedded control its value unless it is the target', () => {
+		const probe = createProbeDocument(
+			'<input id="amount" value="5"><select id="size"><option>Small</option><option selected>Large</option></select><textarea id="note">Gift</textarea><input id="secret" type="password" value="hunter2">',
+		)
+		const amount = requireValue(probe.getElementById('amount'), 'amount')
+		const ids = ['amount', 'size', 'note', 'secret']
+		expect(
+			ids.map((id) => computeBrowserAlternative(requireValue(probe.getElementById(id), id))),
+		).toEqual(['5', 'Large', 'Gift', ''])
+		expect(computeBrowserAlternative(amount, { target: amount })).toBe('')
+	})
+
+	it('falls back to the title of an element with no other alternative', () => {
+		expect(computeBrowserAlternative(readProbeCase('<img title="Save">', 'img'))).toBe('Save')
+		expect(computeBrowserAlternative(readProbeCase('<span title="Tip"></span>', 'span'))).toBe(
+			'Tip',
+		)
+	})
+})
+
+describe('matchesBrowserActivation', () => {
+	it('admits the label and a non-interactive descendant, and refuses an interactive one', () => {
+		const probe = createProbeDocument(
+			'<label>Photo <span id="text">here</span><a id="link" href="#help"><b id="inner">Help</b></a><input id="field"></label>',
+		)
+		const label = requireValue(probe.querySelector('label'), 'label')
+		const ids = ['text', 'link', 'inner', 'field']
+		expect(
+			ids.map((id) => matchesBrowserActivation(requireValue(probe.getElementById(id), id), label)),
+		).toEqual([true, false, false, false])
+		expect(matchesBrowserActivation(label, label)).toBe(true)
 	})
 })
 
@@ -172,11 +208,12 @@ describe('matchesBrowserInvisible', () => {
 				'<button style="width: 0; height: 0; padding: 0; border: 0">c</button>',
 				'<button style="position: absolute; left: -9999px">d</button>',
 				'<button>e</button>',
+				'<button style="display: contents">f</button>',
 			].join(''),
 		)
 		expect(
 			Array.from(probe.querySelectorAll('button'), (button) => matchesBrowserInvisible(button)),
-		).toEqual([true, true, false, false, false])
+		).toEqual([true, true, false, false, false, false])
 	})
 
 	it('reports nothing invisible in a document without a window', () => {
@@ -207,6 +244,15 @@ describe('matchesBrowserOmitted', () => {
 })
 
 describe('readBrowserParent', () => {
+	it('reads an assigned slot before the parent element', () => {
+		const host = readProbeCase(
+			'<div><template shadowrootmode="open"><section><slot></slot></section></template><button>Save</button></div>',
+			'div',
+		)
+		const slot = requireValue(host.shadowRoot?.querySelector('slot'), 'slot')
+		expect(readBrowserParent(requireValue(host.querySelector('button'), 'button'))).toBe(slot)
+	})
+
 	it('reads the parent element, a shadow host, a frame element, and null without a window', async () => {
 		const probe = await createProbeElements()
 		const host = probe.document.createElement('div')

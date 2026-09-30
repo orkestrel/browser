@@ -293,9 +293,39 @@ describe('installModelContext', () => {
 			execute: async () => 'found',
 		})
 		order.handler('returned')
+		queueMicrotask(() => order.handler('microtask'))
 		await registering
 		order.handler('settled')
-		expect(order.calls).toEqual([['returned'], ['toolchange'], ['settled']])
+		expect(order.calls).toEqual([['returned'], ['microtask'], ['toolchange'], ['settled']])
+	})
+
+	it('rejects a pending registration aborted at once with the reason and unregisters it', async () => {
+		const probe = await loadProbeDocument('<p>host</p>')
+		const fixture = installModelContext(probe)
+		const controller = new AbortController()
+		const registering = fixture.registry.registerTool(
+			{ name: 'lookup', description: 'Looks up a car', execute: async () => 'found' },
+			{ signal: controller.signal },
+		)
+		controller.abort(new Error('withdrawn'))
+		await expect(registering).rejects.toThrow('withdrawn')
+		expect(fixture.registrations()).toEqual([])
+	})
+
+	it('rejects a pending registration aborted from the first toolchange listener', async () => {
+		const probe = await loadProbeDocument('<p>host</p>')
+		const fixture = installModelContext(probe)
+		const controller = new AbortController()
+		const withdrawn = new Error('withdrawn')
+		fixture.registry.addEventListener('toolchange', () => controller.abort(withdrawn), {
+			once: true,
+		})
+		const registering = fixture.registry.registerTool(
+			{ name: 'lookup', description: 'Looks up a car', execute: async () => 'found' },
+			{ signal: controller.signal },
+		)
+		await expect(registering).rejects.toThrow('withdrawn')
+		expect(fixture.registrations()).toEqual([])
 	})
 
 	it('unregisters on the registration signal and dispatches toolchange to handler attributes', async () => {
