@@ -10,6 +10,7 @@ import {
 	SocketCDPTransport,
 } from '@src/browser'
 import { createToolManager } from '@orkestrel/tool'
+import { createModelContext, isWebMCPDocument } from '@orkestrel/mcp/browser'
 import { captureError, createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
 import {
 	createProbeBridge,
@@ -170,6 +171,7 @@ describe('createDocumentToolset', () => {
 		await registry.registry.registerTool({
 			name: 'lookup',
 			description: 'Looks up a car',
+			annotations: { readOnlyHint: true },
 			execute: async () => 'found',
 		})
 		const toolset = createDocumentToolset({ document: probe.document, source: bridge })
@@ -177,6 +179,7 @@ describe('createDocumentToolset', () => {
 		toolset.emitter.on('adopt', adopted.handler)
 		await toolset.start()
 		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([...VIEW_TOOLS, 'lookup'])
+		expect(toolset.tools.tool('lookup')?.annotations).toMatchObject({ pure: true, untrusted: true })
 		await registry.registry.registerTool({
 			name: 'quote',
 			description: 'Quotes a price',
@@ -200,9 +203,117 @@ describe('createDocumentToolset', () => {
 		expect(registrations.slice(0, 2)).toEqual(own)
 		expect(registrations[0]).toBe(own[0])
 		expect(registrations[1]).toBe(own[1])
+		for (const native of toolset.native) {
+			const descriptor = requireValue(
+				registrations.find((entry) => entry.tool.name === native.name),
+			).tool
+			expect(descriptor.annotations?.readOnlyHint).toBe(native.annotations?.pure)
+			expect(descriptor.annotations?.untrustedContentHint).toBe(native.annotations?.untrusted)
+			expect(descriptor.annotations?.consequentialHint).toBe(native.annotations?.consequential)
+		}
 		bridge.destroy()
 		await toolset.destroy()
 		expect(registry.registrations()).toEqual(own)
+	})
+})
+
+describe('document registry conformance', () => {
+	it('asserts the document presence path and refuses a navigator registry', () => {
+		const bridge = createModelContext({ document })
+		try {
+			expect(bridge !== undefined).toBe('modelContext' in document)
+			expect('modelContext' in navigator).toBe(false)
+		} finally {
+			bridge?.destroy()
+		}
+	})
+
+	it('marks a declarative form with a stable e5 reference and no autosubmit mark', async () => {
+		const probe = await createProbeElements()
+		probe.document.body.innerHTML =
+			'<button>One</button><button>Two</button><button>Three</button><button>Four</button><form aria-label="Search cars" toolname="search-cars" toolautosubmit></form>'
+		const toolset = createDocumentToolset({ document: probe.document })
+		try {
+			const outline = await toolset.view.elements.outline()
+			expect(outline.text.split('\n')).toContain('e5 form "Search cars" [tool=search-cars]')
+			expect(outline.text).not.toContain('autosubmit')
+			expect((await toolset.view.elements.outline()).text).toBe(outline.text)
+		} finally {
+			await toolset.destroy()
+		}
+	})
+})
+
+describe.runIf(isWebMCPDocument(document))('native document registry composition', () => {
+	it('publishes the DOM descriptors, preserves page tools, adopts trusted hints, and re-adopts on toolchange', async () => {
+		if (!isWebMCPDocument(document)) throw new Error('The native registry disappeared')
+		const registry = document.modelContext
+		const bridge = requireValue(createModelContext({ document }))
+		const lifetime = new AbortController()
+		const toolset = createDocumentToolset({ document, own: true, source: bridge })
+		try {
+			await registry.registerTool(
+				{
+					name: 'u17_lookup',
+					description: 'Looks up a car',
+					annotations: { readOnlyHint: true },
+					execute: async () => 'found',
+				},
+				{ signal: lifetime.signal },
+			)
+			const existing = await registry.getTools()
+			await toolset.start()
+			expect(toolset.tools.tool('u17_lookup')?.annotations).toMatchObject({
+				pure: true,
+				untrusted: true,
+			})
+			const adopted = createRecorder<[ToolInterface]>()
+			toolset.emitter.on('adopt', adopted.handler)
+			await registry.registerTool(
+				{ name: 'u17_quote', description: 'Quotes a car', execute: async () => 'quote' },
+				{ signal: lifetime.signal },
+			)
+			await waitForCondition('native toolchange adoption', () =>
+				adopted.calls.some(([tool]) => tool.name === 'u17_quote'),
+			)
+			const published = createToolManager()
+			for (const tool of toolset.native) published.add(tool)
+			expect(toolset.native.map((tool) => tool.name)).toEqual(VIEW_TOOLS)
+			await bridge.publish(published)
+			const registrations = await registry.getTools()
+			expect(
+				registrations
+					.filter((tool) => VIEW_TOOLS.includes(tool.name))
+					.map((tool) => tool.name)
+					.sort(),
+			).toEqual([...VIEW_TOOLS].sort())
+			for (const native of toolset.native) {
+				const registered = requireValue(registrations.find((tool) => tool.name === native.name))
+				expect(registered.annotations?.readOnlyHint ?? false).toBe(
+					native.annotations?.pure ?? false,
+				)
+				expect(registered.annotations?.untrustedContentHint ?? false).toBe(
+					native.annotations?.untrusted ?? false,
+				)
+				expect(registered.annotations?.consequentialHint ?? false).toBe(
+					native.annotations?.consequential ?? false,
+				)
+			}
+			for (const tool of existing)
+				expect(
+					registrations.find((entry) => entry.name === tool.name && entry.origin === tool.origin),
+				).toEqual(tool)
+			bridge.destroy()
+			const remaining = await registry.getTools()
+			for (const tool of existing)
+				expect(
+					remaining.find((entry) => entry.name === tool.name && entry.origin === tool.origin),
+				).toEqual(tool)
+		} finally {
+			bridge.destroy()
+			await toolset.destroy()
+			lifetime.abort()
+		}
 	})
 })
 

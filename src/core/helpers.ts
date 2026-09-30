@@ -155,6 +155,7 @@ export function renderBrowserOutline(
 		if (node.properties['checked'] === true || node.properties['checked'] === 'true')
 			row += ' [checked]'
 		if (node.properties['disabled'] === true) row += ' [disabled]'
+		if (node.tool !== undefined) row += ` [tool=${node.tool}]`
 		rows.push(row)
 	}
 	rows.push(`(${count} of ${total} elements)`)

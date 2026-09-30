@@ -1677,6 +1677,7 @@ export interface BrowserOutline {
 export interface BrowserOutlineNode extends BrowserAXNode {
 	readonly session: string
 	readonly reference: string | undefined
+	readonly tool?: string
 }
 
 /** Retains both session-local and page-composed element geometry. */
