@@ -22,7 +22,7 @@ import {
 	encodeWebSocketFrame,
 	WEBSOCKET_OPCODE_TEXT,
 } from '@orkestrel/websocket'
-import { createScratch, isRunning } from '@orkestrel/test/server'
+import { createLoopback, createScratch, isRunning } from '@orkestrel/test/server'
 import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
 
 /**
@@ -838,5 +838,157 @@ export function createFakeBrowserProcess(
 			)
 			await fetch(`http://127.0.0.1:${dropPort}/__drop`)
 		},
+	}
+}
+
+// === Fixture pages for the live-browser proofs
+
+/**
+ * Names a loopback host the fixture server answers on.
+ *
+ * @remarks
+ * `127.0.0.1` and `localhost` are distinct sites to Chromium, so a `localhost` document framed
+ * by a `127.0.0.1` document renders in its own process as an out-of-process frame.
+ */
+export type FixtureHost = '127.0.0.1' | 'localhost'
+
+/** Names the text the late-text page inserts after its `Reveal` button is clicked. */
+export const FIXTURE_LATE_TEXT = 'Confirmation code 4417'
+
+/** Holds the delay in milliseconds between the `Reveal` click and the late text's insertion. */
+export const FIXTURE_LATE_DELAY = 200
+
+/** Serves the fixture pages the live-browser proofs drive on one loopback port. */
+export interface FixtureServerInterface {
+	readonly port: number
+	/** Returns the absolute URL of a fixture path on the named host. Default host: `127.0.0.1`. */
+	url(path: string, host?: FixtureHost): string
+	/** Drops every live connection, stops listening, and releases the port. */
+	destroy(): Promise<void>
+}
+
+const FORM_PAGE = `<!doctype html><html><head><title>Delivery form</title><style>body{margin:20px}input,textarea,select{display:block;margin:10px 0;width:200px}</style></head><body>
+<main><h1>Delivery form</h1>
+<label>Name <input id="name" type="text" value="Ada"></label>
+<label>Notes <textarea id="notes">Leave at the door</textarea></label>
+<label>Speed <select id="speed"><option>Standard</option><option>Express</option></select></label>
+<button id="submit" type="button">Submit</button>
+<button id="save" type="button" onclick="document.body.dataset.saved = 'yes'">Save draft</button>
+<button id="review" type="button" onclick="history.pushState({}, '', '/form/review')">Review</button>
+<section id="pool" aria-label="Pool"></section>
+</main>
+<script>
+document.addEventListener('click', (event) => { document.body.dataset.clicks = [document.body.dataset.clicks, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ') })
+addEventListener('pageshow', (event) => { if (event.persisted) document.body.dataset.restored = 'yes' })
+</script>
+</body></html>`
+
+// The 16 px button sits at the frame origin, so a point offset by the frame's border box rather
+// than its content box lands on the frame's 10 px border in the outer document.
+const INNER_PAGE = `<!doctype html><html><head><title>Payment</title><style>html,body{margin:0}#pay{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}</style></head><body>
+<button id="pay" onclick="document.body.dataset.received = [document.body.dataset.received, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Pay</button>
+</body></html>`
+
+const OVERLAY_PAGE = `<!doctype html><html><head><title>Overlay</title><style>body{margin:0}#save,#plain{position:absolute;left:20px;width:120px;height:40px}#save{top:20px}#plain{top:200px}#veil{position:absolute;left:0;top:0;width:300px;height:100px;z-index:9;background:rgba(0,0,0,.2)}</style></head><body>
+<main><button id="save" onclick="document.body.dataset.saved = 'yes'">Save</button><button id="plain" onclick="document.body.dataset.plain = 'yes'">Plain</button></main>
+<div id="veil"></div>
+</body></html>`
+
+const LATE_PAGE = `<!doctype html><html><head><title>Late</title></head><body>
+<main><h1>Order</h1><button id="reveal" onclick="setTimeout(() => { const line = document.createElement('p'); line.textContent = '${FIXTURE_LATE_TEXT}'; document.querySelector('main').append(line) }, ${FIXTURE_LATE_DELAY})">Reveal</button></main>
+</body></html>`
+
+const ARTICLE_PAGE = `<!doctype html><html><head><title>Field notes</title></head><body>
+<nav aria-label="Site"><a href="/form">Delivery desk</a><a href="/overlay">Overlay desk</a></nav>
+<main><article><h1>Field notes</h1>
+${Array.from({ length: 40 }, (_, index) => `<p>Field note ${index + 1} records the river gauge at the north bridge and the soil moisture in the east orchard for the survey log.</p>`).join('\n')}
+<button id="subscribe" onclick="this.dataset.clicked = String(Number(this.dataset.clicked ?? '0') + 1)">Subscribe</button>
+</article></main>
+<footer>Footer chrome nobody reads</footer>
+</body></html>`
+
+const REGISTRY_PAGE = `<!doctype html><html><head><title>Registry</title></head><body>
+<main><h1>Registry</h1></main>
+<script>
+const registry = navigator.modelContext ?? document.modelContext
+if (registry !== undefined) registry.registerTool({ name: 'fixture_echo', description: 'Echoes the text it receives', inputSchema: { type: 'object', properties: { text: { type: 'string' } }, required: ['text'] }, execute: (input) => String(input.text) })
+</script>
+</body></html>`
+
+/**
+ * Renders the fixture page a request path names.
+ *
+ * @param path - The request path, such as `/form` or `/frame/outer`
+ * @param port - The fixture server's port, which the outer frame page embeds in its `localhost`
+ * frame source
+ * @returns The page HTML; `undefined` for a path no fixture serves
+ * @remarks
+ * - `/form` — a text input, a textarea, a select, and three buttons; `Save draft` sets
+ *   `document.body.dataset.saved`, `Review` pushes a same-document route, every click is
+ *   recorded on `document.body.dataset.clicks`, a back-forward cache restore sets
+ *   `document.body.dataset.restored`, and `section#pool` is an empty container
+ * - `/frame/outer` — a `127.0.0.1` document framing `/frame/inner` from `localhost` inside a
+ *   10 px border at (220, 160), with a 16 px `Decoy` button under the frame-local point of the
+ *   framed `Pay` button
+ * - `/frame/inner` — the framed document; its `Pay` button appends the receiving node to
+ *   `document.body.dataset.received`, as the `Decoy` button appends to
+ *   `document.body.dataset.decoy` in the outer document
+ * - `/overlay` — a `Save` button covered by `div#veil` and an uncovered `Plain` button
+ * - `/late` — a `Reveal` button that inserts {@link FIXTURE_LATE_TEXT} after
+ *   {@link FIXTURE_LATE_DELAY} milliseconds
+ * - `/article` — a long article between navigation and footer chrome, ending in a
+ *   `Subscribe` button below the fold
+ * - `/registry` — registers the `fixture_echo` tool through the page's WebMCP registry when
+ *   the browser exposes one
+ */
+export function renderFixturePage(path: string, port: number): string | undefined {
+	switch (path) {
+		case '/form':
+			return FORM_PAGE
+		case '/frame/outer':
+			return `<!doctype html><html><head><title>Checkout</title><style>html,body{margin:0;height:100%}#decoy{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}iframe{position:absolute;left:220px;top:160px;width:300px;height:200px;border:10px solid gray;padding:0}</style></head><body>
+<button id="decoy" onclick="document.body.dataset.decoy = [document.body.dataset.decoy, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Decoy</button>
+<iframe title="Payment" src="http://localhost:${port}/frame/inner"></iframe>
+</body></html>`
+		case '/frame/inner':
+			return INNER_PAGE
+		case '/overlay':
+			return OVERLAY_PAGE
+		case '/late':
+			return LATE_PAGE
+		case '/article':
+			return ARTICLE_PAGE
+		case '/registry':
+			return REGISTRY_PAGE
+		default:
+			return undefined
+	}
+}
+
+/**
+ * Starts the fixture page server on an ephemeral `127.0.0.1` port.
+ *
+ * @returns A {@link FixtureServerInterface} answering every {@link renderFixturePage} path with
+ * `200` and any other path with `404`
+ * @remarks Chromium resolves `localhost` to the loopback interface, so the one listener serves
+ * both {@link FixtureHost} origins.
+ */
+export async function createFixtureServer(): Promise<FixtureServerInterface> {
+	const server = createServer((request, response) => {
+		const page = renderFixturePage(
+			new URL(request.url ?? '/', 'http://127.0.0.1').pathname,
+			request.socket.localPort ?? 0,
+		)
+		response.writeHead(page === undefined ? 404 : 200, {
+			'content-type': 'text/html; charset=utf-8',
+		})
+		response.end(page ?? '')
+	})
+	const loopback = await createLoopback(server)
+	return {
+		port: loopback.port,
+		url: (path: string, host: FixtureHost = '127.0.0.1'): string =>
+			`http://${host}:${loopback.port}${path}`,
+		destroy: (): Promise<void> => loopback.destroy(),
 	}
 }

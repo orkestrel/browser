@@ -14,6 +14,7 @@
 
 import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/server'
 import { findSystemBrowser } from '@src/server'
+import { isArray, isRecord, isString } from '@orkestrel/contract'
 
 /**
  * Lists the container-safe launch flags every live-browser proof shares.
@@ -61,4 +62,42 @@ export function requireSystemBrowser(options?: SystemBrowserOptions): SystemBrow
 		)
 	}
 	return found
+}
+
+/**
+ * Cites the protocol reading that makes the live `WebMCP` mirror inapplicable on a host.
+ *
+ * @remarks
+ * A service proof passes it to a conditional skip after asserting the reading it names, so the
+ * skip reports the mechanism rather than the browser's name.
+ */
+export const REGISTRY_ABSENT_REASON =
+	'WebMCP.enable answers CDP error -32601 (method not found) and Schema.getDomains lists no WebMCP domain, so this browser has no page registry to mirror'
+
+/**
+ * Parses the domain names a `Schema.getDomains` reply lists.
+ *
+ * @param reply - The raw `Schema.getDomains` result
+ * @returns The domain names in reply order; `undefined` when the reply carries no `domains`
+ * list or a listed domain has no string `name`
+ */
+export function parseProtocolDomains(reply: unknown): readonly string[] | undefined {
+	if (!isRecord(reply) || !isArray(reply['domains'])) return undefined
+	const names: string[] = []
+	for (const domain of reply['domains']) {
+		if (!isRecord(domain) || !isString(domain['name'])) return undefined
+		names.push(domain['name'])
+	}
+	return names
+}
+
+/**
+ * Extracts the reference numbers an outline's element rows carry, in row order.
+ *
+ * @param text - The `text` of a `BrowserOutline`
+ * @returns The number after the `e` of each row that opens with a reference such as `e12`;
+ * heading, text, and summary rows contribute nothing
+ */
+export function extractOutlineReferences(text: string): readonly number[] {
+	return [...text.matchAll(/^e([1-9]\d*) /gm)].map((match) => Number(match[1]))
 }

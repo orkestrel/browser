@@ -7,25 +7,41 @@
  */
 
 import type { BrowserInterface } from '@src/server'
-import { describe, it, expect, afterEach } from 'vitest'
+import type { BrowserPageInterface, BrowserReadResult } from '@src/core'
+import type { FixtureServerInterface } from '../setupServer.js'
+import { describe, it, expect, afterAll, afterEach, beforeAll } from 'vitest'
 import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createBrowser } from '@src/server'
-import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError, compileCodegenScript } from '@src/core'
+import {
+	BROWSER_RESULT_LIMIT,
+	compileCodegenScript,
+	isBrowserError,
+	isBrowserResultLimitError,
+} from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
 import { createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
+	createFixtureServer,
 	createTempDirectory,
 	createTCPProxy,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
+	FIXTURE_LATE_DELAY,
+	FIXTURE_LATE_TEXT,
 	readServerPort,
 	reservePort,
 	waitForProcessExit,
 } from '../setupServer.js'
-import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../setupService.js'
+import {
+	extractOutlineReferences,
+	parseProtocolDomains,
+	REGISTRY_ABSENT_REASON,
+	requireSystemBrowser,
+	SERVICE_BROWSER_ARGS,
+} from '../setupService.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 const REAL_BROWSER_ARGS = [...SERVICE_BROWSER_ARGS]
@@ -597,5 +613,410 @@ describe('Browser real launch', () => {
 		} finally {
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
 		}
+	})
+})
+
+describe('Browser proofs against the fixture pages', () => {
+	let fixtures: FixtureServerInterface
+	let browser: BrowserInterface
+	const opened: BrowserPageInterface[] = []
+
+	beforeAll(async () => {
+		fixtures = await createFixtureServer()
+		browser = createBrowser({
+			executable: REAL_BROWSER_EXECUTABLE,
+			headless: true,
+			profile: createTempDirectory('orkestrel-browser-profile-').path,
+			args: REAL_BROWSER_ARGS,
+			cdp: { port: await reservePort() },
+			timeout: 20_000,
+		})
+		await browser.connect()
+	})
+
+	afterEach(async () => {
+		for (const page of opened.splice(0)) await page.close().catch(() => undefined)
+	})
+
+	afterAll(async () => {
+		await browser.destroy()
+		await fixtures.destroy()
+		await destroyTempDirectories()
+	})
+
+	// Fails against the landed source: `Page.frameDetached` with reason `swap`, which Chromium
+	// sends on the page session when the framed document moves into its own process, deletes the
+	// session `Target.attachedToTarget` registered for that frame, so `frames()` never lists it and
+	// the outline asks the page session for a frame it does not own.
+	it.fails('P19 clicks an out-of-process frame button through page.elements into the frame document; P21 hit-tests it on the frame session and P26 offsets it by the content box, while the raw frame-local point lands on the outer decoy', async () => {
+		const page = await browser.create({ url: fixtures.url('/frame/outer') })
+		opened.push(page)
+		await waitForCondition(
+			'the out-of-process frame attached to the page',
+			async () => (await page.frames()).length === 2,
+			{ budget: 10_000, interval: 50 },
+		)
+		const frame = requireValue((await page.frames()).find((child) => child.id !== page.id))
+		expect(await frame.evaluate('location.origin')).toBe(`http://localhost:${fixtures.port}`)
+		expect(await page.evaluate('location.origin')).toBe(`http://127.0.0.1:${fixtures.port}`)
+
+		const [pay] = await page.elements.find({ role: 'button', name: 'Pay' })
+		const button = requireValue(pay)
+		const local = {
+			x: Number(
+				await frame.evaluate(
+					"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.x + box.width / 2 })()",
+				),
+			),
+			y: Number(
+				await frame.evaluate(
+					"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.y + box.height / 2 })()",
+				),
+			),
+		}
+		const content = {
+			x: Number(
+				await page.evaluate(
+					"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().x + frame.clientLeft })()",
+				),
+			),
+			y: Number(
+				await page.evaluate(
+					"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().y + frame.clientTop })()",
+				),
+			),
+		}
+		expect((await button.quad()).center).toStrictEqual({
+			x: content.x + local.x,
+			y: content.y + local.y,
+		})
+
+		await button.click()
+		expect(await frame.evaluate('document.body.dataset.received')).toBe('pay:true')
+		expect(await page.evaluate('document.body.dataset.decoy')).toBeUndefined()
+
+		// Control: the raw frame-local point addresses the outer document, where the decoy sits.
+		await page.mouse.click(local)
+		expect(await page.evaluate('document.body.dataset.decoy')).toBe('decoy:true')
+		expect(await frame.evaluate('document.body.dataset.received')).toBe('pay:true')
+	})
+
+	// Fails against the landed source for the swap deletion the preceding case names, and, with
+	// that deletion skipped, because the page records the frame's URL from `Target.attachedToTarget`,
+	// which carries an empty URL before the framed document commits, and never updates it.
+	it.fails('P19 lists the out-of-process frame at its document URL', async () => {
+		const page = await browser.create({ url: fixtures.url('/frame/outer') })
+		opened.push(page)
+		const inner = fixtures.url('/frame/inner', 'localhost')
+
+		await waitForCondition(
+			'the out-of-process frame listed at its URL',
+			async () => (await page.frame(inner)) !== undefined,
+			{ budget: 10_000, interval: 50 },
+		)
+		expect((await page.frames()).map((frame) => frame.url)).toStrictEqual([
+			fixtures.url('/frame/outer'),
+			inner,
+		])
+	})
+
+	it('P11 refuses a click on an overlay-covered button with OCCLUDED naming the covering element (control: the uncovered button clicks)', async () => {
+		const page = await browser.create({ url: fixtures.url('/overlay') })
+		opened.push(page)
+		const [save] = await page.elements.find({ role: 'button', name: 'Save' })
+		const covered = requireValue(save)
+
+		await expect(covered.click()).rejects.toMatchObject({
+			code: 'BROWSER_ELEMENT_ERROR',
+			context: { reference: covered.reference, reason: 'OCCLUDED' },
+			message: `Element ${covered.reference} is covered by div#veil; call look for fresh refs.`,
+		})
+		expect(await page.evaluate('document.body.dataset.saved')).toBeUndefined()
+
+		const [plain] = await page.elements.find({ role: 'button', name: 'Plain' })
+		await requireValue(plain).click()
+		expect(await page.evaluate('document.body.dataset.plain')).toBe('yes')
+	})
+
+	it('P22 clicks a text input, a textarea, and a select, whose hit test resolves to the control rather than its user-agent shadow node (control: a plain button clicks)', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const [name] = await page.elements.find({ role: 'textbox', name: 'Name' })
+		const [notes] = await page.elements.find({ role: 'textbox', name: 'Notes' })
+		const [speed] = await page.elements.find({ role: 'combobox', name: 'Speed' })
+
+		await requireValue(name).click()
+		expect(await page.evaluate('document.activeElement.id')).toBe('name')
+		await requireValue(notes).click()
+		expect(await page.evaluate('document.activeElement.id')).toBe('notes')
+		await requireValue(speed).click()
+		expect(await page.evaluate('document.activeElement.id')).toBe('speed')
+
+		const [submit] = await page.elements.find({ role: 'button', name: 'Submit' })
+		await requireValue(submit).click()
+		expect(await page.evaluate('document.body.dataset.clicks')).toBe(
+			'name:true notes:true speed:true submit:true',
+		)
+	})
+
+	it('P24 clicks a button below the fold after the page scrolls to it, hit-testing in document coordinates', async () => {
+		const page = await browser.create({ url: fixtures.url('/article') })
+		opened.push(page)
+		const viewport = Number(await page.evaluate('innerHeight'))
+		const offset = Number(await page.evaluate("document.getElementById('subscribe').offsetTop"))
+		expect(await page.evaluate('scrollY')).toBe(0)
+		expect(offset).toBeGreaterThan(viewport)
+
+		const [subscribe] = await page.elements.find({ role: 'button', name: 'Subscribe' })
+		const button = requireValue(subscribe)
+		await button.click()
+
+		expect(await page.evaluate("document.getElementById('subscribe').dataset.clicked")).toBe('1')
+		expect(Number(await page.evaluate('scrollY'))).toBeGreaterThan(0)
+		expect((await button.quad()).center.y).toBeLessThan(viewport)
+	})
+
+	it('reads the article distilled against whole and reassembles it from offset and limit slices (control: a limit past the total returns one slice)', async () => {
+		const page = await browser.create({ url: fixtures.url('/article') })
+		opened.push(page)
+		const reading = await page.read()
+		const distilled = reading.text()
+		const whole = reading.text({ distill: false })
+
+		expect(distilled.text).toContain('Field note 40 records the river gauge')
+		expect(distilled.text).not.toContain('Footer chrome nobody reads')
+		expect(distilled.text).not.toContain('Overlay desk')
+		expect(whole.text).toContain('Field note 40 records the river gauge')
+		expect(whole.text).toContain('Footer chrome nobody reads')
+		expect(whole.text).toContain('Overlay desk')
+		expect(distilled.total).toBeLessThan(whole.total)
+
+		const slices: BrowserReadResult[] = []
+		for (
+			let offset = 0;
+			offset < distilled.total && slices.length < 100;
+			offset += slices.at(-1)?.text.length ?? distilled.total
+		)
+			slices.push(reading.text({ offset, limit: 500 }))
+		expect(slices.length).toBeGreaterThan(1)
+		expect(slices.filter((slice) => slice.text.length > 500)).toStrictEqual([])
+		expect(slices.filter((slice) => slice.total !== distilled.total)).toStrictEqual([])
+		expect(slices.map((slice) => slice.text).join('')).toBe(distilled.text)
+
+		expect(reading.text({ limit: distilled.total + 1 })).toStrictEqual({
+			text: distilled.text,
+			offset: 0,
+			total: distilled.total,
+		})
+	})
+
+	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text rejects BROWSER_WAIT_TIMEOUT at the deadline)', async () => {
+		const page = await browser.create({ url: fixtures.url('/late') })
+		opened.push(page)
+		const [reveal] = await page.elements.find({ role: 'button', name: 'Reveal' })
+		const button = requireValue(reveal)
+
+		const started = performance.now()
+		await button.click()
+		await page.wait(FIXTURE_LATE_TEXT, { timeout: 5_000 })
+		const elapsed = performance.now() - started
+		expect(elapsed).toBeGreaterThanOrEqual(FIXTURE_LATE_DELAY)
+		expect(elapsed - FIXTURE_LATE_DELAY).toBeLessThan(300)
+
+		const deadline = performance.now()
+		await expect(page.wait('Never shown', { timeout: 300 })).rejects.toMatchObject({
+			code: 'BROWSER_WAIT_TIMEOUT',
+		})
+		expect(performance.now() - deadline).toBeGreaterThanOrEqual(300)
+	})
+
+	it('navigate clears references: a stale element refuses GONE naming look, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const previous = extractOutlineReferences((await page.elements.outline()).text)
+		const [name] = await page.elements.find({ role: 'textbox', name: 'Name' })
+		const stale = requireValue(name)
+		await stale.focus()
+		expect(await page.evaluate('document.activeElement.id')).toBe('name')
+
+		await page.navigate(fixtures.url('/overlay'))
+
+		expect(page.elements.element(stale.reference)).toBeUndefined()
+		await expect(stale.click()).rejects.toMatchObject({
+			code: 'BROWSER_ELEMENT_ERROR',
+			context: { reference: stale.reference, reason: 'GONE' },
+			message: `Element ${stale.reference} is gone because the page changed; call look for fresh refs.`,
+		})
+		const next = extractOutlineReferences((await page.elements.outline()).text)
+		expect(previous.length).toBeGreaterThan(0)
+		expect(next.length).toBeGreaterThan(0)
+		expect(Math.min(...next)).toBeGreaterThan(Math.max(...previous))
+	})
+
+	it('P18 binds no later element to an earlier reference after churn and garbage collection (control: a removed and collected element no longer resolves)', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 50; index += 1) { const button = document.createElement('button'); button.textContent = 'Old ' + index; pool.append(button) } return pool.children.length })()",
+		)
+		const earlier = extractOutlineReferences(
+			(await page.elements.outline()).text
+				.split('\n')
+				.filter((row) => row.includes(' button "Old '))
+				.join('\n'),
+		)
+		const [first] = await page.elements.find({ role: 'button', name: 'Old 0' })
+		const removed = requireValue(first)
+
+		await page.evaluate(
+			"(() => { const pool = document.getElementById('pool'); pool.replaceChildren(); for (let index = 0; index < 10000; index += 1) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
+		)
+		await page.send('HeapProfiler.collectGarbage')
+		await page.evaluate(
+			"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 50; index += 1) { const button = document.createElement('button'); button.textContent = 'Later ' + index; pool.append(button) } return pool.children.length })()",
+		)
+		const later = extractOutlineReferences(
+			(await page.elements.outline()).text
+				.split('\n')
+				.filter((row) => row.includes(' button "Later '))
+				.join('\n'),
+		)
+
+		expect(earlier).toHaveLength(50)
+		expect(later).toHaveLength(50)
+		expect(later.filter((reference) => earlier.includes(reference))).toStrictEqual([])
+		await expect(removed.click()).rejects.toSatisfy(isBrowserError)
+	})
+
+	// Fails against the landed source: `DOM.scrollIntoViewIfNeeded` on a removed node that the
+	// garbage collector reclaimed answers `No node found for given backend id`, which the element's
+	// failure classifier does not read as `GONE`, so the raw `CDPError` escapes the refusal contract.
+	it.fails('refuses a click on a removed and collected element GONE naming look', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const [save] = await page.elements.find({ role: 'button', name: 'Save draft' })
+		const removed = requireValue(save)
+		await page.evaluate(
+			"(() => { document.getElementById('save').remove(); const pool = document.getElementById('pool'); for (let index = 0; index < 10000; index += 1) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
+		)
+		await page.send('HeapProfiler.collectGarbage')
+
+		await expect(removed.click()).rejects.toMatchObject({
+			code: 'BROWSER_ELEMENT_ERROR',
+			context: { reference: removed.reference, reason: 'GONE' },
+			message: `Element ${removed.reference} is gone because the page changed; call look for fresh refs.`,
+		})
+	})
+
+	it('P16 marks a reading stale after a same-document route and keeps references (control: a DOM mutation leaves it fresh)', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const reading = await page.read()
+		const [name] = await page.elements.find({ role: 'textbox', name: 'Name' })
+		const [review] = await page.elements.find({ role: 'button', name: 'Review' })
+		expect(reading.stale).toBe(false)
+
+		await page.evaluate(
+			"(() => { document.querySelector('main').append(document.createElement('p')); return true })()",
+		)
+		expect(reading.stale).toBe(false)
+
+		await requireValue(review).click()
+		await waitForCondition(
+			'the same-document route marked the reading stale',
+			() => reading.stale,
+			{
+				budget: 5_000,
+				interval: 20,
+			},
+		)
+		expect(page.url).toBe(fixtures.url('/form/review'))
+		await requireValue(name).focus()
+		expect(await page.evaluate('document.activeElement.id')).toBe('name')
+		expect((await page.read()).stale).toBe(false)
+	})
+
+	it('P25 leaves outline usable after a back-forward cache restore', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.navigate(fixtures.url('/article', 'localhost'))
+		await page.back({ condition: 'commit' })
+
+		expect(page.url).toBe(fixtures.url('/form'))
+		expect(await page.evaluate('document.body.dataset.restored')).toBe('yes')
+		const outline = await page.elements.outline()
+		expect(outline.text).toContain('textbox "Name"')
+		const [submit] = await page.elements.find({ role: 'button', name: 'Submit' })
+		await requireValue(submit).click()
+		expect(await page.evaluate('document.body.dataset.clicks')).toBe('submit:true')
+	})
+
+	// Fails against the landed source: `back()` waits for `Page.loadEventFired` under its default
+	// `load` condition, and a back-forward cache restore commits through `Page.frameNavigated` of
+	// type `BackForwardCacheRestore` without firing a load event, so the call times out.
+	it.fails('resolves back() under its default load condition when the back-forward cache restores the entry', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.navigate(fixtures.url('/article', 'localhost'))
+
+		await expect(page.back({ timeout: 5_000 })).resolves.toMatchObject({
+			url: fixtures.url('/form'),
+		})
+		expect(await page.evaluate('document.body.dataset.restored')).toBe('yes')
+	})
+
+	it('P15 resolves registry.start() to whether Schema.getDomains lists WebMCP (control: the list names Page)', async () => {
+		const page = await browser.create({ url: fixtures.url('/registry') })
+		opened.push(page)
+		const domains = requireValue(parseProtocolDomains(await page.send('Schema.getDomains')))
+
+		expect(domains).toContain('Page')
+		expect(await page.registry.start()).toBe(domains.includes('WebMCP'))
+	})
+
+	it('mirrors a page-registered tool through the live WebMCP domain', async (context) => {
+		const page = await browser.create({ url: fixtures.url('/registry') })
+		opened.push(page)
+		const domains = requireValue(parseProtocolDomains(await page.send('Schema.getDomains')))
+		const started = await page.registry.start()
+
+		expect(domains.includes('WebMCP')).toBe(started)
+		context.skip(!started, REGISTRY_ABSENT_REASON)
+		await waitForCondition(
+			'the registry mirrored the page tool',
+			() => page.registry.tool('fixture_echo') !== undefined,
+			{ budget: 5_000, interval: 20 },
+		)
+		expect(page.registry.tool('fixture_echo')).toMatchObject({
+			name: 'fixture_echo',
+			description: 'Echoes the text it receives',
+			frame: page.id,
+		})
+	})
+
+	it('replays a recorded #save click through its retargeted script (control: a script compiled from an empty recording changes nothing)', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const codegen = await page.codegen()
+		const [save] = await page.elements.find({ css: '#save' })
+		await requireValue(save).click()
+		const actions = await codegen.stop()
+
+		expect(actions).toContainEqual(expect.objectContaining({ action: 'click', selector: '#save' }))
+		const script = compileCodegenScript(actions, { language: 'javascript' })
+		expect(script).toContain('elements.find({ css: "#save" })')
+		expect(script).toContain('.click()')
+
+		const fresh = await browser.create({ url: fixtures.url('/form') })
+		opened.push(fresh)
+		await new Function(`return ${script}`)()(fresh)
+		expect(await fresh.evaluate('document.body.dataset.saved')).toBe('yes')
+
+		const untouched = await browser.create({ url: fixtures.url('/form') })
+		opened.push(untouched)
+		await new Function(`return ${compileCodegenScript([], { language: 'javascript' })}`)()(
+			untouched,
+		)
+		expect(await untouched.evaluate('document.body.dataset.saved')).toBeUndefined()
 	})
 })
