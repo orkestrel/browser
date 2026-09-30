@@ -99,6 +99,39 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
  * await toolset.start()
  * const result = await toolset.tools.execute({ id: '1', name: 'look', arguments: { what: 'cart' } })
  * ```
+ *
+ * @example Drive a page with a small model
+ * ```ts
+ * import { createAgent } from '@orkestrel/agent'
+ * import { createBrowserToolset } from '@orkestrel/browser'
+ * import { createBrowser } from '@orkestrel/browser/server'
+ * import { createOllama } from '@orkestrel/ollama'
+ * import { createToolManager } from '@orkestrel/tool'
+ *
+ * const system =
+ * 	'You control a web browser with tools and must call a tool before you answer. ' +
+ * 	'The first message shows the page as look returns it; references such as e4 name its elements. ' +
+ * 	'To learn a fact, call read with only what, for example read with what set to opening hours; when the result ends by naming an offset, call read again with that offset. ' +
+ * 	'To search, call type with the search box reference, the words, and submit true. ' +
+ * 	'To press a button or follow a link, call click with its reference from the latest result. Never invent a reference. ' +
+ * 	'If text you expect has not appeared, call wait once. ' +
+ * 	'When the task is done, answer in one short sentence.'
+ *
+ * const browser = createBrowser({ headless: true })
+ * await browser.connect()
+ * const page = await browser.create({ url: 'https://shop.example.test/' })
+ * const toolset = createBrowserToolset(page, { tools: createToolManager() })
+ * await toolset.start()
+ * toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'click', 'type', 'press', 'navigate', 'wait']
+ * const agent = createAgent(createOllama({ model: 'qwen3.5:2b-q4_K_M' }), {
+ * 	system,
+ * 	tools: toolset.tools,
+ * })
+ * agent.context.messages.add({ role: 'user', content: 'What does the Alpine Kettle cost?' })
+ * const result = await agent.generate()
+ * await toolset.destroy()
+ * await browser.destroy()
+ * ```
  */
 export function createBrowserToolset(
 	page: BrowserPageInterface,

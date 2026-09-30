@@ -721,7 +721,7 @@ export interface BrowserTouchInterface {
 	tap(point: BrowserPoint): Promise<void>
 }
 
-/** Describes the actionability checks performed before locator input. */
+/** Describes the actionability checks performed before element input. */
 export interface BrowserActionabilityOptions {
 	readonly visible?: boolean
 	readonly stable?: boolean
@@ -1762,10 +1762,27 @@ export interface BrowserElementInterface {
 	readonly reference: string
 	readonly role: string
 	readonly name: string
+	/**
+	 * Clicks the element, refusing with a coded `BrowserElementError` when it is gone, hidden,
+	 * covered, or disabled.
+	 */
 	click(options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Replaces the value of a text control with `value`, dispatching the input events that typing
+	 * fires.
+	 */
 	fill(value: string, options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Selects the options of a `select` element whose value or label matches `values`, dispatching
+	 * `input` and `change`.
+	 */
 	select(values: readonly string[], options?: BrowserCallOptions): Promise<void>
+	/** Moves focus to the element. */
 	focus(options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Captures the element's markup with its document's URL and title as a reading whose `stale` flag
+	 * tracks later navigations of that document.
+	 */
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
 	/**
 	 * Submits the form the element belongs to. The CDP placement focuses the element and presses
@@ -1778,11 +1795,23 @@ export interface BrowserElementInterface {
 
 /** Provides trusted page input and capture for a referenced element. */
 export interface BrowserPageElementInterface extends BrowserElementInterface {
+	/** Moves the pointer onto the element with a trusted mouse event. */
 	hover(options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Focuses the element and presses `key` through a trusted key pair, sending the release even
+	 * after an abort.
+	 */
 	press(key: string, options?: BrowserCallOptions): Promise<void>
+	/** Sets the files of a file input to `files`, as paths the browser reads. */
 	upload(files: readonly string[], options?: BrowserCallOptions): Promise<void>
+	/** Drags the element onto the center of `target` with trusted pointer events. */
 	drag(target: BrowserPageElementInterface, options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Resolves the element's content quad in page coordinates, composed through every frame between
+	 * the element and the page.
+	 */
 	quad(options?: BrowserCallOptions): Promise<BrowserQuad>
+	/** Captures the page clipped to the element's box. */
 	screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult>
 }
 
@@ -1790,14 +1819,32 @@ export interface BrowserPageElementInterface extends BrowserElementInterface {
 export interface BrowserElementManagerInterface<
 	TElement extends BrowserElementInterface = BrowserElementInterface,
 > {
+	/**
+	 * Captures the view's document as a document-order outline, binding a reference to each
+	 * interactive element and bounding the referenced rows by `limit`.
+	 */
 	outline(options?: BrowserOutlineOptions): Promise<BrowserOutline>
+	/**
+	 * Returns the elements matching `query` by role, case-insensitive accessible-name substring, or
+	 * CSS selector, within an optional referenced element.
+	 */
 	find(query: BrowserElementQuery, options?: BrowserCallOptions): Promise<readonly TElement[]>
+	/**
+	 * Resolves with the elements matching `query` after a mutation produces a match, or after none
+	 * matches when `absent` is set; rejects at the deadline or on abort.
+	 */
 	wait(
 		query: BrowserElementQuery,
 		options?: BrowserElementWaitOptions,
 	): Promise<readonly TElement[]>
+	/**
+	 * Returns the element a reference names, or `undefined` when the reference is unknown or was
+	 * dropped.
+	 */
 	element(reference: string): TElement | undefined
+	/** Returns every element the manager holds a reference to. */
 	elements(): readonly TElement[]
+	/** Drops every reference the manager holds. */
 	clear(): void
 }
 
@@ -1806,8 +1853,17 @@ export interface BrowserViewInterface {
 	readonly url: string
 	readonly trusted: boolean
 	readonly elements: BrowserElementManagerInterface
+	/** Resolves the document title. */
 	title(options?: BrowserCallOptions): Promise<string>
+	/**
+	 * Captures the document URL, title, and markup as a reading whose `stale` flag tracks later
+	 * navigations.
+	 */
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
+	/**
+	 * Resolves when `text` is visible in the document; rejects with a `BrowserError` coded
+	 * `BROWSER_WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort.
+	 */
 	wait(text: string, options?: BrowserCallOptions): Promise<void>
 }
 
@@ -1956,7 +2012,11 @@ export type BrowserToolSourceEventMap = { readonly change: readonly [] }
  */
 export interface BrowserToolSourceInterface {
 	readonly emitter: EmitterInterface<BrowserToolSourceEventMap>
+	/** Projects the page's current tools as executable tools. */
 	adopt(): Promise<readonly ToolInterface[]>
+	/**
+	 * Lists the registered tools, from which a toolset decides the `schema` and `debugging` skips.
+	 */
 	tools?(): readonly BrowserTool[]
 }
 

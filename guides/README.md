@@ -4,16 +4,17 @@ A dual-axis index into this repository's guides — by concept, and by directory
 
 ## By concept
 
-| Concept | Spec                       | Source                                                   | Tests                                                                            |
-| ------- | -------------------------- | -------------------------------------------------------- | -------------------------------------------------------------------------------- |
-| Browser | [`browser.md`](browser.md) | [`src/core`](../src/core), [`src/server`](../src/server) | [`tests/src/core`](../tests/src/core), [`tests/src/server`](../tests/src/server) |
+| Concept | Spec                       | Source                                                                                    | Tests                                                                                                                         |
+| ------- | -------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Browser | [`browser.md`](browser.md) | [`src/core`](../src/core), [`src/browser`](../src/browser), [`src/server`](../src/server) | [`tests/src/core`](../tests/src/core), [`tests/src/browser`](../tests/src/browser), [`tests/src/server`](../tests/src/server) |
 
 ## By directory
 
-| Directory    | Guide                      |
-| ------------ | -------------------------- |
-| `src/core`   | [`browser.md`](browser.md) |
-| `src/server` | [`browser.md`](browser.md) |
+| Directory     | Guide                      |
+| ------------- | -------------------------- |
+| `src/core`    | [`browser.md`](browser.md) |
+| `src/browser` | [`browser.md`](browser.md) |
+| `src/server`  | [`browser.md`](browser.md) |
 
 ## Dependency reference
 

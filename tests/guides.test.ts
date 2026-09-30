@@ -17,8 +17,11 @@ const GUIDE_SPEC = 'guides/browser.md'
 /** Each import specifier this package's own guides may resolve against. */
 const MODULES = Object.freeze({
 	[PACKAGE_NAME]: 'src/core',
+	[`${PACKAGE_NAME}/server`]: 'src/server',
+	[`${PACKAGE_NAME}/browser`]: 'src/browser',
 	'@src/core': 'src/core',
 	'@src/server': 'src/server',
+	'@src/browser': 'src/browser',
 })
 /**
  * Declarations deliberately kept out of the barrel, as `computeSymbolKey` strings.
@@ -37,10 +40,40 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class BrowserRoute',
 	'class BrowserWorker',
 ])
+/** The heading every fence driving the toolset with a small model sits under. */
+const SMALL_MODEL_TITLE = 'Drive a page with a small model'
+/**
+ * The system prompt the store proof in `@orkestrel/ollama` passed with, its
+ * `STORE_SYSTEM_PROMPT` constant transcribed.
+ */
+const SMALL_MODEL_PROMPT =
+	'You control a web browser with tools and must call a tool before you answer. ' +
+	'The first message shows the page as look returns it; references such as e4 name its elements. ' +
+	'To learn a fact, call read with only what, for example read with what set to opening hours; when the result ends by naming an offset, call read again with that offset. ' +
+	'To search, call type with the search box reference, the words, and submit true. ' +
+	'To press a button or follow a link, call click with its reference from the latest result. Never invent a reference. ' +
+	'If text you expect has not appeared, call wait once. ' +
+	'When the task is done, answer in one short sentence.'
+/** The toolset lines of the Surface fence of that title, transcribed byte for byte. */
+const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
+	'const toolset = createBrowserToolset(page, { tools: createToolManager() })',
+	'await toolset.start()',
+	"toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'click', 'type', 'press', 'navigate', 'wait']",
+])
+/** Matches an in-page assignment or property definition that replaces a page dialog function. */
+const DIALOG_OVERRIDE =
+	/\b(?:alert|confirm|prompt)\s*=(?!=)|defineProperty\([^)]*['"](?:alert|confirm|prompt)['"]/
 
 await new GuideCommand({
 	root: new URL('../', import.meta.url),
-	patterns: ['src/**/*.ts', 'tests/**/*.ts', 'guides/*.md', '*.md', 'package.json'],
+	patterns: [
+		'src/**/*.ts',
+		'tests/**/*.ts',
+		'tests/mirrors/*',
+		'guides/*.md',
+		'*.md',
+		'package.json',
+	],
 	modules: MODULES,
 	languages: FENCE_LANGUAGES,
 	language: EXAMPLE_LANGUAGE,
@@ -89,6 +122,66 @@ await new GuideCommand({
 	it('opens the README with the guide tagline', () => {
 		expect(manifest.name).toBe(PACKAGE_NAME)
 		expect(report.pitch).toEqual([])
+	})
+
+	// `guides/browser.md` carries the system prompt a small model passed with and claims the tools
+	// a page-backed toolset lists. Name parity proves neither, so the prompt is read out of each fence
+	// of that title and compared with the transcribed constant, and the fence's toolset lines run
+	// against a real `BrowserPage` over the scripted CDP fixture. The agent half needs a live model and
+	// a package this workspace does not install, and it claims no value.
+	describe(SMALL_MODEL_TITLE, () => {
+		const fences = own.guide
+			.fences()
+			.filter((fence) => fence.title === SMALL_MODEL_TITLE && fence.language === EXAMPLE_LANGUAGE)
+
+		it('carries the store proof system prompt in the Surface fence and the pattern fence', () => {
+			expect(fences).toHaveLength(2)
+			for (const fence of fences) {
+				const declared = /const system =\n((?:\t'[^'\n]*'(?: \+)?\n)+)/.exec(fence.code)?.[1] ?? ''
+				const literals = [...declared.matchAll(/'([^'\n]*)'/g)].map((match) => match[1] ?? '')
+				expect(literals.join('')).toBe(SMALL_MODEL_PROMPT)
+			}
+		})
+
+		it('carries the transcribed toolset lines in the Surface fence', () => {
+			for (const line of SMALL_MODEL_LINES) expect(fences[0]?.code).toContain(line)
+		})
+
+		it('lists the seven tools its comment claims over a real page', async () => {
+			const { createBrowserElementFixture } = await import('./setup.js')
+			const { createBrowserToolset } = await import('@src/core')
+			const { createToolManager } = await import('@orkestrel/tool')
+			const { client, page } = await createBrowserElementFixture()
+			try {
+				const toolset = createBrowserToolset(page, { tools: createToolManager() })
+				await toolset.start()
+				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
+					'look',
+					'read',
+					'click',
+					'type',
+					'press',
+					'navigate',
+					'wait',
+				])
+				await toolset.destroy()
+			} finally {
+				await client.close()
+			}
+		})
+	})
+
+	// The guide's Contract records that the in-page face never replaces `alert`, `confirm`, or
+	// `prompt`, so a click that opens one blocks the driven document. The control proves the
+	// pattern catches the override it guards against.
+	it('assigns no page dialog function in the in-page face', () => {
+		expect(DIALOG_OVERRIDE.test('window.alert = () => undefined')).toBe(true)
+		expect(DIALOG_OVERRIDE.test("Object.defineProperty(view, 'confirm', { value })")).toBe(true)
+		const overriding = Object.entries(files)
+			.filter(([path]) => path.startsWith('src/browser/'))
+			.filter(([, code]) => DIALOG_OVERRIDE.test(code))
+			.map(([path]) => path)
+		expect(overriding).toEqual([])
 	})
 
 	for (const { entry, guide, source } of rows) {
