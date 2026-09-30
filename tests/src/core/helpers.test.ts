@@ -51,6 +51,8 @@ import {
 import { readProperty, requireValue } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
+	BROWSER_ELEMENT_NAME_CASES,
+	BROWSER_ELEMENT_NAME_AX_FIXTURE,
 	createBrowserElementFixture,
 	createDOMSnapshotResult,
 	JPEG_BASE64,
@@ -58,6 +60,17 @@ import {
 } from '../../setup.js'
 
 describe('element helpers', () => {
+	it.each(BROWSER_ELEMENT_NAME_CASES)('$title', ({ query, expected }) => {
+		const rows = readBrowserAccessibility(BROWSER_ELEMENT_NAME_AX_FIXTURE).nodes.map((node) => ({
+			...node,
+			session: 'main',
+			reference: undefined,
+		}))
+		expect(
+			filterBrowserOutline(rows, query).map((node) => normalizeBrowserName(node.name ?? '')),
+		).toEqual(expected)
+	})
+
 	it('catches helper alias, normalization, scope, and point composition errors', () => {
 		expect(['enter', 'Return', 'ENTER', 'esc', 'ctrl+a'].map(normalizeBrowserKey)).toEqual([
 			'Enter',

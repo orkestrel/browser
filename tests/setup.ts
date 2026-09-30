@@ -2,6 +2,7 @@ import type {
 	BrowserCallOptions,
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
+	BrowserElementQuery,
 	BrowserFrameInterface,
 	BrowserNavigationEventMap,
 	BrowserOutline,
@@ -1591,6 +1592,67 @@ export const BROWSER_ELEMENT_AX_FIXTURE = Object.freeze({
 		},
 	],
 })
+
+/** Lists accessible names that distinguish exact matching from substring and folded matching. */
+export const BROWSER_ELEMENT_NAME_FIXTURE = Object.freeze([
+	'Save',
+	'save',
+	'Save draft',
+	'Save   draft',
+])
+
+/** Holds the protocol names used to prove exact accessibility queries. */
+export const BROWSER_ELEMENT_NAME_AX_FIXTURE = Object.freeze({
+	nodes: BROWSER_ELEMENT_NAME_FIXTURE.map((name, index) => ({
+		nodeId: String(index),
+		backendDOMNodeId: index + 100,
+		role: { value: 'button' },
+		name: { value: name },
+	})),
+})
+
+/** Holds query expectations shared by the remote and DOM element managers. */
+export const BROWSER_ELEMENT_NAME_CASES: ReadonlyArray<{
+	readonly title: string
+	readonly query: BrowserElementQuery
+	readonly expected: readonly string[]
+}> = Object.freeze([
+	{
+		title: 'exact names reject substrings',
+		query: { role: 'button', name: 'Save', exact: true },
+		expected: ['Save'],
+	},
+	{
+		title: 'exact names preserve case',
+		query: { role: 'button', name: 'save', exact: true },
+		expected: ['save'],
+	},
+	{
+		title: 'normalizes whitespace on both sides when exact is true',
+		query: { role: 'button', name: '  Save\n draft  ', exact: true },
+		expected: ['Save draft', 'Save draft'],
+	},
+	{
+		title: 'rejects a partial name when exact is true',
+		query: { role: 'button', name: 'Sav', exact: true },
+		expected: [],
+	},
+	{
+		title: 'keeps case-insensitive substring matching by default',
+		query: { role: 'button', name: 'Save' },
+		expected: ['Save', 'save', 'Save draft', 'Save draft'],
+	},
+	{
+		title: 'keeps case-insensitive substring matching when exact is false',
+		query: { role: 'button', name: 'Save', exact: false },
+		expected: ['Save', 'save', 'Save draft', 'Save draft'],
+	},
+	{
+		title: 'keeps role matching without a name when exact is true',
+		query: { role: 'button', exact: true },
+		expected: ['Save', 'save', 'Save draft', 'Save draft'],
+	},
+])
 
 /** Holds the iframe tree whose backend overlaps the parent renderer's link. */
 export const BROWSER_ELEMENT_CHILD_FIXTURE = Object.freeze({

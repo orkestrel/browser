@@ -2544,10 +2544,10 @@ export interface BrowserElementManagerInterface<
 }
 
 /** Provides the document operations shared by remote and DOM-native views. */
-export interface BrowserViewInterface {
+export interface BrowserViewInterface<E extends BrowserElementInterface = BrowserElementInterface> {
 	readonly url: string
 	readonly trusted: boolean
-	readonly elements: BrowserElementManagerInterface
+	readonly elements: BrowserElementManagerInterface<E>
 	/** Resolves the document title. */
 	title(options?: BrowserCallOptions): Promise<string>
 	/**
@@ -3136,7 +3136,8 @@ export interface BrowserNodeQuery {
  * - `destroy` — release local resources and detach from the target
  * - `close` — close the remote target and release local resources
  */
-export interface BrowserPageInterface extends BrowserFrameInterface, BrowserViewInterface {
+export interface BrowserPageInterface
+	extends BrowserFrameInterface, BrowserViewInterface<BrowserPageElementInterface> {
 	readonly elements: BrowserElementManagerInterface<BrowserPageElementInterface>
 	readonly trusted: true
 	readonly keyboard: BrowserKeyboardInterface

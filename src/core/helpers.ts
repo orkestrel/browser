@@ -96,7 +96,7 @@ export function normalizeBrowserName(value: string): string {
 /**
  * Filters document-order outline rows by accessibility role and name.
  * @param nodes - Captured rows
- * @param query - Role and case-insensitive name constraints
+ * @param query - Role and name constraints, with whole, case-sensitive matching when exact is true
  * @returns Matching rows in their original order
  */
 export function filterBrowserOutline(
@@ -109,9 +109,11 @@ export function filterBrowserOutline(
 			!BROWSER_OUTLINE_OMITTED_ROLES.has(node.role ?? '') &&
 			(query.role === undefined || node.role === query.role) &&
 			(query.name === undefined ||
-				normalizeBrowserName(node.name ?? '')
-					.toLowerCase()
-					.includes(normalizeBrowserName(query.name).toLowerCase())),
+				(query.exact === true
+					? normalizeBrowserName(node.name ?? '') === normalizeBrowserName(query.name)
+					: normalizeBrowserName(node.name ?? '')
+							.toLowerCase()
+							.includes(normalizeBrowserName(query.name).toLowerCase()))),
 	)
 }
 
