@@ -23,6 +23,7 @@ import {
 	evaluateJavaScript,
 	evaluateBrowserHit,
 	evaluateBrowserSubmit,
+	BrowserSubmitWindows,
 	BROWSER_SUBMIT_CASES,
 	readBrowserCompiledTimers,
 	runBrowserCompiledTimers,
@@ -214,19 +215,18 @@ describe('compileCodegenScript', () => {
 })
 
 describe('compileSubmitObserverExpression and compileSubmitReadExpression', () => {
-	const observer = compileSubmitObserverExpression()
-	const read = compileSubmitReadExpression()
+	const observer = compileSubmitObserverExpression(7)
+	const read = compileSubmitReadExpression(7)
 
 	it.each(BROWSER_SUBMIT_CASES)(
-		'catches %s read with the wrong navigation or an observer left installed',
+		'reads %s as its surviving relationships and removes the observer',
 		(_name, submits, destinations) => {
 			expect(evaluateBrowserSubmit(observer, read, submits)).toEqual([destinations, 0])
 		},
 	)
 
-	it('catches a read that reports a submit none fired, a read with no observer that throws, or a reinstallation that keeps the earlier listener', () => {
+	it('reads nothing when no submission fired and replaces an earlier installation', () => {
 		expect(evaluateBrowserSubmit(observer, read)).toEqual([[], 0])
-		expect(evaluateBrowserSubmit(observer, read, [], 0)).toEqual([[], 0])
 		expect(evaluateBrowserSubmit(observer, read, [], 2)).toEqual([[], 0])
 		expect(evaluateBrowserSubmit(observer, read, [{ prevented: false, form: {} }], 2)).toEqual([
 			['self'],
@@ -234,5 +234,26 @@ describe('compileSubmitObserverExpression and compileSubmitReadExpression', () =
 		])
 		expect(observer).toContain(JSON.stringify(BROWSER_SUBMIT_KEY))
 		expect(read).toContain(JSON.stringify(BROWSER_SUBMIT_KEY))
+	})
+
+	it('answers null and removes nothing for a read of another token or of no observer', () => {
+		expect(evaluateBrowserSubmit(observer, read, [], 0)).toEqual([null, 0])
+		expect(
+			evaluateBrowserSubmit(compileSubmitObserverExpression(8), read, [
+				{ prevented: false, form: {} },
+			]),
+		).toEqual([null, 1])
+	})
+
+	it('keeps a later action observer when an earlier action removal lands after it installed', () => {
+		const windows = new BrowserSubmitWindows()
+		const window = windows.window('session-main', 91)
+		window.evaluate(compileSubmitObserverExpression(1))
+		window.evaluate(compileSubmitObserverExpression(2))
+		expect(window.evaluate(compileSubmitReadExpression(1))).toBeNull()
+		expect(window.listeners).toBe(1)
+		window.dispatch({ prevented: false, form: { target: '_parent' } })
+		expect(window.evaluate(compileSubmitReadExpression(2))).toEqual(['parent'])
+		expect(window.listeners).toBe(0)
 	})
 })

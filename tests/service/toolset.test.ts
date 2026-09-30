@@ -36,7 +36,13 @@ import {
 } from '@src/core'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createToolManager } from '@orkestrel/tool'
-import { createRecorder, createTeardown, retryUntil, waitForCondition } from '@orkestrel/test'
+import {
+	createRecorder,
+	createTeardown,
+	requireValue,
+	retryUntil,
+	waitForCondition,
+} from '@orkestrel/test'
 import { createFixtureServer, createTempDirectory, reservePort } from '../setupServer.js'
 import {
 	extractOutlineRows,
@@ -685,6 +691,118 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await tools.execute({ id: 'after', name: 'look', arguments: { what: 'the voucher' } }),
 			),
 		).toBe(applied)
+	})
+
+	it('returns the destination view in the receipt of a type with submit that navigates an in-process frame out to another process', async () => {
+		const page = await browser.create({ url: fixtures.url('/frame/local') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		await waitForCondition(
+			'precondition: the outline lists the framed Code field',
+			async () => (await page.elements.outline()).text.includes('textbox "Code"'),
+			{ budget: 10_000, interval: 20 },
+		)
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the voucher' } }),
+		)
+		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
+		const code = requireOutlineReference(look, 'textbox', 'Code')
+
+		const receipt = requireToolText(
+			await tools.execute({
+				id: 'type',
+				name: 'type',
+				arguments: { ref: code, text: 'SPRING', submit: true },
+			}),
+		)
+		const applied = [
+			`page "Local voucher" ${fixtures.url('/frame/local')}`,
+			'# Local voucher',
+			`${frame} Iframe "Voucher form"`,
+			'# Voucher applied',
+			'Received key Enter',
+			'(1 of 1 elements)',
+		].join('\n')
+		expect(receipt).toBe(
+			`Typed "SPRING" into ${code} textbox "Code" and submitted the form.\n\n${applied}`,
+		)
+		expect((await page.frames()).map((candidate) => candidate.url)).toContain(
+			fixtures.url('/frame/done?code=SPRING&key=Enter', 'localhost'),
+		)
+	})
+
+	it('returns the parent frame destination in the receipt of a type with submit whose nested out-of-process form targets _parent', async () => {
+		const page = await browser.create({ url: fixtures.url('/frame/nested') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		await waitForCondition(
+			'precondition: the outline lists the Coupon field of the innermost frame',
+			async () => (await page.elements.outline()).text.includes('textbox "Coupon"'),
+			{ budget: 10_000, interval: 20 },
+		)
+		const inner = (await page.frames()).find(
+			(candidate) => candidate.url === fixtures.url('/frame/inner'),
+		)
+		const middle = (await page.frames()).find(
+			(candidate) => candidate.url === fixtures.url('/frame/middle', 'localhost'),
+		)
+		expect(inner?.parent).toBe(requireValue(middle).id)
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the coupon' } }),
+		)
+		const coupon = requireOutlineReference(look, 'textbox', 'Coupon')
+
+		const receipt = requireToolText(
+			await tools.execute({
+				id: 'type',
+				name: 'type',
+				arguments: { ref: coupon, text: 'SPRING', submit: true },
+			}),
+		)
+		expect(receipt.split('\n', 1)[0]).toBe(
+			`Typed "SPRING" into ${coupon} textbox "Coupon" and submitted the form.`,
+		)
+		const view = receipt.slice(receipt.indexOf('\n\n'))
+		expect(view).toContain('# Voucher applied')
+		expect(view).not.toContain('textbox "Coupon"')
+		expect((await page.frames()).map((candidate) => candidate.url)).toContain(
+			fixtures.url('/frame/done?code=SPRING'),
+		)
+	})
+
+	it('returns the same page at its fragment in the receipt of a click whose form submission stays within the document', async () => {
+		const page = await browser.create({ url: fixtures.url('/search?q=tray') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the search' } }),
+		)
+		const find = requireOutlineReference(look, 'button', 'Find')
+		const started = performance.now()
+		const receipt = requireToolText(
+			await tools.execute({ id: 'find', name: 'click', arguments: { ref: find } }),
+		)
+		const elapsed = performance.now() - started
+		expect(receipt).toBe(
+			[
+				`Clicked ${find} button "Find".`,
+				'',
+				`page "Search" ${fixtures.url('/search?q=tray#found')}`,
+				'# Search',
+				`${find} button "Find"`,
+				'(1 of 1 elements)',
+			].join('\n'),
+		)
+		expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS - 1_000)
 	})
 
 	// Asserts the guide's receipt deadline, `BROWSER_TOOL_TIMEOUT_MS` (5 000 ms), with the

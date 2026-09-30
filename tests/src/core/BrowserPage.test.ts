@@ -42,7 +42,11 @@ import {
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
 	createRecordingWriter,
+	createReferenceSequence,
+	emitBrowserNavigation,
 	readCDPExpression,
+	readCDPParams,
+	readCDPSessionMethods,
 	replyOk,
 	scriptCDPAttach,
 	scriptEvaluate,
@@ -868,6 +872,9 @@ describe('BrowserPage', () => {
 			scriptFrameTree(transport)
 			replyOk(transport, 'Page.enable')
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
+			replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 			const contexts = [84, 85]
 			transport.onSend('Page.createIsolatedWorld', (message) =>
 				transport.reply(message.id, { executionContextId: contexts.shift() }),
@@ -908,7 +915,11 @@ describe('BrowserPage', () => {
 
 			expect(first.stale).toBe(true)
 			expect(second.stale).toBe(true)
-			const evaluations = transport.sent.filter((message) => message.method === 'Runtime.evaluate')
+			const evaluations = transport.sent.filter(
+				(message) =>
+					message.method === 'Runtime.evaluate' &&
+					readCDPExpression(message)?.includes(compileReadFunction()) === true,
+			)
 			expect(evaluations.map((message) => message.sessionId)).toEqual([
 				'session-oopif',
 				'session-oopif',
@@ -922,6 +933,9 @@ describe('BrowserPage', () => {
 			scriptFrameTree(transport)
 			replyOk(transport, 'Page.enable')
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
+			replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
 				url: 'https://other.example/embed',
@@ -1004,6 +1018,9 @@ describe('BrowserPage', () => {
 			scriptFrameTree(transport)
 			replyOk(transport, 'Page.enable')
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
+			replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 			scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
 				url: 'https://example.com/',
@@ -1024,17 +1041,15 @@ describe('BrowserPage', () => {
 			)
 			await waitForCondition('the session event was delivered', () => sessions.count === 1)
 			const iframe = requireValue(sessions.calls[0]?.[0])
-			const creationCount = (): number =>
-				transport.sent.filter((message) => message.method === 'Page.createIsolatedWorld').length
 			await page.read()
 			await iframe.read()
-			expect(creationCount()).toBe(2)
+			expect(readCDPParams(transport, 'Page.createIsolatedWorld')).toHaveLength(2)
 
 			transport.event('Runtime.executionContextsCleared', {}, 'session-oopif')
 			await page.read()
-			expect(creationCount()).toBe(2)
+			expect(readCDPParams(transport, 'Page.createIsolatedWorld')).toHaveLength(2)
 			await iframe.read()
-			expect(creationCount()).toBe(3)
+			expect(readCDPParams(transport, 'Page.createIsolatedWorld')).toHaveLength(3)
 		})
 
 		it('keeps the frame url of a navigation that overtook the capture', async () => {
@@ -1475,6 +1490,9 @@ describe('BrowserPage', () => {
 			scriptFrameTree(transport)
 			replyOk(transport, 'Page.enable')
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
+			replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 			scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -1506,6 +1524,9 @@ describe('BrowserPage', () => {
 			scriptFrameTree(transport)
 			replyOk(transport, 'Page.enable')
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
+			replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 			scriptEvaluate(transport, (expression) => expression.includes('6 * 7'), 42)
 			const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -1589,6 +1610,8 @@ describe('BrowserPage', () => {
 		it('starts a recorder and returns the same instance on repeat calls', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
 			replyOk(transport, 'Runtime.addBinding')
 			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
 			replyOk(transport, 'Runtime.evaluate')
@@ -1627,6 +1650,8 @@ describe('BrowserPage', () => {
 		it('releases an active recorder when the target is externally destroyed', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
 			replyOk(transport, 'Runtime.addBinding')
 			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
 			replyOk(transport, 'Runtime.evaluate')
@@ -1645,6 +1670,8 @@ describe('BrowserPage', () => {
 		it('tears down an active codegen recorder before closing', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Target.setAutoAttach')
 			replyOk(transport, 'Runtime.addBinding')
 			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
 			replyOk(transport, 'Runtime.evaluate')
@@ -1956,9 +1983,12 @@ describe('BrowserPage events', () => {
 		expect(completes.calls).toHaveLength(0)
 	})
 
-	it('promotes attached worker targets after enabling their Runtime session', async () => {
+	it('promotes and resumes attached worker targets after enabling their Runtime session', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 		const workers = createRecorder<[worker: BrowserWorkerInterface]>()
 		page.emitter.on('worker', workers.handler)
@@ -1976,6 +2006,10 @@ describe('BrowserPage events', () => {
 			'session-1',
 		)
 		await waitForCondition('the worker event was delivered', () => workers.count === 1)
+		expect(readCDPSessionMethods(transport, 'worker-session')).toEqual([
+			'Runtime.enable',
+			'Runtime.runIfWaitingForDebugger',
+		])
 
 		expect(workers.calls[0]?.[0]).toMatchObject({
 			id: 'worker-1',
@@ -1991,7 +2025,7 @@ describe('BrowserPage events', () => {
 		await expect(workers.calls[0]?.[0].evaluate('1')).rejects.toThrow('Browser worker is closed')
 	})
 
-	it('creates popup pages with opener identity and initialized protocol domains', async () => {
+	it('creates popup pages with opener identity and initialized protocol domains, and resumes them after the domains', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
@@ -2002,6 +2036,7 @@ describe('BrowserPage events', () => {
 		replyOk(transport, 'Target.setAutoAttach')
 		replyOk(transport, 'Page.setInterceptFileChooserDialog')
 		replyOk(transport, 'Network.enable')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 		const popups = createRecorder<[page: BrowserPageInterface]>()
 		page.emitter.on('popup', popups.handler)
@@ -2026,6 +2061,21 @@ describe('BrowserPage events', () => {
 			url: 'https://example.com/popup',
 		})
 		expect(popup?.opener).toBe(page)
+		expect(readCDPSessionMethods(transport, 'popup-session')).toEqual([
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Page.getFrameTree',
+			'Target.setAutoAttach',
+			'Page.setInterceptFileChooserDialog',
+			'Network.enable',
+			'Runtime.runIfWaitingForDebugger',
+		])
+		expect(readCDPParams(transport, 'Target.setAutoAttach').at(-1)).toEqual({
+			autoAttach: true,
+			waitForDebuggerOnStart: true,
+			flatten: true,
+		})
 		expect(
 			transport.sent.some(
 				(message) =>
@@ -2046,6 +2096,7 @@ describe('BrowserPage events', () => {
 			frameTree: { frame: { id: 'popup-frame', url: 'https://example.com/popup' } },
 		})
 		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		replyOk(transport, 'Page.setInterceptFileChooserDialog')
 		replyOk(transport, 'Network.enable')
 		replyOk(transport, 'Target.setDiscoverTargets')
@@ -2091,8 +2142,7 @@ describe('BrowserPage events', () => {
 	it('refuses a second live page for a held target on the same session, and forgets held targets and waiting reports when the connection ends', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		scriptCDPAttach(transport)
-		let sequence = 0
-		const reference = (): string => `e${++sequence}`
+		const reference = createReferenceSequence()
 		const held = new BrowserPage(
 			client,
 			'target-1',
@@ -2166,6 +2216,7 @@ describe('BrowserPage events', () => {
 			'Runtime.enable',
 			'Page.setLifecycleEventsEnabled',
 			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
 			'Page.setInterceptFileChooserDialog',
 			'Network.enable',
 		])
@@ -2201,89 +2252,139 @@ describe('BrowserPage events', () => {
 		expect(page.opener).toBe(opener)
 	})
 
-	it('detaches a popup attached through its opener session on that session when its setup fails', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		replyOk(transport, 'Page.enable')
-		replyOk(transport, 'Runtime.enable')
-		replyOk(transport, 'Page.setLifecycleEventsEnabled')
-		replyOk(transport, 'Page.getFrameTree', {
-			frameTree: { frame: { id: 'popup-frame', url: 'https://example.com/popup' } },
-		})
-		transport.onSend('Target.setAutoAttach', (message) =>
-			transport.fail(message.id, 'Target closed'),
-		)
-		replyOk(transport, 'Target.detachFromTarget')
-		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const popups = createRecorder<[page: BrowserPageInterface]>()
-		page.emitter.on('popup', popups.handler)
+	it.each([
+		['answered', false],
+		['refused', true],
+	] as const)(
+		'destroys a popup whose setup fails only after its resume is %s',
+		async (_reply, refused) => {
+			const { client, transport } = await createConnectedCDPClient()
+			const resumes: CDPSentMessage[] = []
+			replyOk(transport, 'Page.enable')
+			replyOk(transport, 'Runtime.enable')
+			replyOk(transport, 'Page.setLifecycleEventsEnabled')
+			replyOk(transport, 'Page.getFrameTree', {
+				frameTree: { frame: { id: 'popup-frame', url: 'https://example.com/popup' } },
+			})
+			transport.onSend('Target.setAutoAttach', (message) =>
+				transport.fail(message.id, 'Target closed'),
+			)
+			replyOk(transport, 'Target.detachFromTarget')
+			transport.onSend('Runtime.runIfWaitingForDebugger', (message) => resumes.push(message))
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			const popups = createRecorder<[page: BrowserPageInterface]>()
+			page.emitter.on('popup', popups.handler)
+			try {
+				transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: 'popup-child',
+						targetInfo: { targetId: 'popup-1', type: 'page', url: 'https://example.com/popup' },
+					},
+					'session-1',
+				)
+				await waitForCondition('the popup resume is withheld', () => resumes.length === 1)
+				await waitForDelay(20)
+				const resume = requireValue(resumes[0])
+				expect(transport.sent.slice(transport.sent.indexOf(resume) + 1)).toEqual([])
+				if (refused) transport.fail(resume.id, 'Target closed')
+				else transport.reply(resume.id, {})
+				await waitForCondition('the popup session detaches', () =>
+					transport.sent.some((message) => message.method === 'Target.detachFromTarget'),
+				)
+				expect([
+					popups.count,
+					transport.sent
+						.filter((message) => message.method === 'Target.detachFromTarget')
+						.map((message) => [message.params?.['sessionId'], message.sessionId]),
+					readCDPSessionMethods(transport, 'popup-child').slice(-2),
+				]).toEqual([
+					0,
+					[['popup-child', 'session-1']],
+					['Runtime.runIfWaitingForDebugger', 'Target.detachFromTarget'],
+				])
+			} finally {
+				await client.close()
+			}
+		},
+	)
 
-		transport.event(
-			'Target.attachedToTarget',
-			{
-				sessionId: 'popup-child',
-				targetInfo: { targetId: 'popup-1', type: 'page', url: 'https://example.com/popup' },
-			},
-			'session-1',
-		)
-		await waitForCondition('the popup session detaches', () =>
-			transport.sent.some((message) => message.method === 'Target.detachFromTarget'),
-		)
-
-		expect(popups.count).toBe(0)
-		expect(
-			transport.sent
-				.filter((message) => message.method === 'Target.detachFromTarget')
-				.map((message) => [message.params?.['sessionId'], message.sessionId]),
-		).toEqual([['popup-child', 'session-1']])
-	})
-
-	it('detaches a child frame or worker session whose setup fails through the page session', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		transport.onSend('Page.enable', (message) => {
-			if (message.sessionId === 'frame-child') transport.fail(message.id, 'Target closed')
-			else transport.reply(message.id, {})
-		})
-		transport.onSend('Runtime.enable', (message) => {
-			if (message.sessionId === 'worker-child') transport.fail(message.id, 'Target closed')
-			else transport.reply(message.id, {})
-		})
-		replyOk(transport, 'Target.detachFromTarget')
-		const page = new BrowserPage(client, 'target-1', 'session-1')
-
-		transport.event(
-			'Target.attachedToTarget',
-			{
-				sessionId: 'frame-child',
-				targetInfo: { targetId: 'frame-1', type: 'iframe', url: 'https://example.com/frame' },
-			},
-			'session-1',
-		)
-		transport.event(
-			'Target.attachedToTarget',
-			{
-				sessionId: 'worker-child',
-				targetInfo: { targetId: 'worker-1', type: 'worker', url: 'https://example.com/w.js' },
-			},
-			'session-1',
-		)
-		await waitForCondition(
-			'both child sessions detach',
-			() =>
-				transport.sent.filter((message) => message.method === 'Target.detachFromTarget').length ===
-				2,
-		)
-
-		expect(
-			transport.sent
-				.filter((message) => message.method === 'Target.detachFromTarget')
-				.map((message) => [message.params?.['sessionId'], message.sessionId])
-				.sort(),
-		).toEqual([
-			['frame-child', 'session-1'],
-			['worker-child', 'session-1'],
-		])
-		expect(page.closed).toBe(false)
-	})
+	it.each([
+		['answered', false],
+		['refused', true],
+	] as const)(
+		'detaches through the page session a child frame or worker session whose setup fails only after its resume is %s, and enables it no further',
+		async (_reply, refused) => {
+			const { client, transport } = await createConnectedCDPClient()
+			const resumes: CDPSentMessage[] = []
+			transport.onSend('Page.enable', (message) => {
+				if (message.sessionId === 'frame-child') transport.fail(message.id, 'Target closed')
+				else transport.reply(message.id, {})
+			})
+			transport.onSend('Runtime.enable', (message) => {
+				if (message.sessionId === 'worker-child') transport.fail(message.id, 'Target closed')
+				else transport.reply(message.id, {})
+			})
+			replyOk(transport, 'Target.detachFromTarget')
+			transport.onSend('Runtime.runIfWaitingForDebugger', (message) => resumes.push(message))
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			try {
+				transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: 'frame-child',
+						targetInfo: { targetId: 'frame-1', type: 'iframe', url: 'https://example.com/frame' },
+					},
+					'session-1',
+				)
+				transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: 'worker-child',
+						targetInfo: { targetId: 'worker-1', type: 'worker', url: 'https://example.com/w.js' },
+					},
+					'session-1',
+				)
+				await waitForCondition('both resumes are withheld', () => resumes.length === 2)
+				await waitForDelay(20)
+				expect(
+					transport.sent.filter((message) => message.method === 'Target.detachFromTarget'),
+				).toEqual([])
+				for (const resume of resumes)
+					if (refused) transport.fail(resume.id, 'Target closed')
+					else transport.reply(resume.id, {})
+				await waitForCondition(
+					'both child sessions detach',
+					() =>
+						transport.sent.filter((message) => message.method === 'Target.detachFromTarget')
+							.length === 2,
+				)
+				await waitForDelay(20)
+				expect([
+					transport.sent
+						.filter((message) => message.method === 'Target.detachFromTarget')
+						.map((message) => [message.params?.['sessionId'], message.sessionId])
+						.sort(),
+					['frame-child', 'worker-child'].map((session) =>
+						readCDPSessionMethods(transport, session),
+					),
+					page.closed,
+				]).toEqual([
+					[
+						['frame-child', 'session-1'],
+						['worker-child', 'session-1'],
+					],
+					[
+						['Page.enable', 'Runtime.runIfWaitingForDebugger', 'Target.detachFromTarget'],
+						['Runtime.enable', 'Runtime.runIfWaitingForDebugger', 'Target.detachFromTarget'],
+					],
+					false,
+				])
+			} finally {
+				await client.close()
+			}
+		},
+	)
 
 	it('emits frame attach/detach and crash lifecycle events', async () => {
 		const { client, transport } = await createConnectedCDPClient()
@@ -2419,6 +2520,9 @@ describe('BrowserPage navigation and session events', () => {
 		scriptFrameTree(transport)
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 		scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
 		const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -2435,10 +2539,20 @@ describe('BrowserPage navigation and session events', () => {
 		)
 		await waitForCondition('the session event was delivered', () => sessions.count === 1)
 
-		const methods = transport.sent
-			.filter((message) => message.sessionId === 'session-oopif')
-			.map((message) => message.method)
-		expect(methods).toEqual(['Page.enable', 'Runtime.enable', 'Page.getFrameTree'])
+		expect(readCDPSessionMethods(transport, 'session-oopif')).toEqual([
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+			'Page.getFrameTree',
+		])
+		expect(readCDPParams(transport, 'Target.setAutoAttach').at(-1)).toEqual({
+			autoAttach: true,
+			waitForDebuggerOnStart: true,
+			flatten: true,
+			filter: [{ type: 'iframe' }],
+		})
 		const frame = requireValue(sessions.calls[0]?.[0])
 		expect(frame.id).toBe('oopif-7')
 		expect(frame.url).toBe('https://other.example/embed')
@@ -2463,6 +2577,7 @@ describe('BrowserPage navigation and session events', () => {
 		scriptFrameTree(transport)
 		transport.onSend('Page.enable', (message) => transport.fail(message.id, 'enable failed'))
 		replyOk(transport, 'Target.detachFromTarget')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2488,6 +2603,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		const enables: number[] = []
 		transport.onSend('Page.enable', (message) => enables.push(message.id))
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 		scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
@@ -2520,6 +2638,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		scriptFrameTree(transport)
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 		scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
@@ -2552,6 +2673,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		const enables: number[] = []
 		transport.onSend('Page.enable', (message) => enables.push(message.id))
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		const detached = createRecorder<[frame: string]>()
@@ -2617,6 +2741,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		scriptFrameTree(transport)
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2658,6 +2785,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		const enables: number[] = []
 		transport.onSend('Page.enable', (message) => enables.push(message.id))
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2691,6 +2821,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		scriptFrameTree(transport)
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2739,6 +2872,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		)
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2779,6 +2915,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		})
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2819,6 +2958,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		})
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2850,6 +2992,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 			else transport.reply(message.id, {})
 		})
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		replyOk(transport, 'Target.detachFromTarget')
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 84 })
 		scriptEvaluate(transport, (expression) => expression.includes('40 + 2'), 42)
@@ -2898,6 +3043,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		scriptFrameTree(transport)
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -2943,6 +3091,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 		scriptFrameTree(transport)
 		replyOk(transport, 'Page.enable')
 		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
 		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 		page.emitter.on('session', sessions.handler)
@@ -3367,4 +3518,1062 @@ describe('BrowserPage navigation completion under a signal', () => {
 			}
 		},
 	)
+})
+
+describe('BrowserPage navigation steps', () => {
+	it('starts a record from the started step with its loader, else from a request in the current tab', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		try {
+			const record = page.navigation.record('main')
+			const started = createRecorder<[]>()
+			void record.wait().then(started.handler)
+			transport.event(
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'anchorClick',
+					url: 'https://example.test/help',
+					disposition: 'newTab',
+				},
+				'session-main',
+			)
+			await waitForDelay()
+			expect(started.count).toBe(0)
+			transport.event(
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/cart',
+					loaderId: 'loader-cart',
+					navigationType: 'differentDocument',
+				},
+				'session-main',
+			)
+			await waitForDelay()
+			expect(started.count).toBe(1)
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'main', url: 'https://example.test/old', loaderId: 'loader-old' } },
+				'session-main',
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://example.test/cart',
+				stage: 'requested',
+			})
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'main', url: 'https://example.test/cart', loaderId: 'loader-cart' } },
+				'session-main',
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://example.test/cart',
+				stage: 'committed',
+			})
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'main', loaderId: 'loader-cart', name: 'load' },
+				'session-main',
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://example.test/cart',
+				stage: 'loaded',
+			})
+			record.destroy()
+
+			const fallback = page.navigation.record('main')
+			transport.event(
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/receipt',
+					disposition: 'currentTab',
+				},
+				'session-main',
+			)
+			await fallback.wait({ timeout: 1_000 })
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'main', url: 'https://example.test/receipt', loaderId: 'loader-any' } },
+				'session-main',
+			)
+			expect(await fallback.settle({ timeout: 0 })).toEqual({
+				url: 'https://example.test/receipt',
+				stage: 'committed',
+			})
+			fallback.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('reports a frame session load by its loader and a stop only after a commit that named no loader', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		scriptFrameTree(
+			transport,
+			new Map([
+				[
+					'session-child',
+					{
+						id: 'child',
+						parentId: 'main',
+						url: 'https://other.test/field',
+						loaderId: 'loader-field',
+					},
+				],
+			]),
+		)
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: {
+						targetId: 'child',
+						type: 'iframe',
+						url: 'https://other.test/field',
+						parentFrameId: 'main',
+					},
+				},
+				'session-main',
+			)
+			await waitForCondition('the frame session is published', () => sessions.count === 1)
+			const record = page.navigation.record('child')
+			for (const [method, params] of [
+				[
+					'Page.frameStartedNavigating',
+					{ frameId: 'child', url: 'https://other.test/done', loaderId: 'loader-done' },
+				],
+				[
+					'Page.frameNavigated',
+					{ frame: { id: 'child', url: 'https://other.test/done', loaderId: 'loader-done' } },
+				],
+				['Page.frameStoppedLoading', { frameId: 'child' }],
+				['Page.lifecycleEvent', { frameId: 'child', loaderId: 'loader-replay', name: 'load' }],
+			] as const)
+				transport.event(method, params, 'session-child')
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/done',
+				stage: 'committed',
+			})
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'child', loaderId: 'loader-done', name: 'load' },
+				'session-child',
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/done',
+				stage: 'loaded',
+			})
+			record.destroy()
+
+			const loaderless = page.navigation.record('child')
+			transport.event(
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'child',
+					reason: 'formSubmissionGet',
+					url: 'https://other.test/next',
+					disposition: 'currentTab',
+				},
+				'session-child',
+			)
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'child', url: 'https://other.test/next' } },
+				'session-child',
+			)
+			expect(await loaderless.settle({ timeout: 0 })).toHaveProperty('stage', 'committed')
+			transport.event('Page.frameStoppedLoading', { frameId: 'child' }, 'session-child')
+			expect(await loaderless.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/next',
+				stage: 'loaded',
+			})
+			loaderless.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('settles an out-of-process frame navigation from the commit and load its session reports after the page resumes it', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const enables: number[] = []
+		transport.onSend('Page.enable', (message) => enables.push(message.id))
+		for (const method of [
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		scriptFrameTree(transport)
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		const detached = createRecorder<[frame: string]>()
+		page.emitter.on('session', sessions.handler)
+		page.emitter.on('detach', detached.handler)
+		try {
+			transport.event(
+				'Page.frameAttached',
+				{ frameId: 'child', parentFrameId: 'main' },
+				'session-main',
+			)
+			const record = page.navigation.record('child')
+			emitBrowserNavigation(
+				transport,
+				'session-main',
+				'child',
+				'https://other.test/field',
+				'loader-field',
+				['request', 'start'],
+			)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: {
+						targetId: 'child',
+						type: 'iframe',
+						url: 'https://other.test/field',
+						parentFrameId: 'main',
+					},
+				},
+				'session-main',
+			)
+			transport.event('Page.frameDetached', { frameId: 'child', reason: 'swap' }, 'session-main')
+			await waitForCondition('the enable is withheld', () => enables.length === 1)
+			expect([
+				await record.settle({ timeout: 0 }),
+				detached.count,
+				readCDPSessionMethods(transport, 'session-child'),
+			]).toEqual([{ url: 'https://other.test/field', stage: 'requested' }, 0, ['Page.enable']])
+			transport.reply(requireValue(enables[0]), {})
+			await waitForCondition('the frame session is published', () => sessions.count === 1)
+			await waitForDelay(20)
+			expect([
+				await record.settle({ timeout: 0 }),
+				readCDPSessionMethods(transport, 'session-child'),
+			]).toEqual([
+				{ url: 'https://other.test/field', stage: 'requested' },
+				[
+					'Page.enable',
+					'Runtime.enable',
+					'Page.setLifecycleEventsEnabled',
+					'Target.setAutoAttach',
+					'Runtime.runIfWaitingForDebugger',
+				],
+			])
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/field',
+				'loader-field',
+				['commit'],
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/field',
+				stage: 'committed',
+			})
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/field',
+				'loader-field',
+				['load'],
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/field',
+				stage: 'loaded',
+			})
+			expect((await page.frames()).find((frame) => frame.id === 'child')?.parent).toBe('main')
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('ignores a commit and stop from the session a nested frame left for its own session', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const held: number[] = []
+		transport.onSend('Page.enable', (message) => {
+			if (message.sessionId === 'session-nested') held.push(message.id)
+			else transport.reply(message.id, {})
+		})
+		for (const method of [
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 7 })
+		scriptEvaluate(transport, (expression) => expression.includes(compileReadFunction()), {
+			url: 'https://a.test/inner',
+			title: 'Inner',
+			html: '<p>Inner</p>',
+		})
+		scriptFrameTree(
+			transport,
+			new Map([
+				[
+					'session-child',
+					{ id: 'child', parentId: 'main', url: 'https://b.test/middle', loaderId: 'loader-b' },
+				],
+				[
+					'session-nested',
+					{
+						id: 'nested',
+						parentId: 'child',
+						url: 'https://a.test/inner',
+						loaderId: 'loader-inner',
+					},
+				],
+			]),
+		)
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: {
+						targetId: 'child',
+						type: 'iframe',
+						url: 'https://b.test/middle',
+						parentFrameId: 'main',
+					},
+				},
+				'session-main',
+			)
+			await waitForCondition('the middle frame is published', () => sessions.count === 1)
+			// The middle frame's session attaches the frames nested in it.
+			expect(readCDPParams(transport, 'Target.setAutoAttach')).toHaveLength(1)
+			transport.event(
+				'Page.frameAttached',
+				{ frameId: 'nested', parentFrameId: 'child' },
+				'session-child',
+			)
+			const record = page.navigation.record('nested')
+			transport.event(
+				'Page.frameStartedNavigating',
+				{ frameId: 'nested', url: 'https://a.test/inner', loaderId: 'loader-inner' },
+				'session-child',
+			)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-nested',
+					targetInfo: {
+						targetId: 'nested',
+						type: 'iframe',
+						url: 'https://a.test/inner',
+						parentFrameId: 'child',
+					},
+				},
+				'session-child',
+			)
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'nested', url: 'https://b.test/stale' } },
+				'session-child',
+			)
+			transport.event('Page.frameStoppedLoading', { frameId: 'nested' }, 'session-child')
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://a.test/inner',
+				stage: 'requested',
+			})
+			transport.reply(requireValue(held[0]), {})
+			await waitForCondition('the nested frame is published', () => sessions.count === 2)
+			expect(requireValue(sessions.calls[1])[0].parent).toBe('child')
+			await waitForDelay(20)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://a.test/inner',
+				stage: 'requested',
+			})
+			transport.event(
+				'Page.frameNavigated',
+				{
+					frame: {
+						id: 'nested',
+						parentId: 'child',
+						url: 'https://a.test/inner',
+						loaderId: 'loader-inner',
+					},
+				},
+				'session-nested',
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://a.test/inner',
+				stage: 'committed',
+			})
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'nested', loaderId: 'loader-inner', name: 'load' },
+				'session-nested',
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://a.test/inner',
+				stage: 'loaded',
+			})
+			record.destroy()
+			// A stale report from the session the frame left changes nothing about its current
+			// document, while a report from its own session replaces it.
+			const reading = await requireValue(sessions.calls[1])[0].read()
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'nested', url: 'https://b.test/stale-again' } },
+				'session-child',
+			)
+			transport.event(
+				'Page.frameDetached',
+				{ frameId: 'nested', reason: 'remove' },
+				'session-child',
+			)
+			expect(reading.stale).toBe(false)
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'nested', url: 'https://a.test/next', loaderId: 'loader-next' } },
+				'session-nested',
+			)
+			expect(reading.stale).toBe(true)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('keeps a navigation that starts while its frame publishes from completing on the document the frame already reported', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const trees: CDPSentMessage[] = []
+		for (const method of [
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		transport.onSend('Page.getFrameTree', (message) => trees.push(message))
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: {
+						targetId: 'child',
+						type: 'iframe',
+						url: 'https://other.test/field',
+					},
+				},
+				'session-main',
+			)
+			await waitForCondition('the frame tree read is withheld', () => trees.length === 1)
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/a',
+				'loader-a',
+				['request', 'start'],
+			)
+			const record = page.navigation.record('child')
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/a',
+				'loader-a',
+				['commit'],
+			)
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/b',
+				'loader-b',
+				['request', 'start'],
+			)
+			transport.reply(requireValue(trees[0]).id, {
+				frameTree: {
+					frame: {
+						id: 'child',
+						parentId: 'main',
+						url: 'https://other.test/a',
+						loaderId: 'loader-a',
+					},
+				},
+			})
+			await waitForCondition('the frame is published', () => sessions.count === 1)
+			await waitForDelay(20)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/b',
+				stage: 'requested',
+			})
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/b',
+				'loader-b',
+				['commit'],
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/b',
+				stage: 'committed',
+			})
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/b',
+				'loader-b',
+				['load'],
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/b',
+				stage: 'loaded',
+			})
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('publishes no commit for a document its session reported through a same-document navigation', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const trees: CDPSentMessage[] = []
+		for (const method of [
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		transport.onSend('Page.getFrameTree', (message) => trees.push(message))
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: {
+						targetId: 'child',
+						type: 'iframe',
+						url: 'https://other.test/a',
+					},
+				},
+				'session-main',
+			)
+			await waitForCondition('the frame tree read is withheld', () => trees.length === 1)
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'child', url: 'https://other.test/a#placed', navigationType: 'fragment' },
+				'session-child',
+			)
+			const record = page.navigation.record('child')
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/b',
+				'loader-b',
+				['request'],
+			)
+			transport.reply(requireValue(trees[0]).id, {
+				frameTree: {
+					frame: {
+						id: 'child',
+						parentId: 'main',
+						url: 'https://other.test/a',
+						loaderId: 'loader-a',
+					},
+				},
+			})
+			await waitForCondition('the frame is published', () => sessions.count === 1)
+			await waitForDelay(20)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/b',
+				stage: 'requested',
+			})
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/b',
+				'loader-b',
+				['commit'],
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/b',
+				stage: 'committed',
+			})
+			emitBrowserNavigation(
+				transport,
+				'session-child',
+				'child',
+				'https://other.test/b',
+				'loader-b',
+				['load'],
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/b',
+				stage: 'loaded',
+			})
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('reports no load for a reported document when its frame tree or a later start names a newer one', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const trees = new Map<string, CDPSentMessage>()
+		for (const method of [
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		transport.onSend('Page.getFrameTree', (message) => trees.set(message.sessionId ?? '', message))
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			for (const frame of ['voucher', 'coupon'])
+				transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: `session-${frame}`,
+						targetInfo: {
+							targetId: frame,
+							type: 'iframe',
+							url: 'about:blank',
+						},
+					},
+					'session-main',
+				)
+			await waitForCondition('both frame tree reads are withheld', () => trees.size === 2)
+			// The voucher frame's tree names a newer document at the same URL.
+			const voucher = page.navigation.record('voucher')
+			emitBrowserNavigation(
+				transport,
+				'session-voucher',
+				'voucher',
+				'https://other.test/voucher',
+				'loader-a',
+				['request', 'start', 'commit'],
+			)
+			const resubmitted = page.navigation.record('voucher')
+			emitBrowserNavigation(
+				transport,
+				'session-voucher',
+				'voucher',
+				'https://other.test/voucher',
+				'loader-b',
+				['request', 'start'],
+			)
+			transport.reply(requireValue(trees.get('session-voucher')).id, {
+				frameTree: {
+					frame: {
+						id: 'voucher',
+						parentId: 'main',
+						url: 'https://other.test/voucher',
+						loaderId: 'loader-b',
+					},
+				},
+			})
+			// The coupon frame's tree names the reported document, and a newer one starts after publication.
+			const coupon = page.navigation.record('coupon')
+			emitBrowserNavigation(
+				transport,
+				'session-coupon',
+				'coupon',
+				'https://other.test/c',
+				'loader-c',
+				['request', 'start', 'commit'],
+			)
+			transport.reply(requireValue(trees.get('session-coupon')).id, {
+				frameTree: {
+					frame: {
+						id: 'coupon',
+						parentId: 'main',
+						url: 'https://other.test/c',
+						loaderId: 'loader-c',
+					},
+				},
+			})
+			await waitForCondition('both frames are published', () => sessions.count === 2)
+			emitBrowserNavigation(
+				transport,
+				'session-coupon',
+				'coupon',
+				'https://other.test/d',
+				'loader-d',
+				['request', 'start'],
+			)
+			await waitForDelay(20)
+			expect(
+				await Promise.all(
+					[voucher, coupon, resubmitted].map((record) => record.settle({ timeout: 0 })),
+				),
+			).toEqual([
+				{ url: 'https://other.test/voucher', stage: 'committed' },
+				{ url: 'https://other.test/c', stage: 'committed' },
+				{ url: 'https://other.test/voucher', stage: 'requested' },
+			])
+			emitBrowserNavigation(
+				transport,
+				'session-voucher',
+				'voucher',
+				'https://other.test/voucher',
+				'loader-b',
+				['commit'],
+			)
+			expect(await resubmitted.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/voucher',
+				stage: 'committed',
+			})
+			emitBrowserNavigation(
+				transport,
+				'session-voucher',
+				'voucher',
+				'https://other.test/voucher',
+				'loader-b',
+				['load'],
+			)
+			expect(await resubmitted.settle({ timeout: 0 })).toEqual({
+				url: 'https://other.test/voucher',
+				stage: 'loaded',
+			})
+			for (const record of [voucher, coupon, resubmitted]) record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('resumes a frame session and reads its frame tree only after its lifecycle events and auto-attach are in effect', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const held: CDPSentMessage[] = []
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
+		for (const method of ['Page.setLifecycleEventsEnabled', 'Target.setAutoAttach'])
+			transport.onSend(method, (message) => held.push(message))
+		scriptFrameTree(transport)
+		const trees: CDPSentMessage[] = []
+		transport.onSend('Page.getFrameTree', (message) => {
+			if (message.sessionId === 'session-child') trees.push(message)
+		})
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: { targetId: 'child', type: 'iframe', url: 'https://other.test/field' },
+				},
+				'session-main',
+			)
+			await waitForCondition('lifecycle enablement is sent', () => held.length > 0)
+			await waitForDelay(20)
+			expect([held.map((message) => message.method), trees.length]).toEqual([
+				['Page.setLifecycleEventsEnabled'],
+				0,
+			])
+			transport.reply(requireValue(held[0]).id, {})
+			await waitForCondition('auto-attach is sent', () => held.length === 2)
+			await waitForDelay(20)
+			expect(readCDPSessionMethods(transport, 'session-child')).toEqual([
+				'Page.enable',
+				'Runtime.enable',
+				'Page.setLifecycleEventsEnabled',
+				'Target.setAutoAttach',
+			])
+			transport.reply(requireValue(held[1]).id, {})
+			await waitForCondition(
+				'the frame is published after its tree read',
+				() => sessions.count === 1,
+			)
+			expect(readCDPSessionMethods(transport, 'session-child').slice(-2)).toEqual([
+				'Runtime.runIfWaitingForDebugger',
+				'Page.getFrameTree',
+			])
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('reads the frame tree and publishes a frame session without waiting for its resume reply, and sends nothing when the reply arrives', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const resumes: CDPSentMessage[] = []
+		for (const method of [
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+		])
+			replyOk(transport, method)
+		transport.onSend('Runtime.runIfWaitingForDebugger', (message) => resumes.push(message))
+		scriptFrameTree(
+			transport,
+			new Map([
+				['session-child', { id: 'child', parentId: 'main', url: 'https://other.test/field' }],
+			]),
+		)
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: { targetId: 'child', type: 'iframe', url: 'https://other.test/field' },
+				},
+				'session-main',
+			)
+			await waitForCondition(
+				'the frame is published with its resume unanswered',
+				() => sessions.count === 1,
+			)
+			expect([
+				resumes.length,
+				readCDPSessionMethods(transport, 'session-child'),
+				requireValue(sessions.calls[0])[0].parent,
+			]).toEqual([
+				1,
+				[
+					'Page.enable',
+					'Runtime.enable',
+					'Page.setLifecycleEventsEnabled',
+					'Target.setAutoAttach',
+					'Runtime.runIfWaitingForDebugger',
+					'Page.getFrameTree',
+				],
+				'main',
+			])
+			const sent = transport.sent.length
+			transport.reply(requireValue(resumes[0]).id, {})
+			await waitForDelay(20)
+			expect(transport.sent).toHaveLength(sent)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('publishes a nested frame that attaches through its parent session while the parent publication is pending', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const held: number[] = []
+		transport.onSend('Page.enable', (message) => {
+			if (message.sessionId === 'session-child') held.push(message.id)
+			else transport.reply(message.id, {})
+		})
+		for (const method of [
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		scriptFrameTree(
+			transport,
+			new Map([
+				[
+					'session-child',
+					{ id: 'child', parentId: 'main', url: 'https://b.test/middle', loaderId: 'loader-b' },
+				],
+				[
+					'session-nested',
+					{ id: 'nested', parentId: 'child', url: 'https://a.test/inner', loaderId: 'loader-a' },
+				],
+			]),
+		)
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child',
+					targetInfo: {
+						targetId: 'child',
+						type: 'iframe',
+						url: 'https://b.test/middle',
+						parentFrameId: 'main',
+					},
+				},
+				'session-main',
+			)
+			await waitForCondition('the middle enable is withheld', () => held.length === 1)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-nested',
+					targetInfo: {
+						targetId: 'nested',
+						type: 'iframe',
+						url: 'https://a.test/inner',
+						parentFrameId: 'child',
+					},
+				},
+				'session-child',
+			)
+			await waitForCondition('the nested frame is published', () => sessions.count === 1)
+			expect([
+				requireValue(sessions.calls[0])[0].id,
+				requireValue(sessions.calls[0])[0].parent,
+			]).toEqual(['nested', 'child'])
+			const record = page.navigation.record('nested')
+			emitBrowserNavigation(
+				transport,
+				'session-nested',
+				'nested',
+				'https://a.test/next',
+				'loader-next',
+			)
+			expect(await record.settle({ timeout: 0 })).toEqual({
+				url: 'https://a.test/next',
+				stage: 'loaded',
+			})
+			record.destroy()
+			transport.reply(requireValue(held[0]), {})
+			await waitForCondition('the middle frame is published', () => sessions.count === 2)
+			expect(requireValue(sessions.calls[1])[0].id).toBe('child')
+		} finally {
+			await client.close()
+		}
+	})
+
+	it.each([
+		['before', true],
+		['after', false],
+	] as const)(
+		'finds a named-parent frame by the name its session commit reports %s publication',
+		async (_order, early) => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			for (const method of [
+				'Page.enable',
+				'Runtime.enable',
+				'Page.setLifecycleEventsEnabled',
+				'Runtime.runIfWaitingForDebugger',
+			])
+				replyOk(transport, method)
+			transport.onSend('Target.setAutoAttach', (message) => held.push(message))
+			scriptFrameTree(transport)
+			const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+			const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+			page.emitter.on('session', sessions.handler)
+			const commit = {
+				frame: {
+					id: 'child',
+					parentId: 'main',
+					name: 'checkout',
+					url: 'https://other.test/checkout',
+					loaderId: 'loader-checkout',
+				},
+			}
+			try {
+				transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: 'session-child',
+						targetInfo: {
+							targetId: 'child',
+							type: 'iframe',
+							url: 'https://other.test/checkout',
+							parentFrameId: 'main',
+						},
+					},
+					'session-main',
+				)
+				await waitForCondition('the auto-attach is withheld', () => held.length === 1)
+				if (early) transport.event('Page.frameNavigated', commit, 'session-child')
+				transport.reply(requireValue(held[0]).id, {})
+				await waitForCondition('the frame is published', () => sessions.count === 1)
+				if (!early) transport.event('Page.frameNavigated', commit, 'session-child')
+				const found = await page.frame('checkout')
+				expect([found?.id, found?.url, found?.name]).toEqual([
+					'child',
+					'https://other.test/checkout',
+					'checkout',
+				])
+			} finally {
+				await client.close()
+			}
+		},
+	)
+
+	it('names a published frame parent from its target and leaves an unnamed parent unknown', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Runtime.runIfWaitingForDebugger',
+		])
+			replyOk(transport, method)
+		scriptFrameTree(
+			transport,
+			new Map([['session-orphan', { id: 'orphan-9', url: 'https://other.example/orphan' }]]),
+		)
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+		const sessions = createRecorder<[frame: BrowserFrameInterface]>()
+		page.emitter.on('session', sessions.handler)
+		try {
+			for (const [session, target] of [
+				[
+					'session-oopif',
+					{
+						targetId: 'oopif-7',
+						type: 'iframe',
+						url: 'https://other.example/embed',
+						parentFrameId: 'child-1',
+					},
+				],
+				[
+					'session-orphan',
+					{ targetId: 'orphan-9', type: 'iframe', url: 'https://other.example/orphan' },
+				],
+			] as const)
+				transport.event(
+					'Target.attachedToTarget',
+					{ sessionId: session, targetInfo: target },
+					'session-1',
+				)
+			await waitForCondition('both frames are published', () => sessions.count === 2)
+			const frames = await page.frames()
+			expect(frames.find((frame) => frame.id === 'oopif-7')?.parent).toBe('child-1')
+			expect(frames.find((frame) => frame.id === 'orphan-9')?.parent).toBeUndefined()
+		} finally {
+			await client.close()
+		}
+	})
 })

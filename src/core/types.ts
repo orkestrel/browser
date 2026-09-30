@@ -280,6 +280,104 @@ export interface BrowserNavigationManagerInterface {
 	 * timeout, and with `signal.reason` on abort.
 	 */
 	idle(options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Opens a record of the navigations the page's frames start from this call on, for an input
+	 * dispatched into `frame` next. Thrown when the page is closed: the page's closed error.
+	 */
+	record(frame: string): BrowserNavigationRecordInterface
+}
+
+/**
+ * Settles the navigation an input into one frame started, from the steps the page accepted after
+ * the record opened.
+ *
+ * @remarks
+ * The record's eligible frames are its frame, every ancestor the page can name, and the main
+ * frame, plus each frame a `settle` destination resolves to. The earliest eligible start is
+ * selected; a later start in that frame before its commit supersedes it; the commit carries the
+ * selected loader when both are known, else it is the frame's first commit after the start; the
+ * load carries the commit's loader; and a same-document commit completes the navigation.
+ */
+export interface BrowserNavigationRecordInterface {
+	/**
+	 * Resolves when the record's frame or one of its ancestors starts a navigation after the record
+	 * opened. Rejects at `timeout` with `BROWSER_NAVIGATION_TIMEOUT`, with `signal.reason` on abort,
+	 * and when the record ends or the page closes.
+	 */
+	wait(options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Follows the earliest navigation started after the record opened in the record's frame, one of
+	 * its ancestors, or a frame `destinations` names, waiting within `timeout` for a destination to
+	 * start one. Resolves with the stage reached at completion or at `timeout`, or `undefined` when
+	 * none started; a selected frame that detaches ends the wait with the stage it reached. Rejects
+	 * with `signal.reason` on abort, and when the record ends or the page closes.
+	 */
+	settle(options?: BrowserSettlementOptions): Promise<BrowserSettlementResult | undefined>
+	/** Ends the record and rejects a pending `wait` or `settle`. */
+	destroy(): void
+}
+
+/**
+ * Names the frame a submission targets relative to the frame whose document submitted, mirroring
+ * the HTML `_self`, `_parent`, and `_top` keywords.
+ */
+export type BrowserDestinationRelationship = 'self' | 'parent' | 'top'
+
+/**
+ * Pairs a document that recorded a surviving submission with the submission's destination.
+ *
+ * @remarks
+ * - `frame` — the id of the frame whose document submitted
+ * - `relationship` — the destination relative to that frame
+ */
+export interface BrowserDestination {
+	readonly frame: string
+	readonly relationship: BrowserDestinationRelationship
+}
+
+/**
+ * Configures a record's settlement.
+ *
+ * @remarks
+ * - `destinations` — the submissions whose destination frames become eligible; a destination
+ *   whose parent the page cannot name makes the first start in any frame eligible
+ * - `timeout` — bounds the settlement, which then resolves with the stage it reached
+ */
+export interface BrowserSettlementOptions extends BrowserCallOptions {
+	readonly destinations?: readonly BrowserDestination[]
+}
+
+/** Names how far a settled navigation got: requested, committed, or loaded. */
+export type BrowserNavigationStage = 'requested' | 'committed' | 'loaded'
+
+/**
+ * Describes the navigation a record settled.
+ *
+ * @remarks
+ * - `url` — the requested URL for `requested`, and the committed URL otherwise
+ * - `stage` — how far the navigation got
+ */
+export interface BrowserSettlementResult {
+	readonly url: string
+	readonly stage: BrowserNavigationStage
+}
+
+/**
+ * Maps the navigation steps a page accepts from the session that owns each frame, which it hands to
+ * its navigation and element managers.
+ *
+ * @remarks
+ * - `request` — a frame started a navigation, with its loader when the protocol names one
+ * - `commit` — a frame committed a document, or a same-document navigation when `same` is `true`
+ * - `load` — a frame's document loaded, with the loader of its commit
+ * - `detach` — a frame left its document; `swapped` is `true` when the frame persists in another
+ *   renderer
+ */
+export type BrowserNavigationEventMap = {
+	readonly request: readonly [frame: string, url: string, loader: string | undefined]
+	readonly commit: readonly [frame: string, url: string, loader: string | undefined, same: boolean]
+	readonly load: readonly [frame: string, loader: string | undefined]
+	readonly detach: readonly [frame: string, swapped: boolean]
 }
 
 /**
@@ -1736,9 +1834,15 @@ export type BrowserElementPointFunction = (
 	options?: BrowserCallOptions,
 ) => Promise<BrowserPoint>
 
-/** Provides the protocol and ownership boundaries used by a page element manager. */
+/**
+ * Provides the protocol and ownership boundaries used by a page element manager.
+ *
+ * @remarks
+ * - `steps` — the navigation steps the page accepts from the session that owns each frame
+ */
 export interface BrowserElementManagerInput {
 	readonly navigation: (frame: string) => number
+	readonly steps: EmitterInterface<BrowserNavigationEventMap>
 	readonly page: BrowserPageInterface
 	readonly client: CDPClientInterface
 	readonly session: string
@@ -2127,9 +2231,6 @@ export interface BrowserToolsetWatch {
 	readonly dialog: (dialog: BrowserDialogInterface) => void
 	readonly popup: (page: BrowserPageInterface) => void
 	readonly close: () => void
-	readonly requested: CDPHandler
-	readonly navigated: CDPHandler
-	readonly lifecycle: CDPHandler
 	readonly closed: CDPHandler
 }
 
@@ -2219,10 +2320,7 @@ export interface BrowserFrameInterface {
 	): Promise<unknown>
 	/** Subscribes to a CDP event in the frame's current target session. */
 	subscribe(method: string, handler: CDPHandler): Promise<void>
-	/**
-	 * Removes a frame-session CDP event subscription from every session this frame object made it on,
-	 * so a frame that moved to another session releases the registration where it was made.
-	 */
+	/** Removes a frame-session CDP event subscription. */
 	unsubscribe(method: string, handler: CDPHandler): Promise<void>
 	/**
 	 * Persists bytes through a page writer; a child frame rejects because it owns no writer.

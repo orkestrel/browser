@@ -108,23 +108,26 @@ export function compileHitFunction(): string {
 }
 
 /**
- * Compiles the installation of a capture-phase `submit` observer on the window of the world it
- * runs in.
+ * Compiles the installation of a capture-phase `submit` observer owned by `token` on the window of
+ * the world it runs in.
  *
  * @remarks
  * The observer records every `submit` event the window sees from installation until
- * {@link compileSubmitReadExpression} reads and removes it, under {@link BROWSER_SUBMIT_KEY}, and
- * replaces an observer an earlier installation left in place. A listener of an isolated world
- * observes the events the page's own scripts dispatch, because both worlds share one DOM.
+ * {@link compileSubmitReadExpression} with the same `token` reads and removes it, under
+ * {@link BROWSER_SUBMIT_KEY}, and replaces an observer an earlier installation left in place,
+ * whatever its token. A listener of an isolated world observes the events the page's own scripts
+ * dispatch, because both worlds share one DOM.
  *
+ * @param token - The integer that identifies the action owning the observer
  * @returns Expression source that resolves `true`
  */
-export function compileSubmitObserverExpression(): string {
+export function compileSubmitObserverExpression(token: number): string {
 	const key = JSON.stringify(BROWSER_SUBMIT_KEY)
 	return `(() => {
+	const token = ${JSON.stringify(token)}
 	const previous = globalThis[${key}]
 	if (previous !== undefined) removeEventListener('submit', previous.listener, true)
-	const state = { events: [], listener: undefined }
+	const state = { token, events: [], listener: undefined }
 	state.listener = (event) => { state.events.push(event) }
 	globalThis[${key}] = state
 	addEventListener('submit', state.listener, true)
@@ -133,26 +136,29 @@ export function compileSubmitObserverExpression(): string {
 }
 
 /**
- * Compiles the read of the `submit` observer {@link compileSubmitObserverExpression} installs,
- * removing the observer.
+ * Compiles the read of the `submit` observer {@link compileSubmitObserverExpression} installs for
+ * `token`, removing the observer.
  *
  * @remarks
- * The read lists, without repeats and in the order first recorded, the destination of every
- * recorded `submit` that kept its default action: `self` for a target that is empty or `_self`,
- * `parent` for `_parent`, and `top` for `_top`. The target is the one the submitter, the form, or
- * the document's `base` element names. A prevented submission, one whose method is `dialog`, and
- * one aimed at another browsing context add nothing. Every listener of an event has run by the
- * time the input that fired it settles, so `defaultPrevented` is final by then. The list is empty
- * when no observer is installed.
+ * The read lists, without repeats and in the order first recorded, the relationship of the
+ * destination of every recorded `submit` that kept its default action: `self` for a target that
+ * is empty or `_self`, `parent` for `_parent`, and `top` for `_top`. The target is the one the
+ * submitter, the form, or the document's `base` element names. A prevented submission, one whose
+ * method is `dialog`, and one aimed at another browsing context add nothing. Every listener of an
+ * event has run by the time the input that fired it settles, so `defaultPrevented` is final by
+ * then. The read resolves `null` and removes nothing when no observer of `token` is installed, so
+ * a delayed read of an earlier action leaves a later action's observer in place.
  *
- * @returns Expression source that resolves an array of `self`, `parent`, and `top`
+ * @param token - The integer that identifies the action owning the observer
+ * @returns Expression source that resolves an array of `self`, `parent`, and `top`, or `null`
  */
-export function compileSubmitReadExpression(): string {
+export function compileSubmitReadExpression(token: number): string {
 	const key = JSON.stringify(BROWSER_SUBMIT_KEY)
 	return `(() => {
+	const token = ${JSON.stringify(token)}
 	const state = globalThis[${key}]
+	if (state === undefined || state.token !== token) return null
 	delete globalThis[${key}]
-	if (state === undefined) return []
 	removeEventListener('submit', state.listener, true)
 	const destinations = { '': 'self', _self: 'self', _parent: 'parent', _top: 'top' }
 	const found = []

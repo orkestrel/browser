@@ -506,7 +506,7 @@ export class BrowserContext implements BrowserContextInterface {
 	async #configurePage(page: BrowserPage): Promise<void> {
 		await page.send('Target.setAutoAttach', {
 			autoAttach: true,
-			waitForDebuggerOnStart: false,
+			waitForDebuggerOnStart: true,
 			flatten: true,
 		})
 		await page.send('Page.setInterceptFileChooserDialog', { enabled: true })

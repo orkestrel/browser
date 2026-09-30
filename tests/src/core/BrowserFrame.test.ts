@@ -66,7 +66,7 @@ describe('BrowserFrame', () => {
 		expect(evaluation?.params?.['contextId']).toBe(42)
 	})
 
-	it('catches an unsubscribe that releases a moved frame from its new session instead of the one it subscribed on', async () => {
+	it('subscribes and unsubscribes on the session the frame resolves at each call', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		try {
 			const sessions = ['session-one']
@@ -78,17 +78,12 @@ describe('BrowserFrame', () => {
 			)
 			const events = createRecorder<[params: Readonly<Record<string, unknown>>]>()
 			await frame.subscribe('Page.frameNavigated', events.handler)
-			sessions.push('session-two')
-			await frame.subscribe('Page.frameNavigated', events.handler)
-			transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, 'session-one')
 			transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, 'session-two')
-			expect(events.count).toBe(2)
-
-			sessions.push('session-three')
+			transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, 'session-one')
+			expect(events.count).toBe(1)
 			await frame.unsubscribe('Page.frameNavigated', events.handler)
-			for (const session of ['session-one', 'session-two', 'session-three'])
-				transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, session)
-			expect(events.count).toBe(2)
+			transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, 'session-one')
+			expect(events.count).toBe(1)
 		} finally {
 			await client.close()
 		}

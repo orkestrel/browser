@@ -45,9 +45,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 	readonly #isolated: boolean
 	readonly #epoch: BrowserEpochFunction | undefined
 	readonly #world: BrowserWorldFunction | undefined
-	// The sessions each handler was subscribed on, by method, so a frame that moved to another
-	// session releases every registration from the session it was made on.
-	readonly #subscriptions = new Map<string, Map<CDPHandler, string[]>>()
 	#url: string
 
 	constructor(
@@ -187,19 +184,11 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	async subscribe(method: string, handler: CDPHandler): Promise<void> {
 		this.assert()
-		const session = await this.#sessionId()
-		this.#client.subscribe(method, handler, session)
-		const held = this.#subscriptions.get(method) ?? new Map<CDPHandler, string[]>()
-		held.set(handler, [...(held.get(handler) ?? []), session])
-		this.#subscriptions.set(method, held)
+		this.#client.subscribe(method, handler, await this.#sessionId())
 	}
 
 	async unsubscribe(method: string, handler: CDPHandler): Promise<void> {
-		const held = this.#subscriptions.get(method)
-		const sessions = held?.get(handler) ?? [await this.#sessionId()]
-		held?.delete(handler)
-		if (held?.size === 0) this.#subscriptions.delete(method)
-		for (const session of sessions) this.#client.unsubscribe(method, handler, session)
+		this.#client.unsubscribe(method, handler, await this.#sessionId())
 	}
 
 	async save(path: string, _bytes: Uint8Array): Promise<void> {
