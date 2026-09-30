@@ -205,7 +205,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'hold', name: 'click', arguments: { ref: hold } }),
 		)
 		expect(held).toBe(
-			`Clicked ${hold} button "Save for later"; the page handled the submission without navigating.\n\n${look}`,
+			`Clicked ${hold} button "Save for later"; the page handled the submission without navigating; call wait for the text you expect.\n\n${look}`,
 		)
 		expect(await page.evaluate('document.body.dataset.held')).toBe('yes')
 		expect(page.url).toBe(fixtures.url('/shop'))
@@ -247,7 +247,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		expect(typed.split('\n', 1)[0]).toBe(
-			`Typed "Ada Lovelace" into ${name} textbox "Name" and submitted the form; the page handled the submission without navigating.`,
+			`Typed "Ada Lovelace" into ${name} textbox "Name" and submitted the form; the page handled the submission without navigating; call wait for the text you expect.`,
 		)
 		expect(typed).toContain(`\n\npage "Checkout" ${fixtures.url('/checkout')}\n`)
 		expect(typed).toContain(`${name} textbox "Name" value="Ada Lovelace"`)
