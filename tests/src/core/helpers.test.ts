@@ -691,7 +691,9 @@ describe('contenteditable fill — parse/normalize/compile pipeline', () => {
 		expect(normalized).toEqual([{ action: 'fill', selector: '#editor', value: 'hello world' }])
 
 		const script = compileCodegenScript(normalized)
-		expect(script).toContain(`await page.fill("#editor", "hello world")`)
+		expect(script).toContain(
+			`await (await page.elements.find({ css: "#editor" }))[0].fill("hello world")`,
+		)
 	})
 
 	it('collapses consecutive contenteditable-originated fill payloads to the latest value', () => {
@@ -709,7 +711,9 @@ describe('contenteditable fill — parse/normalize/compile pipeline', () => {
 		expect(normalized).toEqual([{ action: 'fill', selector: '#editor', value: 'hello' }])
 
 		const script = compileCodegenScript(normalized)
-		expect(script).toContain(`await page.fill("#editor", "hello")`)
+		expect(script).toContain(
+			`await (await page.elements.find({ css: "#editor" }))[0].fill("hello")`,
+		)
 	})
 })
 

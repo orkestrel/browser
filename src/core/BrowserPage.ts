@@ -20,6 +20,7 @@ import type {
 	BrowserPageInterface,
 	BrowserPageEventMap,
 	BrowserPageOptions,
+	BrowserRect,
 	BrowserRegistryInterface,
 	BrowserResponse,
 	BrowserScreenshotOptions,
@@ -468,7 +469,16 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		let token: string | undefined
 		let transparent = false
 		try {
-			const preparation = compileScreenshotPreparationExpression(options)
+			const masks: BrowserRect[] = []
+			for (const element of options?.mask ?? []) {
+				const { points } = await element.quad()
+				const xs = points.filter((_value, index) => index % 2 === 0)
+				const ys = points.filter((_value, index) => index % 2 !== 0)
+				const left = Math.min(...xs)
+				const top = Math.min(...ys)
+				masks.push([left, top, Math.max(...xs) - left, Math.max(...ys) - top])
+			}
+			const preparation = compileScreenshotPreparationExpression(options, masks)
 			if (preparation !== undefined) {
 				const value = await this.evaluate(preparation)
 				if (!isString(value)) throw new BrowserError('Browser screenshot preparation failed')

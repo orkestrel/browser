@@ -17,7 +17,7 @@ import {
 	BrowserPage,
 	createCDPClient,
 	isBrowserError,
-	isBrowserSelectorError,
+	isBrowserElementError,
 	isBrowserResultLimitError,
 	isCDPTimeoutError,
 	BrowserResultLimitError,
@@ -38,8 +38,6 @@ import {
 	replyOk,
 	scriptEvaluate,
 	scriptFrameTree,
-	scriptSelectorPresent,
-	scriptTrustedSelector,
 	JPEG_BASE64,
 	PNG_BASE64,
 	throwListenerError,
@@ -1021,29 +1019,36 @@ describe('BrowserPage', () => {
 
 	describe('advanced capture', () => {
 		it('applies clip, transparency, animation, caret, and mask controls with cleanup', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptEvaluate(
-				transport,
-				(expression) => expression.includes('__orkestrelScreenshotSequence'),
-				'token-1',
-			)
-			scriptEvaluate(
-				transport,
-				(expression) => expression.includes('element.getAttribute(attribute)'),
-				true,
-			)
+			const { transport, page } = await createBrowserElementFixture({
+				evaluation: (message) =>
+					transport.reply(message.id, {
+						result: {
+							value: readCDPExpression(message)?.includes('__orkestrelScreenshotSequence')
+								? 'token-1'
+								: true,
+						},
+					}),
+			})
 			replyOk(transport, 'Emulation.setDefaultBackgroundColorOverride')
-			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
-			const page = new BrowserPage(client, 'target-1', 'session-1')
+			await page.elements.outline()
+			const secret = requireValue(page.elements.element('e1'))
 
 			await page.screenshot({
 				clip: [10, 20, 300, 200],
 				transparent: true,
 				animations: false,
 				caret: false,
-				mask: [page.selectors.css('.secret')],
+				mask: [secret],
 				color: '#123456',
 			})
+
+			expect(
+				transport.sent.some(
+					(message) =>
+						message.method === 'Runtime.evaluate' &&
+						readCDPExpression(message)?.includes('const rects = [[10,20,20,20]]') === true,
+				),
+			).toBe(true)
 
 			expect(
 				transport.sent.find((message) => message.method === 'Page.captureScreenshot')?.params,
@@ -1059,6 +1064,19 @@ describe('BrowserPage', () => {
 			expect(background).toHaveLength(2)
 			expect(background[0]?.params).toEqual({ color: { r: 0, g: 0, b: 0, a: 0 } })
 			expect(background[1]?.params).toBeUndefined()
+		})
+
+		it('rejects the screenshot with the element error when a masked element cannot report a box', async () => {
+			const { client, transport, page } = await createBrowserElementFixture({ hidden: true })
+			await page.elements.outline()
+			const secret = requireValue(page.elements.element('e1'))
+
+			await expect(page.screenshot({ mask: [secret] })).rejects.toSatisfy(isBrowserElementError)
+
+			expect(transport.sent.some((message) => message.method === 'Page.captureScreenshot')).toBe(
+				false,
+			)
+			await client.close()
 		})
 
 		it('removes temporary screenshot state when transparent background setup fails', async () => {
@@ -1152,63 +1170,6 @@ describe('BrowserPage', () => {
 		})
 	})
 
-	describe('click()', () => {
-		it('clicks a present element', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptTrustedSelector(transport, '#btn')
-
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.click('#btn')).resolves.toBeUndefined()
-		})
-
-		it('throws BrowserSelectorError when the selector never appears', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			// The retry loop runs in the page, so the scripted false is the whole
-			// wait: the locator must turn it into a selector error.
-			scriptEvaluate(transport, (expression) => expression.includes('new Promise'), false)
-
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-
-			await expect(page.click('#missing', { timeout: 20 })).rejects.toSatisfy(
-				isBrowserSelectorError,
-			)
-		})
-	})
-
-	describe('fill()', () => {
-		it('sets an input value', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptTrustedSelector(transport, '#name')
-
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.fill('#name', 'hello world')).resolves.toBeUndefined()
-		})
-
-		it('sends a contenteditable-aware expression that sets textContent when isContentEditable', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptTrustedSelector(transport, '#editable')
-
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await page.fill('#editable', 'hello world')
-
-			const focusCall = transport.sent.find(
-				(message) => message.method === 'Runtime.callFunctionOn',
-			)
-			expect(focusCall?.params?.['functionDeclaration']).toContain('this.isContentEditable')
-			expect(transport.sent.some((message) => message.method === 'Input.insertText')).toBe(true)
-		})
-	})
-
-	describe('select()', () => {
-		it('selects the given values', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptTrustedSelector(transport, '#sel')
-
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.select('#sel', ['b'])).resolves.toBeUndefined()
-		})
-	})
-
 	describe('evaluate()', () => {
 		it('returns the evaluated value', async () => {
 			const { client, transport } = await createConnectedCDPClient()
@@ -1267,37 +1228,6 @@ describe('BrowserPage', () => {
 			expect(
 				thrown instanceof BrowserResultLimitError ? thrown.context?.['limit'] : undefined,
 			).toBe(BROWSER_RESULT_LIMIT)
-		})
-	})
-
-	describe('wait()', () => {
-		it('resolves once the selector appears', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptSelectorPresent(transport, '#target')
-
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.selectors.css('#target').wait()).resolves.toBeUndefined()
-		})
-	})
-
-	describe('selector escaping', () => {
-		it('safely embeds a selector with embedded quotes and backslashes into the evaluate expression', async () => {
-			const { client, transport } = await createConnectedCDPClient()
-			scriptTrustedSelector(transport, String.raw`div[data-x='a"b\c']`)
-
-			const selector = String.raw`div[data-x='a"b\c']`
-			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.click(selector)).resolves.toBeUndefined()
-
-			const clickCall = transport.sent.find(
-				(m) =>
-					m.method === 'Runtime.evaluate' &&
-					m.params?.['returnByValue'] === false &&
-					readCDPExpression(m)?.includes(JSON.stringify(selector)) === true,
-			)
-			expect(clickCall).toBeDefined()
-			const expression = requireValue(readCDPExpression(clickCall))
-			expect(expression).toContain(JSON.stringify(selector))
 		})
 	})
 
@@ -1709,7 +1639,7 @@ describe('BrowserPage events', () => {
 		const chooser = choosers.calls[0]?.[0]
 
 		await expect(chooser?.upload(['one.txt'])).rejects.toThrow('chooser failed')
-		await expect(chooser?.cancel()).resolves.toBeUndefined()
+		await expect(chooser?.dismiss()).resolves.toBeUndefined()
 		expect(attempts).toBe(2)
 	})
 

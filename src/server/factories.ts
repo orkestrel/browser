@@ -18,7 +18,7 @@ import { FileBrowserWriter } from './writers/FileBrowserWriter.js'
  * const browser = createBrowser({ headless: true })
  * await browser.connect() // CDP endpoint discovery → connect, else launch
  * const page = await browser.create({ url: 'https://example.com' })
- * await page.click('#accept')
+ * await (await page.elements.find({ css: '#accept' }))[0]?.click()
  * const shot = await page.screenshot({ path: './out.png' })
  * await browser.destroy()
  * ```

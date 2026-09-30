@@ -250,7 +250,7 @@ describe('BrowserCodegen', () => {
 			const script = codegen.script()
 
 			expect(script).toContain('async function run(page) {')
-			expect(script).toContain('await page.click("#x")')
+			expect(script).toContain('await (await page.elements.find({ css: "#x" }))[0].click()')
 		})
 
 		it('compiles recorded actions to TypeScript when requested', async () => {

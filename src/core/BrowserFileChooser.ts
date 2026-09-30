@@ -38,7 +38,7 @@ export class BrowserFileChooser implements BrowserFileChooserInterface {
 		}
 	}
 
-	async cancel(): Promise<void> {
+	async dismiss(): Promise<void> {
 		this.#assert()
 		this.#handling = true
 		try {

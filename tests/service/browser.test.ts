@@ -72,7 +72,7 @@ describe('Browser real launch', () => {
 		}
 	})
 
-	it('drives locators, frames, routes, snapshots, accessibility, and PDF in a real browser', async () => {
+	it('drives elements, frames, routes, snapshots, accessibility, and PDF in a real browser', async () => {
 		const httpServer = createServer((request, response) => {
 			if (request.url === '/frame') {
 				response.writeHead(200, { 'content-type': 'text/html' })
@@ -99,17 +99,18 @@ describe('Browser real launch', () => {
 			await browser.connect()
 			const page = await browser.create({ url })
 
-			const save = page.selectors.role('button', { name: 'Save', exact: true })
-			expect(await save.count()).toBe(1)
-			await save.click()
+			const saves = await page.elements.find({ role: 'button', name: 'Save' })
+			expect(saves).toHaveLength(1)
+			await saves[0]?.click()
 			expect(await page.evaluate('document.body.dataset.clicked')).toBe('yes')
 
 			const frame = await page.frame('checkout')
 			expect(frame).toBeDefined()
 			if (frame === undefined) throw new Error('Named frame was not attached')
-			const email = frame.selectors.label('Email', { exact: true })
-			await email.fill('ada@example.com')
-			expect(await email.value()).toBe('ada@example.com')
+			const emails = await page.elements.find({ role: 'textbox', name: 'Email' })
+			expect(emails).toHaveLength(1)
+			await emails[0]?.fill('ada@example.com')
+			expect(await frame.evaluate("document.querySelector('input').value")).toBe('ada@example.com')
 
 			await page.network.route({ url: '**/api', method: 'GET' }, async (route) => {
 				await route.fulfill({
@@ -570,7 +571,8 @@ describe('Browser real launch', () => {
 			const page = await browser.create({ url })
 
 			const codegen = await page.codegen()
-			await page.fill('#editable', 'hello world')
+			const editable = await page.elements.find({ css: '#editable' })
+			await editable[0]?.fill('hello world')
 			const actions = await codegen.stop()
 
 			const fillAction = actions.find(

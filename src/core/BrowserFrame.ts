@@ -1,12 +1,10 @@
 import type {
-	BrowserActionOptions,
 	BrowserEpochFunction,
 	BrowserFrameInterface,
 	BrowserHandleInterface,
 	BrowserKeyboardInterface,
 	BrowserMouseInterface,
 	BrowserReadingInterface,
-	BrowserSelectorManagerInterface,
 	BrowserCallOptions,
 	BrowserSessionFunction,
 	BrowserTouchInterface,
@@ -18,7 +16,6 @@ import { BrowserHandle } from './BrowserHandle.js'
 import { BrowserKeyboard } from './BrowserKeyboard.js'
 import { BrowserMouse } from './BrowserMouse.js'
 import { BrowserReading } from './BrowserReading.js'
-import { BrowserSelectorManager } from './BrowserSelectorManager.js'
 import { BrowserTouch } from './BrowserTouch.js'
 import { BROWSER_FRAME_WORLD_NAME, BROWSER_RESULT_LIMIT } from './constants.js'
 import { compileGuardedEvaluateExpression, compileReadFunction } from './compilers.js'
@@ -41,8 +38,8 @@ import { isRecord, isString } from '@orkestrel/contract'
  * import { BrowserFrame } from '@orkestrel/browser'
  *
  * const frame = new BrowserFrame(client, 'session-1', 'frame-1', 'https://example.com')
- * await frame.fill('[name=email]', 'ada@example.com')
  * const title = await frame.title()
+ * const reading = await frame.read()
  * ```
  */
 export class BrowserFrame implements BrowserFrameInterface {
@@ -54,7 +51,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 	readonly #isolated: boolean
 	readonly #epoch: BrowserEpochFunction | undefined
 	readonly #world: BrowserWorldFunction | undefined
-	readonly #selectors: BrowserSelectorManager
 	readonly #keyboard: BrowserKeyboard
 	readonly #mouse: BrowserMouse
 	readonly #touch: BrowserTouch
@@ -80,7 +76,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#isolated = isolated
 		this.#epoch = epoch
 		this.#world = world
-		this.#selectors = new BrowserSelectorManager(this)
 		this.#keyboard = new BrowserKeyboard(this)
 		this.#mouse = new BrowserMouse(this)
 		this.#touch = new BrowserTouch(this)
@@ -100,10 +95,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	get url(): string {
 		return this.#url
-	}
-
-	get selectors(): BrowserSelectorManagerInterface {
-		return this.#selectors
 	}
 
 	get keyboard(): BrowserKeyboardInterface {
@@ -167,25 +158,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 				? {}
 				: { epoch, navigation: this.#epoch }),
 		})
-	}
-
-	async click(selector: string, options?: BrowserActionOptions): Promise<void> {
-		this.assert()
-		await this.#selectors.css(selector).click(options)
-	}
-
-	async fill(selector: string, value: string, options?: BrowserActionOptions): Promise<void> {
-		this.assert()
-		await this.#selectors.css(selector).fill(value, options)
-	}
-
-	async select(
-		selector: string,
-		values: readonly string[],
-		options?: BrowserActionOptions,
-	): Promise<void> {
-		this.assert()
-		await this.#selectors.css(selector).select(values, options)
 	}
 
 	async evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {

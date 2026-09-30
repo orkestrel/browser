@@ -283,22 +283,6 @@ export interface BrowserNavigationManagerInterface {
 }
 
 /**
- * Describes the options for element interaction (click, fill, select, wait).
- *
- * @remarks
- * - `timeout` — maximum time to wait for the selector in milliseconds
- * - `strict` — require the selector to resolve to exactly one element (default `true`)
- * - `force` — skip the actionability checks
- * - `trial` — run the checks and stop before dispatching input
- */
-export interface BrowserActionOptions {
-	readonly timeout?: number
-	readonly strict?: boolean
-	readonly force?: boolean
-	readonly trial?: boolean
-}
-
-/**
  * Describes the options shared by every trusted input operation.
  *
  * @remarks
@@ -333,40 +317,6 @@ export interface BrowserDragOptions extends BrowserInputOptions {
 }
 
 /**
- * Describes the options for a locator operation that aims at a point inside the element.
- *
- * @remarks
- * - `position` — offset from the element's top-left corner, in CSS pixels
- */
-export interface BrowserPointerOptions extends BrowserActionOptions {
-	readonly position?: BrowserPoint
-}
-
-/** Describes the options for a locator click, combining element resolution with mouse input. */
-export interface BrowserLocatorClickOptions extends BrowserPointerOptions, BrowserClickOptions {}
-
-/** Describes the options for a locator drag, combining element resolution with mouse input. */
-export interface BrowserLocatorDragOptions extends BrowserPointerOptions, BrowserDragOptions {}
-
-/** Describes the options for locator keyboard entry, combining element resolution with key input. */
-export interface BrowserLocatorTypeOptions extends BrowserActionOptions, BrowserInputOptions {}
-
-/** Names an element state a frame or page can wait for. */
-export type BrowserWaitState = 'attached' | 'detached' | 'visible' | 'hidden'
-
-/**
- * Describes the options for waiting on an element.
- *
- * @remarks
- * - `timeout` — maximum time to wait in milliseconds
- * - `strict` — require the selector to resolve to exactly one element
- * - `state` — target state (default `'attached'`)
- */
-export interface BrowserWaitOptions extends BrowserActionOptions {
-	readonly state?: BrowserWaitState
-}
-
-/**
  * Describes the options for taking a page screenshot.
  *
  * @remarks
@@ -374,6 +324,7 @@ export interface BrowserWaitOptions extends BrowserActionOptions {
  * - `full` — capture the full scrollable page (default `false`)
  * - `format` — image format (default `'png'`)
  * - `quality` — JPEG quality 0–100 (ignored for PNG)
+ * - `mask` — elements whose current boxes the capture covers with `color`; a gone element rejects the capture
  */
 export interface BrowserScreenshotOptions {
 	readonly path?: string
@@ -385,7 +336,7 @@ export interface BrowserScreenshotOptions {
 	readonly animations?: boolean
 	readonly caret?: boolean
 	readonly scale?: BrowserScreenshotScale
-	readonly mask?: readonly BrowserLocatorInterface[]
+	readonly mask?: readonly BrowserPageElementInterface[]
 	readonly color?: string
 }
 
@@ -685,140 +636,6 @@ export interface BrowserClockInterface {
 	uninstall(): Promise<void>
 }
 
-// === Browser selectors and locators
-
-/**
- * Names a selector axis supported by {@link BrowserSelectorManagerInterface}.
- *
- * @remarks
- * `testId` mirrors the `data-testid` attribute {@link BROWSER_TEST_ID_ATTRIBUTE} names.
- */
-export type BrowserSelector = 'css' | 'role' | 'text' | 'label' | 'placeholder' | 'testId'
-
-/** Describes a declarative locator filter applied after selector resolution. */
-export interface BrowserLocatorFilter {
-	readonly text?: string
-	readonly exact?: boolean
-	readonly visible?: boolean
-}
-
-/** Describes a serializable selector query, including optional ancestry and filtering. */
-export interface BrowserQuery {
-	readonly selector: BrowserSelector
-	readonly value: string
-	readonly name?: string
-	readonly exact?: boolean
-	readonly parent?: BrowserQuery
-	readonly filter?: BrowserLocatorFilter
-	readonly index?: number
-}
-
-/** Describes the options for role-based locator creation. */
-export interface BrowserRoleOptions {
-	readonly name?: string
-	readonly exact?: boolean
-}
-
-/** Describes the options for text-like locator creation. */
-export interface BrowserTextOptions {
-	readonly exact?: boolean
-}
-
-/** Describes the options for setting files on a file input. */
-export interface BrowserUploadOptions extends BrowserActionOptions {
-	readonly files: readonly string[]
-}
-
-/**
- * Represents a reusable strict locator over one frame.
- */
-export interface BrowserLocatorInterface {
-	readonly frame: BrowserFrameInterface
-	readonly query: BrowserQuery
-	/** Narrows to a descendant matching the CSS selector. */
-	locator(selector: string): BrowserLocatorInterface
-	/** Narrows to the matches satisfying the filter. */
-	filter(options: BrowserLocatorFilter): BrowserLocatorInterface
-	/** Narrows to the first match. */
-	first(): BrowserLocatorInterface
-	/** Narrows to the last match. */
-	last(): BrowserLocatorInterface
-	/** Narrows to the match at the given index. */
-	item(index: number): BrowserLocatorInterface
-	/** Counts the current matches. */
-	count(): Promise<number>
-	/** Resolves one indexed locator per current match. */
-	all(): Promise<readonly BrowserLocatorInterface[]>
-	/** Clicks the match with trusted input after its actionability checks pass. */
-	click(options?: BrowserLocatorClickOptions): Promise<void>
-	/** Replaces the match's value with the given text. */
-	fill(value: string, options?: BrowserActionOptions): Promise<void>
-	/** Selects the given option values on the match. */
-	select(values: readonly string[], options?: BrowserActionOptions): Promise<void>
-	/** Clicks the match unless it already reports checked. */
-	check(options?: BrowserLocatorClickOptions): Promise<void>
-	/** Clicks the match unless it already reports unchecked. */
-	uncheck(options?: BrowserLocatorClickOptions): Promise<void>
-	/** Moves trusted pointer input over the match. */
-	hover(options?: BrowserPointerOptions): Promise<void>
-	/** Gives the match keyboard focus. */
-	focus(options?: BrowserActionOptions): Promise<void>
-	/** Focuses the match and presses one key or chord. */
-	press(key: string, options?: BrowserLocatorTypeOptions): Promise<void>
-	/** Focuses the match and types the value one key at a time. */
-	type(value: string, options?: BrowserLocatorTypeOptions): Promise<void>
-	/** Empties the match's value. */
-	clear(options?: BrowserActionOptions): Promise<void>
-	/** Waits until the match reaches the requested state. Rejects on timeout. */
-	wait(options?: BrowserWaitOptions): Promise<void>
-	/** Reads the first match's rendered text. */
-	text(): Promise<string>
-	/** Reads the rendered text of every match. */
-	texts(): Promise<readonly string[]>
-	/** Reads the first match's inner HTML. */
-	html(): Promise<string>
-	/** Reads the first match's form value. */
-	value(): Promise<string>
-	/**
-	 * Reads one attribute of the first match, or returns `undefined` when the match carries
-	 * none.
-	 */
-	attribute(name: string): Promise<string | undefined>
-	/** Reports whether the first match renders a non-empty box. */
-	visible(): Promise<boolean>
-	/** Reports whether the first match accepts input. */
-	enabled(): Promise<boolean>
-	/** Reports whether the first match accepts typed text. */
-	editable(): Promise<boolean>
-	/**
-	 * Captures the first match's box, persisting it through the page writer when a path is
-	 * given.
-	 */
-	screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult>
-	/** Sets the file selection on the matched file input. */
-	upload(options: BrowserUploadOptions): Promise<void>
-	/** Drags the match onto the target locator with trusted pointer input. */
-	drag(target: BrowserLocatorInterface, options?: BrowserLocatorDragOptions): Promise<void>
-}
-
-/**
- * Groups the locator factories by selector semantics.
- */
-export interface BrowserSelectorManagerInterface {
-	/** Locates by CSS selector. */
-	css(value: string): BrowserLocatorInterface
-	/** Locates by ARIA role, optionally by accessible name and exactness. */
-	role(value: string, options?: BrowserRoleOptions): BrowserLocatorInterface
-	/** Locates by rendered text, optionally exact. */
-	text(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
-	/** Locates a labelled control by its label text, optionally exact. */
-	label(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
-	/** Locates an input by its placeholder text, optionally exact. */
-	placeholder(value: string, options?: BrowserTextOptions): BrowserLocatorInterface
-	/** Locates by the test-id attribute. */
-	testId(value: string): BrowserLocatorInterface
-}
-
 // === Browser input
 
 /** Describes a point in viewport CSS pixels. */
@@ -852,12 +669,9 @@ export interface BrowserChord {
  *
  * @remarks
  * The intersection of each option type that carries a bounded key, so one
- * validator answers for a locator click, a locator drag, a mouse click, a
- * mouse drag, and keyboard entry alike.
+ * validator answers for a mouse click, a mouse drag, and keyboard entry alike.
  */
-export type BrowserOperationOptions = BrowserPointerOptions &
-	BrowserClickOptions &
-	BrowserDragOptions
+export type BrowserOperationOptions = BrowserClickOptions & BrowserDragOptions
 
 /** Provides keyboard input operations bound to one frame target session. */
 export interface BrowserKeyboardInterface {
@@ -981,18 +795,18 @@ export interface BrowserFileChooserInterface {
 	 * chooser is already handled.
 	 */
 	upload(files: readonly string[]): Promise<void>
-	/** Clears the selection. Throws once the chooser is already handled. */
-	cancel(): Promise<void>
+	/** Dismisses the chooser with an empty selection. Throws once the chooser is already handled. */
+	dismiss(): Promise<void>
 }
 
 /** Names a download lifecycle phase. */
-export type BrowserDownloadStatus = 'pending' | 'complete' | 'cancelled'
+export type BrowserDownloadStatus = 'pending' | 'complete' | 'aborted'
 
 /** Maps the download progress events. */
 export type BrowserDownloadEventMap = {
 	readonly progress: readonly [received: number, total: number]
 	readonly complete: readonly [path: string | undefined]
-	readonly cancel: readonly []
+	readonly abort: readonly []
 }
 
 /** Describes a protocol-neutral download progress update. */
@@ -1029,10 +843,10 @@ export interface BrowserDownloadInterface {
 	readonly total: number
 	readonly path: string | undefined
 	/**
-	 * Sends CDP `Browser.cancelDownload` for this download, and is ignored unless the status
-	 * is still pending.
+	 * Aborts the download by sending CDP `Browser.cancelDownload`, and is ignored unless the
+	 * status is still pending. The status becomes `'aborted'` and the `abort` event fires.
 	 */
-	cancel(): Promise<void>
+	abort(): Promise<void>
 	/** Records one step of the download's progress. The owning page drives it. */
 	update(progress: BrowserDownloadProgress): void
 }
@@ -2101,9 +1915,6 @@ export interface BrowserFrameInfo {
  * - `url` — current frame URL
  * - `title` — resolve the document title
  * - `read` — capture the document URL, title, and HTML as a reading
- * - `click` — click an element matching the selector
- * - `fill` — type text into an input element
- * - `select` — choose option(s) in a `<select>` element
  * - `evaluate` — execute a JavaScript expression in the page context
  * - `wait` — wait for an element state
  * - `send` — issue a raw CDP method in the frame's current target session, with an optional per-call timeout
@@ -2115,7 +1926,6 @@ export interface BrowserFrameInterface {
 	readonly parent: string | undefined
 	readonly name: string | undefined
 	readonly url: string
-	readonly selectors: BrowserSelectorManagerInterface
 	readonly keyboard: BrowserKeyboardInterface
 	readonly mouse: BrowserMouseInterface
 	readonly touch: BrowserTouchInterface
@@ -2129,17 +1939,6 @@ export interface BrowserFrameInterface {
 	 * available to it.
 	 */
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
-	/**
-	 * Clicks a CSS-selector match, strict by default and requiring it visible and enabled.
-	 */
-	click(selector: string, options?: BrowserActionOptions): Promise<void>
-	/**
-	 * Fills an editable input or contenteditable element, strict by default, dispatching input
-	 * and change events.
-	 */
-	fill(selector: string, value: string, options?: BrowserActionOptions): Promise<void>
-	/** Selects options on an enabled `select` element, strict by default. */
-	select(selector: string, values: readonly string[], options?: BrowserActionOptions): Promise<void>
 	/** Evaluates an expression in the frame execution world under the result-size guard. */
 	evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown>
 	/**

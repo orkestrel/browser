@@ -30,12 +30,12 @@ describe('BrowserFileChooser', () => {
 		])
 	})
 
-	it('cancels by clearing the input selection', async () => {
+	it('dismisses by clearing the input selection', async () => {
 		const { page, transport } = await createAttachedPage()
 		replyOk(transport, 'DOM.setFileInputFiles')
 		const chooser = new BrowserFileChooser(page, 42, false)
 
-		await chooser.cancel()
+		await chooser.dismiss()
 
 		expect(readCDPParams(transport, 'DOM.setFileInputFiles')).toStrictEqual([
 			{ backendNodeId: 42, files: [] },
@@ -57,17 +57,17 @@ describe('BrowserFileChooser', () => {
 		expect(readCDPParams(transport, 'DOM.setFileInputFiles')).toHaveLength(2)
 	})
 
-	it('refuses a second decision after an upload or a cancel', async () => {
+	it('refuses a second decision after an upload or a dismissal', async () => {
 		const { page, transport } = await createAttachedPage()
 		replyOk(transport, 'DOM.setFileInputFiles')
 		const uploaded = new BrowserFileChooser(page, 1, true)
-		const cancelled = new BrowserFileChooser(page, 1, true)
+		const dismissed = new BrowserFileChooser(page, 1, true)
 
 		await uploaded.upload(['one.txt'])
-		await cancelled.cancel()
+		await dismissed.dismiss()
 
-		await expect(uploaded.cancel()).rejects.toThrow('Browser file chooser is already handled')
-		await expect(cancelled.upload(['one.txt'])).rejects.toThrow(
+		await expect(uploaded.dismiss()).rejects.toThrow('Browser file chooser is already handled')
+		await expect(dismissed.upload(['one.txt'])).rejects.toThrow(
 			'Browser file chooser is already handled',
 		)
 	})
@@ -83,7 +83,7 @@ describe('BrowserFileChooser', () => {
 		const chooser = new BrowserFileChooser(page, 1, true)
 
 		await expect(chooser.upload(['one.txt'])).rejects.toThrow('input detached')
-		await expect(chooser.cancel()).resolves.toBeUndefined()
+		await expect(chooser.dismiss()).resolves.toBeUndefined()
 		expect(attempts).toBe(2)
 	})
 })

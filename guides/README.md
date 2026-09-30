@@ -34,9 +34,7 @@ here for the same reason.
 
 [`html.md`](html.md) is a byte-identical mirror of the guide for
 `@orkestrel/html` — a runtime dependency, the parse → `distill` →
-`renderText` pipeline `BrowserFrameInterface.article()` is built from (the
-reader-facing prose of a page, extracted from the frame's own HTML
-capture). It documents **that package's** surface, not anything sourced in
+`renderText` pipeline for the reader-facing prose of an HTML document. It documents **that package's** surface, not anything sourced in
 this repo; it is kept here for the same reason.
 
 [`guide.md`](guide.md) is a byte-identical mirror of the guide for

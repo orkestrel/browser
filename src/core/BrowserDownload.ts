@@ -64,7 +64,7 @@ export class BrowserDownload implements BrowserDownloadInterface {
 		return this.#path
 	}
 
-	async cancel(): Promise<void> {
+	async abort(): Promise<void> {
 		if (this.#status !== 'pending') return
 		const params: Record<string, unknown> = { guid: this.#id }
 		if (this.#context !== undefined) params['browserContextId'] = this.#context
@@ -81,9 +81,9 @@ export class BrowserDownload implements BrowserDownloadInterface {
 			this.#status = 'complete'
 			this.#emitter.emit('complete', this.#path)
 			this.#emitter.destroy()
-		} else if (progress.status === 'cancelled') {
-			this.#status = 'cancelled'
-			this.#emitter.emit('cancel')
+		} else if (progress.status === 'aborted') {
+			this.#status = 'aborted'
+			this.#emitter.emit('abort')
 			this.#emitter.destroy()
 		}
 	}

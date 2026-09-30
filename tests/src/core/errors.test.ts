@@ -2,14 +2,12 @@ import {
 	BrowserConnectionError,
 	BrowserError,
 	BrowserResultLimitError,
-	BrowserSelectorError,
 	CDPConnectionError,
 	CDPError,
 	CDPTimeoutError,
 	isBrowserConnectionError,
 	isBrowserError,
 	isBrowserResultLimitError,
-	isBrowserSelectorError,
 	isCDPConnectionError,
 	isCDPError,
 	isCDPTimeoutError,
@@ -20,7 +18,6 @@ describe('core browser error guards', () => {
 	it('narrows every browser error class', () => {
 		expect(isBrowserError(new BrowserError('failure'))).toBe(true)
 		expect(isBrowserConnectionError(new BrowserConnectionError('failure'))).toBe(true)
-		expect(isBrowserSelectorError(new BrowserSelectorError('failure'))).toBe(true)
 		expect(isCDPError(new CDPError('failure'))).toBe(true)
 		expect(isCDPConnectionError(new CDPConnectionError('failure'))).toBe(true)
 		expect(isCDPTimeoutError(new CDPTimeoutError('failure'))).toBe(true)
@@ -34,7 +31,6 @@ describe('core browser error guards', () => {
 		expect(() => isBrowserError(revocable.proxy)).not.toThrow()
 		expect(isBrowserError(revocable.proxy)).toBe(false)
 		expect(isBrowserConnectionError(revocable.proxy)).toBe(false)
-		expect(isBrowserSelectorError(revocable.proxy)).toBe(false)
 		expect(isCDPError(revocable.proxy)).toBe(false)
 		expect(isCDPConnectionError(revocable.proxy)).toBe(false)
 		expect(isCDPTimeoutError(revocable.proxy)).toBe(false)

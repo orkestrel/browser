@@ -1,16 +1,13 @@
-import type { BrowserWaitState } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_RESULT_LIMIT,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BrowserFrame,
-	BrowserSelectorError,
 	compileGuardedEvaluateExpression,
 	compileReadFunction,
 	createCDPClient,
 	isBrowserError,
 	isBrowserResultLimitError,
-	isBrowserSelectorError,
 	isCDPTimeoutError,
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
@@ -20,7 +17,6 @@ import {
 	readCDPExpression,
 	replyOk,
 	scriptEvaluate,
-	scriptTrustedSelector,
 } from '../../setup.js'
 
 // === BrowserFrame
@@ -309,114 +305,6 @@ describe('BrowserFrame', () => {
 		frame.update('https://example.com/frame/next')
 
 		expect(reading.stale).toBe(false)
-	})
-
-	it('waits and acts entirely through the frame execution context', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-		scriptTrustedSelector(transport, '#submit')
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
-
-		await frame.click('#submit')
-
-		const evaluations = transport.sent.filter((message) => message.method === 'Runtime.evaluate')
-		expect(evaluations).toHaveLength(2)
-		expect(evaluations.every((message) => message.params?.['contextId'] === 42)).toBe(true)
-	})
-
-	it('passes strict false through waits and actions', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-		scriptTrustedSelector(transport, '.choice')
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
-
-		await frame.click('.choice', { strict: false })
-
-		const expressions = transport.sent
-			.filter((message) => message.method === 'Runtime.evaluate')
-			.map((message) => readCDPExpression(message))
-		expect(expressions[0]).toContain('if (false && matches.length > 1)')
-		expect(expressions[1]).toContain(JSON.stringify('.choice'))
-	})
-
-	it.each<BrowserWaitState>(['attached', 'detached', 'visible', 'hidden'])(
-		'compiles the %s wait state',
-		async (state) => {
-			const { client, transport } = await createConnectedCDPClient()
-			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-			scriptEvaluate(transport, (expression) => expression.includes('new Promise'), true)
-			const frame = new BrowserFrame(
-				client,
-				'session-child',
-				'frame-child',
-				'https://example.com/frame',
-			)
-
-			await expect(frame.selectors.css('#target').wait({ state })).resolves.toBeUndefined()
-			const expression = readCDPExpression(
-				transport.sent.find((message) => message.method === 'Runtime.evaluate'),
-			)
-			expect(expression?.includes('matches.length > 0 && visible(matches[0])')).toBe(
-				state === 'visible',
-			)
-			expect(expression?.includes('matches.every((element) => !visible(element))')).toBe(
-				state === 'hidden',
-			)
-			expect(expression?.includes('matches.length === 0')).toBe(
-				state === 'detached' || state === 'hidden',
-			)
-		},
-	)
-
-	it('rejects invalid timeouts before sending a CDP request', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
-
-		await expect(frame.selectors.css('#target').wait({ timeout: Number.NaN })).rejects.toSatisfy(
-			isBrowserError,
-		)
-		await expect(frame.selectors.css('#target').wait({ timeout: -1 })).rejects.toSatisfy(
-			isBrowserError,
-		)
-		expect(transport.sent).toEqual([])
-	})
-
-	it('maps an unmet state to a selector error with frame context', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-		scriptEvaluate(transport, (expression) => expression.includes('new Promise'), false)
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
-
-		const thrown: unknown = await frame.selectors
-			.css('#missing')
-			.wait({ timeout: 0 })
-			.catch((error: unknown) => error)
-		expect(isBrowserSelectorError(thrown)).toBe(true)
-		expect(thrown instanceof BrowserSelectorError ? thrown.context : undefined).toMatchObject({
-			frame: 'frame-child',
-			state: 'attached',
-			timeout: 0,
-		})
 	})
 
 	it('sends arbitrary CDP methods through the resolved frame session', async () => {

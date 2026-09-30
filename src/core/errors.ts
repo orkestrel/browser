@@ -54,17 +54,6 @@ export function isBrowserElementError(value: unknown): value is BrowserElementEr
 }
 
 /**
- * Reports that a selector-based lookup or wait timed out without the element appearing, under
- * the code `BROWSER_SELECTOR_ERROR`.
- */
-export class BrowserSelectorError extends BrowserError {
-	constructor(message: string, context?: Readonly<Record<string, unknown>>) {
-		super(message, 'BROWSER_SELECTOR_ERROR', context)
-		this.name = 'BrowserSelectorError'
-	}
-}
-
-/**
  * Reports that a CDP request received an error response from the remote endpoint, under the
  * code `BROWSER_CDP_ERROR`, with the `method`, the CDP `code`, the `message`, and any `data`
  * in its context.
@@ -124,16 +113,6 @@ export class BrowserResultLimitError extends BrowserError {
  */
 export function isBrowserError(value: unknown): value is BrowserError {
 	return isInstance(value, BrowserError)
-}
-
-/**
- * Narrows an unknown value to a `BrowserSelectorError`.
- *
- * @param value - Value to check
- * @returns True if value is a BrowserSelectorError instance; false otherwise
- */
-export function isBrowserSelectorError(value: unknown): value is BrowserSelectorError {
-	return isInstance(value, BrowserSelectorError)
 }
 
 /**

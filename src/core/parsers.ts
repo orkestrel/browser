@@ -527,7 +527,7 @@ export function parseBrowserDownloadProgress(
 		state === 'completed'
 			? 'complete'
 			: state === 'canceled'
-				? 'cancelled'
+				? 'aborted'
 				: state === 'inProgress'
 					? 'pending'
 					: undefined

@@ -702,12 +702,11 @@ export function validateBrowserPoint(point: BrowserPoint): void {
 }
 
 /**
- * Validates the bounded delay, count, steps, and position of one trusted-input operation.
+ * Validates the bounded delay, count, and steps of one trusted-input operation.
  *
  * @remarks
  * The parameter is `BrowserOperationOptions`, so one validator answers for a
- * locator click, a locator drag, a mouse click, a mouse drag, and keyboard
- * entry alike.
+ * mouse click, a mouse drag, and keyboard entry alike.
  *
  * @param options - Candidate input options
  */
@@ -727,7 +726,6 @@ export function validateBrowserInputOptions(options?: BrowserOperationOptions): 
 			steps: options.steps,
 		})
 	}
-	if (options?.position !== undefined) validateBrowserPoint(options.position)
 }
 
 /**

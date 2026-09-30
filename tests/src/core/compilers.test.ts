@@ -11,13 +11,9 @@ import {
 	compileHitFunction,
 	BROWSER_RESULT_LIMIT_PATTERN,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
-	compileAttachedWaitExpression,
-	compileClickExpression,
 	compileCodegenScript,
-	compileHiddenWaitExpression,
 	compileReadFunction,
-	compileSelectExpression,
-	compileVisibleWaitExpression,
+	compileScreenshotPreparationExpression,
 	compileGuardedEvaluateExpression,
 } from '@src/core'
 import { evaluateJavaScript, evaluateBrowserHit, readBrowserCompiledTimers } from '../../setup.js'
@@ -48,34 +44,16 @@ describe('element compilers', () => {
 	})
 })
 
-describe('browser action expressions', () => {
-	it('embeds hostile selectors as JSON data rather than executable source', () => {
-		const selector = String.raw`div[data-value='";globalThis.pwned=true;//']`
-		const wait = compileAttachedWaitExpression(selector, true, 250)
-		const click = compileClickExpression(selector, true)
+describe('compileScreenshotPreparationExpression', () => {
+	it('draws one overlay per masked rectangle and skips preparation when nothing needs it', () => {
+		expect(compileScreenshotPreparationExpression()).toBeUndefined()
 
-		expect(wait).toContain(JSON.stringify(selector))
-		expect(click).toContain(JSON.stringify(selector))
-		expect(wait).toContain('const strict = true')
-		expect(wait).toContain('250')
-		expect(click).toContain('matches.length !== 1')
-		expect(click).toContain(':disabled')
-	})
+		const expression = compileScreenshotPreparationExpression({ color: '#123456' }, [
+			[10, 20, 30, 40],
+		])
 
-	it('lets non-strict visible waits act on the first match and hidden waits require all hidden', () => {
-		const visible = compileVisibleWaitExpression('.item', false, 100)
-		const hidden = compileHiddenWaitExpression('.item', false, 100)
-
-		expect(visible).toContain('matches.length > 0 && visible(matches[0])')
-		expect(hidden).toContain('Array.from(matches).every')
-	})
-
-	it('rejects missing options and multiple values for a single select', () => {
-		const expression = compileSelectExpression('#region', ['us', 'ca'], true)
-
-		expect(expression).toContain('!el.multiple && values.length > 1')
-		expect(expression).toContain('Select options not found')
-		expect(expression).toContain('new Set(Array.from(el.options')
+		expect(expression).toContain('[[10,20,30,40]]')
+		expect(expression).toContain(JSON.stringify('#123456'))
 	})
 })
 
@@ -175,9 +153,9 @@ describe('compileCodegenScript', () => {
 		const lines = script.split('\n')
 		expect(lines).toHaveLength(actions.length + 2)
 		expect(lines[1]).toBe(`\tawait page.navigate("about:blank")`)
-		expect(lines[2]).toBe(`\tawait page.click("#a")`)
-		expect(lines[3]).toBe(`\tawait page.fill("#b", "hi")`)
-		expect(lines[4]).toBe(`\tawait page.select("#c", ["x","y"])`)
+		expect(lines[2]).toBe(`\tawait (await page.elements.find({ css: "#a" }))[0].click()`)
+		expect(lines[3]).toBe(`\tawait (await page.elements.find({ css: "#b" }))[0].fill("hi")`)
+		expect(lines[4]).toBe(`\tawait (await page.elements.find({ css: "#c" }))[0].select(["x","y"])`)
 	})
 
 	it('emits a TypeScript-typed page parameter only when language is typescript', () => {
@@ -192,7 +170,7 @@ describe('compileCodegenScript', () => {
 	it('embeds a selector containing quotes safely through JSON-safe quoting', () => {
 		const withQuote: BrowserCodegenAction[] = [{ action: 'click', selector: `div[data-x="y"]` }]
 		const script = compileCodegenScript(withQuote)
-		const expectedLine = `\tawait page.click(${JSON.stringify(`div[data-x="y"]`)})`
+		const expectedLine = `\tawait (await page.elements.find({ css: ${JSON.stringify(`div[data-x="y"]`)} }))[0].click()`
 		expect(script).toContain(expectedLine)
 		// The embedded quotes are escaped, not left bare.
 		expect(script).toContain('\\"y\\"')

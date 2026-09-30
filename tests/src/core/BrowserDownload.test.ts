@@ -58,7 +58,7 @@ describe('BrowserDownload', () => {
 		expect(download.emitter.destroyed).toBe(true)
 	})
 
-	it('cancels through the protocol while pending and stops sending once settled', async () => {
+	it('aborts through the protocol while pending and stops sending once settled', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Browser.cancelDownload')
 		const download = new BrowserDownload(
@@ -69,22 +69,22 @@ describe('BrowserDownload', () => {
 			'context-1',
 		)
 
-		await download.cancel()
-		download.update({ status: 'cancelled', received: 0, total: 0 })
-		await download.cancel()
+		await download.abort()
+		download.update({ status: 'aborted', received: 0, total: 0 })
+		await download.abort()
 
 		expect(readCDPParams(transport, 'Browser.cancelDownload')).toStrictEqual([
 			{ guid: 'download-1', browserContextId: 'context-1' },
 		])
-		expect(download.status).toBe('cancelled')
+		expect(download.status).toBe('aborted')
 	})
 
-	it('omits the context from the cancel frame when the download has none', async () => {
+	it('omits the context from the abort frame when the download has none', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Browser.cancelDownload')
 		const download = new BrowserDownload(client, 'download-1', 'https://example.com/f', 'f.txt')
 
-		await download.cancel()
+		await download.abort()
 
 		expect(readCDPParams(transport, 'Browser.cancelDownload')).toStrictEqual([
 			{ guid: 'download-1' },

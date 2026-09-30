@@ -133,16 +133,6 @@ export const BROWSER_RESULT_LIMIT_PATTERN = new RegExp(
 )
 
 /**
- * Sets the poll interval while waiting for a selector to appear, `100` milliseconds.
- *
- * @remarks
- * A wait adds the same interval as slack to its own CDP call timeout, so the in-page poll
- * expires before the call carrying it. Host-side CDP readiness probes wait it out between
- * attempts.
- */
-export const BROWSER_WAIT_POLL_INTERVAL_MS = 100
-
-/**
  * Sets the default maximum node count accepted from a decoded CDP DOM snapshot, `100_000`.
  */
 export const BROWSER_SNAPSHOT_NODE_LIMIT = 100_000
@@ -150,23 +140,8 @@ export const BROWSER_SNAPSHOT_NODE_LIMIT = 100_000
 /** Names the isolated world used for iframe evaluation, `'__orkestrelBrowserFrame'`. */
 export const BROWSER_FRAME_WORLD_NAME = '__orkestrelBrowserFrame'
 
-/** Names the attribute the semantic test-id selector uses. */
-export const BROWSER_TEST_ID_ATTRIBUTE = 'data-testid'
-
 /** Sets the number of animation frames whose element bounds must agree before trusted input. */
 export const BROWSER_STABLE_FRAME_COUNT = 2
-
-/**
- * Holds the in-page visibility predicate source, over a `style` computed style and a
- * `rect` bounding box already in scope at the interpolation site.
- *
- * @remarks
- * Every compiled expression that decides whether an element is visible
- * interpolates this one source, so what "visible" means has a single
- * definition rather than one copy per compiler.
- */
-export const BROWSER_VISIBILITY_SOURCE =
-	"style.display !== 'none' && style.visibility !== 'hidden' && style.visibility !== 'collapse' && rect.width > 0 && rect.height > 0"
 
 /** Maps a canonical modifier name to its CDP Input modifier bit value. */
 export const BROWSER_KEY_MODIFIERS: Readonly<Record<string, number>> = Object.freeze({
