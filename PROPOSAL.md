@@ -253,8 +253,8 @@ A trusted CDP click takes five steps, each with a named refusal.
 
 1. `DOM.scrollIntoViewIfNeeded`.
 2. `compileActionabilityFunction` in the isolated world: visible, enabled, and stable across two animation frames. `HIDDEN` or `DISABLED` refuses.
-3. `DOM.getContentQuads` on the element's own session; no quad refuses `HIDDEN`. For an out-of-process frame the quad is frame-local (P19), so the page coordinates are the quad center plus the frame element's rectangle in its parent, composed up the frame chain.
-4. `DOM.getNodeForLocation` at that point; a hit outside the element and its descendants refuses `OCCLUDED` naming the covering element (P11).
+3. `DOM.getContentQuads` on the element's own session; no quad refuses `HIDDEN`. For an out-of-process frame the quad is frame-local (P19), so the page coordinates are the quad center plus the origin of the frame element's content box in its parent (`DOM.getBoxModel`; P26 reads the content quads as the border box, and a click at the border-box offset lands in the parent), composed up the frame chain.
+4. `DOM.getNodeForLocation` on the element's own session at the frame-local point in that document's coordinates (the command takes document coordinates and reports nothing for a point scrolled out of view, P24; on the page session a point inside an out-of-process frame reports the frame's owner element, P21), without `includeUserAgentShadowDOM` (the flag reports the inner user-agent shadow node of an input, a textarea, or a select, P22); a hit outside the element and its composed descendants refuses `OCCLUDED` naming the covering element (P11).
 5. `Input.dispatchMouseEvent` pressed and released on the page session.
 
 **Serialization.** The toolset runs one action at a time in first-in, first-out order; an action holds the queue until its receipt is produced, and an action whose signal aborts while queued leaves the queue without sending anything. The signal is checked before a pointer or key pair starts; after `mousePressed` or `keyDown` is sent, the matching release is always sent without the signal, so an abort never leaves a button or key held down. A release still pending when the receipt is produced (P14) is awaited by the next action before that action sends anything. `dialog` never waits on the queue, because the pending release settles only after the dialog is handled.
@@ -637,7 +637,7 @@ This unit builds the element manager over the accessibility tree and trusted inp
   7. `find({ role: 'button', name: 'sav' })` matches `Save`; `find({ css })` sends `DOM.querySelectorAll` then `DOM.describeNode`.
   8. `page.wait(text)` resolves when the evaluation resolves `true`, re-sends after a scripted `Execution context was destroyed` followed by `DOMContentLoaded`, rejects `BROWSER_WAIT_TIMEOUT` when the evaluation resolves `false`, and sends the disconnect evaluation on abort; `compileTextWaitExpression` and `compileQueryWaitExpression` contain no `setInterval` and one `setTimeout` each, whose delay is the deadline argument (Grep and a parse of the compiled string in the test).
   9. Exactly one `Page.createIsolatedWorld` per document; another after `Runtime.executionContextsCleared`; every element evaluation carries that `contextId`.
-  10. `outline` waits for a `DOMContentLoaded` lifecycle event for the current loader; the test emits it 20 ms after the call and asserts no evaluation was sent before it.
+  10. `outline` waits for a `DOMContentLoaded` lifecycle event for the current loader; the test emits it 20 ms after the call and asserts no evaluation was sent before it. A `Page.frameNavigated` of type `BackForwardCacheRestore` marks the document ready at once, because a restore emits no lifecycle event (P25).
   11. `npm run test:src:core` exits 0.
 
 ### U5 `removal`
