@@ -180,24 +180,35 @@ export interface BrowserSubmitCase {
 
 /**
  * Pairs each submit-observer case, the submissions one action dispatches in order, with the
- * destinations the read reports.
+ * destinations the read reports and whether it reports a prevented submission.
  */
 export const BROWSER_SUBMIT_CASES: ReadonlyArray<
-	readonly [name: string, submits: readonly BrowserSubmitCase[], destinations: readonly string[]]
+	readonly [
+		name: string,
+		submits: readonly BrowserSubmitCase[],
+		destinations: readonly string[],
+		prevented: boolean,
+	]
 > = [
-	['an implicit submission', [{ prevented: false, form: {} }], ['self']],
-	['a prevented submission', [{ prevented: true, form: {} }], []],
-	['a dialog form', [{ prevented: false, form: { method: 'dialog' } }], []],
-	['a dialog submitter', [{ prevented: false, form: {}, submitter: { formmethod: 'DIALOG' } }], []],
-	['a new-window form', [{ prevented: false, form: { target: '_blank' } }], []],
+	['an implicit submission', [{ prevented: false, form: {} }], ['self'], false],
+	['a prevented submission', [{ prevented: true, form: {} }], [], true],
+	['a dialog form', [{ prevented: false, form: { method: 'dialog' } }], [], false],
+	[
+		'a dialog submitter',
+		[{ prevented: false, form: {}, submitter: { formmethod: 'DIALOG' } }],
+		[],
+		false,
+	],
+	['a new-window form', [{ prevented: false, form: { target: '_blank' } }], [], false],
 	[
 		'a same-window submitter of a new-window form',
 		[{ prevented: false, form: { target: '_blank' }, submitter: { formtarget: '_self' } }],
 		['self'],
+		false,
 	],
-	['a named-window base target', [{ prevented: false, form: {}, base: 'results' }], []],
-	['a parent-window form', [{ prevented: false, form: { target: '_parent' } }], ['parent']],
-	['a top-window form', [{ prevented: false, form: { target: '_TOP' } }], ['top']],
+	['a named-window base target', [{ prevented: false, form: {}, base: 'results' }], [], false],
+	['a parent-window form', [{ prevented: false, form: { target: '_parent' } }], ['parent'], false],
+	['a top-window form', [{ prevented: false, form: { target: '_TOP' } }], ['top'], false],
 	[
 		'a prevented submission followed by a navigating one',
 		[
@@ -205,6 +216,7 @@ export const BROWSER_SUBMIT_CASES: ReadonlyArray<
 			{ prevented: false, form: {} },
 		],
 		['self'],
+		true,
 	],
 	[
 		'a navigating submission followed by a prevented one',
@@ -213,6 +225,7 @@ export const BROWSER_SUBMIT_CASES: ReadonlyArray<
 			{ prevented: true, form: {} },
 		],
 		['self'],
+		true,
 	],
 	[
 		'three submissions to two destinations',
@@ -222,6 +235,7 @@ export const BROWSER_SUBMIT_CASES: ReadonlyArray<
 			{ prevented: false, form: { target: '_top' } },
 		],
 		['top', 'self'],
+		false,
 	],
 ]
 
@@ -250,6 +264,560 @@ export const BROWSER_SUBMIT_ACTIONS = [
 ] as const
 
 /**
+ * Pairs each focus arrangement of the element fixture's `main` and `child` documents with a
+ * toolset action and the receipt line it returns when the observer records no submission: the
+ * no-form status for `type` with `submit` and for an Enter an `input` a form owns received, and no
+ * status for a click, another key, or an Enter any other element received, a focus move by that
+ * element's own handler included.
+ */
+export const BROWSER_SUBMIT_FOCUS_STEPS: ReadonlyArray<
+	readonly [
+		label: string,
+		main: BrowserSubmitFocus | undefined,
+		child: BrowserSubmitFocus | undefined,
+		tool: string,
+		args: Readonly<Record<string, unknown>>,
+		line: string,
+	]
+> = [
+	[
+		'a type with submit',
+		undefined,
+		undefined,
+		'type',
+		{ ref: 'e2', text: 'sam', submit: true },
+		'Typed "sam" into e2 textbox "Email" and pressed Enter; no form received the submission.',
+	],
+	[
+		'an Enter in an input a form owns',
+		{ name: 'input', form: { method: 'post' } },
+		undefined,
+		'press',
+		{ key: 'Enter' },
+		'Pressed Enter; no form received the submission.',
+	],
+	[
+		'a Tab in an input a form owns',
+		{ name: 'input', form: { method: 'post' } },
+		undefined,
+		'press',
+		{ key: 'Tab' },
+		'Pressed Tab.',
+	],
+	[
+		'a click with the focus in an input a form owns',
+		{ name: 'input', form: { method: 'post' } },
+		undefined,
+		'click',
+		{ ref: 'e1' },
+		'Clicked e1 link "Home".',
+	],
+	[
+		'an Enter in a textarea',
+		{ name: 'textarea', form: { method: 'post' } },
+		undefined,
+		'press',
+		{ key: 'Enter' },
+		'Pressed Enter.',
+	],
+	[
+		'an Enter in an input no form owns',
+		{ name: 'input' },
+		undefined,
+		'press',
+		{ key: 'Enter' },
+		'Pressed Enter.',
+	],
+	[
+		'an Enter in a framed input a form owns',
+		{ name: 'iframe' },
+		{ name: 'input', form: { method: 'post' } },
+		'press',
+		{ key: 'Enter' },
+		'Pressed Enter; no form received the submission.',
+	],
+	[
+		'an Enter in a form input whose handler focuses a textarea',
+		{ name: 'input', form: { method: 'post' }, moves: { name: 'textarea', form: {} } },
+		undefined,
+		'press',
+		{ key: 'Enter' },
+		'Pressed Enter; no form received the submission.',
+	],
+	[
+		'an Enter in a textarea whose handler focuses a form input',
+		{ name: 'textarea', form: {}, moves: { name: 'input', form: { method: 'post' } } },
+		undefined,
+		'press',
+		{ key: 'Enter' },
+		'Pressed Enter.',
+	],
+]
+
+/**
+ * Pairs each key a {@link BrowserSubmitWindow} dispatches to its focused element with whether the
+ * submit observer's read reports it `implicit`: true only for an Enter an `input` a form owns
+ * received, whichever element its handler focuses afterwards.
+ */
+export const BROWSER_SUBMIT_FOCUS_CASES: ReadonlyArray<
+	readonly [name: string, focus: BrowserSubmitFocus | undefined, key: string, implicit: boolean]
+> = [
+	['an Enter in an input a form owns', { name: 'input', form: { method: 'post' } }, 'Enter', true],
+	['an Enter in an input no form owns', { name: 'input' }, 'Enter', false],
+	['an Enter in a textarea', { name: 'textarea', form: {} }, 'Enter', false],
+	['an Enter on a button', { name: 'button', form: {} }, 'Enter', false],
+	['a Tab in an input a form owns', { name: 'input', form: {} }, 'Tab', false],
+	['an Enter with no focused element', undefined, 'Enter', false],
+	[
+		'an Enter in a form input whose handler focuses a textarea',
+		{ name: 'input', form: {}, moves: { name: 'textarea', form: {} } },
+		'Enter',
+		true,
+	],
+	[
+		'an Enter in a textarea whose handler focuses a form input',
+		{ name: 'textarea', form: {}, moves: { name: 'input', form: {} } },
+		'Enter',
+		false,
+	],
+]
+
+/**
+ * Pairs each lifetime rule of a page's pending navigation request with the protocol events the
+ * page session reports before a record of `frame` opens, the events after it opens, and the reason
+ * the record's settlement reports: a start takes the reason of the latest request for its frame
+ * and URL once, and a later request, a reload or history start, a same-document commit, and the
+ * frame's removal drop it.
+ */
+export const BROWSER_PENDING_REQUEST_CASES: ReadonlyArray<
+	readonly [
+		name: string,
+		frame: string,
+		before: ReadonlyArray<readonly [method: string, params: Readonly<Record<string, unknown>>]>,
+		after: ReadonlyArray<readonly [method: string, params: Readonly<Record<string, unknown>>]>,
+		reason: string | undefined,
+	]
+> = [
+	[
+		'a start of the requested URL takes the request reason',
+		'main',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		'formSubmissionPost',
+	],
+	[
+		'an unknown-reason request for the same URL replaces a form reason',
+		'main',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'prerenderActivation',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		undefined,
+	],
+	[
+		'a second start of the same URL finds the request consumed',
+		'main',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-first',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-second',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		undefined,
+	],
+	[
+		'a reload start of the requested URL takes no reason',
+		'main',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-reload',
+					navigationType: 'reload',
+				},
+			],
+		],
+		undefined,
+	],
+	[
+		'a history start drops the request for the next start',
+		'main',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-back',
+					navigationType: 'historyDifferentDocument',
+				},
+			],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		undefined,
+	],
+	[
+		'a start of another URL drops the request for a later request-less start of its URL',
+		'main',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/other',
+					loaderId: 'loader-other',
+					navigationType: 'differentDocument',
+				},
+			],
+			[
+				'Page.frameNavigated',
+				{ frame: { id: 'main', url: 'https://example.test/other', loaderId: 'loader-other' } },
+			],
+			['Page.lifecycleEvent', { frameId: 'main', loaderId: 'loader-other', name: 'load' }],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		undefined,
+	],
+	[
+		'a same-document commit drops the request',
+		'main',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionGet',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			[
+				'Page.navigatedWithinDocument',
+				{ frameId: 'main', url: 'https://example.test/cart#placed', navigationType: 'fragment' },
+			],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		undefined,
+	],
+	[
+		'a removed frame drops its request',
+		'side',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'side',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			['Page.frameDetached', { frameId: 'side', reason: 'remove' }],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'side',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		undefined,
+	],
+	[
+		'a swapped frame keeps its request',
+		'side',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'side',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			['Page.frameDetached', { frameId: 'side', reason: 'swap' }],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'side',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		'formSubmissionPost',
+	],
+	[
+		'a frame whose target detached drops its request',
+		'side',
+		[
+			[
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'side',
+					reason: 'formSubmissionPost',
+					url: 'https://example.test/order',
+					disposition: 'currentTab',
+				},
+			],
+			['Target.detachedFromTarget', { sessionId: 'session-side', targetId: 'side' }],
+		],
+		[
+			[
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'side',
+					url: 'https://example.test/order',
+					loaderId: 'loader-order',
+					navigationType: 'differentDocument',
+				},
+			],
+		],
+		undefined,
+	],
+]
+
+/**
+ * Pairs each navigation that outruns the Enter of a `type` with `submit` before any observer read
+ * with the protocol stages it starts with, the reason its request carries, and the clause the
+ * receipt ends its action with: `and submitted the form` only for a form submission's reason.
+ */
+export const BROWSER_SUBMIT_EARLY_CASES: ReadonlyArray<
+	readonly [
+		name: string,
+		stages: readonly BrowserNavigationStageEvent[],
+		reason: string,
+		clause: string,
+	]
+> = [
+	['a form submission', ['request', 'start'], 'formSubmissionPost', 'and submitted the form'],
+	['a link click', ['request', 'start'], 'anchorClick', 'and pressed Enter'],
+	[
+		'a navigation whose request names no reason',
+		['start'],
+		'formSubmissionPost',
+		'and pressed Enter',
+	],
+]
+
+/**
+ * Pairs each ordering of a `type` with `submit` whose observer read answered no submission and a
+ * `formSubmissionPost` navigation of the main frame with whether that navigation starts and loads
+ * before the read answers; the navigation starts right after the read otherwise, and loads later.
+ */
+export const BROWSER_SUBMIT_NEGATIVE_CASES: ReadonlyArray<readonly [name: string, first: boolean]> =
+	[
+		['the navigation before the read answers', true],
+		['the read answering before the navigation settles', false],
+	]
+
+/**
+ * Pairs each outcome of a `type` with `submit` whose observer read failed with the protocol stages
+ * of the main-frame navigation that followed it, the reason its request carries, the URL of the
+ * view the receipt carries, and the clause the receipt ends its action with.
+ */
+export const BROWSER_SUBMIT_UNREAD_CASES: ReadonlyArray<
+	readonly [
+		name: string,
+		stages: readonly BrowserNavigationStageEvent[],
+		reason: string,
+		url: string,
+		clause: string,
+	]
+> = [
+	[
+		'a form submission followed',
+		['request', 'start', 'commit', 'load'],
+		'formSubmissionGet',
+		'https://example.test/next',
+		'and submitted the form',
+	],
+	[
+		'a link navigation followed',
+		['request', 'start', 'commit', 'load'],
+		'anchorClick',
+		'https://example.test/next',
+		'and pressed Enter',
+	],
+	[
+		'a navigation without a request followed',
+		['start', 'commit', 'load'],
+		'formSubmissionPost',
+		'https://example.test/next',
+		'and pressed Enter',
+	],
+	[
+		'no navigation followed',
+		[],
+		'formSubmissionPost',
+		'https://example.test/cart',
+		'and pressed Enter',
+	],
+]
+
+/**
+ * Lists the read values off the submit observer read's shape that a toolset takes as an unknown
+ * outcome: a missing member, a member of the wrong type, `null`, and the bare array an earlier
+ * read shape answered.
+ */
+export const BROWSER_SUBMIT_MALFORMED_READS: ReadonlyArray<
+	readonly [name: string, value: unknown]
+> = [
+	['a record without implicit', { destinations: [], prevented: false, submitted: false }],
+	[
+		'a record whose submitted is a string',
+		{ destinations: [], prevented: false, submitted: 'false', implicit: false },
+	],
+	[
+		'a record whose destinations hold a number',
+		{ destinations: [1], prevented: false, submitted: false, implicit: false },
+	],
+	['null', null],
+	['a bare array', ['self']],
+]
+
+/**
  * Pairs each session arrangement of the element fixture's `child` iframe with its fixture `local`
  * option and the session that reports the frame's navigation.
  */
@@ -272,30 +840,97 @@ export class BrowserSubmitElement {
 }
 
 /**
+ * Describes the element a {@link BrowserSubmitWindow} holds the focus on.
+ *
+ * @remarks
+ * - `name` — the element's local name, such as `input`
+ * - `form` — the attributes of the form that owns the element; absent for an element no form owns
+ * - `moves` — the element the focused element's own `keydown` handler focuses after the window's
+ *   capture listeners ran; absent for an element whose handler keeps the focus
+ */
+export interface BrowserSubmitFocus {
+	readonly name: string
+	readonly form?: Readonly<Record<string, string>>
+	readonly moves?: BrowserSubmitFocus
+}
+
+/**
  * Stands in for the window, document, and global scope of one execution world the submit
- * observer runs in: it registers `submit` listeners, honours `once`, dispatches inert events to
- * them, answers the `base[target]` query, and evaluates an expression against itself.
+ * observer runs in: it registers `submit` and `keydown` listeners with their capture flag, honours
+ * `once`, dispatches inert events to them, answers the `base[target]` query, and evaluates an
+ * expression against itself. An event reaches the window's capture listeners in registration
+ * order, then its target, then the bubbling listeners, as the DOM sends it: a key goes to the
+ * focused element, whose own handler runs between the two phases and can move the focus.
+ * `removeEventListener` removes the registration of the same type, listener, and capture flag.
  */
 export class BrowserSubmitWindow {
-	readonly #listeners = new Map<unknown, boolean>()
+	readonly #listeners: Array<{
+		readonly type: string
+		readonly listener: unknown
+		readonly capture: boolean
+		readonly once: boolean
+	}> = []
 	readonly #globals: Record<string, unknown> = {}
 	readonly #base: string | undefined
+	#focused: BrowserSubmitFocus | undefined
 
 	constructor(base?: string) {
 		this.#base = base
 	}
 
 	get listeners(): number {
-		return this.#listeners.size
+		return this.#listeners.length
+	}
+
+	// Answers the focus in the shape `document.activeElement` has, so a proof reads where a key
+	// handler moved it.
+	get activeElement(): {
+		readonly localName: string
+		readonly form: BrowserSubmitElement | null
+	} | null {
+		const focused = this.#focused
+		if (focused === undefined) return null
+		return {
+			localName: focused.name,
+			form: focused.form === undefined ? null : new BrowserSubmitElement(focused.form),
+		}
+	}
+
+	focus(element?: BrowserSubmitFocus): void {
+		this.#focused = element
+	}
+
+	// A document whose focus sits on an iframe hands its keys to the framed document, so it
+	// dispatches none itself.
+	press(key: string): void {
+		const focused = this.#focused
+		if (focused === undefined || focused.name === 'iframe') return
+		const target = {
+			localName: focused.name,
+			form: focused.form === undefined ? null : new BrowserSubmitElement(focused.form),
+		}
+		const event = { key, target }
+		this.#emit('keydown', event, true)
+		if (focused.moves !== undefined) this.#focused = focused.moves
+		this.#emit('keydown', event, false)
 	}
 
 	addEventListener(type: string, listener: unknown, options?: unknown): void {
-		if (type === 'submit')
-			this.#listeners.set(listener, isRecord(options) && options['once'] === true)
+		if (type !== 'submit' && type !== 'keydown') return
+		const capture = options === true || (isRecord(options) && options['capture'] === true)
+		if (this.#find(type, listener, capture) >= 0) return
+		this.#listeners.push({
+			type,
+			listener,
+			capture,
+			once: isRecord(options) && options['once'] === true,
+		})
 	}
 
-	removeEventListener(type: string, listener: unknown): void {
-		if (type === 'submit') this.#listeners.delete(listener)
+	removeEventListener(type: string, listener: unknown, options?: unknown): void {
+		const capture = options === true || (isRecord(options) && options['capture'] === true)
+		const index = this.#find(type, listener, capture)
+		if (index >= 0) this.#listeners.splice(index, 1)
 	}
 
 	querySelector(selector: string): BrowserSubmitElement | null {
@@ -310,10 +945,8 @@ export class BrowserSubmitWindow {
 			target: new BrowserSubmitElement(submit.form),
 			submitter: submit.submitter === undefined ? null : new BrowserSubmitElement(submit.submitter),
 		}
-		for (const [listener, once] of [...this.#listeners]) {
-			if (once) this.#listeners.delete(listener)
-			if (isFunction(listener)) Reflect.apply(listener, undefined, [event])
-		}
+		this.#emit('submit', event, true)
+		this.#emit('submit', event, false)
 	}
 
 	evaluate(expression: string): unknown {
@@ -330,6 +963,24 @@ export class BrowserSubmitWindow {
 			this,
 			this.#globals,
 		])
+	}
+
+	#emit(type: string, event: unknown, capture: boolean): void {
+		for (const registration of [...this.#listeners]) {
+			if (registration.type !== type || registration.capture !== capture) continue
+			if (registration.once) this.#listeners.splice(this.#listeners.indexOf(registration), 1)
+			if (isFunction(registration.listener))
+				Reflect.apply(registration.listener, undefined, [event])
+		}
+	}
+
+	#find(type: string, listener: unknown, capture: boolean): number {
+		return this.#listeners.findIndex(
+			(registration) =>
+				registration.type === type &&
+				registration.listener === listener &&
+				registration.capture === capture,
+		)
 	}
 }
 
@@ -351,6 +1002,12 @@ export class BrowserSubmitWindows {
 		const created = new BrowserSubmitWindow()
 		this.#windows.set(key, created)
 		return created
+	}
+
+	// Every window receives the key, and each one whose focus sits on an element it holds
+	// dispatches it, so a key reaches the focused document of a scripted frame tree.
+	press(key: string): void {
+		for (const window of this.#windows.values()) window.press(key)
 	}
 
 	evaluate(message: CDPSentMessage): unknown {
@@ -1041,8 +1698,8 @@ export interface BrowserElementFixtureOptions {
  * `registry` answers it. `released` answers a `mouseReleased` dispatch in place of the reply,
  * `select` answers the select-option function call, and `text` answers the text-selection
  * function call, and `insert` answers `Input.insertText`, so a test can withhold or refuse any
- * of them. The toolset's submit observer and
- * its read run in the {@link BrowserSubmitWindow} of the session and world they name, from
+ * of them. A key-down dispatch presses its key in every window of `windows` before the reply. The
+ * toolset's submit observer and its read run in the {@link BrowserSubmitWindow} of the session and world they name, from
  * `windows`, unless `observe` answers the installation or `submit` answers the read; `nested` adds
  * a `nested` frame inside `child` to the frame tree. `roots` names
  * the root frame a session's `Page.getFrameTree` answers with in place of the page tree, unless
@@ -1083,7 +1740,10 @@ export function scriptBrowserElements(
 		if (options?.insert !== undefined) options.insert(message)
 		else transport.reply(message.id, {})
 	})
-	replyOk(transport, 'Input.dispatchKeyEvent')
+	transport.onSend('Input.dispatchKeyEvent', (message) => {
+		if (message.params?.['type'] === 'keyDown') windows.press(String(message.params['key']))
+		transport.reply(message.id, {})
+	})
 	replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 	replyOk(transport, 'Page.enable')
 	replyOk(transport, 'Runtime.enable')
@@ -1321,6 +1981,8 @@ export type BrowserNavigationStageEvent = 'request' | 'start' | 'commit' | 'load
  * @param url - The navigation's destination
  * @param loader - The navigation's loader id
  * @param stages - The events to emit. Default: `request`, `start`, `commit`, and `load`
+ * @param reason - The `reason` the request carries, any string the protocol could send. Default:
+ * `formSubmissionPost`
  */
 export function emitBrowserNavigation(
 	transport: CDPTestTransportInterface,
@@ -1329,11 +1991,12 @@ export function emitBrowserNavigation(
 	url: string,
 	loader: string,
 	stages: readonly BrowserNavigationStageEvent[] = ['request', 'start', 'commit', 'load'],
+	reason = 'formSubmissionPost',
 ): void {
 	if (stages.includes('request'))
 		transport.event(
 			'Page.frameRequestedNavigation',
-			{ frameId: frame, reason: 'formSubmissionPost', url, disposition: 'currentTab' },
+			{ frameId: frame, reason, url, disposition: 'currentTab' },
 			session,
 		)
 	if (stages.includes('start'))

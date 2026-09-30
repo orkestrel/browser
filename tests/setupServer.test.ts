@@ -45,6 +45,8 @@ import {
 	createTempDirectory,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
+	FIXTURE_CHECKOUT_CODE,
+	FIXTURE_CHECKOUT_DELAY,
 	FIXTURE_DOCUMENT_BUNDLE,
 	FIXTURE_DOCUMENT_IMPORTS,
 	FIXTURE_LATE_DELAY,
@@ -580,6 +582,7 @@ describe('renderFixturePage', () => {
 			'/form/placed': 'Order placed',
 			'/shop': 'Cedar Tea Tray',
 			'/shop/cart': 'Cart',
+			'/checkout': 'Checkout',
 			'/frame/outer': 'Checkout',
 			'/frame/inner': 'Payment',
 			'/frame/voucher': 'Voucher',
@@ -724,6 +727,28 @@ describe('renderFixturePage', () => {
 			'append(line); document.body.dataset.inserted = String(performance.timeOrigin + performance.now()) }',
 		)
 		expect(late).not.toContain(FIXTURE_LATE_TEXT + '</')
+	})
+
+	it('prevents the order submission, posts the name, and inserts the confirmation after the checkout delay, beside a gift form that keeps its default action', () => {
+		const checkout = requireValue(renderFixturePage('/checkout', 4100))
+
+		expect(FIXTURE_CHECKOUT_CODE).toBe('A1042')
+		expect(FIXTURE_CHECKOUT_DELAY).toBe(200)
+		expect(checkout).toContain(
+			'<form id="order" action="/checkout/order" method="post"><label>Name <input id="name" name="name" type="text"></label></form>',
+		)
+		expect(checkout).toContain(
+			"document.getElementById('order').addEventListener('submit', (event) => {\n\tevent.preventDefault()",
+		)
+		expect(checkout).toContain(
+			"fetch('/checkout/order', { method: 'POST', body: new URLSearchParams({ name }) })",
+		)
+		expect(checkout).toContain("line.textContent = 'Order ' + code + ' placed for ' + name + '.'")
+		expect(checkout).toContain(`}, ${FIXTURE_CHECKOUT_DELAY})`)
+		expect(checkout).toContain(
+			'<form id="gift" action="/form/placed" method="get"><input name="speed" type="hidden" value="Standard">',
+		)
+		expect(checkout.match(/preventDefault/g)).toHaveLength(1)
 	})
 })
 
@@ -899,6 +924,25 @@ describe('createFixtureServer', () => {
 				200,
 				renderFixturePage('/shop/cart', fixtures.port),
 			])
+		} finally {
+			await fixtures.destroy()
+		}
+	})
+
+	it('answers a POST of an order with the order code as plain text, and a GET of the order path with 404', async () => {
+		const fixtures = await createFixtureServer()
+		try {
+			const posted = await fetch(fixtures.url('/checkout/order'), {
+				method: 'POST',
+				body: new URLSearchParams({ name: 'Ada Lovelace' }),
+			})
+			expect([posted.status, posted.headers.get('content-type'), await posted.text()]).toEqual([
+				200,
+				'text/plain; charset=utf-8',
+				FIXTURE_CHECKOUT_CODE,
+			])
+			const fetched = await fetch(fixtures.url('/checkout/order'))
+			expect([fetched.status, await fetched.text()]).toEqual([404, ''])
 		} finally {
 			await fixtures.destroy()
 		}

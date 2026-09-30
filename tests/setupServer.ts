@@ -904,6 +904,15 @@ export const FIXTURE_LATE_TEXT = 'Confirmation code 4417'
 /** Holds the delay in milliseconds between the `Reveal` click and the late text's insertion. */
 export const FIXTURE_LATE_DELAY = 200
 
+/** Names the order code a `POST` to `/checkout/order` answers with. */
+export const FIXTURE_CHECKOUT_CODE = 'A1042'
+
+/**
+ * Holds the delay in milliseconds between the checkout page's receipt of the order code and the
+ * confirmation line's insertion.
+ */
+export const FIXTURE_CHECKOUT_DELAY = 200
+
 /**
  * Maps each bare specifier the served document page imports to the path the fixture server
  * answers it on.
@@ -983,6 +992,24 @@ const SHOP_PAGE = `<!doctype html><html><head><title>Cedar Tea Tray</title></hea
 <form action="/shop/cart" method="post"><input name="item" type="hidden" value="Cedar Tea Tray"><button id="add">Add to cart</button></form>
 <form action="/shop/cart" method="post" onsubmit="event.preventDefault(); document.body.dataset.held = 'yes'"><button id="hold">Save for later</button></form>
 </main>
+</body></html>`
+
+// The order form's `submit` listener prevents the submission, posts the name, and inserts the
+// confirmation line after the order code arrives; the gift form keeps its default action.
+const CHECKOUT_PAGE = `<!doctype html><html><head><title>Checkout</title></head><body>
+<main><h1>Checkout</h1>
+<form id="order" action="/checkout/order" method="post"><label>Name <input id="name" name="name" type="text"></label></form>
+<form id="gift" action="/form/placed" method="get"><input name="speed" type="hidden" value="Standard"><label>Gift name <input id="recipient" name="name" type="text"></label></form>
+</main>
+<script>
+document.getElementById('order').addEventListener('submit', (event) => {
+	event.preventDefault()
+	const name = document.getElementById('name').value
+	fetch('/checkout/order', { method: 'POST', body: new URLSearchParams({ name }) }).then((response) => response.text()).then((code) => {
+		setTimeout(() => { const line = document.createElement('p'); line.textContent = 'Order ' + code + ' placed for ' + name + '.'; document.querySelector('main').append(line) }, ${FIXTURE_CHECKOUT_DELAY})
+	})
+})
+</script>
 </body></html>`
 
 const CART_PAGE = `<!doctype html><html><head><title>Cart</title></head><body>
@@ -1119,6 +1146,11 @@ try {
  *   `Save for later` form's `submit` handler calls `preventDefault()` and sets
  *   `document.body.dataset.held`
  * - `/shop/cart` — the cart a `POST` to `/shop/cart` redirects to with `303`
+ * - `/checkout` — an `Order` form holding one `Name` text input, whose `submit` listener calls
+ *   `preventDefault()`, posts the name to `/checkout/order`, and inserts the line
+ *   `Order CODE placed for NAME.` {@link FIXTURE_CHECKOUT_DELAY} milliseconds after the order code
+ *   arrives, and a `Gift` form holding one `Gift name` text input, which an Enter submits to
+ *   `/form/placed` with the `Standard` speed
  * - `/frame/outer` — a `127.0.0.1` document framing `/frame/inner` from `localhost` inside a
  *   10 px border at (220, 160), with a 16 px `Decoy` button under the frame-local point of the
  *   framed `Pay` button
@@ -1178,6 +1210,8 @@ export function renderFixturePage(path: string, port: number): string | undefine
 			return SHOP_PAGE
 		case '/shop/cart':
 			return CART_PAGE
+		case '/checkout':
+			return CHECKOUT_PAGE
 		case '/frame/outer':
 			return `<!doctype html><html><head><title>Checkout</title><style>html,body{margin:0;height:100%}#decoy{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}iframe{position:absolute;left:220px;top:160px;width:300px;height:200px;border:10px solid gray;padding:0}</style></head><body>
 <button id="decoy" onclick="document.body.dataset.decoy = [document.body.dataset.decoy, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Decoy</button>
@@ -1297,8 +1331,10 @@ export async function loadFixtureModule(
  * Starts the fixture page server on an ephemeral `127.0.0.1` port.
  *
  * @returns A {@link FixtureServerInterface} answering a `POST` to `/shop/cart` with `303` and the
- * location `/shop/cart`, every {@link renderFixturePage} path with `200` and HTML, every
- * {@link loadFixtureModule} path with `200` and JavaScript, and any other path with `404`
+ * location `/shop/cart`, a `POST` to `/checkout/order` with `200` and
+ * {@link FIXTURE_CHECKOUT_CODE} as plain text, every {@link renderFixturePage} path with `200` and
+ * HTML, every {@link loadFixtureModule} path with `200` and JavaScript, and any other path with
+ * `404`
  * @remarks Chromium resolves `localhost` to the loopback interface, so the one listener serves
  * both {@link FixtureHost} origins.
  */
@@ -1324,6 +1360,12 @@ async function serveFixtureRequest(
 		request.resume()
 		response.writeHead(303, { location: '/shop/cart' })
 		response.end()
+		return
+	}
+	if (request.method === 'POST' && path === '/checkout/order') {
+		request.resume()
+		response.writeHead(200, { 'content-type': 'text/plain; charset=utf-8' })
+		response.end(FIXTURE_CHECKOUT_CODE)
 		return
 	}
 	const page = renderFixturePage(path, request.socket.localPort ?? 0)

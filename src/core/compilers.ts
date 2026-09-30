@@ -115,8 +115,10 @@ export function compileHitFunction(): string {
  * The observer records every `submit` event the window sees from installation until
  * {@link compileSubmitReadExpression} with the same `token` reads and removes it, under
  * {@link BROWSER_SUBMIT_KEY}, and replaces an observer an earlier installation left in place,
- * whatever its token. A listener of an isolated world observes the events the page's own scripts
- * dispatch, because both worlds share one DOM.
+ * whatever its token. A capture-phase `keydown` listener beside it records whether an Enter's
+ * target is an `input` a form owns, before any handler of the page can move the focus. A listener
+ * of an isolated world observes the events the page's own scripts dispatch, because both worlds
+ * share one DOM.
  *
  * @param token - The integer that identifies the action owning the observer
  * @returns Expression source that resolves `true`
@@ -126,11 +128,19 @@ export function compileSubmitObserverExpression(token: number): string {
 	return `(() => {
 	const token = ${JSON.stringify(token)}
 	const previous = globalThis[${key}]
-	if (previous !== undefined) removeEventListener('submit', previous.listener, true)
-	const state = { token, events: [], listener: undefined }
+	if (previous !== undefined) {
+		removeEventListener('submit', previous.listener, true)
+		removeEventListener('keydown', previous.keys, true)
+	}
+	const state = { token, events: [], implicit: false, listener: undefined, keys: undefined }
 	state.listener = (event) => { state.events.push(event) }
+	state.keys = (event) => {
+		const target = event.target ?? null
+		if (event.key === 'Enter' && target?.localName === 'input' && (target.form ?? null) !== null) state.implicit = true
+	}
 	globalThis[${key}] = state
 	addEventListener('submit', state.listener, true)
+	addEventListener('keydown', state.keys, true)
 	return true
 })()`
 }
@@ -140,17 +150,26 @@ export function compileSubmitObserverExpression(token: number): string {
  * `token`, removing the observer.
  *
  * @remarks
- * The read lists, without repeats and in the order first recorded, the relationship of the
- * destination of every recorded `submit` that kept its default action: `self` for a target that
- * is empty or `_self`, `parent` for `_parent`, and `top` for `_top`. The target is the one the
- * submitter, the form, or the document's `base` element names. A prevented submission, one whose
- * method is `dialog`, and one aimed at another browsing context add nothing. Every listener of an
- * event has run by the time the input that fired it settles, so `defaultPrevented` is final by
- * then. The read resolves `null` and removes nothing when no observer of `token` is installed, so
- * a delayed read of an earlier action leaves a later action's observer in place.
+ * The read resolves an object of four members:
+ * - `destinations` — without repeats and in the order first recorded, the relationship of the
+ *   destination of every recorded `submit` that kept its default action: `self` for a target
+ *   that is empty or `_self`, `parent` for `_parent`, and `top` for `_top`. The target is the one
+ *   the submitter, the form, or the document's `base` element names. A prevented submission, one
+ *   whose method is `dialog`, and one aimed at another browsing context add nothing.
+ * - `prevented` — true when a listener prevented any recorded `submit`; false otherwise
+ * - `submitted` — true when the observer recorded any `submit`; false otherwise
+ * - `implicit` — true when the observer recorded an Enter whose target is an `input` a form owns,
+ *   the control whose Enter submits that form implicitly; false otherwise. The target is recorded
+ *   in the capture phase, so a handler that moves the focus afterwards does not change it.
+ *
+ * Every listener of an event has run by the time the input that fired it settles, so
+ * `defaultPrevented` is final by then. The read resolves `null` and removes nothing when no
+ * observer of `token` is installed, so a delayed read of an earlier action leaves a later
+ * action's observer in place.
  *
  * @param token - The integer that identifies the action owning the observer
- * @returns Expression source that resolves an array of `self`, `parent`, and `top`, or `null`
+ * @returns Expression source that resolves `{ destinations, prevented, submitted, implicit }`, or
+ * `null`
  */
 export function compileSubmitReadExpression(token: number): string {
 	const key = JSON.stringify(BROWSER_SUBMIT_KEY)
@@ -160,6 +179,7 @@ export function compileSubmitReadExpression(token: number): string {
 	if (state === undefined || state.token !== token) return null
 	delete globalThis[${key}]
 	removeEventListener('submit', state.listener, true)
+	removeEventListener('keydown', state.keys, true)
 	const destinations = { '': 'self', _self: 'self', _parent: 'parent', _top: 'top' }
 	const found = []
 	for (const event of state.events) {
@@ -171,7 +191,12 @@ export function compileSubmitReadExpression(token: number): string {
 		const destination = Object.hasOwn(destinations, target) ? destinations[target] : undefined
 		if (method !== 'dialog' && destination !== undefined && !found.includes(destination)) found.push(destination)
 	}
-	return found
+	return {
+		destinations: found,
+		prevented: state.events.some((event) => event.defaultPrevented),
+		submitted: state.events.length > 0,
+		implicit: state.implicit,
+	}
 })()`
 }
 

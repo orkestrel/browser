@@ -13,6 +13,62 @@ import { isBrowserError } from '@src/core'
 import { BROWSER_RECORD_PARENTS, openBrowserNavigationRecord } from '../../setup.js'
 
 describe('BrowserNavigationRecord', () => {
+	describe('reason', () => {
+		it('reports the reason of the selected start through its commit and load after wait resolves', async () => {
+			const { steps, record } = openBrowserNavigationRecord('main')
+			const waiting = record.wait({ timeout: 10_000 })
+			steps.emit('request', 'main', 'https://example.test/next', undefined, 'formSubmissionPost')
+			await waiting
+			steps.emit(
+				'request',
+				'main',
+				'https://example.test/next',
+				'loader-next',
+				'formSubmissionPost',
+			)
+			steps.emit('commit', 'main', 'https://example.test/next', 'loader-next', false)
+			expect(await record.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/next',
+				stage: 'committed',
+				reason: 'formSubmissionPost',
+			})
+			steps.emit('load', 'main', 'loader-next')
+			expect(await record.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/next',
+				stage: 'loaded',
+				reason: 'formSubmissionPost',
+			})
+			record.destroy()
+		})
+
+		it("reports a superseding start's own reason over the request it replaced, and a request's reason for a same-document commit", async () => {
+			const { steps, record } = openBrowserNavigationRecord('main')
+			steps.emit('request', 'main', 'https://example.test/a', undefined, 'anchorClick')
+			steps.emit('request', 'main', 'https://example.test/b', 'loader-b', undefined)
+			expect(await record.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/b',
+				stage: 'requested',
+				reason: undefined,
+			})
+			record.destroy()
+			const { record: fragment } = openBrowserNavigationRecord('main', steps)
+			steps.emit(
+				'request',
+				'main',
+				'https://example.test/cart?q=1#placed',
+				undefined,
+				'formSubmissionGet',
+			)
+			steps.emit('commit', 'main', 'https://example.test/cart?q=1#placed', undefined, true)
+			expect(await fragment.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/cart?q=1#placed',
+				stage: 'loaded',
+				reason: 'formSubmissionGet',
+			})
+			fragment.destroy()
+		})
+	})
+
 	describe('settle', () => {
 		it('follows the earliest eligible start through its commit and the load of its loader', async () => {
 			const { steps, record } = openBrowserNavigationRecord('main')
@@ -20,7 +76,7 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'main', relationship: 'self' }] })
 				.then(settled.handler)
-			steps.emit('request', 'main', 'https://example.test/next', 'loader-next')
+			steps.emit('request', 'main', 'https://example.test/next', 'loader-next', undefined)
 			await waitForDelay()
 			expect(settled.count).toBe(0)
 			steps.emit('commit', 'main', 'https://example.test/next', 'loader-next', false)
@@ -34,7 +90,7 @@ describe('BrowserNavigationRecord', () => {
 
 		it('ignores every step that arrived before the record opened', async () => {
 			const { steps, record: earlier } = openBrowserNavigationRecord('main')
-			steps.emit('request', 'main', 'https://example.test/a', 'loader-a')
+			steps.emit('request', 'main', 'https://example.test/a', 'loader-a', undefined)
 			steps.emit('commit', 'main', 'https://example.test/a', 'loader-a', false)
 			earlier.destroy()
 			const { record } = openBrowserNavigationRecord('main', steps)
@@ -49,7 +105,7 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'main', relationship: 'self' }] })
 				.then(settled.handler)
-			steps.emit('request', 'main', 'https://example.test/b', 'loader-b')
+			steps.emit('request', 'main', 'https://example.test/b', 'loader-b', undefined)
 			steps.emit('commit', 'main', 'https://example.test/a', 'loader-a', false)
 			steps.emit('load', 'main', 'loader-a')
 			await waitForDelay()
@@ -65,7 +121,7 @@ describe('BrowserNavigationRecord', () => {
 
 		it('takes the first commit after a start that names no loader', async () => {
 			const { steps, record } = openBrowserNavigationRecord('main')
-			steps.emit('request', 'main', 'https://example.test/next', undefined)
+			steps.emit('request', 'main', 'https://example.test/next', undefined, undefined)
 			steps.emit('commit', 'main', 'https://example.test/next', 'loader-next', false)
 			expect(await record.settle({ timeout: 20 })).toEqual({
 				url: 'https://example.test/next',
@@ -80,8 +136,8 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'main', relationship: 'self' }] })
 				.then(settled.handler)
-			steps.emit('request', 'main', 'https://example.test/cart', 'loader-post')
-			steps.emit('request', 'main', 'https://example.test/receipt', 'loader-redirect')
+			steps.emit('request', 'main', 'https://example.test/cart', 'loader-post', undefined)
+			steps.emit('request', 'main', 'https://example.test/receipt', 'loader-redirect', undefined)
 			steps.emit('commit', 'main', 'https://example.test/cart', 'loader-post', false)
 			steps.emit('load', 'main', 'loader-post')
 			await waitForDelay()
@@ -99,7 +155,7 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'child', relationship: 'self' }] })
 				.then(settled.handler)
-			steps.emit('request', 'child', 'https://example.test/done', undefined)
+			steps.emit('request', 'child', 'https://example.test/done', undefined, undefined)
 			steps.emit('load', 'child', undefined)
 			steps.emit('commit', 'child', 'https://example.test/done', undefined, false)
 			await waitForDelay()
@@ -116,7 +172,7 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'main', relationship: 'self' }] })
 				.then(settled.handler)
-			steps.emit('request', 'main', 'https://example.test/cart?q=1#placed', undefined)
+			steps.emit('request', 'main', 'https://example.test/cart?q=1#placed', undefined, undefined)
 			await waitForDelay()
 			expect(settled.count).toBe(0)
 			steps.emit('commit', 'main', 'https://example.test/cart?q=1#placed', undefined, true)
@@ -150,14 +206,14 @@ describe('BrowserNavigationRecord', () => {
 
 		it('resolves with the stage it reached when its timeout passes', async () => {
 			const requested = openBrowserNavigationRecord('main')
-			requested.steps.emit('request', 'main', 'https://example.test/next', 'loader-next')
+			requested.steps.emit('request', 'main', 'https://example.test/next', 'loader-next', undefined)
 			expect(await requested.record.settle({ timeout: 20 })).toEqual({
 				url: 'https://example.test/next',
 				stage: 'requested',
 			})
 			requested.record.destroy()
 			const committed = openBrowserNavigationRecord('main')
-			committed.steps.emit('request', 'main', 'https://example.test/next', 'loader-next')
+			committed.steps.emit('request', 'main', 'https://example.test/next', 'loader-next', undefined)
 			committed.steps.emit('commit', 'main', 'https://example.test/final', 'loader-next', false)
 			expect(await committed.record.settle({ timeout: 20 })).toEqual({
 				url: 'https://example.test/final',
@@ -174,7 +230,7 @@ describe('BrowserNavigationRecord', () => {
 				.then(settled.handler)
 			await waitForDelay(20)
 			expect(settled.count).toBe(0)
-			steps.emit('request', 'main', 'https://example.test/next', 'loader-next')
+			steps.emit('request', 'main', 'https://example.test/next', 'loader-next', undefined)
 			steps.emit('commit', 'main', 'https://example.test/next', 'loader-next', false)
 			steps.emit('load', 'main', 'loader-next')
 			await waitForDelay()
@@ -188,11 +244,11 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'nested', relationship: 'parent' }], timeout: 10_000 })
 				.then(settled.handler)
-			steps.emit('request', 'side', 'https://example.test/side', 'loader-side')
-			steps.emit('request', 'nested', 'https://example.test/nested', 'loader-nested')
+			steps.emit('request', 'side', 'https://example.test/side', 'loader-side', undefined)
+			steps.emit('request', 'nested', 'https://example.test/nested', 'loader-nested', undefined)
 			await waitForDelay()
 			expect(settled.count).toBe(0)
-			steps.emit('request', 'child', 'https://example.test/applied', 'loader-applied')
+			steps.emit('request', 'child', 'https://example.test/applied', 'loader-applied', undefined)
 			steps.emit('commit', 'child', 'https://example.test/applied', 'loader-applied', false)
 			steps.emit('load', 'child', 'loader-applied')
 			await waitForDelay()
@@ -207,7 +263,7 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'orphan', relationship: 'parent' }], timeout: 10_000 })
 				.then(settled.handler)
-			steps.emit('request', 'side', 'https://example.test/side', 'loader-side')
+			steps.emit('request', 'side', 'https://example.test/side', 'loader-side', undefined)
 			steps.emit('commit', 'side', 'https://example.test/side', 'loader-side', false)
 			steps.emit('load', 'side', 'loader-side')
 			await waitForDelay()
@@ -224,7 +280,7 @@ describe('BrowserNavigationRecord', () => {
 				],
 				timeout: 10_000,
 			})
-			steps.emit('request', 'side', 'https://example.test/side', 'loader-side')
+			steps.emit('request', 'side', 'https://example.test/side', 'loader-side', undefined)
 			steps.emit('commit', 'side', 'https://example.test/side', 'loader-side', false)
 			steps.emit('load', 'side', 'loader-side')
 			const started = performance.now()
@@ -239,12 +295,12 @@ describe('BrowserNavigationRecord', () => {
 			void record
 				.settle({ destinations: [{ frame: 'child', relationship: 'self' }], timeout: 10_000 })
 				.then(settled.handler)
-			steps.emit('request', 'side', 'https://example.test/side', 'loader-side')
+			steps.emit('request', 'side', 'https://example.test/side', 'loader-side', undefined)
 			steps.emit('commit', 'side', 'https://example.test/side', 'loader-side', false)
 			steps.emit('load', 'side', 'loader-side')
 			await waitForDelay()
 			expect(settled.count).toBe(0)
-			steps.emit('request', 'child', 'https://example.test/done', 'loader-done')
+			steps.emit('request', 'child', 'https://example.test/done', 'loader-done', undefined)
 			steps.emit('commit', 'child', 'https://example.test/done', 'loader-done', false)
 			steps.emit('load', 'child', 'loader-done')
 			await waitForDelay()
@@ -255,7 +311,7 @@ describe('BrowserNavigationRecord', () => {
 		it('follows its frame across a swap and ends when the frame detaches', async () => {
 			const { steps, record } = openBrowserNavigationRecord('child')
 			const settled = createRecorder<[result: BrowserSettlementResult | undefined]>()
-			steps.emit('request', 'child', 'https://example.test/voucher', 'loader-voucher')
+			steps.emit('request', 'child', 'https://example.test/voucher', 'loader-voucher', undefined)
 			void record.settle({ timeout: 10_000 }).then(settled.handler)
 			steps.emit('detach', 'child', true)
 			steps.emit('commit', 'child', 'https://example.test/voucher', 'loader-voucher', false)
@@ -273,10 +329,10 @@ describe('BrowserNavigationRecord', () => {
 			const { steps, record } = openBrowserNavigationRecord('nested')
 			const started = createRecorder<[]>()
 			void record.wait().then(started.handler)
-			steps.emit('request', 'side', 'https://example.test/side', 'loader-side')
+			steps.emit('request', 'side', 'https://example.test/side', 'loader-side', undefined)
 			await waitForDelay()
 			expect(started.count).toBe(0)
-			steps.emit('request', 'main', 'https://example.test/next', undefined)
+			steps.emit('request', 'main', 'https://example.test/next', undefined, undefined)
 			await waitForDelay()
 			expect(started.count).toBe(1)
 			await expect(record.wait()).resolves.toBeUndefined()
@@ -332,7 +388,7 @@ describe('BrowserNavigationRecord', () => {
 		it('honours a cancellation that lands in the same turn as the completing load', async () => {
 			const { steps, record } = openBrowserNavigationRecord('main')
 			const controller = new AbortController()
-			steps.emit('request', 'main', 'https://example.test/next', 'loader-next')
+			steps.emit('request', 'main', 'https://example.test/next', 'loader-next', undefined)
 			steps.emit('commit', 'main', 'https://example.test/next', 'loader-next', false)
 			const settling = record.settle({ signal: controller.signal }).catch((error: unknown) => error)
 			const reason = new Error('The caller left')
@@ -347,7 +403,7 @@ describe('BrowserNavigationRecord', () => {
 			const timers = process.getActiveResourcesInfo().filter((name) => name === 'Timeout').length
 			const waiting = record.wait()
 			const settling = record.settle({ destinations: [{ frame: 'main', relationship: 'self' }] })
-			steps.emit('request', 'main', 'https://example.test/next', undefined)
+			steps.emit('request', 'main', 'https://example.test/next', undefined, undefined)
 			steps.emit('commit', 'main', 'https://example.test/next', undefined, true)
 			await waiting
 			await settling

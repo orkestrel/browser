@@ -361,7 +361,11 @@ describe('BrowserNavigationManager', () => {
 				'https://example.test/next',
 				'loader-next',
 			)
-			await expect(settling).resolves.toEqual({ url: 'https://example.test/next', stage: 'loaded' })
+			await expect(settling).resolves.toEqual({
+				url: 'https://example.test/next',
+				stage: 'loaded',
+				reason: 'formSubmissionPost',
+			})
 			expect(recording.registrations()).toBe(before)
 			record.destroy()
 			expect(recording.registrations()).toBe(before)

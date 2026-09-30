@@ -28,6 +28,7 @@ import {
 	isError,
 	isFiniteNumber,
 	isInteger,
+	isRecord,
 	isString,
 } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -104,7 +105,15 @@ import {
  * an ancestor before the input settles is followed; when the input settles first, each observed
  * submission that kept its default action names its destination frame, and the receipt waits for
  * the navigation the record selects to commit and load under the receipt's deadline; a submission
- * every listener prevented adds no wait. A receipt that
+ * every listener prevented adds no wait. When the reads name no surviving destination and no
+ * navigation followed, the receipt's status is `the page handled the submission without
+ * navigating` after a prevented submission, and `no form received the submission` when `type`
+ * with `submit`, or a `press` of Enter that an input a form owns received, recorded none. The
+ * page placement's `type` with `submit` ends its action with `and submitted the form` when a read
+ * recorded a submission, or when the navigation the receipt settled names `formSubmissionGet` or
+ * `formSubmissionPost` as its reason, whatever the read answered, and with `and pressed Enter`
+ * otherwise. A `read`
+ * at an offset at or past its retained reading's end restarts that reading at 0. A receipt that
  * waits for a requested navigation shares one `BROWSER_TOOL_TIMEOUT_MS` deadline between that
  * wait and its view capture, of which `BROWSER_TOOL_CAPTURE_MS` is reserved for the capture. The
  * deadline runs from the moment the receipt starts waiting, after any time the action spent
@@ -391,8 +400,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const view = this.#cursor
 		const retained = this.#reading
 		let reading = retained?.reading
-		// A continuation reuses the capture it continues; a changed view or document recaptures,
-		// and the slice restarts at 0 so the footer shows the reset.
+		// A continuation reuses the capture it continues; a changed view or a navigation recaptures.
+		// The slice restarts at 0 after a recapture and at an offset at or past the retained
+		// reading's end, so the footer shows the reset.
 		if (
 			offset === 0 ||
 			retained === undefined ||
@@ -403,7 +413,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			reading = await this.#race(view.read({ signal: context.signal }), '', context.signal)
 			this.#reading = { view, reading }
 		}
-		const start = reading === retained?.reading ? offset : 0
+		const start =
+			reading === retained?.reading && offset < reading.markdown({ offset: 0, limit: 1 }).total
+				? offset
+				: 0
 		// A move note shares the limit with the slice, so the continuation offset counts only the
 		// reading characters this result carries.
 		const note = boundBrowserText(
@@ -426,7 +439,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		}
 		const end = slice.offset + slice.text.length
 		const more = end < slice.total
-		if (offset === 0 && !more) return [`${note}${slice.text}`, '']
+		if (start === 0 && !more) return [`${note}${slice.text}`, '']
 		return [
 			`${note}${slice.text}`,
 			`\n\n[characters ${start}–${end} of ${slice.total}${more ? `; call read with offset ${end} for more` : ''}]`,
@@ -559,14 +572,19 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					'',
 				]
 			}
+			// The page placement submits with a trusted Enter, so its receipt names the submission
+			// only when the observer recorded one; the DOM placement calls `requestSubmit()`.
 			return [
 				await this.#settle(
 					element.submit({ signal: context.signal }),
-					`${action} and submitted the form`,
+					page === undefined ? `${action} and submitted the form` : `${action} and pressed Enter`,
 					context.signal,
 					this.#view.trusted,
 					record,
 					observation,
+					page === undefined
+						? undefined
+						: { explicit: true, action: `${action} and submitted the form` },
 				),
 				'',
 			]
@@ -598,14 +616,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			// The keyboard takes no signal and sends each release without one, so the signal is
 			// checked before the first key goes down.
 			context.signal.throwIfAborted()
+			const action = `Pressed ${key}`
 			return [
 				await this.#settle(
 					page.keyboard.press(key),
-					`Pressed ${key}`,
+					action,
 					context.signal,
 					true,
 					record,
 					observation,
+					key === 'Enter' ? { explicit: false, action } : undefined,
 				),
 				'',
 			]
@@ -860,7 +880,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// deadline, of which the capture keeps `BROWSER_TOOL_CAPTURE_MS` for itself. A command that settles
 	// first leaves a form submission's navigation to start later, so the observation's reads name the
 	// destinations the record also waits for under the same deadline. The record selects and follows
-	// the navigation; this method holds no frame, session, loader, or request state.
+	// the navigation; this method holds no frame, session, loader, or request state. `enter` marks an
+	// action that pressed Enter to submit: `explicit` when the model asked for the submission whatever
+	// the Enter's target, and the `action` line that replaces the attempt when a read recorded a
+	// submission, or when the settled navigation's reason names a form submission, which a form in a
+	// document the observer does not cover can start; a navigation with another reason or none does
+	// not prove one.
 	async #settle(
 		command: Promise<void>,
 		action: string,
@@ -868,6 +893,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		trusted: boolean,
 		record?: BrowserNavigationRecordInterface,
 		observation?: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
+		enter?: { readonly explicit: boolean; readonly action: string },
 	): Promise<string> {
 		let deadline: number | undefined
 		try {
@@ -885,16 +911,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS
 			const bound = deadline - BROWSER_TOOL_CAPTURE_MS
 			if (first) this.#hold(command)
-			const destinations =
+			const submissions =
 				first || observation === undefined
-					? []
+					? { destinations: [], prevented: false, submitted: undefined, implicit: false }
 					: await this.#readSubmissions(observation, action, signal, bound)
 			const settled =
 				record === undefined
 					? undefined
 					: await this.#race(
 							record.settle({
-								destinations,
+								destinations: submissions.destinations,
 								timeout: Math.max(0, bound - performance.now()),
 								signal,
 							}),
@@ -902,17 +928,33 @@ export class BrowserToolset implements BrowserToolsetInterface {
 							signal,
 						)
 			signal.throwIfAborted()
+			// Without a surviving destination and a navigation, the observer names what became of the
+			// submission: a listener handled it, or no form received the Enter the action asked for.
+			const unmoved = settled === undefined && submissions.destinations.length === 0
 			const status =
 				settled?.stage === 'committed'
 					? `the page is still loading ${settled.url}`
 					: settled?.stage === 'requested'
 						? `it requested ${settled.url} and the page did not change`
-						: undefined
+						: unmoved && submissions.prevented
+							? 'the page handled the submission without navigating'
+							: unmoved &&
+								  submissions.submitted === false &&
+								  (enter?.explicit === true || (enter !== undefined && submissions.implicit))
+								? 'no form received the submission'
+								: undefined
+			const line =
+				enter !== undefined &&
+				(submissions.submitted === true ||
+					settled?.reason === 'formSubmissionGet' ||
+					settled?.reason === 'formSubmissionPost')
+					? enter.action
+					: action
 			return renderBrowserReceipt({
-				action,
+				action: line,
 				trusted,
 				...(status === undefined ? {} : { status }),
-				view: await this.#capture(action, signal, deadline),
+				view: await this.#capture(line, signal, deadline),
 			})
 		} finally {
 			record?.destroy()
@@ -993,29 +1035,57 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	// Reads every document the action still owns within `bound` and returns the destination of each
-	// surviving submission; a read that fails or runs out of time adds nothing, because the record
-	// already holds any navigation the input started in its frame or an ancestor.
+	// surviving submission, whether a listener prevented one, and whether an Enter reached an input
+	// a form owns. `submitted` is true when any read recorded a submission, false when every
+	// document answered and none did, and undefined otherwise; a read that fails or runs out of time
+	// adds nothing, because the record already holds any navigation the input started in its frame
+	// or an ancestor.
 	async #readSubmissions(
 		observation: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
 		action: string,
 		signal: AbortSignal,
 		bound: number,
-	): Promise<readonly BrowserDestination[]> {
+	): Promise<{
+		readonly destinations: readonly BrowserDestination[]
+		readonly prevented: boolean
+		readonly submitted: boolean | undefined
+		readonly implicit: boolean
+	}> {
 		const reads = await Promise.all(
 			[...observation.frames].map((frame) =>
 				this.#readSubmission(frame, observation, action, signal, bound),
 			),
 		)
-		return reads.flat()
+		const answered = reads.flatMap((read) => (read === undefined ? [] : [read]))
+		return {
+			destinations: answered.flatMap((read) => read.destinations),
+			prevented: answered.some((read) => read.prevented),
+			submitted: answered.some((read) => read.submitted)
+				? true
+				: answered.length > 0 && answered.length === reads.length
+					? false
+					: undefined,
+			implicit: answered.some((read) => read.implicit),
+		}
 	}
 
+	// Returns undefined for a read that failed, ran out of time, found no observer to read, or
+	// answered a record whose members are not the read's types, which leaves the outcome unknown.
 	async #readSubmission(
 		frame: BrowserFrameInterface,
 		observation: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
 		action: string,
 		signal: AbortSignal,
 		bound: number,
-	): Promise<readonly BrowserDestination[]> {
+	): Promise<
+		| {
+				readonly destinations: readonly BrowserDestination[]
+				readonly prevented: boolean
+				readonly submitted: boolean
+				readonly implicit: boolean
+		  }
+		| undefined
+	> {
 		try {
 			const read = await this.#bounded(
 				frame.evaluate(compileSubmitReadExpression(observation.token), { signal }),
@@ -1025,18 +1095,32 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			)
 			// A read that answered removed the observer, or found none to remove.
 			if (read !== undefined) observation.frames.delete(frame)
-			if (!isArray(read)) return []
-			return read
-				.filter(
-					(relationship): relationship is BrowserDestinationRelationship =>
-						relationship === 'self' || relationship === 'parent' || relationship === 'top',
-				)
-				.map((relationship) => ({ frame: frame.id, relationship }))
+			if (!isRecord(read)) return undefined
+			const { destinations, prevented, submitted, implicit } = read
+			if (
+				!isArray(destinations) ||
+				!destinations.every(isString) ||
+				!isBoolean(prevented) ||
+				!isBoolean(submitted) ||
+				!isBoolean(implicit)
+			)
+				return undefined
+			return {
+				destinations: destinations
+					.filter(
+						(relationship): relationship is BrowserDestinationRelationship =>
+							relationship === 'self' || relationship === 'parent' || relationship === 'top',
+					)
+					.map((relationship) => ({ frame: frame.id, relationship })),
+				prevented,
+				submitted,
+				implicit,
+			}
 		} catch (error) {
 			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
 				throw error
 			}
-			return []
+			return undefined
 		}
 	}
 

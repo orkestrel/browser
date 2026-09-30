@@ -2,6 +2,7 @@ import type {
 	BrowserCallOptions,
 	BrowserDestination,
 	BrowserNavigationEventMap,
+	BrowserNavigationReason,
 	BrowserNavigationRecordInterface,
 	BrowserSettlementOptions,
 	BrowserSettlementResult,
@@ -43,6 +44,7 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 				readonly frame: string
 				readonly url: string
 				readonly loader: string | undefined
+				readonly reason: BrowserNavigationReason | undefined
 		  }
 		| {
 				readonly event: 'commit'
@@ -219,7 +221,12 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 		any: boolean,
 	): { readonly done: boolean; readonly result: BrowserSettlementResult | undefined } {
 		let start:
-			| { readonly frame: string; readonly url: string; readonly loader: string | undefined }
+			| {
+					readonly frame: string
+					readonly url: string
+					readonly loader: string | undefined
+					readonly reason: BrowserNavigationReason | undefined
+			  }
 			| undefined
 		let commit: { readonly url: string; readonly loader: string | undefined } | undefined
 		for (const step of this.#log) {
@@ -239,7 +246,8 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 			}
 			if (step.event === 'commit') {
 				if (commit !== undefined) continue
-				if (step.same) return { done: true, result: { url: step.url, stage: 'loaded' } }
+				if (step.same)
+					return { done: true, result: { url: step.url, stage: 'loaded', reason: start.reason } }
 				if (start.loader === undefined || step.loader === undefined || step.loader === start.loader)
 					commit = step
 				continue
@@ -251,13 +259,15 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 	}
 
 	#stage(
-		start: { readonly url: string } | undefined,
+		start:
+			| { readonly url: string; readonly reason: BrowserNavigationReason | undefined }
+			| undefined,
 		commit: { readonly url: string } | undefined,
 		loaded: boolean,
 	): BrowserSettlementResult | undefined {
 		if (start === undefined) return undefined
-		if (commit === undefined) return { url: start.url, stage: 'requested' }
-		return { url: commit.url, stage: loaded ? 'loaded' : 'committed' }
+		if (commit === undefined) return { url: start.url, stage: 'requested', reason: start.reason }
+		return { url: commit.url, stage: loaded ? 'loaded' : 'committed', reason: start.reason }
 	}
 
 	#wake(): void {
@@ -357,8 +367,13 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 		return settlement
 	}
 
-	#handleRequest(frame: string, url: string, loader: string | undefined): void {
-		this.#log.push({ event: 'request', frame, url, loader })
+	#handleRequest(
+		frame: string,
+		url: string,
+		loader: string | undefined,
+		reason: BrowserNavigationReason | undefined,
+	): void {
+		this.#log.push({ event: 'request', frame, url, loader, reason })
 		this.#wake()
 	}
 

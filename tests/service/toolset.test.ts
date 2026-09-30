@@ -43,7 +43,12 @@ import {
 	retryUntil,
 	waitForCondition,
 } from '@orkestrel/test'
-import { createFixtureServer, createTempDirectory, reservePort } from '../setupServer.js'
+import {
+	createFixtureServer,
+	createTempDirectory,
+	FIXTURE_CHECKOUT_CODE,
+	reservePort,
+} from '../setupServer.js'
 import {
 	extractOutlineRows,
 	matchesToolReceipt,
@@ -183,7 +188,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		).toStrictEqual([])
 	})
 
-	it('returns the cart view in the receipt of a click whose POST form the server answers with 303, and the same page for a form whose submit handler prevents the submission', async () => {
+	it('returns the cart view in the receipt of a click whose POST form the server answers with 303, and the same page with the handled status for a form whose submit handler prevents the submission', async () => {
 		const page = await browser.create({ url: fixtures.url('/shop') })
 		opened.push(page)
 		const tools = createToolManager()
@@ -199,7 +204,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const held = requireToolText(
 			await tools.execute({ id: 'hold', name: 'click', arguments: { ref: hold } }),
 		)
-		expect(held).toBe(`Clicked ${hold} button "Save for later".\n\n${look}`)
+		expect(held).toBe(
+			`Clicked ${hold} button "Save for later"; the page handled the submission without navigating.\n\n${look}`,
+		)
 		expect(await page.evaluate('document.body.dataset.held')).toBe('yes')
 		expect(page.url).toBe(fixtures.url('/shop'))
 
@@ -215,6 +222,64 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				'Your cart holds the Cedar Tea Tray.',
 				'(0 of 0 elements)',
 			].join('\n'),
+		)
+	})
+
+	it('names the page handling of a type with submit whose submission the page script prevents and posts, returning the page before its confirmation, which a following wait finds (control: a form that navigates keeps the destination view)', async () => {
+		const page = await browser.create({ url: fixtures.url('/checkout') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the checkout' } }),
+		)
+		const name = requireOutlineReference(look, 'textbox', 'Name')
+		const recipient = requireOutlineReference(look, 'textbox', 'Gift name')
+		const confirmation = `Order ${FIXTURE_CHECKOUT_CODE} placed for Ada Lovelace.`
+
+		const typed = requireToolText(
+			await tools.execute({
+				id: 'order',
+				name: 'type',
+				arguments: { ref: name, text: 'Ada Lovelace', submit: true },
+			}),
+		)
+		expect(typed.split('\n', 1)[0]).toBe(
+			`Typed "Ada Lovelace" into ${name} textbox "Name" and submitted the form; the page handled the submission without navigating.`,
+		)
+		expect(typed).toContain(`\n\npage "Checkout" ${fixtures.url('/checkout')}\n`)
+		expect(typed).toContain(`${name} textbox "Name" value="Ada Lovelace"`)
+		expect(typed).not.toContain(FIXTURE_CHECKOUT_CODE)
+		expect(page.url).toBe(fixtures.url('/checkout'))
+
+		expect(
+			requireToolText(
+				await tools.execute({ id: 'wait', name: 'wait', arguments: { text: confirmation } }),
+			),
+		).toBe(`${JSON.stringify(confirmation)} is on the page.`)
+
+		const gift = requireToolText(
+			await tools.execute({
+				id: 'gift',
+				name: 'type',
+				arguments: { ref: recipient, text: 'Grace Hopper', submit: true },
+			}),
+		)
+		const placed = fixtures.url('/form/placed?speed=Standard&name=Grace+Hopper')
+		const view = [
+			`page "Order placed" ${placed}`,
+			'# Order placed',
+			'Delivery booked for Grace Hopper at Standard speed.',
+			'(0 of 0 elements)',
+		].join('\n')
+		expect(gift).toSatisfy((receipt: string) =>
+			matchesToolReceipt(receipt, {
+				action: `Typed "Grace Hopper" into ${recipient} textbox "Gift name" and submitted the form`,
+				view,
+				url: placed,
+			}),
 		)
 	})
 
@@ -671,8 +736,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			'Received key Enter',
 			'(1 of 1 elements)',
 		].join('\n')
-		const action = `Typed "SPRING" into ${code} textbox "Code" and submitted the form.`
-		expect(receipt).toBe(`${action}\n\n${applied}`)
+		expect(receipt).toBe(
+			`Typed "SPRING" into ${code} textbox "Code" and submitted the form.\n\n${applied}`,
+		)
 		// The frame's keydown listener put the Enter into the submitted query, so the committed
 		// URL is evidence that the key-down reached the frame.
 		const done = fixtures.url('/frame/done?code=SPRING&key=Enter')
@@ -838,15 +904,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const placed = fixtures.url(
 				'/form/placed?name=Grace+Hopper&notes=Leave+at+the+door&speed=Standard',
 			)
+			const view = [
+				`page "Order placed" ${placed}`,
+				'# Order placed',
+				'Delivery booked for Grace Hopper at Standard speed.',
+				'(0 of 0 elements)',
+			].join('\n')
 			expect(typed).toBe(
-				[
-					`Typed "Grace Hopper" into ${name} textbox "Name" and submitted the form.`,
-					'',
-					`page "Order placed" ${placed}`,
-					'# Order placed',
-					'Delivery booked for Grace Hopper at Standard speed.',
-					'(0 of 0 elements)',
-				].join('\n'),
+				`Typed "Grace Hopper" into ${name} textbox "Name" and submitted the form.\n\n${view}`,
 			)
 			expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
 		})

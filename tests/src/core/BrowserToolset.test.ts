@@ -54,6 +54,11 @@ import {
 	matchesBrowserSubmitObserver,
 	matchesBrowserSubmitRead,
 	BROWSER_SUBMIT_ACTIONS,
+	BROWSER_SUBMIT_EARLY_CASES,
+	BROWSER_SUBMIT_FOCUS_STEPS,
+	BROWSER_SUBMIT_MALFORMED_READS,
+	BROWSER_SUBMIT_NEGATIVE_CASES,
+	BROWSER_SUBMIT_UNREAD_CASES,
 	createBrowserElementFixture,
 	createBrowserViewDouble,
 	createConnectedCDPClient,
@@ -489,7 +494,9 @@ describe('BrowserToolset', () => {
 					),
 				)
 				expect(
-					typed.startsWith('Typed "sam" into e2 textbox "Email" and submitted the form.\n\n'),
+					typed.startsWith(
+						'Typed "sam" into e2 textbox "Email" and pressed Enter; no form received the submission.\n\n',
+					),
 				).toBe(true)
 				const methods = transport.sent.slice(sent).map((message) => message.method)
 				expect(methods).toContain('DOM.focus')
@@ -1862,7 +1869,9 @@ describe('BrowserToolset', () => {
 				)
 				expect(performance.now() - started).toBeLessThan(1_000)
 				expect(
-					result.startsWith('Clicked e1 link "Home".\n\npage "Cart" https://example.test/cart\n'),
+					result.startsWith(
+						'Clicked e1 link "Home"; the page handled the submission without navigating.\n\npage "Cart" https://example.test/cart\n',
+					),
 				).toBe(true)
 				expect(
 					transport.sent
@@ -2265,6 +2274,277 @@ describe('BrowserToolset', () => {
 		})
 	})
 
+	describe('submission outcomes', () => {
+		it.each(BROWSER_SUBMIT_ACTIONS)(
+			'names the page handling of a %s submission a listener prevented, without a navigation wait',
+			async (name, args, action) => {
+				const fixture = await createBrowserElementFixture({
+					submit: (message) => {
+						if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['main'])
+							fixture.windows
+								.window('session-main', 91)
+								.dispatch({ prevented: true, form: { method: 'post' } })
+						answerBrowserEvaluation(fixture.transport, fixture.windows, message)
+					},
+				})
+				const { client, page } = fixture
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'the form' }, { signal })
+					const started = performance.now()
+					const result = String(
+						await requireValue(toolset.tools.tool(name)).execute(args, { signal }),
+					)
+					expect(performance.now() - started).toBeLessThan(1_000)
+					expect(result.split('\n\n', 1)[0]).toBe(
+						`${action}; the page handled the submission without navigating.`,
+					)
+					expect(result).toContain('\n\npage "Cart" https://example.test/cart\n')
+				} finally {
+					await client.close()
+				}
+			},
+		)
+
+		it.each(BROWSER_SUBMIT_FOCUS_STEPS)(
+			'returns the receipt line of %s when the observer records no submission',
+			async (_label, main, child, name, args, line) => {
+				const { client, page, windows } = await createBrowserElementFixture()
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'the form' }, { signal })
+					windows.window('session-main', 91).focus(main)
+					windows.window('session-child', 92).focus(child)
+					const result = String(
+						await requireValue(toolset.tools.tool(name)).execute(args, { signal }),
+					)
+					expect(result.split('\n\n', 1)[0]).toBe(line)
+				} finally {
+					await client.close()
+				}
+			},
+		)
+
+		it('keeps the destination view without a handled status when a surviving submission accompanies a prevented one', async () => {
+			const fixture = await createBrowserElementFixture({
+				submit: (message) => {
+					const window = fixture.windows.window('session-main', 91)
+					window.dispatch({ prevented: true, form: {} })
+					window.dispatch({ prevented: false, form: {} })
+					answerBrowserEvaluation(fixture.transport, fixture.windows, message)
+					emitBrowserNavigation(
+						fixture.transport,
+						'session-main',
+						'main',
+						'https://example.test/next',
+						'loader-next',
+					)
+				},
+			})
+			const { client, page } = fixture
+			try {
+				const toolset = createBrowserToolset(page)
+				await toolset.start()
+				const signal = new AbortController().signal
+				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				const result = String(
+					await requireValue(toolset.tools.tool('type')).execute(
+						{ ref: 'e2', text: 'sam', submit: true },
+						{ signal },
+					),
+				)
+				expect(
+					result.startsWith(
+						'Typed "sam" into e2 textbox "Email" and submitted the form.\n\npage "Cart" https://example.test/next\n',
+					),
+				).toBe(true)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it.each(BROWSER_SUBMIT_EARLY_CASES)(
+			'names the clause of a type whose Enter %s outran before any read by the reason, with the destination view',
+			async (_name, stages, reason, clause) => {
+				const fixture = await createBrowserElementFixture()
+				const { client, page, transport } = fixture
+				transport.onSend('Input.dispatchKeyEvent', (message) => {
+					if (message.params?.['type'] === 'keyDown')
+						emitBrowserNavigation(
+							transport,
+							'session-main',
+							'main',
+							'https://example.test/next',
+							'loader-next',
+							stages,
+							reason,
+						)
+				})
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					const typing = requireValue(toolset.tools.tool('type')).execute(
+						{ ref: 'e2', text: 'sam', submit: true },
+						{ signal },
+					)
+					await waitForCondition('the Enter is released', () =>
+						transport.sent.some(
+							(message) =>
+								message.method === 'Input.dispatchKeyEvent' && message.params?.['type'] === 'keyUp',
+						),
+					)
+					emitBrowserNavigation(
+						transport,
+						'session-main',
+						'main',
+						'https://example.test/next',
+						'loader-next',
+						['commit', 'load'],
+					)
+					expect(
+						String(await typing).startsWith(
+							`Typed "sam" into e2 textbox "Email" ${clause}.\n\npage "Cart" https://example.test/next\n`,
+						),
+					).toBe(true)
+				} finally {
+					await client.close()
+				}
+			},
+		)
+
+		it.each(BROWSER_SUBMIT_NEGATIVE_CASES)(
+			'names the submitted form of a type whose read answered no submission, with %s under a form reason',
+			async (_name, first) => {
+				const answered = createRecorder<[]>()
+				const fixture = await createBrowserElementFixture({
+					submit: (message) => {
+						if (first)
+							emitBrowserNavigation(
+								fixture.transport,
+								'session-main',
+								'main',
+								'https://example.test/next',
+								'loader-next',
+							)
+						answerBrowserEvaluation(fixture.transport, fixture.windows, message)
+						if (!first)
+							emitBrowserNavigation(
+								fixture.transport,
+								'session-main',
+								'main',
+								'https://example.test/next',
+								'loader-next',
+								['request', 'start'],
+							)
+						answered.handler()
+					},
+				})
+				const { client, page, transport, windows } = fixture
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					windows.window('session-main', 91).focus({ name: 'input', form: { method: 'post' } })
+					const typing = requireValue(toolset.tools.tool('type')).execute(
+						{ ref: 'e2', text: 'sam', submit: true },
+						{ signal },
+					)
+					await waitForCondition('the observer read answered', () => answered.count === 1)
+					if (!first)
+						emitBrowserNavigation(
+							transport,
+							'session-main',
+							'main',
+							'https://example.test/next',
+							'loader-next',
+							['commit', 'load'],
+						)
+					expect(
+						String(await typing).startsWith(
+							'Typed "sam" into e2 textbox "Email" and submitted the form.\n\npage "Cart" https://example.test/next\n',
+						),
+					).toBe(true)
+				} finally {
+					await client.close()
+				}
+			},
+		)
+
+		it.each(BROWSER_SUBMIT_UNREAD_CASES)(
+			'names the clause of a type whose observer read failed and %s by its reason, with the view it reached',
+			async (_name, stages, reason, url, clause) => {
+				const fixture = await createBrowserElementFixture({
+					submit: (message) => {
+						emitBrowserNavigation(
+							fixture.transport,
+							'session-main',
+							'main',
+							'https://example.test/next',
+							'loader-next',
+							stages,
+							reason,
+						)
+						fixture.transport.fail(message.id, 'Execution context was destroyed.', -32000)
+					},
+				})
+				const { client, page } = fixture
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					const result = String(
+						await requireValue(toolset.tools.tool('type')).execute(
+							{ ref: 'e2', text: 'sam', submit: true },
+							{ signal },
+						),
+					)
+					expect(
+						result.startsWith(
+							`Typed "sam" into e2 textbox "Email" ${clause}.\n\npage "Cart" ${url}\n`,
+						),
+					).toBe(true)
+				} finally {
+					await client.close()
+				}
+			},
+		)
+
+		it.each(BROWSER_SUBMIT_MALFORMED_READS)(
+			'takes %s from the observer read as an unknown outcome',
+			async (_name, value) => {
+				const fixture = await createBrowserElementFixture({
+					submit: (message) => fixture.transport.reply(message.id, { result: { value } }),
+				})
+				const { client, page } = fixture
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					const result = String(
+						await requireValue(toolset.tools.tool('type')).execute(
+							{ ref: 'e2', text: 'sam', submit: true },
+							{ signal },
+						),
+					)
+					expect(result.split('\n\n', 1)[0]).toBe(
+						'Typed "sam" into e2 textbox "Email" and pressed Enter.',
+					)
+				} finally {
+					await client.close()
+				}
+			},
+		)
+	})
+
 	describe('observer cleanup', () => {
 		it('removes the observer when the click refuses before the read', async () => {
 			const fixture = await createBrowserElementFixture({ actionability: 'Element is not visible' })
@@ -2363,7 +2643,7 @@ describe('BrowserToolset', () => {
 						),
 					).catch((error: unknown) => error)
 					await waitForCondition('the child installation is withheld', () => held.length === 1)
-					await waitForCondition('the main observer installed', () => windows.listeners === 1)
+					await waitForCondition('the main observer installed', () => windows.listeners === 2)
 					const reason = new Error('The caller left')
 					if (interruption === 'an abort') controller.abort(reason)
 					else
@@ -2418,7 +2698,7 @@ describe('BrowserToolset', () => {
 				await waitForCondition('the second action reads its observer', () => reads.length === 2)
 				const [removal, read] = reads
 				answerBrowserEvaluation(transport, windows, requireValue(removal))
-				expect(windows.listeners).toBe(1)
+				expect(windows.listeners).toBe(2)
 				windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
 				answerBrowserEvaluation(transport, windows, requireValue(read))
 				await waitForDelay(50)
@@ -3465,6 +3745,54 @@ describe('BrowserToolset', () => {
 						String(message.params?.['expression']).includes('outerHTML'),
 					),
 				).toHaveLength(2)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('restarts the retained reading at 0 for an offset at or past its end after a DOM edit without a navigation, and continues one inside it', async () => {
+			let html = `<main><h1>Guide</h1>${Array.from(
+				{ length: 12 },
+				(_, index) => `<p>Paragraph ${index} carries enough words to fill one line of text.</p>`,
+			).join('')}</main>`
+			const fixture = await createBrowserElementFixture({
+				evaluation: (message) =>
+					fixture.transport.reply(message.id, {
+						result: {
+							value: String(message.params?.['expression']).includes('outerHTML')
+								? { url: 'https://example.test/cart', title: 'Cart', html }
+								: true,
+						},
+					}),
+			})
+			const { client, page, transport } = fixture
+			try {
+				const toolset = createBrowserToolset(page, { limit: 120 })
+				await toolset.start()
+				const signal = new AbortController().signal
+				const read = requireValue(toolset.tools.tool('read'))
+				const first = String(await read.execute({ what: 'guide' }, { signal }))
+				const [, end = '', total = ''] = requireValue(
+					/\n\n\[characters 0–(\d+) of (\d+); call read with offset \d+ for more\]$/.exec(first),
+				)
+				expect(Number(end)).toBeLessThan(Number(total))
+				// The edit leaves the reading current, because only a navigation makes it stale.
+				html = '<main><h1>Edited</h1><p>The page changed its text in place.</p></main>'
+				for (const offset of [Number(total), Number(total) + 1_000]) {
+					expect(await read.execute({ what: 'guide', offset }, { signal })).toBe(first)
+				}
+				const last = Number(total) - 1
+				expect(await read.execute({ what: 'guide', offset: last }, { signal })).toMatch(
+					new RegExp(`^[\\s\\S]\\n\\n\\[characters ${last}–${total} of ${total}\\]$`),
+				)
+				expect(
+					transport.sent.filter((message) =>
+						String(message.params?.['expression']).includes('outerHTML'),
+					),
+				).toHaveLength(1)
+				expect(await read.execute({ what: 'guide' }, { signal })).toBe(
+					'# Edited\n\nThe page changed its text in place.',
+				)
 			} finally {
 				await client.close()
 			}

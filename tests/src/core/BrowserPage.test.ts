@@ -56,6 +56,7 @@ import {
 	BROWSER_HISTORY_DIRECTIONS,
 	BROWSER_HISTORY_RESTORE_CASES,
 	BROWSER_NAVIGATION_COMMANDS,
+	BROWSER_PENDING_REQUEST_CASES,
 	JPEG_BASE64,
 	PNG_BASE64,
 	throwListenerError,
@@ -3601,8 +3602,211 @@ describe('BrowserPage navigation steps', () => {
 			expect(await fallback.settle({ timeout: 0 })).toEqual({
 				url: 'https://example.test/receipt',
 				stage: 'committed',
+				reason: 'formSubmissionPost',
 			})
 			fallback.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('carries the reason of a request in the current tab into the record, reads an unknown reason as undefined, and gives a start without a request none', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		try {
+			const form = page.navigation.record('main')
+			transport.event(
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'formSubmissionGet',
+					url: 'https://example.test/search?q=tray',
+					disposition: 'currentTab',
+				},
+				'session-main',
+			)
+			expect(await form.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/search?q=tray',
+				stage: 'requested',
+				reason: 'formSubmissionGet',
+			})
+			form.destroy()
+			const unknown = page.navigation.record('main')
+			transport.event(
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'main',
+					reason: 'prerenderActivation',
+					url: 'https://example.test/next',
+					disposition: 'currentTab',
+				},
+				'session-main',
+			)
+			expect(await unknown.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/next',
+				stage: 'requested',
+				reason: undefined,
+			})
+			unknown.destroy()
+			const started = page.navigation.record('main')
+			transport.event(
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'main',
+					url: 'https://example.test/cart',
+					loaderId: 'loader-cart',
+					navigationType: 'differentDocument',
+				},
+				'session-main',
+			)
+			expect(await started.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/cart',
+				stage: 'requested',
+				reason: undefined,
+			})
+			started.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('gives a start the reason of the current-tab request for its frame and URL that another known session reported, and none for another URL', async () => {
+		const { client, page, transport } = await createBrowserElementFixture({ nested: true })
+		try {
+			const sessions = createRecorder<[frame: unknown]>()
+			page.emitter.on('session', sessions.handler)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-nested',
+					targetInfo: {
+						targetId: 'nested',
+						type: 'iframe',
+						url: 'https://example.test/coupon',
+						parentFrameId: 'child',
+					},
+				},
+				'session-child',
+			)
+			await waitForCondition('the nested frame session is published', () => sessions.count === 1)
+			const parent = page.navigation.record('nested')
+			// The nested document submits into its parent, so its session reports the request for a
+			// frame another session owns, and the owning session reports the start.
+			transport.event(
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'child',
+					reason: 'formSubmissionGet',
+					url: 'https://example.test/done?code=SPRING',
+					disposition: 'currentTab',
+				},
+				'session-nested',
+			)
+			transport.event(
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'child',
+					url: 'https://example.test/done?code=SPRING',
+					loaderId: 'loader-done',
+					navigationType: 'differentDocument',
+				},
+				'session-child',
+			)
+			expect(await parent.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/done?code=SPRING',
+				stage: 'requested',
+				reason: 'formSubmissionGet',
+			})
+			parent.destroy()
+			const other = page.navigation.record('child')
+			transport.event(
+				'Page.frameRequestedNavigation',
+				{
+					frameId: 'child',
+					reason: 'anchorClick',
+					url: 'https://example.test/help',
+					disposition: 'currentTab',
+				},
+				'session-nested',
+			)
+			transport.event(
+				'Page.frameStartedNavigating',
+				{
+					frameId: 'child',
+					url: 'https://example.test/cart',
+					loaderId: 'loader-cart',
+					navigationType: 'differentDocument',
+				},
+				'session-child',
+			)
+			expect(await other.settle({ timeout: 0 })).toStrictEqual({
+				url: 'https://example.test/cart',
+				stage: 'requested',
+				reason: undefined,
+			})
+			other.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it.each(BROWSER_PENDING_REQUEST_CASES)(
+		'holds a pending request for one start: %s',
+		async (_name, frame, before, after, reason) => {
+			const { client, transport } = await createConnectedCDPClient()
+			const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+			try {
+				for (const [method, params] of before) transport.event(method, params, 'session-main')
+				const record = page.navigation.record(frame)
+				for (const [method, params] of after) transport.event(method, params, 'session-main')
+				expect(await record.settle({ timeout: 0 })).toStrictEqual({
+					url: 'https://example.test/order',
+					stage: 'requested',
+					reason,
+				})
+				record.destroy()
+			} finally {
+				await client.close()
+			}
+		},
+	)
+
+	it('keeps no pending request of ten removed frames for a later start of their ids', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		try {
+			const frames = Array.from({ length: 10 }, (_, index) => `removed-${index}`)
+			for (const frame of frames) {
+				transport.event(
+					'Page.frameRequestedNavigation',
+					{
+						frameId: frame,
+						reason: 'formSubmissionPost',
+						url: `https://example.test/${frame}`,
+						disposition: 'currentTab',
+					},
+					'session-main',
+				)
+				transport.event('Page.frameDetached', { frameId: frame, reason: 'remove' }, 'session-main')
+			}
+			const reasons: unknown[] = []
+			for (const frame of frames) {
+				const record = page.navigation.record(frame)
+				transport.event(
+					'Page.frameStartedNavigating',
+					{
+						frameId: frame,
+						url: `https://example.test/${frame}`,
+						loaderId: `loader-${frame}`,
+						navigationType: 'differentDocument',
+					},
+					'session-main',
+				)
+				const settled = await record.settle({ timeout: 0 })
+				reasons.push([settled?.stage, settled?.reason])
+				record.destroy()
+			}
+			expect(reasons).toEqual(frames.map(() => ['requested', undefined]))
 		} finally {
 			await client.close()
 		}
@@ -3700,6 +3904,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await loaderless.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/next',
 				stage: 'loaded',
+				reason: 'formSubmissionGet',
 			})
 			loaderless.destroy()
 		} finally {
@@ -3758,7 +3963,11 @@ describe('BrowserPage navigation steps', () => {
 				await record.settle({ timeout: 0 }),
 				detached.count,
 				readCDPSessionMethods(transport, 'session-child'),
-			]).toEqual([{ url: 'https://other.test/field', stage: 'requested' }, 0, ['Page.enable']])
+			]).toEqual([
+				{ url: 'https://other.test/field', stage: 'requested', reason: 'formSubmissionPost' },
+				0,
+				['Page.enable'],
+			])
 			transport.reply(requireValue(enables[0]), {})
 			await waitForCondition('the frame session is published', () => sessions.count === 1)
 			await waitForDelay(20)
@@ -3766,7 +3975,7 @@ describe('BrowserPage navigation steps', () => {
 				await record.settle({ timeout: 0 }),
 				readCDPSessionMethods(transport, 'session-child'),
 			]).toEqual([
-				{ url: 'https://other.test/field', stage: 'requested' },
+				{ url: 'https://other.test/field', stage: 'requested', reason: 'formSubmissionPost' },
 				[
 					'Page.enable',
 					'Runtime.enable',
@@ -3786,6 +3995,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/field',
 				stage: 'committed',
+				reason: 'formSubmissionPost',
 			})
 			emitBrowserNavigation(
 				transport,
@@ -3798,6 +4008,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/field',
 				stage: 'loaded',
+				reason: 'formSubmissionPost',
 			})
 			expect((await page.frames()).find((frame) => frame.id === 'child')?.parent).toBe('main')
 			record.destroy()
@@ -4026,6 +4237,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/b',
 				stage: 'requested',
+				reason: 'formSubmissionPost',
 			})
 			emitBrowserNavigation(
 				transport,
@@ -4038,6 +4250,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/b',
 				stage: 'committed',
+				reason: 'formSubmissionPost',
 			})
 			emitBrowserNavigation(
 				transport,
@@ -4050,6 +4263,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/b',
 				stage: 'loaded',
+				reason: 'formSubmissionPost',
 			})
 			record.destroy()
 		} finally {
@@ -4115,6 +4329,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/b',
 				stage: 'requested',
+				reason: 'formSubmissionPost',
 			})
 			emitBrowserNavigation(
 				transport,
@@ -4127,6 +4342,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/b',
 				stage: 'committed',
+				reason: 'formSubmissionPost',
 			})
 			emitBrowserNavigation(
 				transport,
@@ -4139,6 +4355,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/b',
 				stage: 'loaded',
+				reason: 'formSubmissionPost',
 			})
 			record.destroy()
 		} finally {
@@ -4240,9 +4457,9 @@ describe('BrowserPage navigation steps', () => {
 					[voucher, coupon, resubmitted].map((record) => record.settle({ timeout: 0 })),
 				),
 			).toEqual([
-				{ url: 'https://other.test/voucher', stage: 'committed' },
-				{ url: 'https://other.test/c', stage: 'committed' },
-				{ url: 'https://other.test/voucher', stage: 'requested' },
+				{ url: 'https://other.test/voucher', stage: 'committed', reason: 'formSubmissionPost' },
+				{ url: 'https://other.test/c', stage: 'committed', reason: 'formSubmissionPost' },
+				{ url: 'https://other.test/voucher', stage: 'requested', reason: 'formSubmissionPost' },
 			])
 			emitBrowserNavigation(
 				transport,
@@ -4255,6 +4472,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await resubmitted.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/voucher',
 				stage: 'committed',
+				reason: 'formSubmissionPost',
 			})
 			emitBrowserNavigation(
 				transport,
@@ -4267,6 +4485,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await resubmitted.settle({ timeout: 0 })).toEqual({
 				url: 'https://other.test/voucher',
 				stage: 'loaded',
+				reason: 'formSubmissionPost',
 			})
 			for (const record of [voucher, coupon, resubmitted]) record.destroy()
 		} finally {
@@ -4460,6 +4679,7 @@ describe('BrowserPage navigation steps', () => {
 			expect(await record.settle({ timeout: 0 })).toEqual({
 				url: 'https://a.test/next',
 				stage: 'loaded',
+				reason: 'formSubmissionPost',
 			})
 			record.destroy()
 			transport.reply(requireValue(held[0]), {})

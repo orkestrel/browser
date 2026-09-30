@@ -1,5 +1,10 @@
 import type { ToolDefinition } from '@orkestrel/tool'
-import type { BrowserElementRefusal, BrowserMouseButton, BrowserToolName } from './types.js'
+import type {
+	BrowserElementRefusal,
+	BrowserMouseButton,
+	BrowserNavigationReason,
+	BrowserToolName,
+} from './types.js'
 
 // === Base64
 //
@@ -177,6 +182,36 @@ export const BROWSER_HAR_CREATOR = Object.freeze({
 
 /** Names the attribute that tags temporary screenshot styles and masks. */
 export const BROWSER_SCREENSHOT_ATTRIBUTE = 'data-orkestrel-screenshot'
+
+/**
+ * Lists every CDP `Page.ClientNavigationReason` value a page accepts as a navigation's reason, as
+ * of Chromium 141; a page reads any other reason as undefined.
+ */
+export const BROWSER_NAVIGATION_REASONS: readonly BrowserNavigationReason[] = Object.freeze([
+	'anchorClick',
+	'formSubmissionGet',
+	'formSubmissionPost',
+	'httpHeaderRefresh',
+	'initialFrameNavigation',
+	'metaTagRefresh',
+	'other',
+	'pageBlockInterstitial',
+	'reload',
+	'scriptInitiated',
+])
+
+/**
+ * Lists the CDP `Page.frameStartedNavigating` `navigationType` values that repeat or restore a
+ * history entry rather than follow a request, as of Chromium 141.
+ */
+export const BROWSER_RELOAD_NAVIGATION_TYPES: readonly string[] = Object.freeze([
+	'reload',
+	'reloadBypassingCache',
+	'restore',
+	'restoreWithPost',
+	'historySameDocument',
+	'historyDifferentDocument',
+])
 
 /**
  * Names the isolated-world property that holds the `submit` observer an action installs before
