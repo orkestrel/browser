@@ -10,6 +10,8 @@ import type {
 	BrowserDiagnosticsInterface,
 	BrowserFrameInfo,
 	BrowserFrameInterface,
+	BrowserKeyboardInterface,
+	BrowserMouseInterface,
 	BrowserNavigationOptions,
 	BrowserNavigationManagerInterface,
 	BrowserNavigationResult,
@@ -20,6 +22,7 @@ import type {
 	BrowserPageInterface,
 	BrowserPageEventMap,
 	BrowserPageOptions,
+	BrowserReadingInterface,
 	BrowserRect,
 	BrowserRegistryInterface,
 	BrowserResponse,
@@ -28,6 +31,7 @@ import type {
 	BrowserScriptManagerInterface,
 	BrowserSnapshotInterface,
 	BrowserSnapshotOptions,
+	BrowserTouchInterface,
 	BrowserWaitUntil,
 	BrowserWorkerCategory,
 	BrowserAccessibilityInterface,
@@ -47,6 +51,9 @@ import { BrowserDialog } from './BrowserDialog.js'
 import { BrowserDownload } from './BrowserDownload.js'
 import { BrowserFrame } from './BrowserFrame.js'
 import { BrowserFileChooser } from './BrowserFileChooser.js'
+import { BrowserKeyboard } from './BrowserKeyboard.js'
+import { BrowserMouse } from './BrowserMouse.js'
+import { BrowserTouch } from './BrowserTouch.js'
 import { BrowserNetworkManager } from './BrowserNetworkManager.js'
 import { BrowserNavigationManager } from './BrowserNavigationManager.js'
 import { BrowserScriptManager } from './BrowserScriptManager.js'
@@ -107,6 +114,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #opener: BrowserPageInterface | undefined
 	readonly #emitter: Emitter<BrowserPageEventMap>
 	readonly #elements: BrowserElementManager
+	readonly #keyboard: BrowserKeyboard
+	readonly #mouse: BrowserMouse
+	readonly #touch: BrowserTouch
 	readonly #reference: BrowserReferenceFunction
 	readonly #readiness = new Map<symbol, BrowserReadinessWait>()
 	#referenceSequence = 0
@@ -153,6 +163,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#loadTimer: ReturnType<typeof setTimeout> | undefined
 	#loadResolve: (() => void) | undefined
 	#loadReject: ((error: unknown) => void) | undefined
+	#loadAbort: { readonly signal: AbortSignal; readonly listener: () => void } | undefined
 	#responses: BrowserResponse[] | undefined
 	readonly #navigationResponseHandler = this.#handleNavigationResponse.bind(this)
 	readonly #destroyHandler = this.#handleDestroy.bind(this)
@@ -215,6 +226,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			reference: this.#reference,
 			ready: this.#ready.bind(this),
 		})
+		this.#keyboard = new BrowserKeyboard(this)
+		this.#mouse = new BrowserMouse(this)
+		this.#touch = new BrowserTouch(this)
 		this.#client.subscribe('Page.lifecycleEvent', this.#lifecycleHandler, sessionId)
 		this.#network = new BrowserNetworkManager(this, writer)
 		this.#navigationManager = new BrowserNavigationManager(
@@ -265,6 +279,25 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	get trusted(): true {
 		return true
+	}
+
+	get keyboard(): BrowserKeyboardInterface {
+		return this.#keyboard
+	}
+
+	get mouse(): BrowserMouseInterface {
+		return this.#mouse
+	}
+
+	get touch(): BrowserTouchInterface {
+		return this.#touch
+	}
+
+	// The page's reading waits for the current document's DOMContentLoaded, as the outline does,
+	// so a read issued while a navigation loads captures the loaded document.
+	override async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+		await this.#ready(options)
+		return await super.read(options)
 	}
 
 	async wait(text: string, options?: BrowserCallOptions): Promise<void> {
@@ -598,7 +631,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		validateBrowserTimeout(timeout)
 		const watch = this.#watchNavigation()
 		const condition = options?.condition ?? 'load'
-		const wait = this.#waitForLoadEvent(condition, timeout)
+		const wait = this.#waitForLoadEvent(condition, timeout, options?.signal)
 		void wait.catch(() => undefined)
 		let loader: string | undefined
 
@@ -630,11 +663,14 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
 		const watch = this.#watchNavigation()
-		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout)
+		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout, options?.signal)
 		void wait.catch(() => undefined)
 
 		try {
-			await this.send('Page.reload', undefined, { timeout })
+			await this.send('Page.reload', undefined, {
+				timeout,
+				...(options?.signal === undefined ? {} : { signal: options.signal }),
+			})
 			await wait
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
@@ -896,8 +932,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		if (this.#seed === seed) this.#seed = undefined
 	}
 
+	// The seed answers for the document it was issued against: `#floor` changes only when the
+	// page frame's document changes, so a same-document navigation during the seed keeps its
+	// answer.
 	async #seedReadiness(options?: BrowserCallOptions): Promise<void> {
-		const epoch = this.#epoch
+		const document = this.#floor
 		const context = await this.#world(this.id, this.#sessionId, options)
 		const result = await this.send(
 			'Runtime.evaluate',
@@ -905,7 +944,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			options,
 		)
 		const state = readEvaluationResult(result)
-		if (epoch === this.#epoch && (state === 'interactive' || state === 'complete'))
+		if (document === this.#floor && (state === 'interactive' || state === 'complete'))
 			this.#dom = this.#loader ?? 'initial'
 	}
 
@@ -1391,7 +1430,13 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 	}
 
-	#waitForLoadEvent(condition: BrowserWaitUntil, timeout: number): Promise<void> {
+	// A signal ends the load wait with its reason, so an abort after `Page.navigate` replied is
+	// reported as the abort rather than as the navigation timeout.
+	#waitForLoadEvent(
+		condition: BrowserWaitUntil,
+		timeout: number,
+		signal?: AbortSignal,
+	): Promise<void> {
 		const eventName =
 			condition === 'commit'
 				? 'Page.frameNavigated'
@@ -1412,7 +1457,16 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		for (const event of this.#loadEvents) {
 			this.#client.subscribe(event, this.#loadHandler, this.#sessionId)
 		}
+		if (signal !== undefined) {
+			const listener = this.#abortLoad.bind(this, signal)
+			this.#loadAbort = { signal, listener }
+			signal.addEventListener('abort', listener, { once: true })
+		}
 		return deferred.promise
+	}
+
+	#abortLoad(signal: AbortSignal): void {
+		this.#rejectLoad(signal.reason)
 	}
 
 	#resolveLoad(): void {
@@ -1437,6 +1491,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#client.unsubscribe(event, this.#loadHandler, this.#sessionId)
 		}
 		this.#loadEvents = []
+		this.#loadAbort?.signal.removeEventListener('abort', this.#loadAbort.listener)
+		this.#loadAbort = undefined
 		this.#loadTimer = undefined
 		this.#loadResolve = undefined
 		this.#loadReject = undefined

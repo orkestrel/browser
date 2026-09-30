@@ -30,6 +30,7 @@ import {
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
 	createBrowserElementFixture,
+	emitDocumentReady,
 	createCDPTestTransport,
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
@@ -138,6 +139,154 @@ describe('BrowserPage', () => {
 			expect(page.keyboard).toBe(page.keyboard)
 			expect(page.mouse).toBe(page.mouse)
 			expect(page.touch).toBe(page.touch)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a navigation aborted during its load that rejects with a timeout instead of the reason', async () => {
+		const { client, transport, page } = await createBrowserElementFixture()
+		try {
+			replyOk(transport, 'Page.stopLoading')
+			transport.onSend('Page.navigate', (message) =>
+				transport.reply(message.id, { frameId: 'main', loaderId: 'loader-next' }),
+			)
+			const controller = new AbortController()
+			const navigation = page
+				.navigate('https://example.test/next', { signal: controller.signal, timeout: 20_000 })
+				.catch((caught: unknown) => caught)
+			await waitForCondition('the navigation replied', () =>
+				transport.sent.some((message) => message.method === 'Page.navigate'),
+			)
+			await waitForDelay(10)
+			controller.abort('the caller left')
+			expect(await navigation).toBe('the caller left')
+			expect(transport.sent.some((message) => message.method === 'Page.stopLoading')).toBe(true)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a reload aborted during its load that rejects with a timeout instead of the reason', async () => {
+		const { client, transport, page } = await createBrowserElementFixture()
+		try {
+			replyOk(transport, 'Page.stopLoading')
+			replyOk(transport, 'Page.reload')
+			const controller = new AbortController()
+			const reload = page
+				.reload({ signal: controller.signal, timeout: 20_000 })
+				.catch((caught: unknown) => caught)
+			await waitForCondition('the reload replied', () =>
+				transport.sent.some((message) => message.method === 'Page.reload'),
+			)
+			await waitForDelay(10)
+			controller.abort('the caller left')
+			expect(await reload).toBe('the caller left')
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a readiness seed that a same-document navigation discards', async () => {
+		const seeds: number[] = []
+		const fixture = await createBrowserElementFixture({
+			loaderless: true,
+			readiness: (message) => seeds.push(message.id),
+			evaluation: (message) =>
+				fixture.transport.reply(message.id, {
+					result: {
+						value: String(message.params?.['expression']).includes('outerHTML')
+							? { url: 'https://example.test/cart', title: 'Cart', html: '<p>Loaded</p>' }
+							: true,
+					},
+				}),
+		})
+		const { client, transport, page } = fixture
+		try {
+			const first = page.read({ timeout: 500 })
+			await waitForCondition('the seed is withheld', () => seeds.length === 1)
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'main', url: 'https://example.test/cart#details' },
+				'session-main',
+			)
+			transport.reply(requireValue(seeds[0]), { result: { value: 'complete' } })
+			expect((await first).text().text).toBe('Loaded')
+			expect((await page.read({ timeout: 500 })).text().text).toBe('Loaded')
+			expect(seeds).toHaveLength(1)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a page read that captures before the loading document is ready', async () => {
+		const fixture = await createBrowserElementFixture({
+			evaluation: (message) =>
+				fixture.transport.reply(message.id, {
+					result: {
+						value: String(message.params?.['expression']).includes('outerHTML')
+							? { url: 'https://example.test/cart', title: 'Cart', html: '<p>Loaded</p>' }
+							: true,
+					},
+				}),
+		})
+		const { client, transport, page } = fixture
+		try {
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'main', url: page.url, loaderId: 'loading' } },
+				'session-main',
+			)
+			const before = transport.sent.length
+			const started = performance.now()
+			const pending = page.read({ timeout: 500 })
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'main', loaderId: 'stale', name: 'DOMContentLoaded' },
+				'session-main',
+			)
+			await waitForDelay(20)
+			expect(
+				transport.sent.slice(before).some((message) => message.method === 'Runtime.evaluate'),
+			).toBe(false)
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'main', loaderId: 'loading', name: 'DOMContentLoaded' },
+				'session-main',
+			)
+			expect((await pending).text().text).toBe('Loaded')
+			expect(performance.now() - started).toBeGreaterThanOrEqual(20)
+			transport.event(
+				'Page.frameNavigated',
+				{
+					type: 'BackForwardCacheRestore',
+					frame: { id: 'main', url: page.url, loaderId: 'restored' },
+				},
+				'session-main',
+			)
+			const restored = performance.now()
+			expect((await page.read({ timeout: 500 })).text().text).toBe('Loaded')
+			expect(performance.now() - restored).toBeLessThan(200)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches page input that leaves the page session or lives on a child frame', async () => {
+		const { client, transport, page } = await createBrowserElementFixture()
+		try {
+			replyOk(transport, 'Input.dispatchTouchEvent')
+			await page.keyboard.press('a')
+			await page.mouse.click({ x: 5, y: 6 })
+			await page.touch.tap({ x: 7, y: 8 })
+			const input = transport.sent.filter((message) => message.method.startsWith('Input.'))
+			expect(new Set(input.map((message) => message.method))).toEqual(
+				new Set(['Input.dispatchKeyEvent', 'Input.dispatchMouseEvent', 'Input.dispatchTouchEvent']),
+			)
+			expect(new Set(input.map((message) => message.sessionId))).toEqual(new Set(['session-main']))
+			const children = (await page.frames()).filter((frame) => frame.id !== page.id)
+			expect(children.length).toBeGreaterThan(0)
+			expect(children.some((frame) => 'keyboard' in frame)).toBe(false)
 		} finally {
 			await client.close()
 		}
@@ -528,6 +677,7 @@ describe('BrowserPage', () => {
 			})
 			scriptEvaluate(transport, (expression) => expression.includes('1 + 1'), 2)
 			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			emitDocumentReady(transport, page)
 
 			const reading = await page.read()
 			await page.read()
@@ -561,6 +711,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			emitDocumentReady(transport, page)
 
 			await page.read()
 			transport.event('Runtime.executionContextDestroyed', { executionContextId: 99 }, 'session-1')
@@ -587,6 +738,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			emitDocumentReady(transport, page)
 			const [, child, grandchild] = await page.frames()
 			const main = await page.read()
 			const childReading = await requireValue(child).read()
@@ -613,6 +765,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			emitDocumentReady(transport, page)
 			const [, child, grandchild] = await page.frames()
 			const main = await page.read()
 			const childReading = await requireValue(child).read()
@@ -639,6 +792,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			emitDocumentReady(transport, page)
 			const [, child] = await page.frames()
 			const before = await page.read()
 			const childReading = await requireValue(child).read()
@@ -656,12 +810,17 @@ describe('BrowserPage', () => {
 
 			transport.event(
 				'Page.frameNavigated',
-				{ frame: { id: 'main-1', url: 'https://example.com/next' } },
+				{ frame: { id: 'main-1', url: 'https://example.com/next', loaderId: 'loader-next' } },
 				'session-1',
 			)
 
 			expect(after.stale).toBe(true)
 			expect(childReading.stale).toBe(true)
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'main-1', loaderId: 'loader-next', name: 'DOMContentLoaded' },
+				'session-1',
+			)
 			expect((await page.read()).stale).toBe(false)
 		})
 
@@ -676,6 +835,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			emitDocumentReady(transport, page)
 			const [, child] = await page.frames()
 			const main = await page.read()
 			const childReading = await requireValue(child).read()
@@ -785,6 +945,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1')
+			emitDocumentReady(transport, page)
 
 			const reads = Promise.all([page.read(), page.read()])
 			await waitForCondition('the creation was sent', () => creations.length > 0)
@@ -810,6 +971,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1')
+			emitDocumentReady(transport, page)
 
 			const pending = page.read()
 			await waitForCondition('the creation was sent', () => creations.length === 1)
@@ -836,6 +998,7 @@ describe('BrowserPage', () => {
 				html: '<p>Body</p>',
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'main-1')
+			emitDocumentReady(transport, page)
 			const sessions = createRecorder<[frame: BrowserFrameInterface]>()
 			page.emitter.on('session', sessions.handler)
 			transport.event(
@@ -874,6 +1037,7 @@ describe('BrowserPage', () => {
 				'https://example.com/a',
 				'main-1',
 			)
+			emitDocumentReady(transport, page)
 
 			const pending = page.read()
 			await waitForCondition('the capture was sent', () => captures.length === 1)
@@ -907,6 +1071,7 @@ describe('BrowserPage', () => {
 				})
 			})
 			const page = new BrowserPage(client, 'target-1', 'session-1')
+			emitDocumentReady(transport, page)
 
 			const thrown: unknown = await page.read().catch((caught: unknown) => caught)
 			const evaluation = transport.sent.find((message) => message.method === 'Runtime.evaluate')

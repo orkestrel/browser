@@ -41,9 +41,17 @@ import {
 	compileCodegenScript,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BASE64_CHARS,
+	boundBrowserText,
+	requireBrowserReference,
+	readBrowserToolString,
+	renderBrowserElement,
+	renderBrowserReceipt,
+	isBrowserElementError,
 } from '@src/core'
+import { readProperty, requireValue } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
+	createBrowserElementFixture,
 	createDOMSnapshotResult,
 	JPEG_BASE64,
 	PNG_BASE64,
@@ -131,6 +139,124 @@ describe('WebMCP adoption helpers', () => {
 				required: ['query'],
 			}),
 		).toBeUndefined()
+	})
+})
+
+describe('toolset helpers', () => {
+	it('catches a bound that cuts a string within the limit, keeps more than the limit, or splits a surrogate pair', () => {
+		expect(boundBrowserText('abc', 3)).toBe('abc')
+		expect(boundBrowserText('abcdef', 4)).toBe('abcd\n[characters 0–4 of 6; the rest was cut]')
+		expect(boundBrowserText('ab\u{1F600}cd', 3)).toBe('ab\n[characters 0–2 of 6; the rest was cut]')
+		expect(boundBrowserText('\u{1F600}\u{1F600}', 1)).toBe(
+			'\n[characters 0–0 of 4; the rest was cut]',
+		)
+		for (const limit of [0, -1, 1.5, Number.NaN])
+			expect(() => boundBrowserText('abc', limit)).toThrow(
+				'Browser tool limit must be a positive integer',
+			)
+	})
+
+	it('catches a receipt that drops the status, the dialog article, or the blank line before the view', () => {
+		expect(renderBrowserReceipt({ action: 'Clicked e4 button "Place order"', view: 'page' })).toBe(
+			'Clicked e4 button "Place order".\n\npage',
+		)
+		expect(
+			renderBrowserReceipt({
+				action: 'Clicked e3 link "Next"',
+				status: 'the page is still loading https://example.test/next',
+			}),
+		).toBe('Clicked e3 link "Next"; the page is still loading https://example.test/next.')
+		expect(
+			renderBrowserReceipt({
+				action: 'Clicked e7 button "Delete"',
+				dialog: { category: 'confirm', message: 'Delete the draft?' },
+			}),
+		).toBe(
+			'Clicked e7 button "Delete". A confirm dialog is open: "Delete the draft?"; call dialog.',
+		)
+		expect(
+			renderBrowserReceipt({ action: '', dialog: { category: 'alert', message: 'Line\n"two"' } }),
+		).toBe('An alert dialog is open: "Line\\n\\"two\\""; call dialog.')
+		expect(renderBrowserReceipt({ action: '', view: 'page' })).toBe('page')
+	})
+
+	it('catches an untrusted click or type receipt without its marker, or a trusted one with it', () => {
+		for (const [action, status, line] of [
+			['Clicked e1 button "Save"', undefined, 'Clicked e1 button "Save".'],
+			['Typed "sam" into e2 textbox "Email"', undefined, 'Typed "sam" into e2 textbox "Email".'],
+			[
+				'Typed "sam" into e2 textbox "Email" and submitted the form',
+				undefined,
+				'Typed "sam" into e2 textbox "Email" and submitted the form.',
+			],
+			[
+				'Selected "Large" in e3 combobox "Size" (programmatic)',
+				undefined,
+				'Selected "Large" in e3 combobox "Size" (programmatic).',
+			],
+			[
+				'Clicked e3 link "Next"',
+				'the page is still loading https://example.test/next',
+				'Clicked e3 link "Next"; the page is still loading https://example.test/next.',
+			],
+		] as const) {
+			expect(
+				renderBrowserReceipt({
+					action,
+					...(status === undefined ? {} : { status }),
+					trusted: false,
+					view: 'page',
+				}),
+			).toBe(`${line} (untrusted event)\n\npage`)
+			expect(
+				renderBrowserReceipt({
+					action,
+					...(status === undefined ? {} : { status }),
+					trusted: true,
+					view: 'page',
+				}),
+			).toBe(`${line}\n\npage`)
+			expect(
+				renderBrowserReceipt({ action, ...(status === undefined ? {} : { status }), view: 'page' }),
+			).toBe(`${line}\n\npage`)
+		}
+	})
+
+	it('catches an element rendering that differs from its outline row', async () => {
+		const { client, page } = await createBrowserElementFixture()
+		try {
+			const outline = await page.elements.outline()
+			const rows = outline.text.split('\n')
+			for (const reference of ['e1', 'e2', 'e4']) {
+				const rendered = renderBrowserElement(requireValue(page.elements.element(reference)))
+				expect(rows.some((row) => row.startsWith(rendered))).toBe(true)
+			}
+			expect(renderBrowserElement(requireValue(page.elements.element('e1')))).toBe('e1 link "Home"')
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a reference reader that accepts a non-reference or names no next call', () => {
+		for (const value of ['e12', 'E12', '12', '[e12]', 'ref=e12', '[ref=e12]'])
+			expect(requireBrowserReference(value)).toBe('e12')
+		for (const value of ['x12', 'e0', '', 12, undefined]) {
+			const outcome = attempt(() => requireBrowserReference(value))
+			expect(outcome.success).toBe(false)
+			const error = readProperty(outcome, 'error')
+			expect(isBrowserElementError(error)).toBe(true)
+			expect(String(error)).toContain('is not a reference such as e12; call look')
+		}
+	})
+
+	it('catches a string reader that accepts a non-string', () => {
+		expect(readBrowserToolString({ url: 'https://example.test/' }, 'url')).toBe(
+			'https://example.test/',
+		)
+		for (const args of [{}, { url: 1 }, { url: undefined }])
+			expect(() => readBrowserToolString(args, 'url')).toThrow(
+				'The url parameter must be a string.',
+			)
 	})
 })
 
@@ -420,11 +546,13 @@ describe('extractBrowserSlice', () => {
 		expect(extractBrowserSlice('', 0, 4)).toEqual({ text: '', offset: 0, total: 0 })
 	})
 
-	it('keeps a surrogate pair whole at a hard cut and still advances past a lone pair', () => {
+	it('keeps a surrogate pair whole at a hard cut, returning nothing at a limit of 1', () => {
 		const faces = '\u{1F600}\u{1F600}'
 
 		expect(extractBrowserSlice(faces, 0, 3).text).toBe('\u{1F600}')
-		expect(extractBrowserSlice(faces, 0, 1).text).toBe('\uD83D')
+		expect(extractBrowserSlice(faces, 0, 2).text).toBe('\u{1F600}')
+		expect(extractBrowserSlice(faces, 0, 1)).toEqual({ text: '', offset: 0, total: 4 })
+		expect(extractBrowserSlice(faces, 2, 1)).toEqual({ text: '', offset: 2, total: 4 })
 	})
 
 	it('keeps an unpaired high surrogate at a hard cut', () => {

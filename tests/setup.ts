@@ -1,12 +1,25 @@
 import type {
+	BrowserCallOptions,
+	BrowserElementInterface,
+	BrowserElementManagerInterface,
 	BrowserFrameInterface,
+	BrowserOutline,
+	BrowserOutlineOptions,
+	BrowserReadingInterface,
+	BrowserViewInterface,
 	CDPClientInterface,
 	CDPTarget,
 	CDPTransportEventMap,
 	CDPTransportInterface,
 	BrowserWriterInterface,
 } from '@src/core'
-import { BrowserCodegen, BrowserPage, createCDPClient } from '@src/core'
+import {
+	BrowserCodegen,
+	BrowserError,
+	BrowserPage,
+	createBrowserReading,
+	createCDPClient,
+} from '@src/core'
 import { isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { waitForEvent } from '@orkestrel/test'
@@ -459,11 +472,18 @@ export interface BrowserElementFixtureOptions {
 	readonly gone?: boolean
 	readonly actionability?: string
 	readonly pressed?: () => void
+	readonly released?: CDPSentHandler
+	readonly select?: CDPSentHandler
+	readonly registry?: CDPSentHandler
 	readonly evaluation?: CDPSentHandler
 }
 
 /**
  * Scripts accessibility, DOM, isolated-world, and trusted-input replies without replacing project behavior.
+ * @remarks
+ * `WebMCP.enable` fails with the method-not-found code `-32601`, as Chromium 141 answers, unless
+ * `registry` answers it. `released` answers a `mouseReleased` dispatch in place of the reply,
+ * and `select` answers the select-option function call, so a test can withhold either.
  * @param transport - In-memory CDP boundary
  * @param options - Deliberate protocol refusal or observation
  */
@@ -577,12 +597,26 @@ export function scriptBrowserElements(
 			frameId: message.sessionId === 'session-child' ? 'child' : 'main',
 		}),
 	)
+	transport.onSend('WebMCP.enable', (message) => {
+		if (options?.registry !== undefined) options.registry(message)
+		else transport.fail(message.id, "'WebMCP.enable' wasn't found", -32601)
+	})
 	transport.onSend('Input.dispatchMouseEvent', (message) => {
 		if (message.params?.['type'] === 'mousePressed') options?.pressed?.()
-		transport.reply(message.id, {})
+		if (message.params?.['type'] === 'mouseReleased' && options?.released !== undefined)
+			options.released(message)
+		else transport.reply(message.id, {})
 	})
 	transport.onSend('Runtime.callFunctionOn', (message) => {
 		const declaration = message.params?.['functionDeclaration']
+		if (
+			options?.select !== undefined &&
+			isString(declaration) &&
+			declaration.includes('HTMLSelectElement')
+		) {
+			options.select(message)
+			return
+		}
 		if (isString(declaration) && declaration.includes('capture.html')) {
 			transport.reply(message.id, {
 				result: {
@@ -663,6 +697,226 @@ export async function createBrowserElementFixture(
 	return { client, transport, page }
 }
 
+/**
+ * Emits a committed main-frame document and its `DOMContentLoaded`, so a page's readiness wait
+ * resolves without the `document.readyState` seed.
+ * @param transport - The fake transport the page listens on
+ * @param page - The page whose main frame becomes ready at its current URL
+ * @param session - The page's session
+ */
+export function emitDocumentReady(
+	transport: CDPTestTransportInterface,
+	page: BrowserPage,
+	session = 'session-1',
+): void {
+	transport.event(
+		'Page.frameNavigated',
+		{ frame: { id: page.id, url: page.url, loaderId: 'loader-ready' } },
+		session,
+	)
+	transport.event(
+		'Page.lifecycleEvent',
+		{ frameId: page.id, loaderId: 'loader-ready', name: 'DOMContentLoaded' },
+		session,
+	)
+}
+
+/**
+ * Configures the scripted results of a {@link BrowserViewDouble}.
+ * @remarks
+ * `url`, `title`, and `html` describe the document the view reads; `waited` is `false` to make
+ * every text wait reject coded `BROWSER_WAIT_TIMEOUT`.
+ */
+export interface BrowserViewDoubleOptions {
+	readonly url?: string
+	readonly title?: string
+	readonly html?: string
+	readonly waited?: boolean
+}
+
+/** Records an element's operations into its view double's call list. */
+export class BrowserElementDouble implements BrowserElementInterface {
+	readonly #reference: string
+	readonly #role: string
+	readonly #name: string
+	readonly #calls: string[]
+
+	constructor(reference: string, role: string, name: string, calls: string[]) {
+		this.#reference = reference
+		this.#role = role
+		this.#name = name
+		this.#calls = calls
+	}
+
+	get reference(): string {
+		return this.#reference
+	}
+
+	get role(): string {
+		return this.#role
+	}
+
+	get name(): string {
+		return this.#name
+	}
+
+	async click(options?: BrowserCallOptions): Promise<void> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push(`click ${this.#reference}`)
+	}
+
+	async fill(value: string, options?: BrowserCallOptions): Promise<void> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push(`fill ${this.#reference} ${value}`)
+	}
+
+	async select(values: readonly string[], options?: BrowserCallOptions): Promise<void> {
+		options?.signal?.throwIfAborted()
+		if (this.#role !== 'combobox') throw new BrowserError('Element is not a select control')
+		this.#calls.push(`select ${this.#reference} ${values.join(',')}`)
+	}
+
+	async focus(options?: BrowserCallOptions): Promise<void> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push(`focus ${this.#reference}`)
+	}
+
+	async submit(options?: BrowserCallOptions): Promise<void> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push(`submit ${this.#reference}`)
+	}
+
+	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push(`read ${this.#reference}`)
+		return createBrowserReading({
+			url: 'https://example.test/form',
+			title: 'Form',
+			html: `<p>${this.#name}</p>`,
+		})
+	}
+}
+
+/** Serves a fixed outline over three element doubles and records every operation. */
+export class BrowserElementManagerDouble implements BrowserElementManagerInterface {
+	readonly #url: string
+	readonly #title: string
+	readonly #calls: string[]
+	readonly #elements: readonly BrowserElementDouble[]
+
+	constructor(url: string, title: string, calls: string[]) {
+		this.#url = url
+		this.#title = title
+		this.#calls = calls
+		this.#elements = [
+			new BrowserElementDouble('e1', 'button', 'Save', calls),
+			new BrowserElementDouble('e2', 'textbox', 'Email', calls),
+			new BrowserElementDouble('e3', 'combobox', 'Size', calls),
+		]
+	}
+
+	async outline(options?: BrowserOutlineOptions): Promise<BrowserOutline> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push(`outline${options?.within === undefined ? '' : ` ${options.within}`}`)
+		return {
+			url: this.#url,
+			title: this.#title,
+			text: [
+				`page ${JSON.stringify(this.#title)} ${this.#url}`,
+				...this.#elements.map(
+					(element) => `${element.reference} ${element.role} ${JSON.stringify(element.name)}`,
+				),
+				`(${this.#elements.length} of ${this.#elements.length} elements)`,
+			].join('\n'),
+			count: this.#elements.length,
+			total: this.#elements.length,
+		}
+	}
+
+	async find(): Promise<readonly BrowserElementInterface[]> {
+		return this.#elements
+	}
+
+	async wait(): Promise<readonly BrowserElementInterface[]> {
+		return this.#elements
+	}
+
+	element(reference: string): BrowserElementInterface | undefined {
+		return this.#elements.find((element) => element.reference === reference)
+	}
+
+	elements(): readonly BrowserElementInterface[] {
+		return this.#elements
+	}
+
+	clear(): void {
+		this.#calls.push('clear')
+	}
+}
+
+/**
+ * Implements {@link BrowserViewInterface} over scripted outline, reading, and wait results, with
+ * no page and no protocol session, and records every operation in `calls`.
+ */
+export class BrowserViewDouble implements BrowserViewInterface {
+	readonly #url: string
+	readonly #title: string
+	readonly #html: string
+	readonly #waited: boolean
+	readonly #calls: string[] = []
+	readonly #elements: BrowserElementManagerDouble
+
+	constructor(options?: BrowserViewDoubleOptions) {
+		this.#url = options?.url ?? 'https://example.test/form'
+		this.#title = options?.title ?? 'Form'
+		this.#html = options?.html ?? '<main><p>Form body</p></main>'
+		this.#waited = options?.waited ?? true
+		this.#elements = new BrowserElementManagerDouble(this.#url, this.#title, this.#calls)
+	}
+
+	get url(): string {
+		return this.#url
+	}
+
+	get trusted(): boolean {
+		return false
+	}
+
+	get elements(): BrowserElementManagerInterface {
+		return this.#elements
+	}
+
+	get calls(): readonly string[] {
+		return this.#calls
+	}
+
+	async title(): Promise<string> {
+		return this.#title
+	}
+
+	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push('read')
+		return createBrowserReading({ url: this.#url, title: this.#title, html: this.#html })
+	}
+
+	async wait(text: string, options?: BrowserCallOptions): Promise<void> {
+		options?.signal?.throwIfAborted()
+		this.#calls.push(`wait ${text}`)
+		if (!this.#waited)
+			throw new BrowserError('Browser text wait timed out', 'BROWSER_WAIT_TIMEOUT', { text })
+	}
+}
+
+/**
+ * Creates a view double: a document view with no page behind it.
+ * @param options - The scripted document and wait result
+ * @returns The view double
+ */
+export function createBrowserViewDouble(options?: BrowserViewDoubleOptions): BrowserViewDouble {
+	return new BrowserViewDouble(options)
+}
+
 /** Scripts the target attach and required domain-enable handshake. */
 export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 'session-1'): void {
 	replyOk(transport, 'Target.attachToTarget', { sessionId: session })
@@ -684,52 +938,6 @@ export function scriptCDPAttach(transport: CDPTestTransportInterface, session = 
 export function readCDPExpression(message: CDPSentMessage | undefined): string | undefined {
 	const expression = message?.params?.['expression']
 	return isString(expression) ? expression : undefined
-}
-
-/** Scripts a selector lookup that resolves as present. */
-export function scriptSelectorPresent(
-	transport: CDPTestTransportInterface,
-	selector: string,
-): void {
-	scriptEvaluate(
-		transport,
-		(expression) =>
-			expression.includes('new Promise') &&
-			expression.includes('const query =') &&
-			expression.includes(JSON.stringify(selector)),
-		true,
-	)
-}
-
-/**
- * Scripts the complete trusted-input path for one present selector.
- *
- * @param transport - Fake transport
- * @param selector - Selector resolved by the locator
- */
-export function scriptTrustedSelector(
-	transport: CDPTestTransportInterface,
-	selector: string,
-): void {
-	scriptSelectorPresent(transport, selector)
-	transport.onSend('Runtime.evaluate', (message) => {
-		const expression = message.params?.['expression']
-		if (
-			message.params?.['returnByValue'] === false &&
-			isString(expression) &&
-			expression.includes(JSON.stringify(selector))
-		) {
-			transport.reply(message.id, { result: { objectId: 'object-1' } })
-		}
-	})
-	replyOk(transport, 'Runtime.callFunctionOn', { result: { value: true } })
-	replyOk(transport, 'DOM.getContentQuads', {
-		quads: [[0, 0, 100, 0, 100, 40, 0, 40]],
-	})
-	replyOk(transport, 'Input.dispatchMouseEvent')
-	replyOk(transport, 'Input.dispatchKeyEvent')
-	replyOk(transport, 'Input.insertText')
-	replyOk(transport, 'Runtime.releaseObject')
 }
 
 /** Scripts the nested frame tree page frame tests share. */

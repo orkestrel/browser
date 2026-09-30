@@ -17,14 +17,17 @@
 
 import type { CDPSentMessage } from './setup.js'
 import { describe, expect, it } from 'vitest'
+import { BrowserPage } from '@src/core'
 import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
 import {
 	readBrowserCompiledTimers,
 	createBrowserElementFixture,
+	createBrowserViewDouble,
 	createAttachedPage,
 	createCDPTestTransport,
 	createCodegenBindingPayload,
 	createConnectedCDPClient,
+	emitDocumentReady,
 	createDOMSnapshotResult,
 	createRecordingWriter,
 	createStartedCodegen,
@@ -40,8 +43,6 @@ import {
 	scriptCDPAttach,
 	scriptEvaluate,
 	scriptFrameTree,
-	scriptSelectorPresent,
-	scriptTrustedSelector,
 	throwListenerError,
 } from './setup.js'
 
@@ -82,6 +83,113 @@ describe('element protocol and compiler fixtures', () => {
 			})
 		} finally {
 			await client.close()
+		}
+	})
+
+	it('catches a fixture that answers WebMCP.enable as present or answers a withheld release or option call', async () => {
+		const withheld: CDPSentMessage[] = []
+		const { page, client, transport } = await createBrowserElementFixture({
+			released: (message) => withheld.push(message),
+			select: (message) => withheld.push(message),
+		})
+		try {
+			const absent = await page.send('WebMCP.enable').catch((caught: unknown) => caught)
+			expect(readProperty(absent, 'context')).toMatchObject({ code: -32601 })
+			const pressed = page.send('Input.dispatchMouseEvent', { type: 'mousePressed' })
+			await expect(pressed).resolves.toEqual({})
+			const released = page.send('Input.dispatchMouseEvent', { type: 'mouseReleased' })
+			const option = page.send('Runtime.callFunctionOn', {
+				functionDeclaration: 'function() { return this instanceof HTMLSelectElement }',
+			})
+			await expect(
+				page.send('Runtime.callFunctionOn', { functionDeclaration: 'function() { return 1 }' }),
+			).resolves.toEqual({ result: { value: true } })
+			expect(withheld.map((message) => message.method)).toEqual([
+				'Input.dispatchMouseEvent',
+				'Runtime.callFunctionOn',
+			])
+			for (const message of withheld) transport.reply(message.id, { held: message.method })
+			await expect(released).resolves.toEqual({ held: 'Input.dispatchMouseEvent' })
+			await expect(option).resolves.toEqual({ held: 'Runtime.callFunctionOn' })
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a document-ready emission that leaves the page seeding readiness or moves its URL', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		try {
+			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
+			scriptEvaluate(transport, (expression) => expression.includes('outerHTML'), {
+				url: 'https://example.test/',
+				title: 'Ready',
+				html: '<p>Ready</p>',
+			})
+			const page = new BrowserPage(
+				client,
+				'target-1',
+				'session-1',
+				undefined,
+				'https://example.test/',
+				'main-1',
+			)
+			emitDocumentReady(transport, page)
+			expect(page.url).toBe('https://example.test/')
+			expect((await page.read()).title).toBe('Ready')
+			expect(transport.sent.map((message) => readCDPExpression(message))).not.toContain(
+				'document.readyState',
+			)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a view double that loses a call, reads another document, or waits when told to time out', async () => {
+		const view = createBrowserViewDouble({
+			url: 'https://example.test/cart',
+			title: 'Cart',
+			html: '<main><p>Two items</p></main>',
+			waited: false,
+		})
+		expect([view.url, view.trusted, await view.title()]).toEqual([
+			'https://example.test/cart',
+			false,
+			'Cart',
+		])
+		const outline = await view.elements.outline()
+		expect(outline.text).toBe(
+			'page "Cart" https://example.test/cart\ne1 button "Save"\ne2 textbox "Email"\ne3 combobox "Size"\n(3 of 3 elements)',
+		)
+		expect((await view.read()).markdown().text).toContain('Two items')
+		const save = requireValue(view.elements.element('e1'))
+		await save.click()
+		await save.fill('x')
+		await expect(save.select(['x'])).rejects.toThrow('Element is not a select control')
+		await requireValue(view.elements.element('e3')).select(['Large'])
+		const wait = await view.wait('Paid').catch((caught: unknown) => caught)
+		expect(readProperty(wait, 'code')).toBe('BROWSER_WAIT_TIMEOUT')
+		expect(view.elements.element('e9')).toBeUndefined()
+		expect(view.calls).toEqual([
+			'outline',
+			'read',
+			'click e1',
+			'fill e1 x',
+			'select e3 Large',
+			'wait Paid',
+		])
+		const aborted = new AbortController()
+		aborted.abort('stop')
+		await expect(view.read({ signal: aborted.signal })).rejects.toBe('stop')
+	})
+
+	it('catches a fixture whose registry answer does not replace the absent-domain failure', async () => {
+		const fixture = await createBrowserElementFixture({
+			registry: (message) => fixture.transport.reply(message.id, { enabled: true }),
+		})
+		try {
+			await expect(fixture.page.send('WebMCP.enable')).resolves.toEqual({ enabled: true })
+		} finally {
+			await fixture.client.close()
 		}
 	})
 })
@@ -363,70 +471,6 @@ describe('scriptEvaluate', () => {
 		).resolves.toStrictEqual({ result: { value: 'orkestrel' } })
 		await expect(
 			client.send('Runtime.evaluate', { expression: 'document.title' }, { timeout: 50 }),
-		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
-	})
-})
-
-describe('scriptSelectorPresent', () => {
-	it('resolves the presence poll for its own selector and refuses a prefix lookalike or a non-poll expression', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		scriptSelectorPresent(transport, '#hero')
-
-		const poll = `new Promise((resolve) => { const query = ${JSON.stringify('#hero')}; resolve(document.querySelector(query) !== null) })`
-		const lookalike = `new Promise((resolve) => { const query = ${JSON.stringify('#heroic')}; resolve(document.querySelector(query) !== null) })`
-		const direct = `const query = ${JSON.stringify('#hero')}; document.querySelector(query) !== null`
-
-		await expect(client.send('Runtime.evaluate', { expression: poll })).resolves.toStrictEqual({
-			result: { value: true },
-		})
-		await expect(
-			client.send('Runtime.evaluate', { expression: lookalike }, { timeout: 50 }),
-		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
-		await expect(
-			client.send('Runtime.evaluate', { expression: direct }, { timeout: 50 }),
-		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
-	})
-})
-
-describe('scriptTrustedSelector', () => {
-	it('answers the presence poll, the object handle, the content quads, and the input dispatches for its selector', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		scriptTrustedSelector(transport, '#btn')
-
-		const poll = `new Promise((resolve) => { const query = ${JSON.stringify('#btn')}; resolve(document.querySelector(query) !== null) })`
-		await expect(client.send('Runtime.evaluate', { expression: poll })).resolves.toStrictEqual({
-			result: { value: true },
-		})
-
-		await expect(
-			client.send('Runtime.evaluate', {
-				expression: `document.querySelector(${JSON.stringify('#btn')})`,
-				returnByValue: false,
-			}),
-		).resolves.toStrictEqual({ result: { objectId: 'object-1' } })
-		await expect(
-			client.send('Runtime.callFunctionOn', { objectId: 'object-1' }),
-		).resolves.toStrictEqual({ result: { value: true } })
-		await expect(
-			client.send('DOM.getContentQuads', { objectId: 'object-1' }),
-		).resolves.toStrictEqual({ quads: [[0, 0, 100, 0, 100, 40, 0, 40]] })
-		await expect(
-			client.send('Input.dispatchMouseEvent', { type: 'mousePressed' }),
-		).resolves.toStrictEqual({})
-		await expect(client.send('Input.insertText', { text: 'hello' })).resolves.toStrictEqual({})
-		await expect(
-			client.send('Runtime.releaseObject', { objectId: 'object-1' }),
-		).resolves.toStrictEqual({})
-
-		await expect(
-			client.send(
-				'Runtime.evaluate',
-				{
-					expression: `document.querySelector(${JSON.stringify('#other')})`,
-					returnByValue: false,
-				},
-				{ timeout: 50 },
-			),
 		).rejects.toThrow('CDP request timed out: Runtime.evaluate')
 	})
 })

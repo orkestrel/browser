@@ -7,9 +7,10 @@
  */
 
 import { describe, it, expect } from 'vitest'
-import { createCDPClient } from '@src/core'
+import { createToolManager } from '@orkestrel/tool'
+import { BrowserToolset, createBrowserToolset, createCDPClient } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
-import { createCDPTestTransport, replyOk } from '../../setup.js'
+import { createBrowserElementFixture, createCDPTestTransport, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
 describe('createCDPClient', () => {
@@ -58,5 +59,24 @@ describe('createCDPClient', () => {
 		expect(client.connected).toBe(true)
 		await client.close()
 		expect(client.connected).toBe(false)
+	})
+})
+
+describe('createBrowserToolset', () => {
+	it('catches a factory that ignores the supplied manager or fills it before start', async () => {
+		const { client, page } = await createBrowserElementFixture()
+		try {
+			const tools = createToolManager()
+			const toolset = createBrowserToolset(page, { tools })
+			expect(toolset).toBeInstanceOf(BrowserToolset)
+			expect(toolset.tools).toBe(tools)
+			expect(tools.count).toBe(0)
+			await toolset.start()
+			expect(tools.tools()).toEqual(toolset.native)
+			await toolset.destroy()
+			expect(tools.count).toBe(0)
+		} finally {
+			await client.close()
+		}
 	})
 })

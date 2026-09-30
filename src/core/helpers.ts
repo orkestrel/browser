@@ -37,6 +37,8 @@ import type {
 	BrowserRouteQuery,
 	BrowserQuad,
 	BrowserReadResult,
+	BrowserReceipt,
+	BrowserElementInterface,
 	BrowserSnapshotInput,
 	BrowserScriptCoverage,
 	BrowserScreenshotOptions,
@@ -71,11 +73,12 @@ import {
 	BROWSER_KEY_MODIFIERS,
 	BROWSER_MOUSE_BUTTON_MASKS,
 } from './constants.js'
-import { BrowserError, BrowserResultLimitError } from './errors.js'
+import { BrowserElementError, BrowserError, BrowserResultLimitError } from './errors.js'
 import {
 	parseBrowserAXString,
 	parseBrowserCookiePartition,
 	parseBrowserRect,
+	parseBrowserReference,
 	parseNumberArray,
 	parseSnapshotString,
 } from './parsers.js'
@@ -276,6 +279,149 @@ export function deriveBrowserToolSchema(
 		},
 		required: ['what'],
 	}
+}
+
+/**
+ * Bounds a tool string at a character limit, appending a footer that names the cut.
+ *
+ * @remarks
+ * A string within the limit returns unchanged. A longer one keeps its first `limit` UTF-16 code
+ * units, one fewer when the last would split a surrogate pair (so a limit of 1 before a pair keeps
+ * nothing), followed by `\n[characters 0–END of TOTAL; the rest was cut]`.
+ *
+ * @param text - The page-authored or composed string
+ * @param limit - The most characters kept before the footer, a positive integer
+ * @returns The string, cut and footed when it exceeds the limit
+ * @throws Thrown when `limit` is not a positive integer.
+ *
+ * @example
+ * ```ts
+ * import { boundBrowserText } from '@orkestrel/browser'
+ *
+ * boundBrowserText('abcdef', 4) // 'abcd\n[characters 0–4 of 6; the rest was cut]'
+ * boundBrowserText('abc', 4) // 'abc'
+ * ```
+ */
+export function boundBrowserText(text: string, limit: number): string {
+	if (!isInteger(limit) || limit < 1) {
+		throw new BrowserError('Browser tool limit must be a positive integer', undefined, { limit })
+	}
+	if (text.length <= limit) return text
+	const last = text.charCodeAt(limit - 1)
+	const end = last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit
+	return `${text.slice(0, end)}\n[characters 0–${end} of ${text.length}; the rest was cut]`
+}
+
+/**
+ * Renders an element as its outline row reads: reference, role, and quoted name.
+ *
+ * @param element - The referenced element
+ * @returns The element's reference, role, and JSON-quoted name
+ *
+ * @example
+ * ```ts
+ * import { renderBrowserElement } from '@orkestrel/browser'
+ *
+ * const element = page.elements.element('e4')
+ * if (element !== undefined) renderBrowserElement(element) // 'e4 button "Place order"'
+ * ```
+ */
+export function renderBrowserElement(element: BrowserElementInterface): string {
+	return `${element.reference} ${element.role} ${JSON.stringify(element.name)}`
+}
+
+/**
+ * Requires a tool argument to be an element reference in any spelling `parseBrowserReference`
+ * accepts, and returns its canonical form.
+ *
+ * @param value - The argument a model supplied
+ * @returns The canonical reference, such as `e12`
+ * @throws Thrown as a `BrowserElementError` with reason `UNKNOWN` when the value is not a
+ * reference, naming `look` as the next call.
+ *
+ * @example
+ * ```ts
+ * import { requireBrowserReference } from '@orkestrel/browser'
+ *
+ * requireBrowserReference('[ref=e12]') // 'e12'
+ * ```
+ */
+export function requireBrowserReference(value: unknown): string {
+	const reference = isString(value) ? parseBrowserReference(value) : undefined
+	if (reference === undefined)
+		throw new BrowserElementError(
+			{ subject: `Reference ${JSON.stringify(value)}` },
+			'UNKNOWN',
+			'is not a reference such as e12',
+		)
+	return reference
+}
+
+/**
+ * Reads a required string argument from a tool call.
+ *
+ * @param args - The arguments a model supplied
+ * @param key - The parameter name
+ * @returns The string the argument holds
+ * @throws Thrown as a `BrowserError` coded `BROWSER_TOOLSET_ARGUMENT` when the argument is not a
+ * string.
+ *
+ * @example
+ * ```ts
+ * import { readBrowserToolString } from '@orkestrel/browser'
+ *
+ * readBrowserToolString({ url: 'https://example.com/' }, 'url') // 'https://example.com/'
+ * ```
+ */
+export function readBrowserToolString(
+	args: Readonly<Record<string, unknown>>,
+	key: string,
+): string {
+	const value = args[key]
+	if (!isString(value))
+		throw new BrowserError(`The ${key} parameter must be a string.`, 'BROWSER_TOOLSET_ARGUMENT', {
+			key,
+		})
+	return value
+}
+
+/**
+ * Renders a tool receipt: the action and its status on one line, the interrupting dialog, then
+ * a blank line and the fresh view.
+ *
+ * @remarks
+ * The status joins the action with a semicolon, and a period closes the line. A dialog adds
+ * `A CATEGORY dialog is open: "MESSAGE"; call dialog.`, with `An` before `alert`. An empty
+ * action with no status leaves the dialog sentence, or the view, alone. A `trusted` of `false`
+ * ends the line with ` (untrusted event)`.
+ *
+ * @param receipt - The action, status, dialog, and view
+ * @returns The receipt text
+ *
+ * @example
+ * ```ts
+ * import { renderBrowserReceipt } from '@orkestrel/browser'
+ *
+ * renderBrowserReceipt({
+ * 	action: 'Clicked e7 button "Delete"',
+ * 	dialog: { category: 'confirm', message: 'Delete the draft?' },
+ * })
+ * // 'Clicked e7 button "Delete". A confirm dialog is open: "Delete the draft?"; call dialog.'
+ * ```
+ */
+export function renderBrowserReceipt(receipt: BrowserReceipt): string {
+	const sentences: string[] = []
+	if (receipt.action !== '' || receipt.status !== undefined)
+		sentences.push(
+			`${[receipt.action, receipt.status].filter((part) => part !== undefined && part !== '').join('; ')}.`,
+		)
+	if (receipt.dialog !== undefined)
+		sentences.push(
+			`${receipt.dialog.category === 'alert' ? 'An' : 'A'} ${receipt.dialog.category} dialog is open: ${JSON.stringify(receipt.dialog.message)}; call dialog.`,
+		)
+	const line = `${sentences.join(' ')}${receipt.trusted === false ? ' (untrusted event)' : ''}`
+	if (receipt.view === undefined) return line
+	return line === '' ? receipt.view : `${line}\n\n${receipt.view}`
 }
 
 /**
@@ -1566,8 +1712,9 @@ export function readBrowserWorld(value: unknown, frame: string): number {
  * `offset` and `limit` count UTF-16 code units. A slice whose window reaches the end of the text
  * holds the rest of it. Otherwise the slice ends after the last line break inside
  * `offset` to `offset + limit` that lies past `offset`, and at `offset + limit` when none does. A
- * hard cut that would end on the high half of a surrogate pair ends one unit earlier, unless that
- * empties the slice. An `offset` at or past the end yields an empty slice.
+ * hard cut that would end on the high half of a surrogate pair ends one unit earlier, so a limit
+ * of 1 before a pair yields an empty slice rather than a lone surrogate. An `offset` at or past
+ * the end yields an empty slice.
  *
  * @param text - The whole projection
  * @param offset - The index the slice starts at. Default: `0`
@@ -1600,7 +1747,7 @@ export function extractBrowserSlice(text: string, offset = 0, limit?: number): B
 	if (line > 0) return { text: window.slice(0, line + 1), offset, total }
 	const last = window.charCodeAt(limit - 1)
 	const next = text.charCodeAt(offset + limit)
-	const split = limit > 1 && last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff
+	const split = last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff
 	return { text: split ? window.slice(0, -1) : window, offset, total }
 }
 

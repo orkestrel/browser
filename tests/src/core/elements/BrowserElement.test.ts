@@ -298,6 +298,27 @@ describe('trusted element actions', () => {
 		}
 	})
 
+	it('catches a submit that skips the focus, the Enter pair, or the page session', async () => {
+		const { page, client, transport } = await createBrowserElementFixture()
+		try {
+			await page.elements.outline()
+			const start = transport.sent.length
+			await requireValue(page.elements.element('e2')).submit()
+			const sent = transport.sent.slice(start)
+			const focus = sent.findIndex((message) => message.method === 'DOM.focus')
+			const keys = sent.filter((message) => message.method === 'Input.dispatchKeyEvent')
+			expect(focus).toBeGreaterThan(-1)
+			expect(sent.indexOf(requireValue(keys[0]))).toBeGreaterThan(focus)
+			expect(keys.map((message) => [message.params?.['type'], message.params?.['key']])).toEqual([
+				['keyDown', 'Enter'],
+				['keyUp', 'Enter'],
+			])
+			expect(keys.map((message) => message.sessionId)).toEqual(['session-main', 'session-main'])
+		} finally {
+			await client.close()
+		}
+	})
+
 	it('catches losing element error identity, code, reason, or recovery', () => {
 		const error = new BrowserElementError('e12', 'GONE')
 		expect(isBrowserElementError(error)).toBe(true)

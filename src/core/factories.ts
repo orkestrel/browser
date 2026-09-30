@@ -1,13 +1,17 @@
 import type {
+	BrowserPageInterface,
 	BrowserReadingInput,
 	BrowserReadingInterface,
 	BrowserSnapshotInput,
 	BrowserSnapshotInterface,
+	BrowserToolsetInterface,
+	BrowserToolsetOptions,
 	CDPClientInterface,
 	CDPClientOptions,
 } from './types.js'
 import { BrowserReading } from './BrowserReading.js'
 import { BrowserSnapshot } from './BrowserSnapshot.js'
+import { BrowserToolset } from './BrowserToolset.js'
 import { CDPClient } from './CDPClient.js'
 
 /**
@@ -70,4 +74,35 @@ export function createBrowserSnapshot(input: BrowserSnapshotInput): BrowserSnaps
  */
 export function createBrowserReading(input: BrowserReadingInput): BrowserReadingInterface {
 	return new BrowserReading(input)
+}
+
+/**
+ * Creates a `BrowserToolsetInterface` that publishes the browser vocabulary over one page into a
+ * `@orkestrel/tool` manager.
+ *
+ * @remarks
+ * The page is both the toolset's view and its `page` option, so the toolset advertises the seven
+ * CDP tools. It registers its tools during `start()`: the generic tools first, then the page
+ * tools as their adoption resolves. Its options are described on {@link BrowserToolsetOptions};
+ * hand `toolset.tools` to an agent, and publish `toolset.native` to a built-in browser agent.
+ *
+ * @param page - The page the tools act on first
+ * @param options - The manager, page-tool source, context, bound, and schemes; `page` is replaced
+ * by the page argument
+ * @returns A {@link BrowserToolsetInterface}
+ *
+ * @example
+ * ```ts
+ * import { createBrowserToolset } from '@orkestrel/browser'
+ *
+ * const toolset = createBrowserToolset(page, { context })
+ * await toolset.start()
+ * const result = await toolset.tools.execute({ id: '1', name: 'look', arguments: { what: 'cart' } })
+ * ```
+ */
+export function createBrowserToolset(
+	page: BrowserPageInterface,
+	options?: BrowserToolsetOptions,
+): BrowserToolsetInterface {
+	return new BrowserToolset(page, { ...options, page })
 }

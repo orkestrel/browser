@@ -39,6 +39,12 @@ describe('BrowserFrame', () => {
 		expect(frame.url).toBe('https://example.com/frame')
 	})
 
+	it('catches a child frame that carries its own input stream', async () => {
+		const { client } = await createConnectedCDPClient()
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', 'about:blank')
+		for (const member of ['keyboard', 'mouse', 'touch']) expect(member in frame).toBe(false)
+	})
+
 	it('evaluates in an isolated world bound to the frame and session', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })

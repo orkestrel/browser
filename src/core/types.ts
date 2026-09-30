@@ -1,6 +1,6 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { HTMLInterface } from '@orkestrel/html'
-import type { ToolInterface } from '@orkestrel/tool'
+import type { ToolContext, ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
 
 // === CDP transport
 
@@ -1754,6 +1754,13 @@ export interface BrowserElementInterface {
 	select(values: readonly string[], options?: BrowserCallOptions): Promise<void>
 	focus(options?: BrowserCallOptions): Promise<void>
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
+	/**
+	 * Submits the form the element belongs to. The CDP placement focuses the element and presses
+	 * Enter through a trusted key pair, sending the release even after an abort; the DOM
+	 * placement calls the form's `requestSubmit()` and reports the outcome through a `submit`
+	 * listener.
+	 */
+	submit(options?: BrowserCallOptions): Promise<void>
 }
 
 /** Provides trusted page input and capture for a referenced element. */
@@ -1889,6 +1896,173 @@ export interface BrowserRegistryPending {
 	readonly reject: (error: unknown) => void
 }
 
+// === Browser toolset
+
+/**
+ * Names a tool the browser toolset reserves: the seven generic tools, the staged `dialog`, and
+ * the opt-in `tabs` and `switch`.
+ */
+export type BrowserToolName =
+	| 'look'
+	| 'read'
+	| 'click'
+	| 'type'
+	| 'press'
+	| 'navigate'
+	| 'wait'
+	| 'dialog'
+	| 'tabs'
+	| 'switch'
+
+/**
+ * Names why a toolset declined a page tool.
+ *
+ * @remarks
+ * - `reserved` — the name is one of the toolset's own tool names
+ * - `held` — the manager holds the name under a tool the toolset did not add
+ * - `pattern` — the name falls outside `BROWSER_TOOL_NAME_PATTERN`
+ * - `schema` — the page's input schema declares `what` as optional
+ * - `debugging` — the page marks the tool for developers
+ */
+export type BrowserToolsetReason = 'reserved' | 'held' | 'pattern' | 'schema' | 'debugging'
+
+/** Maps the signal a tool source emits when its page's tools change. */
+export type BrowserToolSourceEventMap = { readonly change: readonly [] }
+
+/**
+ * Supplies page-registered tools to a toolset through a contract free of protocol types.
+ *
+ * @remarks
+ * - `emitter` — emits `change` when the page's tools change
+ * - `adopt` — projects the current tools as executable tools
+ * - `tools` — the census of registered tools; a toolset decides the `schema` and `debugging`
+ *   skips from it, and applies only the name checks to a source that omits it
+ *
+ * `BrowserRegistry` satisfies this contract with its census; `@orkestrel/mcp`'s
+ * `ModelContextInterface` satisfies it without one.
+ */
+export interface BrowserToolSourceInterface {
+	readonly emitter: EmitterInterface<BrowserToolSourceEventMap>
+	adopt(): Promise<readonly ToolInterface[]>
+	tools?(): readonly BrowserTool[]
+}
+
+/**
+ * Maps the events a toolset emits.
+ *
+ * @remarks
+ * - `adopt` — a page tool was added to the manager
+ * - `skip` — a page tool was declined, with the reason
+ * - `select` — the toolset's current view changed
+ */
+export type BrowserToolsetEventMap = {
+	readonly adopt: readonly [tool: ToolInterface]
+	readonly skip: readonly [name: string, reason: BrowserToolsetReason]
+	readonly select: readonly [view: BrowserViewInterface]
+}
+
+/**
+ * Configures a browser toolset.
+ *
+ * @remarks
+ * - `tools` — the manager the toolset fills. Default: a manager the toolset creates
+ * - `page` — the page behind the view, which adds `press`, `navigate`, the staged `dialog`,
+ *   popup following, and the protocol subscriptions; omitting it leaves the five view tools
+ * - `source` — a fixed source of page tools. Default: `page.registry` when `page` is supplied,
+ *   which the toolset starts and which follows the current page; no source otherwise
+ * - `context` — the browser context whose pages the `tabs` and `switch` tools list and select;
+ *   it requires `page`, and omitting it leaves both tools unadvertised
+ * - `limit` — the most characters of a result or error message before its footer, a positive
+ *   integer. Default: `BROWSER_TOOL_LIMIT`
+ * - `schemes` — the URL schemes `navigate` accepts, each with its colon. Default:
+ *   `BROWSER_SCHEMES`
+ */
+export interface BrowserToolsetOptions {
+	readonly on?: EmitterHooks<BrowserToolsetEventMap>
+	readonly error?: EmitterErrorHandler
+	readonly tools?: ToolManagerInterface
+	readonly page?: BrowserPageInterface
+	readonly source?: BrowserToolSourceInterface
+	readonly context?: BrowserContextInterface
+	readonly limit?: number
+	readonly schemes?: readonly string[]
+}
+
+/**
+ * Publishes the browser vocabulary as tools over one current view and adopts the page's own
+ * tools beside them.
+ *
+ * @remarks
+ * - `emitter` — emits `adopt`, `skip`, and `select`
+ * - `tools` — the manager the toolset fills
+ * - `native` — the generic tools alone, which a consumer publishes to a built-in agent: the
+ *   seven for a page-backed toolset, and `look`, `read`, `click`, `type`, and `wait` for a
+ *   view-backed one
+ * - `view` — the view the tools act on
+ */
+export interface BrowserToolsetInterface {
+	readonly emitter: EmitterInterface<BrowserToolsetEventMap>
+	readonly tools: ToolManagerInterface
+	readonly native: readonly ToolInterface[]
+	readonly view: BrowserViewInterface
+	/**
+	 * Adds the tools, follows the view, and adopts the page's tools; concurrent calls share one
+	 * startup. Rejects with a coded `BrowserError` and adds nothing when the manager holds a
+	 * reserved name under a tool the toolset did not add, and rejects with
+	 * `the browser session ended` when `destroy()` runs before startup finishes.
+	 */
+	start(options?: BrowserCallOptions): Promise<void>
+	/**
+	 * Stops following the view, rejects queued actions, and removes every tool the toolset added
+	 * that the manager still holds.
+	 */
+	destroy(): Promise<void>
+}
+
+/**
+ * Runs one toolset tool inside the toolset's boundary.
+ *
+ * @param args - The arguments the caller supplied
+ * @param context - The call's context, whose signal also aborts when the toolset is destroyed
+ * @returns The result body, which the boundary bounds, and a footer it appends after the bound
+ */
+export type BrowserToolsetHandler = (
+	args: Readonly<Record<string, unknown>>,
+	context: ToolContext,
+) => Promise<readonly [body: string, footer: string]>
+
+/** Holds the listeners a toolset attaches to one followed page. */
+export interface BrowserToolsetWatch {
+	readonly dialog: (dialog: BrowserDialogInterface) => void
+	readonly popup: (page: BrowserPageInterface) => void
+	readonly close: () => void
+	readonly requested: CDPHandler
+	readonly navigated: CDPHandler
+	readonly lifecycle: CDPHandler
+	readonly closed: CDPHandler
+}
+
+/**
+ * Describes one tool receipt before rendering.
+ *
+ * @remarks
+ * - `action` — what the tool did, without a closing period, such as `Clicked e4 button "Save"`;
+ *   empty when the tool did nothing the receipt names
+ * - `status` — a clause joined to the action with a semicolon, such as
+ *   `the page is still loading URL`
+ * - `dialog` — the dialog that interrupted the tool
+ * - `view` — the fresh view that follows the receipt line
+ * - `trusted` — if `false`, the receipt line ends with ` (untrusted event)`, which a click or type
+ *   over a DOM view reports; if `true` or omitted, the line carries no marker
+ */
+export interface BrowserReceipt {
+	readonly action: string
+	readonly status?: string
+	readonly dialog?: { readonly category: BrowserDialogCategory; readonly message: string }
+	readonly view?: string
+	readonly trusted?: boolean
+}
+
 /**
  * Describes serializable frame metadata decoded from CDP `Page.getFrameTree`.
  *
@@ -1926,9 +2100,6 @@ export interface BrowserFrameInterface {
 	readonly parent: string | undefined
 	readonly name: string | undefined
 	readonly url: string
-	readonly keyboard: BrowserKeyboardInterface
-	readonly mouse: BrowserMouseInterface
-	readonly touch: BrowserTouchInterface
 	/** Resolves the frame document title. */
 	title(options?: BrowserCallOptions): Promise<string>
 	/**

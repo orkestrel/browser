@@ -1,4 +1,5 @@
-import type { BrowserMouseButton } from './types.js'
+import type { ToolDefinition } from '@orkestrel/tool'
+import type { BrowserMouseButton, BrowserToolName } from './types.js'
 
 // === Base64
 //
@@ -354,3 +355,235 @@ export const BROWSER_OUTLINE_OMITTED_ROLES: ReadonlySet<string> = Object.freeze(
 export const BROWSER_TEXT_ROLES: ReadonlySet<string> = Object.freeze(
 	new Set(['heading', 'StaticText']),
 )
+
+// === Browser toolset
+
+/**
+ * Bounds each tool result and error message at `4_000` UTF-16 code units before its footer.
+ *
+ * @remarks
+ * A page tool's error message and JSON output reach the toolset already cut at
+ * {@link BROWSER_REGISTRY_OUTPUT_LIMIT}, so a toolset limit over that shows at most
+ * `4_096` characters of either.
+ */
+export const BROWSER_TOOL_LIMIT = 4_000
+
+/**
+ * Sets the `wait` tool's default and an action receipt's bound on a requested navigation,
+ * `5_000` milliseconds.
+ *
+ * @remarks
+ * The receipt's bound runs from the moment the receipt starts waiting for the requested
+ * navigation, so the time an action spent queued and the load wait of an explicit `navigate`
+ * precede it.
+ */
+export const BROWSER_TOOL_TIMEOUT_MS = 5_000
+
+/**
+ * Reserves `1_000` milliseconds of an action receipt's `BROWSER_TOOL_TIMEOUT_MS` deadline for the
+ * view capture, so a receipt whose navigation wait reaches its bound still carries the view.
+ */
+export const BROWSER_TOOL_CAPTURE_MS = 1_000
+
+/**
+ * Holds the note an action receipt carries in place of the view when the receipt's deadline
+ * passed before the view could be captured.
+ */
+export const BROWSER_TOOL_DEADLINE_NOTE =
+	'(The view could not be read before the deadline; call look.)'
+
+/** Caps the `wait` tool's `timeout` parameter at `30_000` milliseconds. */
+export const BROWSER_TOOL_TIMEOUT_LIMIT_MS = 30_000
+
+/**
+ * Names every tool the browser toolset reserves: `look`, `read`, `click`, `type`, `press`,
+ * `navigate`, `wait`, `dialog`, `tabs`, and `switch`.
+ */
+export const BROWSER_TOOL_NAMES: readonly BrowserToolName[] = Object.freeze([
+	'look',
+	'read',
+	'click',
+	'type',
+	'press',
+	'navigate',
+	'wait',
+	'dialog',
+	'tabs',
+	'switch',
+])
+
+/**
+ * Matches a page tool name the toolset can advertise: 1 to 64 ASCII letters, digits,
+ * underscores, and hyphens.
+ *
+ * @remarks
+ * The pattern is the narrowest of the tool-name rules of the providers the fleet targets. The
+ * Anthropic Messages API tool definition requires a `name` matching `^[a-zA-Z0-9_-]{1,64}$`, and
+ * the OpenAI function-calling definition requires a function `name` of letters, digits,
+ * underscores, and dashes, at most 64 characters long. The WebMCP specification draft allows a
+ * period and up to 128 code points (the proposal's "Relation to WebMCP" section), so a page tool
+ * named `a.b` or one longer than 64 characters is skipped with the reason `pattern`.
+ */
+export const BROWSER_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/
+
+/** Names the URL schemes the `navigate` tool accepts by default: `http:` and `https:`. */
+export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https:'])
+
+/**
+ * Holds the advertised definition of each reserved tool: its description, its JSON Schema
+ * parameters, and its annotations.
+ *
+ * @remarks
+ * Every description, the tool's and each parameter's, is at most 100 characters, and every tool
+ * declares at least one required parameter: a streamed call to a tool declaring none ended the
+ * stream with an error in the real-model runs. `look` and `read` annotate `pure` and `untrusted`,
+ * `wait` and `tabs` annotate `pure`, and the rest carry no annotation.
+ */
+export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>> = Object.freeze({
+	look: Object.freeze({
+		name: 'look',
+		description:
+			'Show the page text and its elements with references such as e4. Call it before acting.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				what: Object.freeze({ type: 'string', description: 'What you want to find or act on.' }),
+				ref: Object.freeze({
+					type: 'string',
+					description: 'A reference such as e4, to show only that part of the page.',
+				}),
+			}),
+			required: Object.freeze(['what']),
+		}),
+		annotations: Object.freeze({ pure: true, untrusted: true }),
+	}),
+	read: Object.freeze({
+		name: 'read',
+		description: 'Read the page as Markdown, one slice at a time.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				what: Object.freeze({
+					type: 'string',
+					description: 'What you want to learn from the page.',
+				}),
+				offset: Object.freeze({
+					type: 'integer',
+					description: 'The character to continue from, as the last reply names. Default: 0.',
+				}),
+				ref: Object.freeze({
+					type: 'string',
+					description: 'A reference such as e4, to read only that element.',
+				}),
+			}),
+			required: Object.freeze(['what']),
+		}),
+		annotations: Object.freeze({ pure: true, untrusted: true }),
+	}),
+	click: Object.freeze({
+		name: 'click',
+		description: 'Click an element by its reference from look, such as e4.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				ref: Object.freeze({ type: 'string', description: 'The reference, such as e4.' }),
+			}),
+			required: Object.freeze(['ref']),
+		}),
+	}),
+	type: Object.freeze({
+		name: 'type',
+		description: 'Type text into a field, or choose an option in a select, by its reference.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				ref: Object.freeze({ type: 'string', description: 'The reference, such as e4.' }),
+				text: Object.freeze({
+					type: 'string',
+					description: 'The text to type or the option to choose.',
+				}),
+				submit: Object.freeze({
+					type: 'boolean',
+					description: 'Whether to press Enter afterward.',
+				}),
+			}),
+			required: Object.freeze(['ref', 'text']),
+		}),
+	}),
+	press: Object.freeze({
+		name: 'press',
+		description: 'Press a key such as Enter, Escape, Tab, ArrowDown, or Control+a.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				key: Object.freeze({ type: 'string', description: 'The key or chord, such as Enter.' }),
+			}),
+			required: Object.freeze(['key']),
+		}),
+	}),
+	navigate: Object.freeze({
+		name: 'navigate',
+		description: 'Open a web address in the current tab.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				url: Object.freeze({ type: 'string', description: 'The absolute http or https address.' }),
+			}),
+			required: Object.freeze(['url']),
+		}),
+	}),
+	wait: Object.freeze({
+		name: 'wait',
+		description: 'Wait until a text appears on the page.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				text: Object.freeze({ type: 'string', description: 'The text to wait for.' }),
+				timeout: Object.freeze({
+					type: 'integer',
+					description: 'The most seconds to wait, at most 30. Default: 5.',
+				}),
+			}),
+			required: Object.freeze(['text']),
+		}),
+		annotations: Object.freeze({ pure: true }),
+	}),
+	dialog: Object.freeze({
+		name: 'dialog',
+		description: 'Accept or dismiss the open dialog.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				accept: Object.freeze({
+					type: 'boolean',
+					description: 'True to accept the dialog; false to dismiss it.',
+				}),
+				text: Object.freeze({ type: 'string', description: 'The answer to a prompt dialog.' }),
+			}),
+			required: Object.freeze(['accept']),
+		}),
+	}),
+	tabs: Object.freeze({
+		name: 'tabs',
+		description: 'List the open tabs; the current one is marked.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				what: Object.freeze({ type: 'string', description: 'What you are looking for.' }),
+			}),
+			required: Object.freeze(['what']),
+		}),
+		annotations: Object.freeze({ pure: true }),
+	}),
+	switch: Object.freeze({
+		name: 'switch',
+		description: 'Switch to a tab from tabs, such as t2.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				tab: Object.freeze({ type: 'string', description: 'The tab, such as t2.' }),
+			}),
+			required: Object.freeze(['tab']),
+		}),
+	}),
+})

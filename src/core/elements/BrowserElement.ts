@@ -159,6 +159,11 @@ export class BrowserElement implements BrowserPageElementInterface {
 		options?.signal?.throwIfAborted()
 	}
 
+	async submit(options?: BrowserCallOptions): Promise<void> {
+		// A trusted Enter on the focused control runs the form's implicit submission.
+		await this.press('Enter', options)
+	}
+
 	async upload(files: readonly string[], options?: BrowserCallOptions): Promise<void> {
 		const resolved = await this.#resolve(options)
 		try {

@@ -2,21 +2,15 @@ import type {
 	BrowserEpochFunction,
 	BrowserFrameInterface,
 	BrowserHandleInterface,
-	BrowserKeyboardInterface,
-	BrowserMouseInterface,
 	BrowserReadingInterface,
 	BrowserCallOptions,
 	BrowserSessionFunction,
-	BrowserTouchInterface,
 	BrowserWorldFunction,
 	CDPHandler,
 	CDPClientInterface,
 } from './types.js'
 import { BrowserHandle } from './BrowserHandle.js'
-import { BrowserKeyboard } from './BrowserKeyboard.js'
-import { BrowserMouse } from './BrowserMouse.js'
 import { BrowserReading } from './BrowserReading.js'
-import { BrowserTouch } from './BrowserTouch.js'
 import { BROWSER_FRAME_WORLD_NAME, BROWSER_RESULT_LIMIT } from './constants.js'
 import { compileGuardedEvaluateExpression, compileReadFunction } from './compilers.js'
 import { readBrowserWorld, readEvaluationResult, requireBrowserString } from './helpers.js'
@@ -51,9 +45,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 	readonly #isolated: boolean
 	readonly #epoch: BrowserEpochFunction | undefined
 	readonly #world: BrowserWorldFunction | undefined
-	readonly #keyboard: BrowserKeyboard
-	readonly #mouse: BrowserMouse
-	readonly #touch: BrowserTouch
 	#url: string
 
 	constructor(
@@ -76,9 +67,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#isolated = isolated
 		this.#epoch = epoch
 		this.#world = world
-		this.#keyboard = new BrowserKeyboard(this)
-		this.#mouse = new BrowserMouse(this)
-		this.#touch = new BrowserTouch(this)
 	}
 
 	get id(): string {
@@ -95,18 +83,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	get url(): string {
 		return this.#url
-	}
-
-	get keyboard(): BrowserKeyboardInterface {
-		return this.#keyboard
-	}
-
-	get mouse(): BrowserMouseInterface {
-		return this.#mouse
-	}
-
-	get touch(): BrowserTouchInterface {
-		return this.#touch
 	}
 
 	async title(options?: BrowserCallOptions): Promise<string> {
