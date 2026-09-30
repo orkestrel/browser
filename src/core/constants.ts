@@ -481,7 +481,7 @@ export const BROWSER_TOOL_NAMES: readonly BrowserToolName[] = Object.freeze([
  * Anthropic Messages API tool definition requires a `name` matching `^[a-zA-Z0-9_-]{1,64}$`, and
  * the OpenAI function-calling definition requires a function `name` of letters, digits,
  * underscores, and dashes, at most 64 characters long. The WebMCP specification draft allows a
- * period and up to 128 code points (the proposal's "Relation to WebMCP" section), so a page tool
+ * period and up to 128 code points (the guide's "Declared conformance gaps" section), so a page tool
  * named `a.b` or one longer than 64 characters is skipped with the reason `pattern`.
  */
 export const BROWSER_TOOL_NAME_PATTERN = /^[A-Za-z0-9_-]{1,64}$/

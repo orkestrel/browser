@@ -559,7 +559,7 @@ export const WEBMCP_GAPS: readonly ConformanceRow[] = Object.freeze([
 			WEBMCP_SOURCE.includes('U+002E FULL STOP (.)'),
 		ruling: 'retain',
 		closer:
-			'Retains the provider charset and 64 bound documented beside BROWSER_TOOL_NAME_PATTERN in src/core/constants.ts. PROPOSAL.md decision 27 governs digest-pinned conformance and its refresh ritual only.',
+			'Retains the provider charset and 64 bound documented beside BROWSER_TOOL_NAME_PATTERN in src/core/constants.ts. The guide section Declared conformance gaps governs digest-pinned conformance and its refresh steps only.',
 	},
 	{
 		symbol: 'declarative toolname, tooldescription, toolautosubmit ahead of source',

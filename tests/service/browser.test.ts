@@ -947,7 +947,7 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	})
 
-	// The 300 ms bound is the proposal's performance requirement, held on a host running up to three
+	// The 300 ms bound is the guide's Contract performance requirement, held on a host running up to three
 	// Chromium instances at once; a busier host can exceed it without a library defect, and the
 	// 5 000 ms deadline carries the functional completion. Both instants are epoch milliseconds from
 	// one system clock: the page records `performance.timeOrigin + performance.now()` at the

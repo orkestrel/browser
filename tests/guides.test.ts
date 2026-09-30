@@ -43,13 +43,13 @@ const INTERNAL: readonly string[] = Object.freeze([
 /** The heading every fence driving the toolset with a small model sits under. */
 const SMALL_MODEL_TITLE = 'Drive a page with a small model'
 /**
- * The system prompt the store proof in `@orkestrel/ollama` passed with, its
+ * The system prompt the store proof in `@orkestrel/ollama` runs with, its
  * `STORE_SYSTEM_PROMPT` constant transcribed.
  */
 const SMALL_MODEL_PROMPT =
 	'You control a web browser with tools and must call a tool before you answer. ' +
 	'The first message shows the page as look returns it; references such as e4 name its elements. ' +
-	'To learn a fact, call read with only what, for example read with what set to opening hours; when the result ends by naming an offset, call read again with that offset. ' +
+	'To learn a fact, call read with what set to your question; when its result ends by naming an offset, call read again with that offset. ' +
 	'To search, call type with the search box reference, the words, and submit true. ' +
 	'To press a button or follow a link, call click with its reference from the latest result. Never invent a reference. ' +
 	'If text you expect has not appeared, call wait once. ' +
@@ -60,6 +60,8 @@ const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 	'await toolset.start()',
 	"toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'click', 'type', 'press', 'navigate', 'wait']",
 ])
+/** The receipt the guide's Tools section quotes for a `look` call that carries `ref`. */
+const UNADVERTISED_RECEIPT = 'The look tool takes no ref parameter; call look with what.'
 /** Matches an in-page assignment or property definition that replaces a page dialog function. */
 const DIALOG_OVERRIDE =
 	/\b(?:alert|confirm|prompt)\s*=(?!=)|defineProperty\([^)]*['"](?:alert|confirm|prompt)['"]/
@@ -171,7 +173,35 @@ await new GuideCommand({
 		})
 	})
 
+	// The guide's Tools section states that a call carrying a parameter its tool does not advertise
+	// is refused before the handler runs, and quotes the receipt. The quote is checked against what a
+	// real toolset returns over the scripted CDP fixture, and the transport's record shows that the
+	// refused call sent nothing.
+	it('refuses a parameter the tool does not advertise with the receipt the guide quotes', async () => {
+		expect(files[GUIDE_SPEC]).toContain(`\`${UNADVERTISED_RECEIPT}\``)
+		const { createBrowserElementFixture } = await import('./setup.js')
+		const { createBrowserToolset } = await import('@src/core')
+		const { createToolManager } = await import('@orkestrel/tool')
+		const { client, page, transport } = await createBrowserElementFixture()
+		try {
+			const toolset = createBrowserToolset(page, { tools: createToolManager() })
+			await toolset.start()
+			const sent = transport.sent.length
+			const result = await toolset.tools.execute({
+				id: 'unadvertised',
+				name: 'look',
+				arguments: { what: 'the cart', ref: 'e1' },
+			})
+			expect(result).toMatchObject({ success: false, error: UNADVERTISED_RECEIPT })
+			expect(transport.sent.length).toBe(sent)
+			await toolset.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
 	// The guide's Contract records that the in-page face never replaces `alert`, `confirm`, or
+
 	// `prompt`, so a click that opens one blocks the driven document. The control proves the
 	// pattern catches the override it guards against.
 	it('assigns no page dialog function in the in-page face', () => {

@@ -1966,7 +1966,7 @@ export const POLICY_SOURCE_DEADLINES: readonly PolicyDeadline[] = Object.freeze(
 	{
 		path: 'src/server/Browser.ts',
 		declaration: '#waitForRemainderWithin',
-		reason: 'process-group drain, the named exception in PROPOSAL.md, Event and invalidation model',
+		reason: 'process-group drain, the named exception in guide invariant 13',
 	},
 	{
 		path: 'src/server/transports/WebSocketCDPTransport.ts',

@@ -672,7 +672,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		).toBe(applied)
 	})
 
-	// Asserts the proposal's receipt deadline, `BROWSER_TOOL_TIMEOUT_MS` (5 000 ms), with the
+	// Asserts the guide's receipt deadline, `BROWSER_TOOL_TIMEOUT_MS` (5 000 ms), with the
 	// captured view in place of any note, one case per claim. Envelope: this file's one Chromium,
 	// the service project running its files one at a time, and no other browser work on the host.
 	// A busier host can exceed the deadline without a library defect; the preceding cases carry
