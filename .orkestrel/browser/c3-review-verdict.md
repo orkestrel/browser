@@ -42,3 +42,15 @@ Rulings (the fix brief `tmp/units/c3-fix3-brief.md` in the worktree):
 - G4 (O2 blocking): `create()` and `sync()` share one reservation: synchronization waits for a creation in flight, and a creation that meets an established winner joins it instead of closing the target.
 
 Accepted: deviation 3 (a failed holder's popup relationship is not restored by a later `sync()`; U12b documents the limit). A fourth objective review, scoped to G1–G4, follows the round.
+
+## Fourth review (after G1–G4)
+
+Astra `analyst`, read-only, scoped to the third fix round: `VERDICT: FAIL 13,17; outside the claims: O1,O2`. Claims 22–26 and 19 confirmed (G2, G3, and G4's specified orderings hold); the three third-round deviations confirmed. Claim 13's remaining ordering: reservation acquisition is not atomic (a waiter released by `#awaitReservation` installs over an adoption's entry installed while it waited; reachable through a construction-time `on.popup` listener that starts `sync()`). O1 required: creation joining a winner skips its requested navigation, viewport, and hooks. O2 blocking: a synchronization whose page is destroyed during its viewport command still publishes it, and creation joins the closed page. The gate set on the tree green (`test:src` 1072, `test:setup` 99, `test:service` 30; every other project as before).
+
+Rulings (the fix brief `tmp/units/c3-fix4-brief.md` in the worktree):
+
+- H1 (claims 13, 17): check-and-install is one synchronous acquisition step, retried after every wait; the initial-listener ordering is the regression case.
+- H2 (O1): both join paths apply creation's `url` (with its timeout), `viewport`, and `on` hooks to the joined page before resolving.
+- H3 (O2): the context never publishes a closed page; a failed synchronization settles its reservation as failure without inserting; creation validates a joined page's liveness and rejects when it closed.
+
+A fifth objective review, scoped to H1–H3, follows the round.
