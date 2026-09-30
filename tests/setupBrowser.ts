@@ -100,14 +100,32 @@ export function readProbeCase(markup: string, css: string): Element {
  * @returns The loaded document; the iframe is removed after the test
  */
 export async function loadProbeDocument(html: string): Promise<Document> {
-	const frame = document.createElement('iframe')
-	frames.add(frame)
+	const probe = await loadProbeFrame(document, document.body, html)
+	const frame = probe.defaultView?.frameElement
+	if (frame instanceof HTMLIFrameElement) frames.add(frame)
+	return probe
+}
+
+/**
+ * Appends a `srcdoc` iframe holding markup to a parent node and waits for its `load`.
+ *
+ * @param host - The document the iframe element is created in
+ * @param parent - The node the iframe is appended to: an element or a shadow root in `host`
+ * @param html - The markup the iframe loads
+ * @returns The loaded document
+ */
+export async function loadProbeFrame(
+	host: Document,
+	parent: ParentNode,
+	html: string,
+): Promise<Document> {
+	const frame = host.createElement('iframe')
 	const loaded = waitForEvent<[Event]>((listener) => {
 		frame.addEventListener('load', listener, { once: true })
 		return () => frame.removeEventListener('load', listener)
 	}, 'probe iframe load')
 	frame.srcdoc = html
-	document.body.append(frame)
+	parent.append(frame)
 	await loaded
 	return requireValue(frame.contentDocument, 'probe iframe document')
 }
@@ -234,9 +252,31 @@ export const PROBE_NAME_CASES: ReadonlyArray<ProbeCase<string>> = Object.freeze(
 	},
 	{
 		markup:
-			'<span id="secret" hidden>Secret name</span><button aria-labelledby="secret">X</button>',
+			'<span id="secret" hidden>Secret <span hidden>name</span></span><button aria-labelledby="secret">X</button>',
 		css: 'button',
 		expected: 'Secret name',
+	},
+	{
+		markup: '<img id="caption" alt="Save"><button aria-labelledby="caption">Wrong</button>',
+		css: 'button',
+		expected: 'Save',
+	},
+	{
+		markup:
+			'<span id="visible">Pay <span hidden>later</span></span><button aria-labelledby="visible">X</button>',
+		css: 'button',
+		expected: 'Pay',
+	},
+	{
+		markup: '<div role="button"><template shadowrootmode="open">Shadow save</template>Light</div>',
+		css: 'div',
+		expected: 'Shadow save',
+	},
+	{
+		markup:
+			'<div role="button"><template shadowrootmode="open"><b>Go </b><slot></slot></template>home</div>',
+		css: 'div',
+		expected: 'Go home',
 	},
 	{
 		markup: '<button aria-label=" Close  dialog ">X</button>',
@@ -303,3 +343,13 @@ export const PROBE_POPUP_CASES: ReadonlyArray<ProbeCase<boolean>> = Object.freez
 		expected: false,
 	},
 ])
+
+/**
+ * Stands in for a weak reference whose target the collector reclaimed, the one state a proof
+ * cannot produce on demand because it cannot force a collection.
+ */
+export class CollectedReference extends WeakRef<Element> {
+	override deref(): Element | undefined {
+		return undefined
+	}
+}

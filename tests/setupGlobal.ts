@@ -5,9 +5,11 @@ import type {
 	SystemBrowser,
 	SystemBrowserOptions,
 } from '@src/server'
+import type { Server } from 'node:http'
 import { createServer, request } from 'node:http'
 import { fileURLToPath } from 'node:url'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
+import { createTeardown } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { createServer as createViteServer } from 'vite'
 import { reservePort } from './setupServer.js'
@@ -199,52 +201,84 @@ export function readUpgradeStatus(endpoint: string, origin: string): Promise<num
 }
 
 /**
+ * Closes a listening server and waits for its close.
+ *
+ * @param server - The listening server
+ * @returns A promise that settles when the server closed
+ * @throws Thrown when the server was not listening.
+ */
+export function closeFixtureServer(server: Server): Promise<void> {
+	return new Promise<void>((done, fail) => {
+		server.close((error) => (error === undefined ? done() : fail(error)))
+	})
+}
+
+/**
  * Starts a loopback fixture server and two Chromium browsers before the browser test graph runs.
  *
  * @remarks
  * Both browsers launch through {@link createBrowserLauncher}. The one launched with
- * {@link REMOTE_ORIGINS_FLAG} is provided as `endpoint`; the control launched without it is provided as `endpointWithoutFlag`, so a browser proof spawns nothing.
+ * {@link REMOTE_ORIGINS_FLAG} is provided as `endpoint`; the control launched without it is
+ * provided as `endpointWithoutFlag`, so a browser proof spawns nothing. Every acquisition and
+ * publication runs inside one rollback boundary: when a step throws, every resource already
+ * acquired is released before the error propagates, and the returned teardown attempts every
+ * release even when one rejects.
  *
  * @param project - The Vitest project receiving the fixture origin and the endpoints
- * @returns A teardown that terminates both browsers and closes the server
+ * @returns A teardown that terminates both browsers, closes the launcher, and closes the server
+ * @throws Thrown when a step fails; an `AggregateError` carrying the failure and the rollback's
+ * failure when the rollback fails too.
  */
 export async function setup(project: Pick<TestProject, 'provide'>): Promise<() => Promise<void>> {
-	const server = createServer((_request, response) => {
-		response.setHeader('access-control-allow-origin', '*')
-		response.setHeader('content-type', 'text/html; charset=utf-8')
-		response.end('<!doctype html><title>fixture</title>')
-	})
-	await new Promise<void>((done, fail) => {
-		server.once('error', fail)
-		server.listen(0, '127.0.0.1', done)
-	})
-	const address = server.address()
-	if (address === null || typeof address === 'string') throw new Error('fixture server has no port')
-	const { port } = address
-	const launcher = await createBrowserLauncher()
-	const launched = await Promise.allSettled([
-		launcher.launch([REMOTE_ORIGINS_FLAG]),
-		launcher.launch([]),
-	])
-	const browsers = launched.flatMap((result) =>
-		result.status === 'fulfilled' ? [result.value] : [],
-	)
-	const failure = launched.find((result) => result.status === 'rejected')
-	const [flagged, control] = browsers
-	if (failure !== undefined || flagged === undefined || control === undefined) {
-		await Promise.all(browsers.map((browser) => browser.destroy()))
-		await launcher.close()
-		await new Promise<void>((done) => server.close(() => done()))
-		throw failure?.reason ?? new Error('the global setup launched no browser')
-	}
-	project.provide('server', `http://127.0.0.1:${port}`)
-	project.provide('endpoint', flagged.endpoint)
-	project.provide('endpointWithoutFlag', control.endpoint)
-	return async () => {
-		await Promise.all([flagged.destroy(), control.destroy()])
-		await launcher.close()
-		await new Promise<void>((done, fail) => {
-			server.close((error) => (error === undefined ? done() : fail(error)))
+	const teardown = createTeardown()
+	try {
+		const server = createServer((_request, response) => {
+			response.setHeader('access-control-allow-origin', '*')
+			response.setHeader('content-type', 'text/html; charset=utf-8')
+			response.end('<!doctype html><title>fixture</title>')
 		})
+		await new Promise<void>((done, fail) => {
+			server.once('error', fail)
+			server.listen(0, '127.0.0.1', done)
+		})
+		teardown.add(() => closeFixtureServer(server))
+		const address = server.address()
+		if (address === null || typeof address === 'string')
+			throw new Error('fixture server has no port')
+		const launcher = await createBrowserLauncher()
+		teardown.add(() => launcher.close())
+		const launched = await Promise.allSettled([
+			launcher.launch([REMOTE_ORIGINS_FLAG]),
+			launcher.launch([]),
+		])
+		const browsers = launched.flatMap((result) =>
+			result.status === 'fulfilled' ? [result.value] : [],
+		)
+		// Both browsers terminate in parallel; the handler rethrows every failure after both ran.
+		teardown.add(async () => {
+			const released = await Promise.allSettled(browsers.map((browser) => browser.destroy()))
+			const failures = released.flatMap((result) =>
+				result.status === 'rejected' ? [result.reason] : [],
+			)
+			if (failures.length > 0) throw new AggregateError(failures, 'a browser did not terminate')
+		})
+		const [flagged, control] = launched
+		if (flagged?.status !== 'fulfilled') throw flagged?.reason
+		if (control?.status !== 'fulfilled') throw control?.reason
+		project.provide('server', `http://127.0.0.1:${address.port}`)
+		project.provide('endpoint', flagged.value.endpoint)
+		project.provide('endpointWithoutFlag', control.value.endpoint)
+		return () => teardown.destroy()
+	} catch (error) {
+		await teardown.destroy().catch((cleanup: unknown) => {
+			throw new AggregateError(
+				[error, cleanup],
+				'The global setup failed and its rollback failed',
+				{
+					cause: error,
+				},
+			)
+		})
+		throw error
 	}
 }

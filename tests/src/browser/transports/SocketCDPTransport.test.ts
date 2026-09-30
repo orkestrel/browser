@@ -78,6 +78,13 @@ describe('SocketCDPTransport', () => {
 		expect(isBrowserConnectionError(parse) && parse.message).toMatch(/URL is invalid/)
 	})
 
+	it('codes a URL the WebSocket constructor refuses, one with a fragment', async () => {
+		const url = 'ws://127.0.0.1:9222/#fragment'
+		const refusal = await new SocketCDPTransport({ url }).start().catch((error: unknown) => error)
+		expect(isBrowserConnectionError(refusal) && refusal.code).toBe('BROWSER_CONNECTION_ERROR')
+		expect(isBrowserConnectionError(refusal) && refusal.context).toMatchObject({ url })
+	})
+
 	it('joins concurrent starts, closes on request, and starts a fresh socket after', async () => {
 		const transport = new SocketCDPTransport({ url: inject('endpoint') })
 		const closes = createRecorder<[]>()

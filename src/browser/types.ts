@@ -49,10 +49,13 @@ export interface BrowserDOMViewInterface extends BrowserViewInterface {
  * @remarks
  * - `document` — returns the document the view drives at the moment of the call
  * - `navigation` — reads the view's navigation epoch, which every reading records
+ * - `signal` — the view's lifetime; it aborts when the view is destroyed, and every wait and
+ *   navigation listener the manager starts ends with it
  */
 export interface BrowserDOMElementManagerInput {
 	readonly document: () => Document
 	readonly navigation: BrowserEpochFunction
+	readonly signal: AbortSignal
 }
 
 /**
@@ -60,13 +63,15 @@ export interface BrowserDOMElementManagerInput {
  *
  * @remarks
  * - `reference` — the reference the manager minted for the element
- * - `node` — the element the reference names
+ * - `node` — a weak reference to the element the reference names, so a removed element can be
+ *   collected; an element that no longer dereferences reports `GONE`
  * - `current` — true while the manager still holds the reference; false otherwise
- * - `navigation` — reads the view's navigation epoch, which every reading records
+ * - `navigation` — reads the epoch of the element's own document, which every reading records;
+ *   it advances when that document or the view's document navigates
  */
 export interface BrowserDOMElementInput {
 	readonly reference: string
-	readonly node: Element
+	readonly node: WeakRef<Element>
 	readonly current: () => boolean
 	readonly navigation: BrowserEpochFunction
 }
@@ -75,19 +80,32 @@ export interface BrowserDOMElementInput {
  * Describes one wait parked on DOM mutations.
  *
  * @remarks
- * - `documents` — the documents whose mutations re-run the check; a `pagehide` in any of their
- *   windows fails the wait
+ * - `roots` — returns the documents and shadow roots whose mutations re-run the check; the wait
+ *   re-reads it after every mutation batch and every `load` in an observed document, and a
+ *   `pagehide` in the first root's window fails the wait
  * - `check` — returns the value the wait settles on, or `undefined` to keep waiting
- * - `timeout` — ms before the wait fails
- * - `signal` — aborts the wait
+ * - `timeout` — ms from `start` before the wait fails
+ * - `start` — the `performance.now()` reading the deadline counts from, taken when the calling
+ *   method was entered
+ * - `signal` — aborts the wait with the signal's reason
  * - `subject` — names the wait in its timeout message
  */
 export interface BrowserMutationWait<T> {
-	readonly documents: readonly Document[]
+	readonly roots: () => readonly Node[]
 	readonly check: () => T | undefined
 	readonly timeout: number
+	readonly start: number
 	readonly signal?: AbortSignal | undefined
 	readonly subject: string
+}
+
+/** Settles one wait parked on DOM mutations. */
+export interface BrowserDOMWaitInterface<T> {
+	/**
+	 * Resolves the first value the check returns other than `undefined`, then releases every
+	 * observer, the deadline timer, and every listener.
+	 */
+	execute(): Promise<T>
 }
 
 // === Browser socket transport

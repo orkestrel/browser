@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { isBrowserElementError, isBrowserError } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
-import { waitForEvent } from '@orkestrel/test'
+import { requireValue, waitForEvent } from '@orkestrel/test'
 import {
 	createProbeElements,
 	loadProbeDocument,
+	loadProbeFrame,
 	readBrowserFixtureBase,
 } from '../../../setupBrowser.js'
 
@@ -141,6 +142,49 @@ describe('BrowserDOMElementManager', () => {
 			])
 		})
 
+		it('yields no row for a scope root that is hidden or sits under a hidden ancestor', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			await view.elements.outline()
+			const empty = ['page "Probe" about:srcdoc', '(0 of 0 elements)']
+			expect((await view.elements.outline({ within: 'e3' })).text).toContain('e3 button "Save"')
+			probe.save.hidden = true
+			expect((await view.elements.outline({ within: 'e3' })).text.split('\n')).toEqual(empty)
+			probe.save.hidden = false
+			requireValue(probe.document.querySelector('main'), 'main').setAttribute('aria-hidden', 'true')
+			expect((await view.elements.outline({ within: 'e3' })).text.split('\n')).toEqual(empty)
+			expect(await view.elements.find({ role: 'button', within: 'e3' })).toEqual([])
+		})
+
+		it('contributes the rows of open shadow roots and slotted nodes in document order', async () => {
+			const probe = await loadProbeDocument(
+				[
+					'<p>Before</p>',
+					'<div><template shadowrootmode="open"><button>Save</button></template>Unrendered</div>',
+					'<div><template shadowrootmode="open"><nav><slot></slot></nav></template><a href="/cars">Slotted</a></div>',
+					'<p>After</p>',
+				].join(''),
+			)
+			const view = createBrowserDOMView({ document: probe })
+			const { text } = await view.elements.outline()
+			expect(text.split('\n').slice(1)).toEqual([
+				'Before',
+				'e1 button "Save"',
+				'e2 link "Slotted"',
+				'After',
+				'(2 of 2 elements)',
+			])
+		})
+
+		it('omits a visibility: hidden element and keeps its visible descendant', async () => {
+			const probe = await loadProbeDocument(
+				'<button style="visibility: hidden">Ghost</button><div style="visibility: hidden">Faded<button style="visibility: visible">Seen</button></div>',
+			)
+			const view = createBrowserDOMView({ document: probe })
+			const { text } = await view.elements.outline()
+			expect(text.split('\n').slice(1)).toEqual(['e1 button "Seen"', '(1 of 1 elements)'])
+		})
+
 		it('refuses a negative or fractional limit and an unknown within reference', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
@@ -170,6 +214,25 @@ describe('BrowserDOMElementManager', () => {
 			const third = await view.elements.outline()
 			expect(third.text).toContain('e6 link "One"')
 			expect(third.text).not.toMatch(/\be[1-5] /)
+		})
+	})
+
+	describe('bindings', () => {
+		it('reports GONE for a removed node and mints the next number for its replacement', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const [save] = await view.elements.find({ role: 'button' })
+			const replacement = probe.document.createElement('button')
+			replacement.textContent = 'Save'
+			probe.save.replaceWith(replacement)
+			const refusal = await save?.click().catch((error: unknown) => error)
+			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({
+				reference: 'e3',
+				reason: 'GONE',
+			})
+			const [next] = await view.elements.find({ role: 'button' })
+			expect(next?.reference).toBe('e5')
+			expect(view.elements.element('e3')).toBe(save)
 		})
 	})
 
@@ -231,6 +294,26 @@ describe('BrowserDOMElementManager', () => {
 			const pending = view.elements.wait({ name: 'Never' }, { signal: controller.signal })
 			controller.abort(new Error('stopped'))
 			await expect(pending).rejects.toThrow('stopped')
+		})
+
+		it('wakes on a match inside a frame inserted after the wait began', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const pending = view.elements.wait({ role: 'button', name: 'Inner' }, { timeout: 2_000 })
+			const inner = await loadProbeFrame(probe.document, probe.late, '<main></main>')
+			inner.body.insertAdjacentHTML('beforeend', '<button>Inner</button>')
+			const [found] = await pending
+			expect(found?.name).toBe('Inner')
+		})
+
+		it('rejects a pending wait when its view is destroyed, and a later match does not resolve it', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const pending = view.elements.wait({ name: 'Late' }, { timeout: 1_000 })
+			view.destroy()
+			probe.late.innerHTML = '<button>Late</button>'
+			const refusal = await pending.catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
 		})
 	})
 })

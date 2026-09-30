@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import { isBrowserElementError, isBrowserError } from '@src/core'
-import { createBrowserDOMView } from '@src/browser'
+import { BrowserDOMElement, createBrowserDOMView } from '@src/browser'
 import { createRecorder, requireValue } from '@orkestrel/test'
 import {
+	CollectedReference,
 	createProbeElements,
 	findProbeElement,
 	loadProbeDocument,
@@ -51,6 +52,34 @@ describe('BrowserDOMElement', () => {
 			expect(clicks.calls).toEqual([])
 		})
 
+		it('judges a label by its control: a file chooser and a disabled control refuse', async () => {
+			const probe = await loadProbeDocument(
+				'<label role="button">Photo<input type="file"></label><label role="button">Gift<input type="checkbox" disabled></label>',
+			)
+			const clicks = createRecorder<[string]>()
+			probe.addEventListener('click', (event) => clicks.handler(event.type))
+			const view = createBrowserDOMView({ document: probe })
+			const [photo, gift] = await view.elements.find({ role: 'button' })
+			const chooser = await photo?.click().catch((error: unknown) => error)
+			const disabled = await gift?.click().catch((error: unknown) => error)
+			expect(isBrowserElementError(chooser) && chooser.message).toMatch(/opens a file chooser/)
+			expect(isBrowserElementError(disabled) && disabled.context).toMatchObject({
+				reason: 'DISABLED',
+			})
+			expect(clicks.calls).toEqual([])
+		})
+
+		it('activates a label for a checkbox and toggles the checkbox', async () => {
+			const probe = await loadProbeDocument(
+				'<label role="button">Gift wrap<input type="checkbox"></label>',
+			)
+			const box = requireValue(probe.querySelector('input'), 'checkbox')
+			const view = createBrowserDOMView({ document: probe })
+			const [label] = await view.elements.find({ role: 'button' })
+			await label?.click()
+			expect(box.checked).toBe(true)
+		})
+
 		it('clicks a link whose target names a frame in the page', async () => {
 			const probe = await loadProbeDocument(
 				'<a href="#next" target="panel">Next</a><iframe name="panel"></iframe>',
@@ -87,6 +116,39 @@ describe('BrowserDOMElement', () => {
 		})
 	})
 
+	describe('binding', () => {
+		it('acts on the node its weak reference dereferences, and reports GONE when it does not', async () => {
+			const probe = await createProbeElements()
+			const clicks = createRecorder<[boolean]>()
+			probe.save.addEventListener('click', (event) => clicks.handler(event.isTrusted))
+			const node = new WeakRef<Element>(probe.save)
+			expect(node.deref()).toBe(probe.save)
+			const bound = new BrowserDOMElement({
+				reference: 'e7',
+				node,
+				current: () => true,
+				navigation: () => 0,
+			})
+			await bound.click()
+			expect(clicks.calls).toEqual([[false]])
+			expect(bound.name).toBe('Save')
+			const collected = new BrowserDOMElement({
+				reference: 'e8',
+				node: new CollectedReference(probe.save),
+				current: () => true,
+				navigation: () => 0,
+			})
+			const refusal = await collected.click().catch((error: unknown) => error)
+			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({
+				reference: 'e8',
+				reason: 'GONE',
+			})
+			expect(collected.role).toBe('generic')
+			expect(collected.name).toBe('')
+			expect(clicks.count).toBe(1)
+		})
+	})
+
 	describe('fill', () => {
 		it('sets the value through the prototype setter and dispatches input then change', async () => {
 			const probe = await createProbeElements()
@@ -103,6 +165,10 @@ describe('BrowserDOMElement', () => {
 					events.handler(event.type, readNativeValue(probe.email), event.isTrusted)
 				})
 			}
+			const bubbled = createRecorder<[string]>()
+			for (const type of ['input', 'change']) {
+				probe.document.body.addEventListener(type, (event) => bubbled.handler(event.type))
+			}
 			const view = createBrowserDOMView({ document: probe.document })
 			await (await findProbeElement(view, 'input')).fill('sam@example.test')
 			expect(own.calls).toEqual([])
@@ -110,6 +176,7 @@ describe('BrowserDOMElement', () => {
 				['input', 'sam@example.test', false],
 				['change', 'sam@example.test', false],
 			])
+			expect(bubbled.calls).toEqual([['input'], ['change']])
 		})
 
 		it('refuses typing into a contenteditable element and a non-text control', async () => {

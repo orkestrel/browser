@@ -14,8 +14,10 @@ import { computeBrowserName, computeBrowserRole, matchesBrowserPopup } from '../
  * observes the outcome through a `submit` listener registered across the call. Each action
  * refuses, with a `BrowserElementError` naming the reason, what an untrusted event cannot do: a
  * disabled control, a link or submission that opens another browsing context, a file chooser,
- * and typing into a contenteditable element. An element removed from its document, or held
- * across a navigation, reports `GONE`.
+ * and typing into a contenteditable element. A click on a `label`, or inside one, is judged by
+ * the label's control as well: a disabled control refuses `DISABLED`, and a file input refuses as
+ * a direct click on it does. An element removed from its document, collected,
+ * or held across a navigation, reports `GONE`.
  *
  * @example
  * ```ts
@@ -36,30 +38,26 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 	}
 
 	get role(): string {
-		return computeBrowserRole(this.#input.node) ?? 'generic'
+		const node = this.#input.node.deref()
+		return (node === undefined ? undefined : computeBrowserRole(node)) ?? 'generic'
 	}
 
 	get name(): string {
-		return computeBrowserName(this.#input.node)
+		const node = this.#input.node.deref()
+		return node === undefined ? '' : computeBrowserName(node)
 	}
 
 	async click(options?: BrowserCallOptions): Promise<void> {
-		const view = this.#actionable(options)
-		const node = this.#input.node
-		if (matchesBrowserPopup(node)) {
-			throw new BrowserElementError(
-				this.reference,
-				'UNKNOWN',
-				'opens another browsing context, which an untrusted click cannot do',
-			)
+		const [node, view] = this.#actionable(options)
+		const label = node instanceof view.HTMLLabelElement ? node : node.closest('label')
+		const control = label?.control ?? null
+		if (control !== null && control !== node) {
+			if (control.matches(':disabled')) {
+				throw new BrowserElementError(this.reference, 'DISABLED', 'labels a disabled control')
+			}
+			this.#refuse(control)
 		}
-		if (node.localName === 'input' && Reflect.get(node, 'type') === 'file') {
-			throw new BrowserElementError(
-				this.reference,
-				'UNKNOWN',
-				'opens a file chooser, which an untrusted click cannot do',
-			)
-		}
+		this.#refuse(node)
 		if (node instanceof view.HTMLElement) {
 			node.click()
 			return
@@ -70,8 +68,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 	}
 
 	async fill(value: string, options?: BrowserCallOptions): Promise<void> {
-		const view = this.#actionable(options)
-		const node = this.#input.node
+		const [node, view] = this.#actionable(options)
 		if (node instanceof view.HTMLElement && node.isContentEditable) {
 			throw new BrowserElementError(
 				this.reference,
@@ -107,8 +104,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 	}
 
 	async select(values: readonly string[], options?: BrowserCallOptions): Promise<void> {
-		const view = this.#actionable(options)
-		const node = this.#input.node
+		const [node, view] = this.#actionable(options)
 		if (!(node instanceof view.HTMLSelectElement)) {
 			throw new BrowserElementError(this.reference, 'UNKNOWN', 'is not a select control')
 		}
@@ -132,25 +128,23 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 	}
 
 	async focus(options?: BrowserCallOptions): Promise<void> {
-		const view = this.#current(options)
-		const node = this.#input.node
+		const [node, view] = this.#current(options)
 		if (node instanceof view.HTMLElement || node instanceof view.SVGElement) node.focus()
 	}
 
 	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
-		this.#current(options)
-		const document = this.#input.node.ownerDocument
+		const [node] = this.#current(options)
+		const document = node.ownerDocument
 		return createBrowserReading({
 			url: document.URL,
 			title: document.title,
-			html: this.#input.node.outerHTML,
+			html: node.outerHTML,
 			navigation: this.#input.navigation,
 		})
 	}
 
 	async submit(options?: BrowserCallOptions): Promise<void> {
-		const view = this.#current(options)
-		const node = this.#input.node
+		const [node, view] = this.#current(options)
 		const owner = node instanceof view.HTMLFormElement ? node : Reflect.get(node, 'form')
 		if (!(owner instanceof view.HTMLFormElement)) {
 			throw new BrowserElementError(this.reference, 'UNKNOWN', 'is not in a form')
@@ -204,25 +198,41 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		})
 	}
 
-	// Resolves the element's realm, refusing an element its view no longer holds.
-	#current(options?: BrowserCallOptions): Window & typeof globalThis {
+	// Resolves the element and its realm, refusing an element its view no longer holds.
+	#current(options?: BrowserCallOptions): readonly [Element, Window & typeof globalThis] {
 		options?.signal?.throwIfAborted()
-		const node = this.#input.node
-		const view = node.ownerDocument.defaultView
-		if (!this.#input.current() || !node.isConnected || view === null) {
+		const node = this.#input.node.deref()
+		const view = node?.ownerDocument.defaultView ?? null
+		if (!this.#input.current() || node === undefined || !node.isConnected || view === null) {
 			throw new BrowserElementError(this.reference, 'GONE')
 		}
-		return view
+		return [node, view]
 	}
 
-	// Resolves the realm of an element an action targets: current, rendered, and enabled.
-	#actionable(options?: BrowserCallOptions): Window & typeof globalThis {
-		const view = this.#current(options)
-		const node = this.#input.node
-		if (!node.checkVisibility()) {
-			throw new BrowserElementError(this.reference, 'HIDDEN')
-		}
+	// Resolves an element an action targets: current, rendered, and enabled.
+	#actionable(options?: BrowserCallOptions): readonly [Element, Window & typeof globalThis] {
+		const current = this.#current(options)
+		const [node] = current
+		if (!node.checkVisibility()) throw new BrowserElementError(this.reference, 'HIDDEN')
 		if (node.matches(':disabled')) throw new BrowserElementError(this.reference, 'DISABLED')
-		return view
+		return current
+	}
+
+	// Refuses an activation target whose activation an untrusted click cannot perform.
+	#refuse(target: Element): void {
+		if (matchesBrowserPopup(target)) {
+			throw new BrowserElementError(
+				this.reference,
+				'UNKNOWN',
+				'opens another browsing context, which an untrusted click cannot do',
+			)
+		}
+		if (target.localName === 'input' && Reflect.get(target, 'type') === 'file') {
+			throw new BrowserElementError(
+				this.reference,
+				'UNKNOWN',
+				'opens a file chooser, which an untrusted click cannot do',
+			)
+		}
 	}
 }

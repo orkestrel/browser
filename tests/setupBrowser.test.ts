@@ -1,6 +1,6 @@
 import { describe, expect, it, inject } from 'vitest'
 import { createBrowserDOMView } from '@src/browser'
-import { createRecorder, waitForEvent } from '@orkestrel/test'
+import { createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { installModelContext } from './fixtures/modelContext.js'
 import {
@@ -124,16 +124,28 @@ describe('createProbeBridge', () => {
 			execute: async (input) => ({ make: input['make'] }),
 		})
 		await registry.registry.registerTool({
+			name: 'quote',
+			description: 'Quotes a price from page content',
+			annotations: { untrustedContentHint: true, consequentialHint: true },
+			execute: async () => 'quote',
+		})
+		await registry.registry.registerTool({
 			name: 'inspect',
 			description: 'Inspects the page state',
 			annotations: { debugging: true },
 			execute: async () => 'state',
 		})
-		expect(changes.count).toBe(2)
-		expect((await bridge.adopt()).map((tool) => tool.name)).toEqual(['lookup'])
+		expect(changes.count).toBe(3)
+		const adopted = await bridge.adopt()
+		expect(adopted.map((tool) => tool.name)).toEqual(['lookup', 'quote'])
+		expect(adopted.map((tool) => tool.annotations)).toEqual([
+			{ pure: true, untrusted: false, consequential: false },
+			{ pure: false, untrusted: true, consequential: true },
+		])
 		expect((await bridge.adopt({ debugging: true })).map((tool) => tool.name)).toEqual([
 			'inspect',
 			'lookup',
+			'quote',
 		])
 		bridge.destroy()
 	})
@@ -168,6 +180,29 @@ describe('createProbeBridge', () => {
 		await expect(pending).rejects.toThrow('stopped')
 		expect(activations.calls).toEqual([['lookup'], ['slow']])
 		expect(aborts.calls).toEqual([['slow']])
+		bridge.destroy()
+	})
+	it('adopts across a registration and a removal as each queued toolchange reports it', async () => {
+		const probe = await loadProbeDocument('<p>host</p>')
+		const { registry, bridge } = createProbeBridge(probe)
+		const controller = new AbortController()
+		const registered = waitForEvent<[]>((listener) => {
+			bridge.emitter.on('change', listener)
+			return () => bridge.emitter.off('change', listener)
+		}, 'bridge change on registration')
+		await registry.registry.registerTool(
+			{ name: 'lookup', description: 'Looks up a car', execute: async () => 'found' },
+			{ signal: controller.signal },
+		)
+		await registered
+		expect((await bridge.adopt()).map((tool) => tool.name)).toEqual(['lookup'])
+		const removed = waitForEvent<[]>((listener) => {
+			bridge.emitter.on('change', listener)
+			return () => bridge.emitter.off('change', listener)
+		}, 'bridge change on removal')
+		controller.abort()
+		await removed
+		expect(await bridge.adopt()).toEqual([])
 		bridge.destroy()
 	})
 })
@@ -247,6 +282,22 @@ describe('installModelContext', () => {
 		).rejects.toThrow(/potentially trustworthy/)
 	})
 
+	it('queues toolchange as a task: after registerTool returns and before its promise settles', async () => {
+		const probe = await loadProbeDocument('<p>host</p>')
+		const fixture = installModelContext(probe)
+		const order = createRecorder<[string]>()
+		fixture.registry.addEventListener('toolchange', () => order.handler('toolchange'))
+		const registering = fixture.registry.registerTool({
+			name: 'lookup',
+			description: 'Looks up a car',
+			execute: async () => 'found',
+		})
+		order.handler('returned')
+		await registering
+		order.handler('settled')
+		expect(order.calls).toEqual([['returned'], ['toolchange'], ['settled']])
+	})
+
 	it('unregisters on the registration signal and dispatches toolchange to handler attributes', async () => {
 		const probe = await loadProbeDocument('<p>host</p>')
 		const fixture = installModelContext(probe)
@@ -257,8 +308,14 @@ describe('installModelContext', () => {
 			{ name: 'temporary', description: 'Temporary', execute: async () => 'done' },
 			{ signal: controller.signal },
 		)
+		const removed = waitForEvent<[Event]>((listener) => {
+			fixture.registry.addEventListener('toolchange', listener)
+			return () => fixture.registry.removeEventListener('toolchange', listener)
+		}, 'toolchange on removal')
 		controller.abort()
 		expect(fixture.registrations()).toEqual([])
+		expect(changes.calls).toEqual([['toolchange']])
+		await removed
 		expect(changes.calls).toEqual([['toolchange'], ['toolchange']])
 		const handler = fixture.registry.ontoolchange
 		fixture.registry.ontoolchange = null
@@ -282,6 +339,16 @@ describe('installModelContext', () => {
 		await expect(fixture.registry.executeTool(nothing)).rejects.toThrow('did not complete')
 		const [event] = await activated
 		expect(Reflect.get(event, 'toolName')).toBe('nothing')
+		await fixture.registry.registerTool({
+			name: 'bigint',
+			description: 'Returns a BigInt',
+			execute: async () => 1n,
+		})
+		const bigint = (await fixture.registry.getTools()).find((tool) => tool.name === 'bigint')
+		const unserializable = await fixture.registry
+			.executeTool(requireValue(bigint, 'bigint tool'))
+			.catch((error: unknown) => error)
+		expect(unserializable instanceof DOMException && unserializable.name).toBe('UnknownError')
 		await expect(fixture.registry.executeTool({ ...nothing, name: 'missing' })).rejects.toThrow(
 			"No registered tool named 'missing'",
 		)

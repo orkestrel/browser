@@ -11,7 +11,8 @@ import type {
 import { BrowserError, createBrowserReading, validateBrowserTimeout } from '@src/core'
 import { BrowserDOMElementManager } from './elements/BrowserDOMElementManager.js'
 import { BROWSER_DOCUMENT_TIMEOUT_MS } from './constants.js'
-import { isBrowserDocument, observeBrowserMutations } from './helpers.js'
+import { BrowserDOMWait } from './BrowserDOMWait.js'
+import { collectBrowserRoots, isBrowserDocument, listenBrowserNavigation } from './helpers.js'
 
 /**
  * Reads and drives a DOM document from a realm that can reach it, with untrusted events.
@@ -23,7 +24,9 @@ import { isBrowserDocument, observeBrowserMutations } from './helpers.js'
  * where the window has that API, on `popstate` and `hashchange` where it does not, on `pagehide`,
  * and when the window's document changes. A `pushState` in a window without the Navigation API
  * fires none of those events, so a reading there stays current across it. A cross-document
- * navigation also clears every element reference. `trusted` is `false`: every action dispatches
+ * navigation also clears every element reference. `destroy()` releases the listeners and every
+ * reference, and fails every pending wait with a `BrowserError` coded
+ * `BROWSER_DOCUMENT_DESTROYED`. `trusted` is `false`: every action dispatches
  * events whose `isTrusted` is `false`.
  *
  * @example
@@ -61,6 +64,7 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 		this.#elements = new BrowserDOMElementManager({
 			document: this.#current.bind(this),
 			navigation: this.#navigation.bind(this),
+			signal: this.#release.signal,
 		})
 		this.#listen()
 	}
@@ -94,20 +98,27 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 	}
 
 	async wait(text: string, options?: BrowserCallOptions): Promise<void> {
+		const start = performance.now()
 		const timeout = options?.timeout ?? BROWSER_DOCUMENT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
 		const document = this.#current()
-		await observeBrowserMutations({
-			documents: [document],
+		await new BrowserDOMWait({
+			roots: collectBrowserRoots.bind(undefined, document),
 			check: this.#contains.bind(this, document, text),
 			timeout,
-			signal: options?.signal,
+			start,
+			signal:
+				options?.signal === undefined
+					? this.#release.signal
+					: AbortSignal.any([options.signal, this.#release.signal]),
 			subject: 'Browser text wait',
-		})
+		}).execute()
 	}
 
 	destroy(): void {
-		this.#release.abort()
+		this.#release.abort(
+			new BrowserError('Browser DOM view was destroyed', 'BROWSER_DOCUMENT_DESTROYED'),
+		)
 		this.#listeners.abort()
 		this.#elements.clear()
 	}
@@ -141,13 +152,6 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 	#listen(): void {
 		this.#listeners.abort()
 		this.#listeners = new AbortController()
-		const options = { signal: this.#listeners.signal }
-		if (Reflect.has(this.#window, 'navigation')) {
-			this.#window.navigation.addEventListener('navigatesuccess', this.#navigateHandler, options)
-		} else {
-			this.#window.addEventListener('popstate', this.#navigateHandler, options)
-			this.#window.addEventListener('hashchange', this.#navigateHandler, options)
-		}
-		this.#window.addEventListener('pagehide', this.#navigateHandler, options)
+		listenBrowserNavigation(this.#window, this.#navigateHandler, this.#listeners.signal)
 	}
 }

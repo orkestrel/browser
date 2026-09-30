@@ -1,6 +1,5 @@
-import type { BrowserMutationWait } from './types.js'
 import { attempt, isObject, isString } from '@orkestrel/contract'
-import { BrowserElementError, BrowserError, normalizeBrowserName } from '@src/core'
+import { normalizeBrowserName } from '@src/core'
 import {
 	BROWSER_CONTENT_NAMED_ROLES,
 	BROWSER_CONTEXT_TARGETS,
@@ -84,7 +83,9 @@ export function computeBrowserRole(element: Element): string | undefined {
  *
  * @remarks
  * The steps follow the accessible-name computation, first match wins: the elements
- * that `aria-labelledby` references, `aria-label`, the value of an `input` button, the `alt` of an
+ * that `aria-labelledby` references in the element's own tree, each through
+ * `computeBrowserAlternative` with hidden content admitted when the referenced element is
+ * omitted, `aria-label`, the value of an `input` button, the `alt` of an
  * image, the text of every associated `label`, the element's own content for a role in
  * `BROWSER_CONTENT_NAMED_ROLES`, then the `title` attribute, then the `placeholder` of a text
  * control. The `title` step follows content because a tooltip names an element only when nothing
@@ -102,15 +103,17 @@ export function computeBrowserRole(element: Element): string | undefined {
  * ```
  */
 export function computeBrowserName(element: Element, role = computeBrowserRole(element)): string {
-	const document = element.ownerDocument
+	const view = element.ownerDocument.defaultView
+	const tree = element.getRootNode()
+	const scope = view !== null && tree instanceof view.ShadowRoot ? tree : element.ownerDocument
 	const referenced = normalizeBrowserName(
 		(element.getAttribute('aria-labelledby') ?? '')
 			.split(/\s+/)
 			.flatMap((id) => {
-				const target = id === '' ? null : document.getElementById(id)
-				if (target === null) return []
-				const label = normalizeBrowserName(target.getAttribute('aria-label') ?? '')
-				return [label === '' ? computeBrowserText(target) : label]
+				const target = id === '' ? null : scope.getElementById(id)
+				return target === null
+					? []
+					: [computeBrowserAlternative(target, matchesBrowserOmitted(target))]
 			})
 			.join(' '),
 	)
@@ -131,7 +134,7 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
 		if (alt !== '') return alt
 	}
 	const labelled = normalizeBrowserName(
-		Array.from(document.querySelectorAll('label'))
+		Array.from(scope.querySelectorAll('label'))
 			.filter((candidate) => candidate.control === element)
 			.map((candidate) => computeBrowserText(candidate))
 			.join(' '),
@@ -149,15 +152,15 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
 }
 
 /**
- * Computes the rendered text an element's content contributes to an accessible name.
+ * Computes the text an element's content contributes to an accessible name, in the flat tree,
+ * trimmed and whitespace-collapsed.
  *
  * @remarks
- * Text from different block containers is joined by a space and text within one block is joined
- * directly. A descendant with `aria-label` contributes that label instead of its content, an
- * image contributes its `alt`, and a hidden descendant, a `select`, and a `textarea` contribute
- * nothing. Hidden means what `matchesBrowserHidden` reports.
+ * The text is what `readBrowserContent` reads, normalized.
  *
- * @param root - The element whose content is read
+ * @param root - The element or shadow root whose content is read
+ * @param hidden - If `true`, admits hidden content, as a hidden element that `aria-labelledby`
+ * references does; if `false`, omits it. Default: `false`
  * @returns The trimmed, whitespace-collapsed text
  *
  * @example
@@ -168,47 +171,92 @@ export function computeBrowserName(element: Element, role = computeBrowserRole(e
  * computeBrowserText(link) // 'Cars Search the fleet'
  * ```
  */
-export function computeBrowserText(root: Element): string {
-	const view = root.ownerDocument.defaultView
-	if (view === null) return normalizeBrowserName(root.textContent ?? '')
-	const walker = root.ownerDocument.createTreeWalker(
-		root,
-		NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
-	)
+export function computeBrowserText(root: Element | ShadowRoot, hidden = false): string {
+	return normalizeBrowserName(readBrowserContent(root, hidden))
+}
+
+/**
+ * Reads the untrimmed text an element's content contributes to an accessible name, in the flat
+ * tree.
+ *
+ * @remarks
+ * The content is the open shadow root's children for a shadow host, the flattened assigned nodes
+ * for a `slot`, and the child nodes otherwise. Each child contributes what
+ * `computeBrowserAlternative` returns for it, and a child that `matchesBrowserBlock` reports is
+ * set apart from its neighbours by a space. Whitespace at the edges of an inline child is kept,
+ * so `<b>Go </b>home` reads `Go home`.
+ *
+ * @param root - The element or shadow root whose content is read
+ * @param hidden - If `true`, admits hidden content; if `false`, omits it. Default: `false`
+ * @returns The untrimmed text
+ *
+ * @example
+ * ```ts
+ * const label = document.createElement('span')
+ * label.innerHTML = '<b>Go </b>home'
+ * document.body.append(label)
+ * readBrowserContent(label) // 'Go home'
+ * ```
+ */
+export function readBrowserContent(root: Element | ShadowRoot, hidden = false): string {
+	const view = root.ownerDocument?.defaultView ?? null
+	const shadow = view !== null && root instanceof view.Element ? root.shadowRoot : null
+	const children: readonly Node[] =
+		shadow !== null
+			? Array.from(shadow.childNodes)
+			: view !== null && root instanceof view.HTMLSlotElement
+				? root.assignedNodes({ flatten: true })
+				: Array.from(root.childNodes)
 	let text = ''
-	let block: Element | undefined
-	let node = walker.nextNode()
-	while (node !== null) {
-		let piece = ''
-		let owner: Element | null = node.parentElement
-		let descend = true
-		if (node instanceof view.Element) {
-			owner = node
-			const label = node.getAttribute('aria-label')?.trim() ?? ''
-			const type = node.localName === 'input' ? Reflect.get(node, 'type') : undefined
-			if (
-				matchesBrowserHidden(node) ||
-				node.localName === 'select' ||
-				node.localName === 'textarea'
-			) {
-				descend = false
-			} else if (label !== '') {
-				piece = label
-				descend = false
-			} else if (node.localName === 'img' || node.localName === 'area' || type === 'image') {
-				piece = node.getAttribute('alt') ?? ''
-			}
-		} else {
-			piece = node.textContent ?? ''
-		}
-		if (piece.trim() !== '') {
-			const current = readBrowserBlock(owner, root)
-			text += block === undefined || block === current ? piece : ` ${piece}`
-			block = current
-		}
-		node = descend ? walker.nextNode() : skipBrowserSubtree(walker)
+	let previous = false
+	for (const child of children) {
+		const piece = computeBrowserAlternative(child, hidden)
+		const block = view !== null && child instanceof view.Element && matchesBrowserBlock(child)
+		if (piece !== '') text += text !== '' && (block || previous) ? ` ${piece}` : piece
+		previous = block
 	}
-	return normalizeBrowserName(text)
+	return text
+}
+
+/**
+ * Computes the text one node contributes to an accessible name: its own text alternative, or its
+ * content.
+ *
+ * @remarks
+ * A text node contributes its data unless its parent is invisible. An element contributes
+ * nothing when it is hidden or is a `select`, `textarea`, `script`, or `style`; otherwise its
+ * `aria-label`, the `alt` of an image, or its content through `readBrowserContent`.
+ *
+ * @param node - The node whose contribution is computed
+ * @param hidden - If `true`, admits hidden and invisible content; if `false`, omits it.
+ * Default: `false`
+ * @returns The untrimmed contribution
+ *
+ * @example
+ * ```ts
+ * const image = document.createElement('img')
+ * image.alt = 'Save'
+ * computeBrowserAlternative(image) // 'Save'
+ * ```
+ */
+export function computeBrowserAlternative(node: Node, hidden = false): string {
+	const view = node.ownerDocument?.defaultView ?? null
+	if (view === null) return node.textContent ?? ''
+	if (!(node instanceof view.Element)) {
+		const parent = node.parentElement
+		if (node.nodeType !== view.Node.TEXT_NODE) return ''
+		return !hidden && parent !== null && matchesBrowserInvisible(parent)
+			? ''
+			: (node.textContent ?? '')
+	}
+	const tag = node.localName
+	if (!hidden && matchesBrowserHidden(node)) return ''
+	if (tag === 'select' || tag === 'textarea' || tag === 'script' || tag === 'style') return ''
+	const label = normalizeBrowserName(node.getAttribute('aria-label') ?? '')
+	if (label !== '') return label
+	if (tag === 'img' || tag === 'area' || (tag === 'input' && Reflect.get(node, 'type') === 'image'))
+		return node.getAttribute('alt') ?? ''
+	return readBrowserContent(node, hidden)
 }
 
 /**
@@ -231,6 +279,137 @@ export function matchesBrowserHidden(element: Element): boolean {
 		element.getAttribute('aria-hidden') === 'true' ||
 		element.ownerDocument.defaultView?.getComputedStyle(element).display === 'none'
 	)
+}
+
+/**
+ * Checks whether an element renders nothing visible of its own.
+ *
+ * @remarks
+ * The test is `checkVisibility` with `visibilityProperty` and `contentVisibilityAuto`, so an
+ * element whose computed `visibility` is `hidden` or `collapse`, an element skipped by
+ * `content-visibility: auto`, and an element without a box are invisible. A descendant can
+ * still be visible, so the rule omits the element's own row and text and keeps its subtree.
+ * Zero-size and off-screen elements stay visible. An element in a document without a window is
+ * never invisible, because nothing renders it.
+ *
+ * @param element - The element to test
+ * @returns True if the element renders nothing visible of its own; false otherwise
+ *
+ * @example
+ * ```ts
+ * const button = document.createElement('button')
+ * button.style.visibility = 'hidden'
+ * document.body.append(button)
+ * matchesBrowserInvisible(button) // true
+ * ```
+ */
+export function matchesBrowserInvisible(element: Element): boolean {
+	return (
+		element.ownerDocument.defaultView !== null &&
+		!element.checkVisibility({ visibilityProperty: true, contentVisibilityAuto: true })
+	)
+}
+
+/**
+ * Checks whether an element sits in an omitted subtree: the element or an ancestor matches
+ * `matchesBrowserHidden`, across shadow hosts and the frame elements of same-origin documents.
+ *
+ * @param element - The element to test
+ * @returns True if the element or an ancestor is hidden; false otherwise
+ *
+ * @example
+ * ```ts
+ * const section = document.createElement('section')
+ * section.hidden = true
+ * const button = section.appendChild(document.createElement('button'))
+ * matchesBrowserOmitted(button) // true
+ * ```
+ */
+export function matchesBrowserOmitted(element: Element): boolean {
+	for (
+		let current: Element | null = element;
+		current !== null;
+		current = readBrowserParent(current)
+	) {
+		if (matchesBrowserHidden(current)) return true
+	}
+	return false
+}
+
+/**
+ * Reads an element's parent in the flat tree: its parent element, the host of the open shadow
+ * root it sits at the top of, or the frame element of its same-origin document.
+ *
+ * @param element - The element whose parent is read
+ * @returns The parent, or `null` at the top of a top-level or cross-origin-framed document
+ *
+ * @example
+ * ```ts
+ * readBrowserParent(document.body) // document.documentElement
+ * readBrowserParent(document.documentElement) // null in a top-level document
+ * ```
+ */
+export function readBrowserParent(element: Element): Element | null {
+	if (element.parentElement !== null) return element.parentElement
+	const view: (Window & typeof globalThis) | null = element.ownerDocument.defaultView
+	if (view === null) return null
+	const tree = element.getRootNode()
+	return tree instanceof view.ShadowRoot ? tree.host : view.frameElement
+}
+
+/**
+ * Checks whether an element starts a block of its own, the unit that separates runs of text.
+ *
+ * @param element - The element to test
+ * @returns True if the element is a `br`, or its computed `display` is neither inline-level,
+ * `contents`, nor `none`; false otherwise
+ *
+ * @example
+ * ```ts
+ * const paragraph = document.createElement('p')
+ * document.body.append(paragraph)
+ * matchesBrowserBlock(paragraph) // true
+ * ```
+ */
+export function matchesBrowserBlock(element: Element): boolean {
+	if (element.localName === 'br') return true
+	const display = element.ownerDocument.defaultView?.getComputedStyle(element).display ?? ''
+	return !display.startsWith('inline') && display !== 'contents' && display !== 'none'
+}
+
+/**
+ * Collects the tree roots a wait observes under a node: the node's own root, then every open
+ * shadow root and every same-origin frame document at or beneath it, recursively.
+ *
+ * @param root - The document, shadow root, or element to collect under
+ * @returns The roots, the node's own root first; a cross-origin frame contributes none
+ *
+ * @example
+ * ```ts
+ * collectBrowserRoots(document) // [document, ...each open shadow root and frame document]
+ * ```
+ */
+export function collectBrowserRoots(root: Document | ShadowRoot | Element): readonly Node[] {
+	const roots: Node[] = [root.getRootNode()]
+	const queue: Array<Document | ShadowRoot | Element> = [root]
+	for (let current = queue.shift(); current !== undefined; current = queue.shift()) {
+		const view = (isBrowserDocument(current) ? current : current.ownerDocument)?.defaultView ?? null
+		const own = view !== null && current instanceof view.Element ? [current] : []
+		for (const element of [...own, ...current.querySelectorAll('*')]) {
+			const shadow = element.shadowRoot
+			if (shadow !== null) {
+				roots.push(shadow)
+				queue.push(shadow)
+			}
+			const child =
+				view !== null && element instanceof view.HTMLIFrameElement ? element.contentDocument : null
+			if (child !== null) {
+				roots.push(child)
+				queue.push(child)
+			}
+		}
+	}
+	return roots
 }
 
 /**
@@ -315,9 +494,9 @@ export function skipBrowserSubtree(walker: TreeWalker): Node | null {
  * Reads the nearest block container of an element, the unit that separates runs of text.
  *
  * @param element - The element to start from, or `null` for a node without a parent element
- * @param root - The element that bounds the search
- * @returns The nearest inclusive ancestor, below `root`, whose computed `display` is neither
- * inline-level nor `contents`; `root` when none is
+ * @param root - The node that bounds the search
+ * @returns The nearest inclusive ancestor, below `root`, that `matchesBrowserBlock` reports;
+ * `root` when none is
  *
  * @example
  * ```ts
@@ -328,86 +507,45 @@ export function skipBrowserSubtree(walker: TreeWalker): Node | null {
  * readBrowserBlock(strong, document.body) // paragraph
  * ```
  */
-export function readBrowserBlock(element: Element | null, root: Element): Element {
-	const view = root.ownerDocument.defaultView
-	if (view === null) return root
+export function readBrowserBlock(element: Element | null, root: Node): Node {
 	let current = element
 	while (current !== null && current !== root) {
-		const display = view.getComputedStyle(current).display
-		if (!display.startsWith('inline') && display !== 'contents') return current
+		if (matchesBrowserBlock(current)) return current
 		current = current.parentElement
 	}
 	return root
 }
 
 /**
- * Resolves the first value a check returns, re-running the check after each batch of mutations
- * in the observed documents.
+ * Subscribes one listener to a window's navigation events until a signal aborts.
  *
  * @remarks
- * The wait parks on one `MutationObserver` per document, with one deadline timer and no other
- * timer, and releases every observer, the timer, and its listeners when it settles. The check
- * runs one time before the wait parks, so a condition that already holds resolves at once.
+ * The listener receives the Navigation API's `navigatesuccess` where the window has that API, and
+ * `popstate` and `hashchange` where it does not, plus `pagehide` in both cases. A `pushState` in a
+ * window without the Navigation API fires none of those events.
  *
- * @param wait - The documents, the check, the deadline, the signal, and the subject
- * @returns The first value the check returns other than `undefined`
- * @throws Thrown when the signal aborts, with the signal's reason; when the deadline passes, a
- * `BrowserError` with the code `BROWSER_WAIT_TIMEOUT`; when an observed document's window fires
- * `pagehide`, a `BrowserElementError` with the reason `GONE`; and whatever the check throws.
+ * @param window - The window whose navigation events are observed
+ * @param listener - Receives each event; `event.type` tells an unload from a same-document
+ * navigation
+ * @param signal - Removes every subscription when it aborts
  *
  * @example
  * ```ts
- * const ready = await observeBrowserMutations({
- * 	documents: [document],
- * 	check: () => document.querySelector('#ready') ?? undefined,
- * 	timeout: 1_000,
- * 	subject: 'Ready wait',
- * })
+ * const release = new AbortController()
+ * listenBrowserNavigation(frame.contentWindow, (event) => console.log(event.type), release.signal)
  * ```
  */
-export async function observeBrowserMutations<T>(wait: BrowserMutationWait<T>): Promise<T> {
-	const signal = wait.signal
-	signal?.throwIfAborted()
-	const first = wait.check()
-	if (first !== undefined) return first
-	const settled = Promise.withResolvers<T>()
-	const release = new AbortController()
-	const observers = wait.documents.flatMap((document) => {
-		const view = document.defaultView
-		if (view === null) return []
-		const observer = new view.MutationObserver(() => {
-			const result = attempt(wait.check)
-			if (!result.success) settled.reject(result.error)
-			else if (result.value !== undefined) settled.resolve(result.value)
-		})
-		observer.observe(document, {
-			subtree: true,
-			childList: true,
-			attributes: true,
-			characterData: true,
-		})
-		view.addEventListener(
-			'pagehide',
-			() => settled.reject(new BrowserElementError({ subject: 'document' }, 'GONE')),
-			{ signal: release.signal },
-		)
-		return [observer]
-	})
-	const timer = setTimeout(() => {
-		settled.reject(
-			new BrowserError(`${wait.subject} timed out`, 'BROWSER_WAIT_TIMEOUT', {
-				timeout: wait.timeout,
-			}),
-		)
-	}, wait.timeout)
-	signal?.addEventListener('abort', () => settled.reject(signal.reason), {
-		signal: release.signal,
-	})
-	try {
-		return await settled.promise
-	} finally {
-		for (const observer of observers) observer.disconnect()
-		clearTimeout(timer)
-		release.abort()
+export function listenBrowserNavigation(
+	window: Window,
+	listener: (event: Event) => void,
+	signal: AbortSignal,
+): void {
+	const options = { signal }
+	if (Reflect.has(window, 'navigation')) {
+		window.navigation.addEventListener('navigatesuccess', listener, options)
+	} else {
+		window.addEventListener('popstate', listener, options)
+		window.addEventListener('hashchange', listener, options)
 	}
+	window.addEventListener('pagehide', listener, options)
 }

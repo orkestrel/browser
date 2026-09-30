@@ -221,7 +221,11 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 			exposed: exposed.flatMap((origin) => (origin === undefined ? [] : [origin])),
 		})
 		signal?.addEventListener('abort', this.#unregister.bind(this, tool.name), { once: true })
-		this.dispatchEvent(new Event('toolchange'))
+		// The draft queues the `toolchange` notification as a task, then queues another task that
+		// resolves the registration, so a listener runs after this call returns and before the
+		// returned promise settles.
+		setTimeout(this.#notify.bind(this), 0)
+		await new Promise<void>((resolve) => setTimeout(resolve, 0))
 	}
 
 	async getTools(options?: WebMCPToolsOptions): Promise<readonly WebMCPRegisteredTool[]> {
@@ -288,9 +292,15 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 				(value) => ({ value }),
 				() => undefined,
 			)
-		const serialized: unknown = outcome === undefined ? undefined : JSON.stringify(outcome.value)
-		if (!isString(serialized)) throw new DOMException('The tool did not complete', 'UnknownError')
-		return serialized
+		// Serializing the callback's value is part of completion: a value that does not serialize,
+		// such as a `BigInt`, completes the execution unsuccessfully.
+		const serialized = attempt((): unknown =>
+			outcome === undefined ? undefined : JSON.stringify(outcome.value),
+		)
+		if (!serialized.success || !isString(serialized.value)) {
+			throw new DOMException('The tool did not complete', 'UnknownError')
+		}
+		return serialized.value
 	}
 
 	#replace(
@@ -318,6 +328,10 @@ export class ModelContextRegistry extends EventTarget implements WebMCPRegistryI
 
 	#unregister(name: string): void {
 		if (!this.#state.tools.delete(name)) return
+		setTimeout(this.#notify.bind(this), 0)
+	}
+
+	#notify(): void {
 		this.dispatchEvent(new Event('toolchange'))
 	}
 }

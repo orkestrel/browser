@@ -10,8 +10,9 @@ import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserConnectionError, BrowserTransition }
  *
  * @remarks
  * `start()` resolves on the socket's `open` event and rejects with a `BrowserConnectionError`
- * carrying `url` for a URL whose scheme is not `ws:` or `wss:`, for a socket that fails or closes
- * before it opens, and at the `timeout` deadline. Concurrent and repeated `start()` and `close()`
+ * carrying `url` for a URL whose scheme is not `ws:` or `wss:`, for a URL the `WebSocket`
+ * constructor refuses (one with a fragment), for a socket that fails or closes before it opens,
+ * and at the `timeout` deadline. Concurrent and repeated `start()` and `close()`
  * calls share their active transition, and a later `start()` opens a fresh socket after the
  * prior one closes. A close the remote end initiates emits `close`. The driven Chromium must
  * allow the caller's origin through `--remote-allow-origins`.
@@ -83,7 +84,14 @@ export class SocketCDPTransport implements CDPTransportInterface {
 				{ url: this.#url },
 			)
 		}
-		const socket = new WebSocket(this.#url)
+		const created = attempt(() => new WebSocket(this.#url))
+		if (!created.success) {
+			throw new BrowserConnectionError(`Socket CDP connection to ${this.#url} could not open`, {
+				url: this.#url,
+				error: created.error,
+			})
+		}
+		const socket = created.value
 		this.#socket = socket
 		const opened = Promise.withResolvers<void>()
 		this.#opening = opened

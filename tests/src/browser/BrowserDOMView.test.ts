@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import { isBrowserElementError, isBrowserError } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
-import { waitForEvent } from '@orkestrel/test'
-import { createProbeElements, findProbeElement } from '../../setupBrowser.js'
+import { requireValue, waitForEvent } from '@orkestrel/test'
+import { createProbeElements, findProbeElement, loadProbeFrame } from '../../setupBrowser.js'
 
 describe('BrowserDOMView', () => {
 	describe('read', () => {
@@ -38,6 +38,38 @@ describe('BrowserDOMView', () => {
 			expect(view.url).toBe('about:srcdoc#cart')
 			expect(view.elements.element(save.reference)).toBe(save)
 			await save.focus()
+		})
+
+		it('marks a child frame element reading stale on the child pushState and keeps the main reading fresh', async () => {
+			const probe = await createProbeElements()
+			const child = await loadProbeFrame(probe.document, probe.late, '<button>Inner</button>')
+			const view = createBrowserDOMView({ document: probe.document })
+			const main = await view.read()
+			const [inner] = await view.elements.find({ role: 'button', name: 'Inner' })
+			const reading = await requireValue(inner, 'inner button').read()
+			expect(reading.stale).toBe(false)
+			const window = requireValue(child.defaultView, 'child window')
+			const navigated = waitForEvent<[Event]>((listener) => {
+				window.navigation.addEventListener('navigatesuccess', listener, { once: true })
+				return () => window.navigation.removeEventListener('navigatesuccess', listener)
+			}, 'child navigatesuccess')
+			window.history.pushState(null, '', 'about:srcdoc#inner')
+			await navigated
+			expect(reading.stale).toBe(true)
+			expect(main.stale).toBe(false)
+			expect(view.elements.element(inner?.reference ?? '')).toBe(inner)
+		})
+
+		it('drops a child frame document references when that document unloads', async () => {
+			const probe = await createProbeElements()
+			const child = await loadProbeFrame(probe.document, probe.late, '<button>Inner</button>')
+			const view = createBrowserDOMView({ document: probe.document })
+			const [inner] = await view.elements.find({ role: 'button', name: 'Inner' })
+			const reading = await requireValue(inner, 'inner button').read()
+			requireValue(child.defaultView?.frameElement, 'child frame').remove()
+			expect(reading.stale).toBe(true)
+			expect(view.elements.element(inner?.reference ?? '')).toBeUndefined()
+			expect(view.elements.element('e3')?.name).toBe('Save')
 		})
 
 		it('keeps a reading current while nothing navigates', async () => {
@@ -103,6 +135,16 @@ describe('BrowserDOMView', () => {
 			const expired = await view.wait('Never', { timeout: 20 }).catch((error: unknown) => error)
 			expect(isBrowserError(expired) && expired.code).toBe('BROWSER_WAIT_TIMEOUT')
 			await expect(view.wait('Never', { timeout: -1 })).rejects.toThrow(/non-negative/)
+		})
+
+		it('rejects a pending wait when the view is destroyed, and later text does not resolve it', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const pending = view.wait('Arrived', { timeout: 1_000 })
+			view.destroy()
+			probe.late.textContent = 'Arrived'
+			const refusal = await pending.catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
 		})
 
 		it('rejects with GONE when the document is unloaded mid-wait', async () => {

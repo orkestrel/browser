@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest'
+import { createServer } from 'node:http'
 import { isString } from '@orkestrel/contract'
 import { ignoreCall } from './setup.js'
 import {
+	closeFixtureServer,
 	createBrowserLauncher,
 	isBrowserServerModule,
 	isBrowserServiceModule,
@@ -40,9 +42,43 @@ describe('setup', () => {
 		} finally {
 			await teardown()
 		}
-		if (!isString(origin) || !isString(endpoint)) throw new Error('a provided value is missing')
+		if (!isString(origin) || !isString(endpoint) || !isString(control)) {
+			throw new Error('a provided value is missing')
+		}
 		await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
 		await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+		await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+	}, 20_000)
+
+	it('releases every acquired resource when a later step throws', async () => {
+		const provided = new Map<string, unknown>()
+		const failure = await setup({
+			provide: (key: string, value: unknown) => {
+				provided.set(key, value)
+				if (key === 'endpointWithoutFlag') throw new Error('provide failed')
+			},
+		}).catch((error: unknown) => error)
+		expect(failure).toBeInstanceOf(Error)
+		expect(failure instanceof Error && failure.message).toBe('provide failed')
+		const origin = provided.get('server')
+		const endpoint = provided.get('endpoint')
+		const control = provided.get('endpointWithoutFlag')
+		if (!isString(origin) || !isString(endpoint) || !isString(control)) {
+			throw new Error('a provided value is missing')
+		}
+		await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
+		await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+		await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+	}, 20_000)
+})
+
+describe('closeFixtureServer', () => {
+	it('closes a listening server and rejects for one that is not listening', async () => {
+		const server = createServer()
+		await new Promise<void>((done) => server.listen(0, '127.0.0.1', done))
+		await closeFixtureServer(server)
+		expect(server.listening).toBe(false)
+		await expect(closeFixtureServer(server)).rejects.toThrow(/not running/)
 	})
 })
 
@@ -60,7 +96,7 @@ describe('createBrowserLauncher', () => {
 		} finally {
 			await launcher.close()
 		}
-	})
+	}, 20_000)
 })
 
 describe('isBrowserServerModule', () => {
