@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest'
 import type { BrowserPageInterface, BrowserViewInterface } from '@src/core'
-import { BrowserContext, createBrowserToolset } from '@src/core'
-import { createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
+import type { CDPSentMessage } from '../../setup.js'
+import { BrowserContext, createBrowserToolset, isBrowserError } from '@src/core'
+import { isString } from '@orkestrel/contract'
+import {
+	captureError,
+	createRecorder,
+	readProperty,
+	requireValue,
+	waitForCondition,
+	waitForDelay,
+} from '@orkestrel/test'
 import {
 	createConnectedCDPClient,
 	createTarget,
@@ -9,6 +18,7 @@ import {
 	replyOk,
 	scriptBrowserElements,
 	scriptCDPAttach,
+	scriptEvaluate,
 	throwListenerError,
 } from '../../setup.js'
 
@@ -398,8 +408,11 @@ describe('BrowserContext', () => {
 
 				const popup = requireValue(popups.calls[0]?.[0], 'popup')
 				expect(popups.count).toBe(1)
-				expect(pages.calls).toEqual([[popup]])
-				expect(context.pages()).toEqual([opener, popup])
+				expect(pages.count).toBe(1)
+				expect(pages.calls[0]?.[0]).toBe(popup)
+				expect(context.pages()).toHaveLength(2)
+				expect(context.pages()[0]).toBe(opener)
+				expect(context.pages()[1]).toBe(popup)
 				expect(sibling.pages()).toHaveLength(1)
 				expect(popup).toMatchObject({ target: 'popup', url: 'about:blank', closed: false })
 				expect(popup.opener).toBe(opener)
@@ -477,6 +490,9 @@ describe('BrowserContext', () => {
 					targetInfo: { ...base, targetId: 'worker', type: 'worker', openerId: 'opener' },
 				})
 				transport.event('Target.targetCreated', {
+					targetInfo: { ...base, targetId: 'claimed', openerId: 'opener', attached: true },
+				})
+				transport.event('Target.targetCreated', {
 					targetInfo: { ...base, targetId: 'popup', openerId: 'opener' },
 				})
 				await waitForCondition('the context lists the popup', () => context.pages().length === 2)
@@ -523,9 +539,12 @@ describe('BrowserContext', () => {
 
 				const popup = requireValue(popups.calls[0]?.[0], 'popup')
 				expect(popups.count).toBe(1)
-				expect(pages.calls).toEqual([[popup]])
+				expect(pages.count).toBe(1)
+				expect(pages.calls[0]?.[0]).toBe(popup)
 				expect(popup.closed).toBe(false)
-				expect(context.pages()).toEqual([opener, popup])
+				expect(context.pages()).toHaveLength(2)
+				expect(context.pages()[0]).toBe(opener)
+				expect(context.pages()[1]).toBe(popup)
 				expect(
 					transport.sent
 						.filter((message) => message.method === 'Target.detachFromTarget')
@@ -649,8 +668,922 @@ describe('BrowserContext', () => {
 				expect(selected.calls[1]?.[0]).toBe(opener)
 				expect(toolset.view).toBe(opener)
 				expect(popup.closed).toBe(true)
-				expect(context.pages()).toEqual([opener])
+				expect(context.pages()).toHaveLength(1)
+				expect(context.pages()[0]).toBe(opener)
 				await toolset.destroy()
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('keeps the popup discovery published when a sync that reattaches its target finishes later', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' }, (message) => {
+				if (
+					held.length > 0 ||
+					message.method !== 'Target.attachToTarget' ||
+					message.params?.['targetId'] !== 'popup'
+				)
+					return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
+			replyOk(transport, 'Target.detachFromTarget')
+			const context = new BrowserContext(client)
+			try {
+				const opener = await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const popups = createRecorder<[page: BrowserPageInterface]>()
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', popups.handler)
+
+				const synced = context.sync([createTarget({ id: 'opener' }), createTarget({ id: 'popup' })])
+				await waitForCondition('sync attaches the popup target', () => held.length === 1)
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'popup', type: 'page', url: '', openerId: 'opener' },
+				})
+				await waitForCondition('the opener publishes the popup', () => popups.count === 1)
+				transport.reply(requireValue(held[0], 'sync attach').id, { sessionId: 'sync-session' })
+				await synced
+				await waitForCondition('the context lists the popup', () => pages.count === 1)
+
+				const popup = requireValue(popups.calls[0]?.[0], 'popup')
+				expect(popups.count).toBe(1)
+				expect(pages.count).toBe(1)
+				expect(pages.calls[0]?.[0]).toBe(popup)
+				expect(context.pages()).toHaveLength(2)
+				expect(context.pages()[0]).toBe(opener)
+				expect(context.pages()[1]).toBe(popup)
+				expect(
+					transport.sent
+						.filter((message) => message.method === 'Target.detachFromTarget')
+						.map((message) => [message.params?.['sessionId'], message.sessionId]),
+				).toEqual([['sync-session', undefined]])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes a target a sync attached first as the popup of its opener without a second page', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { popup: 'sync-session' }, (message) => {
+				if (
+					held.length > 0 ||
+					message.method !== 'Target.attachToTarget' ||
+					message.params?.['targetId'] !== 'popup'
+				)
+					return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
+			replyOk(transport, 'Target.detachFromTarget')
+			const context = new BrowserContext(client)
+			try {
+				const opener = await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const popups = createRecorder<[page: BrowserPageInterface]>()
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', popups.handler)
+
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'popup', type: 'page', url: '', openerId: 'opener' },
+				})
+				await waitForCondition('discovery attaches the popup target', () => held.length === 1)
+				await context.sync([createTarget({ id: 'opener' }), createTarget({ id: 'popup' })])
+				expect(pages.count).toBe(1)
+				transport.reply(requireValue(held[0], 'discovery attach').id, {
+					sessionId: 'popup-session',
+				})
+				await waitForCondition('the opener publishes the popup', () => popups.count === 1)
+
+				const popup = requireValue(popups.calls[0]?.[0], 'popup')
+				expect(pages.count).toBe(1)
+				expect(pages.calls[0]?.[0]).toBe(popup)
+				expect(context.pages()).toHaveLength(2)
+				expect(context.pages()[0]).toBe(opener)
+				expect(context.pages()[1]).toBe(popup)
+				expect(popup.opener).toBe(opener)
+				expect(
+					transport.sent
+						.filter((message) => message.method === 'Target.detachFromTarget')
+						.map((message) => [message.params?.['sessionId'], message.sessionId]),
+				).toEqual([['popup-session', undefined]])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('leaves a popup that closed while its adoption waited out of pages()', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const emulations: CDPSentMessage[] = []
+			transport.onSend('Emulation.setTimezoneOverride', (message) => {
+				if (message.sessionId === 'popup-session') emulations.push(message)
+				else transport.reply(message.id, {})
+			})
+			scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' })
+			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
+			replyOk(transport, 'Target.detachFromTarget')
+			const context = new BrowserContext(client, undefined, undefined, undefined, {
+				timezone: 'America/New_York',
+			})
+			try {
+				const opener = await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const popups = createRecorder<[page: BrowserPageInterface]>()
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', popups.handler)
+
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'popup', type: 'page', url: '', openerId: 'opener' },
+				})
+				await waitForCondition('the adoption emulates the popup', () => emulations.length === 1)
+				const popup = requireValue(popups.calls[0]?.[0], 'popup')
+				const closes = createRecorder<[]>()
+				popup.emitter.on('close', closes.handler)
+				transport.event('Target.targetDestroyed', { targetId: 'popup' })
+				await waitForCondition('the popup closes', () => closes.count === 1)
+				transport.reply(requireValue(emulations[0], 'emulation').id, {})
+				await waitForDelay(20)
+
+				expect(popup.closed).toBe(true)
+				expect(pages.count).toBe(0)
+				expect(context.pages()).toHaveLength(1)
+				expect(context.pages()[0]).toBe(opener)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('enables discovery again on the next connection of the same client', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			let created = 0
+			transport.onSend('Target.createTarget', (message) => {
+				created += 1
+				transport.reply(message.id, { targetId: `tab-${created}` })
+			})
+			replyOk(transport, 'Target.detachFromTarget')
+			try {
+				const first = new BrowserContext(client)
+				await first.create()
+				await first.create()
+				await first.destroy()
+				await client.reconnect()
+				const second = new BrowserContext(client)
+				await second.create()
+
+				expect(readCDPParams(transport, 'Target.setDiscoverTargets')).toEqual([
+					{ discover: true },
+					{ discover: true },
+				])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes a popup reported twice during its opener initialization once, after the opener', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' }, (message) => {
+				if (
+					held.length > 0 ||
+					message.method !== 'Target.setAutoAttach' ||
+					message.sessionId !== 'session-1'
+				)
+					return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
+			const context = new BrowserContext(client)
+			const pages = createRecorder<[page: BrowserPageInterface]>()
+			context.emitter.on('page', pages.handler)
+			try {
+				const creating = context.create()
+				// A failed assertion leaves the creation pending until the client closes.
+				void creating.catch(() => undefined)
+				await waitForCondition('the opener configures', () => held.length === 1)
+				const report = {
+					targetInfo: {
+						targetId: 'popup',
+						type: 'page',
+						url: '',
+						attached: false,
+						openerId: 'opener',
+					},
+				}
+				transport.event('Target.targetCreated', report)
+				transport.event('Target.targetCreated', report)
+				await waitForCondition('the popup initializes', () =>
+					transport.sent.some(
+						(message) =>
+							message.method === 'Network.enable' && message.sessionId === 'popup-session',
+					),
+				)
+				await waitForDelay(20)
+				expect(pages.count).toBe(0)
+				transport.reply(requireValue(held[0], 'opener configuration').id, {})
+				const opener = await creating
+				await waitForCondition('the context lists the popup', () => pages.count === 2)
+
+				expect(pages.calls.map(([page]) => page.target)).toEqual(['opener', 'popup'])
+				expect(pages.calls[1]?.[0].opener).toBe(opener)
+				expect(
+					readCDPParams(transport, 'Target.attachToTarget').map((params) => params['targetId']),
+				).toEqual(['opener', 'popup'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes a popup reported before its opener existed once, after the opener publishes', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' })
+			let created = 0
+			transport.onSend('Target.createTarget', (message) => {
+				created += 1
+				transport.reply(message.id, { targetId: created === 1 ? 'first' : 'opener' })
+			})
+			const context = new BrowserContext(client)
+			try {
+				await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				context.emitter.on('page', pages.handler)
+				transport.event('Target.targetCreated', {
+					targetInfo: {
+						targetId: 'popup',
+						type: 'page',
+						url: '',
+						attached: false,
+						openerId: 'opener',
+					},
+				})
+				expect(
+					readCDPParams(transport, 'Target.attachToTarget').map((params) => params['targetId']),
+				).toEqual(['first'])
+
+				const opener = await context.create()
+				await waitForCondition('the context lists the popup', () => pages.count === 2)
+
+				expect(pages.calls.map(([page]) => page.target)).toEqual(['opener', 'popup'])
+				expect(pages.calls[1]?.[0].opener).toBe(opener)
+				expect(
+					readCDPParams(transport, 'Target.attachToTarget').map((params) => params['targetId']),
+				).toEqual(['first', 'opener', 'popup'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes no popup whose holder closed while the losing session detached, and the toolset stays on the opener', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			const detaches: CDPSentMessage[] = []
+			transport.onSend('Target.detachFromTarget', (message) => {
+				if (message.params?.['sessionId'] === 'popup-session') detaches.push(message)
+				else transport.reply(message.id, {})
+			})
+			scriptCDPAttach(transport, 'session-1', { popup: 'sync-session' }, (message) => {
+				if (
+					held.length > 0 ||
+					message.method !== 'Target.attachToTarget' ||
+					message.params?.['targetId'] !== 'popup'
+				)
+					return false
+				held.push(message)
+				return true
+			})
+			scriptBrowserElements(transport)
+			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
+			const context = new BrowserContext(client)
+			try {
+				const opener = await context.create()
+				const toolset = createBrowserToolset(opener, { context })
+				await toolset.start()
+				const selected = createRecorder<[view: BrowserViewInterface]>()
+				const popups = createRecorder<[page: BrowserPageInterface]>()
+				toolset.emitter.on('select', selected.handler)
+				opener.emitter.on('popup', popups.handler)
+
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'popup', type: 'page', url: '', openerId: 'opener' },
+				})
+				await waitForCondition('discovery attaches the popup target', () => held.length === 1)
+				await context.sync([createTarget({ id: 'opener' }), createTarget({ id: 'popup' })])
+				const winner = requireValue(context.pages()[1], 'synchronized popup')
+				transport.reply(requireValue(held[0], 'discovery attach').id, {
+					sessionId: 'popup-session',
+				})
+				await waitForCondition('the losing session detaches', () => detaches.length === 1)
+				const closes = createRecorder<[]>()
+				winner.emitter.on('close', closes.handler)
+				transport.event('Target.targetDestroyed', { targetId: 'popup' })
+				await waitForCondition('the winner closes', () => closes.count === 1)
+				transport.reply(requireValue(detaches[0], 'losing detach').id, {})
+				await waitForDelay(20)
+
+				expect(popups.count).toBe(0)
+				expect(context.pages()).toHaveLength(1)
+				expect(context.pages()[0]).toBe(opener)
+				expect(selected.count).toBe(0)
+				expect(toolset.view).toBe(opener)
+				await toolset.destroy()
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes no popup for a holder whose setup fails after discovery found it', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const paused: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { popup: 'sync-session' }, (message) => {
+				if (
+					paused.length > 0 ||
+					message.method !== 'Target.setAutoAttach' ||
+					message.sessionId !== 'sync-session'
+				)
+					return false
+				paused.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
+			replyOk(transport, 'Target.detachFromTarget')
+			const context = new BrowserContext(client)
+			try {
+				const opener = await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const popups = createRecorder<[page: BrowserPageInterface]>()
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', popups.handler)
+
+				const synced = context.sync([createTarget({ id: 'opener' }), createTarget({ id: 'popup' })])
+				await waitForCondition('sync configures the popup', () => paused.length === 1)
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'popup', type: 'page', url: '', openerId: 'opener' },
+				})
+				await waitForDelay(20)
+				transport.fail(requireValue(paused[0], 'paused setup').id, 'Target closed')
+				await synced
+				await waitForDelay(20)
+
+				expect(popups.count).toBe(0)
+				expect(pages.count).toBe(0)
+				expect(context.pages()).toHaveLength(1)
+				expect(context.pages()[0]).toBe(opener)
+				expect(
+					readCDPParams(transport, 'Target.attachToTarget').map((params) => params['targetId']),
+				).toEqual(['opener', 'popup'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('emits a popup of a popup after its opener emits that popup when the descendant initializes first', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const paused: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { b: 'session-b', c: 'session-c' }, (message) => {
+				if (
+					paused.length > 0 ||
+					message.method !== 'Target.setAutoAttach' ||
+					message.sessionId !== 'session-b'
+				)
+					return false
+				paused.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'a' })
+			const context = new BrowserContext(client)
+			try {
+				const opener = await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const order: string[] = []
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', (popup) => {
+					order.push(`a>${popup.target}`)
+					popup.emitter.on('popup', (descendant) =>
+						order.push(`${popup.target}>${descendant.target}`),
+					)
+				})
+
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'b', type: 'page', url: '', openerId: 'a' },
+				})
+				await waitForCondition('the popup configures', () => paused.length === 1)
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'c', type: 'page', url: '', openerId: 'b' },
+				})
+				await waitForCondition('the descendant initializes', () =>
+					transport.sent.some(
+						(message) => message.method === 'Network.enable' && message.sessionId === 'session-c',
+					),
+				)
+				await waitForDelay(20)
+				expect(order).toEqual([])
+				transport.reply(requireValue(paused[0], 'paused setup').id, {})
+				await waitForCondition('the context lists both popups', () => pages.count === 2)
+
+				expect(order).toEqual(['a>b', 'b>c'])
+				expect(pages.calls.map(([page]) => page.target)).toEqual(['b', 'c'])
+				expect(context.pages().map((page) => page.target)).toEqual(['a', 'b', 'c'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes a popup of a popup after that popup when the popup adoption is still emulating', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const emulations: CDPSentMessage[] = []
+			transport.onSend('Emulation.setTimezoneOverride', (message) => {
+				if (message.sessionId === 'session-b') emulations.push(message)
+				else transport.reply(message.id, {})
+			})
+			scriptCDPAttach(transport, 'session-1', { b: 'session-b', c: 'session-c' })
+			replyOk(transport, 'Target.createTarget', { targetId: 'a' })
+			const context = new BrowserContext(client, undefined, undefined, undefined, {
+				timezone: 'America/New_York',
+			})
+			try {
+				const opener = await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const order: string[] = []
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', (popup) => {
+					order.push(`a>${popup.target}`)
+					popup.emitter.on('popup', (descendant) =>
+						order.push(`${popup.target}>${descendant.target}`),
+					)
+				})
+
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'b', type: 'page', url: '', openerId: 'a' },
+				})
+				await waitForCondition('the popup adoption emulates', () => emulations.length === 1)
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'c', type: 'page', url: '', openerId: 'b' },
+				})
+				await waitForCondition('the popup emits its descendant', () => order.length === 2)
+				await waitForDelay(20)
+				expect(pages.count).toBe(0)
+				transport.reply(requireValue(emulations[0], 'popup emulation').id, {})
+				await waitForCondition('the context lists both popups', () => pages.count === 2)
+
+				expect(order).toEqual(['a>b', 'b>c'])
+				expect(pages.calls.map(([page]) => page.target)).toEqual(['b', 'c'])
+				expect(context.pages().map((page) => page.target)).toEqual(['a', 'b', 'c'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('keeps a popup adoption boundary for its descendants after a losing sync of the same target settles', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			const emulations: CDPSentMessage[] = []
+			transport.onSend('Emulation.setTimezoneOverride', (message) => {
+				if (message.sessionId === 'session-b') emulations.push(message)
+				else transport.reply(message.id, {})
+			})
+			scriptCDPAttach(transport, 'session-1', { b: 'session-b', c: 'session-c' }, (message) => {
+				if (
+					held.length > 0 ||
+					message.method !== 'Target.attachToTarget' ||
+					message.params?.['targetId'] !== 'b'
+				)
+					return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'a' })
+			replyOk(transport, 'Target.detachFromTarget')
+			const context = new BrowserContext(client, undefined, undefined, undefined, {
+				timezone: 'America/New_York',
+			})
+			try {
+				const opener = await context.create()
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const order: string[] = []
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', (popup) => {
+					order.push(`a>${popup.target}`)
+					popup.emitter.on('popup', (descendant) =>
+						order.push(`${popup.target}>${descendant.target}`),
+					)
+				})
+
+				const synced = context.sync([createTarget({ id: 'a' }), createTarget({ id: 'b' })])
+				await waitForCondition('sync attaches the popup target', () => held.length === 1)
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'b', type: 'page', url: '', openerId: 'a' },
+				})
+				await waitForCondition('the opener emits the popup', () => order.length === 1)
+				transport.reply(requireValue(held[0], 'sync attach').id, { sessionId: 'sync-b' })
+				await synced
+				await waitForCondition('the popup adoption emulates', () => emulations.length === 1)
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'c', type: 'page', url: '', openerId: 'b' },
+				})
+				await waitForCondition('the popup emits its descendant', () => order.length === 2)
+				await waitForDelay(20)
+				expect(pages.count).toBe(0)
+				transport.reply(requireValue(emulations[0], 'popup emulation').id, {})
+				await waitForCondition('the context lists both popups', () => pages.count === 2)
+
+				expect(order).toEqual(['a>b', 'b>c'])
+				expect(pages.calls.map(([page]) => page.target)).toEqual(['b', 'c'])
+				expect(context.pages().map((page) => page.target)).toEqual(['a', 'b', 'c'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes a created page once while a sync of its target waits, and closes no target', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { t: 'sync-session' }, (message) => {
+				if (held.length > 0 || message.method !== 'Target.attachToTarget') return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 't' })
+			replyOk(transport, 'Target.detachFromTarget')
+			replyOk(transport, 'Target.closeTarget')
+			const context = new BrowserContext(client)
+			const pages = createRecorder<[page: BrowserPageInterface]>()
+			context.emitter.on('page', pages.handler)
+			try {
+				const creating = context.create()
+				void creating.catch(() => undefined)
+				await waitForCondition('creation attaches its target', () => held.length === 1)
+				const synced = context.sync([createTarget({ id: 't' })])
+				await waitForDelay(20)
+				transport.reply(requireValue(held[0], 'creation attach').id, {
+					sessionId: 'create-session',
+				})
+				const page = await creating
+				await synced
+
+				expect(pages.count).toBe(1)
+				expect(pages.calls[0]?.[0]).toBe(page)
+				expect(context.pages()).toHaveLength(1)
+				expect(context.pages()[0]).toBe(page)
+				expect(readCDPParams(transport, 'Target.closeTarget')).toEqual([])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('joins a creation to the page a sync already attaching its target publishes', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', undefined, (message) => {
+				if (held.length > 0 || message.method !== 'Target.attachToTarget') return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 't' })
+			replyOk(transport, 'Target.detachFromTarget')
+			replyOk(transport, 'Target.closeTarget')
+			const context = new BrowserContext(client)
+			const pages = createRecorder<[page: BrowserPageInterface]>()
+			context.emitter.on('page', pages.handler)
+			try {
+				const synced = context.sync([createTarget({ id: 't' })])
+				await waitForCondition('sync attaches the target', () => held.length === 1)
+				const creating = context.create()
+				void creating.catch(() => undefined)
+				await waitForDelay(20)
+				transport.reply(requireValue(held[0], 'sync attach').id, { sessionId: 'sync-session' })
+				await synced
+				const page = await creating
+
+				expect(pages.count).toBe(1)
+				expect(pages.calls[0]?.[0]).toBe(page)
+				expect(context.pages()).toHaveLength(1)
+				expect(readCDPParams(transport, 'Target.closeTarget')).toEqual([])
+				expect(
+					readCDPParams(transport, 'Target.attachToTarget').map((params) => params['targetId']),
+				).toEqual(['t'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('keeps a popup adoption boundary when an initial popup listener starts a sync of the popup target', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			const emulations: CDPSentMessage[] = []
+			let attaches = 0
+			transport.onSend('Emulation.setTimezoneOverride', (message) => {
+				if (message.sessionId === 'session-b') emulations.push(message)
+				else transport.reply(message.id, {})
+			})
+			scriptCDPAttach(transport, 'session-1', { b: 'session-b', c: 'session-c' }, (message) => {
+				if (message.method !== 'Target.attachToTarget' || message.params?.['targetId'] !== 'b')
+					return false
+				attaches += 1
+				if (attaches !== 2) return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'a' })
+			replyOk(transport, 'Target.detachFromTarget')
+			const context = new BrowserContext(client, undefined, undefined, undefined, {
+				timezone: 'America/New_York',
+			})
+			const synced: Array<Promise<void>> = []
+			try {
+				const opener = await context.create({
+					on: {
+						popup: () => {
+							synced.push(context.sync([createTarget({ id: 'b' }), createTarget({ id: 'a' })]))
+						},
+					},
+				})
+				const pages = createRecorder<[page: BrowserPageInterface]>()
+				const order: string[] = []
+				context.emitter.on('page', pages.handler)
+				opener.emitter.on('popup', (popup) => {
+					order.push(`a>${popup.target}`)
+					popup.emitter.on('popup', (descendant) =>
+						order.push(`${popup.target}>${descendant.target}`),
+					)
+				})
+
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'b', type: 'page', url: '', openerId: 'a' },
+				})
+				await waitForCondition(
+					'the listener sync attaches the popup target',
+					() => held.length === 1,
+				)
+				transport.reply(requireValue(held[0], 'sync attach').id, { sessionId: 'sync-b' })
+				await Promise.all(synced)
+				await waitForCondition('the popup adoption emulates', () => emulations.length === 1)
+				transport.event('Target.targetCreated', {
+					targetInfo: { targetId: 'c', type: 'page', url: '', openerId: 'b' },
+				})
+				await waitForCondition('the popup emits its descendant', () => order.length === 2)
+				await waitForDelay(20)
+				expect(pages.count).toBe(0)
+				transport.reply(requireValue(emulations[0], 'popup emulation').id, {})
+				await waitForCondition('the context lists both popups', () => pages.count === 2)
+
+				expect(order).toEqual(['a>b', 'b>c'])
+				expect(pages.calls.map(([page]) => page.target)).toEqual(['b', 'c'])
+				expect(context.pages().map((page) => page.target)).toEqual(['a', 'b', 'c'])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('navigates a page a creation joins to the url the creation requested, and refuses the join when the page closes during that navigation', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			const pending: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { t: 'sync-session' }, (message) => {
+				if (held.length > 0 || message.method !== 'Target.attachToTarget') return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 't' })
+			transport.onSend('Page.navigate', (message) => {
+				if (message.params?.['url'] !== 'https://example.com/requested') {
+					pending.push(message)
+					return
+				}
+				transport.reply(message.id, {})
+				transport.event('Page.loadEventFired', {}, message.sessionId)
+			})
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('location.href'),
+				'https://example.com/requested',
+			)
+			const context = new BrowserContext(client)
+			const pages = createRecorder<[page: BrowserPageInterface]>()
+			context.emitter.on('page', pages.handler)
+			try {
+				const synced = context.sync([createTarget({ id: 't' })])
+				await waitForCondition('sync attaches the target', () => held.length === 1)
+				const creating = context.create({ url: 'https://example.com/requested', timeout: 2_000 })
+				void creating.catch(() => undefined)
+				transport.reply(requireValue(held[0], 'sync attach').id, { sessionId: 'sync-session' })
+				await synced
+				const page = await creating
+
+				expect(pages.count).toBe(1)
+				expect(pages.calls[0]?.[0]).toBe(page)
+				expect(
+					transport.sent
+						.filter((message) => message.method === 'Page.navigate')
+						.map((message) => [message.params?.['url'], message.sessionId]),
+				).toEqual([['https://example.com/requested', 'sync-session']])
+
+				const closes = createRecorder<[]>()
+				page.emitter.on('close', closes.handler)
+				const refused = context
+					.create({ url: 'https://example.com/late' })
+					.catch((error: unknown) => error)
+				await waitForCondition('the second join navigates', () => pending.length === 1)
+				transport.event('Target.targetDestroyed', { targetId: 't' })
+				await waitForCondition('the joined page closes', () => closes.count === 1)
+				transport.reply(requireValue(pending[0], 'late navigation').id, {})
+
+				const refusal = await refused
+				expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_PAGE_CLOSED')
+				expect(context.pages()).toEqual([])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('navigates a joined page back to about:blank when the creation requested it and the page left it', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const creations: CDPSentMessage[] = []
+			let location = 'about:blank'
+			scriptCDPAttach(transport, 'session-1', { t: 'sync-session' })
+			transport.onSend('Target.createTarget', (message) => creations.push(message))
+			transport.onSend('Page.navigate', (message) => {
+				const url = message.params?.['url']
+				if (isString(url)) location = url
+				transport.reply(message.id, {})
+				transport.event('Page.loadEventFired', {}, message.sessionId)
+			})
+			transport.onSend('Runtime.evaluate', (message) =>
+				transport.reply(message.id, { result: { value: location } }),
+			)
+			const context = new BrowserContext(client)
+			const pages = createRecorder<[page: BrowserPageInterface]>()
+			context.emitter.on('page', pages.handler)
+			try {
+				const creating = context.create({ url: 'about:blank', timeout: 2_000 })
+				void creating.catch(() => undefined)
+				await waitForCondition('creation requests its target', () => creations.length === 1)
+				await context.sync([createTarget({ id: 't' })])
+				const winner = requireValue(context.pages()[0], 'synchronized page')
+				await winner.navigate('https://example.com/elsewhere')
+				transport.reply(requireValue(creations[0], 'creation').id, { targetId: 't' })
+				const page = await creating
+
+				expect(page).toBe(winner)
+				expect(pages.count).toBe(1)
+				expect(
+					transport.sent
+						.filter((message) => message.method === 'Page.navigate')
+						.map((message) => [message.params?.['url'], message.sessionId]),
+				).toEqual([
+					['https://example.com/elsewhere', 'sync-session'],
+					['about:blank', 'sync-session'],
+				])
+				expect(location).toBe('about:blank')
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('reports a throw of a hook a joining creation registered to the creation error handler', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { t: 'sync-session' }, (message) => {
+				if (held.length > 0 || message.method !== 'Target.attachToTarget') return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 't' })
+			transport.onSend('Page.navigate', (message) => {
+				transport.reply(message.id, {})
+				transport.event('Page.loadEventFired', {}, message.sessionId)
+			})
+			scriptEvaluate(
+				transport,
+				(expression) => expression.includes('location.href'),
+				'https://example.com/requested',
+			)
+			const failures = createRecorder<[error: unknown, event: string]>()
+			const context = new BrowserContext(client)
+			try {
+				const synced = context.sync([createTarget({ id: 't' })])
+				await waitForCondition('sync attaches the target', () => held.length === 1)
+				const creating = context.create({
+					url: 'https://example.com/requested',
+					on: { navigate: throwListenerError },
+					error: failures.handler,
+				})
+				void creating.catch(() => undefined)
+				transport.reply(requireValue(held[0], 'sync attach').id, { sessionId: 'sync-session' })
+				await synced
+				await creating
+				expect(failures.count).toBe(0)
+
+				transport.event(
+					'Page.frameNavigated',
+					{
+						frame: { id: 'frame-sync-session', url: 'https://example.com/next', loaderId: 'next' },
+					},
+					'sync-session',
+				)
+
+				expect(
+					failures.calls.map(([error, event]) => [readProperty(error, 'message'), event]),
+				).toEqual([[readProperty(captureError(throwListenerError), 'message'), 'navigate']])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('applies the viewport and hooks of a creation to the page it joins, and refuses the join when the page closes during its viewport', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			const viewports: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', { t: 'sync-session' }, (message) => {
+				if (held.length > 0 || message.method !== 'Target.attachToTarget') return false
+				held.push(message)
+				return true
+			})
+			transport.onSend('Emulation.setDeviceMetricsOverride', (message) => {
+				if (message.params?.['width'] === 320) viewports.push(message)
+				else transport.reply(message.id, {})
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 't' })
+			const context = new BrowserContext(client)
+			try {
+				const synced = context.sync([createTarget({ id: 't' })])
+				await waitForCondition('sync attaches the target', () => held.length === 1)
+				const closes = createRecorder<[]>()
+				const creating = context.create({
+					viewport: { width: 640, height: 480 },
+					on: { close: closes.handler },
+				})
+				void creating.catch(() => undefined)
+				transport.reply(requireValue(held[0], 'sync attach').id, { sessionId: 'sync-session' })
+				await synced
+				const page = await creating
+				expect(
+					transport.sent
+						.filter((message) => message.method === 'Emulation.setDeviceMetricsOverride')
+						.map((message) => [
+							message.params?.['width'],
+							message.params?.['height'],
+							message.sessionId,
+						]),
+				).toEqual([[640, 480, 'sync-session']])
+
+				const refused = context
+					.create({ viewport: { width: 320, height: 240 } })
+					.catch((error: unknown) => error)
+				await waitForCondition('the second join applies its viewport', () => viewports.length === 1)
+				transport.event('Target.targetDestroyed', { targetId: 't' })
+				await waitForCondition('the joined page closes', () => closes.count === 1)
+				transport.reply(requireValue(viewports[0], 'paused viewport').id, {})
+
+				expect(page.closed).toBe(true)
+				const refusal = await refused
+				expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_PAGE_CLOSED')
+				expect(context.pages()).toEqual([])
+				expect(transport.sent.some((message) => message.method === 'Page.navigate')).toBe(false)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('publishes no page a sync attached when it closed before publication, and the waiting creation rejects', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const viewports: CDPSentMessage[] = []
+			let attaches = 0
+			transport.onSend('Target.attachToTarget', (message) => {
+				attaches += 1
+				if (attaches === 2) transport.fail(message.id, 'No target with given id found')
+			})
+			transport.onSend('Emulation.setDeviceMetricsOverride', (message) => {
+				if (message.sessionId === 'sync-session') viewports.push(message)
+				else transport.reply(message.id, {})
+			})
+			scriptCDPAttach(transport, 'sync-session')
+			replyOk(transport, 'Target.createTarget', { targetId: 't' })
+			replyOk(transport, 'Target.detachFromTarget')
+			replyOk(transport, 'Target.closeTarget')
+			const context = new BrowserContext(client, undefined, { width: 800, height: 600 })
+			const pages = createRecorder<[page: BrowserPageInterface]>()
+			context.emitter.on('page', pages.handler)
+			try {
+				const synced = context.sync([createTarget({ id: 't' })])
+				await waitForCondition('sync applies its viewport', () => viewports.length === 1)
+				const creating = context.create()
+				const refused = creating.catch((error: unknown) => error)
+				await waitForDelay(20)
+				transport.event('Target.targetDestroyed', { targetId: 't' })
+				await waitForDelay(20)
+				transport.fail(requireValue(viewports[0], 'paused viewport').id, 'Target closed')
+				await synced
+
+				expect(readProperty(await refused, 'message')).toBe('No target with given id found')
+				expect(pages.count).toBe(0)
+				expect(context.pages()).toEqual([])
+				expect(readCDPParams(transport, 'Target.attachToTarget')).toHaveLength(2)
 			} finally {
 				await client.close()
 			}

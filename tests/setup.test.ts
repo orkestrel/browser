@@ -453,7 +453,7 @@ describe('scriptCDPAttach', () => {
 		).resolves.toStrictEqual({ sessionId: 'session-1' })
 	})
 
-	it('answers discovery, an attach to a mapped target with its own session, and that session with its own frame', async () => {
+	it('answers discovery, an attach to a mapped target with its own session, and that session with its own frame, and refuses a frame tree off every announced session', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' })
 
@@ -471,9 +471,115 @@ describe('scriptCDPAttach', () => {
 		).resolves.toStrictEqual({
 			frameTree: { frame: { id: 'frame-popup-session', url: 'about:blank' } },
 		})
-		await expect(client.send('Page.getFrameTree')).resolves.toStrictEqual({
-			frameTree: { frame: { id: 'frame-session-1', url: 'about:blank' } },
+		await expect(client.send('Page.getFrameTree')).rejects.toMatchObject({
+			message: "'Page.getFrameTree' wasn't found",
 		})
+		await expect(
+			client.send('Page.getFrameTree', undefined, { session: 'unknown-session' }),
+		).rejects.toMatchObject({ message: 'Session with given id not found.' })
+		transport.event('Target.attachedToTarget', { sessionId: 'child-session' }, 'session-1')
+		await expect(
+			client.send('Page.getFrameTree', undefined, { session: 'child-session' }),
+		).resolves.toStrictEqual({
+			frameTree: { frame: { id: 'frame-child-session', url: 'about:blank' } },
+		})
+		transport.event('Target.detachedFromTarget', { sessionId: 'child-session' }, 'session-1')
+		await expect(
+			client.send('Page.getFrameTree', undefined, { session: 'child-session' }),
+		).rejects.toMatchObject({ message: 'Session with given id not found.' })
+	})
+
+	it('admits no session from an attach reply that arrives after its connection ended', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptCDPAttach(
+			transport,
+			'session-1',
+			undefined,
+			(message) => message.method === 'Target.attachToTarget',
+		)
+		const attaching = client.send('Target.attachToTarget', { targetId: 'target-1' })
+		const refused = attaching.catch((error: unknown) => error)
+		const request = requireValue(
+			transport.sent.find((message) => message.method === 'Target.attachToTarget'),
+			'attach request',
+		)
+		transport.closeRemote()
+		expect(readProperty(await refused, 'message')).toBe('CDP connection closed')
+		await client.connect()
+		transport.reply(request.id, { sessionId: 'stale-session' })
+
+		expect([...transport.sessions]).toEqual([])
+		await expect(
+			client.send('Page.getFrameTree', undefined, { session: 'stale-session' }),
+		).rejects.toMatchObject({ message: 'Session with given id not found.' })
+	})
+
+	it('admits no session from a success reply that follows an error reply for one attach request', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptCDPAttach(
+			transport,
+			'session-1',
+			undefined,
+			(message) => message.method === 'Target.attachToTarget',
+		)
+		const attaching = client.send('Target.attachToTarget', { targetId: 'target-1' })
+		const request = requireValue(
+			transport.sent.find((message) => message.method === 'Target.attachToTarget'),
+			'attach request',
+		)
+		transport.fail(request.id, 'No target with given id found')
+		await expect(attaching).rejects.toMatchObject({ message: 'No target with given id found' })
+		transport.reply(request.id, { sessionId: 'late-session' })
+
+		expect([...transport.sessions]).toEqual([])
+		await expect(
+			client.send('Page.getFrameTree', undefined, { session: 'late-session' }),
+		).rejects.toMatchObject({ message: 'Session with given id not found.' })
+	})
+
+	it('admits only the first reply to an attach request and forgets every session when the connection ends', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptCDPAttach(transport)
+		transport.onSend('Target.getTargetInfo', (message) =>
+			transport.reply(message.id, { sessionId: 'unrelated-session' }),
+		)
+		const attached = await client.send('Target.attachToTarget', { targetId: 'target-1' })
+		const request = requireValue(
+			transport.sent.find((message) => message.method === 'Target.attachToTarget'),
+			'attach request',
+		)
+		transport.reply(request.id, { sessionId: 'late-session' })
+		await client.send('Target.getTargetInfo')
+		transport.event('Target.attachedToTarget', { sessionId: 'child-session' }, 'session-1')
+
+		expect(attached).toStrictEqual({ sessionId: 'session-1' })
+		expect([...transport.sessions]).toEqual(['session-1', 'child-session'])
+		await client.reconnect()
+		expect([...transport.sessions]).toEqual([])
+		await expect(
+			client.send('Page.getFrameTree', undefined, { session: 'session-1' }),
+		).rejects.toMatchObject({ message: 'Session with given id not found.' })
+		transport.event('Target.attachedToTarget', { sessionId: 'child-session' }, 'session-1')
+		transport.closeRemote()
+		expect([...transport.sessions]).toEqual([])
+	})
+
+	it('leaves a withheld message unanswered for the test to answer', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const held: CDPSentMessage[] = []
+		scriptCDPAttach(transport, 'session-1', undefined, (message) => {
+			if (message.sessionId !== 'session-1') return false
+			held.push(message)
+			return true
+		})
+
+		const enabled = client.send('Page.enable', undefined, { session: 'session-1' })
+		await expect(client.send('Page.enable', undefined, { session: 'session-2' })).resolves.toEqual(
+			{},
+		)
+		expect(held.map((message) => message.method)).toEqual(['Page.enable'])
+		transport.reply(requireValue(held[0], 'held').id, { answered: true })
+		await expect(enabled).resolves.toEqual({ answered: true })
 	})
 })
 

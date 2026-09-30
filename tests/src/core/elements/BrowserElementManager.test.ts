@@ -7,7 +7,6 @@ import {
 	BROWSER_ELEMENT_CHILD_FIXTURE,
 	createBrowserElementFixture,
 	createConnectedCDPClient,
-	replyOk,
 	scriptBrowserElements,
 	scriptCDPAttach,
 } from '../../../setup.js'
@@ -516,9 +515,13 @@ describe('element manager', () => {
 
 	it('catches a per-page counter inside one browser context', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		scriptCDPAttach(transport)
+		scriptCDPAttach(transport, 'session-1', { second: 'session-2' })
 		scriptBrowserElements(transport)
-		replyOk(transport, 'Target.createTarget', { targetId: 'created' })
+		let created = 0
+		transport.onSend('Target.createTarget', (message) => {
+			created += 1
+			transport.reply(message.id, { targetId: created === 1 ? 'first' : 'second' })
+		})
 		const context = new BrowserContext(client)
 		try {
 			const first = await context.create()

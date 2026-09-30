@@ -143,16 +143,25 @@ describe('BrowserDOMElementManager', () => {
 			expect(requireValue(probe.querySelector('select'), 'select').value).toBe('s')
 		})
 
-		it('separates adjacent texts by the whitespace between them and keeps a fragment without any joined', async () => {
+		it('separates adjacent texts by the whitespace or visible break between them and keeps a fragment without either joined', async () => {
 			const probe = await loadProbeDocument(
 				[
 					'<div><label>Gift wrap</label>\n  <label>Message</label></div>',
 					'<p><label>Gift<b>wrap</b></label> <span> for  </span><i>two</i></p>',
+					'<p>Gift<br>wrap</p>',
+					'<p>Card<br style="display: none">note</p>',
+					'<p>Map<br style="visibility: hidden">pin</p>',
 				].join(''),
 			)
 			const view = createBrowserDOMView({ document: probe })
 			const rows = (await view.elements.outline()).text.split('\n')
-			expect(rows.slice(1, -1)).toEqual(['Gift wrap Message', 'Giftwrap for two'])
+			expect(rows.slice(1, -1)).toEqual([
+				'Gift wrap Message',
+				'Giftwrap for two',
+				'Gift wrap',
+				'Cardnote',
+				'Map pin',
+			])
 		})
 
 		it('separates text in different blocks and joins text within one', async () => {

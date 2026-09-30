@@ -178,9 +178,16 @@ export type CDPSentHandler = (message: CDPSentMessage) => void
  * `close()` emits `close` when the transport was started, the way the real
  * WebSocket transport reports every socket close including the one it
  * requested itself.
+ *
+ * `sessions` holds every flattened session the scripted peer has announced on the current
+ * connection: a reply that answers a pending `Target.attachToTarget` request of that connection
+ * and a `Target.attachedToTarget` event add one, and a `Target.detachedFromTarget` event removes
+ * it. A success or failure reply consumes its pending request, and `close()` and `closeRemote()`
+ * end the connection with every pending request and session; `sent` keeps its history.
  */
 export interface CDPTestTransportInterface extends CDPTransportInterface {
 	readonly sent: readonly CDPSentMessage[]
+	readonly sessions: ReadonlySet<string>
 	readonly started: boolean
 	readonly closed: boolean
 	onSend(method: string, handler: CDPSentHandler): void
@@ -207,6 +214,9 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 	const emitter = new Emitter<CDPTransportEventMap>()
 	const sent: CDPSentMessage[] = []
 	const handlers = new Map<string, CDPSentHandler[]>()
+	const sessions = new Set<string>()
+	// The `Target.attachToTarget` requests of the current connection that no reply has answered.
+	const attaching = new Set<number>()
 	let started = false
 	let closed = false
 
@@ -214,6 +224,9 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 		emitter,
 		get sent(): readonly CDPSentMessage[] {
 			return sent
+		},
+		get sessions(): ReadonlySet<string> {
+			return sessions
 		},
 		get started(): boolean {
 			return started
@@ -237,6 +250,7 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 			const message: CDPSentMessage = { id, method, params, sessionId }
 
 			sent.push(message)
+			if (method === 'Target.attachToTarget' && started) attaching.add(id)
 
 			for (const handler of handlers.get(method) ?? []) handler(message)
 		},
@@ -244,6 +258,8 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 			const open = started
 			closed = true
 			started = false
+			attaching.clear()
+			sessions.clear()
 			// The real transport reports every socket close, including the one it
 			// requested itself, so a close request emits `close` exactly once.
 			if (open) emitter.emit('close')
@@ -257,18 +273,26 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 			list.push(handler)
 		},
 		reply(id: number, result: unknown): void {
+			if (attaching.delete(id) && isRecord(result) && isString(result['sessionId']))
+				sessions.add(result['sessionId'])
 			emitter.emit('message', JSON.stringify({ id, result }))
 		},
 		fail(id: number, message: string, code?: number): void {
+			attaching.delete(id)
 			const error = code === undefined ? { message } : { code, message }
 			emitter.emit('message', JSON.stringify({ id, error }))
 		},
 		event(method: string, params?: Readonly<Record<string, unknown>>, sessionId?: string): void {
+			const announced = params?.['sessionId']
+			if (isString(announced) && method === 'Target.attachedToTarget') sessions.add(announced)
+			if (isString(announced) && method === 'Target.detachedFromTarget') sessions.delete(announced)
 			const frame: Record<string, unknown> = { method, params: params ?? {} }
 			if (sessionId !== undefined) frame['sessionId'] = sessionId
 			emitter.emit('message', JSON.stringify(frame))
 		},
 		closeRemote(): void {
+			attaching.clear()
+			sessions.clear()
 			emitter.emit('close')
 		},
 		errorRemote(error: unknown): void {
@@ -976,35 +1000,54 @@ export function createBrowserViewDouble(options?: BrowserViewDoubleOptions): Bro
 /**
  * Scripts target discovery, the target attach, and the required domain-enable handshake.
  *
+ * @remarks
+ * `Page.getFrameTree` answers a session the transport's `sessions` holds with that session's own
+ * frame, and refuses a call without a session with the method-not-found code `-32601` and one on
+ * any other session with `-32001`, as Chromium does.
+ *
  * @param transport - The fake transport to script
  * @param session - The session an attach answers with. Default: `session-1`
  * @param sessions - The session an attach to one target id answers with instead of `session`
+ * @param withheld - Reports a message this handshake leaves unanswered, for the test to answer
  */
 export function scriptCDPAttach(
 	transport: CDPTestTransportInterface,
 	session = 'session-1',
 	sessions?: Readonly<Record<string, string>>,
+	withheld?: (message: CDPSentMessage) => boolean,
 ): void {
-	replyOk(transport, 'Target.setDiscoverTargets')
+	for (const method of [
+		'Target.setDiscoverTargets',
+		'Page.enable',
+		'Page.setLifecycleEventsEnabled',
+		'Runtime.enable',
+		'Network.enable',
+		'Network.disable',
+		'Target.setAutoAttach',
+		'Page.setInterceptFileChooserDialog',
+		'Browser.setDownloadBehavior',
+		'Emulation.setTouchEmulationEnabled',
+	])
+		transport.onSend(method, (message) => {
+			if (withheld?.(message) !== true) transport.reply(message.id, {})
+		})
 	transport.onSend('Target.attachToTarget', (message) => {
+		if (withheld?.(message) === true) return
 		const target = message.params?.['targetId']
 		const named = isString(target) ? sessions?.[target] : undefined
 		transport.reply(message.id, { sessionId: named ?? session })
 	})
-	replyOk(transport, 'Page.enable')
-	replyOk(transport, 'Page.setLifecycleEventsEnabled')
-	replyOk(transport, 'Runtime.enable')
-	replyOk(transport, 'Network.enable')
-	replyOk(transport, 'Network.disable')
-	transport.onSend('Page.getFrameTree', (message) =>
-		transport.reply(message.id, {
-			frameTree: { frame: { id: `frame-${message.sessionId ?? session}`, url: 'about:blank' } },
-		}),
-	)
-	replyOk(transport, 'Target.setAutoAttach')
-	replyOk(transport, 'Page.setInterceptFileChooserDialog')
-	replyOk(transport, 'Browser.setDownloadBehavior')
-	replyOk(transport, 'Emulation.setTouchEmulationEnabled')
+	transport.onSend('Page.getFrameTree', (message) => {
+		const known = message.sessionId
+		if (withheld?.(message) === true) return
+		if (known === undefined) transport.fail(message.id, "'Page.getFrameTree' wasn't found", -32601)
+		else if (!transport.sessions.has(known))
+			transport.fail(message.id, 'Session with given id not found.', -32001)
+		else
+			transport.reply(message.id, {
+				frameTree: { frame: { id: `frame-${known}`, url: 'about:blank' } },
+			})
+	})
 }
 
 /** Reads a sent Runtime expression without a type assertion. */

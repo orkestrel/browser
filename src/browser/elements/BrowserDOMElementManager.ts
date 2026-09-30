@@ -59,7 +59,8 @@ import {
  * navigation events and on the view's; that document's `pagehide` drops its references. A form
  * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A `select` row
  * is followed by one `option` row per option, named by its label. Whitespace between two texts of
- * one block renders as one space, and texts with none between them stay joined. A CSS query
+ * one block renders as one space, as a rendered `br` between them does, and texts with neither
+ * between them stay joined. A CSS query
  * searches the document the view drives, not its child documents or shadow trees. After the
  * input's `signal` aborts, `outline`, `find`, and `wait` reject with its reason.
  *
@@ -250,6 +251,13 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 				continue
 			}
 			const invisible = matchesBrowserInvisible(node)
+			// A rendered break separates the texts of its block the way whitespace does; the walker never
+			// reaches a hidden one.
+			if (node.localName === 'br') {
+				if (!quiet && text !== '') text += '\n'
+				node = walker.nextNode()
+				continue
+			}
 			if (node instanceof view.HTMLIFrameElement) {
 				text = this.#flush(rows, text)
 				const child = node.contentDocument
