@@ -13,8 +13,10 @@
  */
 
 import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/server'
+import { BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
 import { findSystemBrowser } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
+import { waitForCondition } from '@orkestrel/test'
 
 /**
  * Lists the container-safe launch flags every live-browser proof shares.
@@ -204,4 +206,150 @@ export function requireCacheRestore(
 		throw new Error(
 			'Precondition failed: the history navigation committed without a back-forward cache restore and without a reported cache miss.',
 		)
+}
+
+/** Describes one element row of a rendered outline: its reference, its role, and its name. */
+export interface ServiceOutlineRow {
+	readonly reference: string
+	readonly role: string
+	readonly name: string
+}
+
+/**
+ * Extracts the element rows of a rendered outline, in row order.
+ *
+ * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
+ * @returns The reference, role, and JSON-decoded name of each row that opens with a reference
+ * such as `e12` followed by a role and a quoted name; heading, text, and summary rows contribute
+ * nothing
+ */
+export function extractOutlineRows(text: string): readonly ServiceOutlineRow[] {
+	return [...text.matchAll(/^(e[1-9]\d*) (\S+) ("(?:[^"\\\n]|\\.)*")/gm)].flatMap((match) => {
+		const [, reference, role, quoted] = match
+		const name: unknown = JSON.parse(quoted ?? '""')
+		return reference === undefined || role === undefined || !isString(name)
+			? []
+			: [{ reference, role, name }]
+	})
+}
+
+/**
+ * Collects the role and name of every element row of a rendered outline, as a sorted list.
+ *
+ * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
+ * @returns One `ROLE "NAME"` entry per element row, with the name JSON-quoted, sorted by code
+ * unit so two outlines that list the same elements in different orders or under different
+ * references collect equal lists
+ */
+export function collectOutlinePairs(text: string): readonly string[] {
+	return extractOutlineRows(text)
+		.map((row) => `${row.role} ${JSON.stringify(row.name)}`)
+		.toSorted()
+}
+
+/**
+ * Returns the reference of the one outline row with a role and a name, or throws.
+ *
+ * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
+ * @param role - The row's role, such as `textbox`
+ * @param name - The row's decoded name, such as `Name`
+ * @returns The row's reference, such as `e3`
+ * @throws Thrown when no row or more than one row carries the role and the name, naming both.
+ */
+export function requireOutlineReference(text: string, role: string, name: string): string {
+	const rows = extractOutlineRows(text).filter((row) => row.role === role && row.name === name)
+	const [row] = rows
+	if (row === undefined || rows.length > 1)
+		throw new Error(
+			`Expected one outline row ${role} ${JSON.stringify(name)} and found ${rows.length}`,
+		)
+	return row.reference
+}
+
+/**
+ * Reads the text a successful tool result carries, or throws with the failure it reports.
+ *
+ * @param result - A `ToolResult` from `ToolManagerInterface.execute`, or its JSON copy read back
+ * from a page
+ * @returns The result's string `value`
+ * @throws Thrown when the result reports a failure, naming its `error`, and when it carries no
+ * string `value`.
+ */
+export function requireToolText(result: unknown): string {
+	if (isRecord(result) && result['success'] === false)
+		throw new Error(`The tool call failed: ${String(result['error'])}`)
+	if (!isRecord(result) || result['success'] !== true || !isString(result['value']))
+		throw new Error('The tool call returned no text')
+	return result['value']
+}
+
+/**
+ * Holds the note a receipt carries when a navigation replaces the page while its view is captured.
+ */
+export const SERVICE_CHANGED_NOTE =
+	'(The view could not be read: outline is gone because the page changed; call look for fresh refs.; call look.)'
+
+/**
+ * Describes the receipt a correct toolset returns for an action whose view capture completes in
+ * time.
+ *
+ * @remarks
+ * - `action` — the receipt's action sentence without its closing period, such as
+ *   `Clicked e1 textbox "Name"`
+ * - `view` — the outline the capture reads
+ * - `url` — for an action that navigates, the URL the navigation commits
+ */
+export interface ServiceReceipt {
+	readonly action: string
+	readonly view: string
+	readonly url?: string
+}
+
+/**
+ * Checks whether a receipt is one a correct toolset returns for an action on a host whose load
+ * or capture can outrun the receipt deadline.
+ *
+ * @param receipt - The text the tool call returned
+ * @param expected - The action sentence, the captured view, and the committed URL of a navigation
+ * @returns True if the receipt is the action line followed by the expected view or by
+ * `BROWSER_TOOL_DEADLINE_NOTE`, or, when `expected.url` is given, the action line followed by
+ * the note that the navigation replaced the outline being captured, or the action line naming
+ * `the page is still loading URL` followed by any view; false otherwise
+ * @remarks A busy host can deliver the navigation request after the action's input command
+ * settles, so the capture starts on the page the navigation is leaving.
+ */
+export function matchesToolReceipt(receipt: string, expected: ServiceReceipt): boolean {
+	const line = `${expected.action}.\n\n`
+	if (receipt === `${line}${expected.view}` || receipt === `${line}${BROWSER_TOOL_DEADLINE_NOTE}`)
+		return true
+	return (
+		expected.url !== undefined &&
+		(receipt === `${line}${SERVICE_CHANGED_NOTE}` ||
+			receipt.startsWith(`${expected.action}; the page is still loading ${expected.url}.\n\n`))
+	)
+}
+
+/**
+ * Waits until the served document page reports its toolset started, or throws naming the cause.
+ *
+ * @param page - The page showing the fixture server's `/document` page; only its `evaluate` is read
+ * @param budget - The milliseconds the page has to report. Default: 10 000
+ * @throws Thrown when the page sets `document.body.dataset.failed`, naming the error it recorded,
+ * and when it sets neither flag within `budget`, naming the `dist/src/browser` import the page
+ * depends on.
+ */
+export async function requireDocumentToolset(
+	page: { evaluate(expression: string): Promise<unknown> },
+	budget = 10_000,
+): Promise<void> {
+	await waitForCondition(
+		'precondition: the document page imported dist/src/browser and started its toolset',
+		async () =>
+			(await page.evaluate('document.body.dataset.ready ?? document.body.dataset.failed')) !==
+			undefined,
+		{ budget, interval: 20 },
+	)
+	const failed = await page.evaluate('document.body.dataset.failed')
+	if (failed !== undefined)
+		throw new Error(`Precondition failed: the document toolset did not start: ${String(failed)}`)
 }

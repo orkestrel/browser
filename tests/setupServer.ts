@@ -5,7 +5,9 @@ import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { createServer } from 'node:http'
 import { createConnection, createServer as createNetServer } from 'node:net'
+import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
 	isFunction,
@@ -20,7 +22,9 @@ import {
 import {
 	createNodeWebSocket,
 	encodeWebSocketFrame,
+	parseWebSocketFrame,
 	WEBSOCKET_OPCODE_TEXT,
+	WEBSOCKET_READY_OPEN,
 } from '@orkestrel/websocket'
 import { createLoopback, createScratch, isRunning } from '@orkestrel/test/server'
 import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
@@ -241,6 +245,15 @@ export interface CDPTestServerInterface {
 	readonly received: readonly CDPServerReceived[]
 	/** Count of open WebSocket sockets (for close-propagation assertions). */
 	readonly sockets: number
+	/**
+	 * Every CDP application-message write the server performed on an open WebSocket, one entry per
+	 * socket write, in write order: each reply, failure, and event, and each WebMCP burst.
+	 *
+	 * @remarks
+	 * The upgrade response, pongs, and close and other control frames go through
+	 * `@orkestrel/websocket`'s own socket writer and are not recorded.
+	 */
+	readonly writes: readonly Buffer[]
 	/** Set the targets returned by `/json/list` (drives `fetchCDPTargets`/`syncContexts`). */
 	list(targets: readonly unknown[]): void
 	/** Script an automatic reply for every request matching `method`. */
@@ -276,6 +289,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 	readonly #received: CDPServerReceived[] = []
 	readonly #scripts = new Map<string, unknown | CDPServerReplyHandler>()
 	readonly #sockets = new Set<NodeWebSocketInterface>()
+	readonly #writes: Buffer[] = []
 	#targets: readonly unknown[] = []
 	#active: NodeWebSocketInterface | undefined
 	#socket: Duplex | undefined
@@ -310,6 +324,10 @@ export class CDPTestServer implements CDPTestServerInterface {
 
 	get sockets(): number {
 		return this.#sockets.size
+	}
+
+	get writes(): readonly Buffer[] {
+		return this.#writes
 	}
 
 	async start(): Promise<void> {
@@ -428,7 +446,7 @@ export class CDPTestServer implements CDPTestServerInterface {
 				})
 			} else if (method === 'WebMCP.invokeTool') {
 				const invocationId = `invocation-${id}`
-				this.#socket?.write(
+				this.#write(
 					Buffer.concat([
 						encodeWebSocketFrame(
 							WEBSOCKET_OPCODE_TEXT,
@@ -493,8 +511,36 @@ export class CDPTestServer implements CDPTestServerInterface {
 	}
 
 	#send(data: Record<string, unknown>): void {
-		this.#active?.send(JSON.stringify(data))
+		this.#write(encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, JSON.stringify(data)))
 	}
+
+	// The one point every server frame leaves through, so `writes` records each socket write.
+	#write(chunk: Buffer): void {
+		const socket = this.#socket
+		if (socket === undefined || this.#active?.readyState !== WEBSOCKET_READY_OPEN) return
+		this.#writes.push(chunk)
+		socket.write(chunk)
+	}
+}
+
+/**
+ * Reads the payloads of the WebSocket frames one socket write carries, in write order.
+ *
+ * @param chunk - One entry of `CDPTestServerInterface.writes`
+ * @returns Each frame's payload decoded as UTF-8; empty for an empty chunk
+ * @throws Thrown when the chunk ends inside a frame, naming the offset of that frame.
+ */
+export function readWebSocketFrames(chunk: Buffer): readonly string[] {
+	const payloads: string[] = []
+	let offset = 0
+	while (offset < chunk.length) {
+		const frame = parseWebSocketFrame(chunk.subarray(offset))
+		if (frame === undefined)
+			throw new Error(`The write ends inside the frame at byte ${offset} of ${chunk.length}`)
+		payloads.push(frame.payload.toString('utf8'))
+		offset += frame.consumed
+	}
+	return payloads
 }
 
 // === Fake browser process (real spawned executable, no mocks)
@@ -858,6 +904,35 @@ export const FIXTURE_LATE_TEXT = 'Confirmation code 4417'
 /** Holds the delay in milliseconds between the `Reveal` click and the late text's insertion. */
 export const FIXTURE_LATE_DELAY = 200
 
+/**
+ * Maps each bare specifier the served document page imports to the path the fixture server
+ * answers it on.
+ *
+ * @remarks
+ * The page's import map carries this table. Each path mirrors the package's installed ES module
+ * entry under the workspace, so a relative import inside an entry resolves to a path
+ * {@link loadFixtureModule} also answers.
+ */
+export const FIXTURE_DOCUMENT_IMPORTS: Readonly<Record<string, string>> = Object.freeze({
+	'@orkestrel/codec': '/node_modules/@orkestrel/codec/dist/src/core/index.js',
+	'@orkestrel/contract': '/node_modules/@orkestrel/contract/dist/src/core/index.js',
+	'@orkestrel/emitter': '/node_modules/@orkestrel/emitter/dist/src/core/index.js',
+	'@orkestrel/html': '/node_modules/@orkestrel/html/dist/src/core/index.js',
+	'@orkestrel/markdown': '/node_modules/@orkestrel/markdown/dist/src/core/index.js',
+	'@orkestrel/mcp/browser': '/node_modules/@orkestrel/mcp/dist/src/browser/index.js',
+	'@orkestrel/sse': '/node_modules/@orkestrel/sse/dist/src/core/index.js',
+	'@orkestrel/tool': '/node_modules/@orkestrel/tool/dist/src/core/index.js',
+})
+
+/** Lists the built bundle files the served document page imports, relative to the workspace. */
+export const FIXTURE_DOCUMENT_BUNDLE: readonly string[] = Object.freeze([
+	'dist/src/browser/index.js',
+	'dist/src/core/index.js',
+])
+
+/** Names the served path of the WebMCP registry double the document page installs. */
+export const FIXTURE_REGISTRY_MODULE = '/tests/fixtures/modelContext.js'
+
 /** Serves the fixture pages the live-browser proofs drive on one loopback port. */
 export interface FixtureServerInterface {
 	readonly port: number
@@ -867,14 +942,26 @@ export interface FixtureServerInterface {
 	destroy(): Promise<void>
 }
 
+const FIXTURE_WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
+
+// The served modules no import map entry names: the bundle files, which the page and the browser
+// bundle import by path, and the `@orkestrel/mcp` core entry its browser entry imports relatively.
+const FIXTURE_RELATIVE_MODULES: readonly string[] = [
+	'/dist/src/browser/index.js',
+	'/dist/src/core/index.js',
+	'/node_modules/@orkestrel/mcp/dist/src/core/index.js',
+]
+
 const FORM_PAGE = `<!doctype html><html><head><title>Delivery form</title><style>body{margin:20px}input,textarea,select{display:block;margin:10px 0;width:200px}</style></head><body>
 <main><h1>Delivery form</h1>
-<label>Name <input id="name" type="text" value="Ada"></label>
-<label>Notes <textarea id="notes">Leave at the door</textarea></label>
-<label>Speed <select id="speed"><option>Standard</option><option>Express</option></select></label>
+<form action="/form/placed" method="get">
+<label>Name <input id="name" name="name" type="text" value="Ada"></label>
+<label>Notes <textarea id="notes" name="notes">Leave at the door</textarea></label>
+<label>Speed <select id="speed" name="speed"><option>Standard</option><option>Express</option></select></label>
 <button id="submit" type="button">Submit</button>
 <button id="save" type="button" onclick="document.body.dataset.saved = 'yes'">Save draft</button>
 <button id="review" type="button" onclick="history.pushState({}, '', '/form/review')">Review</button>
+</form>
 <section id="pool" aria-label="Pool"></section>
 </main>
 <script>
@@ -883,10 +970,25 @@ addEventListener('pageshow', (event) => { if (event.persisted) document.body.dat
 </script>
 </body></html>`
 
+const PLACED_PAGE = `<!doctype html><html><head><title>Order placed</title></head><body>
+<main><h1>Order placed</h1><p id="summary">Pending</p></main>
+<script>
+const query = new URLSearchParams(location.search)
+document.getElementById('summary').textContent = 'Delivery booked for ' + query.get('name') + ' at ' + query.get('speed') + ' speed.'
+</script>
+</body></html>`
+
 // The 16 px button sits at the frame origin, so a point offset by the frame's border box rather
 // than its content box lands on the frame's 10 px border in the outer document.
 const INNER_PAGE = `<!doctype html><html><head><title>Payment</title><style>html,body{margin:0}#pay{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}</style></head><body>
 <button id="pay" onclick="document.body.dataset.received = [document.body.dataset.received, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Pay</button>
+</body></html>`
+
+const DONE_PAGE = `<!doctype html><html><head><title>Voucher applied</title></head><body>
+<main><h1>Voucher applied</h1><p id="key">Pending</p></main>
+<script>
+document.getElementById('key').textContent = 'Received key ' + new URLSearchParams(location.search).get('key')
+</script>
 </body></html>`
 
 const OVERLAY_PAGE = `<!doctype html><html><head><title>Overlay</title><style>body{margin:0}#save,#plain{position:absolute;left:20px;width:120px;height:40px}#save{top:20px}#plain{top:200px}#veil{position:absolute;left:0;top:0;width:300px;height:100px;z-index:9;background:rgba(0,0,0,.2)}</style></head><body>
@@ -915,24 +1017,95 @@ if (registry !== undefined) registry.registerTool({ name: 'fixture_echo', descri
 </script>
 </body></html>`
 
+const CONFIRM_PAGE = `<!doctype html><html><head><title>Drafts</title></head><body>
+<main><h1>Drafts</h1>
+<button id="delete" type="button" onclick="document.body.dataset.answer = String(confirm('Delete the draft?'))">Delete</button>
+<button id="keep" type="button" onclick="document.body.dataset.kept = String(Number(document.body.dataset.kept ?? '0') + 1)">Keep</button>
+</main>
+</body></html>`
+
+const LEAVE_PAGE = `<!doctype html><html><head><title>Unsaved note</title></head><body>
+<main><h1>Unsaved note</h1><a href="/beforeunload/next">Next</a></main>
+<script>
+addEventListener('beforeunload', (event) => { event.preventDefault(); event.returnValue = '' })
+</script>
+</body></html>`
+
+const PLAIN_PAGE = `<!doctype html><html><head><title>Saved note</title></head><body>
+<main><h1>Saved note</h1><a href="/beforeunload/next">Next</a></main>
+</body></html>`
+
+const NEXT_PAGE = `<!doctype html><html><head><title>Next note</title></head><body>
+<main><h1>Next note</h1></main>
+</body></html>`
+
+const POPUP_PAGE = `<!doctype html><html><head><title>Catalog</title></head><body>
+<main><h1>Catalog</h1>
+<button id="open" type="button" onclick="window.open('/popup/child', 'details')">Open details</button>
+<button id="stay" type="button" onclick="document.body.dataset.stayed = 'yes'">Stay</button>
+</main>
+</body></html>`
+
+const CHILD_PAGE = `<!doctype html><html><head><title>Details</title></head><body>
+<main><h1>Details</h1>
+<button id="like" type="button" onclick="document.body.dataset.liked = 'yes'">Like</button>
+</main>
+</body></html>`
+
+const DOCUMENT_PAGE = `<!doctype html><html><head><title>Gift options</title>
+<script type="importmap">${JSON.stringify({ imports: FIXTURE_DOCUMENT_IMPORTS })}</script>
+</head><body>
+<main><h1>Gift options</h1>
+<a href="/form">Delivery desk</a>
+<label><input id="wrap" type="checkbox"> Gift wrap</label>
+<label>Message <input id="message" type="text"></label>
+<button id="apply" type="button">Apply</button>
+</main>
+<script>
+document.getElementById('wrap').addEventListener('click', (event) => { document.body.dataset.trusted = [document.body.dataset.trusted, String(event.isTrusted)].filter(Boolean).join(' ') })
+</script>
+<script type="module">
+import { createDocumentToolset } from '/dist/src/browser/index.js'
+import { createModelContext } from '@orkestrel/mcp/browser'
+import { installModelContext } from '${FIXTURE_REGISTRY_MODULE}'
+try {
+	installModelContext(document)
+	const toolset = createDocumentToolset({ document, own: true, source: createModelContext({ document }) })
+	await toolset.start()
+	window.documentToolset = toolset
+	document.body.dataset.ready = 'yes'
+} catch (error) {
+	document.body.dataset.failed = String(error)
+}
+</script>
+</body></html>`
+
 /**
  * Renders the fixture page a request path names.
  *
  * @param path - The request path, such as `/form` or `/frame/outer`
- * @param port - The fixture server's port, which the outer frame page embeds in its `localhost`
- * frame source
+ * @param port - The fixture server's port, which a page embeds in each URL it names on the other
+ * {@link FixtureHost}
  * @returns The page HTML; `undefined` for a path no fixture serves
  * @remarks
- * - `/form` — a text input, a textarea, a select, and three buttons; `Save draft` sets
+ * - `/form` — a form holding a text input, a textarea, a select, and three `type="button"`
+ *   buttons, which an Enter in the text input submits to `/form/placed`; `Save draft` sets
  *   `document.body.dataset.saved`, `Review` pushes a same-document route, every click is
  *   recorded on `document.body.dataset.clicks`, a back-forward cache restore sets
- *   `document.body.dataset.restored`, and `section#pool` is an empty container
+ *   `document.body.dataset.restored`, and `section#pool`, outside the form, is an empty container
+ * - `/form/placed` — the submission's result, whose summary names the submitted `name` and `speed`
  * - `/frame/outer` — a `127.0.0.1` document framing `/frame/inner` from `localhost` inside a
  *   10 px border at (220, 160), with a 16 px `Decoy` button under the frame-local point of the
  *   framed `Pay` button
  * - `/frame/inner` — the framed document; its `Pay` button appends the receiving node to
  *   `document.body.dataset.received`, as the `Decoy` button appends to
  *   `document.body.dataset.decoy` in the outer document
+ * - `/frame/voucher` — a `127.0.0.1` document framing `/frame/field` from `localhost`
+ * - `/frame/field` — a form holding one `Code` text input, which an Enter submits to
+ *   `/frame/done` on `127.0.0.1`, so the frame navigates to another site and process; a
+ *   `keydown` listener writes an Enter's key into the form's hidden `key` field before the
+ *   submission, so the submitted query carries `key=Enter` only when the key-down reached the frame
+ * - `/frame/done` — the voucher form's result, whose text reads back the submitted `key`
  * - `/overlay` — a `Save` button covered by `div#veil` and an uncovered `Plain` button
  * - `/late` — a `Reveal` button that inserts {@link FIXTURE_LATE_TEXT} after
  *   {@link FIXTURE_LATE_DELAY} milliseconds and records the insertion's epoch time in
@@ -942,11 +1115,29 @@ if (registry !== undefined) registry.registerTool({ name: 'fixture_echo', descri
  *   `Subscribe` button below the fold
  * - `/registry` — registers the `fixture_echo` tool through the page's WebMCP registry when
  *   the browser exposes one
+ * - `/confirm` — a `Delete` button whose click asks `confirm('Delete the draft?')` and records
+ *   the answer on `document.body.dataset.answer`, and a `Keep` button that counts its clicks on
+ *   `document.body.dataset.kept` with no dialog
+ * - `/beforeunload` — a `Next` link to `/beforeunload/next` on a page whose `beforeunload`
+ *   handler asks to stay
+ * - `/beforeunload/plain` — the same link on a page with no `beforeunload` handler
+ * - `/beforeunload/next` — the link's destination
+ * - `/popup` — an `Open details` button that opens `/popup/child` in a new tab through
+ *   `window.open`, and a `Stay` button that sets `document.body.dataset.stayed` and opens nothing
+ * - `/popup/child` — the opened tab; its `Like` button sets `document.body.dataset.liked`
+ * - `/document` — imports the built `dist/src/browser` bundle through an import map of
+ *   {@link FIXTURE_DOCUMENT_IMPORTS}, installs the registry double {@link FIXTURE_REGISTRY_MODULE}
+ *   serves, and publishes `createDocumentToolset({ document, own: true, source })` over its own
+ *   document on `window.documentToolset` after `start()`, then sets
+ *   `document.body.dataset.ready`, or `document.body.dataset.failed` with the error; a listener
+ *   records each `Gift wrap` checkbox click's `isTrusted` on `document.body.dataset.trusted`
  */
 export function renderFixturePage(path: string, port: number): string | undefined {
 	switch (path) {
 		case '/form':
 			return FORM_PAGE
+		case '/form/placed':
+			return PLACED_PAGE
 		case '/frame/outer':
 			return `<!doctype html><html><head><title>Checkout</title><style>html,body{margin:0;height:100%}#decoy{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}iframe{position:absolute;left:220px;top:160px;width:300px;height:200px;border:10px solid gray;padding:0}</style></head><body>
 <button id="decoy" onclick="document.body.dataset.decoy = [document.body.dataset.decoy, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Decoy</button>
@@ -954,6 +1145,19 @@ export function renderFixturePage(path: string, port: number): string | undefine
 </body></html>`
 		case '/frame/inner':
 			return INNER_PAGE
+		case '/frame/voucher':
+			return `<!doctype html><html><head><title>Voucher</title></head><body>
+<main><h1>Voucher</h1><iframe title="Voucher form" src="http://localhost:${port}/frame/field"></iframe></main>
+</body></html>`
+		case '/frame/field':
+			return `<!doctype html><html><head><title>Voucher form</title></head><body>
+<form action="http://127.0.0.1:${port}/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label><input id="key" name="key" type="hidden"></form>
+<script>
+document.getElementById('code').addEventListener('keydown', (event) => { if (event.key === 'Enter') document.getElementById('key').value = event.key })
+</script>
+</body></html>`
+		case '/frame/done':
+			return DONE_PAGE
 		case '/overlay':
 			return OVERLAY_PAGE
 		case '/late':
@@ -962,29 +1166,84 @@ export function renderFixturePage(path: string, port: number): string | undefine
 			return ARTICLE_PAGE
 		case '/registry':
 			return REGISTRY_PAGE
+		case '/confirm':
+			return CONFIRM_PAGE
+		case '/beforeunload':
+			return LEAVE_PAGE
+		case '/beforeunload/plain':
+			return PLAIN_PAGE
+		case '/beforeunload/next':
+			return NEXT_PAGE
+		case '/popup':
+			return POPUP_PAGE
+		case '/popup/child':
+			return CHILD_PAGE
+		case '/document':
+			return DOCUMENT_PAGE
 		default:
 			return undefined
 	}
 }
 
 /**
+ * Throws naming `npm run build` when a built bundle file the document page imports is absent.
+ *
+ * @param root - The workspace directory the bundle is built under. Default: this workspace
+ * @throws Thrown when a {@link FIXTURE_DOCUMENT_BUNDLE} file is absent under `root`, naming each
+ * absent file and `npm run build`.
+ */
+export function requireDocumentBundle(root: string = FIXTURE_WORKSPACE): void {
+	const absent = FIXTURE_DOCUMENT_BUNDLE.filter((path) => !existsSync(join(root, path)))
+	if (absent.length > 0)
+		throw new Error(
+			`Precondition failed: ${absent.join(' and ')} ${absent.length === 1 ? 'is' : 'are'} absent; run npm run build before the document proofs.`,
+		)
+}
+
+/**
+ * Loads the JavaScript the fixture server answers a module path with.
+ *
+ * @param path - The request path, such as `/dist/src/browser/index.js`
+ * @param root - The workspace directory the module files are read from. Default: this workspace
+ * @returns The module source; `undefined` for a path no fixture module serves or whose file is
+ * absent under `root`
+ * @remarks
+ * The served paths are each {@link FIXTURE_DOCUMENT_IMPORTS} entry, the two
+ * {@link FIXTURE_DOCUMENT_BUNDLE} files, the `@orkestrel/mcp` core entry the browser entry
+ * imports relatively, and {@link FIXTURE_REGISTRY_MODULE}, which is `tests/fixtures/modelContext.ts`
+ * with its types removed by Vite's `transformWithOxc`.
+ */
+export async function loadFixtureModule(
+	path: string,
+	root: string = FIXTURE_WORKSPACE,
+): Promise<string | undefined> {
+	if (path === FIXTURE_REGISTRY_MODULE) {
+		const source = join(root, 'tests/fixtures/modelContext.ts')
+		if (!existsSync(source)) return undefined
+		const { transformWithOxc } = await import('vite')
+		return (await transformWithOxc(readFileSync(source, 'utf8'), source)).code
+	}
+	if (
+		!Object.values(FIXTURE_DOCUMENT_IMPORTS).includes(path) &&
+		!FIXTURE_RELATIVE_MODULES.includes(path)
+	)
+		return undefined
+	const file = join(root, path)
+	return existsSync(file) ? readFileSync(file, 'utf8') : undefined
+}
+
+/**
  * Starts the fixture page server on an ephemeral `127.0.0.1` port.
  *
  * @returns A {@link FixtureServerInterface} answering every {@link renderFixturePage} path with
- * `200` and any other path with `404`
+ * `200` and HTML, every {@link loadFixtureModule} path with `200` and JavaScript, and any other
+ * path with `404`
  * @remarks Chromium resolves `localhost` to the loopback interface, so the one listener serves
  * both {@link FixtureHost} origins.
  */
 export async function createFixtureServer(): Promise<FixtureServerInterface> {
 	const server = createServer((request, response) => {
-		const page = renderFixturePage(
-			new URL(request.url ?? '/', 'http://127.0.0.1').pathname,
-			request.socket.localPort ?? 0,
-		)
-		response.writeHead(page === undefined ? 404 : 200, {
-			'content-type': 'text/html; charset=utf-8',
-		})
-		response.end(page ?? '')
+		void serveFixtureRequest(request, response)
 	})
 	const loopback = await createLoopback(server)
 	return {
@@ -993,4 +1252,30 @@ export async function createFixtureServer(): Promise<FixtureServerInterface> {
 			`http://${host}:${loopback.port}${path}`,
 		destroy: (): Promise<void> => loopback.destroy(),
 	}
+}
+
+async function serveFixtureRequest(
+	request: IncomingMessage,
+	response: ServerResponse,
+): Promise<void> {
+	const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
+	const page = renderFixturePage(path, request.socket.localPort ?? 0)
+	if (page !== undefined) {
+		response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+		response.end(page)
+		return
+	}
+	const module = await loadFixtureModule(path).catch((error: unknown) =>
+		error instanceof Error ? error : new Error(String(error)),
+	)
+	if (module instanceof Error) {
+		response.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
+		response.end(module.message)
+		return
+	}
+	response.writeHead(module === undefined ? 404 : 200, {
+		'content-type':
+			module === undefined ? 'text/html; charset=utf-8' : 'text/javascript; charset=utf-8',
+	})
+	response.end(module ?? '')
 }

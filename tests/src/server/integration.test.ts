@@ -5,7 +5,7 @@ import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createCDPTestServer } from '../../setupServer.js'
 
 describe('WebMCP over WebSocket', () => {
-	it('C9 settles execute from a response and event sent in one socket write', async () => {
+	it('C9 settles execute from a response and event sent in one socket write, after the registry emits respond', async () => {
 		const server = await createCDPTestServer()
 		server.advertise([{ name: 'search', description: 'Search', frameId: 'main' }], {
 			status: 'Completed',
@@ -20,11 +20,12 @@ describe('WebMCP over WebSocket', () => {
 			const registry = page.registry
 			expect(await registry.start()).toBe(true)
 			await waitForCondition('WebMCP tool advertised', () => registry.tool('search') !== undefined)
-			const result = await registry.execute(
-				requireValue(registry.tool('search')),
-				{ query: 'book' },
-				{ timeout: 1000 },
-			)
+			const order: string[] = []
+			registry.emitter.on('respond', () => order.push('respond'))
+			const result = await registry
+				.execute(requireValue(registry.tool('search')), { query: 'book' }, { timeout: 1000 })
+				.finally(() => order.push('execute'))
+			expect(order).toStrictEqual(['respond', 'execute'])
 			expect(result).toEqual({
 				id: expect.any(String),
 				status: 'Completed',

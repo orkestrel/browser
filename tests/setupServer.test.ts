@@ -3,24 +3,29 @@
  *
  * The subject is the Node-only test infrastructure `tests/src/server/**` and `tests/service/**`
  * drive: the port reservation helpers, the process wait, the scratch registry, the raw TCP
- * fixtures, the in-process CDP server, the spawned fake browser, and the fixture page server. Every case uses the real resource the fixture exists to
- * provide — real loopback sockets on ephemeral ports, real files, and real child processes.
+ * fixtures, the in-process CDP server and the frames of each socket write it performs, the spawned
+ * fake browser, the fixture page and module server, and the built-bundle precondition of the
+ * document page. Every case uses the real resource the fixture exists to provide — real loopback
+ * sockets on ephemeral ports, real files, and real child processes.
  *
  * `tests/setupServer.ts` declares no DOM-driving export, so this file defers nothing to a browser
  * suite. This package registers no browser project.
  *
  * Expected values are derived by a route the module does not share: a second socket connecting to
  * the port `readServerPort` reports, the platform `WebSocket` client driving the CDP fixture, the
- * child's own `spawn` handle carrying the identifier the fixture publishes, and `existsSync` reading
- * the directories the scratch registry removes.
+ * child's own `spawn` handle carrying the identifier the fixture publishes, `existsSync` reading
+ * the directories the scratch registry removes, and Node's own module resolution for the entries
+ * the document page's import map names.
  */
 
 import type { CDPTestServerInterface } from './setupServer.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { basename, join } from 'node:path'
+import { fileURLToPath } from 'node:url'
+import { encodeWebSocketFrame, WEBSOCKET_OPCODE_TEXT } from '@orkestrel/websocket'
 import {
 	createRecorder,
 	readProperty,
@@ -40,15 +45,23 @@ import {
 	createTempDirectory,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
+	FIXTURE_DOCUMENT_BUNDLE,
+	FIXTURE_DOCUMENT_IMPORTS,
 	FIXTURE_LATE_DELAY,
 	FIXTURE_LATE_TEXT,
+	FIXTURE_REGISTRY_MODULE,
+	loadFixtureModule,
 	readFixtureProcessId,
 	readServerPort,
+	readWebSocketFrames,
 	renderFixturePage,
+	requireDocumentBundle,
 	reservePort,
 	StallServer,
 	waitForProcessExit,
 } from './setupServer.js'
+
+const WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
 
 afterAll(async () => {
 	await destroyFakeBrowsers()
@@ -352,6 +365,67 @@ describe('createCDPTestServer', () => {
 		await server.close()
 	})
 
+	it('P5 writes the invokeTool reply and the toolResponded event in one socket write, and every other frame in its own', async () => {
+		const server = await createCDPTestServer()
+		try {
+			const tools = [{ name: 'search', description: 'Search', frameId: 'main' }]
+			server.advertise(tools, { status: 'Completed', output: { found: 'book' } })
+			const frames: unknown[] = []
+
+			const client = new WebSocket(server.endpoint)
+			client.addEventListener('message', (event) => frames.push(JSON.parse(String(event.data))))
+			await new Promise<void>((resolve, reject) => {
+				client.addEventListener('open', () => resolve(), { once: true })
+				client.addEventListener(
+					'error',
+					() => reject(new Error('The CDP test server refused the upgrade')),
+					{ once: true },
+				)
+			})
+
+			client.send(JSON.stringify({ id: 1, method: 'WebMCP.enable', sessionId: 'session-1' }))
+			client.send(
+				JSON.stringify({
+					id: 2,
+					method: 'WebMCP.invokeTool',
+					params: { frameId: 'main', toolName: 'search', input: { query: 'book' } },
+					sessionId: 'session-1',
+				}),
+			)
+			await waitForCondition(
+				'the CDP test server answered both requests',
+				() => frames.length === 4,
+				{
+					budget: 2000,
+				},
+			)
+
+			const reply = { id: 2, result: { invocationId: 'invocation-2' } }
+			const responded = {
+				method: 'WebMCP.toolResponded',
+				params: { status: 'Completed', output: { found: 'book' }, invocationId: 'invocation-2' },
+				sessionId: 'session-1',
+			}
+			expect(
+				server.writes.map((chunk) =>
+					readWebSocketFrames(chunk).map((payload): unknown => JSON.parse(payload)),
+				),
+			).toStrictEqual([
+				[{ id: 1, result: {} }],
+				[{ method: 'WebMCP.toolsAdded', params: { tools }, sessionId: 'session-1' }],
+				[reply, responded],
+			])
+			expect(frames).toStrictEqual([
+				{ id: 1, result: {} },
+				{ method: 'WebMCP.toolsAdded', params: { tools }, sessionId: 'session-1' },
+				reply,
+				responded,
+			])
+		} finally {
+			await server.close()
+		}
+	})
+
 	it('counts the open sockets and closes each one', async () => {
 		const server: CDPTestServerInterface = await createCDPTestServer()
 		expect(server.sockets).toBe(0)
@@ -380,6 +454,29 @@ describe('createCDPTestServer', () => {
 })
 
 // === Fake browser process
+
+describe('readWebSocketFrames', () => {
+	it('reads each frame one write carries, in order, and nothing from an empty write', () => {
+		const chunk = Buffer.concat([
+			encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, '{"id":1}'),
+			encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'x'.repeat(300)),
+		])
+
+		expect(readWebSocketFrames(chunk)).toStrictEqual(['{"id":1}', 'x'.repeat(300)])
+		expect(readWebSocketFrames(Buffer.alloc(0))).toStrictEqual([])
+	})
+
+	it('refuses a write that ends inside a frame, naming the frame offset', () => {
+		const first = encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'whole')
+		const second = encodeWebSocketFrame(WEBSOCKET_OPCODE_TEXT, 'cut short')
+
+		expect(() =>
+			readWebSocketFrames(Buffer.concat([first, second.subarray(0, second.length - 1)])),
+		).toThrow(
+			`The write ends inside the frame at byte ${first.length} of ${first.length + second.length - 1}`,
+		)
+	})
+})
 
 describe('readFixtureProcessId', () => {
 	it('reads a published identifier and refuses a torn write or a file that never appears', async () => {
@@ -478,21 +575,34 @@ describe('createFakeBrowserProcess', () => {
 
 describe('renderFixturePage', () => {
 	it('renders every fixture path as a titled document and refuses an unknown path', () => {
-		const titles = Object.fromEntries(
-			['/form', '/frame/outer', '/frame/inner', '/overlay', '/late', '/article', '/registry'].map(
-				(path) => [path, /<title>([^<]*)<\/title>/.exec(renderFixturePage(path, 4100) ?? '')?.[1]],
-			),
-		)
-
-		expect(titles).toStrictEqual({
+		const expected = {
 			'/form': 'Delivery form',
+			'/form/placed': 'Order placed',
 			'/frame/outer': 'Checkout',
 			'/frame/inner': 'Payment',
+			'/frame/voucher': 'Voucher',
+			'/frame/field': 'Voucher form',
+			'/frame/done': 'Voucher applied',
 			'/overlay': 'Overlay',
 			'/late': 'Late',
 			'/article': 'Field notes',
 			'/registry': 'Registry',
-		})
+			'/confirm': 'Drafts',
+			'/beforeunload': 'Unsaved note',
+			'/beforeunload/plain': 'Saved note',
+			'/beforeunload/next': 'Next note',
+			'/popup': 'Catalog',
+			'/popup/child': 'Details',
+			'/document': 'Gift options',
+		}
+		const titles = Object.fromEntries(
+			Object.keys(expected).map((path) => [
+				path,
+				/<title>([^<]*)<\/title>/.exec(renderFixturePage(path, 4100) ?? '')?.[1],
+			]),
+		)
+
+		expect(titles).toStrictEqual(expected)
 		expect(renderFixturePage('/missing', 4100)).toBeUndefined()
 		expect(renderFixturePage('/form/review', 4100)).toBeUndefined()
 	})
@@ -511,6 +621,66 @@ describe('renderFixturePage', () => {
 		expect(renderFixturePage('/frame/outer', 4200)).toContain('http://localhost:4200/frame/inner')
 	})
 
+	it('submits the form page to its placed page and frames the voucher field from localhost with its action on 127.0.0.1', () => {
+		const form = requireValue(renderFixturePage('/form', 4100))
+
+		expect(form).toContain('<form action="/form/placed" method="get">')
+		expect(form).toContain('<input id="name" name="name" type="text" value="Ada">')
+		expect(form.indexOf('</form>')).toBeLessThan(form.indexOf('<section id="pool"'))
+		expect(renderFixturePage('/form/placed', 4100)).toContain("query.get('name')")
+		expect(renderFixturePage('/frame/voucher', 4100)).toContain(
+			'<iframe title="Voucher form" src="http://localhost:4100/frame/field"></iframe>',
+		)
+		expect(renderFixturePage('/frame/field', 4200)).toContain(
+			'<form action="http://127.0.0.1:4200/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label><input id="key" name="key" type="hidden"></form>',
+		)
+		expect(renderFixturePage('/frame/field', 4200)).toContain(
+			"document.getElementById('code').addEventListener('keydown', (event) => { if (event.key === 'Enter') document.getElementById('key').value = event.key })",
+		)
+		expect(renderFixturePage('/frame/done', 4200)).toContain(
+			"'Received key ' + new URLSearchParams(location.search).get('key')",
+		)
+	})
+
+	it('asks confirm on Delete, guards leaving the beforeunload page only, and opens the child page from the popup page', () => {
+		expect(renderFixturePage('/confirm', 4100)).toContain(
+			'onclick="document.body.dataset.answer = String(confirm(\'Delete the draft?\'))">Delete</button>',
+		)
+		expect(renderFixturePage('/confirm', 4100)).toContain(
+			'onclick="document.body.dataset.kept = String(Number(document.body.dataset.kept ?? \'0\') + 1)">Keep</button>',
+		)
+		expect(renderFixturePage('/beforeunload', 4100)).toContain(
+			"addEventListener('beforeunload', (event) => { event.preventDefault(); event.returnValue = '' })",
+		)
+		expect(renderFixturePage('/beforeunload', 4100)).toContain(
+			'<a href="/beforeunload/next">Next</a>',
+		)
+		expect(renderFixturePage('/beforeunload/plain', 4100)).toContain(
+			'<a href="/beforeunload/next">Next</a>',
+		)
+		expect(renderFixturePage('/beforeunload/plain', 4100)).not.toContain('addEventListener')
+		expect(renderFixturePage('/popup', 4100)).toContain(
+			"onclick=\"window.open('/popup/child', 'details')\">Open details</button>",
+		)
+		expect(renderFixturePage('/popup', 4100)).toContain('id="stay"')
+	})
+
+	it('imports the built bundle through the document import map and publishes a toolset over the registry double', () => {
+		const page = requireValue(renderFixturePage('/document', 4100))
+		const imports: unknown = JSON.parse(
+			requireValue(/<script type="importmap">(.*)<\/script>/.exec(page)?.[1]),
+		)
+
+		expect(imports).toStrictEqual({ imports: { ...FIXTURE_DOCUMENT_IMPORTS } })
+		expect(page).toContain("import { createDocumentToolset } from '/dist/src/browser/index.js'")
+		expect(page).toContain("import { createModelContext } from '@orkestrel/mcp/browser'")
+		expect(page).toContain(`import { installModelContext } from '${FIXTURE_REGISTRY_MODULE}'`)
+		expect(page).toContain(
+			'createDocumentToolset({ document, own: true, source: createModelContext({ document }) })',
+		)
+		expect(page).toContain('window.documentToolset = toolset')
+	})
+
 	it('schedules the late text on the Reveal click after the late delay', () => {
 		const late = requireValue(renderFixturePage('/late', 4100))
 
@@ -522,6 +692,116 @@ describe('renderFixturePage', () => {
 			'append(line); document.body.dataset.inserted = String(performance.timeOrigin + performance.now()) }',
 		)
 		expect(late).not.toContain(FIXTURE_LATE_TEXT + '</')
+	})
+})
+
+describe('FIXTURE_DOCUMENT_IMPORTS', () => {
+	// A workspace reached through a linked `node_modules` resolves to the link's target, so the
+	// comparison starts at the `node_modules` segment.
+	it('maps each specifier to the served path of the entry Node resolves for it', () => {
+		const resolved = Object.fromEntries(
+			Object.keys(FIXTURE_DOCUMENT_IMPORTS).map((specifier) => [
+				specifier,
+				fileURLToPath(import.meta.resolve(specifier))
+					.split('\\')
+					.join('/')
+					.replace(/^.*(?=\/node_modules\/)/, ''),
+			]),
+		)
+
+		expect(resolved).toStrictEqual({ ...FIXTURE_DOCUMENT_IMPORTS })
+		expect(Object.keys(FIXTURE_DOCUMENT_IMPORTS)).toContain('@orkestrel/mcp/browser')
+	})
+
+	it('names every bare specifier the served modules import, walking every relative import to a served module', async () => {
+		const pending = [...Object.values(FIXTURE_DOCUMENT_IMPORTS), FIXTURE_REGISTRY_MODULE]
+		const visited = new Set<string>()
+		const bare = new Set<string>()
+		const unserved: string[] = []
+		for (let path = pending.pop(); path !== undefined; path = pending.pop()) {
+			if (visited.has(path)) continue
+			visited.add(path)
+			const source = await loadFixtureModule(path)
+			if (source === undefined) {
+				unserved.push(path)
+				continue
+			}
+			for (const match of source.matchAll(
+				/(?:^|\n)\s*(?:import|export)\s[^;]*?from\s*["']([^"']+)["']/g,
+			)) {
+				const specifier = requireValue(match[1])
+				if (specifier.startsWith('.'))
+					pending.push(new URL(specifier, `http://127.0.0.1${path}`).pathname)
+				else bare.add(specifier)
+			}
+		}
+
+		expect(visited).toContain('/node_modules/@orkestrel/mcp/dist/src/core/index.js')
+		expect(bare).toContain('@orkestrel/sse')
+		expect([...bare].filter((specifier) => !(specifier in FIXTURE_DOCUMENT_IMPORTS))).toStrictEqual(
+			[],
+		)
+		expect(unserved).toStrictEqual([])
+	})
+})
+
+describe('loadFixtureModule', () => {
+	it('serves the bundle files and the listed package entries from the root it is given, and no other path', async () => {
+		const scratch = createTempDirectory()
+		scratch.write('dist/src/browser/index.js', 'export const bundle = "browser"\n')
+		scratch.write('dist/src/core/index.js', 'export const bundle = "core"\n')
+		scratch.write('dist/src/server/index.js', 'export const bundle = "server"\n')
+		const contract = '/node_modules/@orkestrel/contract/dist/src/core/index.js'
+
+		expect(await loadFixtureModule('/dist/src/browser/index.js', scratch.path)).toBe(
+			'export const bundle = "browser"\n',
+		)
+		expect(await loadFixtureModule('/dist/src/core/index.js', scratch.path)).toBe(
+			'export const bundle = "core"\n',
+		)
+		expect(await loadFixtureModule('/dist/src/server/index.js', scratch.path)).toBeUndefined()
+		expect(await loadFixtureModule(contract, scratch.path)).toBeUndefined()
+		expect(await loadFixtureModule(contract)).toBe(readFileSync(join(WORKSPACE, contract), 'utf8'))
+		expect(
+			await loadFixtureModule('/node_modules/@orkestrel/contract/package.json'),
+		).toBeUndefined()
+		expect(await loadFixtureModule('/dist/src/browser/../../../package.json')).toBeUndefined()
+		expect(await loadFixtureModule('/document')).toBeUndefined()
+	})
+
+	it('serves the registry double with its types removed, and nothing from a root without it', async () => {
+		const module = requireValue(await loadFixtureModule(FIXTURE_REGISTRY_MODULE))
+
+		expect(FIXTURE_REGISTRY_MODULE).toBe('/tests/fixtures/modelContext.js')
+		expect(module).toContain('export function installModelContext(host)')
+		expect(module).not.toContain('import type')
+		expect(module).not.toContain('host: Document')
+		expect(
+			await loadFixtureModule(FIXTURE_REGISTRY_MODULE, createTempDirectory().path),
+		).toBeUndefined()
+	})
+})
+
+describe('requireDocumentBundle', () => {
+	it('names npm run build and each absent bundle file, and returns when both are built', () => {
+		const empty = createTempDirectory()
+		const partial = createTempDirectory()
+		partial.write('dist/src/core/index.js', '')
+		const built = createTempDirectory()
+		built.write('dist/src/browser/index.js', '')
+		built.write('dist/src/core/index.js', '')
+
+		expect([...FIXTURE_DOCUMENT_BUNDLE]).toStrictEqual([
+			'dist/src/browser/index.js',
+			'dist/src/core/index.js',
+		])
+		expect(() => requireDocumentBundle(empty.path)).toThrow(
+			'Precondition failed: dist/src/browser/index.js and dist/src/core/index.js are absent; run npm run build before the document proofs.',
+		)
+		expect(() => requireDocumentBundle(partial.path)).toThrow(
+			'Precondition failed: dist/src/browser/index.js is absent; run npm run build before the document proofs.',
+		)
+		expect(requireDocumentBundle(built.path)).toBeUndefined()
 	})
 })
 
@@ -549,6 +829,16 @@ describe('createFixtureServer', () => {
 			const missing = await fetch(fixtures.url('/missing'))
 			expect(missing.status).toBe(404)
 			expect(await missing.text()).toBe('')
+
+			const contract = '/node_modules/@orkestrel/contract/dist/src/core/index.js'
+			const module = await fetch(fixtures.url(contract))
+			expect(module.status).toBe(200)
+			expect(module.headers.get('content-type')).toBe('text/javascript; charset=utf-8')
+			expect(await module.text()).toBe(readFileSync(join(WORKSPACE, contract), 'utf8'))
+
+			const manifest = await fetch(fixtures.url('/node_modules/@orkestrel/contract/package.json'))
+			expect(manifest.status).toBe(404)
+			await manifest.text()
 		} finally {
 			await fixtures.destroy()
 		}

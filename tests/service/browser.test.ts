@@ -37,7 +37,6 @@ import {
 	requireValue,
 	retryUntil,
 	waitForCondition,
-	waitForDelay,
 } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
@@ -976,13 +975,15 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(latency).toBeGreaterThanOrEqual(-2)
 		expect(latency).toBeLessThan(300)
 
-		// The checkpoint sits 900 ms before the deadline, a margin no host timer overshoots.
-		const pending = createRecorder<[]>()
-		const absent = page.wait('Never shown', { timeout: 1_000 })
-		void absent.then(pending.handler, pending.handler)
-		await waitForDelay(100)
-		expect(pending.count).toBe(0)
-		await expect(absent).rejects.toMatchObject({ code: 'BROWSER_WAIT_TIMEOUT' })
+		// The checkpoint is the settlement itself: the in-page deadline starts after this process
+		// reads `started`, so a wait that stays pending until its deadline settles at least 1 000 ms
+		// later on any host, and a slow host only moves the settlement later. The 2 ms allowance
+		// covers the two processes' monotonic clocks.
+		const started = performance.now()
+		await expect(page.wait('Never shown', { timeout: 1_000 })).rejects.toMatchObject({
+			code: 'BROWSER_WAIT_TIMEOUT',
+		})
+		expect(performance.now() - started).toBeGreaterThanOrEqual(1_000 - 2)
 	})
 
 	it('navigate clears references: a stale element refuses GONE naming look, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {
