@@ -19,6 +19,8 @@ import type { CDPSentMessage } from './setup.js'
 import { describe, expect, it } from 'vitest'
 import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
 import {
+	readBrowserCompiledTimers,
+	createBrowserElementFixture,
 	createAttachedPage,
 	createCDPTestTransport,
 	createCodegenBindingPayload,
@@ -42,6 +44,47 @@ import {
 	scriptTrustedSelector,
 	throwListenerError,
 } from './setup.js'
+
+describe('element protocol and compiler fixtures', () => {
+	it('catches a timer instrument that ignores syntax errors, intervals, or the actual delay argument', () => {
+		expect(readBrowserCompiledTimers('setTimeout(() => undefined, 41)')).toEqual([
+			{ name: 'setTimeout', delay: '41' },
+		])
+		expect(readBrowserCompiledTimers('setInterval(() => undefined, 7)')).toEqual([
+			{ name: 'setInterval', delay: '7' },
+		])
+		expect(readBrowserCompiledTimers('setTimeout(() => undefined)')).toEqual([
+			{ name: 'setTimeout', delay: undefined },
+		])
+		expect(() => readBrowserCompiledTimers('(')).toThrow('Unexpected')
+	})
+
+	it('catches losing the scripted iframe, overlapping backend, or frame-local quad', async () => {
+		const { page, client } = await createBrowserElementFixture()
+		try {
+			const tree = await page.send('Accessibility.getFullAXTree', { frameId: 'main' })
+			expect(readProperty(tree, 'nodes')).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ nodeId: 'link', backendDOMNodeId: 3 }),
+					expect.objectContaining({
+						nodeId: 'iframe',
+						backendDOMNodeId: 13,
+						role: { value: 'Iframe' },
+					}),
+				]),
+			)
+			const child = await page.send('Accessibility.getFullAXTree', { frameId: 'child' })
+			expect(readProperty(child, 'nodes')).toEqual(
+				expect.arrayContaining([expect.objectContaining({ nodeId: 'save', backendDOMNodeId: 3 })]),
+			)
+			expect(await page.send('DOM.getContentQuads', { backendNodeId: 3 })).toEqual({
+				quads: [[10, 20, 30, 20, 30, 40, 10, 40]],
+			})
+		} finally {
+			await client.close()
+		}
+	})
+})
 
 // === Fake CDP transport
 

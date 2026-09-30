@@ -333,3 +333,49 @@ export const BROWSER_REGISTRY_ABSENT_CODE = -32601
 
 /** Bounds adopted tool JSON output and error messages to 4096 UTF-16 code units. */
 export const BROWSER_REGISTRY_OUTPUT_LIMIT = 4096
+/** Prefixes stable element references within a browser context. */
+export const BROWSER_REFERENCE_PREFIX = 'e'
+
+/** Bounds the default number of actionable elements in an outline. */
+export const BROWSER_OUTLINE_LIMIT = 150
+
+/** Names accessibility roles that receive actionable outline references. */
+export const BROWSER_INTERACTIVE_ROLES: ReadonlySet<string> = Object.freeze(
+	new Set([
+		'button',
+		'link',
+		'textbox',
+		'searchbox',
+		'combobox',
+		'listbox',
+		'option',
+		'checkbox',
+		'radio',
+		'switch',
+		'slider',
+		'spinbutton',
+		'menuitem',
+		'menuitemcheckbox',
+		'menuitemradio',
+		'tab',
+		'treeitem',
+		'DisclosureTriangle',
+		'PopUpButton',
+		'ColorWell',
+		'Date',
+		'DateTime',
+		'Time',
+		'InputTime',
+		'Iframe',
+	]),
+)
+
+/** Names accessibility roles whose own rows add no outline content. */
+export const BROWSER_OUTLINE_OMITTED_ROLES: ReadonlySet<string> = Object.freeze(
+	new Set(['none', 'generic', 'InlineTextBox', 'RootWebArea', 'WebArea']),
+)
+
+/** Names accessibility roles rendered as text without an actionable reference. */
+export const BROWSER_TEXT_ROLES: ReadonlySet<string> = Object.freeze(
+	new Set(['heading', 'StaticText']),
+)

@@ -1,4 +1,5 @@
 import type {
+	BrowserFrameInterface,
 	CDPClientInterface,
 	CDPTarget,
 	CDPTransportEventMap,
@@ -8,6 +9,49 @@ import type {
 import { BrowserCodegen, BrowserPage, createCDPClient } from '@src/core'
 import { isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
+import { waitForEvent } from '@orkestrel/test'
+
+/** Describes a timer call observed while evaluating a natively parsed expression. */
+export interface BrowserCompiledTimer {
+	readonly name: string
+	readonly delay: string | undefined
+}
+
+/**
+ * Parses compiled JavaScript and collects timer calls, including their actual delay argument.
+ * @param expression - Compiler output
+ * @returns Timer names and the values passed as their delay arguments
+ */
+export function readBrowserCompiledTimers(expression: string): readonly BrowserCompiledTimer[] {
+	const timers: BrowserCompiledTimer[] = []
+	const evaluator = new Function(
+		'observer',
+		'timers',
+		`
+		const globalThis = {}
+		const MutationObserver = observer
+		const document = { body: { innerText: '' } }
+		const requestAnimationFrame = () => 0
+		const cancelAnimationFrame = () => undefined
+		const clearTimeout = () => undefined
+		const setTimeout = (_callback, delay) => timers.push({ name: 'setTimeout', delay: delay === undefined ? undefined : String(delay) })
+		const setInterval = (_callback, delay) => timers.push({ name: 'setInterval', delay: delay === undefined ? undefined : String(delay) })
+		return (${expression})
+	`,
+	)
+	Reflect.apply(evaluator, undefined, [BrowserCompiledObserver, timers])
+	return timers
+}
+
+/** Supplies inert observer methods to the compiler timer-argument instrument. */
+export class BrowserCompiledObserver {
+	observe(): void {
+		return undefined
+	}
+	disconnect(): void {
+		return undefined
+	}
+}
 
 /** Ignores an intentional callback invocation. */
 export function ignoreCall(): void {
@@ -27,6 +71,20 @@ export function throwListenerError(): never {
 /** Evaluates a JavaScript expression fixture and exposes its result as unknown. */
 export function evaluateJavaScript(expression: string): unknown {
 	const evaluator = new Function(`return (${expression})`)
+	return Reflect.apply(evaluator, undefined, [])
+}
+
+/** Evaluates a hit compiler against inert composed-tree and sibling-tree data. */
+export function evaluateBrowserHit(declaration: string): unknown {
+	const evaluator = new Function(`
+		class ShadowRoot { constructor(host) { this.host = host; this.nodeType = 11 } }
+		const document = { nodeType: 9 }
+		const element = { nodeType: 1, parentNode: document, contains: (target) => target === element }
+		const shadow = new ShadowRoot(element)
+		const target = { nodeType: 1, parentNode: shadow }
+		const sibling = { nodeType: 1, parentNode: document }
+		return [(${declaration}).call(element, target), (${declaration}).call(element, sibling)]
+	`)
 	return Reflect.apply(evaluator, undefined, [])
 }
 
@@ -213,6 +271,396 @@ export function replyOk(
 	result: unknown = {},
 ): void {
 	transport.onSend(method, (message) => transport.reply(message.id, result))
+}
+
+/** Holds a deliberately non-document-ordered AX response including the P8 iframe. */
+export const BROWSER_ELEMENT_AX_FIXTURE = Object.freeze({
+	nodes: [
+		{
+			nodeId: 'root',
+			backendDOMNodeId: 1,
+			role: { value: 'RootWebArea' },
+			name: { value: 'Cart' },
+			childIds: [
+				'heading',
+				'link',
+				'email',
+				'gift',
+				'order',
+				'text',
+				'none',
+				'generic',
+				'inline',
+				'ignored',
+				'iframe',
+				'paragraph',
+				'list',
+			],
+		},
+		{
+			nodeId: 'order',
+			parentId: 'root',
+			backendDOMNodeId: 7,
+			role: { value: 'button' },
+			name: { value: ' Place order ' },
+			properties: [{ name: 'disabled', value: { value: true } }],
+		},
+		{
+			nodeId: 'heading',
+			parentId: 'root',
+			backendDOMNodeId: 2,
+			role: { value: 'heading' },
+			name: { value: ' Your cart ' },
+		},
+		{
+			nodeId: 'link',
+			parentId: 'root',
+			childIds: ['duplicate'],
+			backendDOMNodeId: 3,
+			role: { value: 'link' },
+			name: { value: ' Home ' },
+		},
+		{
+			nodeId: 'duplicate',
+			parentId: 'link',
+			backendDOMNodeId: 4,
+			role: { value: 'StaticText' },
+			name: { value: 'Home' },
+		},
+		{
+			nodeId: 'email',
+			parentId: 'root',
+			backendDOMNodeId: 5,
+			role: { value: 'textbox' },
+			name: { value: 'Email' },
+			value: { value: 'sam@example.test' },
+		},
+		{
+			nodeId: 'gift',
+			parentId: 'root',
+			backendDOMNodeId: 6,
+			role: { value: 'checkbox' },
+			name: { value: 'Gift wrap' },
+			properties: [{ name: 'checked', value: { value: 'true' } }],
+		},
+		{
+			nodeId: 'text',
+			parentId: 'root',
+			backendDOMNodeId: 8,
+			role: { value: 'StaticText' },
+			name: { value: ' Two items, 48.00 total. ' },
+		},
+		{
+			nodeId: 'none',
+			parentId: 'root',
+			backendDOMNodeId: 9,
+			role: { value: 'none' },
+			name: { value: 'omit none' },
+		},
+		{
+			nodeId: 'generic',
+			parentId: 'root',
+			backendDOMNodeId: 10,
+			role: { value: 'generic' },
+			name: { value: 'omit generic' },
+		},
+		{
+			nodeId: 'inline',
+			parentId: 'root',
+			backendDOMNodeId: 11,
+			role: { value: 'InlineTextBox' },
+			name: { value: 'omit inline' },
+		},
+		{
+			nodeId: 'ignored',
+			parentId: 'root',
+			backendDOMNodeId: 12,
+			ignored: true,
+			role: { value: 'button' },
+			name: { value: 'omit ignored' },
+		},
+		{
+			nodeId: 'iframe',
+			parentId: 'root',
+			backendDOMNodeId: 13,
+			role: { value: 'Iframe' },
+			name: { value: 'Checkout' },
+		},
+		{
+			nodeId: 'paragraph',
+			parentId: 'root',
+			backendDOMNodeId: 14,
+			role: { value: 'paragraph' },
+			childIds: ['paragraph-text'],
+		},
+		{
+			nodeId: 'paragraph-text',
+			parentId: 'paragraph',
+			backendDOMNodeId: 15,
+			role: { value: 'StaticText' },
+			name: { value: 'Delivery included.' },
+		},
+		{
+			nodeId: 'list',
+			parentId: 'root',
+			backendDOMNodeId: 16,
+			role: { value: 'list' },
+			childIds: ['listitem'],
+		},
+		{
+			nodeId: 'listitem',
+			parentId: 'list',
+			backendDOMNodeId: 17,
+			role: { value: 'listitem' },
+			childIds: ['marker'],
+		},
+		{
+			nodeId: 'marker',
+			parentId: 'listitem',
+			backendDOMNodeId: 18,
+			role: { value: 'ListMarker' },
+			name: { value: '•' },
+		},
+	],
+})
+
+/** Holds the iframe tree whose backend overlaps the parent renderer's link. */
+export const BROWSER_ELEMENT_CHILD_FIXTURE = Object.freeze({
+	nodes: [
+		{
+			nodeId: 'child-root',
+			backendDOMNodeId: 20,
+			role: { value: 'RootWebArea' },
+			childIds: ['save'],
+		},
+		{
+			nodeId: 'save',
+			parentId: 'child-root',
+			backendDOMNodeId: 3,
+			role: { value: 'button' },
+			name: { value: ' Save ' },
+		},
+	],
+})
+
+/** Configures protocol responses for discriminating element action tests. */
+export interface BrowserElementFixtureOptions {
+	readonly loaderless?: boolean
+	readonly readiness?: CDPSentHandler
+	readonly title?: CDPSentHandler
+	readonly document?: CDPSentHandler
+	readonly query?: CDPSentHandler
+	readonly describe?: CDPSentHandler
+	readonly metrics?: Readonly<Record<string, unknown>>
+	readonly failure?: { readonly method: string; readonly message: string }
+	readonly accessibility?: CDPSentHandler
+	readonly hidden?: boolean
+	readonly covered?: boolean
+	readonly gone?: boolean
+	readonly actionability?: string
+	readonly pressed?: () => void
+	readonly evaluation?: CDPSentHandler
+}
+
+/**
+ * Scripts accessibility, DOM, isolated-world, and trusted-input replies without replacing project behavior.
+ * @param transport - In-memory CDP boundary
+ * @param options - Deliberate protocol refusal or observation
+ */
+export function scriptBrowserElements(
+	transport: CDPTestTransportInterface,
+	options?: BrowserElementFixtureOptions,
+): void {
+	replyOk(transport, 'Accessibility.enable')
+	replyOk(transport, 'Runtime.releaseObject')
+	for (const method of ['DOM.focus', 'DOM.scrollIntoViewIfNeeded'])
+		transport.onSend(method, (message) => {
+			if (options?.failure?.method === method) transport.fail(message.id, options.failure.message)
+			else transport.reply(message.id, {})
+		})
+	replyOk(
+		transport,
+		'Page.getLayoutMetrics',
+		options?.metrics ?? { cssLayoutViewport: { pageX: 0, pageY: 0 } },
+	)
+	replyOk(transport, 'DOM.getBoxModel', {
+		model: {
+			border: [220, 160, 420, 160, 420, 360, 220, 360],
+			content: [230, 170, 410, 170, 410, 350, 230, 350],
+		},
+	})
+	replyOk(transport, 'DOM.setFileInputFiles')
+	replyOk(transport, 'Input.insertText')
+	replyOk(transport, 'Input.dispatchKeyEvent')
+	replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
+	replyOk(transport, 'Page.enable')
+	replyOk(transport, 'Runtime.enable')
+	replyOk(transport, 'Page.setLifecycleEventsEnabled')
+	replyOk(transport, 'Target.setAutoAttach')
+	replyOk(transport, 'Page.getFrameTree', {
+		frameTree: {
+			frame: { id: 'main', url: 'https://example.test/cart' },
+			childFrames: [
+				{ frame: { id: 'child', parentId: 'main', url: 'https://example.test/checkout' } },
+			],
+		},
+	})
+	transport.onSend('Page.createIsolatedWorld', (message) =>
+		transport.reply(message.id, {
+			executionContextId: message.params?.['frameId'] === 'child' ? 92 : 91,
+		}),
+	)
+	transport.onSend('Accessibility.getFullAXTree', (message) => {
+		if (options?.accessibility !== undefined) options.accessibility(message)
+		else
+			transport.reply(
+				message.id,
+				message.params?.['frameId'] === 'child'
+					? BROWSER_ELEMENT_CHILD_FIXTURE
+					: BROWSER_ELEMENT_AX_FIXTURE,
+			)
+	})
+	transport.onSend('DOM.describeNode', (message) => {
+		if (options?.describe !== undefined) {
+			options.describe(message)
+			return
+		}
+		transport.reply(message.id, {
+			node:
+				message.params?.['backendNodeId'] === 13
+					? { backendNodeId: 13, frameId: 'child' }
+					: message.params?.['backendNodeId'] === 99
+						? { backendNodeId: 99, nodeName: 'DIV', attributes: ['id', 'overlay'] }
+						: { backendNodeId: 7 },
+		})
+	})
+	transport.onSend('DOM.getDocument', (message) => {
+		if (options?.document !== undefined) options.document(message)
+		else transport.reply(message.id, { root: { nodeId: 1 } })
+	})
+	replyOk(transport, 'DOM.pushNodesByBackendIdsToFrontend', { nodeIds: [1] })
+	transport.onSend('DOM.querySelectorAll', (message) => {
+		if (options?.query !== undefined) options.query(message)
+		else transport.reply(message.id, { nodeIds: [50] })
+	})
+	transport.onSend('DOM.resolveNode', (message) => {
+		if (options?.gone === true) transport.fail(message.id, 'No node with given id found')
+		else
+			transport.reply(message.id, {
+				object: { objectId: `object-${message.params?.['backendNodeId']}` },
+			})
+	})
+	transport.onSend('DOM.getContentQuads', (message) => {
+		if (options?.failure?.method === message.method) {
+			transport.fail(message.id, options.failure.message)
+			return
+		}
+		transport.reply(message.id, {
+			quads:
+				options?.hidden === true
+					? []
+					: message.params?.['backendNodeId'] === 13
+						? [[220, 160, 420, 160, 420, 360, 220, 360]]
+						: [[10, 20, 30, 20, 30, 40, 10, 40]],
+		})
+	})
+	transport.onSend('DOM.getNodeForLocation', (message) =>
+		transport.reply(message.id, {
+			backendNodeId:
+				options?.covered === true
+					? 99
+					: message.sessionId === 'session-child'
+						? 3
+						: message.params?.['x'] === 250
+							? 13
+							: 3,
+			frameId: message.sessionId === 'session-child' ? 'child' : 'main',
+		}),
+	)
+	transport.onSend('Input.dispatchMouseEvent', (message) => {
+		if (message.params?.['type'] === 'mousePressed') options?.pressed?.()
+		transport.reply(message.id, {})
+	})
+	transport.onSend('Runtime.callFunctionOn', (message) => {
+		const declaration = message.params?.['functionDeclaration']
+		if (isString(declaration) && declaration.includes('capture.html')) {
+			transport.reply(message.id, {
+				result: {
+					value: { url: 'https://example.test/cart', title: 'Cart', html: '<button>Save</button>' },
+				},
+			})
+			return
+		}
+		if (
+			options?.actionability !== undefined &&
+			isString(declaration) &&
+			declaration.includes('requestAnimationFrame')
+		) {
+			transport.reply(message.id, {
+				exceptionDetails: { exception: { description: options.actionability } },
+			})
+		} else
+			transport.reply(message.id, {
+				result: {
+					value: !(
+						options?.covered === true &&
+						isString(declaration) &&
+						declaration.includes('function(target)')
+					),
+				},
+			})
+	})
+	transport.onSend('Runtime.evaluate', (message) => {
+		const expression = message.params?.['expression']
+		if (expression === 'document.readyState') {
+			if (options?.readiness !== undefined) options.readiness(message)
+			else transport.reply(message.id, { result: { value: 'complete' } })
+		} else if (expression === 'document.title') {
+			if (options?.title !== undefined) options.title(message)
+			else transport.reply(message.id, { result: { value: 'Cart' } })
+		} else if (options?.evaluation !== undefined) options.evaluation(message)
+		else transport.reply(message.id, { result: { value: true } })
+	})
+}
+
+/** Creates a page with a committed, DOM-ready document and scripted accessibility and DOM replies. */
+export async function createBrowserElementFixture(
+	options?: BrowserElementFixtureOptions,
+): Promise<AttachedPageFixture> {
+	const { client, transport } = await createConnectedCDPClient()
+	scriptBrowserElements(transport, options)
+	const page = new BrowserPage(
+		client,
+		'main',
+		'session-main',
+		undefined,
+		'https://example.test/cart',
+	)
+	const attached = waitForEvent<readonly [BrowserFrameInterface]>((handler) => {
+		page.emitter.on('session', handler)
+		return () => page.emitter.off('session', handler)
+	}, 'element iframe session')
+	transport.event(
+		'Target.attachedToTarget',
+		{
+			sessionId: 'session-child',
+			targetInfo: { targetId: 'child', type: 'iframe', url: 'https://example.test/checkout' },
+		},
+		'session-main',
+	)
+	await attached
+	if (options?.loaderless === true) return { client, transport, page }
+	transport.event(
+		'Page.frameNavigated',
+		{ frame: { id: 'main', url: page.url, loaderId: 'loader-main' } },
+		'session-main',
+	)
+	transport.event(
+		'Page.lifecycleEvent',
+		{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
+		'session-main',
+	)
+	return { client, transport, page }
 }
 
 /** Scripts the target attach and required domain-enable handshake. */

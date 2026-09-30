@@ -10,7 +10,6 @@ import type {
 	BrowserCallOptions,
 	BrowserSessionFunction,
 	BrowserTouchInterface,
-	BrowserWaitOptions,
 	BrowserWorldFunction,
 	CDPHandler,
 	CDPClientInterface,
@@ -223,11 +222,6 @@ export class BrowserFrame implements BrowserFrameInterface {
 		return new BrowserHandle(this.#client, session, result['result']['objectId'])
 	}
 
-	async wait(selector: string, options?: BrowserWaitOptions): Promise<void> {
-		this.assert()
-		await this.#selectors.css(selector).wait(options)
-	}
-
 	async send(
 		method: string,
 		params?: Readonly<Record<string, unknown>>,
@@ -284,6 +278,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	async #context(session: string, options?: BrowserCallOptions): Promise<number | undefined> {
 		if (!this.#isolated) return undefined
+		if (this.#world !== undefined) return await this.#world(session, options)
 		return await this.#create(session, options)
 	}
 

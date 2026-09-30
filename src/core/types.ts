@@ -1831,6 +1831,152 @@ export type BrowserWorldFunction = (
 	options?: BrowserCallOptions,
 ) => Promise<number>
 
+/** Describes an accessibility or CSS query within an optional element reference. */
+export interface BrowserElementQuery {
+	readonly role?: string
+	readonly name?: string
+	readonly css?: string
+	readonly within?: string
+}
+
+/** Configures an element wait, including whether absence satisfies it. */
+export interface BrowserElementWaitOptions extends BrowserCallOptions {
+	readonly absent?: boolean
+}
+
+/** Configures an outline's element limit and optional subtree. */
+export interface BrowserOutlineOptions extends BrowserCallOptions {
+	readonly limit?: number
+	readonly within?: string
+}
+
+/** Carries a document-order outline and its included and available element counts. */
+export interface BrowserOutline {
+	readonly url: string
+	readonly title: string
+	readonly text: string
+	readonly count: number
+	readonly total: number
+}
+
+/** Associates an outline row with its frame, session, and optional actionable reference. */
+export interface BrowserOutlineNode extends BrowserAXNode {
+	readonly session: string
+	readonly reference: string | undefined
+}
+
+/** Retains both session-local and page-composed element geometry. */
+export interface BrowserElementGeometry {
+	readonly local: BrowserQuad
+	readonly page: BrowserQuad
+}
+
+/** Identifies a manager failure without inventing an element reference. */
+export interface BrowserElementSubject {
+	readonly subject: string
+}
+
+/** Identifies the refusal an element action reports. */
+export type BrowserElementReason = 'GONE' | 'HIDDEN' | 'OCCLUDED' | 'DISABLED' | 'UNKNOWN'
+
+/** Allocates the next reference from the owning browser context. */
+export type BrowserReferenceFunction = () => string
+
+/** Resolves the page-owned isolated world for a particular frame and session. */
+export type BrowserElementWorldFunction = (
+	frame: string,
+	session: string,
+	options?: BrowserCallOptions,
+) => Promise<number>
+
+/** Waits for the current document's DOM readiness. */
+export type BrowserReadinessFunction = (options?: BrowserCallOptions) => Promise<void>
+
+/** Composes a frame-local point into page coordinates. */
+export type BrowserElementPointFunction = (
+	frame: string,
+	point: BrowserPoint,
+	options?: BrowserCallOptions,
+) => Promise<BrowserPoint>
+
+/** Provides the protocol and ownership boundaries used by a page element manager. */
+export interface BrowserElementManagerInput {
+	readonly navigation: (frame: string) => number
+	readonly page: BrowserPageInterface
+	readonly client: CDPClientInterface
+	readonly session: string
+	readonly resolve: BrowserSessionFunction
+	readonly world: BrowserElementWorldFunction
+	readonly reference: BrowserReferenceFunction
+	readonly ready: BrowserReadinessFunction
+}
+
+/** Binds an element to its document identity and the page's shared protocol resources. */
+export interface BrowserElementInput extends BrowserElementManagerInput {
+	readonly description: () => BrowserOutlineNode
+	readonly node: BrowserOutlineNode & { readonly reference: string }
+	readonly backend: number
+	readonly frame: string
+	readonly current: () => boolean
+	readonly point: BrowserElementPointFunction
+}
+
+/** Holds the resources of one lifecycle-event readiness wait. */
+export interface BrowserReadinessWait {
+	readonly resolve: () => void
+	readonly reject: (error: unknown) => void
+	readonly timer: ReturnType<typeof setTimeout>
+	readonly signal: AbortSignal | undefined
+	readonly listener: (() => void) | undefined
+}
+
+/** Provides actions and reading through a stable document element reference. */
+export interface BrowserElementInterface {
+	readonly reference: string
+	readonly role: string
+	readonly name: string
+	click(options?: BrowserCallOptions): Promise<void>
+	fill(value: string, options?: BrowserCallOptions): Promise<void>
+	select(values: readonly string[], options?: BrowserCallOptions): Promise<void>
+	focus(options?: BrowserCallOptions): Promise<void>
+	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
+}
+
+/** Provides trusted page input and capture for a referenced element. */
+export interface BrowserPageElementInterface extends BrowserElementInterface {
+	hover(options?: BrowserCallOptions): Promise<void>
+	press(key: string, options?: BrowserCallOptions): Promise<void>
+	upload(files: readonly string[], options?: BrowserCallOptions): Promise<void>
+	drag(target: BrowserPageElementInterface, options?: BrowserCallOptions): Promise<void>
+	quad(options?: BrowserCallOptions): Promise<BrowserQuad>
+	screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult>
+}
+
+/** Captures, queries, and retains references to a view's elements. */
+export interface BrowserElementManagerInterface<
+	TElement extends BrowserElementInterface = BrowserElementInterface,
+> {
+	outline(options?: BrowserOutlineOptions): Promise<BrowserOutline>
+	find(query: BrowserElementQuery, options?: BrowserCallOptions): Promise<readonly TElement[]>
+	wait(
+		query: BrowserElementQuery,
+		options?: BrowserElementWaitOptions,
+	): Promise<readonly TElement[]>
+	element(reference: string): TElement | undefined
+	elements(): readonly TElement[]
+	clear(): void
+}
+
+/** Provides the document operations shared by remote and DOM-native views. */
+export interface BrowserViewInterface {
+	readonly url: string
+	readonly trusted: boolean
+	readonly elements: BrowserElementManagerInterface
+	title(options?: BrowserCallOptions): Promise<string>
+	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
+	wait(text: string, options?: BrowserCallOptions): Promise<void>
+}
+
 /**
  * Describes the options every asynchronous page, frame, handle, and worker call accepts.
  *
@@ -2000,8 +2146,6 @@ export interface BrowserFrameInterface {
 	 * Evaluates an expression by reference and returns a disposable remote object handle.
 	 */
 	handle(expression: string, options?: BrowserCallOptions): Promise<BrowserHandleInterface>
-	/** Waits for a selector to reach the attached, detached, visible, or hidden state. */
-	wait(selector: string, options?: BrowserWaitOptions): Promise<void>
 	/**
 	 * Issues a raw CDP method in the frame's current target session, with a trailing
 	 * `BrowserCallOptions` carrying a per-call `timeout` overriding the client-wide default and a
@@ -2236,7 +2380,14 @@ export interface BrowserNodeQuery {
  * - `destroy` — release local resources and detach from the target
  * - `close` — close the remote target and release local resources
  */
-export interface BrowserPageInterface extends BrowserFrameInterface {
+export interface BrowserPageInterface extends BrowserFrameInterface, BrowserViewInterface {
+	readonly elements: BrowserElementManagerInterface<BrowserPageElementInterface>
+	readonly trusted: true
+	readonly keyboard: BrowserKeyboardInterface
+	readonly mouse: BrowserMouseInterface
+	readonly touch: BrowserTouchInterface
+	/** Waits for visible text in the main document, rejecting at the deadline or on abort. */
+	wait(text: string, options?: BrowserCallOptions): Promise<void>
 	readonly emitter: EmitterInterface<BrowserPageEventMap>
 	readonly registry: BrowserRegistryInterface
 	readonly network: BrowserNetworkManagerInterface

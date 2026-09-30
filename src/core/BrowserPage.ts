@@ -1,4 +1,8 @@
 import type {
+	BrowserElementManagerInterface,
+	BrowserPageElementInterface,
+	BrowserReadinessWait,
+	BrowserReferenceFunction,
 	BrowserCallOptions,
 	BrowserCodegenInterface,
 	BrowserCodegenOptions,
@@ -32,6 +36,7 @@ import type {
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCodegen } from './BrowserCodegen.js'
+import { BrowserElementManager } from './elements/BrowserElementManager.js'
 import { BrowserRegistry } from './BrowserRegistry.js'
 import { BrowserTransition } from './BrowserTransition.js'
 import { BrowserAccessibility } from './BrowserAccessibility.js'
@@ -49,11 +54,13 @@ import { BrowserWorker } from './BrowserWorker.js'
 import { BrowserError } from './errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_REFERENCE_PREFIX,
 	BROWSER_FRAME_WORLD_NAME,
 	BROWSER_SNAPSHOT_NODE_LIMIT,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
 } from './constants.js'
 import {
+	compileTextWaitExpression,
 	compileScreenshotCleanupExpression,
 	compileScreenshotPreparationExpression,
 } from './compilers.js'
@@ -64,6 +71,7 @@ import {
 	browserScreenshotToParams,
 	readBrowserFrames,
 	readBrowserWorld,
+	readEvaluationResult,
 	requireBrowserString,
 	validateBrowserTimeout,
 } from './helpers.js'
@@ -97,6 +105,14 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #contextId: string | undefined
 	readonly #opener: BrowserPageInterface | undefined
 	readonly #emitter: Emitter<BrowserPageEventMap>
+	readonly #elements: BrowserElementManager
+	readonly #reference: BrowserReferenceFunction
+	readonly #readiness = new Map<symbol, BrowserReadinessWait>()
+	#referenceSequence = 0
+	#waitSequence = 0
+	#dom: string | undefined
+	#seed: Promise<void> | undefined
+	readonly #lifecycleHandler = this.#handleLifecycle.bind(this)
 	readonly #network: BrowserNetworkManager
 	readonly #navigationManager: BrowserNavigationManager
 	readonly #scripts: BrowserScriptManager
@@ -164,6 +180,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		contextId?: string,
 		opener?: BrowserPageInterface,
 		options?: BrowserPageOptions,
+		reference?: BrowserReferenceFunction,
 	) {
 		super(
 			client,
@@ -186,6 +203,18 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			...(options?.on !== undefined ? { on: options.on } : {}),
 			...(options?.error !== undefined ? { error: options.error } : {}),
 		})
+		this.#reference = reference ?? this.#nextReference.bind(this)
+		this.#elements = new BrowserElementManager({
+			navigation: this.#epochOf.bind(this),
+			page: this,
+			client,
+			session: sessionId,
+			resolve: this.#resolveFrameSession.bind(this),
+			world: this.#world.bind(this),
+			reference: this.#reference,
+			ready: this.#ready.bind(this),
+		})
+		this.#client.subscribe('Page.lifecycleEvent', this.#lifecycleHandler, sessionId)
 		this.#network = new BrowserNetworkManager(this, writer)
 		this.#navigationManager = new BrowserNavigationManager(
 			this,
@@ -227,6 +256,73 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	get emitter(): EmitterInterface<BrowserPageEventMap> {
 		return this.#emitter
+	}
+
+	get elements(): BrowserElementManagerInterface<BrowserPageElementInterface> {
+		return this.#elements
+	}
+
+	get trusted(): true {
+		return true
+	}
+
+	async wait(text: string, options?: BrowserCallOptions): Promise<void> {
+		this.assert()
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		const end = performance.now() + timeout
+		while (true) {
+			options?.signal?.throwIfAborted()
+			const remaining = Math.max(0, end - performance.now())
+			await this.#ready({ ...options, timeout: remaining })
+			const context = await this.#world(this.id, this.#sessionId, options)
+			const key = `__browserTextWait${++this.#waitSequence}`
+			try {
+				const result = await this.send(
+					'Runtime.evaluate',
+					{
+						expression: compileTextWaitExpression(text, remaining, key),
+						contextId: context,
+						returnByValue: true,
+						awaitPromise: true,
+					},
+					{ ...options, timeout: remaining + 1000 },
+				)
+				if (readEvaluationResult(result) !== true)
+					throw new BrowserError('Browser text wait timed out', 'BROWSER_WAIT_TIMEOUT', {
+						text,
+						timeout,
+					})
+				return
+			} catch (error) {
+				if (options?.signal?.aborted === true) {
+					await this.send(
+						'Runtime.evaluate',
+						{
+							expression: `globalThis[${JSON.stringify(key)}]?.()`,
+							contextId: context,
+							returnByValue: true,
+						},
+						{ timeout: 1000 },
+					).catch(() => undefined)
+					throw options.signal.reason
+				}
+				if (
+					!(error instanceof Error) ||
+					!/execution context was destroyed|cannot find context with specified id/i.test(
+						error.message,
+					)
+				)
+					throw error
+				this.#dom = undefined
+				if (performance.now() >= end)
+					throw new BrowserError('Browser text wait timed out', 'BROWSER_WAIT_TIMEOUT', {
+						text,
+						timeout,
+					})
+				await this.#parkReadiness({ ...options, timeout: Math.max(0, end - performance.now()) })
+			}
+		}
 	}
 
 	get network(): BrowserNetworkManagerInterface {
@@ -672,6 +768,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async #releaseResources(): Promise<void> {
+		this.#client.unsubscribe('Page.lifecycleEvent', this.#lifecycleHandler, this.#sessionId)
+		for (const id of this.#readiness.keys())
+			this.#settleReadiness(id)?.reject(new BrowserError('Browser session ended'))
 		this.#cancelLoad()
 		await this.#registry?.destroy().catch(() => undefined)
 		await this.#codegenStart.pending?.catch(() => undefined)
@@ -754,11 +853,106 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	// A page-frame document change replaces every frame document, so it advances them together.
 	#advancePage(): void {
+		this.#dom = undefined
+		this.#seed = undefined
 		this.#epoch += 1
 		this.#floor = this.#epoch
 		this.#epochs.clear()
 		this.#worlds.clear()
 		this.#creating.clear()
+	}
+
+	#nextReference(): string {
+		return `${BROWSER_REFERENCE_PREFIX}${++this.#referenceSequence}`
+	}
+
+	async #ready(options?: BrowserCallOptions): Promise<void> {
+		this.assert()
+		options?.signal?.throwIfAborted()
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		const end = performance.now() + timeout
+		if (this.#loader === undefined && this.#seed === undefined) {
+			const seed = this.#seedReadiness({ timeout: BROWSER_DEFAULT_TIMEOUT_MS })
+			this.#seed = seed
+			void seed.catch(this.#rejectSeed.bind(this, seed))
+		}
+		if (this.#seed !== undefined) await this.#parkReadiness(options, this.#seed)
+		if (this.#dom !== undefined && this.#dom === (this.#loader ?? 'initial')) return
+		await this.#parkReadiness({ ...options, timeout: Math.max(0, end - performance.now()) })
+	}
+
+	#rejectSeed(seed: Promise<void>): void {
+		if (this.#seed === seed) this.#seed = undefined
+	}
+
+	async #seedReadiness(options?: BrowserCallOptions): Promise<void> {
+		const epoch = this.#epoch
+		const context = await this.#world(this.id, this.#sessionId, options)
+		const result = await this.send(
+			'Runtime.evaluate',
+			{ expression: 'document.readyState', contextId: context, returnByValue: true },
+			options,
+		)
+		const state = readEvaluationResult(result)
+		if (epoch === this.#epoch && (state === 'interactive' || state === 'complete'))
+			this.#dom = this.#loader ?? 'initial'
+	}
+
+	#parkReadiness(options?: BrowserCallOptions, seed?: Promise<void>): Promise<void> {
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		options?.signal?.throwIfAborted()
+		const deferred = Promise.withResolvers<void>()
+		const id = Symbol('readiness')
+		const timer = setTimeout(
+			() =>
+				this.#settleReadiness(id)?.reject(
+					new BrowserError('Browser DOM readiness timed out', 'BROWSER_WAIT_TIMEOUT'),
+				),
+			timeout,
+		)
+		const signal = options?.signal
+		const listener = signal === undefined ? undefined : this.#abortReadiness.bind(this, id, signal)
+		this.#readiness.set(id, {
+			resolve: deferred.resolve,
+			reject: deferred.reject,
+			timer,
+			signal,
+			listener,
+		})
+		if (listener !== undefined) signal?.addEventListener('abort', listener, { once: true })
+		if (seed !== undefined)
+			void seed.then(
+				() => this.#settleReadiness(id)?.resolve(),
+				(error: unknown) => this.#settleReadiness(id)?.reject(error),
+			)
+		return deferred.promise
+	}
+
+	#abortReadiness(id: symbol, signal: AbortSignal): void {
+		this.#settleReadiness(id)?.reject(signal.reason)
+	}
+
+	#settleReadiness(id: symbol): BrowserReadinessWait | undefined {
+		const wait = this.#readiness.get(id)
+		if (wait === undefined) return undefined
+		clearTimeout(wait.timer)
+		if (wait.listener !== undefined) wait.signal?.removeEventListener('abort', wait.listener)
+		this.#readiness.delete(id)
+		return wait
+	}
+
+	#handleLifecycle(params: Readonly<Record<string, unknown>>): void {
+		if (
+			params['frameId'] !== this.id ||
+			params['name'] !== 'DOMContentLoaded' ||
+			!isString(params['loaderId'])
+		)
+			return
+		if (this.#loader !== undefined && params['loaderId'] !== this.#loader) return
+		this.#dom = this.#loader ?? 'initial'
+		for (const id of this.#readiness.keys()) this.#settleReadiness(id)?.resolve()
 	}
 
 	#world(frame: string, session: string, options?: BrowserCallOptions): Promise<number> {
@@ -884,6 +1078,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				frame.id,
 				this.#contextId,
 				this,
+				undefined,
+				this.#reference,
 			)
 			await popup.send('Target.setAutoAttach', {
 				autoAttach: true,
@@ -988,6 +1184,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 		this.#advancePage()
 		if (isString(frame['loaderId'])) this.#loader = frame['loaderId']
+		if (params['type'] === 'BackForwardCacheRestore') {
+			this.#dom = this.#loader ?? 'initial'
+			for (const id of this.#readiness.keys()) this.#settleReadiness(id)?.resolve()
+		}
 		this.update(frame['url'])
 		this.#emitter.emit('navigate', frame['url'], false)
 	}

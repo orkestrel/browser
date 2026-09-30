@@ -6,6 +6,12 @@ import type { BrowserCodegenAction } from '@src/core'
 import { describe, it, expect } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
+	composeBrowserPoint,
+	filterBrowserOutline,
+	normalizeBrowserKey,
+	normalizeBrowserName,
+	readBrowserAccessibility,
+	renderBrowserOutline,
 	BrowserError,
 	renderBrowserToolOutput,
 	deriveBrowserToolSchema,
@@ -36,7 +42,46 @@ import {
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BASE64_CHARS,
 } from '@src/core'
-import { createDOMSnapshotResult, JPEG_BASE64, PNG_BASE64 } from '../../setup.js'
+import {
+	BROWSER_ELEMENT_AX_FIXTURE,
+	createDOMSnapshotResult,
+	JPEG_BASE64,
+	PNG_BASE64,
+} from '../../setup.js'
+
+describe('element helpers', () => {
+	it('catches helper alias, normalization, scope, and point composition errors', () => {
+		expect(['enter', 'Return', 'ENTER', 'esc', 'ctrl+a'].map(normalizeBrowserKey)).toEqual([
+			'Enter',
+			'Enter',
+			'Enter',
+			'Escape',
+			'Control+a',
+		])
+		expect(() => normalizeBrowserKey('unknown-key')).toThrow(
+			'Accepted names: Backspace, Tab, Enter',
+		)
+		expect(normalizeBrowserName('  Save\n draft  ')).toBe('Save draft')
+		expect(
+			composeBrowserPoint({ x: 2, y: 3 }, [
+				{ x: 10, y: 20 },
+				{ x: 100, y: 200 },
+			]),
+		).toEqual({ x: 112, y: 223 })
+		expect(() => composeBrowserPoint({ x: Number.NaN, y: 0 }, [])).toThrow(
+			'coordinates must be finite',
+		)
+		const rows = readBrowserAccessibility(BROWSER_ELEMENT_AX_FIXTURE).nodes.map((node) => ({
+			...node,
+			session: 'main',
+			reference: node.id === 'order' ? 'e1' : undefined,
+		}))
+		expect(
+			filterBrowserOutline(rows, { role: 'button', name: 'order' }).map((node) => node.id),
+		).toEqual(['order'])
+		expect(renderBrowserOutline('url', 'title', rows, 0)).toMatchObject({ count: 0, total: 1 })
+	})
+})
 
 describe('WebMCP adoption helpers', () => {
 	it('renders an ordinary array as JSON rather than treating it as MCP content', () => {

@@ -29,6 +29,7 @@ import {
 } from '@src/core'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
+	createBrowserElementFixture,
 	createCDPTestTransport,
 	createConnectedCDPClient,
 	createDOMSnapshotResult,
@@ -47,6 +48,173 @@ import {
 // === BrowserPage
 
 describe('BrowserPage', () => {
+	it('catches poisoning a loaderless readiness seed with the first caller signal', async () => {
+		let evaluation: number | undefined
+		let attempts = 0
+		const fixture = await createBrowserElementFixture({
+			loaderless: true,
+			readiness: (message) => {
+				evaluation = message.id
+				attempts += 1
+			},
+		})
+		const controller = new AbortController()
+		const reason = new Error('First caller stopped')
+		try {
+			const first = fixture.page.elements.outline({ signal: controller.signal, timeout: 500 })
+			const rejected = first.catch((error: unknown) => error)
+			await waitForCondition('pending readiness seed', () => evaluation !== undefined)
+			const seed = requireValue(evaluation)
+			controller.abort(reason)
+			expect(await rejected).toBe(reason)
+			const second = fixture.page.elements.outline({ timeout: 200 })
+			const outcome = second.catch((error: unknown) => error)
+			fixture.transport.reply(seed, { result: { value: 'complete' } })
+			expect(await outcome).toHaveProperty('count', 6)
+			expect(attempts).toBe(1)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('catches retaining a rejected readiness seed instead of retrying', async () => {
+		let attempts = 0
+		const fixture = await createBrowserElementFixture({
+			loaderless: true,
+			readiness: (message) => {
+				attempts += 1
+				if (attempts === 1) fixture.transport.fail(message.id, 'Readiness unavailable')
+				else fixture.transport.reply(message.id, { result: { value: 'complete' } })
+			},
+		})
+		try {
+			await expect(fixture.page.elements.outline()).rejects.toThrow('Readiness unavailable')
+			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('count', 6)
+			expect(attempts).toBe(2)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('catches parking a back-forward cache restore on a lifecycle event that never arrives', async () => {
+		const { page, client, transport } = await createBrowserElementFixture()
+		const controller = new AbortController()
+		try {
+			transport.event(
+				'Page.frameNavigated',
+				{
+					type: 'BackForwardCacheRestore',
+					frame: { id: 'main', url: page.url, loaderId: 'restored' },
+				},
+				'session-main',
+			)
+			const pending = page.elements
+				.outline({ signal: controller.signal, timeout: 200 })
+				.catch((error: unknown) => error)
+			await waitForDelay(50)
+			const captured = transport.sent.some(
+				(message) => message.method === 'Accessibility.getFullAXTree',
+			)
+			controller.abort()
+			await pending
+			expect(captured).toBe(true)
+		} finally {
+			await client.close()
+		}
+	})
+	it('catches a text wait that never evaluates in the shared isolated world', async () => {
+		const { client, transport, page } = await createBrowserElementFixture()
+		try {
+			await expect(page.wait('Order placed')).resolves.toBeUndefined()
+			const evaluation = requireValue(
+				transport.sent.find((message) =>
+					String(message.params?.['expression']).includes('Order placed'),
+				),
+			)
+			expect(evaluation.params).toMatchObject({
+				contextId: 91,
+				awaitPromise: true,
+				returnByValue: true,
+			})
+			expect(page.trusted).toBe(true)
+			expect(page.keyboard).toBe(page.keyboard)
+			expect(page.mouse).toBe(page.mouse)
+			expect(page.touch).toBe(page.touch)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches interpreting a false text-wait result as success', async () => {
+		const fixture = await createBrowserElementFixture({
+			evaluation: (message) => fixture.transport.reply(message.id, { result: { value: false } }),
+		})
+		try {
+			await expect(fixture.page.wait('missing')).rejects.toMatchObject({
+				code: 'BROWSER_WAIT_TIMEOUT',
+			})
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it.each(['Execution context was destroyed', 'Cannot find context with specified id'])(
+		'catches failing to re-arm after %s or re-arming before DOMContentLoaded',
+		async (failure) => {
+			let attempts = 0
+			const fixture = await createBrowserElementFixture({
+				evaluation: (message) => {
+					attempts += 1
+					if (attempts === 1) {
+						fixture.transport.event('Runtime.executionContextsCleared', {}, 'session-main')
+						fixture.transport.fail(message.id, failure)
+					} else fixture.transport.reply(message.id, { result: { value: true } })
+				},
+			})
+			try {
+				const pending = fixture.page
+					.wait('ready', { timeout: 500 })
+					.catch((error: unknown) => error)
+				await waitForCondition('first text evaluation', () => attempts === 1)
+				await waitForDelay(20)
+				expect(attempts).toBe(1)
+				fixture.transport.event(
+					'Page.lifecycleEvent',
+					{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
+					'session-main',
+				)
+				expect(await pending).toBeUndefined()
+				expect(attempts).toBe(2)
+				expect(
+					fixture.transport.sent.filter((message) => message.method === 'Page.createIsolatedWorld'),
+				).toHaveLength(2)
+			} finally {
+				await fixture.client.close()
+			}
+		},
+	)
+
+	it('catches omitting observer disconnect when an in-flight text wait aborts', async () => {
+		const controller = new AbortController()
+		const reason = new Error('Stop text wait')
+		const fixture = await createBrowserElementFixture({
+			evaluation: (message) => {
+				if (String(message.params?.['expression']).includes('new Promise')) controller.abort(reason)
+				else fixture.transport.reply(message.id, { result: { value: false } })
+			},
+		})
+		try {
+			await expect(fixture.page.wait('missing', { signal: controller.signal })).rejects.toBe(reason)
+			expect(
+				fixture.transport.sent
+					.filter((message) => message.method === 'Runtime.evaluate')
+					.map((message) => message.params?.['expression']),
+			).toContain('globalThis["__browserTextWait1"]?.()')
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
 	it('owns a lazy registry and destroys it before detaching the page', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -1108,7 +1276,7 @@ describe('BrowserPage', () => {
 			scriptSelectorPresent(transport, '#target')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.wait('#target')).resolves.toBeUndefined()
+			await expect(page.selectors.css('#target').wait()).resolves.toBeUndefined()
 		})
 	})
 

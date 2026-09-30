@@ -646,3 +646,14 @@ export function parseBrowserRect(value: unknown): BrowserRect | undefined {
 	}
 	return [x, y, width, height]
 }
+/**
+ * Parses the supported element-reference spellings into their canonical form.
+ * @param value - Reference supplied by a caller
+ * @returns Canonical reference, or undefined for an invalid spelling
+ */
+export function parseBrowserReference(value: string): string | undefined {
+	const match =
+		/^(?:e([1-9]\d*)|([1-9]\d*)|\[e([1-9]\d*)\]|ref=e([1-9]\d*)|\[ref=e([1-9]\d*)\])$/i.exec(value)
+	const number = match?.slice(1).find((part) => part !== undefined)
+	return number === undefined ? undefined : `e${number}`
+}

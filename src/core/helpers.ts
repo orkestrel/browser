@@ -1,4 +1,7 @@
 import type {
+	BrowserElementQuery,
+	BrowserOutline,
+	BrowserOutlineNode,
 	BrowserCodegenAction,
 	BrowserChord,
 	BrowserCookie,
@@ -59,6 +62,7 @@ import {
 } from '@orkestrel/contract'
 import {
 	BASE64_CHARS,
+	BROWSER_OUTLINE_OMITTED_ROLES,
 	BASE64_LOOKUP,
 	BROWSER_RESULT_LIMIT,
 	BROWSER_REGISTRY_OUTPUT_LIMIT,
@@ -75,6 +79,160 @@ import {
 	parseNumberArray,
 	parseSnapshotString,
 } from './parsers.js'
+
+/**
+ * Normalizes an accessible name for display and matching.
+ * @param value - Accessible name
+ * @returns Trimmed name with collapsed whitespace
+ */
+export function normalizeBrowserName(value: string): string {
+	return value.trim().replace(/\s+/g, ' ')
+}
+
+/**
+ * Filters document-order outline rows by accessibility role and name.
+ * @param nodes - Captured rows
+ * @param query - Role and case-insensitive name constraints
+ * @returns Matching rows in their original order
+ */
+export function filterBrowserOutline(
+	nodes: readonly BrowserOutlineNode[],
+	query: BrowserElementQuery,
+): readonly BrowserOutlineNode[] {
+	return nodes.filter(
+		(node) =>
+			!node.ignored &&
+			!BROWSER_OUTLINE_OMITTED_ROLES.has(node.role ?? '') &&
+			(query.role === undefined || node.role === query.role) &&
+			(query.name === undefined ||
+				normalizeBrowserName(node.name ?? '')
+					.toLowerCase()
+					.includes(normalizeBrowserName(query.name).toLowerCase())),
+	)
+}
+
+/**
+ * Renders document-order text and referenced elements with a bounded element count.
+ * @param url - Document address
+ * @param title - Document title
+ * @param nodes - Ordered accessibility rows
+ * @param limit - Maximum referenced rows to include
+ * @returns Outline text and element counts
+ */
+export function renderBrowserOutline(
+	url: string,
+	title: string,
+	nodes: readonly BrowserOutlineNode[],
+	limit: number,
+): BrowserOutline {
+	const rows = [`page ${JSON.stringify(title)} ${url}`]
+	let count = 0
+	let total = 0
+	for (const node of nodes) {
+		if (node.ignored || BROWSER_OUTLINE_OMITTED_ROLES.has(node.role ?? '')) continue
+		const name = normalizeBrowserName(node.name ?? '')
+		if (node.role === 'heading') {
+			rows.push(`# ${name}`)
+			continue
+		}
+		if (node.role === 'StaticText') {
+			const parent = nodes.find(
+				(candidate) => candidate.session === node.session && candidate.id === node.parent,
+			)
+			if (name !== '' && name !== normalizeBrowserName(parent?.name ?? '')) rows.push(name)
+			continue
+		}
+		if (node.reference === undefined) continue
+		total += 1
+		if (count >= limit) continue
+		count += 1
+		let row = `${node.reference} ${node.role ?? 'unknown'} ${JSON.stringify(name)}`
+		if (node.value !== undefined && node.value !== '')
+			row += ` value=${JSON.stringify(String(node.value))}`
+		if (node.properties['checked'] === true || node.properties['checked'] === 'true')
+			row += ' [checked]'
+		if (node.properties['disabled'] === true) row += ' [disabled]'
+		rows.push(row)
+	}
+	rows.push(`(${count} of ${total} elements)`)
+	return { url, title, text: rows.join('\n'), count, total }
+}
+
+/**
+ * Composes a frame-local point with its ancestor frame offsets.
+ * @param point - Local point
+ * @param offsets - Frame rectangles' origins, ordered from child to parent
+ * @returns Validated page point
+ */
+export function composeBrowserPoint(
+	point: BrowserPoint,
+	offsets: readonly BrowserPoint[],
+): BrowserPoint {
+	validateBrowserPoint(point)
+	let x = point.x
+	let y = point.y
+	for (const offset of offsets) {
+		validateBrowserPoint(offset)
+		x += offset.x
+		y += offset.y
+	}
+	const result = { x, y }
+	validateBrowserPoint(result)
+	return result
+}
+
+/**
+ * Normalizes named keys and modifier aliases before trusted keyboard input.
+ * @param value - Key or modifier chord
+ * @returns Canonical key chord
+ * @throws Thrown when a key or modifier is unsupported, listing accepted names.
+ */
+export function normalizeBrowserKey(value: string): string {
+	const accepted = [
+		'Backspace',
+		'Tab',
+		'Enter',
+		'Shift',
+		'Control',
+		'Alt',
+		'Escape',
+		'Space',
+		'PageUp',
+		'PageDown',
+		'End',
+		'Home',
+		'ArrowLeft',
+		'ArrowUp',
+		'ArrowRight',
+		'ArrowDown',
+		'Delete',
+		'Meta',
+	]
+	const aliases: Readonly<Record<string, string>> = {
+		return: 'Enter',
+		esc: 'Escape',
+		ctrl: 'Control',
+		cmd: 'Meta',
+		command: 'Meta',
+	}
+	const parts = value.split('+')
+	const normalized = parts.map(
+		(part) =>
+			aliases[part.toLowerCase()] ??
+			accepted.find((name) => name.toLowerCase() === part.toLowerCase()) ??
+			part,
+	)
+	try {
+		const chord = extractBrowserChord(normalized.join('+'))
+		keyToBrowserInput(chord.key)
+		if (parts.some((part) => part === '')) throw new BrowserError('Empty key')
+		return normalized.join('+')
+	} catch {
+		throw new BrowserError(
+			`Unknown browser key ${JSON.stringify(value)}. Accepted names: ${accepted.join(', ')}, a single character, and modifier chords such as Control+a.`,
+		)
+	}
+}
 
 /**
  * Renders tool strings unchanged, content-array text blocks joined, and other values as bounded JSON.

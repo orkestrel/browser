@@ -16,6 +16,96 @@ import {
 } from './constants.js'
 
 /**
+ * Compiles a mutation-driven wait with one deadline and explicit disconnect ownership.
+ * @param deadline - Maximum time in milliseconds
+ * @param key - Isolated-world property owning this observer
+ * @param predicate - Optional expression checked immediately and after each mutation batch
+ * @returns Promise expression resolving true on a match or change, false at the deadline
+ */
+export function compileQueryWaitExpression(
+	deadline: number,
+	key: string,
+	predicate?: string,
+): string {
+	return `new Promise((resolve) => {
+	let frame
+	let timer
+	let observer
+	const finish = (value) => {
+		observer?.disconnect()
+		if (frame !== undefined) cancelAnimationFrame(frame)
+		clearTimeout(timer)
+		delete globalThis[${JSON.stringify(key)}]
+		resolve(value)
+	}
+	const check = () => {
+		frame = undefined
+		if (${predicate ?? 'true'}) finish(true)
+	}
+	globalThis[${JSON.stringify(key)}] = () => finish(false)
+	observer = new MutationObserver(() => {
+		if (frame === undefined) frame = requestAnimationFrame(check)
+	})
+	observer.observe(document, { childList: true, attributes: true, characterData: true, subtree: true })
+	timer = setTimeout(() => finish(false), ${JSON.stringify(deadline)})
+	${predicate === undefined ? '' : 'check()'}
+})`
+}
+
+/**
+ * Compiles a visible-text wait coalesced by animation frames.
+ * @param text - Text to find in the main document body
+ * @param deadline - Maximum time in milliseconds
+ * @param key - Isolated-world property owning this observer
+ * @returns Mutation-driven promise expression with one deadline
+ */
+export function compileTextWaitExpression(text: string, deadline: number, key: string): string {
+	return compileQueryWaitExpression(
+		deadline,
+		key,
+		`(document.body?.innerText ?? '').includes(${JSON.stringify(text)})`,
+	)
+}
+
+/**
+ * Compiles text selection or select-option assignment against the resolved element.
+ * @param values - Option values or labels; absence selects the text control's contents
+ * @returns Function declaration for an isolated-world element call
+ */
+export function compileSelectFunction(values?: readonly string[]): string {
+	if (values === undefined)
+		return `function() {
+	if (typeof this.select !== 'function') throw new Error('Element is not a text control')
+	this.select()
+	return true
+}`
+	return `function() {
+	if (!(this instanceof HTMLSelectElement)) throw new Error('Element is not a select control')
+	const values = ${JSON.stringify(values)}
+	const selected = values.map((value) => [...this.options].find((option) => option.value === value) ?? [...this.options].find((option) => option.label === value))
+	if (selected.some((option) => option === undefined)) throw new Error('Select option was not found')
+	for (const option of this.options) option.selected = selected.includes(option)
+	this.dispatchEvent(new Event('input', { bubbles: true }))
+	this.dispatchEvent(new Event('change', { bubbles: true }))
+	return true
+}`
+}
+
+/**
+ * Compiles the descendant hit check for a resolved element.
+ * @returns Function declaration accepting the resolved covering node
+ */
+export function compileHitFunction(): string {
+	return `function(target) {
+		while (target && target.nodeType !== 9) {
+			if (target === this) return true
+			target = target instanceof ShadowRoot ? target.host : target.parentNode
+		}
+		return false
+	}`
+}
+
+/**
  * Compiles the page-side promise facade for one Runtime binding.
  *
  * @param name - Binding identifier

@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+	parseBrowserReference,
 	parseBrowserTool,
 	parseBrowserRemoval,
 	parseBrowserInvocation,
@@ -18,6 +19,20 @@ import {
 	parseNumberArray,
 	parseSnapshotString,
 } from '@src/core'
+
+describe('element references', () => {
+	it('catches accepting invalid references or losing any of the six spellings', () => {
+		expect(
+			['e12', 'E12', '12', '[e12]', 'ref=e12', '[ref=e12]'].map(parseBrowserReference),
+		).toEqual(['e12', 'e12', 'e12', 'e12', 'e12', 'e12'])
+		expect(['x12', 'e0', 'e-1', ''].map(parseBrowserReference)).toEqual([
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+		])
+	})
+})
 
 describe('WebMCP parsers', () => {
 	it('decodes protocol tools, annotations, removals, and invocations', () => {

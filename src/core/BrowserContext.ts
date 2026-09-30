@@ -23,6 +23,7 @@ import { BrowserPage } from './BrowserPage.js'
 import { BrowserPermissionManager } from './BrowserPermissionManager.js'
 import { BrowserStorageManager } from './BrowserStorageManager.js'
 import { BrowserError } from './errors.js'
+import { BROWSER_REFERENCE_PREFIX } from './constants.js'
 import { readBrowserFrames, settleBrowserTeardown, validateBrowserViewport } from './helpers.js'
 import { instanceOf, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -56,6 +57,7 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #creating: Set<Promise<BrowserPage>> = new Set()
 	readonly #syncing: BrowserTransition = new BrowserTransition()
 	#shutdown: Promise<void> | undefined
+	#reference = 0
 
 	constructor(
 		client: CDPClientInterface,
@@ -249,6 +251,7 @@ export class BrowserContext implements BrowserContextInterface {
 				this.#id,
 				undefined,
 				options,
+				this.#nextReference.bind(this),
 			)
 			await this.#configurePage(page)
 			await this.#emulation.attach(page)
@@ -283,6 +286,9 @@ export class BrowserContext implements BrowserContextInterface {
 				url,
 				frameId,
 				this.#id,
+				undefined,
+				undefined,
+				this.#nextReference.bind(this),
 			)
 			await this.#configurePage(page)
 			await this.#emulation.attach(page)
@@ -295,6 +301,10 @@ export class BrowserContext implements BrowserContextInterface {
 			else if (sessionId !== undefined) await this.#detachSession(sessionId)
 			throw error
 		}
+	}
+
+	#nextReference(): string {
+		return `${BROWSER_REFERENCE_PREFIX}${++this.#reference}`
 	}
 
 	async #destroyResources(): Promise<void> {

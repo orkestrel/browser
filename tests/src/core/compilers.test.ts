@@ -5,6 +5,10 @@
 import type { BrowserCodegenAction } from '@src/core'
 import { describe, it, expect } from 'vitest'
 import {
+	compileTextWaitExpression,
+	compileQueryWaitExpression,
+	compileSelectFunction,
+	compileHitFunction,
 	BROWSER_RESULT_LIMIT_PATTERN,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	compileAttachedWaitExpression,
@@ -16,7 +20,33 @@ import {
 	compileVisibleWaitExpression,
 	compileGuardedEvaluateExpression,
 } from '@src/core'
-import { evaluateJavaScript } from '../../setup.js'
+import { evaluateJavaScript, evaluateBrowserHit, readBrowserCompiledTimers } from '../../setup.js'
+
+describe('element compilers', () => {
+	it('catches polling, duplicate timers, and a deadline placed in the wrong argument', () => {
+		for (const expression of [
+			compileTextWaitExpression('ready', 73, 'text'),
+			compileQueryWaitExpression(73, 'query'),
+		]) {
+			expect(expression).not.toContain('setInterval')
+			expect(expression.match(/setTimeout/g)).toHaveLength(1)
+			expect(readBrowserCompiledTimers(expression)).toEqual([{ name: 'setTimeout', delay: '73' }])
+			expect(expression).toContain('new MutationObserver')
+			expect(expression).toContain('requestAnimationFrame(check)')
+			expect(expression).toContain('observer?.disconnect()')
+		}
+	})
+
+	it('catches dropping selection, label fallback, dispatched change, or descendant hit support', () => {
+		expect(compileSelectFunction()).toContain('this.select()')
+		const select = compileSelectFunction(['Business'])
+		expect(select).toContain('option.value === value')
+		expect(select).toContain('option.label === value')
+		expect(select).toContain("new Event('input', { bubbles: true })")
+		expect(select).toContain("new Event('change', { bubbles: true })")
+		expect(evaluateBrowserHit(compileHitFunction())).toEqual([true, false])
+	})
+})
 
 describe('browser action expressions', () => {
 	it('embeds hostile selectors as JSON data rather than executable source', () => {

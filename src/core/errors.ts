@@ -1,3 +1,4 @@
+import type { BrowserElementReason, BrowserElementSubject } from './types.js'
 import { isInstance } from '@orkestrel/contract'
 
 // === Browser errors
@@ -23,6 +24,33 @@ export class BrowserError extends Error {
 		this.code = code
 		this.context = context
 	}
+}
+
+/** Reports a refused element operation with a reason and a recovery instruction. */
+export class BrowserElementError extends BrowserError {
+	constructor(
+		reference: string | BrowserElementSubject,
+		reason: BrowserElementReason,
+		detail?: string,
+	) {
+		super(
+			`${typeof reference === 'string' ? `Element ${reference}` : reference.subject} ${detail ?? (reason === 'GONE' ? 'is gone because the page changed' : reason.toLowerCase())}; call look for fresh refs.`,
+			'BROWSER_ELEMENT_ERROR',
+			typeof reference === 'string'
+				? { reference, reason }
+				: { subject: reference.subject, reason },
+		)
+		this.name = 'BrowserElementError'
+	}
+}
+
+/**
+ * Checks whether a value is an element refusal.
+ * @param value - Caught value
+ * @returns True if the value is an element error; false otherwise
+ */
+export function isBrowserElementError(value: unknown): value is BrowserElementError {
+	return isInstance(value, BrowserElementError)
 }
 
 /**

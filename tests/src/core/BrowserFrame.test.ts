@@ -362,7 +362,7 @@ describe('BrowserFrame', () => {
 				'https://example.com/frame',
 			)
 
-			await expect(frame.wait('#target', { state })).resolves.toBeUndefined()
+			await expect(frame.selectors.css('#target').wait({ state })).resolves.toBeUndefined()
 			const expression = readCDPExpression(
 				transport.sent.find((message) => message.method === 'Runtime.evaluate'),
 			)
@@ -387,8 +387,12 @@ describe('BrowserFrame', () => {
 			'https://example.com/frame',
 		)
 
-		await expect(frame.wait('#target', { timeout: Number.NaN })).rejects.toSatisfy(isBrowserError)
-		await expect(frame.wait('#target', { timeout: -1 })).rejects.toSatisfy(isBrowserError)
+		await expect(frame.selectors.css('#target').wait({ timeout: Number.NaN })).rejects.toSatisfy(
+			isBrowserError,
+		)
+		await expect(frame.selectors.css('#target').wait({ timeout: -1 })).rejects.toSatisfy(
+			isBrowserError,
+		)
 		expect(transport.sent).toEqual([])
 	})
 
@@ -403,8 +407,9 @@ describe('BrowserFrame', () => {
 			'https://example.com/frame',
 		)
 
-		const thrown: unknown = await frame
-			.wait('#missing', { timeout: 0 })
+		const thrown: unknown = await frame.selectors
+			.css('#missing')
+			.wait({ timeout: 0 })
 			.catch((error: unknown) => error)
 		expect(isBrowserSelectorError(thrown)).toBe(true)
 		expect(thrown instanceof BrowserSelectorError ? thrown.context : undefined).toMatchObject({
