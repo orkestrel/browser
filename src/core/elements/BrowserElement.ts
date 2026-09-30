@@ -312,7 +312,9 @@ export class BrowserElement implements BrowserPageElementInterface {
 			? 'HIDDEN'
 			: /disabled/i.test(message)
 				? 'DISABLED'
-				: /detached|Could not find node|No node with given id|not found|context/i.test(message)
+				: /detached|Could not find node|No node with given id|No node found for given backend id|not found|context/i.test(
+							message,
+					  )
 					? 'GONE'
 					: undefined
 		if (reason === undefined) throw error

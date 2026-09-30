@@ -544,7 +544,13 @@ describe('BrowserRegistry', () => {
 		const { page, client, transport } = await createAttachedPage()
 		try {
 			const registry = requireValue(page.registry)
-			for (const method of ['WebMCP.enable', 'WebMCP.disable', 'Page.enable', 'Runtime.enable'])
+			for (const method of [
+				'WebMCP.enable',
+				'WebMCP.disable',
+				'Page.enable',
+				'Runtime.enable',
+				'Page.getFrameTree',
+			])
 				replyOk(transport, method)
 			await registry.start()
 			transport.event(
@@ -685,7 +691,8 @@ describe('BrowserRegistry', () => {
 	it('G3 keeps the registry running when a child enable fails during start', async () => {
 		const { page, client, transport } = await createAttachedPage()
 		try {
-			for (const method of ['Page.enable', 'Runtime.enable']) replyOk(transport, method)
+			for (const method of ['Page.enable', 'Runtime.enable', 'Page.getFrameTree'])
+				replyOk(transport, method)
 			transport.event(
 				'Target.attachedToTarget',
 				{

@@ -809,11 +809,7 @@ describe('Browser proofs against the fixture pages', () => {
 			}
 		})
 
-		// Fails against the landed source when `Target.attachedToTarget` precedes
-		// `Page.frameDetached` with reason `swap` and the frame session's enable completes after
-		// both: the detach deletes the pending session the attach installed, the completion then
-		// declines to publish it, and the outline asks the page session for a frame it does not own.
-		it.fails('P19 clicks an out-of-process frame button through page.elements into the frame document; P21 hit-tests it on the frame session and P26 offsets it by the content box, and the outer decoy stays unclicked', async () => {
+		it('P19 clicks an out-of-process frame button through page.elements into the frame document; P21 hit-tests it on the frame session and P26 offsets it by the content box, and the outer decoy stays unclicked', async () => {
 			const [pay] = await page.elements.find({ role: 'button', name: 'Pay' })
 			const button = requireValue(pay)
 			expect((await button.quad()).center).toStrictEqual({
@@ -854,10 +850,7 @@ describe('Browser proofs against the fixture pages', () => {
 			).toBe(received)
 		})
 
-		// Fails against the landed source for the ordering the preceding pin names, and, with that
-		// deletion skipped, because the page records the frame's URL from `Target.attachedToTarget`,
-		// which carries an empty URL before the framed document commits, and no handler updates it.
-		it.fails('P19 lists the out-of-process frame at its document URL', async () => {
+		it('P19 lists the out-of-process frame at its document URL', async () => {
 			expect((await page.frames()).map((frame) => frame.url)).toStrictEqual([
 				fixtures.url('/frame/outer'),
 				fixtures.url('/frame/inner', 'localhost'),
@@ -1085,10 +1078,7 @@ describe('Browser proofs against the fixture pages', () => {
 			)
 		})
 
-		// Fails against the landed source: `DOM.scrollIntoViewIfNeeded` on the reclaimed node answers
-		// `No node found for given backend id`, which the element's failure classifier does not read
-		// as `GONE`, so the raw `CDPError` escapes the refusal contract.
-		it.fails('refuses a click on a removed and collected element GONE naming look', async () => {
+		it('refuses a click on a removed and collected element GONE naming look', async () => {
 			await expect(removed.click()).rejects.toMatchObject({
 				code: 'BROWSER_ELEMENT_ERROR',
 				context: { reference: removed.reference, reason: 'GONE' },
@@ -1182,10 +1172,7 @@ describe('Browser proofs against the fixture pages', () => {
 			outcome = await going
 		})
 
-		// Fails against the landed source: `back()` waits for `Page.loadEventFired` under its default
-		// `load` condition, and a back-forward cache restore commits through `Page.frameNavigated` of
-		// type `BackForwardCacheRestore` without firing a load event, so the call times out.
-		it.fails('resolves back() under its default load condition when the back-forward cache restores the entry', () => {
+		it('resolves back() under its default load condition when the back-forward cache restores the entry', () => {
 			expect(outcome).toStrictEqual({ status: 'resolved', url: fixtures.url('/form') })
 		})
 	})
