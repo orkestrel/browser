@@ -54,3 +54,9 @@ Rulings (the fix brief `tmp/units/c3-fix4-brief.md` in the worktree):
 - H3 (O2): the context never publishes a closed page; a failed synchronization settles its reservation as failure without inserting; creation validates a joined page's liveness and rejects when it closed.
 
 A fifth objective review, scoped to H1–H3, follows the round.
+
+## Fifth review (after H1–H3)
+
+Astra `analyst`, read-only, scoped to the fourth fix round: `VERDICT: FAIL 28; outside the claims: O1,O2,O3`. Claims 13, 17, 27, 29–31 confirmed: the atomic acquisition closes the initial-listener gap, the closed page is never published or joined, and the popup and context orders hold under the re-attack. Claim 28: a join skips a requested `about:blank`. O1 required: joined hooks lose the joining call's `error` handler. O2 required: the H2 mutation reddens two tests. O3 required: `#refusal` is a noun. The gate set on the tree green (`test:src` 1076, `test:setup` 99, `test:service` 30; every other project as before).
+
+Rulings (the fix brief `tmp/units/c3-fix5-brief.md` in the worktree): J1 navigate whenever a URL is requested; J2 guarded hook registration reporting to the joining call's handler; J3 the closure case decoupled from navigation and the H2 mutation rerun; J4 the rename. Ruling on the review cadence: the four items are mechanical and local to `#join`, so the round is accepted on the gate set, the mutation logs, and the Orchestrator's read of the diff, without a sixth review; U16 attacks the integrated context once more.
