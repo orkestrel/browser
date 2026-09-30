@@ -10,7 +10,8 @@ import { computeBrowserName, matchesBrowserActivation, matchesBrowserPopup } fro
  *
  * @remarks
  * `click` runs `HTMLElement.click()`; `fill` and `select` set the control through its native
- * prototype setter and dispatch `input` and `change`; `submit` runs `form.requestSubmit()` and
+ * prototype setter and dispatch `input` and `change`, and `fill` refuses `UNKNOWN` an element
+ * that is not a text control and a read-only one; `submit` runs `form.requestSubmit()` and
  * observes the outcome through a `submit` listener registered across the call. Each action
  * refuses with a `BrowserElementError` naming the reason: `DISABLED` for a disabled control,
  * `HIDDEN` for an element that does not render, and `UNTRUSTED` for what an untrusted event
@@ -85,12 +86,10 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 			input === undefined ? view.HTMLTextAreaElement.prototype : view.HTMLInputElement.prototype,
 			'value',
 		)?.set
-		if (
-			control === undefined ||
-			control.readOnly ||
-			setter === undefined ||
-			(input !== undefined && !BROWSER_TYPED_INPUTS.has(input.type))
-		) {
+		if (control === undefined || (input !== undefined && !BROWSER_TYPED_INPUTS.has(input.type))) {
+			throw new BrowserElementError(this.reference, 'UNKNOWN', 'is not a text control')
+		}
+		if (control.readOnly || setter === undefined) {
 			throw new BrowserElementError(this.reference, 'UNKNOWN', 'is not editable')
 		}
 		control.focus()

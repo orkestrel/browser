@@ -13,7 +13,7 @@
  */
 
 import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/server'
-import { BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
+import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
 import { findSystemBrowser } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { waitForCondition } from '@orkestrel/test'
@@ -284,10 +284,22 @@ export function requireToolText(result: unknown): string {
 }
 
 /**
- * Holds the note a receipt carries when a navigation replaces the page while its view is captured.
+ * Holds the editable regions the role proofs append to a page's `main`: a `contenteditable`
+ * region without a role, a `contenteditable` region with `role="textbox"`, a button inside a
+ * `contenteditable` region, and a text input with `role="button"`.
  */
-export const SERVICE_CHANGED_NOTE =
-	'(The view could not be read: outline is gone because the page changed; call look for fresh refs.; call look.)'
+export const SERVICE_EDITABLE_HTML = [
+	'<div contenteditable="true">Plain notes</div>',
+	'<div contenteditable="true" role="textbox" aria-label="Notes"></div>',
+	'<div contenteditable="true">Draft <button type="button">Bold</button></div>',
+	'<input aria-label="Coupon" role="button">',
+].join('')
+
+/**
+ * Holds the note a receipt carries when a navigation replaces the page while its view is captured
+ * and again while the capture reads it once more: `BROWSER_TOOL_CHANGED_NOTE`.
+ */
+export const SERVICE_CHANGED_NOTE = BROWSER_TOOL_CHANGED_NOTE
 
 /**
  * Describes the receipt a correct toolset returns for an action whose view capture completes in
@@ -313,8 +325,9 @@ export interface ServiceReceipt {
  * @param expected - The action sentence, the captured view, and the committed URL of a navigation
  * @returns True if the receipt is the action line followed by the expected view or by
  * `BROWSER_TOOL_DEADLINE_NOTE`, or, when `expected.url` is given, the action line followed by
- * the note that the navigation replaced the outline being captured, or the action line naming
- * `the page is still loading URL` followed by any view; false otherwise
+ * `SERVICE_CHANGED_NOTE`, or the action line naming `the page is still loading URL` followed by
+ * a view (a `page "` line and what follows), `SERVICE_CHANGED_NOTE`, or
+ * `BROWSER_TOOL_DEADLINE_NOTE`; false otherwise
  * @remarks A busy host can deliver the navigation request after the action's input command
  * settles, so the capture starts on the page the navigation is leaving.
  */
@@ -322,10 +335,15 @@ export function matchesToolReceipt(receipt: string, expected: ServiceReceipt): b
 	const line = `${expected.action}.\n\n`
 	if (receipt === `${line}${expected.view}` || receipt === `${line}${BROWSER_TOOL_DEADLINE_NOTE}`)
 		return true
+	if (expected.url === undefined) return false
+	if (receipt === `${line}${SERVICE_CHANGED_NOTE}`) return true
+	const loading = `${expected.action}; the page is still loading ${expected.url}.\n\n`
+	if (!receipt.startsWith(loading)) return false
+	const suffix = receipt.slice(loading.length)
 	return (
-		expected.url !== undefined &&
-		(receipt === `${line}${SERVICE_CHANGED_NOTE}` ||
-			receipt.startsWith(`${expected.action}; the page is still loading ${expected.url}.\n\n`))
+		suffix.startsWith('page "') ||
+		suffix === SERVICE_CHANGED_NOTE ||
+		suffix === BROWSER_TOOL_DEADLINE_NOTE
 	)
 }
 

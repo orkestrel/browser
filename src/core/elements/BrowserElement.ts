@@ -11,7 +11,7 @@ import type {
 } from '../types.js'
 import { BrowserReading } from '../BrowserReading.js'
 import { BrowserElementError } from '../errors.js'
-import { BROWSER_RESULT_LIMIT } from '../constants.js'
+import { BROWSER_ELEMENT_REFUSALS, BROWSER_RESULT_LIMIT } from '../constants.js'
 import {
 	compileActionabilityFunction,
 	compileGuardedEvaluateExpression,
@@ -310,7 +310,12 @@ export class BrowserElement implements BrowserPageElementInterface {
 	#failure(options: BrowserCallOptions | undefined, error: unknown): never {
 		options?.signal?.throwIfAborted()
 		if (error instanceof BrowserElementError) throw error
-		const message = error instanceof Error ? error.message : String(error)
+		// An in-page refusal carries the page's stack after its first line; only that line reaches
+		// the refusal.
+		const message = (error instanceof Error ? error.message : String(error)).split('\n', 1)[0] ?? ''
+		const known = BROWSER_ELEMENT_REFUSALS.get(message.replace(/^Error: /, ''))
+		if (known !== undefined)
+			throw new BrowserElementError(this.reference, known.reason, known.detail)
 		const reason = /layout object|not visible/i.test(message)
 			? 'HIDDEN'
 			: /disabled/i.test(message)

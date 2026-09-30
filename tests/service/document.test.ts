@@ -31,11 +31,13 @@ import {
 } from '../setupServer.js'
 import {
 	collectOutlinePairs,
+	extractOutlineRows,
 	requireDocumentToolset,
 	requireOutlineReference,
 	requireSystemBrowser,
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
+	SERVICE_EDITABLE_HTML,
 } from '../setupService.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
@@ -136,6 +138,51 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			expect(trusted).not.toContain('(untrusted event)')
 			expect(await page.evaluate('document.body.dataset.trusted')).toBe('false true')
 			expect(await page.evaluate("document.getElementById('wrap').checked")).toBe(false)
+		})
+
+		it('outlines editable regions by role and types into none of them, refusing the role="textbox" region UNTRUSTED and the rest by role', async () => {
+			await page.evaluate(
+				`(() => { document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_EDITABLE_HTML)}); return true })()`,
+			)
+			const look = requireToolText(await page.evaluate(DOCUMENT_LOOK))
+			const notes = requireOutlineReference(look, 'textbox', 'Notes')
+			const bold = requireOutlineReference(look, 'button', 'Bold')
+			const coupon = requireOutlineReference(look, 'button', 'Coupon')
+			expect(look).toContain(
+				[
+					'Plain notes',
+					`${notes} textbox "Notes"`,
+					'Draft',
+					`${bold} button "Bold"`,
+					`${coupon} button "Coupon"`,
+					'(7 of 7 elements)',
+				].join('\n'),
+			)
+			expect(extractOutlineRows(look).map((row) => row.name)).not.toContain('Plain notes')
+
+			const refused = await page.evaluate(
+				`documentToolset.tools.execute([${[notes, bold, coupon]
+					.map(
+						(reference) =>
+							`{ id: '${reference}', name: 'type', arguments: { ref: '${reference}', text: 'kettle' } }`,
+					)
+					.join(', ')}])`,
+			)
+			expect(refused).toMatchObject([
+				{
+					success: false,
+					error: `Element ${notes} is contenteditable, which an untrusted event cannot type into.`,
+				},
+				{
+					success: false,
+					error: `Element ${bold} button "Bold" takes no text; call click for a button.`,
+				},
+				{
+					success: false,
+					error: `Element ${coupon} button "Coupon" takes no text; call click for a button.`,
+				},
+			])
+			expect(await page.evaluate("document.querySelector('[role=textbox]').textContent")).toBe('')
 		})
 
 		it('refuses a workspace without the built bundle before any page loads, naming npm run build', () => {

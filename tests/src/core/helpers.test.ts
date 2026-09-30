@@ -143,15 +143,23 @@ describe('WebMCP adoption helpers', () => {
 })
 
 describe('toolset helpers', () => {
-	it('catches a bound that cuts a string within the limit, keeps more than the limit, or splits a surrogate pair', () => {
-		expect(boundBrowserText('abc', 3)).toBe('abc')
-		expect(boundBrowserText('abcdef', 4)).toBe('abcd\n[characters 0–4 of 6; the rest was cut]')
-		expect(boundBrowserText('ab\u{1F600}cd', 3)).toBe('ab\n[characters 0–2 of 6; the rest was cut]')
-		expect(boundBrowserText('\u{1F600}\u{1F600}', 1)).toBe(
+	it('catches a bound that cuts a string within the limit, keeps more than the limit, splits a surrogate pair, or drops the footer it is given', () => {
+		const footer = "the rest was cut; call read for the page's text"
+		expect(boundBrowserText('abc', 3, footer)).toBe('abc')
+		expect(boundBrowserText('abcdef', 4, footer)).toBe(
+			"abcd\n[characters 0–4 of 6; the rest was cut; call read for the page's text]",
+		)
+		expect(boundBrowserText('abcdef', 4, 'the rest was cut')).toBe(
+			'abcd\n[characters 0–4 of 6; the rest was cut]',
+		)
+		expect(boundBrowserText('ab\u{1F600}cd', 3, 'the rest was cut')).toBe(
+			'ab\n[characters 0–2 of 6; the rest was cut]',
+		)
+		expect(boundBrowserText('\u{1F600}\u{1F600}', 1, 'the rest was cut')).toBe(
 			'\n[characters 0–0 of 4; the rest was cut]',
 		)
 		for (const limit of [0, -1, 1.5, Number.NaN])
-			expect(() => boundBrowserText('abc', limit)).toThrow(
+			expect(() => boundBrowserText('abc', limit, footer)).toThrow(
 				'Browser tool limit must be a positive integer',
 			)
 	})

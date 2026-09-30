@@ -66,6 +66,9 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	readonly #lifetime = new AbortController()
 	#sequence = 0
 	readonly #generations = new Map<string, number>()
+	// Counts every generation step across all frames, so a capture can tell whether any frame it
+	// reads navigated while it ran.
+	#changes = 0
 	readonly #queries = new Map<string, Promise<readonly BrowserOutlineNode[]>>()
 	readonly #navigationHandler = this.#navigate.bind(this)
 	readonly #sessionHandler = this.#session.bind(this)
@@ -85,20 +88,29 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 			throw new BrowserError('Outline limit must be a nonnegative integer')
 		await this.#input.ready(options)
 		const epoch = this.#generation(this.#input.page.id)
-		const rows = await this.#capture(options)
-		const context = await this.#input.world(this.#input.page.id, this.#input.session, options)
-		const result = await this.#input.client.send(
-			'Runtime.evaluate',
-			{ expression: 'document.title', contextId: context, returnByValue: true },
-			{ session: this.#input.session, ...options },
-		)
-		this.#assertCapture(this.#input.page.id, epoch)
-		return renderBrowserOutline(
-			this.#input.page.url,
-			requireBrowserString(readEvaluationResult(result), 'Document title'),
-			this.#within(rows, options?.within),
-			limit,
-		)
+		const changes = this.#changes
+		try {
+			const rows = await this.#capture(options)
+			const context = await this.#input.world(this.#input.page.id, this.#input.session, options)
+			const result = await this.#input.client.send(
+				'Runtime.evaluate',
+				{ expression: 'document.title', contextId: context, returnByValue: true },
+				{ session: this.#input.session, ...options },
+			)
+			this.#assertCapture(this.#input.page.id, epoch)
+			return renderBrowserOutline(
+				this.#input.page.url,
+				requireBrowserString(readEvaluationResult(result), 'Document title'),
+				this.#within(rows, options?.within),
+				limit,
+			)
+		} catch (error) {
+			// A navigation destroys the contexts, nodes, and sessions the capture was reading, so a
+			// rejection that follows one reports the change rather than the protocol failure.
+			if (options?.signal?.aborted === true || this.#changes === changes) throw error
+			this.#lifetime.signal.throwIfAborted()
+			throw new BrowserElementError({ subject: 'outline' }, 'GONE')
+		}
 	}
 
 	/** A CSS query searches the page's main-frame document; use the accessibility outline for in-process child documents. */
@@ -274,6 +286,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	}
 
 	clear(): void {
+		this.#changes += 1
 		for (const [frame, epoch] of this.#generations) this.#generations.set(frame, epoch + 1)
 		this.#records.clear()
 		this.#owners.clear()
@@ -497,6 +510,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 
 	#drop(frame: string): void {
 		if (frame === this.#input.page.id) return
+		this.#changes += 1
 		this.#generations.set(frame, this.#generation(frame) + 1)
 		for (const [key, record] of this.#records)
 			if (record.node.frame === frame) this.#records.delete(key)

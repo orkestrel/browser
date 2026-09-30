@@ -525,6 +525,7 @@ export interface BrowserElementFixtureOptions {
 	readonly pressed?: () => void
 	readonly released?: CDPSentHandler
 	readonly select?: CDPSentHandler
+	readonly text?: CDPSentHandler
 	readonly registry?: CDPSentHandler
 	readonly evaluation?: CDPSentHandler
 }
@@ -534,7 +535,8 @@ export interface BrowserElementFixtureOptions {
  * @remarks
  * `WebMCP.enable` fails with the method-not-found code `-32601`, as Chromium 141 answers, unless
  * `registry` answers it. `released` answers a `mouseReleased` dispatch in place of the reply,
- * and `select` answers the select-option function call, so a test can withhold either.
+ * `select` answers the select-option function call, and `text` answers the text-selection
+ * function call, so a test can withhold or refuse any of them.
  * @param transport - In-memory CDP boundary
  * @param options - Deliberate protocol refusal or observation
  */
@@ -671,6 +673,14 @@ export function scriptBrowserElements(
 			declaration.includes('HTMLSelectElement')
 		) {
 			options.select(message)
+			return
+		}
+		if (
+			options?.text !== undefined &&
+			isString(declaration) &&
+			declaration.includes('this.select()')
+		) {
+			options.text(message)
 			return
 		}
 		if (isString(declaration) && declaration.includes('capture.html')) {

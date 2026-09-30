@@ -283,21 +283,34 @@ describe('BrowserDOMElement', () => {
 			expect(bubbled.calls).toEqual([['input'], ['change']])
 		})
 
-		it('refuses typing into a contenteditable element and a non-text control', async () => {
+		it('refuses typing into a contenteditable element, a non-text control, and a read-only field', async () => {
 			const probe = await loadProbeDocument(
-				'<div contenteditable role="textbox" aria-label="Notes"></div><input type="checkbox">',
+				'<div contenteditable role="textbox" aria-label="Notes"></div><input type="checkbox"><button>Search</button><input aria-label="Code" readonly>',
 			)
 			const view = createBrowserDOMView({ document: probe })
 			const editable = await findProbeElement(view, 'div')
 			const checkbox = await findProbeElement(view, 'input')
+			const search = await findProbeElement(view, 'button')
+			const code = await findProbeElement(view, 'input[readonly]')
 			const notes = await editable.fill('Hello').catch((error: unknown) => error)
 			const box = await checkbox.fill('on').catch((error: unknown) => error)
+			const button = await search.fill('kettle').catch((error: unknown) => error)
+			const fixed = await code.fill('SPRING').catch((error: unknown) => error)
 			expect(isBrowserElementError(notes) && notes.message).toBe(
 				`Element ${editable.reference} is contenteditable, which an untrusted event cannot type into.`,
 			)
 			expect(isBrowserElementError(notes) && notes.context).toMatchObject({ reason: 'UNTRUSTED' })
 			expect(probe.querySelector('div')?.textContent).toBe('')
-			expect(isBrowserElementError(box) && box.message).toMatch(/is not editable/)
+			expect(isBrowserElementError(box) && box.message).toBe(
+				`Element ${checkbox.reference} is not a text control.`,
+			)
+			expect(isBrowserElementError(button) && button.message).toBe(
+				`Element ${search.reference} is not a text control.`,
+			)
+			expect(isBrowserElementError(button) && button.context).toMatchObject({ reason: 'UNKNOWN' })
+			expect(isBrowserElementError(fixed) && fixed.message).toBe(
+				`Element ${code.reference} is not editable.`,
+			)
 			expect(isBrowserElementError(box) && box.context).toMatchObject({ reason: 'UNKNOWN' })
 		})
 	})

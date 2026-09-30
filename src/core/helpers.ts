@@ -50,6 +50,7 @@ import type {
 	BrowserTeardownFunction,
 	BrowserViewport,
 } from './types.js'
+import type { ToolDefinition } from '@orkestrel/tool'
 import {
 	attempt,
 	isArray,
@@ -283,15 +284,20 @@ export function deriveBrowserToolSchema(
 }
 
 /**
- * Bounds a tool string at a character limit, appending a footer that names the cut.
+ * Bounds a tool string at a character limit, appending a footer that names the cut and the
+ * caller's closing clause.
  *
  * @remarks
  * A string within the limit returns unchanged. A longer one keeps its first `limit` UTF-16 code
  * units, one fewer when the last would split a surrogate pair (so a limit of 1 before a pair keeps
- * nothing), followed by `\n[characters 0–END of TOTAL; the rest was cut]`.
+ * nothing), followed by `\n[characters 0–END of TOTAL; FOOTER]`. The footer has no default, so
+ * every caller states what the cut result's reader does next: the toolset passes
+ * `BROWSER_TOOL_VIEW_FOOTER` for a result that carries a view and `BROWSER_TOOL_CUT_FOOTER` for
+ * any other.
  *
  * @param text - The page-authored or composed string
  * @param limit - The most characters kept before the footer, a positive integer
+ * @param footer - The clause that closes the footer after the character range
  * @returns The string, cut and footed when it exceeds the limit
  * @throws Thrown when `limit` is not a positive integer.
  *
@@ -299,18 +305,52 @@ export function deriveBrowserToolSchema(
  * ```ts
  * import { boundBrowserText } from '@orkestrel/browser'
  *
- * boundBrowserText('abcdef', 4) // 'abcd\n[characters 0–4 of 6; the rest was cut]'
- * boundBrowserText('abc', 4) // 'abc'
+ * boundBrowserText('abcdef', 4, 'the rest was cut') // 'abcd\n[characters 0–4 of 6; the rest was cut]'
+ * boundBrowserText('abc', 4, 'the rest was cut') // 'abc'
  * ```
  */
-export function boundBrowserText(text: string, limit: number): string {
+export function boundBrowserText(text: string, limit: number, footer: string): string {
 	if (!isInteger(limit) || limit < 1) {
 		throw new BrowserError('Browser tool limit must be a positive integer', undefined, { limit })
 	}
 	if (text.length <= limit) return text
 	const last = text.charCodeAt(limit - 1)
 	const end = last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit
-	return `${text.slice(0, end)}\n[characters 0–${end} of ${text.length}; the rest was cut]`
+	return `${text.slice(0, end)}\n[characters 0–${end} of ${text.length}; ${footer}]`
+}
+
+/**
+ * Refuses a tool call that carries a parameter its definition does not advertise, naming the
+ * parameters the tool takes.
+ *
+ * @param definition - The advertised tool definition whose `parameters.properties` names the
+ * accepted keys
+ * @param args - The arguments a model supplied
+ * @throws Thrown as a `BrowserError` coded `BROWSER_TOOLSET_ARGUMENT`, with the refused key in its
+ * context, when an argument key is not an advertised parameter.
+ *
+ * @example
+ * ```ts
+ * import { BROWSER_TOOL_COPY, validateBrowserToolArguments } from '@orkestrel/browser'
+ *
+ * validateBrowserToolArguments(BROWSER_TOOL_COPY.look, { what: 'cart', ref: 'e1' })
+ * // throws 'The look tool takes no ref parameter; call look with what.'
+ * ```
+ */
+export function validateBrowserToolArguments(
+	definition: ToolDefinition,
+	args: Readonly<Record<string, unknown>>,
+): void {
+	const properties = definition.parameters?.['properties']
+	const keys = isRecord(properties) ? Object.keys(properties) : []
+	const key = Object.keys(args).find((candidate) => !keys.includes(candidate))
+	if (key === undefined) return
+	const accepted = new Intl.ListFormat('en', { type: 'conjunction' }).format(keys)
+	throw new BrowserError(
+		`The ${definition.name} tool takes no ${key} parameter; call ${definition.name} with ${accepted}.`,
+		'BROWSER_TOOLSET_ARGUMENT',
+		{ key },
+	)
 }
 
 /**
@@ -353,7 +393,7 @@ export function requireBrowserReference(value: unknown): string {
 		throw new BrowserElementError(
 			{ subject: `Reference ${JSON.stringify(value)}` },
 			'UNKNOWN',
-			'is not a reference such as e12',
+			'is not a reference such as e12; call look for fresh refs',
 		)
 	return reference
 }

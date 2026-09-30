@@ -318,6 +318,49 @@ describe('trusted element actions', () => {
 		}
 	})
 
+	it('catches a multiline compiled refusal at the actionability or selection call that keeps its stack or loses its reason', async () => {
+		const stack =
+			'\n    at HTMLInputElement.<anonymous> (<anonymous>:12:3)\n    at <anonymous>:30:4'
+		const outcomes: unknown[] = []
+		for (const [description, answer] of [
+			[`Error: Element is disabled${stack}`, 'actionability'],
+			[`Error: Element is not editable${stack}`, 'actionability'],
+			[`Error: Element is not visible${stack}`, 'actionability'],
+			[`Error: Element is not editable${stack}`, 'text'],
+		] as const) {
+			const fixture = await createBrowserElementFixture(
+				answer === 'actionability'
+					? { actionability: description }
+					: {
+							text: (message) =>
+								fixture.transport.reply(message.id, {
+									exceptionDetails: { exception: { description } },
+								}),
+						},
+			)
+			try {
+				await fixture.page.elements.outline()
+				const refused = await requireValue(fixture.page.elements.element('e2'))
+					.fill('ada@example.test')
+					.catch((caught: unknown) => caught)
+				outcomes.push(
+					isBrowserElementError(refused) && {
+						message: refused.message,
+						reason: refused.context?.['reason'],
+					},
+				)
+			} finally {
+				await fixture.client.close()
+			}
+		}
+		expect(outcomes).toEqual([
+			{ message: 'Element e2 is disabled.', reason: 'DISABLED' },
+			{ message: 'Element e2 is not editable.', reason: 'UNKNOWN' },
+			{ message: 'Element e2 is not visible.', reason: 'HIDDEN' },
+			{ message: 'Element e2 is not editable.', reason: 'UNKNOWN' },
+		])
+	})
+
 	it('catches disabled actionability being ignored', async () => {
 		const { page, client } = await createBrowserElementFixture({
 			actionability: 'Element is disabled',
@@ -379,6 +422,35 @@ describe('trusted element actions', () => {
 				['keyDown', 'Enter'],
 				['keyUp', 'Enter'],
 			])
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches a fill on a control that takes no text that leaks the in-page stack or inserts the text', async () => {
+		const fixture = await createBrowserElementFixture({
+			text: (message) =>
+				fixture.transport.reply(message.id, {
+					exceptionDetails: {
+						exception: {
+							description:
+								'Error: Element is not a text control\n    at HTMLButtonElement.<anonymous> (<anonymous>:6:47)\n    at <anonymous>:9:4',
+						},
+					},
+				}),
+		})
+		const { page, client, transport } = fixture
+		try {
+			await page.elements.outline()
+			const refused = await requireValue(page.elements.element('e1'))
+				.fill('Search')
+				.catch((caught: unknown) => caught)
+			expect(isBrowserElementError(refused)).toBe(true)
+			expect(refused).toMatchObject({
+				message: 'Element e1 is not a text control.',
+				context: { reference: 'e1', reason: 'UNKNOWN' },
+			})
+			expect(transport.sent.some((message) => message.method === 'Input.insertText')).toBe(false)
 		} finally {
 			await client.close()
 		}

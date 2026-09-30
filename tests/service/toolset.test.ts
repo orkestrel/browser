@@ -46,6 +46,8 @@ import {
 	requireSystemBrowser,
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
+	SERVICE_CHANGED_NOTE,
+	SERVICE_EDITABLE_HTML,
 } from '../setupService.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
@@ -172,6 +174,60 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(
 			[look, click, typed, read].filter((receipt) => receipt.length > BROWSER_TOOL_LIMIT),
 		).toStrictEqual([])
+	})
+
+	it('outlines editable regions by role and types only into a referenced text role, filling a role="textbox" region through the trusted path', async () => {
+		const page = await browser.create({ url: fixtures.url('/document') })
+		opened.push(page)
+		await page.evaluate(
+			`(() => { document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_EDITABLE_HTML)}); return true })()`,
+		)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the notes' } }),
+		)
+		const notes = requireOutlineReference(look, 'textbox', 'Notes')
+		const bold = requireOutlineReference(look, 'button', 'Bold')
+		const coupon = requireOutlineReference(look, 'button', 'Coupon')
+		expect(look).toContain(
+			[
+				'Plain notes',
+				`${notes} textbox "Notes"`,
+				'Draft',
+				`${bold} button "Bold"`,
+				`${coupon} button "Coupon"`,
+				'(7 of 7 elements)',
+			].join('\n'),
+		)
+		expect(extractOutlineRows(look).map((row) => row.name)).not.toContain('Plain notes')
+
+		expect(
+			await tools.execute({ id: 'notes', name: 'type', arguments: { ref: notes, text: 'kettle' } }),
+		).toMatchObject({
+			success: true,
+			value: expect.stringMatching(`^Typed "kettle" into ${notes} textbox "Notes"\\.\\n\\npage "`),
+		})
+		expect(await page.evaluate("document.querySelector('[role=textbox]').textContent")).toBe(
+			'kettle',
+		)
+		const refused = await tools.execute([
+			{ id: 'bold', name: 'type', arguments: { ref: bold, text: 'kettle' } },
+			{ id: 'coupon', name: 'type', arguments: { ref: coupon, text: 'kettle' } },
+		])
+		expect(refused).toMatchObject([
+			{
+				success: false,
+				error: `Element ${bold} button "Bold" takes no text; call click for a button.`,
+			},
+			{
+				success: false,
+				error: `Element ${coupon} button "Coupon" takes no text; call click for a button.`,
+			},
+		])
+		expect(await page.evaluate("document.querySelector('[aria-label=Coupon]').value")).toBe('')
 	})
 
 	it('P14 stages dialog when a click fires confirm(); the receipt names the dialog, and dialog accept settles the blocked click with no second receipt (control: a click without a dialog returns the plain receipt)', async () => {
@@ -589,7 +645,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(receipt).toBeOneOf([
 			`${action}\n\n${applied}`,
 			`${action}\n\n${typed}`,
-			`${action}\n\n(The view could not be read: outline is gone because the page changed; call look for fresh refs.; call look.)`,
+			`${action}\n\n${SERVICE_CHANGED_NOTE}`,
 			`${action}\n\n(The view could not be read: Session with given id not found.; call look.)`,
 			`${action}\n\n${BROWSER_TOOL_DEADLINE_NOTE}`,
 		])

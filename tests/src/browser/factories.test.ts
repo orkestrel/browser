@@ -129,6 +129,34 @@ describe('createDocumentToolset', () => {
 		await toolset.destroy()
 	})
 
+	it('refuses a button that claims the textbox role UNKNOWN without naming a reference refresh', async () => {
+		const probe = createProbeDocument('<button role="textbox" aria-label="Search">Search</button>')
+		const toolset = createDocumentToolset({ document: probe })
+		await toolset.start()
+		const signal = new AbortController().signal
+		const look = String(
+			await requireValue(toolset.tools.tool('look'), 'look').execute(
+				{ what: 'search' },
+				{ signal },
+			),
+		)
+		const [search] = await toolset.view.elements.find({ role: 'textbox', name: 'Search' })
+		expect(look).toContain(`${search?.reference} textbox "Search"`)
+		const refused = await Promise.resolve(
+			requireValue(toolset.tools.tool('type'), 'type').execute(
+				{ ref: search?.reference, text: 'kettle' },
+				{ signal },
+			),
+		).catch((error: unknown) => error)
+		expect(
+			isBrowserElementError(refused) && { message: refused.message, context: refused.context },
+		).toEqual({
+			message: `Element ${search?.reference} is not a text control.`,
+			context: { reference: search?.reference, reason: 'UNKNOWN' },
+		})
+		await toolset.destroy()
+	})
+
 	it('lists exactly the five view tools, reports GONE for a removed element, and wakes within 100 ms of a late element', async () => {
 		const probe = await createProbeElements()
 		const toolset = createDocumentToolset({ document: probe.document })

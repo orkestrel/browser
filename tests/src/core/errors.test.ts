@@ -26,7 +26,7 @@ describe('core browser error guards', () => {
 		expect(isBrowserResultLimitError(new BrowserResultLimitError('failure'))).toBe(true)
 	})
 
-	it('names an UNTRUSTED refusal with its detail and no fresh-refs instruction', () => {
+	it('names an UNTRUSTED or other non-GONE refusal with its detail and no fresh-refs instruction', () => {
 		const untrusted = new BrowserElementError(
 			'e4',
 			'UNTRUSTED',
@@ -45,9 +45,19 @@ describe('core browser error guards', () => {
 		expect(new BrowserElementError('e4', 'GONE').message).toBe(
 			'Element e4 is gone because the page changed; call look for fresh refs.',
 		)
-		expect(new BrowserElementError('e4', 'UNKNOWN', 'is not editable').message).toBe(
-			'Element e4 is not editable; call look for fresh refs.',
-		)
+		expect(
+			[
+				new BrowserElementError('e4', 'UNKNOWN', 'is not editable'),
+				new BrowserElementError('e4', 'DISABLED', 'is disabled'),
+				new BrowserElementError('e4', 'HIDDEN', 'is not visible'),
+				new BrowserElementError('e4', 'OCCLUDED', 'is covered by div#veil'),
+			].map((error) => error.message),
+		).toEqual([
+			'Element e4 is not editable.',
+			'Element e4 is disabled.',
+			'Element e4 is not visible.',
+			'Element e4 is covered by div#veil.',
+		])
 	})
 
 	it('is total for revoked proxies and unrelated values', () => {

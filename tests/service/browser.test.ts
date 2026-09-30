@@ -866,7 +866,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await expect(covered.click()).rejects.toMatchObject({
 			code: 'BROWSER_ELEMENT_ERROR',
 			context: { reference: covered.reference, reason: 'OCCLUDED' },
-			message: `Element ${covered.reference} is covered by div#veil; call look for fresh refs.`,
+			message: `Element ${covered.reference} is covered by div#veil.`,
 		})
 		expect(await page.evaluate('document.body.dataset.saved')).toBeUndefined()
 
