@@ -20,7 +20,7 @@ The package runs under the following conditions.
 - Node.js 22.12.0 or later for the server face; the core runs in any JavaScript environment, and the browser face in a page, a worker, or an extension page.
 - A Chromium-family browser on the host for the server face: Chrome, Chromium, or Microsoft Edge. The package downloads no browser.
 - For `createSocketCDPTransport`, a browser launched with `--remote-allow-origins` naming the caller's origin; the browser refuses the handshake otherwise.
-- For `page.registry`, the experimental `WebMCP` protocol domain, which Chrome DevTools MCP 1.10.1 documents on Chrome 150 launched with `--enable-features=WebMCP` (read 2026-09-29). Chromium 141 ships no such domain, and `registry.start()` resolves `false` there.
+- For `page.registry`, a browser that exposes the experimental `WebMCP` protocol domain. The configuration reference of Chrome DevTools MCP 1.10.1, read on 2026-09-29, states that its WebMCP tools need Chrome 150 or later launched with `--enable-features=WebMCP`; see [the Chrome DevTools MCP configuration reference](https://github.com/ChromeDevTools/chrome-devtools-mcp/blob/main/docs/configuration.md). Chromium 141 answers `WebMCP.enable` with `-32601`, and `registry.start()` resolves `false` there.
 - ESM and CommonJS builds ship for the core and server entry points, and an ESM build for the browser entry point.
 
 ## Usage
@@ -76,7 +76,7 @@ For the full surface of the three faces, the method tables, the toolset vocabula
 
 The `exports` field in `package.json` names three entry points:
 
-- `.`, the environment-agnostic core: `CDPClient`, `BrowserContext`, `BrowserPage`, `BrowserFrame`, the element managers, `BrowserReading`, `BrowserToolset`, `BrowserSnapshot`, `BrowserCodegen`, and the factories `createCDPClient`, `createBrowserReading`, `createBrowserSnapshot`, and `createBrowserToolset`;
+- `.`, the environment-agnostic core: `CDPClient`, `BrowserContext`, `BrowserPage`, `BrowserFrame`, `BrowserNavigationManager`, the element managers, `BrowserPageElement`, `BrowserReading`, `BrowserToolset`, `BrowserSnapshot`, `BrowserCodegen`, and the factories `createCDPClient`, `createBrowserReading`, `createBrowserSnapshot`, and `createBrowserToolset`;
 - `./browser`, the in-page face: `BrowserDOMView`, `BrowserDOMElement`, `BrowserDOMElementManager`, `SocketCDPTransport`, and the factories `createBrowserDOMView`, `createDocumentToolset`, and `createSocketCDPTransport`;
 - `./server`, the Node runtime: `Browser`, `WebSocketCDPTransport`, `FileBrowserWriter`, and the factories `createBrowser`, `createCDPTransport`, and `createBrowserWriter`.
 

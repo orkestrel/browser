@@ -878,10 +878,11 @@ export interface BrowserDialogInterface {
 	readonly message: string
 	readonly default: string
 	/**
-	 * Accepts the dialog, optionally supplying prompt text. Throws once the dialog is handled.
+	 * Accepts the dialog, optionally supplying prompt text. Throws when the dialog is already
+	 * handled.
 	 */
 	accept(value?: string): Promise<void>
-	/** Dismisses the dialog. Throws once the dialog is handled. */
+	/** Dismisses the dialog. Throws when the dialog is already handled. */
 	dismiss(): Promise<void>
 }
 
@@ -889,11 +890,11 @@ export interface BrowserDialogInterface {
 export interface BrowserFileChooserInterface {
 	readonly multiple: boolean
 	/**
-	 * Sets the chosen files. Throws when a single-file chooser is given several, and once the
+	 * Sets the chosen files. Throws when a single-file chooser is given several, and when the
 	 * chooser is already handled.
 	 */
 	upload(files: readonly string[]): Promise<void>
-	/** Dismisses the chooser with an empty selection. Throws once the chooser is already handled. */
+	/** Dismisses the chooser with an empty selection. Throws when the chooser is already handled. */
 	dismiss(): Promise<void>
 }
 
@@ -2328,7 +2329,7 @@ export interface BrowserFrameInterface {
 	save(path: string, bytes: Uint8Array): Promise<void>
 	/**
 	 * Throws a coded `BrowserError` when the frame can no longer accept protocol work: a frame
-	 * throws once the CDP client disconnects, and a page also throws once it closes. Every
+	 * throws after the CDP client disconnects, and a page also throws after it closes. Every
 	 * other member here calls it first.
 	 */
 	assert(): void

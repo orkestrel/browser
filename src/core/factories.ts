@@ -123,11 +123,20 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
  * const toolset = createBrowserToolset(page, { tools: createToolManager() })
  * await toolset.start()
  * toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'click', 'type', 'press', 'navigate', 'wait']
+ * const seeded = await toolset.tools.execute({
+ * 	id: 'seed',
+ * 	name: 'look',
+ * 	arguments: { what: 'the page' },
+ * })
+ * const view = seeded.success ? String(seeded.value) : seeded.error
  * const agent = createAgent(createOllama({ model: 'qwen3.5:2b-q4_K_M' }), {
  * 	system,
  * 	tools: toolset.tools,
  * })
- * agent.context.messages.add({ role: 'user', content: 'What does the Alpine Kettle cost?' })
+ * agent.context.messages.add({
+ * 	role: 'user',
+ * 	content: `What does the Alpine Kettle cost?\n\nThe browser shows this page:\n${view}`,
+ * })
  * const result = await agent.generate()
  * await toolset.destroy()
  * await browser.destroy()

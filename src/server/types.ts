@@ -263,11 +263,11 @@ export interface BrowserInterface {
 	/** Assumes responsibility for terminating the connected browser. */
 	adopt(): void
 	/**
-	 * Detaches the client-side transport while the remote browser keeps running. A merely
-	 * attached CDP session forgets the endpoint and its ownership becomes `undefined`. A
-	 * launched or explicitly adopted session retains ownership and its endpoint, so the same
-	 * instance can reconnect and stays responsible for eventual termination. Transport loss
-	 * while an owned browser remains alive is resumable the same way.
+	 * Detaches the client-side transport while the remote browser keeps running. An attached CDP
+	 * session that this instance neither launched nor adopted forgets the endpoint and its
+	 * ownership becomes `undefined`. A launched or explicitly adopted session retains ownership
+	 * and its endpoint, so the same instance can reconnect and stays responsible for eventual
+	 * termination. Transport loss while an owned browser remains alive is resumable the same way.
 	 */
 	disconnect(): Promise<void>
 	/** Returns one context by index, or the first. */
@@ -287,8 +287,9 @@ export interface BrowserInterface {
 	 * process group and awaits its drain, and on Windows it terminates one process by
 	 * identifier, the spawned process or the one a launcher handed the endpoint to — which
 	 * leaves the profile unlocked before cleanup. An adopted attachment is sent CDP
-	 * `Browser.close`. A merely attached browser is detached locally and nothing more, because
-	 * other clients may share its targets. Idempotent.
+	 * `Browser.close`. An attached browser that this instance neither launched nor adopted is
+	 * detached locally and nothing more, because other clients might share its targets.
+	 * Idempotent.
 	 */
 	destroy(): Promise<void>
 	/**

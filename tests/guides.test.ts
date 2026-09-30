@@ -55,11 +55,14 @@ const SMALL_MODEL_PROMPT =
 	'To press a button or follow a link, call click with its reference from the latest result. Never invent a reference. ' +
 	'If text you expect has not appeared, call wait once. ' +
 	'When the task is done, answer in one short sentence.'
-/** The toolset lines of the Surface fence of that title, transcribed byte for byte. */
+/** The toolset and seeding lines of the Surface fence of that title, transcribed byte for byte. */
 const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 	'const toolset = createBrowserToolset(page, { tools: createToolManager() })',
 	'await toolset.start()',
 	"toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'click', 'type', 'press', 'navigate', 'wait']",
+	"const seeded = await toolset.tools.execute({\n\tid: 'seed',\n\tname: 'look',\n\targuments: { what: 'the page' },\n})",
+	'const view = seeded.success ? String(seeded.value) : seeded.error',
+	'\tcontent: `What does the Alpine Kettle cost?\\n\\nThe browser shows this page:\\n${view}`,',
 ])
 /** The receipt the guide's Tools section quotes for a `look` call that carries `ref`. */
 const UNADVERTISED_RECEIPT = 'The look tool takes no ref parameter; call look with what.'
@@ -129,9 +132,9 @@ await new GuideCommand({
 
 	// `guides/browser.md` carries the system prompt a small model passed with and claims the tools
 	// a page-backed toolset lists. Name parity proves neither, so the prompt is read out of each fence
-	// of that title and compared with the transcribed constant, and the fence's toolset lines run
-	// against a real `BrowserPage` over the scripted CDP fixture. The agent half needs a live model and
-	// a package this workspace does not install, and it claims no value.
+	// of that title and compared with the transcribed constant, and the fence's toolset and seeding
+	// lines run against a real `BrowserPage` over the scripted CDP fixture. The agent half needs a live
+	// model and a package this workspace does not install, and it claims no value.
 	describe(SMALL_MODEL_TITLE, () => {
 		const fences = own.guide
 			.fences()
@@ -150,7 +153,7 @@ await new GuideCommand({
 			for (const line of SMALL_MODEL_LINES) expect(fences[0]?.code).toContain(line)
 		})
 
-		it('lists the seven tools its comment claims over a real page', async () => {
+		it('lists the seven tools its comment claims and seeds the look view over a real page', async () => {
 			const { createBrowserElementFixture } = await import('./setup.js')
 			const { createBrowserToolset } = await import('@src/core')
 			const { createToolManager } = await import('@orkestrel/tool')
@@ -167,6 +170,14 @@ await new GuideCommand({
 					'navigate',
 					'wait',
 				])
+				const seeded = await toolset.tools.execute({
+					id: 'seed',
+					name: 'look',
+					arguments: { what: 'the page' },
+				})
+				expect(seeded.success ? String(seeded.value) : seeded.error).toMatch(
+					/^page "[^"\n]*" https:\/\/example\.test\/cart\n/,
+				)
 				await toolset.destroy()
 			} finally {
 				await client.close()

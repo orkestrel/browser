@@ -83,8 +83,8 @@ export const BROWSER_DRAIN_INTERVAL_MS = 100
 
 /**
  * Defers once for `50` milliseconds when a transport loss is observed on an owned process,
- * giving a near-simultaneous process-exit event, which libuv may reap slightly later than the
- * socket close, first say over the diagnosis.
+ * so a near-simultaneous process-exit event, which libuv might reap slightly later than the
+ * socket close, decides the diagnosis first.
  */
 export const BROWSER_TRANSPORT_LOSS_DEFER_MS = 50
 
