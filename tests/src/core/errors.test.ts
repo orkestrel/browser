@@ -1,11 +1,13 @@
 import {
 	BrowserConnectionError,
+	BrowserElementError,
 	BrowserError,
 	BrowserResultLimitError,
 	CDPConnectionError,
 	CDPError,
 	CDPTimeoutError,
 	isBrowserConnectionError,
+	isBrowserElementError,
 	isBrowserError,
 	isBrowserResultLimitError,
 	isCDPConnectionError,
@@ -22,6 +24,30 @@ describe('core browser error guards', () => {
 		expect(isCDPConnectionError(new CDPConnectionError('failure'))).toBe(true)
 		expect(isCDPTimeoutError(new CDPTimeoutError('failure'))).toBe(true)
 		expect(isBrowserResultLimitError(new BrowserResultLimitError('failure'))).toBe(true)
+	})
+
+	it('names an UNTRUSTED refusal with its detail and no fresh-refs instruction', () => {
+		const untrusted = new BrowserElementError(
+			'e4',
+			'UNTRUSTED',
+			'opens a file chooser, which an untrusted click cannot do',
+		)
+		expect(untrusted.message).toBe(
+			'Element e4 opens a file chooser, which an untrusted click cannot do.',
+		)
+		expect(untrusted.message).not.toContain('call look')
+		expect(untrusted.code).toBe('BROWSER_ELEMENT_ERROR')
+		expect(untrusted.context).toEqual({ reference: 'e4', reason: 'UNTRUSTED' })
+		expect(isBrowserElementError(untrusted)).toBe(true)
+		expect(new BrowserElementError({ subject: 'Upload' }, 'UNTRUSTED').message).toBe(
+			'Upload needs a trusted event.',
+		)
+		expect(new BrowserElementError('e4', 'GONE').message).toBe(
+			'Element e4 is gone because the page changed; call look for fresh refs.',
+		)
+		expect(new BrowserElementError('e4', 'UNKNOWN', 'is not editable').message).toBe(
+			'Element e4 is not editable; call look for fresh refs.',
+		)
 	})
 
 	it('is total for revoked proxies and unrelated values', () => {

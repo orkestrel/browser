@@ -6,20 +6,23 @@ import { BROWSER_TYPED_INPUTS } from '../constants.js'
 import { computeBrowserName, matchesBrowserActivation, matchesBrowserPopup } from '../helpers.js'
 
 /**
- * Drives a referenced element of a DOM document with untrusted events.
+ * Drives a referenced element of a DOM document without trusted input.
  *
  * @remarks
  * `click` runs `HTMLElement.click()`; `fill` and `select` set the control through its native
  * prototype setter and dispatch `input` and `change`; `submit` runs `form.requestSubmit()` and
  * observes the outcome through a `submit` listener registered across the call. Each action
- * refuses, with a `BrowserElementError` naming the reason, what an untrusted event cannot do: a
- * disabled control, a link or submission that opens another browsing context, a file chooser,
- * and typing into a contenteditable element. A click that activates a `label`, on the label
- * itself or on a descendant that `matchesBrowserActivation` admits, is judged by the label's
- * control as well: a disabled control refuses `DISABLED`, and a file input refuses as a direct
- * click on it does. A click on an interactive descendant of a label keeps only its own checks.
- * `role` and `name` are the values captured when the reference was bound. Every action on an
- * element removed from its document, collected, or held across a navigation reports `GONE`.
+ * refuses with a `BrowserElementError` naming the reason: `DISABLED` for a disabled control,
+ * `HIDDEN` for an element that does not render, and `UNTRUSTED` for what an untrusted event
+ * cannot do, which is a click or submission that opens another browsing context, a click that
+ * opens a file chooser, and typing into a contenteditable element. A click that activates a
+ * `label`, on the label itself or on a descendant that `matchesBrowserActivation` admits, is
+ * judged by the label's control as well: a disabled control refuses `DISABLED`, and a file input
+ * refuses `UNTRUSTED` as a direct click on it does. A click on an interactive descendant of a
+ * label keeps only its own checks. `role` and `name` read the description the latest outline or
+ * query that encountered the element captured, so a change to the element shows after the next
+ * capture, and a dropped reference keeps its last capture. Every action on an element removed
+ * from its document, collected, or held across a navigation reports `GONE`.
  *
  * @example
  * ```ts
@@ -40,11 +43,11 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 	}
 
 	get role(): string {
-		return this.#input.role
+		return this.#input.description().role
 	}
 
 	get name(): string {
-		return this.#input.name
+		return this.#input.description().name
 	}
 
 	async click(options?: BrowserCallOptions): Promise<void> {
@@ -72,7 +75,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (node instanceof view.HTMLElement && node.isContentEditable) {
 			throw new BrowserElementError(
 				this.reference,
-				'UNKNOWN',
+				'UNTRUSTED',
 				'is contenteditable, which an untrusted event cannot type into',
 			)
 		}
@@ -161,7 +164,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (matchesBrowserPopup(submitter ?? owner)) {
 			throw new BrowserElementError(
 				this.reference,
-				'UNKNOWN',
+				'UNTRUSTED',
 				'submits into another browsing context, which an untrusted submission cannot open',
 			)
 		}
@@ -223,14 +226,14 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (matchesBrowserPopup(target)) {
 			throw new BrowserElementError(
 				this.reference,
-				'UNKNOWN',
+				'UNTRUSTED',
 				'opens another browsing context, which an untrusted click cannot do',
 			)
 		}
 		if (target.localName === 'input' && Reflect.get(target, 'type') === 'file') {
 			throw new BrowserElementError(
 				this.reference,
-				'UNKNOWN',
+				'UNTRUSTED',
 				'opens a file chooser, which an untrusted click cannot do',
 			)
 		}

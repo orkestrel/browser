@@ -26,15 +26,30 @@ export class BrowserError extends Error {
 	}
 }
 
-/** Reports a refused element operation with a reason and a recovery instruction. */
+/**
+ * Reports a refused element operation with a reason and a recovery instruction.
+ *
+ * @remarks
+ * The message names the element and the detail. It ends with `; call look for fresh refs.`
+ * for every reason but `UNTRUSTED`, whose reference is still fresh: an untrusted event cannot do
+ * what was asked, so that message ends with a period.
+ */
 export class BrowserElementError extends BrowserError {
 	constructor(
 		reference: string | BrowserElementSubject,
 		reason: BrowserElementReason,
 		detail?: string,
 	) {
+		const subject = typeof reference === 'string' ? `Element ${reference}` : reference.subject
+		const text =
+			detail ??
+			(reason === 'GONE'
+				? 'is gone because the page changed'
+				: reason === 'UNTRUSTED'
+					? 'needs a trusted event'
+					: reason.toLowerCase())
 		super(
-			`${typeof reference === 'string' ? `Element ${reference}` : reference.subject} ${detail ?? (reason === 'GONE' ? 'is gone because the page changed' : reason.toLowerCase())}; call look for fresh refs.`,
+			`${subject} ${text}${reason === 'UNTRUSTED' ? '.' : '; call look for fresh refs.'}`,
 			'BROWSER_ELEMENT_ERROR',
 			typeof reference === 'string'
 				? { reference, reason }

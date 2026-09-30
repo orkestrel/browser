@@ -171,6 +171,120 @@ describe('BrowserDOMWait', () => {
 		).rejects.toThrow('early')
 	})
 
+	it('does no work after a roots callback aborts the wait mid-reconciliation', async () => {
+		const probe = createProbeDocument('<main></main>')
+		const controller = new AbortController()
+		const checks = createRecorder<[]>()
+		const wait = new BrowserDOMWait({
+			roots: () => {
+				controller.abort(new Error('withdrawn'))
+				return [probe]
+			},
+			check: () => {
+				checks.handler()
+				return probe.getElementById('late') ?? undefined
+			},
+			timeout: 1_000,
+			start: performance.now(),
+			signal: controller.signal,
+			subject: 'Withdrawn wait',
+		})
+		const refusal = await wait.execute().catch((error: unknown) => error)
+		expect(refusal instanceof Error && refusal.message).toBe('withdrawn')
+		expect(wait.roots).toEqual([])
+		expect(checks.count).toBe(1)
+		probe.body.insertAdjacentHTML('beforeend', '<p id="late">late</p>')
+		await waitForDelay(10)
+		expect(checks.count).toBe(1)
+	})
+
+	it('rejects with the caller reason when the initial check aborts, and no later match resolves it', async () => {
+		const probe = createProbeDocument('<main></main>')
+		const controller = new AbortController()
+		const checks = createRecorder<[]>()
+		const wait = new BrowserDOMWait({
+			roots: () => [probe],
+			check: () => {
+				checks.handler()
+				if (checks.count === 1) controller.abort(new Error('withdrawn'))
+				return probe.getElementById('late') ?? undefined
+			},
+			timeout: 50,
+			start: performance.now(),
+			signal: controller.signal,
+			subject: 'Withdrawn check',
+		})
+		const pending = wait.execute()
+		probe.body.insertAdjacentHTML('beforeend', '<p id="late">late</p>')
+		const refusal = await pending.catch((error: unknown) => error)
+		expect(refusal instanceof Error && refusal.message).toBe('withdrawn')
+		expect(checks.count).toBe(1)
+		expect(wait.roots).toEqual([])
+	})
+
+	it('runs no check after a roots callback consumes the deadline on the wait clock', async () => {
+		const probe = createProbeDocument('<main></main>')
+		const checks = createRecorder<[]>()
+		// The reading starts at the host clock, so a wait that ignores `now` sees budget left.
+		let reading = performance.now()
+		const wait = new BrowserDOMWait({
+			roots: () => {
+				reading += 100
+				return [probe]
+			},
+			check: () => {
+				checks.handler()
+				return checks.count > 1 ? 'late' : undefined
+			},
+			timeout: 50,
+			start: reading,
+			now: () => reading,
+			subject: 'Consumed wait',
+		})
+		const expired = await wait.execute().catch((error: unknown) => error)
+		expect(isBrowserError(expired) && expired.code).toBe('BROWSER_WAIT_TIMEOUT')
+		expect(checks.count).toBe(1)
+		expect(wait.roots).toEqual([])
+	})
+
+	it('rejects with the abort reason when an aborting check also returns a value', async () => {
+		const probe = createProbeDocument('<main></main>')
+		const initial = new AbortController()
+		const first = await new BrowserDOMWait({
+			roots: () => [probe],
+			check: () => {
+				initial.abort(new Error('withdrawn first'))
+				return 'found'
+			},
+			timeout: 1_000,
+			start: performance.now(),
+			signal: initial.signal,
+			subject: 'Withdrawn first check',
+		})
+			.execute()
+			.catch((error: unknown) => error)
+		expect(first instanceof Error && first.message).toBe('withdrawn first')
+		const later = new AbortController()
+		const checks = createRecorder<[]>()
+		const second = await new BrowserDOMWait({
+			roots: () => [probe],
+			check: () => {
+				checks.handler()
+				if (checks.count === 1) return undefined
+				later.abort(new Error('withdrawn later'))
+				return 'found'
+			},
+			timeout: 1_000,
+			start: performance.now(),
+			signal: later.signal,
+			subject: 'Withdrawn later check',
+		})
+			.execute()
+			.catch((error: unknown) => error)
+		expect(second instanceof Error && second.message).toBe('withdrawn later')
+		expect(checks.count).toBe(2)
+	})
+
 	it('rejects with GONE when an observed window fires pagehide', async () => {
 		const probe = await createProbeElements()
 		const pending = new BrowserDOMWait({

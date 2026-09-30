@@ -25,7 +25,7 @@ describe('BrowserDOMElement', () => {
 			expect(view.trusted).toBe(false)
 		})
 
-		it('refuses a disabled button, a target="_blank" link, and a file chooser', async () => {
+		it('refuses a disabled button DISABLED, and a target="_blank" link and a file chooser UNTRUSTED', async () => {
 			const probe = await loadProbeDocument(
 				[
 					'<button disabled>Place order</button>',
@@ -45,14 +45,24 @@ describe('BrowserDOMElement', () => {
 			expect(isBrowserElementError(disabled) && disabled.context).toMatchObject({
 				reason: 'DISABLED',
 			})
-			expect(isBrowserElementError(popup) && popup.message).toMatch(
-				/opens another browsing context, which an untrusted click cannot do/,
+			expect(isBrowserElementError(popup) && popup.context).toEqual({
+				reference: link.reference,
+				reason: 'UNTRUSTED',
+			})
+			expect(isBrowserElementError(popup) && popup.message).toBe(
+				`Element ${link.reference} opens another browsing context, which an untrusted click cannot do.`,
 			)
-			expect(isBrowserElementError(chooser) && chooser.message).toMatch(/opens a file chooser/)
+			expect(isBrowserElementError(chooser) && chooser.context).toEqual({
+				reference: file.reference,
+				reason: 'UNTRUSTED',
+			})
+			expect(isBrowserElementError(chooser) && chooser.message).toBe(
+				`Element ${file.reference} opens a file chooser, which an untrusted click cannot do.`,
+			)
 			expect(clicks.calls).toEqual([])
 		})
 
-		it('judges a label by its control: a file chooser and a disabled control refuse', async () => {
+		it('judges a label by its control: a file chooser refuses UNTRUSTED and a disabled control DISABLED', async () => {
 			const probe = await loadProbeDocument(
 				'<label role="button">Photo<input type="file"></label><label role="button">Gift<input type="checkbox" disabled></label>',
 			)
@@ -63,9 +73,31 @@ describe('BrowserDOMElement', () => {
 			const chooser = await photo?.click().catch((error: unknown) => error)
 			const disabled = await gift?.click().catch((error: unknown) => error)
 			expect(isBrowserElementError(chooser) && chooser.message).toMatch(/opens a file chooser/)
+			expect(isBrowserElementError(chooser) && chooser.context).toMatchObject({
+				reason: 'UNTRUSTED',
+			})
 			expect(isBrowserElementError(disabled) && disabled.context).toMatchObject({
 				reason: 'DISABLED',
 			})
+			expect(clicks.calls).toEqual([])
+		})
+
+		it('refuses UNTRUSTED through a file input label for a non-interactive descendant', async () => {
+			const probe = await loadProbeDocument(
+				'<label for="upload"><span>Choose a photo</span></label><input id="upload" type="file">',
+			)
+			const clicks = createRecorder<[string]>()
+			probe.addEventListener('click', (event) => clicks.handler(event.type))
+			const view = createBrowserDOMView({ document: probe })
+			const text = await findProbeElement(view, 'span')
+			const refusal = await text.click().catch((error: unknown) => error)
+			expect(isBrowserElementError(refusal) && refusal.context).toEqual({
+				reference: text.reference,
+				reason: 'UNTRUSTED',
+			})
+			expect(isBrowserElementError(refusal) && refusal.message).toBe(
+				`Element ${text.reference} opens a file chooser, which an untrusted click cannot do.`,
+			)
 			expect(clicks.calls).toEqual([])
 		})
 
@@ -86,6 +118,20 @@ describe('BrowserDOMElement', () => {
 			await help?.click()
 			await terms?.click()
 			expect(clicks.calls).toEqual([['a'], ['a']])
+		})
+
+		it('clicks an image with controls inside a file input label without the chooser refusal', async () => {
+			const probe = await loadProbeDocument(
+				'<label for="upload"><img controls src="animation.gif"></label><input id="upload" type="file">',
+			)
+			const clicks = createRecorder<[unknown]>()
+			probe.addEventListener('click', (event) => {
+				event.preventDefault()
+				clicks.handler(Reflect.get(event.target ?? {}, 'localName'))
+			})
+			const view = createBrowserDOMView({ document: probe })
+			await (await findProbeElement(view, 'img')).click()
+			expect(clicks.calls).toEqual([['img']])
 		})
 
 		it('activates a label for a checkbox and toggles the checkbox', async () => {
@@ -144,8 +190,7 @@ describe('BrowserDOMElement', () => {
 			expect(node.deref()).toBe(probe.save)
 			const bound = new BrowserDOMElement({
 				reference: 'e7',
-				role: 'button',
-				name: 'Save',
+				description: () => ({ role: 'button', name: 'Save' }),
 				node,
 				current: () => true,
 				navigation: () => 0,
@@ -154,8 +199,7 @@ describe('BrowserDOMElement', () => {
 			expect(clicks.calls).toEqual([[false]])
 			const collected = new BrowserDOMElement({
 				reference: 'e8',
-				role: 'button',
-				name: 'Save',
+				description: () => ({ role: 'button', name: 'Save' }),
 				node: new CollectedReference(probe.save),
 				current: () => true,
 				navigation: () => 0,
@@ -184,17 +228,28 @@ describe('BrowserDOMElement', () => {
 			expect(clicks.count).toBe(1)
 		})
 
-		it('reports the role and name captured when the reference was bound', async () => {
+		it('reports the latest captured role and name, refreshed by a recapture and kept after removal', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
-			const [save] = await view.elements.find({ role: 'button', name: 'Save' })
+			const save = requireValue(
+				(await view.elements.find({ role: 'button', name: 'Save' }))[0],
+				'save element',
+			)
 			probe.save.setAttribute('aria-label', 'Store')
+			expect([save.role, save.name]).toEqual(['button', 'Save'])
+			const outline = await view.elements.outline()
+			expect(outline.text).toContain(`${save.reference} button "Store"`)
+			expect([save.role, save.name]).toEqual(['button', 'Store'])
+			expect(view.elements.element(save.reference)?.name).toBe('Store')
 			probe.save.setAttribute('role', 'link')
-			expect(save?.role).toBe('button')
-			expect(save?.name).toBe('Save')
+			probe.save.setAttribute('aria-label', 'Keep')
+			expect(await view.elements.find({ role: 'link', name: 'Keep' })).toEqual([save])
+			expect([save.role, save.name]).toEqual(['link', 'Keep'])
 			probe.save.remove()
-			expect(save?.role).toBe('button')
-			expect(save?.name).toBe('Save')
+			await view.elements.outline()
+			view.elements.clear()
+			expect(view.elements.element(save.reference)).toBeUndefined()
+			expect([save.role, save.name]).toEqual(['link', 'Keep'])
 		})
 	})
 
@@ -237,11 +292,13 @@ describe('BrowserDOMElement', () => {
 			const checkbox = await findProbeElement(view, 'input')
 			const notes = await editable.fill('Hello').catch((error: unknown) => error)
 			const box = await checkbox.fill('on').catch((error: unknown) => error)
-			expect(isBrowserElementError(notes) && notes.message).toMatch(
-				/is contenteditable, which an untrusted event cannot type into/,
+			expect(isBrowserElementError(notes) && notes.message).toBe(
+				`Element ${editable.reference} is contenteditable, which an untrusted event cannot type into.`,
 			)
+			expect(isBrowserElementError(notes) && notes.context).toMatchObject({ reason: 'UNTRUSTED' })
 			expect(probe.querySelector('div')?.textContent).toBe('')
 			expect(isBrowserElementError(box) && box.message).toMatch(/is not editable/)
+			expect(isBrowserElementError(box) && box.context).toMatchObject({ reason: 'UNKNOWN' })
 		})
 	})
 
@@ -268,6 +325,37 @@ describe('BrowserDOMElement', () => {
 			const text = await field.select(['x']).catch((error: unknown) => error)
 			expect(isBrowserElementError(missing) && missing.message).toMatch(/has no option "Huge"/)
 			expect(isBrowserError(text) && text.message).toMatch(/not a select control/)
+			expect(isBrowserElementError(missing) && missing.context).toMatchObject({ reason: 'UNKNOWN' })
+			expect(isBrowserElementError(text) && text.context).toMatchObject({ reason: 'UNKNOWN' })
+		})
+
+		it('refuses a disabled select DISABLED, a hidden one HIDDEN, and a removed one GONE', async () => {
+			const probe = await loadProbeDocument(
+				[
+					'<select id="off" aria-label="Off" disabled><option>Small</option></select>',
+					'<select id="shut" aria-label="Shut"><option>Small</option></select>',
+					'<select id="gone" aria-label="Gone"><option>Small</option></select>',
+				].join(''),
+			)
+			const view = createBrowserDOMView({ document: probe })
+			const off = await findProbeElement(view, '#off')
+			const shut = await findProbeElement(view, '#shut')
+			const gone = await findProbeElement(view, '#gone')
+			requireValue(probe.getElementById('shut'), 'shut').style.display = 'none'
+			requireValue(probe.getElementById('gone'), 'gone').remove()
+			const refusals = await Promise.all(
+				[off, shut, gone].map((element) =>
+					element.select(['Small']).then(
+						() => undefined,
+						(error: unknown) => error,
+					),
+				),
+			)
+			expect(refusals.map((refusal) => isBrowserElementError(refusal) && refusal.context)).toEqual([
+				{ reference: off.reference, reason: 'DISABLED' },
+				{ reference: shut.reference, reason: 'HIDDEN' },
+				{ reference: gone.reference, reason: 'GONE' },
+			])
 		})
 	})
 
@@ -320,7 +408,32 @@ describe('BrowserDOMElement', () => {
 			const loose = await field.submit().catch((error: unknown) => error)
 			const popup = await button.submit().catch((error: unknown) => error)
 			expect(isBrowserElementError(loose) && loose.message).toMatch(/is not in a form/)
-			expect(isBrowserElementError(popup) && popup.message).toMatch(/another browsing context/)
+			expect(isBrowserElementError(loose) && loose.context).toMatchObject({ reason: 'UNKNOWN' })
+			expect(isBrowserElementError(popup) && popup.message).toBe(
+				`Element ${button.reference} submits into another browsing context, which an untrusted submission cannot open.`,
+			)
+			expect(isBrowserElementError(popup) && popup.context).toMatchObject({ reason: 'UNTRUSTED' })
+		})
+
+		it('refuses a removed form control GONE and fires no submit', async () => {
+			const probe = await loadProbeDocument(
+				'<form><input name="email" aria-label="Email" value="sam@example.test"></form>',
+			)
+			const form = requireValue(probe.querySelector('form'), 'form')
+			const submits = createRecorder<[]>()
+			form.addEventListener('submit', (event) => {
+				event.preventDefault()
+				submits.handler()
+			})
+			const view = createBrowserDOMView({ document: probe })
+			const email = await findProbeElement(view, 'input')
+			requireValue(probe.querySelector('input'), 'input').remove()
+			const refusal = await email.submit().catch((error: unknown) => error)
+			expect(isBrowserElementError(refusal) && refusal.context).toEqual({
+				reference: email.reference,
+				reason: 'GONE',
+			})
+			expect(submits.count).toBe(0)
 		})
 	})
 

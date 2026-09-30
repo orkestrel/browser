@@ -20,83 +20,107 @@ import {
 
 const PAGE_ORIGIN = 'http://page.example'
 
-describe('setup', () => {
-	it('provides the fixture origin and both browser endpoints, and releases them on teardown', async () => {
-		const provided = new Map<string, unknown>()
-		const launchers = createRecorder<[BrowserLauncherInterface]>()
-		const teardown = await setup(
-			{
-				provide: (key: string, value: unknown) => {
-					provided.set(key, value)
-				},
-			},
-			async () => {
-				const launcher = await createBrowserLauncher()
-				launchers.handler(launcher)
-				return launcher
-			},
-		)
-		const [[launcher] = []] = launchers.calls
-		expect(launcher?.watching).toBe(true)
-		const origin = provided.get('server')
-		const endpoint = provided.get('endpoint')
-		const control = provided.get('endpointWithoutFlag')
-		try {
-			expect([...provided.keys()].sort()).toEqual(['endpoint', 'endpointWithoutFlag', 'server'])
-			expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
-			expect(endpoint).toMatch(/^ws:\/\/[^/]+\/devtools\/browser\/[\w-]+$/)
-			expect(control).toMatch(/^ws:\/\/[^/]+\/devtools\/browser\/[\w-]+$/)
-			expect(control).not.toBe(endpoint)
-			if (!isString(origin) || !isString(endpoint) || !isString(control)) {
-				throw new Error('a provided value is not a string')
-			}
-			const answered = await fetch(origin + '/')
-			expect(answered.status).toBe(200)
-			expect(answered.headers.get('access-control-allow-origin')).toBe('*')
-			expect(await readUpgradeStatus(endpoint, PAGE_ORIGIN)).toBe(101)
-			expect(await readUpgradeStatus(control, PAGE_ORIGIN)).toBe(403)
-		} finally {
-			await teardown()
-		}
-		if (!isString(origin) || !isString(endpoint) || !isString(control)) {
-			throw new Error('a provided value is missing')
-		}
-		await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
-		await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
-		await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
-		expect(launcher?.watching).toBe(false)
-	})
+// A bounded allowance for a test that launches Chromium through an isolated Vite runner, not a
+// measured minimum. Default-budget runs of the tests that carry it on 2026-09-30 measured, as
+// setup teardown / setup rollback / launcher: 4320/3978/3060 ms, 4225/4070/2978 ms, and
+// 4727/4079/2916 ms, and 4427/2952/3025 ms inside a full `setup` project run
+// (`tmp/codex/u10b-mutations/budgets/`); each pays the Chromium launch and the Vite runner start.
+const LAUNCH_BUDGET_MS = 15_000
 
-	it('releases every acquired resource when a later step throws', async () => {
-		const provided = new Map<string, unknown>()
-		const launchers = createRecorder<[BrowserLauncherInterface]>()
-		const failure = await setup(
-			{
-				provide: (key: string, value: unknown) => {
-					provided.set(key, value)
-					if (key === 'endpointWithoutFlag') throw new Error('provide failed')
+describe('setup', () => {
+	it(
+		'provides the fixture origin and both browser endpoints, and releases them on teardown',
+		async () => {
+			const provided = new Map<string, unknown>()
+			const launchers = createRecorder<[BrowserLauncherInterface]>()
+			const closes = createRecorder<[unknown]>()
+			const teardown = await setup(
+				{
+					provide: (key: string, value: unknown) => {
+						provided.set(key, value)
+					},
 				},
-			},
-			async () => {
-				const launcher = await createBrowserLauncher()
-				launchers.handler(launcher)
-				return launcher
-			},
-		).catch((error: unknown) => error)
-		const [[launcher] = []] = launchers.calls
-		expect(launcher?.watching).toBe(false)
-		expect(failure).toBeInstanceOf(Error)
-		expect(failure instanceof Error && failure.message).toBe('provide failed')
-		const origin = provided.get('server')
-		const endpoint = provided.get('endpoint')
-		const control = provided.get('endpointWithoutFlag')
-		if (!isString(origin) || !isString(endpoint) || !isString(control)) {
-			throw new Error('a provided value is missing')
-		}
-		await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
-		await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
-		await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
-	})
+				async () => {
+					const launcher = await createBrowserLauncher([
+						{ name: 'close-recorder', closeServer: closes.handler },
+					])
+					launchers.handler(launcher)
+					return launcher
+				},
+			)
+			const [[launcher] = []] = launchers.calls
+			const origin = provided.get('server')
+			const endpoint = provided.get('endpoint')
+			const control = provided.get('endpointWithoutFlag')
+			try {
+				expect(launcher?.watching).toBe(true)
+				expect(closes.calls).toEqual([])
+				expect([...provided.keys()].sort()).toEqual(['endpoint', 'endpointWithoutFlag', 'server'])
+				expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
+				expect(endpoint).toMatch(/^ws:\/\/[^/]+\/devtools\/browser\/[\w-]+$/)
+				expect(control).toMatch(/^ws:\/\/[^/]+\/devtools\/browser\/[\w-]+$/)
+				expect(control).not.toBe(endpoint)
+				if (!isString(origin) || !isString(endpoint) || !isString(control)) {
+					throw new Error('a provided value is not a string')
+				}
+				const answered = await fetch(origin + '/')
+				expect(answered.status).toBe(200)
+				expect(answered.headers.get('access-control-allow-origin')).toBe('*')
+				expect(await readUpgradeStatus(endpoint, PAGE_ORIGIN)).toBe(101)
+				expect(await readUpgradeStatus(control, PAGE_ORIGIN)).toBe(403)
+			} finally {
+				await teardown()
+			}
+			if (!isString(origin) || !isString(endpoint) || !isString(control)) {
+				throw new Error('a provided value is missing')
+			}
+			await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
+			await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+			await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+			expect(launcher?.watching).toBe(false)
+			expect(closes.calls).toEqual([[{ reason: 'close' }]])
+		},
+		LAUNCH_BUDGET_MS,
+	)
+
+	it(
+		'releases every acquired resource when a later step throws',
+		async () => {
+			const provided = new Map<string, unknown>()
+			const launchers = createRecorder<[BrowserLauncherInterface]>()
+			const closes = createRecorder<[unknown]>()
+			const failure = await setup(
+				{
+					provide: (key: string, value: unknown) => {
+						provided.set(key, value)
+						if (key === 'endpointWithoutFlag') throw new Error('provide failed')
+					},
+				},
+				async () => {
+					const launcher = await createBrowserLauncher([
+						{ name: 'close-recorder', closeServer: closes.handler },
+					])
+					launchers.handler(launcher)
+					return launcher
+				},
+			).catch((error: unknown) => error)
+			const [[launcher] = []] = launchers.calls
+			expect(launcher?.watching).toBe(false)
+			expect(closes.calls).toEqual([[{ reason: 'close' }]])
+			expect(failure).toBeInstanceOf(Error)
+			expect(failure instanceof Error && failure.message).toBe('provide failed')
+			const origin = provided.get('server')
+			const endpoint = provided.get('endpoint')
+			const control = provided.get('endpointWithoutFlag')
+			if (!isString(origin) || !isString(endpoint) || !isString(control)) {
+				throw new Error('a provided value is missing')
+			}
+			await expect(fetch(origin + '/')).rejects.toThrow(/fetch/i)
+			await expect(readUpgradeStatus(endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+			await expect(readUpgradeStatus(control, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
+		},
+		LAUNCH_BUDGET_MS,
+	)
 })
 
 describe('closeFixtureServer', () => {
@@ -110,20 +134,26 @@ describe('closeFixtureServer', () => {
 })
 
 describe('createBrowserLauncher', () => {
-	it('launches an endpoint that accepts a page origin only with the allow-origins flag', async () => {
-		const launcher = await createBrowserLauncher()
-		try {
-			const flagged = await launcher.launch([REMOTE_ORIGINS_FLAG])
+	it(
+		'launches an endpoint that accepts a page origin only with the allow-origins flag',
+		async () => {
+			const launcher = await createBrowserLauncher()
 			try {
-				expect(await readUpgradeStatus(flagged.endpoint, PAGE_ORIGIN)).toBe(101)
+				const flagged = await launcher.launch([REMOTE_ORIGINS_FLAG])
+				try {
+					expect(await readUpgradeStatus(flagged.endpoint, PAGE_ORIGIN)).toBe(101)
+				} finally {
+					await flagged.destroy()
+				}
+				await expect(readUpgradeStatus(flagged.endpoint, PAGE_ORIGIN)).rejects.toThrow(
+					/ECONNREFUSED/,
+				)
 			} finally {
-				await flagged.destroy()
+				await launcher.close()
 			}
-			await expect(readUpgradeStatus(flagged.endpoint, PAGE_ORIGIN)).rejects.toThrow(/ECONNREFUSED/)
-		} finally {
-			await launcher.close()
-		}
-	})
+		},
+		LAUNCH_BUDGET_MS,
+	)
 })
 
 describe('launchBrowserEndpoint', () => {

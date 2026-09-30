@@ -19,6 +19,44 @@ describe('BrowserDOMView', () => {
 		})
 	})
 
+	describe('destroy', () => {
+		it('refuses read after destroy with BROWSER_DOCUMENT_DESTROYED', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			view.destroy()
+			const refusal = await view.read().catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+		})
+
+		it('refuses title after destroy with BROWSER_DOCUMENT_DESTROYED', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			view.destroy()
+			const refusal = await view.title().catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+		})
+
+		it('refuses a text wait after destroy with BROWSER_DOCUMENT_DESTROYED, even for present text', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			view.destroy()
+			const refusal = await view.wait('Probe page').catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+		})
+
+		it('stays destroyed through a second destroy with the same refusal', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			view.destroy()
+			const first = await view.read().catch((error: unknown) => error)
+			view.destroy()
+			const second = await view.read().catch((error: unknown) => error)
+			expect(isBrowserError(second) && second.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(second).toBe(first)
+			expect(view.elements.elements()).toEqual([])
+		})
+	})
+
 	describe('navigation', () => {
 		it('marks a reading stale after a pushState on a window with the Navigation API', async () => {
 			const probe = await createProbeElements()
@@ -105,9 +143,9 @@ describe('BrowserDOMView', () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			await view.elements.outline()
+			const reading = await view.read()
 			view.destroy()
 			expect(view.elements.elements()).toEqual([])
-			const reading = await view.read()
 			probe.document.defaultView?.history.pushState(null, '', 'about:srcdoc#after')
 			expect(reading.stale).toBe(false)
 		})

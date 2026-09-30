@@ -2,11 +2,15 @@
  * Proof for `src/core/BrowserToolset.ts`.
  *
  * Limitation: the release of the protocol subscriptions (`Page.frameRequestedNavigation`,
- * `Page.frameNavigated`, `Page.lifecycleEvent`, `Page.javascriptDialogClosed`) on `destroy()` is not
- * proven here. The in-memory transport exposes the frames a client sends, not the handlers it
- * holds, and every handler the toolset holds returns early once the toolset is destroyed, so no
- * observable behavior separates a released subscription from a retained one. A client that
- * reported its subscriptions would make it provable.
+ * `Page.frameNavigated`, `Page.lifecycleEvent`, `Page.javascriptDialogClosed`) on `destroy()` is
+ * proven only through their effects: after `destroy()` those events add nothing to the manager
+ * and send nothing. The in-memory transport exposes the frames a client sends, not the handlers
+ * it holds, and a retained handler changes only the toolset's private navigation and dialog
+ * state, which no public observation of a destroyed toolset reads, so no observable behavior
+ * separates a released protocol subscription from a retained one. The
+ * emitter subscriptions released beside them (the page's `dialog`, `popup`, and `close`, and the
+ * registry's `change`) are proven by their listener counts. A client that reported its
+ * subscriptions would make the protocol release provable.
  */
 
 import type {
@@ -1516,6 +1520,82 @@ describe('BrowserToolset', () => {
 				await client.close()
 			}
 		})
+
+		it('catches a release the toolset skips, calls twice, calls before its own teardown, or swallows', async () => {
+			const tools = createToolManager()
+			const releases = createRecorder<[number]>()
+			const toolset = new BrowserToolset(createBrowserViewDouble(), {
+				tools,
+				release: () => releases.handler(tools.count),
+			})
+			await toolset.start()
+			await Promise.all([toolset.destroy(), toolset.destroy()])
+			await toolset.destroy()
+			expect(releases.calls).toEqual([[0]])
+			const failure = new Error('the view did not release')
+			const refused = createRecorder<[]>()
+			const failing = new BrowserToolset(createBrowserViewDouble(), {
+				release: async () => {
+					refused.handler()
+					throw failure
+				},
+			})
+			await failing.start()
+			expect(await failing.destroy().catch((error: unknown) => error)).toBe(failure)
+			expect(failing.tools.tools()).toEqual([])
+			expect(await failing.destroy().catch((error: unknown) => error)).toBe(failure)
+			expect(refused.count).toBe(1)
+		})
+
+		it('catches a destroyed toolset whose registry, dialog, or navigation subscription outlives it', async () => {
+			const fixture = await createBrowserElementFixture({
+				registry: (message) => fixture.transport.reply(message.id, {}),
+			})
+			const { client, page, transport } = fixture
+			try {
+				const listeners = ['dialog', 'popup', 'close'] as const
+				const before = listeners.map((event) => page.emitter.count(event))
+				const changes = page.registry.emitter.count('change')
+				const tools = createToolManager()
+				const toolset = createBrowserToolset(page, { tools })
+				await toolset.start()
+				expect(listeners.map((event) => page.emitter.count(event))).toEqual(
+					before.map((count) => count + 1),
+				)
+				expect(page.registry.emitter.count('change')).toBe(changes + 1)
+				await toolset.destroy()
+				expect(tools.tools()).toEqual([])
+				expect(listeners.map((event) => page.emitter.count(event))).toEqual(before)
+				expect(page.registry.emitter.count('change')).toBe(changes)
+				const sent = transport.sent.length
+				transport.event(
+					'WebMCP.toolsAdded',
+					{ tools: [{ name: 'cart', description: 'Show the cart', frameId: 'main' }] },
+					'session-main',
+				)
+				transport.event(
+					'Page.javascriptDialogOpening',
+					{ url: page.url, type: 'confirm', message: 'Leave the cart?', hasBrowserHandler: false },
+					'session-main',
+				)
+				transport.event(
+					'Page.frameRequestedNavigation',
+					{
+						frameId: 'main',
+						reason: 'anchorClick',
+						url: 'https://example.test/next',
+						disposition: 'currentTab',
+					},
+					'session-main',
+				)
+				await waitForDelay(10)
+				expect(page.registry.tools().map((tool) => tool.name)).toEqual(['cart'])
+				expect(tools.tools()).toEqual([])
+				expect(transport.sent.slice(sent)).toEqual([])
+			} finally {
+				await client.close()
+			}
+		})
 	})
 
 	describe('placements', () => {
@@ -2330,7 +2410,7 @@ describe('BrowserToolset', () => {
 	})
 
 	describe('trust marker', () => {
-		it('catches an untrusted view whose click or type receipt omits the marker, or a look that gains it', async () => {
+		it('catches an untrusted view whose click or type receipt omits the marker, or a look, read, or wait that gains it', async () => {
 			const view = createBrowserViewDouble()
 			const toolset = new BrowserToolset(view)
 			await toolset.start()
@@ -2340,6 +2420,12 @@ describe('BrowserToolset', () => {
 			expect(
 				await requireValue(toolset.tools.tool('look')).execute({ what: 'form' }, { signal }),
 			).toBe(outline)
+			expect(
+				await requireValue(toolset.tools.tool('read')).execute({ what: 'form' }, { signal }),
+			).toBe('Form body')
+			expect(
+				await requireValue(toolset.tools.tool('wait')).execute({ text: 'Form body' }, { signal }),
+			).toBe('"Form body" is on the page.')
 			expect(
 				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 			).toBe(`Clicked e1 button "Save". (untrusted event)\n\n${outline}`)

@@ -1690,8 +1690,20 @@ export interface BrowserElementSubject {
 	readonly subject: string
 }
 
-/** Identifies the refusal an element action reports. */
-export type BrowserElementReason = 'GONE' | 'HIDDEN' | 'OCCLUDED' | 'DISABLED' | 'UNKNOWN'
+/**
+ * Identifies the refusal an element action reports.
+ *
+ * @remarks
+ * `UNTRUSTED` names an action an untrusted event cannot perform on a current reference, such as
+ * opening a file chooser or another browsing context; a fresh reference changes nothing.
+ */
+export type BrowserElementReason =
+	| 'GONE'
+	| 'HIDDEN'
+	| 'OCCLUDED'
+	| 'DISABLED'
+	| 'UNTRUSTED'
+	| 'UNKNOWN'
 
 /** Allocates the next reference from the owning browser context. */
 export type BrowserReferenceFunction = () => string
@@ -1976,6 +1988,10 @@ export type BrowserToolsetEventMap = {
  *   integer. Default: `BROWSER_TOOL_LIMIT`
  * - `schemes` — the URL schemes `navigate` accepts, each with its colon. Default:
  *   `BROWSER_SCHEMES`
+ * - `release` — releases a resource the caller hands to the toolset, such as a view created for
+ *   it alone; `destroy()` calls it one time, after the toolset's own teardown, and rejects with
+ *   its rejection. A view or page supplied without it stays the caller's to end. Default: nothing
+ *   is released
  */
 export interface BrowserToolsetOptions {
 	readonly on?: EmitterHooks<BrowserToolsetEventMap>
@@ -1986,6 +2002,7 @@ export interface BrowserToolsetOptions {
 	readonly context?: BrowserContextInterface
 	readonly limit?: number
 	readonly schemes?: readonly string[]
+	readonly release?: () => Promise<void> | void
 }
 
 /**
@@ -2014,7 +2031,8 @@ export interface BrowserToolsetInterface {
 	start(options?: BrowserCallOptions): Promise<void>
 	/**
 	 * Stops following the view, rejects queued actions, and removes every tool the toolset added
-	 * that the manager still holds.
+	 * that the manager still holds, then calls the `release` option one time; a second call
+	 * returns the first call's promise.
 	 */
 	destroy(): Promise<void>
 }

@@ -238,6 +238,36 @@ describe('BrowserDOMElementManager', () => {
 		})
 	})
 
+	describe('destroyed view', () => {
+		it('refuses outline after its view is destroyed with BROWSER_DOCUMENT_DESTROYED', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			view.destroy()
+			const refusal = await view.elements.outline().catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+		})
+
+		it('refuses find after its view is destroyed with BROWSER_DOCUMENT_DESTROYED', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			view.destroy()
+			const refusal = await view.elements
+				.find({ role: 'button', name: 'Save' })
+				.catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+		})
+
+		it('refuses wait after its view is destroyed with BROWSER_DOCUMENT_DESTROYED, even for a present match', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			view.destroy()
+			const refusal = await view.elements
+				.wait({ role: 'button', name: 'Save' })
+				.catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+		})
+	})
+
 	describe('references', () => {
 		it('keeps an element reference across outlines and never reuses a cleared number', async () => {
 			const probe = await createProbeElements()
@@ -274,6 +304,23 @@ describe('BrowserDOMElementManager', () => {
 			const [next] = await view.elements.find({ role: 'button' })
 			expect(next?.reference).toBe('e5')
 			expect(view.elements.element('e3')).toBe(save)
+		})
+
+		it('refreshes the description of an element only a CSS query binds, keeping the reference', async () => {
+			const probe = await createProbeElements()
+			probe.late.innerHTML = '<div id="note" aria-label="Draft">Note</div>'
+			const view = createBrowserDOMView({ document: probe.document })
+			expect((await view.elements.outline()).text).not.toContain('Draft')
+			const [note] = await view.elements.find({ css: '#note' })
+			expect([note?.role, note?.name]).toEqual(['generic', 'Draft'])
+			requireValue(probe.document.getElementById('note'), 'note').setAttribute(
+				'aria-label',
+				'Final',
+			)
+			expect(note?.name).toBe('Draft')
+			expect(await view.elements.find({ css: '#note' })).toEqual([note])
+			expect(note?.name).toBe('Final')
+			expect(view.elements.element(note?.reference ?? '')?.name).toBe('Final')
 		})
 	})
 

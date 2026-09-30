@@ -188,13 +188,13 @@ describe('computeBrowserAlternative with a target', () => {
 describe('matchesBrowserActivation', () => {
 	it('admits the label and a non-interactive descendant, and refuses an interactive one', () => {
 		const probe = createProbeDocument(
-			'<label>Photo <span id="text">here</span><a id="link" href="#help"><b id="inner">Help</b></a><input id="field"></label>',
+			'<label>Photo <span id="text">here</span><a id="link" href="#help"><b id="inner">Help</b></a><input id="field"><img id="still" src="still.png"><img id="animation" controls src="animation.gif"><img id="map" usemap="#regions" src="map.png"></label>',
 		)
 		const label = requireValue(probe.querySelector('label'), 'label')
-		const ids = ['text', 'link', 'inner', 'field']
+		const ids = ['text', 'link', 'inner', 'field', 'still', 'animation', 'map']
 		expect(
 			ids.map((id) => matchesBrowserActivation(requireValue(probe.getElementById(id), id), label)),
-		).toEqual([true, false, false, false])
+		).toEqual([true, false, false, false, true, false, false])
 		expect(matchesBrowserActivation(label, label)).toBe(true)
 	})
 })

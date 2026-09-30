@@ -6,6 +6,7 @@ import type {
 	SystemBrowserOptions,
 } from '@src/server'
 import type { Server } from 'node:http'
+import type { Plugin } from 'vite'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { createServer, request } from 'node:http'
 import { fileURLToPath } from 'node:url'
@@ -95,17 +96,23 @@ export function isBrowserServiceModule(value: unknown): value is BrowserServiceM
  * @remarks
  * A browser project's own graph refuses a server module through its environment boundary, and
  * the global setup runs inside that graph, so `@src/server` and the service setup that imports it
- * load through a separate runner that declares only the workspace aliases.
+ * load through a separate runner that declares only the workspace aliases. The runner's
+ * `closeServer` hook runs after its full shutdown settles, so a plugin that implements it
+ * observes the launcher's `close` completing.
  *
+ * @param plugins - The Vite plugins the runner loads. Default: none
  * @returns The launcher; close it after its browsers are destroyed
  * @throws Thrown when a loaded module lacks the exports the launcher calls.
  */
-export async function createBrowserLauncher(): Promise<BrowserLauncherInterface> {
+export async function createBrowserLauncher(
+	plugins: readonly Plugin[] = [],
+): Promise<BrowserLauncherInterface> {
 	const runner = await createViteServer({
 		configFile: false,
 		root: fileURLToPath(new URL('../', import.meta.url)),
 		appType: 'custom',
 		logLevel: 'silent',
+		plugins: [...plugins],
 		resolve: {
 			alias: {
 				'@src/core': fileURLToPath(new URL('../src/core/index.ts', import.meta.url)),

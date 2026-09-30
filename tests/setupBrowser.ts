@@ -1,9 +1,10 @@
 import type { BrowserDOMElementInterface, BrowserDOMViewInterface } from '@src/browser'
 import type { ModelContextInterface } from '@orkestrel/mcp/browser'
 import type { ModelContextFixtureInterface } from './fixtures/modelContext.js'
+import type { RecorderInterface } from '@orkestrel/test'
 import { afterEach, inject } from 'vitest'
 import { createModelContext } from '@orkestrel/mcp/browser'
-import { requireValue, waitForEvent } from '@orkestrel/test'
+import { createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
 import { installModelContext } from './fixtures/modelContext.js'
 
 const frames = new Set<HTMLIFrameElement>()
@@ -177,6 +178,39 @@ export async function findProbeElement(
 }
 
 /**
+ * Records the signal of every listener a target subscribes for one event type, and subscribes
+ * each listener through the target's inherited `addEventListener`.
+ *
+ * @remarks
+ * An `EventTarget` publishes no way to read back its subscriptions, so the recorder defines an
+ * own `addEventListener` on the target that records the subscription's `signal` and delegates to
+ * the inherited method unchanged. An aborted recorded signal is a released subscription.
+ *
+ * @param target - The event target the proof owns, such as a probe document's window
+ * @param type - The event type whose subscriptions are recorded
+ * @returns A recorder whose calls hold each subscription's signal, `undefined` when it had none
+ */
+export function recordProbeSubscriptions(
+	target: EventTarget,
+	type: string,
+): RecorderInterface<[AbortSignal | undefined]> {
+	const recorder = createRecorder<[AbortSignal | undefined]>()
+	const inherited = target.addEventListener
+	Object.defineProperty(target, 'addEventListener', {
+		configurable: true,
+		value: (
+			event: string,
+			listener: EventListenerOrEventListenerObject | null,
+			options?: AddEventListenerOptions | boolean,
+		) => {
+			if (event === type) recorder.handler(typeof options === 'object' ? options.signal : undefined)
+			Reflect.apply(inherited, target, [event, listener, options])
+		},
+	})
+	return recorder
+}
+
+/**
  * Reads an input's value through its realm's native prototype getter, past any own accessor a
  * framework's value tracker defines on the element.
  *
@@ -298,6 +332,42 @@ export const PROBE_NAME_CASES: ReadonlyArray<ProbeCase<string>> = Object.freeze(
 		markup: '<img id="caption" title="Save"><button aria-labelledby="caption">Wrong</button>',
 		css: 'button',
 		expected: 'Save',
+	},
+	{
+		markup:
+			'<span id="caption">Visible <input style="visibility:hidden" value="Secret"></span><button aria-labelledby="caption"></button>',
+		css: 'button',
+		expected: 'Visible',
+	},
+	{
+		markup:
+			'<span id="caption">Visible <span style="visibility:hidden" aria-label="Secret"></span></span><button aria-labelledby="caption"></button>',
+		css: 'button',
+		expected: 'Visible',
+	},
+	{
+		markup:
+			'<span id="caption">Visible <span style="visibility:hidden" title="Secret"></span></span><button aria-labelledby="caption"></button>',
+		css: 'button',
+		expected: 'Visible',
+	},
+	{
+		markup:
+			'<span id="caption">Visible <img style="visibility:hidden" alt="Secret"></span><button aria-labelledby="caption"></button>',
+		css: 'button',
+		expected: 'Visible',
+	},
+	{
+		markup:
+			'<span id="caption">Visible <span style="visibility:hidden" title="Secret"><b style="visibility:visible">shown</b></span></span><button aria-labelledby="caption"></button>',
+		css: 'button',
+		expected: 'Visible shown',
+	},
+	{
+		markup:
+			'<span id="caption" style="visibility:hidden">Save <input value="Draft"></span><button aria-labelledby="caption">Wrong</button>',
+		css: 'button',
+		expected: 'Save Draft',
 	},
 	{
 		markup:

@@ -13,3 +13,7 @@ Rulings, each carried by the fix brief `tmp/units/u10b-fix-brief.md` (N1–N11):
 - O1 (required): the public trust documentation claims every event is untrusted while `requestSubmit()` fires a trusted `submit`. N6 corrects both statements.
 - O2 (required): two setup assertions sit before the cleanup block. N7 moves them inside.
 - The mutant table's weak spots: N8 (a CSS-selected element never captured by an outline), N9 (the later-path returned-value abort case), N10 (an invisible image's `alt`).
+
+## Acceptance (2026-09-30)
+
+The fix round (N1–N11) and the ruled addition N12 (a destroyed `BrowserDOMView` refuses `read()`, `title()`, and `wait()`, its manager `outline()`, `find()`, and `wait()`, with `BROWSER_DOCUMENT_DESTROYED`; `destroy()` idempotent) returned with N1, N3, N4a–c, N8, N9a–b, N10, and N12 red on scratch copies; the lane's gates: `check` 0, scoped format and lint 0, `test:src` 1028 passed (57 files), `test:src:browser` 213 passed (8 files), `test:setup` 81, `test:setup:browser` 21, `test:policy` 114 passed, 1 skipped. Accepted after its objective review and committed; the tree-wide gates run on the merged tree.

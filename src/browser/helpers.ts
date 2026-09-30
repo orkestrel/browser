@@ -239,9 +239,11 @@ export function readBrowserContent(
  * @remarks
  * A text node contributes its data unless its parent is invisible; a parent without a box of its
  * own, such as a `slot` or a `display: contents` element, is not invisible. An element
- * contributes nothing when it is hidden or is a `script` or `style`. An embedded control that is
- * not the context's `target` contributes its value: a text field or a range its `value`, a
- * `select` its selected options' labels; a password field and the target itself contribute
+ * contributes nothing when it is hidden or is a `script` or `style`, and an element that
+ * `matchesBrowserInvisible` reports contributes only what its content contributes, never its
+ * value, `aria-label`, `alt`, or `title`. The context's `hidden` admits both. An embedded control
+ * that is not the context's `target` contributes its value: a text field or a range its `value`,
+ * a `select` its selected options' labels; a password field and the target itself contribute
  * nothing. Any other element contributes its `aria-label`, the `alt` of an image, or its content
  * through `readBrowserContent`, and its `title` when those are empty.
  *
@@ -270,6 +272,8 @@ export function computeBrowserAlternative(node: Node, context?: BrowserNameConte
 	const tag = node.localName
 	if (!hidden && matchesBrowserHidden(node)) return ''
 	if (tag === 'script' || tag === 'style') return ''
+	// An invisible element's descendants can still render, so only its content can contribute.
+	if (!hidden && matchesBrowserInvisible(node)) return readBrowserContent(node, context)
 	const embedded = node !== context?.target
 	if (node instanceof view.HTMLTextAreaElement) return embedded ? node.value : ''
 	if (node instanceof view.HTMLSelectElement) {

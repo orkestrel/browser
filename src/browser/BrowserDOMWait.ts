@@ -13,11 +13,14 @@ import { isBrowserDocument } from './helpers.js'
  * and a root that departed (a replaced frame document, a removed shadow root) leaves it, with its
  * observer disconnected and its `load` listener removed. The check runs before the wait parks and
  * again after every subscription, and no check runs once the deadline, counted from `start`, has
- * passed. The wait settles one time: on the check's first value, on the signal's abort with its
- * reason, at the deadline with `BROWSER_WAIT_TIMEOUT`, on a `pagehide` in the first root's window
- * with `GONE`, or with whatever the check or the roots function throws. Settlement disconnects
- * every observer and removes every listener synchronously, so a mutation queued before it runs no
- * check.
+ * passed, which the wait reads again after `roots` returns. The wait settles one time: on the
+ * check's first value, on the signal's abort with its reason, at the deadline with
+ * `BROWSER_WAIT_TIMEOUT`, on a `pagehide` in the first root's window with `GONE`, or with whatever
+ * the check or the roots function throws. A signal that aborts while `check` or `roots` runs
+ * settles the wait with its reason, and wins over a value that same check returns. Settlement
+ * disconnects every observer and removes every listener synchronously, so a mutation queued
+ * before it runs no check, and a `roots` or `check` that settles the wait from inside leaves no
+ * observer, listener, or further check behind.
  *
  * A shadow root attached after the wait began is a declared limit: attaching one fires no
  * mutation record and no event, so the wait discovers it at the next mutation or `load` it
@@ -60,6 +63,8 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 		const signal = this.#wait.signal
 		signal?.throwIfAborted()
 		const first = this.#wait.check()
+		// The abort listener is not registered yet, so an abort from inside the check is read here.
+		signal?.throwIfAborted()
 		if (first !== undefined) return first
 		this.#timer = setTimeout(this.#expire.bind(this), Math.max(0, this.#remaining()))
 		signal?.addEventListener('abort', () => this.#fail(signal.reason), {
@@ -69,14 +74,21 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 		return await this.#settled.promise
 	}
 
-	// Subscribes to every live root and prunes departed ones, then runs the check.
+	// Subscribes to every live root and prunes departed ones, then runs the check. From here on
+	// the abort listener turns a caller's abort into settlement, so the release state carries it.
 	#recheck(): void {
+		if (this.#release.signal.aborted) return
 		if (this.#remaining() <= 0) {
 			this.#expire()
 			return
 		}
 		const result = attempt(() => {
 			this.#reconcile()
+			if (this.#release.signal.aborted) return undefined
+			if (this.#remaining() <= 0) {
+				this.#expire()
+				return undefined
+			}
 			return this.#wait.check()
 		})
 		if (!result.success) this.#fail(result.error)
@@ -85,6 +97,7 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 
 	#reconcile(): void {
 		const live = new Set(this.#wait.roots())
+		if (this.#release.signal.aborted) return
 		for (const [root, entry] of this.#observers) {
 			if (live.has(root)) continue
 			entry.observer.disconnect()
@@ -115,7 +128,8 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 	}
 
 	#remaining(): number {
-		return this.#wait.start + this.#wait.timeout - performance.now()
+		const now = this.#wait.now
+		return this.#wait.start + this.#wait.timeout - (now === undefined ? performance.now() : now())
 	}
 
 	#expire(): void {

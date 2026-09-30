@@ -91,8 +91,8 @@ import {
  * registration is marked `debugging`. The selected registration is the main frame's, then the
  * earlier one. A page tool whose parameters require nothing advertises a required `what`, which
  * is stripped before the tool runs. Every adopted tool is advertised `untrusted`. `destroy()`
- * removes only the tools the manager still holds under the instances the toolset added, and never
- * closes a page.
+ * removes only the tools the manager still holds under the instances the toolset added, never
+ * closes a page, and ends only what `options.release` hands over, calling it one time last.
  *
  * @example
  * ```ts
@@ -112,6 +112,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #context: BrowserContextInterface | undefined
 	readonly #limit: number
 	readonly #schemes: readonly string[]
+	readonly #owned: (() => Promise<void> | void) | undefined
 	readonly #emitter: Emitter<BrowserToolsetEventMap>
 	readonly #lifetime = new AbortController()
 	readonly #native: readonly ToolInterface[]
@@ -165,6 +166,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		this.#context = options?.context
 		this.#limit = limit
 		this.#schemes = options?.schemes ?? BROWSER_SCHEMES
+		this.#owned = options?.release
 		this.#emitter = new Emitter({
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
@@ -1084,6 +1086,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		this.#adopted.clear()
 		this.#reading = undefined
 		this.#emitter.destroy()
+		await this.#owned?.()
 	}
 
 	#handleChange(): void {

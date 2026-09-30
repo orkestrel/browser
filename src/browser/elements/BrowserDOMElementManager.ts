@@ -1,5 +1,6 @@
 import type {
 	BrowserCallOptions,
+	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserElementQuery,
 	BrowserElementWaitOptions,
@@ -51,11 +52,14 @@ import {
  * omitted with its subtree, a scope root in such a subtree yields no row, and an element that
  * `matchesBrowserInvisible` reports yields no row of its own. An element whose role
  * `BROWSER_INTERACTIVE_ROLES` names receives a reference bound through a `WeakRef`, which never
- * changes while the manager holds it, and a reference number is never reused. A reference and a
- * reading from any walked document record that document's epoch, which advances on its own
+ * changes while the manager holds it, and a reference number is never reused. Every outline or
+ * query that encounters a bound element records its role and name afresh, and the element's
+ * wrapper reports that latest capture, also after the manager drops the reference. A reference
+ * and a reading from any walked document record that document's epoch, which advances on its own
  * navigation events and on the view's; that document's `pagehide` drops its references. A form
  * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A CSS query
- * searches the document the view drives, not its child documents or shadow trees.
+ * searches the document the view drives, not its child documents or shadow trees. After the
+ * input's `signal` aborts, `outline`, `find`, and `wait` reject with its reason.
  *
  * `wait` parks a `BrowserDOMWait` bound to the view's lifetime over every root that
  * `collectBrowserRoots` reaches from its scope, reconciled at every observed mutation and frame
@@ -77,6 +81,10 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		{ readonly node: WeakRef<Element>; readonly element: BrowserDOMElement }
 	>()
 	readonly #identities = new WeakMap<Element, string>()
+	readonly #descriptions = new WeakMap<
+		WeakRef<Element>,
+		Pick<BrowserElementInterface, 'role' | 'name'>
+	>()
 	readonly #epochs = new WeakMap<Document, number>()
 	readonly #watched = new WeakSet<Document>()
 	#count = 0
@@ -86,6 +94,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	}
 
 	async outline(options?: BrowserOutlineOptions): Promise<BrowserOutline> {
+		this.#input.signal.throwIfAborted()
 		const limit = options?.limit ?? BROWSER_OUTLINE_LIMIT
 		if (!isInteger(limit) || limit < 0) {
 			throw new BrowserError('Outline limit must be a nonnegative integer', undefined, { limit })
@@ -100,6 +109,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		query: BrowserElementQuery,
 		options?: BrowserCallOptions,
 	): Promise<readonly BrowserDOMElementInterface[]> {
+		this.#input.signal.throwIfAborted()
 		options?.signal?.throwIfAborted()
 		return this.#find(query)
 	}
@@ -108,6 +118,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		query: BrowserElementQuery,
 		options?: BrowserElementWaitOptions,
 	): Promise<readonly BrowserDOMElementInterface[]> {
+		this.#input.signal.throwIfAborted()
 		const start = performance.now()
 		const timeout = options?.timeout ?? BROWSER_DOCUMENT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
@@ -386,14 +397,18 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	#bind(element: Element, role: string, name: string): BrowserDOMElement {
 		const known = this.#identities.get(element)
 		const existing = known === undefined ? undefined : this.#records.get(known)
-		if (existing !== undefined) return existing.element
+		if (existing !== undefined) {
+			this.#descriptions.set(existing.node, { role, name })
+			return existing.element
+		}
 		this.#count += 1
 		const reference = `${BROWSER_REFERENCE_PREFIX}${this.#count}`
 		const node = new WeakRef(element)
+		const description = { role, name }
+		this.#descriptions.set(node, description)
 		const created = new BrowserDOMElement({
 			reference,
-			role,
-			name,
+			description: this.#description.bind(this, node, description),
 			node,
 			current: this.#holds.bind(this, reference),
 			navigation: this.#epoch.bind(this, new WeakRef(element.ownerDocument)),
@@ -405,5 +420,13 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 
 	#holds(reference: string): boolean {
 		return this.#records.has(reference)
+	}
+
+	// Reads the latest capture of a binding; the entry lives as long as the wrapper's weak node.
+	#description(
+		node: WeakRef<Element>,
+		captured: Pick<BrowserElementInterface, 'role' | 'name'>,
+	): Pick<BrowserElementInterface, 'role' | 'name'> {
+		return this.#descriptions.get(node) ?? captured
 	}
 }

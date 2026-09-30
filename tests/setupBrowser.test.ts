@@ -13,6 +13,7 @@ import {
 	readBrowserFixtureBase,
 	readNativeValue,
 	readProbeCase,
+	recordProbeSubscriptions,
 } from './setupBrowser.js'
 
 describe('readBrowserFixtureBase', () => {
@@ -89,6 +90,32 @@ describe('readNativeValue', () => {
 		Object.defineProperty(probe.email, 'value', { configurable: true, get: () => 'shadowed' })
 		expect(probe.email.value).toBe('shadowed')
 		expect(readNativeValue(probe.email)).toBe('sam@example.test')
+	})
+})
+
+describe('recordProbeSubscriptions', () => {
+	it('records the signal of each subscription to its type and still subscribes every listener', async () => {
+		const probe = await loadProbeDocument('<p>host</p>')
+		const window = requireValue(probe.defaultView, 'probe window')
+		const subscriptions = recordProbeSubscriptions(window, 'hashchange')
+		const heard = createRecorder<[string]>()
+		const release = new AbortController()
+		window.addEventListener('hashchange', (event) => heard.handler(event.type), {
+			signal: release.signal,
+		})
+		window.addEventListener('message', (event) => heard.handler(event.type))
+		window.addEventListener('hashchange', (event) => heard.handler(`plain ${event.type}`))
+		expect(subscriptions.calls).toEqual([[release.signal], [undefined]])
+		window.dispatchEvent(new Event('hashchange'))
+		window.dispatchEvent(new Event('message'))
+		release.abort()
+		window.dispatchEvent(new Event('hashchange'))
+		expect(heard.calls).toEqual([
+			['hashchange'],
+			['plain hashchange'],
+			['message'],
+			['plain hashchange'],
+		])
 	})
 })
 
@@ -287,6 +314,9 @@ describe('installModelContext', () => {
 		const fixture = installModelContext(probe)
 		const order = createRecorder<[string]>()
 		fixture.registry.addEventListener('toolchange', () => order.handler('toolchange'))
+		// A timer queued before the call runs before the double's notification task and after
+		// every microtask of the calling task, so a notification from any microtask precedes it.
+		setTimeout(() => order.handler('timer'), 0)
 		const registering = fixture.registry.registerTool({
 			name: 'lookup',
 			description: 'Looks up a car',
@@ -296,7 +326,13 @@ describe('installModelContext', () => {
 		queueMicrotask(() => order.handler('microtask'))
 		await registering
 		order.handler('settled')
-		expect(order.calls).toEqual([['returned'], ['microtask'], ['toolchange'], ['settled']])
+		expect(order.calls).toEqual([
+			['returned'],
+			['microtask'],
+			['timer'],
+			['toolchange'],
+			['settled'],
+		])
 	})
 
 	it('rejects a pending registration aborted at once with the reason and unregisters it', async () => {
