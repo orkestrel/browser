@@ -111,76 +111,75 @@ For the initial load, the page session carries these events for the frame, becau
 **Deviation state:** none. The probe file stays in `tmp/probes/` for the implementation unit, as the brief directs. Nothing was committed or deleted.
 
 ### P8: a paused target whose session is detached without a resume
-**Answer:** `P8: a paused target stays paused after detach` (Chromium 141.0.7390.37 with `--site-per-process`).
+**Answer:** `P8: a paused target stays paused after detach`. This is the fifth-round rerun on Chromium 141.0.7390.37 with `--site-per-process`. The probe is `tmp/probes/c6-attach.test.ts`, its beacon server is bound to `127.0.0.1`, and the output is in `tmp/probes/logs/c6-attach-run.txt`.
 
-The reading is from the fourth-round rerun with the beacon server bound to `127.0.0.1`. The probe is `tmp/probes/c6-attach.test.ts` and its output is in `tmp/probes/logs/c6-attach-run.txt`.
-
-The page session auto-attaches with `waitForDebuggerOnStart: true`. The probe then detaches the child's session without sending `Runtime.runIfWaitingForDebugger`. The site B child never runs its inline script, so no beacon arrives within 2 s. The parent stays at `readyState` `interactive`, because its `load` waits for the frozen frame. The parent session's `Page.getFrameTree` names the child with the URL `:`, not its document URL.
+The page session auto-attaches with `waitForDebuggerOnStart: true`. The child's session is then detached without `Runtime.runIfWaitingForDebugger`. As a result:
+- The site B child never runs its inline script, so no beacon arrives within 2 s.
+- The parent stays at `readyState` `interactive`, because its `load` waits for the frozen frame.
+- The parent session's `Page.getFrameTree` names the child with the URL `:`, not its document URL.
 
 Detach without a resume (`c1` is the child session):
 ```
 #25 page frameStartedNavigating F2 L2 url=B/p8/child?run=paused
 #29 page Target.attachedToTarget F2 type=iframe child=c1 waitingForDebugger=true
 #30 page > Target.detachFromTarget session=c1
-#33 page Target.detachedFromTarget F2 child=c1
-#34 page < Target.detachFromTarget
-#39 page > Page.getFrameTree  (+2097.1 ms)  children: F2@:
+#31 page Target.detachedFromTarget F2 child=c1
+#32 page < Target.detachFromTarget
+#39 page > Page.getFrameTree  (+2204.7 ms)  children: F2@:
 beacon absent; parent readyState interactive
 ```
 
 **Control (resume, await its reply, then detach):** the child commits and runs, and the parent completes.
 ```
-#78 page Target.attachedToTarget F2 type=iframe child=c3 waitingForDebugger=true
-#79 c3 > Runtime.runIfWaitingForDebugger
-#81 page frameDetached F2 reason=swap
+#79 page Target.attachedToTarget F2 type=iframe child=c3 waitingForDebugger=true
+#80 c3 > Runtime.runIfWaitingForDebugger
 #82 c3 < Runtime.runIfWaitingForDebugger
 #83 page > Target.detachFromTarget session=c3
-#84 page Target.detachedFromTarget F2 child=c3
-#85 page < Target.detachFromTarget
-#87 page lifecycle load F1 (the parent)
+#86 page frameDetached F2 reason=swap
+#88 page lifecycle load F1 (the parent)
+#90 page Target.detachedFromTarget F2 child=c3
+#91 page < Target.detachFromTarget
 beacon arrived; parent tree children: none; parent readyState complete
 ```
-The control's order matches `BrowserPage.#detachChild` after I12: it sends the resume, awaits the reply, and only then sends the detach.
+The control's order matches `BrowserPage.#detachChild`: it sends the resume, awaits the reply, and only then sends the detach.
 
 ### P2b: the page's own attach follows a reverse swap
-**Answer:** The page is built as `BrowserContext.#configurePage` builds it. Its new frame session reports the navigation's commit only after the page's resume, and the commit carries the navigation's own loader. The page-session swap follows the commit, and the session's `load` carries the same loader. The record settled `{"url":"http://localhost:44489/frame/done?code=SAVE10&key=","stage":"loaded"}`.
+**Answer:** The page is built the same way `BrowserContext.#configurePage` builds one. Its new frame session reports the navigation's commit only after the page's resume, and the commit carries the navigation's own loader. The page-session swap follows that commit, and the session's `load` carries the same loader. The record settled `{"url":"http://localhost:38453/frame/done?code=SAVE10&key=","stage":"loaded"}`.
 
-Setup: `BrowserPage` runs on the recording transport, and the page session's auto-attach uses `waitForDebuggerOnStart: true`. The page navigates to `/frame/local`, opens `page.navigation.record(FRAME)` for the in-process voucher frame, and submits the frame to `localhost`.
-
-The fourth-round rerun's full tape is `tmp/probes/logs/c6-attach-p2b.txt` (54 frames). The printed trace is in `tmp/probes/logs/c6-attach-run.txt`.
+Setup: `BrowserPage` runs on the recording transport, and the page session's auto-attach uses `waitForDebuggerOnStart: true`. The page navigates to `/frame/local`, opens `page.navigation.record(FRAME)` for the in-process voucher frame, and submits it to `localhost`. The fifth-round rerun's full tape is `tmp/probes/logs/c6-attach-p2b.txt` (46 frames), and the printed trace is in `tmp/probes/logs/c6-attach-run.txt`.
 
 Wire positions (`c5` is the new frame session):
 ```
-#178 page frameRequestedNavigation F1 reason=formSubmissionGet url=B/frame/done?code=SAVE10&key=
-#186 page frameStartedNavigating   F1 L1
-#191 page Target.attachedToTarget  F1 type=iframe child=c5 waitingForDebugger=true
-#192 c5 > Page.enable                     #195 c5 < Page.enable
-#196 c5 > Runtime.enable                  #200 c5 < Runtime.enable
-#201 c5 > Page.setLifecycleEventsEnabled  #206 c5 < Page.setLifecycleEventsEnabled
-#202 c5 lifecycle commit L2               (replay, foreign loader)
-#207 c5 > Target.setAutoAttach            #208 c5 < Target.setAutoAttach
-#209 c5 > Runtime.runIfWaitingForDebugger
-#212 c5 frameNavigated F1 L1
-#214 page frameDetached F1 reason=swap
-#217 c5 < Runtime.runIfWaitingForDebugger
-#221 c5 lifecycle load F1 L1
+#188 page frameRequestedNavigation F1 reason=formSubmissionGet url=B/frame/done?code=SAVE10&key=
+#191 page frameStartedNavigating   F1 L1
+#196 page Target.attachedToTarget  F1 type=iframe child=c5 waitingForDebugger=true
+#197 c5 > Page.enable                     #200 c5 < Page.enable
+#201 c5 > Runtime.enable                  #202 c5 < Runtime.enable
+#203 c5 > Page.setLifecycleEventsEnabled  #208 c5 < Page.setLifecycleEventsEnabled
+#204 c5 lifecycle commit L2               (replay, foreign loader)
+#209 c5 > Target.setAutoAttach            #210 c5 < Target.setAutoAttach
+#211 c5 > Runtime.runIfWaitingForDebugger
+#214 c5 frameNavigated F1 L1
+#216 page frameDetached F1 reason=swap
+#219 c5 < Runtime.runIfWaitingForDebugger
+#223 c5 lifecycle load F1 L1
 ```
 
 ### U0 rerun
-**Answer:** The rerun matches the recorded answers for P1, P2, P3, P4, P6 and P7, while P5's timing differs; the differences are listed below. The probe was `tmp/probes/c6-navigation.test.ts`, rewritten so that no function is declared inside another. It ran once under `test:probe` and passed 7 of 7 with exit 0; its output is `tmp/probes/logs/c6-navigation-rerun.txt`.
+**Answer:** The rerun matches the recorded answers for P1, P2, P3, P4, P6 and P7; P5 differs on timing only, as listed below. The rerun used `tmp/probes/c6-navigation.test.ts`, rewritten in the fifth round so that no function expression is declared, assigned, or placed in a property inside a function. It ran once under `test:probe` and passed 7 of 7 with exit 0. The output is `tmp/probes/logs/c6-navigation-rerun.txt`.
 
-The recorded report states each reading's answer in prose rather than as raw `answer:` lines, so the comparison below sets the rerun's `answer:` lines (and P5's distributions) against that prose.
+The recorded report states each reading's answer in prose rather than as raw `answer:` lines. The comparison below therefore sets the rerun's `answer:` lines, and P5's distributions, against that prose.
 
 - **P1: equal.**
   - The start fires in all three placements, on `page`, `page` and `c1`.
   - `startLoader==navigatedLoader` and `loadLoader==navigatedLoader` are true in all six rows.
   - The control rows show `anchorClick`.
-- **P2: equal answer, different wire positions.**
-  - Forward: the start is on `c1` and `c1` detaches.
-  - Reverse with a wait: the start is on `page`, and the new session's `frameNavigated` (#610) follows its `Page.enable` reply (#601).
+- **P2: equal answer; the wire positions differ.**
+  - Forward: the start is on `c1` (#553, #558), and `c1` detaches.
+  - Reverse with a wait: the start is on `page` (#589, #590), and the new session's `frameNavigated` (#605) follows its `Page.enable` reply (#596).
   - Reverse without a wait: no `frameNavigated` arrives.
-  - Control: stays on `c1` and nothing detaches.
-  - Positions differ from the record: forward requested and started at #561 and #565 (recorded #563 and #566); the reverse requested and started at #594 and #595 (recorded #595 and #596).
+  - The control stays on `c1` and nothing detaches.
+  - The record has #563, #566, #595 and #596.
 - **P3: equal.**
   - `c1` reports `load` on its `frameNavigated` loader.
   - A replayed `commit` and `DOMContentLoaded` arrive on a foreign loader.
@@ -188,16 +187,15 @@ The recorded report states each reading's answer in prose rather than as raw `an
   - Control: `c1` reports no lifecycle event, and `page` reports only `init`.
 - **P4: equal.**
   - With auto-attach off, the nested target attaches through no session, and `c1`'s `frameAttached` names the middle frame as parent.
-  - Control: it attaches through `c1` with `parentFrameId` set to the middle frame.
-- **P5: two differences in timing; the rest is equal.**
-  - **Difference, Enter series:** `frameRequestedNavigation` arrives +0.37 to +1.11 ms after the `keyDown` reply in all 5 repetitions. That is later than the recorded "within ±0.4 ms", and all 5 fall after the reply (recorded: 4 after, 1 before).
-  - **Difference, link control:** in repetitions 3 and 5, `frameStartedNavigating` arrives after the reply (+1.96 and +2.69 ms). The record has all 5 before. `frameRequestedNavigation` stays before the reply in all 5 (−0.35 to −7.97 ms).
-  - **Mouse series:** `frameRequestedNavigation` arrives before the reply in all 5 (−0.10 to −0.25 ms), within ±0.4 ms (recorded: 3 before, 2 after).
-  - **Equal:** `frameStartedNavigating` follows the reply in all 10 form repetitions (+5.4 to +17.0 ms).
+  - Control: the nested target attaches through `c1`, with `parentFrameId` set to the middle frame.
+- **P5: the start-after-reply answer holds for every form repetition; three timing details differ.** `frameStartedNavigating` follows the reply in all 10 form repetitions (+4.9 to +37.2 ms). The input replies took longer on this run (send to reply 1.1 to 29.9 ms).
+  - **Mouse series (equal):** `frameRequestedNavigation` falls within ±0.4 ms of the reply, 3 before and 2 after (−0.31 to +0.20 ms). This matches the record.
+  - **Enter series (differs):** the `frameRequestedNavigation` deltas against the `keyDown` reply are +2.26, +0.85, +3.58, −13.59 and +0.45 ms in repetitions 1 to 5. That is 4 after and 1 before, which matches the record's split, but every one of the five lies outside the record's ±0.4 ms bound. The start still follows the reply in every repetition.
+  - **Link control (differs):** both events arrive after the reply in repetitions 1, 2 and 5 (requested +0.07 to +0.47 ms, started +1.31 to +21.01 ms). The record had all 5 before.
 - **P6: equal.**
   - The page session reports no `frameNavigated` for the out-of-process frame.
   - The in-process control reports both commits on `page`.
-- **P7: equal answer, different wire positions.**
-  - The matching-field form emits `frameRequestedNavigation` and `frameScheduledNavigation` (`formSubmissionGet`) before `navigatedWithinDocument` (`fragment`), with no start and no commit. Positions: #2137, #2139, #2141 (recorded #2137, #2142, #2144).
+- **P7: equal answer; the wire positions differ.**
+  - The matching-field form emits `frameRequestedNavigation` and `frameScheduledNavigation` (`formSubmissionGet`) before `navigatedWithinDocument` (`fragment`), with no start and no commit. Positions: #2140, #2142, #2144 (recorded #2137, #2142, #2144).
   - The form without fields navigates cross-document.
-  - The link control emits only `frameScheduledNavigation` (`anchorClick`).
+  - The link control emits only `frameScheduledNavigation` (`anchorClick`, #2268).

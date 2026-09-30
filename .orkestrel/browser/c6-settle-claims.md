@@ -656,3 +656,103 @@ The 6 touched files are `src/core/BrowserPage.ts`, `tests/setup.ts`, `tests/setu
 - **U0 probe assertions (I13):** "keep the readings' logic" is honored. The lint gate over the touched probe required three changes that don't change any reading: each test asserts its answer count, the in-method `expect` became a thrown precondition, and the unused `browser` holder and its `afterAll` `expect` are removed. The original file had the same 7 lint errors before the rewrite.
 - **Recorded report format:** the recorded U0 report has no raw `answer:` lines, so the comparison sets each rerun `answer:` line against the recorded prose answer for its reading.
 - Nothing else. No file outside the owned list was touched, and nothing was committed.
+
+# Fifth fix round (I17)
+
+Both probes now keep every function either at module level, as a class method, as an anonymous callback passed directly as an argument, or as an anonymous function returned directly. Both reruns reproduce the recorded answers; P5 differs on timing only. No tracked file was touched.
+
+## Changes
+
+- **`tmp/probes/c6-navigation.test.ts:185–221`:** the transport hooks that were object properties in `createTape` are now the methods of a module-level class, `RecordingTransport implements CDPTransportInterface` (`:186`). Its `start`, `send` and `close` methods and its `emitter` getter implement the interface. The private `#receive` method is registered through `this.#receive.bind(this)`. `createTape` (`:218`) now returns `{ transport, frames: transport.frames, labels }`, with no function in any property.
+- **`tmp/probes/c6-navigation.test.ts:975–987` and `:1163`, `:1172`, `:1181`:** P5's three `act` property functions are now `NavigationProbe` methods: `clickAddToCart`, `submitNameByEnter` and `clickNextLink`. Each series passes the bound method reference, for example `act: probe.clickAddToCart.bind(probe)`. The readings' logic and printed output are unchanged.
+- **`tmp/probes/c6-attach.test.ts:106–142`:** the same `RecordingTransport` class (`:107`) replaces the object-property hooks, and `createTape` (`:139`) returns `{ transport, frames: transport.frames }`.
+- **`tmp/units/c6-probe-report.md`:** the `### P8`, `### P2b` and `### U0 rerun` sections are replaced with the fifth-round rerun's positions and comparison.
+- **Logs:** the rerun output replaces `tmp/probes/logs/c6-navigation-rerun.txt`, `c6-attach-run.txt` and `c6-attach-p2b.txt`.
+
+## Claim
+
+- **36 (I17).** Neither probe file declares, assigns or places a function expression in an object property inside another function or method. The sweeps below find no hit except type annotations, ternary branches, control statements, constructors and permitted callbacks. With the changes in place, both probes reproduce their readings: U0 7 of 7, P8 both rows, and P2b settled `loaded`.
+
+## Sweep (over `tmp/probes/c6-navigation.test.ts` and `tmp/probes/c6-attach.test.ts`)
+
+| Pattern | Hits | Ruling |
+|---|---|---|
+| `:\s*(async )?\(` (property position) | nav `:234`, `:606`, `:610`; attach `:180`, `:207`, `:244`, `:435` | None is a function expression. nav `:234` is the `Series.act` type annotation, and nav `:606`, `:610` and attach `:244` are parameter or return type annotations. attach `:180`, `:207` and `:435` are the alternate branches of ternaries. |
+| `:\s*(async )?function` | 0 | none |
+| `^\s+\w+\s*\([^)]*\)\s*\{` (method shorthand) | nav `:165`, `:191`, `:277`, `:300`, `:487`, `:497`, `:646`, `:749`, `:992`, `:1097`; attach `:112`, `:147`, `:154`, `:169`, `:182` | None is inside an object literal. The hits are `if`, `switch` and `for` statements plus the two class constructors (nav `:191` and `:277`, attach `:112`). |
+| Declaration: `^\s+(const\|let) NAME(: T)? = (async )?(PARAMS\|IDENT)( *:T)? *=>` or `^\s+(async )?function\*? *NAME\(` | 0 | none |
+| Other positions: `:\s*(async )?\w+\s*=>`, `\[\s*(async )?\(`, `= (async )?\(`, `\?\s*(async )?\([^)]*\)\s*=>` | nav `:389`; attach `:414` | nav `:389` is JavaScript source inside a template string, which is data. attach `:414` is an `await` expression. |
+| Every arrow: `=>\s*\{?\s*$\|=> [a-z]` | 88 lines (nav 60, attach 28) | Each is an anonymous callback passed directly as an argument (to `filter`, `map`, `find`, `some`, `then`, `catch`, `waitForCondition`, `teardown.add`, `subscribe`, `new Promise`, `it` or `beforeAll`) or returned directly (nav `:611`, `committed`; attach `:245`, `createDetacher`). This is allowed. |
+
+## Rerun comparison
+
+The full sections are in `tmp/units/c6-probe-report.md`: § P8, § P2b and § U0 rerun.
+
+- **P8: equal.** The answer is `P8: a paused target stays paused after detach`.
+  - Without a resume: attach #29, detach #30, `detachedFromTarget` #31, reply #32 (previously #33 and #34). No beacon arrives after 2 s, and the parent stays `interactive`.
+  - Control: resume #80, reply #82, detach #83. One position moved: the page-session swap now arrives after the detach is sent (#86); it previously arrived before the resume's reply (#81). The beacon arrives and the parent reaches `complete`.
+- **P2b: equal order, with new positions:**
+  - #188 requested
+  - #191 started
+  - #196 attach
+  - #197 to #210 the `c5` enables
+  - #211 resume
+  - #214 `frameNavigated` L1
+  - #216 swap
+  - #219 resume reply
+  - #223 `load` L1
+  - The record settled `loaded`, and the tape has 46 frames.
+- **U0: P1, P2, P3, P4, P6 and P7 are equal.** P2 and P7 differ only in wire positions.
+- **U0 P5:** the start follows the input reply in all 10 form repetitions. Three timing details differ:
+  - The mouse series is back to 3 before and 2 after, within ±0.4 ms, as recorded.
+  - The Enter series is 4 after and 1 before, as recorded, but every one of its five request deltas lies outside ±0.4 ms: +2.26, +0.85, +3.58, −13.59 and +0.45 ms in repetitions 1 to 5.
+  - In the link control, repetitions 1, 2 and 5 have both events after the reply; the record had all 5 before.
+
+## Validation (from the worktree root, `env -C /home/user/browser/tmp/worktrees/c6`)
+
+| Command | Exit | Result |
+|---|---|---|
+| `npx oxfmt --check tmp/probes/c6-navigation.test.ts tmp/probes/c6-attach.test.ts` | 0 | clean |
+| `npx oxlint --config .oxlintrc.json --deny-warnings` over the same two files | 0 | clean |
+| `npx tsc -p tmp/probes/tsconfig.probe.json` (a temporary config extending `tsconfig.json`, removed afterwards) | 0 | clean |
+| `npx vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe tmp/probes/c6-navigation.test.ts` | 0 | 7 passed |
+| `npx vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe tmp/probes/c6-attach.test.ts` | 0 | 3 passed |
+
+## Deviations
+
+- **Formatting:** I formatted both probe files by piping each through `oxfmt --stdin-filepath` and copying the output back; I didn't run the `format` script or touch any tracked file.
+- **Wider sweep:** beyond the patterns the brief names, I added two sweeps (the other positions and every arrow) and ruled each hit.
+- **Scope:** nothing else changed. No tracked file, build, or index-wide git command was touched or run, and nothing was committed.
+
+# Sixth fix round (I18)
+
+I18 is in place: the three P5 methods have one-word names, both tape recorders expose their tape through a read-only getter, and the P5 comparison passages give the measured Enter deltas. I didn't rerun the probes: the changes are a rename and a type narrowing, and both files type-check, lint, and format-check clean.
+
+## Changes
+
+- **(a) O1, the P5 method names** (`tmp/probes/c6-navigation.test.ts`):
+  - `clickAddToCart` is now `add` (`:979`).
+  - `submitNameByEnter` is now `submit` (`:983`).
+  - `clickNextLink` is now `follow` (`:988`).
+  - Their bound references are `act: probe.add.bind(probe)` (`:1167`), `act: probe.submit.bind(probe)` (`:1176`), and `act: probe.follow.bind(probe)` (`:1185`).
+- **(b) O2, the tape view:**
+  - In `tmp/probes/c6-navigation.test.ts`, `RecordingTransport` keeps its tape in the private `readonly #frames: TapeFrame[]` (`:187`) and exposes `get frames(): readonly TapeFrame[]` (`:196`). `Tape.frames` is `readonly TapeFrame[]` (`:46`). Both calls to `recordTapeFrame` write to `this.#frames`.
+  - `tmp/probes/c6-attach.test.ts` gets the same change: `#frames` at `:108`, the getter at `:117`, and `Tape.frames` as `readonly TapeFrame[]` at `:50`. Its consumers, `labelSessions` and `printTrace`, already take `readonly TapeFrame[]`.
+- **(c) O3, the P5 numbers:**
+  - `tmp/units/c6-probe-report.md:193` now gives the Enter request deltas from the rerun: +2.26, +0.85, +3.58, −13.59, and +0.45 ms in repetitions 1 to 5. All five lie outside ±0.4 ms. The passage keeps the 4-after, 1-before split and the conclusion that the start follows the reply.
+  - `tmp/units/c6-settle-claims.md:708` states the same five values and keeps the split.
+  - The fourth-round passage at `:616` is unchanged, because it describes that round's own run.
+
+## Validation
+
+All three commands ran from `env -C /home/user/browser/tmp/worktrees/c6`.
+
+| Command | Exit |
+|---|---|
+| `npx oxfmt --check tmp/probes/c6-navigation.test.ts tmp/probes/c6-attach.test.ts` | 0 |
+| `npx oxlint --config .oxlintrc.json --deny-warnings tmp/probes/c6-navigation.test.ts tmp/probes/c6-attach.test.ts` | 0 |
+| `npx tsc -p tmp/probes/tsconfig.probe.json` (a temporary config that extends `tsconfig.json`, removed afterwards) | 0 |
+
+## Deviations
+
+None. I touched no tracked file, ran no build or `format`, and made no git write.
