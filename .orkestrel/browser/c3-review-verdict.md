@@ -29,3 +29,16 @@ Rulings (the fix brief `tmp/units/c3-fix2-brief.md` in the worktree):
 - X6 (claim 9): the per-client records clear on the client's `close` and `drop` as well as `connect`.
 
 Accepted as limitations: deviation 5 (a failed or re-enabled discovery request is re-sent by the next held page's construction). Carried to the U12 follow-up: a page constructed without a reference allocator is neither held nor discovering; `BROWSER_TARGET_HELD` and its constructor restriction. A third objective review follows the round.
+
+## Third review (after X1–X6)
+
+Astra `analyst`, read-only, 479 478 ms, on the second fix round's tree: `VERDICT: FAIL 13,17,19; outside the claims: O1,O2`. Claims 1–12, 14–16, 18, 20, 21 confirmed (X1, X3, X5, X6 hold); the four second-round deviations confirmed. The Orchestrator's gate set on the tree green (`test:src` 1068, `test:src:browser` 219, `test:setup` 97, `test:setup:browser` 21, `test:policy` 114, `test:config` 172, `test:conformance` 69; build, format, lint, check 0).
+
+Rulings (the fix brief `tmp/units/c3-fix3-brief.md` in the worktree):
+
+- G1 (claims 13, 17): popup adoption captures a competing reservation as its predecessor and installs its own, which no other path replaces, so a descendant's adoption always finds the active boundary.
+- G2 (claim 19): fixture replies are admitted only against pending attach requests of the active connection, consumed on success or failure and invalidated on either close.
+- G3 (O1 required): a page constructed without the internal readiness argument counts as published on setup completion even with an opener; the remarks state the default.
+- G4 (O2 blocking): `create()` and `sync()` share one reservation: synchronization waits for a creation in flight, and a creation that meets an established winner joins it instead of closing the target.
+
+Accepted: deviation 3 (a failed holder's popup relationship is not restored by a later `sync()`; U12b documents the limit). A fourth objective review, scoped to G1–G4, follows the round.
