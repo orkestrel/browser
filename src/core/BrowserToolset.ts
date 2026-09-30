@@ -31,15 +31,24 @@ import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	BROWSER_SCHEMES,
 	BROWSER_TOOL_CAPTURE_MS,
+	BROWSER_TOOL_CHANGED_NOTE,
 	BROWSER_TOOL_COPY,
+	BROWSER_TOOL_CUT_FOOTER,
 	BROWSER_TOOL_DEADLINE_NOTE,
 	BROWSER_TOOL_LIMIT,
 	BROWSER_TOOL_NAMES,
 	BROWSER_TOOL_NAME_PATTERN,
 	BROWSER_TOOL_TIMEOUT_LIMIT_MS,
 	BROWSER_TOOL_TIMEOUT_MS,
+	BROWSER_TOOL_VIEW_FOOTER,
+	BROWSER_TYPED_ROLES,
 } from './constants.js'
-import { BrowserElementError, BrowserError, isBrowserError } from './errors.js'
+import {
+	BrowserElementError,
+	BrowserError,
+	isBrowserElementError,
+	isBrowserError,
+} from './errors.js'
 import {
 	boundBrowserText,
 	deriveBrowserToolSchema,
@@ -49,6 +58,7 @@ import {
 	renderBrowserReceipt,
 	renderBrowserToolOutput,
 	requireBrowserReference,
+	validateBrowserToolArguments,
 } from './helpers.js'
 
 /**
@@ -66,10 +76,13 @@ import {
  * Every tool, the page tools included, runs through one boundary. The boundary refuses with
  * `the browser session ended` after `destroy()`, refuses an aborted signal before the tool runs,
  * refuses every tool but `dialog` while a dialog is open, forwards `ToolContext.signal` into every
- * protocol call, and cuts every returned string and every thrown message at `limit` characters
- * plus a footer. A page tool's error message and JSON output reach the toolset already cut at
- * `BROWSER_REGISTRY_OUTPUT_LIMIT` (4 096) by the registry, so a `limit` over that shows at most
- * 4 096 characters of either; a page tool's text output reaches the boundary whole.
+ * protocol call, refuses a call to a toolset tool that carries a parameter the tool does not
+ * advertise, and cuts every returned string and every thrown message at `limit` characters plus
+ * a footer; the footer of a cut result that carries a view names `read` as the next call. `look`
+ * and `read` read the page, never one element. A page tool's error message and JSON output reach
+ * the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT` (4 096) by the registry, so a
+ * `limit` over that shows at most 4 096 characters of either; a page tool's text output reaches
+ * the boundary whole.
  *
  * `click`, `type`, `press`, `navigate`, and `switch` are actions: one runs at a time, in call
  * order, and holds the queue until its receipt. A queued action whose signal aborts leaves
@@ -81,8 +94,11 @@ import {
  * wait and its view capture, of which `BROWSER_TOOL_CAPTURE_MS` is reserved for the capture. The
  * deadline runs from the moment the receipt starts waiting, after any time the action spent
  * queued and after `navigate`'s own load wait; its timers end with the receipt, and settling the
- * receipt aborts the capture. A click or type over a view whose `trusted` is `false` ends its
- * receipt line with ` (untrusted event)`.
+ * receipt aborts the capture. A capture that the page's change makes stale waits for the page's
+ * readiness and reads the view once more inside the same deadline, and reports
+ * `BROWSER_TOOL_CHANGED_NOTE` when that read fails too. `type` refuses an element whose role is
+ * not in `BROWSER_TYPED_ROLES` before it sends anything, naming `click` as the next call. A click
+ * or type over a view whose `trusted` is `false` ends its receipt line with ` (untrusted event)`.
  *
  * A page tool is skipped, with `skip` emitted, when its name is reserved, when the manager holds
  * its name under a tool the toolset did not add (checked again immediately before each addition),
@@ -130,11 +146,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#page: BrowserPageInterface | undefined
 	#following: BrowserToolSourceInterface | undefined
 	#reading:
-		| {
-				readonly view: BrowserViewInterface
-				readonly reference: string | undefined
-				readonly reading: BrowserReadingInterface
-		  }
+		| { readonly view: BrowserViewInterface; readonly reading: BrowserReadingInterface }
 		| undefined
 	#tail: Promise<void> = Promise.resolve()
 	#pending: Promise<void> | undefined
@@ -171,11 +183,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
 		})
-		const look = this.#create('look', this.#look.bind(this))
-		const read = this.#create('read', this.#read.bind(this))
-		const click = this.#create('click', this.#click.bind(this))
-		const type = this.#create('type', this.#type.bind(this))
-		const wait = this.#create('wait', this.#wait.bind(this))
+		const look = this.#create('look', this.#look.bind(this), BROWSER_TOOL_VIEW_FOOTER)
+		const read = this.#create('read', this.#read.bind(this), BROWSER_TOOL_CUT_FOOTER)
+		const click = this.#create('click', this.#click.bind(this), BROWSER_TOOL_VIEW_FOOTER)
+		const type = this.#create('type', this.#type.bind(this), BROWSER_TOOL_VIEW_FOOTER)
+		const wait = this.#create('wait', this.#wait.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		this.#native = Object.freeze(
 			options?.page === undefined
 				? [look, read, click, type, wait]
@@ -184,19 +196,21 @@ export class BrowserToolset implements BrowserToolsetInterface {
 						read,
 						click,
 						type,
-						this.#create('press', this.#press.bind(this)),
-						this.#create('navigate', this.#navigate.bind(this)),
+						this.#create('press', this.#press.bind(this), BROWSER_TOOL_VIEW_FOOTER),
+						this.#create('navigate', this.#navigate.bind(this), BROWSER_TOOL_VIEW_FOOTER),
 						wait,
 					],
 		)
 		this.#dialogTool =
-			options?.page === undefined ? undefined : this.#create('dialog', this.#dialog.bind(this))
+			options?.page === undefined
+				? undefined
+				: this.#create('dialog', this.#dialog.bind(this), BROWSER_TOOL_VIEW_FOOTER)
 		this.#contextTools = Object.freeze(
 			options?.context === undefined
 				? []
 				: [
-						this.#create('tabs', this.#tabs.bind(this)),
-						this.#create('switch', this.#switch.bind(this)),
+						this.#create('tabs', this.#tabs.bind(this), BROWSER_TOOL_CUT_FOOTER),
+						this.#create('switch', this.#switch.bind(this), BROWSER_TOOL_VIEW_FOOTER),
 					],
 		)
 	}
@@ -238,11 +252,22 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return this.#page ?? this.#view
 	}
 
-	#create(name: BrowserToolName, handler: BrowserToolsetHandler): ToolInterface {
+	#create(name: BrowserToolName, handler: BrowserToolsetHandler, clause: string): ToolInterface {
 		return createTool({
 			...BROWSER_TOOL_COPY[name],
-			execute: this.#execute.bind(this, name, handler),
+			execute: this.#execute.bind(this, name, clause, this.#validate.bind(this, name, handler)),
 		})
+	}
+
+	// Refuses a parameter the tool does not advertise before its handler reads any argument.
+	#validate(
+		name: BrowserToolName,
+		handler: BrowserToolsetHandler,
+		args: Readonly<Record<string, unknown>>,
+		context: ToolContext,
+	): Promise<readonly [string, string]> {
+		validateBrowserToolArguments(BROWSER_TOOL_COPY[name], args)
+		return handler(args, context)
 	}
 
 	// Every await is followed by a lifecycle check, so a `destroy()` that ran meanwhile leaves
@@ -285,9 +310,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	// The one boundary every tool runs through; a handler returns its body and a footer the
-	// boundary appends after cutting the body.
+	// boundary appends after cutting the body, and `clause` closes the footer of a cut body.
 	async #execute(
 		name: string,
+		clause: string,
 		handler: BrowserToolsetHandler,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
@@ -304,16 +330,20 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				)
 			}
 			const [body, footer] = await handler(args, { ...context, signal })
-			return `${boundBrowserText(`${this.#drain()}${body}`, this.#limit)}${footer}`
+			return `${boundBrowserText(`${this.#drain()}${body}`, this.#limit, clause)}${footer}`
 		} catch (error) {
 			if (context.signal.aborted && error === context.signal.reason) throw error
 			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
-				return boundBrowserText(`${this.#drain()}${error.message}`, this.#limit)
+				return boundBrowserText(
+					`${this.#drain()}${error.message}`,
+					this.#limit,
+					BROWSER_TOOL_CUT_FOOTER,
+				)
 			}
 			const message = isError(error) ? error.message : String(error)
 			if (message.length <= this.#limit) throw error
 			throw new BrowserError(
-				boundBrowserText(message, this.#limit),
+				boundBrowserText(message, this.#limit, BROWSER_TOOL_CUT_FOOTER),
 				isBrowserError(error) ? error.code : undefined,
 				isBrowserError(error) ? error.context : undefined,
 			)
@@ -321,19 +351,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	async #look(
-		args: Readonly<Record<string, unknown>>,
+		_args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
-		const within = args['ref'] === undefined ? undefined : requireBrowserReference(args['ref'])
 		// The outline carries the signal, so an abort rejects with its own pending protocol
 		// entry's reason rather than a toolset-level copy of it.
-		const outline = await this.#race(
-			this.#cursor.elements.outline({
-				...(within === undefined ? {} : { within }),
-				signal: context.signal,
-			}),
-			'',
-		)
+		const outline = await this.#race(this.#cursor.elements.outline({ signal: context.signal }), '')
 		return [outline.text, '']
 	}
 
@@ -349,33 +372,29 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				{ key: 'offset' },
 			)
 		}
-		const reference = args['ref'] === undefined ? undefined : requireBrowserReference(args['ref'])
 		const view = this.#cursor
 		const retained = this.#reading
 		let reading = retained?.reading
-		// A continuation reuses the capture it continues; a changed view, reference, or document
-		// recaptures, and the slice restarts at 0 so the footer shows the reset.
+		// A continuation reuses the capture it continues; a changed view or document recaptures,
+		// and the slice restarts at 0 so the footer shows the reset.
 		if (
 			offset === 0 ||
 			retained === undefined ||
 			reading === undefined ||
 			retained.view !== view ||
-			retained.reference !== reference ||
 			reading.stale
 		) {
-			reading = await this.#race(
-				reference === undefined
-					? view.read({ signal: context.signal })
-					: this.#element(reference).read({ signal: context.signal }),
-				'',
-				context.signal,
-			)
-			this.#reading = { view, reference, reading }
+			reading = await this.#race(view.read({ signal: context.signal }), '', context.signal)
+			this.#reading = { view, reading }
 		}
 		const start = reading === retained?.reading ? offset : 0
 		// A move note shares the limit with the slice, so the continuation offset counts only the
 		// reading characters this result carries.
-		const note = boundBrowserText(this.#drain(), Math.max(1, this.#limit - 1))
+		const note = boundBrowserText(
+			this.#drain(),
+			Math.max(1, this.#limit - 1),
+			BROWSER_TOOL_CUT_FOOTER,
+		)
 		const room = this.#limit - note.length
 		const slice =
 			room < 1
@@ -437,6 +456,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const turn = await this.#acquire(context.signal)
 		try {
 			const element = this.#element(args['ref'])
+			// The role the latest capture recorded decides, so a control that takes no text is
+			// refused before any protocol command reaches it.
+			if (!BROWSER_TYPED_ROLES.has(element.role)) {
+				throw new BrowserError(
+					`Element ${renderBrowserElement(element)} takes no text; call click for ${/^[aeiou]/i.test(element.role) ? 'an' : 'a'} ${element.role}.`,
+					'BROWSER_TOOLSET_ROLE',
+					{ reference: element.reference, role: element.role },
+				)
+			}
 			const chosen = `Selected ${JSON.stringify(text)} in ${renderBrowserElement(element)} (programmatic)`
 			const typed = `Typed ${JSON.stringify(text)} into ${renderBrowserElement(element)}`
 			// A combobox or listbox role names a select element or a text input with suggestions;
@@ -687,7 +715,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const reference = requireBrowserReference(value)
 		const element = this.#cursor.elements.element(reference)
 		if (element === undefined) {
-			throw new BrowserElementError(reference, 'UNKNOWN', 'is not in the current view')
+			throw new BrowserElementError(
+				reference,
+				'UNKNOWN',
+				'is not in the current view; call look for fresh refs',
+			)
 		}
 		return element
 	}
@@ -838,27 +870,40 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	): Promise<string> {
 		if (deadline - performance.now() < 1) return BROWSER_TOOL_DEADLINE_NOTE
 		// The capture belongs to the receipt: settling the receipt aborts it, so no readiness wait
-		// or protocol call outlives the receipt.
+		// or protocol call outlives the receipt. The deadline alone ends the capture; the outline's
+		// own timeout sits past it, so a capture that runs out always reports the deadline note.
+		// The outline carries the caller's signal, so an abort rejects with its pending protocol
+		// entry's reason.
 		const receipt = new AbortController()
+		const options = {
+			signal: AbortSignal.any([signal, receipt.signal]),
+			timeout: BROWSER_TOOL_TIMEOUT_MS,
+		}
 		try {
-			// The deadline alone ends the capture; the outline's own timeout sits past it, so a
-			// capture that runs out always reports the deadline note. The outline carries the
-			// caller's signal, so an abort rejects with its pending protocol entry's reason.
-			const outline = await this.#bounded(
-				this.#cursor.elements.outline({
-					signal: AbortSignal.any([signal, receipt.signal]),
-					timeout: BROWSER_TOOL_TIMEOUT_MS,
-				}),
-				deadline,
-				action,
-			)
-			if (outline === undefined) return BROWSER_TOOL_DEADLINE_NOTE
-			return outline.text
+			const outline = await this.#bounded(this.#cursor.elements.outline(options), deadline, action)
+			return outline === undefined ? BROWSER_TOOL_DEADLINE_NOTE : outline.text
 		} catch (error) {
 			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
 				throw error
 			}
-			return `(The view could not be read: ${isError(error) ? error.message : String(error)}; call look.)`
+			if (!isBrowserElementError(error) || error.context?.['reason'] !== 'GONE') {
+				return `(The view could not be read: ${isError(error) ? error.message : String(error)}; call look.)`
+			}
+			// A navigation replaced the document mid-capture; the outline waits for the replacing
+			// document's readiness before it reads once more, inside the same deadline.
+			try {
+				const outline = await this.#bounded(
+					this.#cursor.elements.outline(options),
+					deadline,
+					action,
+				)
+				return outline === undefined ? BROWSER_TOOL_DEADLINE_NOTE : outline.text
+			} catch (retry) {
+				if (signal.aborted || (isBrowserError(retry) && retry.code === 'BROWSER_TOOLSET_RECEIPT')) {
+					throw retry
+				}
+				return BROWSER_TOOL_CHANGED_NOTE
+			}
 		} finally {
 			receipt.abort(new BrowserError('the receipt settled', 'BROWSER_TOOLSET_SETTLED'))
 		}
@@ -999,6 +1044,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				execute: this.#execute.bind(
 					this,
 					name,
+					BROWSER_TOOL_CUT_FOOTER,
 					this.#invoke.bind(this, tool, parameters !== tool.parameters),
 				),
 			})

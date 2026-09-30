@@ -299,8 +299,27 @@ describe('matchesToolReceipt', () => {
 			true,
 		)
 		expect(SERVICE_CHANGED_NOTE).toBe(
-			'(The view could not be read: outline is gone because the page changed; call look for fresh refs.; call look.)',
+			'(The page changed before the view could be read; call look.)',
 		)
+	})
+
+	it('accepts after a still-loading status only a view, the changed note, or the deadline note', () => {
+		const loading = 'Clicked e1 link "Next"; the page is still loading http://127.0.0.1/next.\n\n'
+		expect(
+			[
+				'page "Next note" http://127.0.0.1/next\n(0 of 0 elements)',
+				SERVICE_CHANGED_NOTE,
+				BROWSER_TOOL_DEADLINE_NOTE,
+			].map((suffix) => matchesToolReceipt(`${loading}${suffix}`, placed)),
+		).toEqual([true, true, true])
+		expect(
+			[
+				'',
+				'the page',
+				'(The view could not be read: gone; call look.)',
+				`${SERVICE_CHANGED_NOTE}\nextra`,
+			].map((suffix) => matchesToolReceipt(`${loading}${suffix}`, placed)),
+		).toEqual([false, false, false, false])
 	})
 
 	it('refuses another view, another action, a capture error, a loading status without a navigation, and another URL', () => {

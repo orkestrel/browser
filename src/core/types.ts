@@ -1706,6 +1706,16 @@ export type BrowserElementReason =
 	| 'UNTRUSTED'
 	| 'UNKNOWN'
 
+/**
+ * Describes how an element action reports one refusal its compiled in-page check throws: the
+ * reason, and the detail that follows the element's name, or `undefined` for the reason's own
+ * wording.
+ */
+export interface BrowserElementRefusal {
+	readonly reason: BrowserElementReason
+	readonly detail: string | undefined
+}
+
 /** Allocates the next reference from the owning browser context. */
 export type BrowserReferenceFunction = () => string
 

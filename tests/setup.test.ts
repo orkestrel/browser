@@ -111,11 +111,12 @@ describe('element protocol and compiler fixtures', () => {
 		}
 	})
 
-	it('catches a fixture that answers WebMCP.enable as present or answers a withheld release or option call', async () => {
+	it('catches a fixture that answers WebMCP.enable as present or answers a withheld release, option, or text call', async () => {
 		const withheld: CDPSentMessage[] = []
 		const { page, client, transport } = await createBrowserElementFixture({
 			released: (message) => withheld.push(message),
 			select: (message) => withheld.push(message),
+			text: (message) => withheld.push(message),
 		})
 		try {
 			const absent = await page.send('WebMCP.enable').catch((caught: unknown) => caught)
@@ -126,16 +127,21 @@ describe('element protocol and compiler fixtures', () => {
 			const option = page.send('Runtime.callFunctionOn', {
 				functionDeclaration: 'function() { return this instanceof HTMLSelectElement }',
 			})
+			const text = page.send('Runtime.callFunctionOn', {
+				functionDeclaration: 'function() { this.select() }',
+			})
 			await expect(
 				page.send('Runtime.callFunctionOn', { functionDeclaration: 'function() { return 1 }' }),
 			).resolves.toEqual({ result: { value: true } })
 			expect(withheld.map((message) => message.method)).toEqual([
 				'Input.dispatchMouseEvent',
 				'Runtime.callFunctionOn',
+				'Runtime.callFunctionOn',
 			])
-			for (const message of withheld) transport.reply(message.id, { held: message.method })
-			await expect(released).resolves.toEqual({ held: 'Input.dispatchMouseEvent' })
-			await expect(option).resolves.toEqual({ held: 'Runtime.callFunctionOn' })
+			for (const message of withheld) transport.reply(message.id, { held: message.id })
+			await expect(released).resolves.toEqual({ held: withheld[0]?.id })
+			await expect(option).resolves.toEqual({ held: withheld[1]?.id })
+			await expect(text).resolves.toEqual({ held: withheld[2]?.id })
 		} finally {
 			await client.close()
 		}

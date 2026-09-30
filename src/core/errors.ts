@@ -30,9 +30,10 @@ export class BrowserError extends Error {
  * Reports a refused element operation with a reason and a recovery instruction.
  *
  * @remarks
- * The message names the element and the detail. It ends with `; call look for fresh refs.`
- * for every reason but `UNTRUSTED`, whose reference is still fresh: an untrusted event cannot do
- * what was asked, so that message ends with a period.
+ * The message names the element and the detail on one line. It ends with
+ * `; call look for fresh refs.` for `GONE` alone, because only a changed page makes a fresh
+ * reference the remedy; every other reason ends the message with a period, and a caller whose
+ * refusal a fresh reference does fix names that remedy in its detail.
  */
 export class BrowserElementError extends BrowserError {
 	constructor(
@@ -49,7 +50,7 @@ export class BrowserElementError extends BrowserError {
 					? 'needs a trusted event'
 					: reason.toLowerCase())
 		super(
-			`${subject} ${text}${reason === 'UNTRUSTED' ? '.' : '; call look for fresh refs.'}`,
+			`${subject} ${text}${reason === 'GONE' ? '; call look for fresh refs.' : '.'}`,
 			'BROWSER_ELEMENT_ERROR',
 			typeof reference === 'string'
 				? { reference, reason }

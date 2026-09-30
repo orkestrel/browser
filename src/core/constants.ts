@@ -1,5 +1,5 @@
 import type { ToolDefinition } from '@orkestrel/tool'
-import type { BrowserMouseButton, BrowserToolName } from './types.js'
+import type { BrowserElementRefusal, BrowserMouseButton, BrowserToolName } from './types.js'
 
 // === Base64
 //
@@ -346,6 +346,31 @@ export const BROWSER_INTERACTIVE_ROLES: ReadonlySet<string> = Object.freeze(
 	]),
 )
 
+/**
+ * Maps the first line of each refusal the compiled element functions throw, without its `Error: `
+ * prefix, to the reason and the one-line detail an element action reports it with.
+ *
+ * @remarks
+ * `compileActionabilityFunction` throws the detached, not-visible, disabled, not-editable, and
+ * pointer-event refusals; `compileSelectFunction` throws the text-control, select-control, and
+ * missing-option refusals.
+ */
+export const BROWSER_ELEMENT_REFUSALS: ReadonlyMap<string, BrowserElementRefusal> = Object.freeze(
+	new Map<string, BrowserElementRefusal>([
+		['Element is detached', { reason: 'GONE', detail: undefined }],
+		['Element is not visible', { reason: 'HIDDEN', detail: 'is not visible' }],
+		['Element is disabled', { reason: 'DISABLED', detail: 'is disabled' }],
+		['Element is not editable', { reason: 'UNKNOWN', detail: 'is not editable' }],
+		[
+			'Element does not receive pointer events',
+			{ reason: 'OCCLUDED', detail: 'does not receive pointer events' },
+		],
+		['Element is not a text control', { reason: 'UNKNOWN', detail: 'is not a text control' }],
+		['Element is not a select control', { reason: 'UNKNOWN', detail: 'is not a select control' }],
+		['Select option was not found', { reason: 'UNKNOWN', detail: 'has no such option' }],
+	]),
+)
+
 /** Names accessibility roles whose own rows add no outline content. */
 export const BROWSER_OUTLINE_OMITTED_ROLES: ReadonlySet<string> = Object.freeze(
 	new Set(['none', 'generic', 'InlineTextBox', 'RootWebArea', 'WebArea']),
@@ -392,6 +417,41 @@ export const BROWSER_TOOL_CAPTURE_MS = 1_000
 export const BROWSER_TOOL_DEADLINE_NOTE =
 	'(The view could not be read before the deadline; call look.)'
 
+/**
+ * Holds the note an action receipt carries in place of the view when the page changed under the
+ * capture twice: once after the action, and again during the one retry that follows the page's
+ * readiness.
+ */
+export const BROWSER_TOOL_CHANGED_NOTE =
+	'(The page changed before the view could be read; call look.)'
+
+/**
+ * Holds the clause that ends the footer of a cut result that carries no view: a read note, a tab
+ * list, a wait, a page tool's output, or an error message.
+ */
+export const BROWSER_TOOL_CUT_FOOTER = 'the rest was cut'
+
+/**
+ * Holds the clause that ends the footer of a cut result that carries a view, the result of
+ * `look` and of every action, and names `read` as the call that returns the page's text.
+ */
+export const BROWSER_TOOL_VIEW_FOOTER = "the rest was cut; call read for the page's text"
+
+/**
+ * Names the accessibility roles the `type` tool writes to: `textbox`, `searchbox`, and
+ * `spinbutton` take typed text, and `combobox` and `listbox` take a select control's option
+ * or, for a text input with suggestions, typed text.
+ *
+ * @remarks
+ * The set names the roles the tool admits, not every element that accepts text: an element
+ * with another explicit role can still accept text through its element contract. Chromium
+ * 141.0.7390.37 reports a `contenteditable` region without an explicit role as `generic`, which
+ * the outline gives no reference.
+ */
+export const BROWSER_TYPED_ROLES: ReadonlySet<string> = Object.freeze(
+	new Set(['textbox', 'searchbox', 'spinbutton', 'combobox', 'listbox']),
+)
+
 /** Caps the `wait` tool's `timeout` parameter at `30_000` milliseconds. */
 export const BROWSER_TOOL_TIMEOUT_LIMIT_MS = 30_000
 
@@ -434,24 +494,23 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * parameters, and its annotations.
  *
  * @remarks
- * Every description, the tool's and each parameter's, is at most 100 characters, and every tool
- * declares at least one required parameter: a streamed call to a tool declaring none ended the
- * stream with an error in the real-model runs. `look` and `read` annotate `pure` and `untrusted`,
- * `wait` and `tabs` annotate `pure`, and the rest carry no annotation.
+ * Every tool description is at most 25 words and says what the tool shows or does, and for
+ * `look` and `read` when to call it; every parameter description is at most 100 characters.
+ * Every tool declares at least one required parameter: a streamed call to a tool declaring none
+ * ended the stream with an error in the real-model runs. `look` takes `what` alone and `read`
+ * takes `what` and `offset`; neither is scoped to an element, and an element's own reading is
+ * `BrowserElementInterface.read`. `look` and `read` annotate `pure` and `untrusted`, `wait`
+ * and `tabs` annotate `pure`, and the rest carry no annotation.
  */
 export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>> = Object.freeze({
 	look: Object.freeze({
 		name: 'look',
 		description:
-			'Show the page text and its elements with references such as e4. Call it before acting.',
+			"Shows the page's text and the elements you can act on, each with a reference like e4. Call it first and after the page changes.",
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
 				what: Object.freeze({ type: 'string', description: 'What you want to find or act on.' }),
-				ref: Object.freeze({
-					type: 'string',
-					description: 'A reference such as e4, to show only that part of the page.',
-				}),
 			}),
 			required: Object.freeze(['what']),
 		}),
@@ -459,7 +518,8 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	read: Object.freeze({
 		name: 'read',
-		description: 'Read the page as Markdown, one slice at a time.',
+		description:
+			"Reads the page's text for what you name. Call it to learn a fact; continue with the offset a cut result names.",
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -471,10 +531,6 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 					type: 'integer',
 					description: 'The character to continue from, as the last reply names. Default: 0.',
 				}),
-				ref: Object.freeze({
-					type: 'string',
-					description: 'A reference such as e4, to read only that element.',
-				}),
 			}),
 			required: Object.freeze(['what']),
 		}),
@@ -482,7 +538,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	click: Object.freeze({
 		name: 'click',
-		description: 'Click an element by its reference from look, such as e4.',
+		description: 'Clicks the element with that reference.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -493,7 +549,8 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	type: Object.freeze({
 		name: 'type',
-		description: 'Type text into a field, or choose an option in a select, by its reference.',
+		description:
+			'Types into the text control with that reference; set submit to true to submit its form.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -512,7 +569,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	press: Object.freeze({
 		name: 'press',
-		description: 'Press a key such as Enter, Escape, Tab, ArrowDown, or Control+a.',
+		description: 'Presses that key or chord, such as Enter or Control+a.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -523,7 +580,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	navigate: Object.freeze({
 		name: 'navigate',
-		description: 'Open a web address in the current tab.',
+		description: 'Opens that absolute web address in the current tab.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -534,7 +591,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	wait: Object.freeze({
 		name: 'wait',
-		description: 'Wait until a text appears on the page.',
+		description: 'Waits for that text to appear.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({

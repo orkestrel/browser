@@ -55,7 +55,7 @@ import {
 
 describe('BrowserToolset', () => {
 	describe('vocabulary', () => {
-		it('catches a tool outside the seven, a native extra, a missing required parameter, a stray annotation, or a long description', async () => {
+		it('catches a tool outside the seven, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
 				const toolset = new BrowserToolset(page, { page })
@@ -80,7 +80,6 @@ describe('BrowserToolset', () => {
 				for (const name of BROWSER_TOOL_NAMES) {
 					const definition = BROWSER_TOOL_COPY[name]
 					expect(definition.name).toBe(name)
-					expect(requireValue(definition.description).length).toBeLessThanOrEqual(100)
 					const required = readProperty<readonly string[]>(definition.parameters, 'required')
 					const properties = readProperty<Readonly<Record<string, unknown>>>(
 						definition.parameters,
@@ -97,6 +96,62 @@ describe('BrowserToolset', () => {
 			} finally {
 				await client.close()
 			}
+		})
+
+		it('catches a tool description over 25 words or one that does not say when to call the tool', () => {
+			for (const name of BROWSER_TOOL_NAMES)
+				expect(
+					requireValue(BROWSER_TOOL_COPY[name].description).split(/\s+/).length,
+				).toBeLessThanOrEqual(25)
+			const { look, read, click, type, press, navigate, wait } = BROWSER_TOOL_COPY
+			expect(
+				Object.fromEntries(
+					[look, read, click, type, press, navigate, wait].map((tool) => [
+						tool.name,
+						tool.description,
+					]),
+				),
+			).toEqual({
+				look: "Shows the page's text and the elements you can act on, each with a reference like e4. Call it first and after the page changes.",
+				read: "Reads the page's text for what you name. Call it to learn a fact; continue with the offset a cut result names.",
+				click: 'Clicks the element with that reference.',
+				type: 'Types into the text control with that reference; set submit to true to submit its form.',
+				press: 'Presses that key or chord, such as Enter or Control+a.',
+				navigate: 'Opens that absolute web address in the current tab.',
+				wait: 'Waits for that text to appear.',
+			})
+		})
+
+		it('catches a look or read that advertises or accepts ref, or a tool that runs with a parameter it does not advertise', async () => {
+			expect(
+				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.look.parameters, 'properties')),
+			).toEqual(['what'])
+			expect(
+				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.read.parameters, 'properties')),
+			).toEqual(['what', 'offset'])
+			const view = createBrowserViewDouble()
+			const toolset = new BrowserToolset(view)
+			await toolset.start()
+			const results = await toolset.tools.execute([
+				{ id: '1', name: 'look', arguments: { what: 'the cart', ref: 'e1' } },
+				{ id: '2', name: 'read', arguments: { what: 'the cart', ref: 'e1' } },
+				{ id: '3', name: 'type', arguments: { ref: 'e2', text: 'sam', what: 'the email' } },
+			])
+			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
+				'The look tool takes no ref parameter; call look with what.',
+				'The read tool takes no ref parameter; call read with what and offset.',
+				'The type tool takes no what parameter; call type with ref, text, and submit.',
+			])
+			expect(view.calls).toEqual([])
+			const refused = await Promise.resolve(
+				requireValue(toolset.tools.tool('look')).execute(
+					{ what: 'the cart', ref: 'e1' },
+					{ signal: new AbortController().signal },
+				),
+			).catch((caught: unknown) => caught)
+			expect(readProperty(refused, 'code')).toBe('BROWSER_TOOLSET_ARGUMENT')
+			expect(readProperty(refused, 'context')).toEqual({ key: 'ref' })
+			await toolset.destroy()
 		})
 
 		it('catches a start that overwrites a foreign reserved tool or adds tools before refusing', async () => {
@@ -503,6 +558,205 @@ describe('BrowserToolset', () => {
 			} finally {
 				await client.close()
 			}
+		})
+
+		it('catches a type on a control that takes no text that dispatches the edit or names no next call', async () => {
+			const view = createBrowserViewDouble()
+			const toolset = new BrowserToolset(view)
+			await toolset.start()
+			const refused = await Promise.resolve(
+				requireValue(toolset.tools.tool('type')).execute(
+					{ ref: 'e1', text: 'Search', submit: true },
+					{ signal: new AbortController().signal },
+				),
+			).catch((caught: unknown) => caught)
+			expect(
+				isBrowserError(refused) && {
+					message: refused.message,
+					code: refused.code,
+					context: refused.context,
+				},
+			).toEqual({
+				message: 'Element e1 button "Save" takes no text; call click for a button.',
+				code: 'BROWSER_TOOLSET_ROLE',
+				context: { reference: 'e1', role: 'button' },
+			})
+			expect(view.calls).toEqual([])
+			await toolset.destroy()
+			const tree = {
+				nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) =>
+					node.nodeId === 'email'
+						? { ...node, role: { value: 'option' }, name: { value: 'Small' } }
+						: node,
+				),
+			}
+			const fixture = await createBrowserElementFixture({
+				accessibility: (message) =>
+					fixture.transport.reply(
+						message.id,
+						message.params?.['frameId'] === 'child' ? BROWSER_ELEMENT_CHILD_FIXTURE : tree,
+					),
+			})
+			const { client, page, transport } = fixture
+			try {
+				const trusted = createBrowserToolset(page)
+				await trusted.start()
+				const signal = new AbortController().signal
+				await requireValue(trusted.tools.tool('look')).execute({ what: 'size' }, { signal })
+				const sent = transport.sent.length
+				expect(
+					await trusted.tools.execute({
+						id: 'type',
+						name: 'type',
+						arguments: { ref: 'e2', text: 'Small' },
+					}),
+				).toMatchObject({
+					success: false,
+					error: 'Element e2 option "Small" takes no text; call click for an option.',
+				})
+				expect(transport.sent.slice(sent)).toEqual([])
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('catches a type on a captured read-only textbox whose refusal carries the in-page stack or a refresh directive', async () => {
+			const fixture = await createBrowserElementFixture({
+				actionability:
+					'Error: Element is not editable\n    at HTMLInputElement.<anonymous> (<anonymous>:12:3)\n    at <anonymous>:30:4',
+			})
+			const { client, page, transport } = fixture
+			try {
+				const toolset = createBrowserToolset(page)
+				await toolset.start()
+				await requireValue(toolset.tools.tool('look')).execute(
+					{ what: 'email' },
+					{ signal: new AbortController().signal },
+				)
+				expect(
+					await toolset.tools.execute({
+						id: 'type',
+						name: 'type',
+						arguments: { ref: 'e2', text: 'x', submit: true },
+					}),
+				).toMatchObject({ success: false, error: 'Element e2 is not editable.' })
+				expect(transport.sent.some((message) => message.method === 'Input.insertText')).toBe(false)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('catches a view capture that a navigation interrupts and that reports the change instead of reading the page again', async () => {
+			const outcomes: Array<readonly [string, number]> = []
+			for (const persistent of [false, true]) {
+				let capturing = false
+				let changes = 0
+				const fixture = await createBrowserElementFixture({
+					accessibility: (message) => {
+						const child = message.params?.['frameId'] === 'child'
+						if (!child && capturing && (persistent || changes === 0)) {
+							changes += 1
+							const loaderId = `loader-next-${changes}`
+							fixture.transport.event(
+								'Page.frameNavigated',
+								{ frame: { id: 'main', url: 'https://example.test/next', loaderId } },
+								'session-main',
+							)
+							fixture.transport.event(
+								'Page.lifecycleEvent',
+								{ frameId: 'main', loaderId, name: 'DOMContentLoaded' },
+								'session-main',
+							)
+						}
+						fixture.transport.reply(
+							message.id,
+							child ? BROWSER_ELEMENT_CHILD_FIXTURE : BROWSER_ELEMENT_AX_FIXTURE,
+						)
+					},
+				})
+				const { client, page } = fixture
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					capturing = true
+					const result = String(
+						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
+					)
+					outcomes.push([result, changes])
+				} finally {
+					await client.close()
+				}
+			}
+			const [[recovered = '', reads = 0] = [], changed] = outcomes
+			expect(recovered).toMatch(
+				/^Clicked e1 link "Home"\.\n\npage "Cart" https:\/\/example\.test\/next\n/,
+			)
+			expect(reads).toBe(1)
+			expect(changed).toEqual([
+				'Clicked e1 link "Home".\n\n(The page changed before the view could be read; call look.)',
+				2,
+			])
+		})
+
+		it('catches a view capture whose title read a navigation rejects that reports the failure instead of reading the page again, or one that retries a rejection no navigation caused', async () => {
+			const outcomes: Array<readonly [string, number]> = []
+			for (const navigating of [true, false]) {
+				let capturing = false
+				let titles = 0
+				const fixture = await createBrowserElementFixture({
+					title: (message) => {
+						if (!capturing) {
+							fixture.transport.reply(message.id, { result: { value: 'Cart' } })
+							return
+						}
+						titles += 1
+						if (titles > 1) {
+							fixture.transport.reply(message.id, { result: { value: 'Next' } })
+							return
+						}
+						if (navigating) {
+							fixture.transport.event(
+								'Page.frameNavigated',
+								{
+									frame: { id: 'main', url: 'https://example.test/next', loaderId: 'loader-next' },
+								},
+								'session-main',
+							)
+							fixture.transport.event(
+								'Page.lifecycleEvent',
+								{ frameId: 'main', loaderId: 'loader-next', name: 'DOMContentLoaded' },
+								'session-main',
+							)
+						}
+						fixture.transport.fail(message.id, 'Cannot find context with specified id')
+					},
+				})
+				const { client, page } = fixture
+				try {
+					const toolset = createBrowserToolset(page)
+					await toolset.start()
+					const signal = new AbortController().signal
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					capturing = true
+					const result = String(
+						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
+					)
+					outcomes.push([result, titles])
+				} finally {
+					await client.close()
+				}
+			}
+			const [[recovered = '', reads = 0] = [], failed] = outcomes
+			expect(recovered).toMatch(
+				/^Clicked e1 link "Home"\.\n\npage "Next" https:\/\/example\.test\/next\n/,
+			)
+			expect(reads).toBe(2)
+			expect(failed).toEqual([
+				'Clicked e1 link "Home".\n\n(The view could not be read: Cannot find context with specified id; call look.)',
+				1,
+			])
 		})
 
 		it('catches a navigate that sends a refused scheme or returns before the load with no view', async () => {
@@ -1352,10 +1606,12 @@ describe('BrowserToolset', () => {
 				const context = new BrowserContext(client)
 				const tab = await context.create()
 				const cut = /^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut\]$/
+				const viewed =
+					/^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut; call read for the page's text\]$/
 				const refused = await Promise.resolve(
 					requireValue(
-						createBrowserToolset(page, { limit: 64, tools: createToolManager() }).native[0],
-					).execute({ what: 'x', ref: huge }, { signal: new AbortController().signal }),
+						createBrowserToolset(page, { limit: 64, tools: createToolManager() }).native[2],
+					).execute({ ref: huge }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(refused, 'message')).toMatch(cut)
 				expect(readProperty(refused, 'code')).toBe('BROWSER_ELEMENT_ERROR')
@@ -1368,7 +1624,7 @@ describe('BrowserToolset', () => {
 				const signal = new AbortController().signal
 				expect(
 					await requireValue(toolset.tools.tool('look')).execute({ what: 'cart' }, { signal }),
-				).toMatch(cut)
+				).toMatch(viewed)
 				const slice = String(
 					await requireValue(toolset.tools.tool('read')).execute({ what: 'guide' }, { signal }),
 				)
@@ -1418,13 +1674,13 @@ describe('BrowserToolset', () => {
 				expect(readProperty(refusal, 'error')).toMatch(cut)
 				expect(
 					await requireValue(toolset.tools.tool('dialog')).execute({ accept: false }, { signal }),
-				).toMatch(cut)
+				).toMatch(viewed)
 			} finally {
 				await client.close()
 			}
 		})
 
-		it('catches a continuation read that recaptures a current reading or reuses a stale one or another reference', async () => {
+		it('catches a continuation read that recaptures a current reading or reuses a stale one', async () => {
 			const html = `<main><h1>Guide</h1>${Array.from(
 				{ length: 12 },
 				(_, index) => `<p>Paragraph ${index} carries enough words to fill one line of text.</p>`,
@@ -1466,15 +1722,6 @@ describe('BrowserToolset', () => {
 				expect(
 					transport.sent.filter((message) =>
 						String(message.params?.['expression']).includes('outerHTML'),
-					),
-				).toHaveLength(2)
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'cart' }, { signal })
-				await read.execute({ what: 'save', ref: 'e4' }, { signal })
-				const other = String(await read.execute({ what: 'home', ref: 'e1', offset: 5 }, { signal }))
-				expect(other).toMatch(/\n\n\[characters 0–\d+ of \d+\]$/)
-				expect(
-					transport.sent.filter((message) =>
-						String(message.params?.['functionDeclaration']).includes('capture.html'),
 					),
 				).toHaveLength(2)
 			} finally {
@@ -1613,7 +1860,7 @@ describe('BrowserToolset', () => {
 			expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(five)
 			expect(toolset.view).toBe(view)
 			const signal = new AbortController().signal
-			const cut = /\n\[characters 0–60 of \d+; the rest was cut\]$/
+			const cut = /\n\[characters 0–60 of \d+; the rest was cut; call read for the page's text\]$/
 			expect(
 				await requireValue(toolset.tools.tool('look')).execute({ what: 'form' }, { signal }),
 			).toMatch(cut)
