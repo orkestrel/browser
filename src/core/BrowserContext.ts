@@ -130,7 +130,8 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
-		if (this.#shutdown !== undefined) throw new BrowserError('Browser context is closed')
+		if (this.#shutdown !== undefined)
+			throw new BrowserError('Browser context is closed', 'BROWSER_CONTEXT_CLOSED')
 
 		const attempt = this.#create(options)
 		this.#creating.add(attempt)
@@ -147,7 +148,8 @@ export class BrowserContext implements BrowserContextInterface {
 			await active
 			active = this.#syncing.pending
 		}
-		if (this.#shutdown !== undefined) throw new BrowserError('Browser context is closed')
+		if (this.#shutdown !== undefined)
+			throw new BrowserError('Browser context is closed', 'BROWSER_CONTEXT_CLOSED')
 
 		await this.#syncing.execute(() => this.#sync(targets))
 	}
@@ -204,7 +206,10 @@ export class BrowserContext implements BrowserContextInterface {
 				})
 			}
 			if (this.#shutdown !== undefined) {
-				throw new BrowserError('Browser context closed during page creation')
+				throw new BrowserError(
+					'Browser context closed during page creation',
+					'BROWSER_CONTEXT_CLOSED',
+				)
 			}
 
 			if (!this.#publish(page)) throw this.#refuse(targetId)
@@ -501,7 +506,7 @@ export class BrowserContext implements BrowserContextInterface {
 	async #configurePage(page: BrowserPage): Promise<void> {
 		await page.send('Target.setAutoAttach', {
 			autoAttach: true,
-			waitForDebuggerOnStart: false,
+			waitForDebuggerOnStart: true,
 			flatten: true,
 		})
 		await page.send('Page.setInterceptFileChooserDialog', { enabled: true })

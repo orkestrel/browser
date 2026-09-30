@@ -326,10 +326,9 @@ export interface ServiceReceipt {
  * @returns True if the receipt is the action line followed by the expected view or by
  * `BROWSER_TOOL_DEADLINE_NOTE`, or, when `expected.url` is given, the action line followed by
  * `SERVICE_CHANGED_NOTE`, or the action line naming `the page is still loading URL` followed by
- * a view (a `page "` line and what follows), `SERVICE_CHANGED_NOTE`, or
- * `BROWSER_TOOL_DEADLINE_NOTE`; false otherwise
- * @remarks A busy host can deliver the navigation request after the action's input command
- * settles, so the capture starts on the page the navigation is leaving.
+ * the expected view, `SERVICE_CHANGED_NOTE`, or `BROWSER_TOOL_DEADLINE_NOTE`; false otherwise
+ * @remarks The expected view is the destination's, so a receipt that captured the page the
+ * navigation leaves, or a destination document before its content rendered, is refused.
  */
 export function matchesToolReceipt(receipt: string, expected: ServiceReceipt): boolean {
 	const line = `${expected.action}.\n\n`
@@ -341,7 +340,7 @@ export function matchesToolReceipt(receipt: string, expected: ServiceReceipt): b
 	if (!receipt.startsWith(loading)) return false
 	const suffix = receipt.slice(loading.length)
 	return (
-		suffix.startsWith('page "') ||
+		suffix === expected.view ||
 		suffix === SERVICE_CHANGED_NOTE ||
 		suffix === BROWSER_TOOL_DEADLINE_NOTE
 	)

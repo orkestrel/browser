@@ -1,6 +1,7 @@
+import type { BrowserReadingInput } from '@src/core'
 import type { BrowserNameContext } from './types.js'
 import { attempt, isObject, isString } from '@orkestrel/contract'
-import { normalizeBrowserName } from '@src/core'
+import { BROWSER_RESULT_LIMIT, BrowserResultLimitError, normalizeBrowserName } from '@src/core'
 import {
 	BROWSER_CONTENT_NAMED_ROLES,
 	BROWSER_CONTEXT_TARGETS,
@@ -23,6 +24,34 @@ export function isBrowserDocument(value: unknown): value is Document {
 		Reflect.get(value, 'nodeType') === 9 &&
 		isObject(Reflect.get(value, 'defaultView'))
 	)
+}
+
+/**
+ * Reads the URL, title, and serialized markup a DOM reading is built from, refusing a capture
+ * over the result limit before any parse.
+ *
+ * @remarks
+ * The measure is the length of `JSON.stringify({ url, title, html })`, the form the CDP capture
+ * guard compares with `BROWSER_RESULT_LIMIT`, so a character JSON escapes counts as its escape
+ * sequence. A reading a caller builds with `createBrowserReading` passes through no limit.
+ *
+ * @param node - The element whose `outerHTML` is captured; its owner document supplies `URL`
+ * and `title`
+ * @returns The capture's `url`, `title`, and `html`
+ * @throws Thrown as a `BrowserResultLimitError` when the serialized capture is longer than
+ * `BROWSER_RESULT_LIMIT` characters, with `length` and `limit` in its context.
+ */
+export function readBrowserCapture(node: Element): BrowserReadingInput {
+	const document = node.ownerDocument
+	const capture = { url: document.URL, title: document.title, html: node.outerHTML }
+	const length = JSON.stringify(capture).length
+	if (length > BROWSER_RESULT_LIMIT) {
+		throw new BrowserResultLimitError('Document capture exceeds BROWSER_RESULT_LIMIT', {
+			length,
+			limit: BROWSER_RESULT_LIMIT,
+		})
+	}
+	return capture
 }
 
 /**

@@ -978,10 +978,23 @@ document.getElementById('summary').textContent = 'Delivery booked for ' + query.
 </script>
 </body></html>`
 
+const SHOP_PAGE = `<!doctype html><html><head><title>Cedar Tea Tray</title></head><body>
+<main><h1>Cedar Tea Tray</h1>
+<form action="/shop/cart" method="post"><input name="item" type="hidden" value="Cedar Tea Tray"><button id="add">Add to cart</button></form>
+<form action="/shop/cart" method="post" onsubmit="event.preventDefault(); document.body.dataset.held = 'yes'"><button id="hold">Save for later</button></form>
+</main>
+</body></html>`
+
+const CART_PAGE = `<!doctype html><html><head><title>Cart</title></head><body>
+<main><h1>Cart</h1><p>Your cart holds the Cedar Tea Tray.</p></main>
+</body></html>`
+
 // The 16 px button sits at the frame origin, so a point offset by the frame's border box rather
-// than its content box lands on the frame's 10 px border in the outer document.
-const INNER_PAGE = `<!doctype html><html><head><title>Payment</title><style>html,body{margin:0}#pay{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}</style></head><body>
+// than its content box lands on the frame's 10 px border in the outer document. The coupon form
+// sits below it and submits to the frame's parent.
+const INNER_PAGE = `<!doctype html><html><head><title>Payment</title><style>html,body{margin:0}#pay{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}#coupon{position:absolute;left:0;top:60px}</style></head><body>
 <button id="pay" onclick="document.body.dataset.received = [document.body.dataset.received, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Pay</button>
+<form id="coupon" action="/frame/done" method="get" target="_parent"><label>Coupon <input id="code" name="code" type="text"></label></form>
 </body></html>`
 
 const DONE_PAGE = `<!doctype html><html><head><title>Voucher applied</title></head><body>
@@ -989,6 +1002,14 @@ const DONE_PAGE = `<!doctype html><html><head><title>Voucher applied</title></he
 <script>
 document.getElementById('key').textContent = 'Received key ' + new URLSearchParams(location.search).get('key')
 </script>
+</body></html>`
+
+// The search form's field repeats the page's query, so its submission changes only the fragment and
+// stays within the document.
+const SEARCH_PAGE = `<!doctype html><html><head><title>Search</title></head><body>
+<main><h1>Search</h1>
+<form action="#found" method="get"><input name="q" type="hidden" value="tray"><button id="find">Find</button></form>
+</main>
 </body></html>`
 
 const OVERLAY_PAGE = `<!doctype html><html><head><title>Overlay</title><style>body{margin:0}#save,#plain{position:absolute;left:20px;width:120px;height:40px}#save{top:20px}#plain{top:200px}#veil{position:absolute;left:0;top:0;width:300px;height:100px;z-index:9;background:rgba(0,0,0,.2)}</style></head><body>
@@ -1094,18 +1115,33 @@ try {
  *   recorded on `document.body.dataset.clicks`, a back-forward cache restore sets
  *   `document.body.dataset.restored`, and `section#pool`, outside the form, is an empty container
  * - `/form/placed` — the submission's result, whose summary names the submitted `name` and `speed`
+ * - `/shop` — a product page whose `Add to cart` button posts its form to `/shop/cart`, and whose
+ *   `Save for later` form's `submit` handler calls `preventDefault()` and sets
+ *   `document.body.dataset.held`
+ * - `/shop/cart` — the cart a `POST` to `/shop/cart` redirects to with `303`
  * - `/frame/outer` — a `127.0.0.1` document framing `/frame/inner` from `localhost` inside a
  *   10 px border at (220, 160), with a 16 px `Decoy` button under the frame-local point of the
  *   framed `Pay` button
  * - `/frame/inner` — the framed document; its `Pay` button appends the receiving node to
  *   `document.body.dataset.received`, as the `Decoy` button appends to
- *   `document.body.dataset.decoy` in the outer document
+ *   `document.body.dataset.decoy` in the outer document, and its `Coupon` form below the button
+ *   submits to `/frame/done` in the frame's parent
  * - `/frame/voucher` — a `127.0.0.1` document framing `/frame/field` from `localhost`
  * - `/frame/field` — a form holding one `Code` text input, which an Enter submits to
  *   `/frame/done` on `127.0.0.1`, so the frame navigates to another site and process; a
  *   `keydown` listener writes an Enter's key into the form's hidden `key` field before the
  *   submission, so the submitted query carries `key=Enter` only when the key-down reached the frame
  * - `/frame/done` — the voucher form's result, whose text reads back the submitted `key`
+ * - `/frame/local` — a `127.0.0.1` document framing `/frame/away` from `127.0.0.1`, so the frame
+ *   shares the page's process
+ * - `/frame/away` — the voucher form of `/frame/field` with its action on `localhost`, so an Enter
+ *   navigates the in-process frame to another site and process
+ * - `/frame/nested` — a `127.0.0.1` document framing `/frame/middle` from `localhost`
+ * - `/frame/middle` — a `localhost` document framing `/frame/inner` from `127.0.0.1`, so the inner
+ *   frame renders out of process within an out-of-process frame; the inner page's `Coupon` form
+ *   submits to `/frame/done` with the `_parent` target, which navigates this middle frame
+ * - `/search` — a `Find` button whose form repeats the page's `q=tray` query and targets the
+ *   `#found` fragment, so a submission from `/search?q=tray` stays within the document
  * - `/overlay` — a `Save` button covered by `div#veil` and an uncovered `Plain` button
  * - `/late` — a `Reveal` button that inserts {@link FIXTURE_LATE_TEXT} after
  *   {@link FIXTURE_LATE_DELAY} milliseconds and records the insertion's epoch time in
@@ -1138,6 +1174,10 @@ export function renderFixturePage(path: string, port: number): string | undefine
 			return FORM_PAGE
 		case '/form/placed':
 			return PLACED_PAGE
+		case '/shop':
+			return SHOP_PAGE
+		case '/shop/cart':
+			return CART_PAGE
 		case '/frame/outer':
 			return `<!doctype html><html><head><title>Checkout</title><style>html,body{margin:0;height:100%}#decoy{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}iframe{position:absolute;left:220px;top:160px;width:300px;height:200px;border:10px solid gray;padding:0}</style></head><body>
 <button id="decoy" onclick="document.body.dataset.decoy = [document.body.dataset.decoy, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Decoy</button>
@@ -1158,6 +1198,27 @@ document.getElementById('code').addEventListener('keydown', (event) => { if (eve
 </body></html>`
 		case '/frame/done':
 			return DONE_PAGE
+		case '/frame/local':
+			return `<!doctype html><html><head><title>Local voucher</title></head><body>
+<main><h1>Local voucher</h1><iframe title="Voucher form" src="http://127.0.0.1:${port}/frame/away"></iframe></main>
+</body></html>`
+		case '/frame/away':
+			return `<!doctype html><html><head><title>Voucher form</title></head><body>
+<form action="http://localhost:${port}/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label><input id="key" name="key" type="hidden"></form>
+<script>
+document.getElementById('code').addEventListener('keydown', (event) => { if (event.key === 'Enter') document.getElementById('key').value = event.key })
+</script>
+</body></html>`
+		case '/frame/nested':
+			return `<!doctype html><html><head><title>Nested</title></head><body>
+<main><h1>Nested</h1><iframe title="Middle" src="http://localhost:${port}/frame/middle"></iframe></main>
+</body></html>`
+		case '/frame/middle':
+			return `<!doctype html><html><head><title>Middle</title></head><body>
+<main><h1>Middle</h1><iframe title="Payment" src="http://127.0.0.1:${port}/frame/inner"></iframe></main>
+</body></html>`
+		case '/search':
+			return SEARCH_PAGE
 		case '/overlay':
 			return OVERLAY_PAGE
 		case '/late':
@@ -1235,9 +1296,9 @@ export async function loadFixtureModule(
 /**
  * Starts the fixture page server on an ephemeral `127.0.0.1` port.
  *
- * @returns A {@link FixtureServerInterface} answering every {@link renderFixturePage} path with
- * `200` and HTML, every {@link loadFixtureModule} path with `200` and JavaScript, and any other
- * path with `404`
+ * @returns A {@link FixtureServerInterface} answering a `POST` to `/shop/cart` with `303` and the
+ * location `/shop/cart`, every {@link renderFixturePage} path with `200` and HTML, every
+ * {@link loadFixtureModule} path with `200` and JavaScript, and any other path with `404`
  * @remarks Chromium resolves `localhost` to the loopback interface, so the one listener serves
  * both {@link FixtureHost} origins.
  */
@@ -1259,6 +1320,12 @@ async function serveFixtureRequest(
 	response: ServerResponse,
 ): Promise<void> {
 	const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
+	if (request.method === 'POST' && path === '/shop/cart') {
+		request.resume()
+		response.writeHead(303, { location: '/shop/cart' })
+		response.end()
+		return
+	}
 	const page = renderFixturePage(path, request.socket.localPort ?? 0)
 	if (page !== undefined) {
 		response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })

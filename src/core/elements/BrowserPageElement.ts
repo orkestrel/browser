@@ -10,7 +10,7 @@ import type {
 	BrowserScreenshotResult,
 } from '../types.js'
 import { BrowserReading } from '../BrowserReading.js'
-import { BrowserElementError } from '../errors.js'
+import { BrowserElementError, isBrowserElementError } from '../errors.js'
 import { BROWSER_ELEMENT_REFUSALS, BROWSER_RESULT_LIMIT } from '../constants.js'
 import {
 	compileActionabilityFunction,
@@ -30,7 +30,7 @@ import {
 	readEvaluationResult,
 	requireBrowserString,
 } from '../helpers.js'
-import { isArray, isInteger, isNumber, isRecord, isString } from '@orkestrel/contract'
+import { isArray, isError, isInteger, isNumber, isRecord, isString } from '@orkestrel/contract'
 
 /**
  * Drives a referenced DOM element through its document's isolated world and the page input stream.
@@ -40,7 +40,7 @@ import { isArray, isInteger, isNumber, isRecord, isString } from '@orkestrel/con
  * await element?.click()
  * ```
  */
-export class BrowserElement implements BrowserPageElementInterface {
+export class BrowserPageElement implements BrowserPageElementInterface {
 	readonly #input: BrowserElementInput
 
 	constructor(input: BrowserElementInput) {
@@ -49,6 +49,10 @@ export class BrowserElement implements BrowserPageElementInterface {
 
 	get reference(): string {
 		return this.#input.node.reference
+	}
+
+	get frame(): string {
+		return this.#input.frame
 	}
 
 	get role(): string {
@@ -309,10 +313,10 @@ export class BrowserElement implements BrowserPageElementInterface {
 
 	#failure(options: BrowserCallOptions | undefined, error: unknown): never {
 		options?.signal?.throwIfAborted()
-		if (error instanceof BrowserElementError) throw error
+		if (isBrowserElementError(error)) throw error
 		// An in-page refusal carries the page's stack after its first line; only that line reaches
 		// the refusal.
-		const message = (error instanceof Error ? error.message : String(error)).split('\n', 1)[0] ?? ''
+		const message = (isError(error) ? error.message : String(error)).split('\n', 1)[0] ?? ''
 		const known = BROWSER_ELEMENT_REFUSALS.get(message.replace(/^Error: /, ''))
 		if (known !== undefined)
 			throw new BrowserElementError(this.reference, known.reason, known.detail)

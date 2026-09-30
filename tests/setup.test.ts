@@ -17,9 +17,31 @@
 
 import type { CDPSentMessage } from './setup.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage } from '@src/core'
-import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
 import {
+	BrowserPage,
+	compileGuardedEvaluateExpression,
+	compileSubmitObserverExpression,
+	compileSubmitReadExpression,
+} from '@src/core'
+import { createRecorder, readProperty, requireValue, waitForCondition } from '@orkestrel/test'
+import {
+	BROWSER_ELEMENT_AX_FIXTURE,
+	BROWSER_ELEMENT_FRAMED_FIXTURE,
+	BROWSER_RECORD_PARENTS,
+	BrowserSubmitElement,
+	BrowserSubmitWindow,
+	BrowserSubmitWindows,
+	RecordingCDPClient,
+	answerBrowserEvaluation,
+	attachBrowserElementChild,
+	buildBrowserElementTree,
+	emitBrowserNavigation,
+	evaluateBrowserSubmit,
+	matchesBrowserSubmitObserver,
+	matchesBrowserSubmitRead,
+	openBrowserNavigationRecord,
+	readBrowserSubmitToken,
+	scriptBrowserElements,
 	readBrowserCompiledTimers,
 	createBrowserElementFixture,
 	createBrowserViewDouble,
@@ -39,6 +61,8 @@ import {
 	PNG_BASE64,
 	readCDPExpression,
 	readCDPParams,
+	readCDPSessionMethods,
+	createReferenceSequence,
 	replyOk,
 	scriptCDPAttach,
 	scriptEvaluate,
@@ -412,6 +436,48 @@ describe('readCDPParams', () => {
 	})
 })
 
+describe('createReferenceSequence', () => {
+	it('advances each provider by one per call and keeps two providers independent', () => {
+		const first = createReferenceSequence()
+		const second = createReferenceSequence()
+
+		expect([first(), first(), second(), first(), second()]).toStrictEqual([
+			'e1',
+			'e2',
+			'e1',
+			'e3',
+			'e2',
+		])
+	})
+})
+
+describe('readCDPSessionMethods', () => {
+	it('lists the methods sent on a session and those naming it, in send order, and nothing for another session', async () => {
+		const transport = createCDPTestTransport()
+
+		await transport.send(
+			JSON.stringify({ id: 1, method: 'Page.enable', sessionId: 'session-child' }),
+		)
+		await transport.send(
+			JSON.stringify({ id: 2, method: 'Page.enable', sessionId: 'session-main' }),
+		)
+		await transport.send(
+			JSON.stringify({
+				id: 3,
+				method: 'Target.detachFromTarget',
+				params: { sessionId: 'session-child' },
+				sessionId: 'session-main',
+			}),
+		)
+
+		expect(readCDPSessionMethods(transport, 'session-child')).toStrictEqual([
+			'Page.enable',
+			'Target.detachFromTarget',
+		])
+		expect(readCDPSessionMethods(transport, 'session-other')).toStrictEqual([])
+	})
+})
+
 describe('replyOk', () => {
 	it('answers every send of the scripted method with an empty result and leaves another method unanswered', async () => {
 		const { client, transport } = await createConnectedCDPClient()
@@ -444,6 +510,9 @@ describe('scriptCDPAttach', () => {
 		).resolves.toStrictEqual({})
 		await expect(
 			named.client.send('Runtime.enable', undefined, { session: 'session-7' }),
+		).resolves.toStrictEqual({})
+		await expect(
+			named.client.send('Runtime.runIfWaitingForDebugger', undefined, { session: 'session-7' }),
 		).resolves.toStrictEqual({})
 		await expect(
 			named.client.send('Page.getFrameTree', undefined, { session: 'session-7' }),
@@ -907,5 +976,322 @@ describe('listener fixtures', () => {
 		expect(ignoreCall()).toBeUndefined()
 		await expect(ignoreAsyncCall()).resolves.toBeUndefined()
 		expect(throwListenerError).toThrow('listener failed')
+	})
+})
+
+describe('submit observer fixtures', () => {
+	it('answers an attribute from its record and null for one it lacks', () => {
+		const element = new BrowserSubmitElement({ target: '_top' })
+		expect(element.getAttribute('target')).toBe('_top')
+		expect(element.getAttribute('method')).toBeNull()
+	})
+
+	it('registers submit listeners only, honours the once option, dispatches inert events, and answers a base target', () => {
+		const window = new BrowserSubmitWindow('results')
+		const seen = createRecorder<[event: unknown]>()
+		window.addEventListener('click', seen.handler)
+		window.addEventListener('submit', seen.handler)
+		window.addEventListener('submit', ignoreCall, { once: true })
+		expect(window.listeners).toBe(2)
+		window.dispatch({
+			prevented: true,
+			form: { method: 'post' },
+			submitter: { formtarget: '_top' },
+		})
+		expect(window.listeners).toBe(1)
+		const [event] = requireValue(seen.calls[0])
+		expect(readProperty(event, 'defaultPrevented')).toBe(true)
+		expect(readProperty(event, 'submitter')).toBeInstanceOf(BrowserSubmitElement)
+		window.removeEventListener('submit', seen.handler)
+		expect(window.listeners).toBe(0)
+		expect(window.querySelector('base[target]')?.getAttribute('target')).toBe('results')
+		expect(new BrowserSubmitWindow().querySelector('base[target]')).toBeNull()
+	})
+
+	it('evaluates an expression against globals of its own, apart from every other window', () => {
+		const first = new BrowserSubmitWindow()
+		const second = new BrowserSubmitWindow()
+		expect(first.evaluate('(globalThis.marker = 7, globalThis.marker)')).toBe(7)
+		expect(second.evaluate('globalThis.marker')).toBeUndefined()
+		expect(first.evaluate("typeof document.querySelector === 'function'")).toBe(true)
+	})
+
+	it('keeps one window per session and context, sums their listeners, and evaluates a message in the window it names', () => {
+		const windows = new BrowserSubmitWindows()
+		const main = windows.window('session-main', 91)
+		expect(windows.window('session-main', 91)).toBe(main)
+		expect(windows.window('session-child', 91)).not.toBe(main)
+		main.addEventListener('submit', ignoreCall)
+		windows.window('session-child', 92).addEventListener('submit', ignoreCall)
+		expect(windows.listeners).toBe(2)
+		main.evaluate('(globalThis.frame = "main")')
+		expect(
+			windows.evaluate({
+				id: 1,
+				method: 'Runtime.evaluate',
+				params: { expression: 'globalThis.frame', contextId: 91 },
+				sessionId: 'session-main',
+			}),
+		).toBe('main')
+		expect(
+			windows.evaluate({
+				id: 2,
+				method: 'Runtime.evaluate',
+				params: { expression: 'globalThis.frame', contextId: 92 },
+				sessionId: 'session-child',
+			}),
+		).toBeUndefined()
+	})
+
+	it('installs an observer as often as asked, dispatches the submissions, and reads it with the listeners left', () => {
+		const observer =
+			"addEventListener('submit', () => { globalThis.count = (globalThis.count ?? 0) + 1 })"
+		const read = 'globalThis.count ?? 0'
+		expect(evaluateBrowserSubmit(observer, read)).toEqual([0, 1])
+		expect(evaluateBrowserSubmit(observer, read, [{ prevented: false, form: {} }], 2)).toEqual([
+			2, 2,
+		])
+		expect(evaluateBrowserSubmit(observer, read, [], 0)).toEqual([0, 0])
+	})
+
+	it('reads the token a compiled observer or read embeds and tells the two apart, alone or guarded', () => {
+		const observer = compileSubmitObserverExpression(12)
+		const read = compileSubmitReadExpression(12)
+		expect(readBrowserSubmitToken(observer)).toBe(12)
+		expect(readBrowserSubmitToken(compileGuardedEvaluateExpression(read, 100))).toBe(12)
+		expect(readBrowserSubmitToken('document.title')).toBeUndefined()
+		expect([matchesBrowserSubmitObserver(observer), matchesBrowserSubmitRead(observer)]).toEqual([
+			true,
+			false,
+		])
+		expect([matchesBrowserSubmitObserver(read), matchesBrowserSubmitRead(read)]).toEqual([
+			false,
+			true,
+		])
+		expect(matchesBrowserSubmitRead(read.replace('const token = 12', 'const token = 13'))).toBe(
+			true,
+		)
+		expect(matchesBrowserSubmitRead(read.replace('delete globalThis', 'void globalThis'))).toBe(
+			false,
+		)
+	})
+
+	it('answers an evaluation with the value its expression returns in the window it names', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		try {
+			const windows = new BrowserSubmitWindows()
+			windows.window('session-child', 92).evaluate('(globalThis.answer = 42)')
+			transport.onSend('Runtime.evaluate', (message) =>
+				answerBrowserEvaluation(transport, windows, message),
+			)
+			expect(
+				await client.send(
+					'Runtime.evaluate',
+					{ expression: 'globalThis.answer', contextId: 92 },
+					{ session: 'session-child' },
+				),
+			).toEqual({ result: { value: 42 } })
+		} finally {
+			await client.close()
+		}
+	})
+})
+
+describe('navigation settlement fixtures', () => {
+	it('emits each stage of a navigation in protocol order on the session it names', () => {
+		const transport = createCDPTestTransport()
+		const frames = createRecorder<[data: string]>()
+		transport.emitter.on('message', frames.handler)
+		emitBrowserNavigation(
+			transport,
+			'session-child',
+			'child',
+			'https://example.test/done',
+			'loader-done',
+		)
+		const events = frames.calls.map(([data]) => JSON.parse(data))
+		expect(events.map((event) => [event.method, event.sessionId])).toEqual([
+			['Page.frameRequestedNavigation', 'session-child'],
+			['Page.frameStartedNavigating', 'session-child'],
+			['Page.frameNavigated', 'session-child'],
+			['Page.lifecycleEvent', 'session-child'],
+			['Page.lifecycleEvent', 'session-child'],
+		])
+		expect(events.map((event) => event.params)).toEqual([
+			{
+				frameId: 'child',
+				reason: 'formSubmissionPost',
+				url: 'https://example.test/done',
+				disposition: 'currentTab',
+			},
+			{
+				frameId: 'child',
+				url: 'https://example.test/done',
+				loaderId: 'loader-done',
+				navigationType: 'differentDocument',
+			},
+			{ frame: { id: 'child', url: 'https://example.test/done', loaderId: 'loader-done' } },
+			{ frameId: 'child', loaderId: 'loader-done', name: 'DOMContentLoaded' },
+			{ frameId: 'child', loaderId: 'loader-done', name: 'load' },
+		])
+		frames.clear()
+		emitBrowserNavigation(
+			transport,
+			'session-main',
+			'main',
+			'https://example.test/next',
+			'loader-next',
+			['commit'],
+		)
+		expect(frames.calls.map(([data]) => JSON.parse(data).method)).toEqual(['Page.frameNavigated'])
+	})
+
+	it('attaches the child frame on its own session under the main frame and waits for its publication', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptBrowserElements(transport)
+		const page = new BrowserPage(
+			client,
+			'main',
+			'session-main',
+			undefined,
+			'https://example.test/cart',
+		)
+		try {
+			const attaches = createRecorder<[data: string]>()
+			transport.emitter.on('message', attaches.handler)
+			await attachBrowserElementChild(transport, page)
+			expect(
+				attaches.calls
+					.map(([data]) => JSON.parse(data))
+					.find((frame) => frame.method === 'Target.attachedToTarget'),
+			).toEqual({
+				method: 'Target.attachedToTarget',
+				params: {
+					sessionId: 'session-child',
+					targetInfo: {
+						targetId: 'child',
+						type: 'iframe',
+						url: 'https://example.test/checkout',
+						parentFrameId: 'main',
+					},
+				},
+				sessionId: 'session-main',
+			})
+			expect((await page.frames()).find((frame) => frame.id === 'child')?.parent).toBe('main')
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('builds the page tree with the nested frame only when asked, and answers a named root, a tree hook, the resume of a paused target, and an insertion hook', async () => {
+		expect(JSON.stringify(buildBrowserElementTree())).not.toContain('nested')
+		expect(JSON.stringify(buildBrowserElementTree({ nested: true }))).toContain(
+			'"id":"nested","parentId":"child"',
+		)
+		const inserted: CDPSentMessage[] = []
+		const { client, transport, recording } = await createBrowserElementFixture({
+			roots: new Map([['session-other', { id: 'other', url: 'https://example.test/other' }]]),
+			insert: (message) => inserted.push(message),
+		})
+		try {
+			expect(
+				await client.send('Page.getFrameTree', undefined, { session: 'session-other' }),
+			).toEqual({ frameTree: { frame: { id: 'other', url: 'https://example.test/other' } } })
+			expect(
+				await client.send('Page.getFrameTree', undefined, { session: 'session-main' }),
+			).toEqual(buildBrowserElementTree())
+			expect(
+				await client.send('Runtime.runIfWaitingForDebugger', undefined, {
+					session: 'session-other',
+				}),
+			).toEqual({})
+			const insertion = client.send(
+				'Input.insertText',
+				{ text: 'sam' },
+				{ session: 'session-main' },
+			)
+			await waitForCondition('the insertion is withheld', () => inserted.length === 1)
+			transport.reply(requireValue(inserted[0]).id, { held: true })
+			await expect(insertion).resolves.toEqual({ held: true })
+			expect(recording.registrations()).toBeGreaterThan(0)
+		} finally {
+			await client.close()
+		}
+		const hooked = createRecorder<[message: CDPSentMessage]>()
+		const tree = await createBrowserElementFixture({ local: true, tree: hooked.handler })
+		try {
+			const pending = tree.client.send('Page.getFrameTree', undefined, { session: 'session-main' })
+			await waitForCondition('the tree hook receives the read', () => hooked.count === 1)
+			tree.transport.reply(requireValue(hooked.calls[0])[0].id, {
+				frameTree: { frame: { id: 'hooked', url: 'about:blank' } },
+			})
+			await expect(pending).resolves.toEqual({
+				frameTree: { frame: { id: 'hooked', url: 'about:blank' } },
+			})
+		} finally {
+			await tree.client.close()
+		}
+	})
+
+	it('holds an in-process child tree whose backends the main tree does not use', () => {
+		const framed = BROWSER_ELEMENT_FRAMED_FIXTURE.nodes.map((node) => node.backendDOMNodeId)
+		const main = new Set(BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) => node.backendDOMNodeId))
+		expect(framed).toEqual([22, 23])
+		expect(framed.filter((backend) => main.has(backend))).toEqual([])
+	})
+
+	it('opens a record over the steps a test emits, the main frame, and the fixture parents', async () => {
+		expect([...BROWSER_RECORD_PARENTS]).toEqual([
+			['child', 'main'],
+			['side', 'main'],
+			['nested', 'child'],
+		])
+		const { steps, lifetime, record } = openBrowserNavigationRecord('nested')
+		expect(steps.count()).toBe(4)
+		const started = record.wait({ timeout: 1_000 })
+		steps.emit('request', 'child', 'https://example.test/applied', undefined)
+		await expect(started).resolves.toBeUndefined()
+		lifetime.abort(new Error('closed'))
+		await expect(record.settle()).rejects.toThrow('closed')
+		const shared = openBrowserNavigationRecord('main', steps)
+		expect(shared.steps).toBe(steps)
+		shared.record.destroy()
+	})
+})
+
+describe('RecordingCDPClient', () => {
+	it('delegates every call and counts each live registration by method and session', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const recording = new RecordingCDPClient(client)
+		try {
+			expect(recording.connected).toBe(true)
+			expect(recording.emitter).toBe(client.emitter)
+			replyOk(transport, 'Page.enable', { enabled: true })
+			await expect(
+				recording.send('Page.enable', undefined, { session: 'session-1' }),
+			).resolves.toEqual({
+				enabled: true,
+			})
+			const events = createRecorder<[params: Readonly<Record<string, unknown>>]>()
+			recording.subscribe('Page.frameNavigated', events.handler, 'session-1')
+			recording.subscribe('Page.frameNavigated', events.handler, 'session-1')
+			recording.subscribe('Page.frameNavigated', ignoreCall, 'session-2')
+			recording.subscribe('Target.targetCreated', ignoreCall)
+			expect(recording.registrations()).toBe(3)
+			expect(recording.registrations('Page.frameNavigated')).toBe(2)
+			expect(recording.registrations(undefined, 'session-1')).toBe(1)
+			expect(recording.registrations('Page.frameNavigated', 'session-2')).toBe(1)
+			transport.event('Page.frameNavigated', { frame: { id: 'main' } }, 'session-1')
+			expect(events.count).toBe(1)
+			recording.unsubscribe('Page.frameNavigated', events.handler, 'session-1')
+			transport.event('Page.frameNavigated', { frame: { id: 'main' } }, 'session-1')
+			expect(events.count).toBe(1)
+			expect(recording.registrations()).toBe(2)
+			recording.unsubscribe('Page.frameNavigated', ignoreCall, 'session-1')
+			expect(recording.registrations()).toBe(2)
+		} finally {
+			await recording.close()
+		}
+		expect(client.connected).toBe(false)
 	})
 })

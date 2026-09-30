@@ -2009,6 +2009,16 @@ export const POLICY_SOURCE_DEADLINES: readonly PolicyDeadline[] = Object.freeze(
 		reason: 'navigation idle deadline',
 	},
 	{
+		path: 'src/core/BrowserNavigationRecord.ts',
+		declaration: 'wait',
+		reason: 'navigation start deadline, cleared on settlement',
+	},
+	{
+		path: 'src/core/BrowserNavigationRecord.ts',
+		declaration: 'settle',
+		reason: 'settlement deadline that resolves the stage reached, cleared on settlement',
+	},
+	{
 		path: 'src/core/BrowserKeyboard.ts',
 		declaration: 'press',
 		reason: 'caller-requested delay between key events, not a poll',

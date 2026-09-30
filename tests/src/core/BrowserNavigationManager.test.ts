@@ -2,7 +2,13 @@ import type { BrowserNavigationResult } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { BrowserPage, isBrowserError } from '@src/core'
 import { waitForDelay } from '@orkestrel/test'
-import { createConnectedCDPClient, replyOk, scriptEvaluate } from '../../setup.js'
+import {
+	RecordingCDPClient,
+	createConnectedCDPClient,
+	emitBrowserNavigation,
+	replyOk,
+	scriptEvaluate,
+} from '../../setup.js'
 
 describe('BrowserNavigationManager', () => {
 	it('reloads and returns the correlated document response', async () => {
@@ -336,5 +342,55 @@ describe('BrowserNavigationManager', () => {
 		await expect(page.navigate('https://example.com')).rejects.toSatisfy(isBrowserError)
 
 		expect(page.network.emitter.count('response')).toBe(baseline)
+	})
+
+	it('opens a record that adds no client registration while it settles or after it ends', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const recording = new RecordingCDPClient(client)
+		const page = new BrowserPage(recording, 'main', 'session-main', undefined, undefined, 'main')
+		try {
+			const before = recording.registrations()
+			expect(before).toBeGreaterThan(0)
+			const record = page.navigation.record('main')
+			expect(recording.registrations()).toBe(before)
+			const settling = record.settle({ destinations: [{ frame: 'main', relationship: 'self' }] })
+			emitBrowserNavigation(
+				transport,
+				'session-main',
+				'main',
+				'https://example.test/next',
+				'loader-next',
+			)
+			await expect(settling).resolves.toEqual({ url: 'https://example.test/next', stage: 'loaded' })
+			expect(recording.registrations()).toBe(before)
+			record.destroy()
+			expect(recording.registrations()).toBe(before)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('refuses a record on a closed page and rejects a pending record when the page closes', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Target.closeTarget')
+		const page = new BrowserPage(client, 'main', 'session-main', undefined, undefined, 'main')
+		try {
+			const record = page.navigation.record('main')
+			const waiting = record.wait().catch((error: unknown) => error)
+			const settling = record
+				.settle({ destinations: [{ frame: 'main', relationship: 'self' }] })
+				.catch((error: unknown) => error)
+			await page.close()
+			for (const error of [await waiting, await settling])
+				expect(isBrowserError(error) && error.message).toBe(
+					'Browser navigation wait ended because the page closed',
+				)
+			const refusal = await Promise.resolve()
+				.then(() => page.navigation.record('main'))
+				.catch((error: unknown) => error)
+			expect(isBrowserError(refusal) && refusal.message).toBe('Browser page is closed')
+		} finally {
+			await client.close()
+		}
 	})
 })

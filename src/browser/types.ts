@@ -19,7 +19,7 @@ import type { EmitterErrorHandler, EmitterHooks } from '@orkestrel/emitter'
  * - `own` — if `true`, admits the realm's own `globalThis.document`; if `false`, refuses it,
  *   because an action that navigates the realm's own document cannot return. Default: `false`
  */
-export interface BrowserDocumentOptions {
+export interface BrowserDOMViewOptions {
 	readonly document: Document
 	readonly own?: boolean
 }
@@ -29,14 +29,14 @@ export interface BrowserDocumentOptions {
  *
  * @remarks
  * - `document` and `own` — the driven document and the admission of the realm's own document, as
- *   {@link BrowserDocumentOptions} describes them
+ *   {@link BrowserDOMViewOptions} describes them
  * - `source` — a source of page tools, such as `@orkestrel/mcp`'s model context bridge; the
  *   toolset adopts its tools and re-adopts on its `change`. Default: no page tools
  * - `tools`, `limit`, `on`, and `error` — as {@link BrowserToolsetOptions} describes them
  */
 export interface BrowserDocumentToolsetOptions
 	extends
-		BrowserDocumentOptions,
+		BrowserDOMViewOptions,
 		Pick<BrowserToolsetOptions, 'on' | 'error' | 'tools' | 'source' | 'limit'> {}
 
 /**

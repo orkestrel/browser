@@ -12,6 +12,7 @@ import type {
 	BrowserFrameInterface,
 	BrowserKeyboardInterface,
 	BrowserMouseInterface,
+	BrowserNavigationEventMap,
 	BrowserNavigationOptions,
 	BrowserNavigationManagerInterface,
 	BrowserNavigationResult,
@@ -89,7 +90,14 @@ import {
 	parseBrowserDownloadStart,
 	parseBrowserPageError,
 } from './parsers.js'
-import { isArray, isFiniteNumber, isInteger, isRecord, isString } from '@orkestrel/contract'
+import {
+	isArray,
+	isError,
+	isFiniteNumber,
+	isInteger,
+	isRecord,
+	isString,
+} from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
@@ -193,8 +201,24 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			readonly cleared: CDPHandler
 			readonly navigated: CDPHandler
 			readonly routed: CDPHandler
+			readonly detached: CDPHandler
+			readonly attached: CDPHandler
+			readonly requested: CDPHandler
+			readonly started: CDPHandler
+			readonly lifecycle: CDPHandler
+			readonly stopped: CDPHandler
+			readonly target: CDPHandler
+			readonly released: CDPHandler
 		}
 	> = new Map()
+	// The navigation steps each frame's owning session reports, which the navigation and element
+	// managers consume; see `#accepts` for the ownership rule.
+	readonly #steps = new Emitter<BrowserNavigationEventMap>()
+	// The parent of each frame whose attach, frame tree, or target named one.
+	readonly #parents: Map<string, string> = new Map()
+	// The loader of each frame's latest accepted commit, so a stop is a load only for a commit that
+	// named no loader.
+	readonly #loaders: Map<string, string | undefined> = new Map()
 	// The frame of each attach whose domain enable has not settled, keyed by its frame session, so a
 	// navigation the frame session reports before publication reaches the published record.
 	readonly #attaching: Map<string, BrowserFrameInfo> = new Map()
@@ -219,10 +243,6 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #destroyHandler = this.#handleDestroy.bind(this)
 	readonly #loadHandler = this.#handleLoad.bind(this)
 	readonly #restoreHandler = this.#handleRestore.bind(this)
-	readonly #frameAttachedHandler = this.#handleFrameAttached.bind(this)
-	readonly #frameNavigatedHandler = this.#handleFrameNavigated.bind(this)
-	readonly #sameDocumentHandler = this.#handleSameDocument.bind(this)
-	readonly #frameDetachedHandler = this.#handleFrameDetached.bind(this)
 	readonly #dialogHandler = this.#handleDialog.bind(this)
 	readonly #chooserHandler = this.#handleChooser.bind(this)
 	readonly #consoleHandler = this.#handleConsole.bind(this)
@@ -230,8 +250,6 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #crashHandler = this.#handleCrash.bind(this)
 	readonly #downloadHandler = this.#handleDownload.bind(this)
 	readonly #downloadProgressHandler = this.#handleDownloadProgress.bind(this)
-	readonly #attachedHandler = this.#handleAttached.bind(this)
-	readonly #detachedHandler = this.#handleDetached.bind(this)
 
 	constructor(
 		client: CDPClientInterface,
@@ -277,6 +295,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#reference = reference ?? this.#nextReference.bind(this)
 		this.#elements = new BrowserElementManager({
 			navigation: this.#epochOf.bind(this),
+			steps: this.#steps,
 			page: this,
 			client,
 			session: sessionId,
@@ -295,6 +314,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			client,
 			sessionId,
 			() => this.#loader,
+			this.#steps,
+			this.#parents.get.bind(this.#parents),
 		)
 		this.#scripts = new BrowserScriptManager(this)
 		this.#accessibility = new BrowserAccessibility(this)
@@ -306,24 +327,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#network.emitter.on('socket', (socket) => this.#emitter.emit('socket', socket))
 
 		this.#client.subscribe('Target.targetDestroyed', this.#destroyHandler)
-		this.#client.subscribe('Target.attachedToTarget', this.#attachedHandler, this.#sessionId)
-		this.#client.subscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
-		this.#client.subscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
-		this.#client.subscribe('Page.frameNavigated', this.#frameNavigatedHandler, this.#sessionId)
-		this.#client.subscribe(
-			'Page.navigatedWithinDocument',
-			this.#sameDocumentHandler,
-			this.#sessionId,
-		)
-		this.#client.subscribe('Page.frameDetached', this.#frameDetachedHandler, this.#sessionId)
+		this.#watchSession(this.#sessionId)
 		this.#client.subscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
 		this.#client.subscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
 		this.#client.subscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.subscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
 		this.#client.subscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
-		const handlers = this.#resolveSessionHandlers(this.#sessionId)
-		this.#client.subscribe('Runtime.executionContextDestroyed', handlers.destroyed, this.#sessionId)
-		this.#client.subscribe('Runtime.executionContextsCleared', handlers.cleared, this.#sessionId)
 		this.#client.subscribe('Browser.downloadWillBegin', this.#downloadHandler)
 		this.#client.subscribe('Browser.downloadProgress', this.#downloadProgressHandler)
 		void this.#announcement.promise.catch(() => undefined)
@@ -420,7 +429,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 					throw options.signal.reason
 				}
 				if (
-					!(error instanceof Error) ||
+					!isError(error) ||
 					!/execution context was destroyed|cannot find context with specified id/i.test(
 						error.message,
 					)
@@ -645,7 +654,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	async frames(): Promise<readonly BrowserFrameInterface[]> {
 		this.assert()
 		const result = await this.send('Page.getFrameTree')
-		return readBrowserFrames(result, [...this.#iframes.values()]).map((frame) => this.#frame(frame))
+		const frames = readBrowserFrames(result, [...this.#iframes.values()])
+		for (const { id, parent } of frames) if (parent !== undefined) this.#parents.set(id, parent)
+		return frames.map((frame) => this.#frame(frame))
 	}
 
 	async snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface> {
@@ -707,18 +718,18 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	): Promise<BrowserNavigationResult> {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
+		const signal = options?.signal
+		const call = { timeout, ...(signal === undefined ? {} : { signal }) }
 		const watch = this.#watchNavigation()
 		const condition = options?.condition ?? 'load'
-		const wait = this.#waitForLoadEvent(condition, timeout, options?.signal)
+		const wait = this.#waitForLoadEvent(condition, timeout, signal)
 		void wait.catch(() => undefined)
 		let loader: string | undefined
 
+		// A load or a completion read that settles in the same tick as an abort leaves the signal as
+		// the only witness, so cancellation is checked after the wait and after the completion read.
 		try {
-			const result = await this.send(
-				'Page.navigate',
-				{ url },
-				{ timeout, ...(options?.signal !== undefined ? { signal: options.signal } : {}) },
-			)
+			const result = await this.send('Page.navigate', { url }, call)
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
 			}
@@ -727,37 +738,41 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				this.#loader = loader
 			}
 			await wait
+			signal?.throwIfAborted()
+			const completed = await this.#completeNavigation(watch, loader, call)
+			signal?.throwIfAborted()
+			return completed
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
 			this.#cancelLoad()
 			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
 			throw error
 		}
-
-		return await this.#completeNavigation(watch, loader)
 	}
 
 	async #reload(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult> {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
+		const signal = options?.signal
+		const call = { timeout, ...(signal === undefined ? {} : { signal }) }
 		const watch = this.#watchNavigation()
-		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout, options?.signal)
+		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout, signal)
 		void wait.catch(() => undefined)
 
+		// Cancellation is checked after the wait and after the completion read, as `#navigate` does.
 		try {
-			await this.send('Page.reload', undefined, {
-				timeout,
-				...(options?.signal === undefined ? {} : { signal: options.signal }),
-			})
+			await this.send('Page.reload', undefined, call)
 			await wait
+			signal?.throwIfAborted()
+			const completed = await this.#completeNavigation(watch, undefined, call)
+			signal?.throwIfAborted()
+			return completed
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
 			this.#cancelLoad()
 			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
 			throw error
 		}
-
-		return await this.#completeNavigation(watch)
 	}
 
 	async #history(
@@ -949,34 +964,21 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#claimed.clear()
 		this.#downloads.clear()
 		this.#client.unsubscribe('Target.targetDestroyed', this.#destroyHandler)
-		this.#client.unsubscribe('Target.attachedToTarget', this.#attachedHandler, this.#sessionId)
-		this.#client.unsubscribe('Target.detachedFromTarget', this.#detachedHandler, this.#sessionId)
-		this.#client.unsubscribe('Page.frameAttached', this.#frameAttachedHandler, this.#sessionId)
-		this.#client.unsubscribe('Page.frameNavigated', this.#frameNavigatedHandler, this.#sessionId)
-		this.#client.unsubscribe(
-			'Page.navigatedWithinDocument',
-			this.#sameDocumentHandler,
-			this.#sessionId,
-		)
-		this.#client.unsubscribe('Page.frameDetached', this.#frameDetachedHandler, this.#sessionId)
+		this.#unwatchSession(this.#sessionId)
 		this.#client.unsubscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
 		this.#client.unsubscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
 		this.#client.unsubscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.unsubscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
 		this.#client.unsubscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
-		const handlers = this.#resolveSessionHandlers(this.#sessionId)
-		this.#client.unsubscribe(
-			'Runtime.executionContextDestroyed',
-			handlers.destroyed,
-			this.#sessionId,
-		)
-		this.#client.unsubscribe('Runtime.executionContextsCleared', handlers.cleared, this.#sessionId)
 		this.#client.unsubscribe('Browser.downloadWillBegin', this.#downloadHandler)
 		this.#client.unsubscribe('Browser.downloadProgress', this.#downloadProgressHandler)
+		this.#parents.clear()
+		this.#loaders.clear()
 		if (!this.#emitter.destroyed) {
 			this.#emitter.emit('close')
 			this.#emitter.destroy()
 		}
+		this.#steps.destroy()
 	}
 
 	#frame(frame: BrowserFrameInfo): BrowserFrameInterface {
@@ -1151,6 +1153,14 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		readonly cleared: CDPHandler
 		readonly navigated: CDPHandler
 		readonly routed: CDPHandler
+		readonly detached: CDPHandler
+		readonly attached: CDPHandler
+		readonly requested: CDPHandler
+		readonly started: CDPHandler
+		readonly lifecycle: CDPHandler
+		readonly stopped: CDPHandler
+		readonly target: CDPHandler
+		readonly released: CDPHandler
 	} {
 		const existing = this.#sessionHandlers.get(session)
 		if (existing !== undefined) return existing
@@ -1159,28 +1169,62 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			cleared: this.#handleContextsCleared.bind(this, session),
 			navigated: this.#handleSessionNavigated.bind(this, session),
 			routed: this.#handleSessionRouted.bind(this, session),
+			detached: this.#handleFrameDetached.bind(this, session),
+			attached: this.#handleFrameAttached.bind(this, session),
+			requested: this.#handleRequested.bind(this, session),
+			started: this.#handleStarted.bind(this, session),
+			lifecycle: this.#handleSessionLifecycle.bind(this, session),
+			stopped: this.#handleStopped.bind(this, session),
+			target: this.#handleAttached.bind(this, session),
+			released: this.#handleDetached.bind(this),
 		}
 		this.#sessionHandlers.set(session, created)
 		return created
 	}
 
+	// Every session the page follows, its own included, reports its frames' steps through the same
+	// persistent handlers from the moment it is watched until it is unwatched; no action subscribes.
 	#watchSession(session: string): void {
 		const handlers = this.#resolveSessionHandlers(session)
-		this.#client.subscribe('Page.frameDetached', this.#frameDetachedHandler, session)
-		this.#client.subscribe('Page.frameNavigated', handlers.navigated, session)
-		this.#client.subscribe('Page.navigatedWithinDocument', handlers.routed, session)
-		this.#client.subscribe('Runtime.executionContextDestroyed', handlers.destroyed, session)
-		this.#client.subscribe('Runtime.executionContextsCleared', handlers.cleared, session)
+		for (const [method, handler] of this.#pairSessionHandlers(handlers))
+			this.#client.subscribe(method, handler, session)
 	}
 
 	#unwatchSession(session: string): void {
 		const handlers = this.#resolveSessionHandlers(session)
-		this.#client.unsubscribe('Page.frameDetached', this.#frameDetachedHandler, session)
-		this.#client.unsubscribe('Page.frameNavigated', handlers.navigated, session)
-		this.#client.unsubscribe('Page.navigatedWithinDocument', handlers.routed, session)
-		this.#client.unsubscribe('Runtime.executionContextDestroyed', handlers.destroyed, session)
-		this.#client.unsubscribe('Runtime.executionContextsCleared', handlers.cleared, session)
+		for (const [method, handler] of this.#pairSessionHandlers(handlers))
+			this.#client.unsubscribe(method, handler, session)
 		this.#sessionHandlers.delete(session)
+	}
+
+	#pairSessionHandlers(handlers: {
+		readonly destroyed: CDPHandler
+		readonly cleared: CDPHandler
+		readonly navigated: CDPHandler
+		readonly routed: CDPHandler
+		readonly detached: CDPHandler
+		readonly attached: CDPHandler
+		readonly requested: CDPHandler
+		readonly started: CDPHandler
+		readonly lifecycle: CDPHandler
+		readonly stopped: CDPHandler
+		readonly target: CDPHandler
+		readonly released: CDPHandler
+	}): ReadonlyArray<readonly [method: string, handler: CDPHandler]> {
+		return [
+			['Target.attachedToTarget', handlers.target],
+			['Target.detachedFromTarget', handlers.released],
+			['Page.frameAttached', handlers.attached],
+			['Page.frameDetached', handlers.detached],
+			['Page.frameRequestedNavigation', handlers.requested],
+			['Page.frameStartedNavigating', handlers.started],
+			['Page.frameNavigated', handlers.navigated],
+			['Page.navigatedWithinDocument', handlers.routed],
+			['Page.lifecycleEvent', handlers.lifecycle],
+			['Page.frameStoppedLoading', handlers.stopped],
+			['Runtime.executionContextDestroyed', handlers.destroyed],
+			['Runtime.executionContextsCleared', handlers.cleared],
+		]
 	}
 
 	async #resolveFrameSession(frame: string): Promise<string> {
@@ -1188,25 +1232,65 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		return owner === undefined ? this.#sessionId : await owner.attempt
 	}
 
+	// A frame session reports its frame's load only with lifecycle events enabled, and a nested
+	// out-of-process frame attaches only through its parent frame's own auto-attach; a refusal fails
+	// the enablement. The target waits for the debugger until both are in effect, so the commit and
+	// the load of the document it holds arrive on this session after the resume.
 	async #enableFrameSession(session: string): Promise<string> {
 		await this.#client.send('Page.enable', undefined, { session })
 		await this.#client.send('Runtime.enable', undefined, { session })
+		await this.#client.send('Page.setLifecycleEventsEnabled', { enabled: true }, { session })
+		await this.#client.send(
+			'Target.setAutoAttach',
+			{
+				autoAttach: true,
+				waitForDebuggerOnStart: true,
+				flatten: true,
+				filter: [{ type: 'iframe' }],
+			},
+			{ session },
+		)
+		this.#resumeTarget(session)
 		return session
 	}
 
-	// The frame's first commit can precede its session's `Page.enable`, which never replays it, so
-	// the session's own frame tree supplies the committed URL and name before publication. A
-	// session gone between its enable and this read publishes the record it already holds, and a
-	// navigation the session reported since the attach replaced `attached` and is newer than
-	// the tree's snapshot.
-	async #readFrameTree(session: string, attached: BrowserFrameInfo): Promise<void> {
+	// Every target the page's auto-attach reaches waits for the debugger until the page resumes it;
+	// a target gone before its resume ends with its detach.
+	#resumeTarget(session: string): void {
+		void this.#client
+			.send('Runtime.runIfWaitingForDebugger', undefined, { session })
+			.catch(() => undefined)
+	}
+
+	// A detach alone leaves a paused target waiting, so a target the page releases runs uninstrumented
+	// rather than frozen. The wait ends when the resume attempt settles: a reply shows the renderer
+	// processed the resume before the browser processes the detach that follows, and a refusal, the
+	// client's timeout, or the connection's close lets the detach go ahead as best-effort cleanup.
+	async #releaseTarget(session: string): Promise<void> {
+		await this.#client
+			.send('Runtime.runIfWaitingForDebugger', undefined, { session })
+			.catch(() => undefined)
+	}
+
+	// A target that names no parent frame is placed by its own frame tree, whose root supplies the
+	// parent, the URL, and the name; a navigation the session reported since the attach replaced
+	// `attached` with a URL newer than the tree's snapshot, which the record keeps.
+	async #readFrameTree(session: string, attached: BrowserFrameInfo, named: boolean): Promise<void> {
+		if (named) return
 		const result = await this.#client
 			.send('Page.getFrameTree', undefined, { session })
 			.catch(() => undefined)
 		const [root] = readBrowserFrames(result)
 		if (root === undefined || root.id !== attached.id || this.#attaching.get(session) !== attached)
 			return
-		this.#attaching.set(session, { ...attached, url: root.url, name: root.name ?? attached.name })
+		const parent = root.parent ?? attached.parent
+		if (parent !== undefined) this.#parents.set(attached.id, parent)
+		this.#attaching.set(session, {
+			...attached,
+			parent,
+			url: root.url,
+			name: root.name ?? attached.name,
+		})
 	}
 
 	async #attachWorker(
@@ -1221,6 +1305,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				await this.#detachChild(session, this.#sessionId)
 				return
 			}
+			this.#resumeTarget(session)
 			const worker = new BrowserWorker(this.#client, session, id, url, category)
 			this.#workers.set(id, worker)
 			this.#emitter.emit('worker', worker)
@@ -1300,18 +1385,20 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			popup.#owner = owner
 			await popup.send('Target.setAutoAttach', {
 				autoAttach: true,
-				waitForDebuggerOnStart: false,
+				waitForDebuggerOnStart: true,
 				flatten: true,
 			})
 			await popup.send('Page.setInterceptFileChooserDialog', { enabled: true })
 			await popup.network.start()
 			if (this.#closed) throw new BrowserError('Browser page is closed')
+			this.#resumeTarget(session)
 			setup.resolve()
 			this.#publish(popup)
 		} catch (error) {
 			// A popup can close before its session initialization completes.
 			if (popup !== undefined) {
 				setup.reject(error)
+				await this.#releaseTarget(session)
 				await popup.destroy()
 			} else await this.#detachChild(session, owner)
 		} finally {
@@ -1368,8 +1455,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 	}
 
-	// A session attached through a page session detaches only through that session.
+	// A session attached through a page session detaches only through that session, after the page
+	// releases its target.
 	async #detachChild(session: string, owner: string | undefined): Promise<void> {
+		await this.#releaseTarget(session)
 		await this.#client
 			.send(
 				'Target.detachFromTarget',
@@ -1431,10 +1520,14 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#resolveLoad()
 	}
 
-	#handleFrameAttached(params: Readonly<Record<string, unknown>>): void {
+	// Every session that owns a frame names the parent of a frame it attaches; only the page
+	// session's frames are announced, as before a frame session reported any.
+	#handleFrameAttached(session: string, params: Readonly<Record<string, unknown>>): void {
 		const frame = params['frameId']
 		const parent = params['parentFrameId']
-		if (!isString(frame)) return
+		if (!isString(frame) || !this.#accepts(session, frame)) return
+		if (isString(parent)) this.#parents.set(frame, parent)
+		if (session !== this.#sessionId) return
 		this.#emitter.emit(
 			'attach',
 			new BrowserFrame(
@@ -1446,7 +1539,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				undefined,
 				true,
 				() => this.#epochOf(frame),
-				(session, call) => this.#world(frame, session, call),
+				(owner, call) => this.#world(frame, owner, call),
 			),
 		)
 	}
@@ -1472,26 +1565,102 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	// A frame session reports its own frame's committed URL, which `Target.attachedToTarget` does
 	// not carry before the framed document commits.
+	// The ownership check precedes every change, so a report the page rejects leaves the frame's
+	// epoch, world, and parent as they were.
 	#handleSessionNavigated(session: string, params: Readonly<Record<string, unknown>>): void {
-		this.#handleFrameNavigated(params)
 		const frame = params['frame']
-		if (isRecord(frame)) this.#updateFrameURL(session, frame['id'], frame['url'])
+		if (!isRecord(frame) || !isString(frame['id']) || !isString(frame['url'])) return
+		if (!this.#accepts(session, frame['id'])) return
+		this.#handleFrameNavigated(params)
+		this.#updateFrame(session, frame['id'], {
+			url: frame['url'],
+			name: isString(frame['name']) && frame['name'] !== '' ? frame['name'] : undefined,
+		})
+		if (isString(frame['parentId'])) this.#parents.set(frame['id'], frame['parentId'])
+		const loader = isString(frame['loaderId']) ? frame['loaderId'] : undefined
+		this.#loaders.set(frame['id'], loader)
+		this.#steps.emit('commit', frame['id'], frame['url'], loader, false)
 	}
 
 	#handleSessionRouted(session: string, params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frameId']
+		const url = params['url']
+		if (!isString(frame) || !this.#accepts(session, frame)) return
 		this.#handleSameDocument(params)
-		this.#updateFrameURL(session, params['frameId'], params['url'])
+		if (!isString(url)) return
+		this.#updateFrame(session, frame, { url })
+		this.#steps.emit('commit', frame, url, undefined, true)
+	}
+
+	// The one ownership rule every navigation step passes: the page session reports every frame in
+	// the page's process and every swap, and a frame session reports the frame it owns and any frame
+	// no session owns, until another session supersedes it.
+	#accepts(session: string, frame: string): boolean {
+		if (session === this.#sessionId) return true
+		if (!this.#frameIds.has(session)) return false
+		const owner = this.#frameSessions.get(frame)?.session
+		return owner === undefined || owner === session
+	}
+
+	// A start the protocol announces with its loader is the step; the request that precedes it in the
+	// current tab is the step on a host that announces no start.
+	#handleRequested(session: string, params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frameId']
+		const url = params['url']
+		if (
+			params['disposition'] !== 'currentTab' ||
+			!isString(frame) ||
+			!isString(url) ||
+			!this.#accepts(session, frame)
+		)
+			return
+		this.#steps.emit('request', frame, url, undefined)
+	}
+
+	#handleStarted(session: string, params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frameId']
+		const url = params['url']
+		const loader = params['loaderId']
+		if (!isString(frame) || !isString(url) || !isString(loader) || !this.#accepts(session, frame))
+			return
+		this.#steps.emit('request', frame, url, loader)
+	}
+
+	// Enabling lifecycle events replays earlier lifecycle names under a loader of no navigation, so a
+	// load step carries its loader for the consumer to match.
+	#handleSessionLifecycle(session: string, params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frameId']
+		const loader = params['loaderId']
+		if (params['name'] !== 'load' || !isString(frame) || !this.#accepts(session, frame)) return
+		this.#steps.emit('load', frame, isString(loader) ? loader : undefined)
+	}
+
+	// A stop carries no loader, so it is a load only for a commit that named none.
+	#handleStopped(session: string, params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frameId']
+		if (
+			!isString(frame) ||
+			!this.#loaders.has(frame) ||
+			this.#loaders.get(frame) !== undefined ||
+			!this.#accepts(session, frame)
+		)
+			return
+		this.#steps.emit('load', frame, undefined)
 	}
 
 	// Only the frame's owning session describes its document, so an event from a superseded session
-	// or about a nested frame leaves the record alone.
-	#updateFrameURL(session: string, frame: unknown, url: unknown): void {
-		if (!isString(frame) || !isString(url) || this.#frameSessions.get(frame)?.session !== session)
-			return
+	// or about a nested frame leaves the record alone. A commit reports the frame's name, which a
+	// same-document navigation leaves as it was.
+	#updateFrame(
+		session: string,
+		frame: string,
+		update: Pick<BrowserFrameInfo, 'url'> & Partial<Pick<BrowserFrameInfo, 'name'>>,
+	): void {
+		if (this.#frameSessions.get(frame)?.session !== session) return
 		const attaching = this.#attaching.get(session)
-		if (attaching !== undefined) this.#attaching.set(session, { ...attaching, url })
+		if (attaching !== undefined) this.#attaching.set(session, { ...attaching, ...update })
 		const listed = this.#iframes.get(frame)
-		if (listed !== undefined) this.#iframes.set(frame, { ...listed, url })
+		if (listed !== undefined) this.#iframes.set(frame, { ...listed, ...update })
 	}
 
 	#handleSameDocument(params: Readonly<Record<string, unknown>>): void {
@@ -1503,17 +1672,24 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#emitter.emit('navigate', params['url'], true)
 	}
 
-	#handleFrameDetached(params: Readonly<Record<string, unknown>>): void {
+	#handleFrameDetached(session: string, params: Readonly<Record<string, unknown>>): void {
 		const frame = params['frameId']
-		if (!isString(frame)) return
+		// The page session is entitled to report any frame's swap or removal, which `#accepts` grants
+		// it; a frame session reports only a frame it owns.
+		if (!isString(frame) || !this.#accepts(session, frame)) return
+		const swapped = params['reason'] === 'swap'
 		this.#advanceFrame(frame)
 		this.#worlds.delete(frame)
 		this.#creating.delete(frame)
 		// CDP reports a process replacement as `swap`: the frame persists in another renderer, whose
 		// session `Target.attachedToTarget` can have registered before this detach arrives.
-		if (params['reason'] === 'swap') return
-		this.#frameSessions.delete(frame)
-		this.#emitter.emit('detach', frame)
+		if (!swapped) {
+			this.#frameSessions.delete(frame)
+			this.#parents.delete(frame)
+			this.#loaders.delete(frame)
+			this.#emitter.emit('detach', frame)
+		}
+		this.#steps.emit('detach', frame, swapped)
 	}
 
 	#handleDialog(params: Readonly<Record<string, unknown>>): void {
@@ -1643,7 +1819,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		void this.#discoverPopup(id, isString(url) && url !== '' ? url : undefined)
 	}
 
-	#handleAttached(params: Readonly<Record<string, unknown>>): void {
+	// `owner` is the session that reported the attach: the page session for a page, a worker, or a
+	// frame the page's process embeds, and a frame session for a frame nested in its frame.
+	#handleAttached(owner: string, params: Readonly<Record<string, unknown>>): void {
 		const target = params['targetInfo']
 		const session = params['sessionId']
 		if (!isRecord(target) || !isString(target['targetId']) || !isString(session)) {
@@ -1651,6 +1829,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 
 		const category = target['type']
+		if (owner !== this.#sessionId && category !== 'iframe') return
 		if (category === 'worker' || category === 'service_worker' || category === 'shared_worker') {
 			void this.#attachWorker(
 				session,
@@ -1675,12 +1854,20 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			)
 			return
 		}
-		if (category !== 'iframe') return
+		if (category !== 'iframe') {
+			this.#resumeTarget(session)
+			return
+		}
 
 		const frame = target['targetId']
+		const named = isString(target['parentFrameId'])
+		const parent = isString(target['parentFrameId'])
+			? target['parentFrameId']
+			: this.#parents.get(frame)
+		if (parent !== undefined) this.#parents.set(frame, parent)
 		const attached: BrowserFrameInfo = {
 			id: frame,
-			parent: undefined,
+			parent,
 			name: undefined,
 			url: isString(target['url']) ? target['url'] : 'about:blank',
 		}
@@ -1699,7 +1886,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const attempt = this.#enableFrameSession(session)
 		this.#frameSessions.set(frame, { session, attempt })
 		this.#frameIds.set(session, frame)
-		void attempt.then(this.#readFrameTree.bind(this, session, attached)).then(
+		void attempt.then(this.#readFrameTree.bind(this, session, attached, named)).then(
 			() => {
 				const info = this.#attaching.get(session)
 				this.#attaching.delete(session)
@@ -1717,7 +1904,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				if (this.#frameSessions.get(frame)?.attempt === attempt) this.#frameSessions.delete(frame)
 				if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
 				this.#unwatchSession(session)
-				void this.#detachChild(session, this.#sessionId)
+				void this.#detachChild(session, owner)
 			},
 		)
 	}

@@ -5,6 +5,8 @@ import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@o
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_CHILD_FIXTURE,
+	RecordingCDPClient,
+	attachBrowserElementChild,
 	createBrowserElementFixture,
 	createConnectedCDPClient,
 	scriptBrowserElements,
@@ -12,6 +14,51 @@ import {
 } from '../../../setup.js'
 
 describe('element manager', () => {
+	it('drops references on the page steps and subscribes to no frame commit or detach of its own', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptBrowserElements(transport)
+		const recording = new RecordingCDPClient(client)
+		const page = new BrowserPage(
+			recording,
+			'main',
+			'session-main',
+			undefined,
+			'https://example.test/cart',
+		)
+		try {
+			await attachBrowserElementChild(transport, page)
+			expect(
+				['session-main', 'session-child'].flatMap((session) =>
+					['Page.frameNavigated', 'Page.frameDetached'].map((method) =>
+						recording.registrations(method, session),
+					),
+				),
+			).toEqual([1, 1, 1, 1])
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'main', url: page.url, loaderId: 'loader-main' } },
+				'session-main',
+			)
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
+				'session-main',
+			)
+			await page.elements.outline()
+			const child = requireValue(
+				page.elements.elements().find((element) => element.name === 'Save'),
+			)
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'child', url: 'https://example.test/next', loaderId: 'loader-next' } },
+				'session-child',
+			)
+			expect(page.elements.element(child.reference)).toBeUndefined()
+		} finally {
+			await client.close()
+		}
+	})
+
 	it('catches a child navigation invalidating a completed child capture or preserving its old references', async () => {
 		let navigate = false
 		const fixture = await createBrowserElementFixture({

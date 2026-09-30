@@ -13,11 +13,13 @@ import {
 	matchesBrowserInvisible,
 	matchesBrowserOmitted,
 	matchesBrowserPopup,
+	readBrowserCapture,
 	readBrowserBlock,
 	readBrowserParent,
 	skipBrowserSubtree,
 } from '@src/browser'
-import { createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
+import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError } from '@src/core'
+import { captureError, createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
 import {
 	createProbeDocument,
 	createProbeElements,
@@ -372,5 +374,40 @@ describe('listenBrowserNavigation', () => {
 		)
 		probe.frame.remove()
 		expect(events.calls).toEqual([['pagehide']])
+	})
+})
+
+describe('readBrowserCapture', () => {
+	// `{"url":"about:blank","title":"t","html":"<p></p>"}` is 50 characters, so a paragraph of
+	// `BROWSER_RESULT_LIMIT - 50` characters fills the serialized capture to the limit.
+	const room = BROWSER_RESULT_LIMIT - 50
+
+	it('catches a capture refused at the limit, or one passed one character past it', () => {
+		const document = globalThis.document.implementation.createHTMLDocument('t')
+		const paragraph = document.createElement('p')
+		paragraph.textContent = 'x'.repeat(room)
+		expect(readBrowserCapture(paragraph)).toEqual({
+			url: 'about:blank',
+			title: 't',
+			html: `<p>${'x'.repeat(room)}</p>`,
+		})
+		paragraph.textContent = 'x'.repeat(room + 1)
+		const refusal = captureError(() => readBrowserCapture(paragraph))
+		expect(isBrowserResultLimitError(refusal) && [refusal.code, refusal.context]).toEqual([
+			'BROWSER_RESULT_LIMIT_ERROR',
+			{ length: BROWSER_RESULT_LIMIT + 1, limit: BROWSER_RESULT_LIMIT },
+		])
+	})
+
+	it('catches a capture measured by its characters rather than its serialized escapes', () => {
+		const document = globalThis.document.implementation.createHTMLDocument('t')
+		const paragraph = document.createElement('p')
+		paragraph.textContent = `${'x'.repeat(room - 1)}"`
+		expect(paragraph.outerHTML.length).toBe(room + '<p></p>'.length)
+		const refusal = captureError(() => readBrowserCapture(paragraph))
+		expect(isBrowserResultLimitError(refusal) && refusal.context).toEqual({
+			length: BROWSER_RESULT_LIMIT + 1,
+			limit: BROWSER_RESULT_LIMIT,
+		})
 	})
 })

@@ -365,7 +365,7 @@ describe('createCDPTestServer', () => {
 		await server.close()
 	})
 
-	it('P5 writes the invokeTool reply and the toolResponded event in one socket write, and every other frame in its own', async () => {
+	it('writes the invokeTool reply and the toolResponded event in one socket write, and every other frame in its own', async () => {
 		const server = await createCDPTestServer()
 		try {
 			const tools = [{ name: 'search', description: 'Search', frameId: 'main' }]
@@ -578,11 +578,18 @@ describe('renderFixturePage', () => {
 		const expected = {
 			'/form': 'Delivery form',
 			'/form/placed': 'Order placed',
+			'/shop': 'Cedar Tea Tray',
+			'/shop/cart': 'Cart',
 			'/frame/outer': 'Checkout',
 			'/frame/inner': 'Payment',
 			'/frame/voucher': 'Voucher',
 			'/frame/field': 'Voucher form',
 			'/frame/done': 'Voucher applied',
+			'/frame/local': 'Local voucher',
+			'/frame/away': 'Voucher form',
+			'/frame/nested': 'Nested',
+			'/frame/middle': 'Middle',
+			'/search': 'Search',
 			'/overlay': 'Overlay',
 			'/late': 'Late',
 			'/article': 'Field notes',
@@ -639,6 +646,31 @@ describe('renderFixturePage', () => {
 		)
 		expect(renderFixturePage('/frame/done', 4200)).toContain(
 			"'Received key ' + new URLSearchParams(location.search).get('key')",
+		)
+	})
+
+	it('frames the in-process voucher form whose action leaves for localhost, the nested chain across both hosts, and a search form that stays within its document', () => {
+		expect(renderFixturePage('/frame/local', 4200)).toContain(
+			'<iframe title="Voucher form" src="http://127.0.0.1:4200/frame/away"></iframe>',
+		)
+		const away = requireValue(renderFixturePage('/frame/away', 4200))
+		expect(away).toContain(
+			'<form action="http://localhost:4200/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label><input id="key" name="key" type="hidden"></form>',
+		)
+		expect(away).toContain(
+			"if (event.key === 'Enter') document.getElementById('key').value = event.key",
+		)
+		expect(renderFixturePage('/frame/nested', 4200)).toContain(
+			'<iframe title="Middle" src="http://localhost:4200/frame/middle"></iframe>',
+		)
+		expect(renderFixturePage('/frame/middle', 4200)).toContain(
+			'<iframe title="Payment" src="http://127.0.0.1:4200/frame/inner"></iframe>',
+		)
+		expect(renderFixturePage('/frame/inner', 4200)).toContain(
+			'<form id="coupon" action="/frame/done" method="get" target="_parent"><label>Coupon <input id="code" name="code" type="text"></label></form>',
+		)
+		expect(renderFixturePage('/search', 4200)).toContain(
+			'<form action="#found" method="get"><input name="q" type="hidden" value="tray"><button id="find">Find</button></form>',
 		)
 	})
 
@@ -826,6 +858,11 @@ describe('createFixtureServer', () => {
 			const query = await fetch(fixtures.url('/article?page=2'))
 			expect(await query.text()).toBe(renderFixturePage('/article', fixtures.port))
 
+			const middle = await fetch(fixtures.url('/frame/middle', 'localhost'))
+			expect(await middle.text()).toBe(renderFixturePage('/frame/middle', fixtures.port))
+			const search = await fetch(fixtures.url('/search?q=tray'))
+			expect(await search.text()).toBe(renderFixturePage('/search', fixtures.port))
+
 			const missing = await fetch(fixtures.url('/missing'))
 			expect(missing.status).toBe(404)
 			expect(await missing.text()).toBe('')
@@ -839,6 +876,29 @@ describe('createFixtureServer', () => {
 			const manifest = await fetch(fixtures.url('/node_modules/@orkestrel/contract/package.json'))
 			expect(manifest.status).toBe(404)
 			await manifest.text()
+		} finally {
+			await fixtures.destroy()
+		}
+	})
+
+	it('answers a POST to the cart with a 303 to the cart page, and a GET of the cart with the page', async () => {
+		const fixtures = await createFixtureServer()
+		try {
+			const posted = await fetch(fixtures.url('/shop/cart'), {
+				method: 'POST',
+				body: new URLSearchParams({ item: 'Cedar Tea Tray' }),
+				redirect: 'manual',
+			})
+			expect([posted.status, posted.headers.get('location'), await posted.text()]).toEqual([
+				303,
+				'/shop/cart',
+				'',
+			])
+			const cart = await fetch(fixtures.url('/shop/cart'))
+			expect([cart.status, await cart.text()]).toEqual([
+				200,
+				renderFixturePage('/shop/cart', fixtures.port),
+			])
 		} finally {
 			await fixtures.destroy()
 		}

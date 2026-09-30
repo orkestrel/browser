@@ -549,6 +549,9 @@ describe('BrowserRegistry', () => {
 				'WebMCP.disable',
 				'Page.enable',
 				'Runtime.enable',
+				'Page.setLifecycleEventsEnabled',
+				'Target.setAutoAttach',
+				'Runtime.runIfWaitingForDebugger',
 				'Page.getFrameTree',
 			])
 				replyOk(transport, method)
@@ -643,7 +646,14 @@ describe('BrowserRegistry', () => {
 	it('G1 stops the child loop when destroy runs during start', async () => {
 		const { page, client, transport } = await createAttachedPage()
 		try {
-			for (const method of ['WebMCP.disable', 'Page.enable', 'Runtime.enable'])
+			for (const method of [
+				'WebMCP.disable',
+				'Page.enable',
+				'Runtime.enable',
+				'Page.setLifecycleEventsEnabled',
+				'Target.setAutoAttach',
+				'Runtime.runIfWaitingForDebugger',
+			])
 				replyOk(transport, method)
 			for (const [sessionId, targetId] of [
 				['child-a-session', 'child-a'],
@@ -691,7 +701,14 @@ describe('BrowserRegistry', () => {
 	it('G3 keeps the registry running when a child enable fails during start', async () => {
 		const { page, client, transport } = await createAttachedPage()
 		try {
-			for (const method of ['Page.enable', 'Runtime.enable', 'Page.getFrameTree'])
+			for (const method of [
+				'Page.enable',
+				'Runtime.enable',
+				'Page.setLifecycleEventsEnabled',
+				'Target.setAutoAttach',
+				'Runtime.runIfWaitingForDebugger',
+				'Page.getFrameTree',
+			])
 				replyOk(transport, method)
 			transport.event(
 				'Target.attachedToTarget',

@@ -66,6 +66,29 @@ describe('BrowserFrame', () => {
 		expect(evaluation?.params?.['contextId']).toBe(42)
 	})
 
+	it('subscribes and unsubscribes on the session the frame resolves at each call', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		try {
+			const sessions = ['session-one']
+			const frame = new BrowserFrame(
+				client,
+				async () => sessions[sessions.length - 1] ?? 'session-one',
+				'frame-child',
+				'about:blank',
+			)
+			const events = createRecorder<[params: Readonly<Record<string, unknown>>]>()
+			await frame.subscribe('Page.frameNavigated', events.handler)
+			transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, 'session-two')
+			transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, 'session-one')
+			expect(events.count).toBe(1)
+			await frame.unsubscribe('Page.frameNavigated', events.handler)
+			transport.event('Page.frameNavigated', { frame: { id: 'frame-child' } }, 'session-one')
+			expect(events.count).toBe(1)
+		} finally {
+			await client.close()
+		}
+	})
+
 	it('resolves a current session lazily before every operation', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		const calls = createRecorder<[frame: string]>()

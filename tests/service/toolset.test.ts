@@ -29,7 +29,6 @@ import type { FixtureServerInterface } from '../setupServer.js'
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
 import { createBrowser, createCDPTransport } from '@src/server'
 import {
-	BROWSER_TOOL_DEADLINE_NOTE,
 	BROWSER_TOOL_LIMIT,
 	BROWSER_TOOL_TIMEOUT_MS,
 	createBrowserToolset,
@@ -37,7 +36,13 @@ import {
 } from '@src/core'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createToolManager } from '@orkestrel/tool'
-import { createRecorder, createTeardown, retryUntil, waitForCondition } from '@orkestrel/test'
+import {
+	createRecorder,
+	createTeardown,
+	requireValue,
+	retryUntil,
+	waitForCondition,
+} from '@orkestrel/test'
 import { createFixtureServer, createTempDirectory, reservePort } from '../setupServer.js'
 import {
 	extractOutlineRows,
@@ -46,7 +51,6 @@ import {
 	requireSystemBrowser,
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
-	SERVICE_CHANGED_NOTE,
 	SERVICE_EDITABLE_HTML,
 } from '../setupService.js'
 
@@ -179,6 +183,41 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		).toStrictEqual([])
 	})
 
+	it('returns the cart view in the receipt of a click whose POST form the server answers with 303, and the same page for a form whose submit handler prevents the submission', async () => {
+		const page = await browser.create({ url: fixtures.url('/shop') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the tray' } }),
+		)
+		const add = requireOutlineReference(look, 'button', 'Add to cart')
+		const hold = requireOutlineReference(look, 'button', 'Save for later')
+
+		const held = requireToolText(
+			await tools.execute({ id: 'hold', name: 'click', arguments: { ref: hold } }),
+		)
+		expect(held).toBe(`Clicked ${hold} button "Save for later".\n\n${look}`)
+		expect(await page.evaluate('document.body.dataset.held')).toBe('yes')
+		expect(page.url).toBe(fixtures.url('/shop'))
+
+		const added = requireToolText(
+			await tools.execute({ id: 'add', name: 'click', arguments: { ref: add } }),
+		)
+		expect(added).toBe(
+			[
+				`Clicked ${add} button "Add to cart".`,
+				'',
+				`page "Cart" ${fixtures.url('/shop/cart')}`,
+				'# Cart',
+				'Your cart holds the Cedar Tea Tray.',
+				'(0 of 0 elements)',
+			].join('\n'),
+		)
+	})
+
 	it('outlines editable regions by role and types only into a referenced text role, filling a role="textbox" region through the trusted path', async () => {
 		const page = await browser.create({ url: fixtures.url('/document') })
 		opened.push(page)
@@ -233,7 +272,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(await page.evaluate("document.querySelector('[aria-label=Coupon]').value")).toBe('')
 	})
 
-	it('P14 stages dialog when a click fires confirm(); the receipt names the dialog, and dialog accept settles the blocked click with no second receipt (control: a click without a dialog returns the plain receipt)', async () => {
+	it('stages dialog when a click fires confirm(); the receipt names the dialog, and dialog accept settles the blocked click with no second receipt (control: a click without a dialog returns the plain receipt)', async () => {
 		const page = await browser.create({ url: fixtures.url('/confirm') })
 		opened.push(page)
 		const tools = createToolManager()
@@ -290,7 +329,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(await page.evaluate('document.body.dataset.kept')).toBe('2')
 	})
 
-	it('P20 names the beforeunload dialog in a link click receipt, and the accepted dialog commits the navigation (control: the link on a page without the handler navigates in one receipt)', async () => {
+	it('names the beforeunload dialog in a link click receipt, and the accepted dialog commits the navigation (control: the link on a page without the handler navigates in one receipt)', async () => {
 		const page = await browser.create()
 		opened.push(page)
 		// The document reaches network idle before the click, so the next idle belongs to the
@@ -581,14 +620,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 	})
 
-	// Pins the ordering of claim 22: the Enter that submits the framed form navigates the
-	// `localhost` frame to `127.0.0.1`, another site and process, while its key-up is still to be
-	// sent. The observed outcome is a receipt naming the submit, not a rejection. The view it
-	// carries races the frame's move between processes, and each outcome observed on this host
-	// (`tmp/codex/u11b-mutations/frame-outcomes.txt`) is permitted exactly: the outer page's
-	// outline before the swap or with the committed frame, the capture note naming the page change
-	// or the stale frame session, or the deadline note.
-	it('claim 22 returns a receipt naming the submit when type with submit navigates an out-of-process frame to another process', async () => {
+	// Pins this ordering: the Enter that submits the framed form navigates the `localhost` frame to
+	// `127.0.0.1`, another site and process, while its key-up is still to be sent. The receipt waits
+	// for the frame's request on its own session and its commit and stop on the page session, so it
+	// carries the frame's destination view.
+	it('returns the destination view in the receipt of a type with submit that navigates an out-of-process frame to another process', async () => {
 		const page = await browser.create()
 		opened.push(page)
 		const attached = createRecorder<[Readonly<Record<string, unknown>>]>()
@@ -636,22 +672,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			'(1 of 1 elements)',
 		].join('\n')
 		const action = `Typed "SPRING" into ${code} textbox "Code" and submitted the form.`
-		const typed = [
-			`page "Voucher" ${fixtures.url('/frame/voucher')}`,
-			'# Voucher',
-			`${frame} Iframe "Voucher form"`,
-			'Code',
-			`${code} textbox "Code" value="SPRING"`,
-			'SPRING',
-			'(2 of 2 elements)',
-		].join('\n')
-		expect(receipt).toBeOneOf([
-			`${action}\n\n${applied}`,
-			`${action}\n\n${typed}`,
-			`${action}\n\n${SERVICE_CHANGED_NOTE}`,
-			`${action}\n\n(The view could not be read: Session with given id not found.; call look.)`,
-			`${action}\n\n${BROWSER_TOOL_DEADLINE_NOTE}`,
-		])
+		expect(receipt).toBe(`${action}\n\n${applied}`)
 		// The frame's keydown listener put the Enter into the submitted query, so the committed
 		// URL is evidence that the key-down reached the frame.
 		const done = fixtures.url('/frame/done?code=SPRING&key=Enter')
@@ -672,13 +693,125 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		).toBe(applied)
 	})
 
+	it('returns the destination view in the receipt of a type with submit that navigates an in-process frame out to another process', async () => {
+		const page = await browser.create({ url: fixtures.url('/frame/local') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		await waitForCondition(
+			'precondition: the outline lists the framed Code field',
+			async () => (await page.elements.outline()).text.includes('textbox "Code"'),
+			{ budget: 10_000, interval: 20 },
+		)
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the voucher' } }),
+		)
+		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
+		const code = requireOutlineReference(look, 'textbox', 'Code')
+
+		const receipt = requireToolText(
+			await tools.execute({
+				id: 'type',
+				name: 'type',
+				arguments: { ref: code, text: 'SPRING', submit: true },
+			}),
+		)
+		const applied = [
+			`page "Local voucher" ${fixtures.url('/frame/local')}`,
+			'# Local voucher',
+			`${frame} Iframe "Voucher form"`,
+			'# Voucher applied',
+			'Received key Enter',
+			'(1 of 1 elements)',
+		].join('\n')
+		expect(receipt).toBe(
+			`Typed "SPRING" into ${code} textbox "Code" and submitted the form.\n\n${applied}`,
+		)
+		expect((await page.frames()).map((candidate) => candidate.url)).toContain(
+			fixtures.url('/frame/done?code=SPRING&key=Enter', 'localhost'),
+		)
+	})
+
+	it('returns the parent frame destination in the receipt of a type with submit whose nested out-of-process form targets _parent', async () => {
+		const page = await browser.create({ url: fixtures.url('/frame/nested') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		await waitForCondition(
+			'precondition: the outline lists the Coupon field of the innermost frame',
+			async () => (await page.elements.outline()).text.includes('textbox "Coupon"'),
+			{ budget: 10_000, interval: 20 },
+		)
+		const inner = (await page.frames()).find(
+			(candidate) => candidate.url === fixtures.url('/frame/inner'),
+		)
+		const middle = (await page.frames()).find(
+			(candidate) => candidate.url === fixtures.url('/frame/middle', 'localhost'),
+		)
+		expect(inner?.parent).toBe(requireValue(middle).id)
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the coupon' } }),
+		)
+		const coupon = requireOutlineReference(look, 'textbox', 'Coupon')
+
+		const receipt = requireToolText(
+			await tools.execute({
+				id: 'type',
+				name: 'type',
+				arguments: { ref: coupon, text: 'SPRING', submit: true },
+			}),
+		)
+		expect(receipt.split('\n', 1)[0]).toBe(
+			`Typed "SPRING" into ${coupon} textbox "Coupon" and submitted the form.`,
+		)
+		const view = receipt.slice(receipt.indexOf('\n\n'))
+		expect(view).toContain('# Voucher applied')
+		expect(view).not.toContain('textbox "Coupon"')
+		expect((await page.frames()).map((candidate) => candidate.url)).toContain(
+			fixtures.url('/frame/done?code=SPRING'),
+		)
+	})
+
+	it('returns the same page at its fragment in the receipt of a click whose form submission stays within the document', async () => {
+		const page = await browser.create({ url: fixtures.url('/search?q=tray') })
+		opened.push(page)
+		const tools = createToolManager()
+		const toolset = createBrowserToolset(page, { tools })
+		toolsets.push(toolset)
+		await toolset.start()
+		const look = requireToolText(
+			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the search' } }),
+		)
+		const find = requireOutlineReference(look, 'button', 'Find')
+		const started = performance.now()
+		const receipt = requireToolText(
+			await tools.execute({ id: 'find', name: 'click', arguments: { ref: find } }),
+		)
+		const elapsed = performance.now() - started
+		expect(receipt).toBe(
+			[
+				`Clicked ${find} button "Find".`,
+				'',
+				`page "Search" ${fixtures.url('/search?q=tray#found')}`,
+				'# Search',
+				`${find} button "Find"`,
+				'(1 of 1 elements)',
+			].join('\n'),
+		)
+		expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS - 1_000)
+	})
+
 	// Asserts the guide's receipt deadline, `BROWSER_TOOL_TIMEOUT_MS` (5 000 ms), with the
 	// captured view in place of any note, one case per claim. Envelope: this file's one Chromium,
 	// the service project running its files one at a time, and no other browser work on the host.
 	// A busier host can exceed the deadline without a library defect; the preceding cases carry
 	// the behaviour under any load.
 	describe('performance within the receipt deadline', () => {
-		it('claim 1: type with submit returns the loaded result page within the deadline', async () => {
+		it('returns the loaded result page of a type with submit within the deadline', async () => {
 			const page = await browser.create({ url: fixtures.url('/form') })
 			opened.push(page)
 			const tools = createToolManager()
@@ -718,7 +851,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
 		})
 
-		it('claim 2 (P14): the dialog-naming click and the accepted dialog each return within the deadline', async () => {
+		it('returns the dialog-naming click receipt and the accepted dialog receipt each within the deadline', async () => {
 			const page = await browser.create({ url: fixtures.url('/confirm') })
 			opened.push(page)
 			const tools = createToolManager()
@@ -748,7 +881,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect(answered).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
 		})
 
-		it('claim 3 (P20 control): a link click on a page without the handler returns the loaded destination within the deadline', async () => {
+		it('returns the loaded destination of a link click on a page without a beforeunload handler within the deadline', async () => {
 			const page = await browser.create({ url: fixtures.url('/beforeunload/plain') })
 			opened.push(page)
 			const tools = createToolManager()
@@ -780,7 +913,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
 		})
 
-		it('claim 4: switch returns the tab it moved to with its captured view within the deadline', async () => {
+		it('returns the tab a switch moved to with its captured view within the deadline', async () => {
 			const context = await browser.isolate()
 			contexts.push(context)
 			const first = await context.create({ url: fixtures.url('/popup') })

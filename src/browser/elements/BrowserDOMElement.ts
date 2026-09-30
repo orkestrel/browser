@@ -3,7 +3,12 @@ import type { BrowserDOMElementInput, BrowserDOMElementInterface } from '../type
 import { isString } from '@orkestrel/contract'
 import { BrowserElementError, BrowserError, createBrowserReading } from '@src/core'
 import { BROWSER_TYPED_INPUTS } from '../constants.js'
-import { computeBrowserName, matchesBrowserActivation, matchesBrowserPopup } from '../helpers.js'
+import {
+	computeBrowserName,
+	matchesBrowserActivation,
+	matchesBrowserPopup,
+	readBrowserCapture,
+} from '../helpers.js'
 
 /**
  * Drives a referenced element of a DOM document without trusted input.
@@ -136,13 +141,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 
 	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
 		const [node] = this.#current(options)
-		const document = node.ownerDocument
-		return createBrowserReading({
-			url: document.URL,
-			title: document.title,
-			html: node.outerHTML,
-			navigation: this.#input.navigation,
-		})
+		return createBrowserReading({ ...readBrowserCapture(node), navigation: this.#input.navigation })
 	}
 
 	async submit(options?: BrowserCallOptions): Promise<void> {

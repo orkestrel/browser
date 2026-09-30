@@ -1,5 +1,5 @@
 import type { BrowserElementReason, BrowserElementSubject } from './types.js'
-import { isInstance } from '@orkestrel/contract'
+import { isInstance, isString } from '@orkestrel/contract'
 
 // === Browser errors
 
@@ -27,7 +27,7 @@ export class BrowserError extends Error {
 }
 
 /**
- * Reports a refused element operation with a reason and a recovery instruction.
+ * Reports a refused element operation with a reason and, for `GONE`, the refresh directive.
  *
  * @remarks
  * The message names the element and the detail on one line. It ends with
@@ -41,7 +41,7 @@ export class BrowserElementError extends BrowserError {
 		reason: BrowserElementReason,
 		detail?: string,
 	) {
-		const subject = typeof reference === 'string' ? `Element ${reference}` : reference.subject
+		const subject = isString(reference) ? `Element ${reference}` : reference.subject
 		const text =
 			detail ??
 			(reason === 'GONE'
@@ -52,9 +52,7 @@ export class BrowserElementError extends BrowserError {
 		super(
 			`${subject} ${text}${reason === 'GONE' ? '; call look for fresh refs.' : '.'}`,
 			'BROWSER_ELEMENT_ERROR',
-			typeof reference === 'string'
-				? { reference, reason }
-				: { subject: reference.subject, reason },
+			isString(reference) ? { reference, reason } : { subject: reference.subject, reason },
 		)
 		this.name = 'BrowserElementError'
 	}

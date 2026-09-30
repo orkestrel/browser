@@ -1,8 +1,12 @@
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
+	BrowserDestination,
+	BrowserDestinationRelationship,
 	BrowserDialogInterface,
 	BrowserElementInterface,
+	BrowserFrameInterface,
+	BrowserNavigationRecordInterface,
 	BrowserPageInterface,
 	BrowserReadingInterface,
 	BrowserTool,
@@ -19,11 +23,11 @@ import type {
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { ToolContext, ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
 import {
+	isArray,
 	isBoolean,
 	isError,
 	isFiniteNumber,
 	isInteger,
-	isRecord,
 	isString,
 } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -49,6 +53,7 @@ import {
 	isBrowserElementError,
 	isBrowserError,
 } from './errors.js'
+import { compileSubmitObserverExpression, compileSubmitReadExpression } from './compilers.js'
 import {
 	boundBrowserText,
 	deriveBrowserToolSchema,
@@ -89,7 +94,17 @@ import {
  * without sending anything. An action whose receipt returned while its command was still
  * pending, because a dialog opened or a navigation was requested, is awaited by the next action.
  * Every pending step is raced against the page's `dialog` event, so a dialog returns the receipt
- * that names it while the blocked command settles later without a second receipt. A receipt that
+ * that names it while the blocked command settles later without a second receipt. Before `click`
+ * sends its input and before `type` edits the control, the action opens the page's navigation
+ * record for the element's frame, and `press` opens one for the main frame. Before that, `click`
+ * and `type` with `submit` install a `submit` observer in the isolated world of the element's
+ * document, and `press` in every document one `page.frames()` call lists; an action whose input
+ * document cannot be observed is refused with `BROWSER_TOOLSET_OBSERVE` before any input, and a
+ * document `press` did not list is not observed. A navigation that starts in the input's frame or
+ * an ancestor before the input settles is followed; when the input settles first, each observed
+ * submission that kept its default action names its destination frame, and the receipt waits for
+ * the navigation the record selects to commit and load under the receipt's deadline; a submission
+ * every listener prevented adds no wait. A receipt that
  * waits for a requested navigation shares one `BROWSER_TOOL_TIMEOUT_MS` deadline between that
  * wait and its view capture, of which `BROWSER_TOOL_CAPTURE_MS` is reserved for the capture. The
  * deadline runs from the moment the receipt starts waiting, after any time the action spent
@@ -151,10 +166,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		| undefined
 	#tail: Promise<void> = Promise.resolve()
 	#pending: Promise<void> | undefined
-	#requested = Promise.withResolvers<string>()
-	#committed = Promise.withResolvers<string>()
-	#loaded = Promise.withResolvers<string>()
-	#loader: string | undefined
+	// Numbers each action, so the observer it installs answers only its own read and removal.
+	#sequence = 0
 	#navigating: BrowserPageInterface | undefined
 	#generation = 0
 	#started = false
@@ -331,6 +344,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				)
 			}
 			const [body, footer] = await handler(args, { ...context, signal })
+			// A cancellation that lands while the handler finishes wins over its result.
+			signal.throwIfAborted()
 			return `${boundBrowserText(`${this.#drain()}${body}`, this.#limit, clause)}${footer}`
 		} catch (error) {
 			if (context.signal.aborted && error === context.signal.reason) throw error
@@ -423,22 +438,42 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
 		const turn = await this.#acquire(context.signal)
+		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
+		let record: BrowserNavigationRecordInterface | undefined
 		try {
 			const element = this.#element(args['ref'])
 			const action = BROWSER_TYPED_ROLES.has(element.role)
 				? `Clicked ${renderBrowserElement(element)}; call type with ${element.reference} to enter text`
 				: `Clicked ${renderBrowserElement(element)}`
+			const page = this.#page
+			if (page !== undefined) {
+				const frame = this.#resolveFrame(page, element.reference)
+				await this.#observe(
+					await this.#locate(page, frame, context.signal),
+					frame,
+					observation,
+					context.signal,
+				)
+				record = page.navigation.record(frame)
+			}
 			return [
 				await this.#settle(
 					element.click({ signal: context.signal }),
 					action,
 					context.signal,
 					this.#view.trusted,
+					record,
+					observation,
 				),
 				'',
 			]
 		} finally {
-			turn.resolve()
+			record?.destroy()
+			try {
+				await this.#unobserve(observation, context.signal)
+			} finally {
+				turn.resolve()
+			}
 		}
 	}
 
@@ -457,6 +492,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		}
 
 		const turn = await this.#acquire(context.signal)
+		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
+		let record: BrowserNavigationRecordInterface | undefined
 		try {
 			const element = this.#element(args['ref'])
 			// The role the latest capture recorded decides, so a control that takes no text is
@@ -470,17 +507,55 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			}
 			const chosen = `Selected ${JSON.stringify(text)} in ${renderBrowserElement(element)} (programmatic)`
 			const typed = `Typed ${JSON.stringify(text)} into ${renderBrowserElement(element)}`
+			// The observer and the record precede the edit, because the inserted text or the chosen
+			// option can run a handler that submits the form.
+			const page = this.#page
+			if (page !== undefined) {
+				const frame = this.#resolveFrame(page, element.reference)
+				if (submit === true)
+					await this.#observe(
+						await this.#locate(page, frame, context.signal),
+						frame,
+						observation,
+						context.signal,
+					)
+				record = page.navigation.record(frame)
+			}
 			// A combobox or listbox role names a select element or a text input with suggestions;
 			// the receipt names the path taken, and a dialog mid-edit names the path attempted.
 			const choosing = element.role === 'combobox' || element.role === 'listbox'
 			const edit = choosing
 				? this.#choose(element, text, context.signal)
 				: element.fill(text, { signal: context.signal }).then(() => false)
-			const selected = await this.#command(edit, choosing ? chosen : typed, edit)
+			// The edit is the first input, so a navigation it starts wins the race as a click's does:
+			// the unfinished edit stays the queue barrier, and no submission is sent through the
+			// reference that navigation replaces.
+			const attempted = choosing ? chosen : typed
+			const started = record?.wait({ signal: context.signal }).then(
+				() => undefined,
+				() => new Promise<undefined>(() => undefined),
+			)
+			const selected = await this.#command(
+				started === undefined ? edit : Promise.race([started, edit]),
+				attempted,
+				edit,
+			)
+			if (selected === undefined)
+				return [
+					await this.#settle(
+						edit.then(() => undefined),
+						attempted,
+						context.signal,
+						this.#view.trusted,
+						record,
+						observation,
+					),
+					'',
+				]
 			const action = selected ? chosen : typed
 			if (submit !== true) {
 				return [
-					await this.#settle(Promise.resolve(), action, context.signal, this.#view.trusted),
+					await this.#settle(Promise.resolve(), action, context.signal, this.#view.trusted, record),
 					'',
 				]
 			}
@@ -490,11 +565,18 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					`${action} and submitted the form`,
 					context.signal,
 					this.#view.trusted,
+					record,
+					observation,
 				),
 				'',
 			]
 		} finally {
-			turn.resolve()
+			record?.destroy()
+			try {
+				await this.#unobserve(observation, context.signal)
+			} finally {
+				turn.resolve()
+			}
 		}
 	}
 
@@ -504,17 +586,36 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	): Promise<readonly [string, string]> {
 		const key = normalizeBrowserKey(readBrowserToolString(args, 'key'))
 		const turn = await this.#acquire(context.signal)
+		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
+		let record: BrowserNavigationRecordInterface | undefined
 		try {
 			const page = this.#paged()
+			// The focused document receives the keys, so every document one census lists is observed,
+			// and only the main frame's must install.
+			const frames = await this.#race(page.frames(), '', context.signal)
+			await this.#observe(frames, page.id, observation, context.signal)
+			record = page.navigation.record(page.id)
 			// The keyboard takes no signal and sends each release without one, so the signal is
 			// checked before the first key goes down.
 			context.signal.throwIfAborted()
 			return [
-				await this.#settle(page.keyboard.press(key), `Pressed ${key}`, context.signal, true),
+				await this.#settle(
+					page.keyboard.press(key),
+					`Pressed ${key}`,
+					context.signal,
+					true,
+					record,
+					observation,
+				),
 				'',
 			]
 		} finally {
-			turn.resolve()
+			record?.destroy()
+			try {
+				await this.#unobserve(observation, context.signal)
+			} finally {
+				turn.resolve()
+			}
 		}
 	}
 
@@ -751,49 +852,72 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			}
 			throw error
 		}
-		this.#requested = Promise.withResolvers<string>()
-		this.#committed = Promise.withResolvers<string>()
-		this.#loaded = Promise.withResolvers<string>()
-		this.#loader = undefined
 		return turn
 	}
 
-	// Races an action's command against a requested main-frame navigation, then bounds the wait
-	// for that navigation's commit and load and the view capture by one deadline, of which the
-	// capture keeps `BROWSER_TOOL_CAPTURE_MS` for itself.
+	// Races an action's command against the start of a navigation in its frame or an ancestor, then
+	// bounds the settlement of the navigation the action started and the view capture by one
+	// deadline, of which the capture keeps `BROWSER_TOOL_CAPTURE_MS` for itself. A command that settles
+	// first leaves a form submission's navigation to start later, so the observation's reads name the
+	// destinations the record also waits for under the same deadline. The record selects and follows
+	// the navigation; this method holds no frame, session, loader, or request state.
 	async #settle(
 		command: Promise<void>,
 		action: string,
 		signal: AbortSignal,
 		trusted: boolean,
+		record?: BrowserNavigationRecordInterface,
+		observation?: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
 	): Promise<string> {
-		const url = await this.#command(
-			Promise.race([command.then(() => undefined), this.#requested.promise]),
-			action,
-			command,
-		)
-		if (url === undefined) {
-			return renderBrowserReceipt({ action, trusted, view: await this.#capture(action, signal) })
-		}
-		this.#hold(command)
-		const deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS
-		const bound = deadline - BROWSER_TOOL_CAPTURE_MS
-		const committed = await this.#bounded(this.#committed.promise, bound, action, signal)
-		if (committed === undefined) {
+		let deadline: number | undefined
+		try {
+			// A wait that ends without a start leaves the command to decide the race.
+			const started = record?.wait({ signal }).then(
+				() => true,
+				() => new Promise<boolean>(() => undefined),
+			)
+			const input = command.then(() => false)
+			const first = await this.#command(
+				started === undefined ? input : Promise.race([started, input]),
+				action,
+				command,
+			)
+			deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS
+			const bound = deadline - BROWSER_TOOL_CAPTURE_MS
+			if (first) this.#hold(command)
+			const destinations =
+				first || observation === undefined
+					? []
+					: await this.#readSubmissions(observation, action, signal, bound)
+			const settled =
+				record === undefined
+					? undefined
+					: await this.#race(
+							record.settle({
+								destinations,
+								timeout: Math.max(0, bound - performance.now()),
+								signal,
+							}),
+							action,
+							signal,
+						)
+			signal.throwIfAborted()
+			const status =
+				settled?.stage === 'committed'
+					? `the page is still loading ${settled.url}`
+					: settled?.stage === 'requested'
+						? `it requested ${settled.url} and the page did not change`
+						: undefined
 			return renderBrowserReceipt({
 				action,
 				trusted,
-				status: `it requested ${url} and the page did not change`,
+				...(status === undefined ? {} : { status }),
 				view: await this.#capture(action, signal, deadline),
 			})
+		} finally {
+			record?.destroy()
+			if (observation !== undefined) await this.#unobserve(observation, signal, deadline)
 		}
-		const loaded = await this.#bounded(this.#loaded.promise, bound, action, signal)
-		return renderBrowserReceipt({
-			action,
-			trusted,
-			...(loaded === undefined ? { status: `the page is still loading ${committed}` } : {}),
-			view: await this.#capture(action, signal, deadline),
-		})
 	}
 
 	// Races a command that carries the signal itself; a dialog leaves it pending for the next
@@ -812,6 +936,140 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			() => undefined,
 			() => undefined,
 		)
+	}
+
+	// Returns the frame whose document receives an input on the referenced element: the frame the
+	// element manager recorded for it, or the main frame.
+	#resolveFrame(page: BrowserPageInterface, reference: string): string {
+		return page.elements.element(reference)?.frame ?? page.id
+	}
+
+	// Lists the document of `frame` as one census lists it, whose isolated world the observer runs
+	// in, or none.
+	async #locate(
+		page: BrowserPageInterface,
+		frame: string,
+		signal: AbortSignal,
+	): Promise<readonly BrowserFrameInterface[]> {
+		const frames = await this.#race(page.frames(), '', signal)
+		return frames.filter((candidate) => candidate.id === frame)
+	}
+
+	// Installs the observer the action's token owns in each of `frames` concurrently; the action owns
+	// a document from the moment its installation is sent, so every exit removes it. The document of
+	// `required` receives the input and must install, or the action is refused before any input;
+	// another document's failure leaves it unobserved.
+	async #observe(
+		frames: readonly BrowserFrameInterface[],
+		required: string,
+		observation: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
+		signal: AbortSignal,
+	): Promise<void> {
+		const installs = frames.map((frame) => {
+			observation.frames.add(frame)
+			return this.#install(frame, observation.token, signal)
+		})
+		const installed = await this.#race(Promise.all(installs), '', signal)
+		if (!frames.some((frame, index) => frame.id === required && installed[index] === true))
+			throw new BrowserError(
+				`The action was not sent: frame ${required}, which receives the input, could not be observed for a form submission; call look.`,
+				'BROWSER_TOOLSET_OBSERVE',
+				{ frame: required },
+			)
+	}
+
+	async #install(
+		frame: BrowserFrameInterface,
+		token: number,
+		signal: AbortSignal,
+	): Promise<boolean> {
+		try {
+			await frame.evaluate(compileSubmitObserverExpression(token), { signal })
+			return true
+		} catch (error) {
+			if (signal.aborted) throw error
+			return false
+		}
+	}
+
+	// Reads every document the action still owns within `bound` and returns the destination of each
+	// surviving submission; a read that fails or runs out of time adds nothing, because the record
+	// already holds any navigation the input started in its frame or an ancestor.
+	async #readSubmissions(
+		observation: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
+		action: string,
+		signal: AbortSignal,
+		bound: number,
+	): Promise<readonly BrowserDestination[]> {
+		const reads = await Promise.all(
+			[...observation.frames].map((frame) =>
+				this.#readSubmission(frame, observation, action, signal, bound),
+			),
+		)
+		return reads.flat()
+	}
+
+	async #readSubmission(
+		frame: BrowserFrameInterface,
+		observation: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
+		action: string,
+		signal: AbortSignal,
+		bound: number,
+	): Promise<readonly BrowserDestination[]> {
+		try {
+			const read = await this.#bounded(
+				frame.evaluate(compileSubmitReadExpression(observation.token), { signal }),
+				bound,
+				action,
+				signal,
+			)
+			// A read that answered removed the observer, or found none to remove.
+			if (read !== undefined) observation.frames.delete(frame)
+			if (!isArray(read)) return []
+			return read
+				.filter(
+					(relationship): relationship is BrowserDestinationRelationship =>
+						relationship === 'self' || relationship === 'parent' || relationship === 'top',
+				)
+				.map((relationship) => ({ frame: frame.id, relationship }))
+		} catch (error) {
+			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
+				throw error
+			}
+			return []
+		}
+	}
+
+	// Sends the removal of every observer the action still owns, without the action's signal, and
+	// awaits it within the receipt's remaining deadline, or `BROWSER_TOOL_CAPTURE_MS` before the receipt
+	// started one, unless the action's signal aborts the wait with its reason. A JavaScript dialog
+	// blocks every evaluation until it is answered, and an aborted action ends at once, so neither
+	// waits for the removal to land. The token keeps a late removal
+	// from touching a later action's observer, and a replaced document took its observer with it.
+	async #unobserve(
+		observation: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
+		signal: AbortSignal,
+		deadline?: number,
+	): Promise<void> {
+		const frames = [...observation.frames]
+		observation.frames.clear()
+		if (frames.length === 0) return
+		const removal = Promise.allSettled(
+			frames.map((frame) =>
+				frame.evaluate(compileSubmitReadExpression(observation.token), {
+					timeout: BROWSER_TOOL_CAPTURE_MS,
+				}),
+			),
+		)
+		if (signal.aborted || (this.#page !== undefined && this.#dialogs.has(this.#page))) return
+		await this.#bounded(
+			removal,
+			deadline ?? performance.now() + BROWSER_TOOL_CAPTURE_MS,
+			'',
+			signal,
+		).catch((error: unknown) => {
+			if (signal.aborted) throw error
+		})
 	}
 
 	// Settles with the step, or rejects with the receipt naming a dialog that opens on the view
@@ -1087,21 +1345,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			dialog: this.#handleDialog.bind(this, page),
 			popup: this.#handlePopup.bind(this, page),
 			close: this.#handleClose.bind(this, page),
-			requested: this.#handleRequested.bind(this, page),
-			navigated: this.#handleNavigated.bind(this, page),
-			lifecycle: this.#handleLifecycle.bind(this, page),
 			closed: this.#handleClosed.bind(this, page),
 		}
 		this.#watches.set(page, watch)
 		page.emitter.on('dialog', watch.dialog)
 		page.emitter.on('popup', watch.popup)
 		page.emitter.on('close', watch.close)
-		await Promise.all([
-			page.subscribe('Page.frameRequestedNavigation', watch.requested),
-			page.subscribe('Page.frameNavigated', watch.navigated),
-			page.subscribe('Page.lifecycleEvent', watch.lifecycle),
-			page.subscribe('Page.javascriptDialogClosed', watch.closed),
-		])
+		await page.subscribe('Page.javascriptDialogClosed', watch.closed)
 		// A watch removed while its subscriptions were landing releases what landed after.
 		if (this.#watches.get(page) !== watch) await this.#release(page, watch)
 	}
@@ -1117,9 +1367,6 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		page.emitter.off('dialog', watch.dialog)
 		page.emitter.off('popup', watch.popup)
 		page.emitter.off('close', watch.close)
-		await page.unsubscribe('Page.frameRequestedNavigation', watch.requested)
-		await page.unsubscribe('Page.frameNavigated', watch.navigated)
-		await page.unsubscribe('Page.lifecycleEvent', watch.lifecycle)
 		await page.unsubscribe('Page.javascriptDialogClosed', watch.closed)
 	}
 
@@ -1186,38 +1433,5 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const opener = page.opener
 		const target = opener !== undefined && !opener.closed ? opener : origin
 		void this.#select(target, `The tab ${page.url} closed; the view returned to ${target.url}.`)
-	}
-
-	#handleRequested(page: BrowserPageInterface, params: Readonly<Record<string, unknown>>): void {
-		if (page !== this.#page || params['frameId'] !== page.id || !isString(params['url'])) return
-		this.#requested.resolve(params['url'])
-	}
-
-	#handleNavigated(page: BrowserPageInterface, params: Readonly<Record<string, unknown>>): void {
-		const frame = params['frame']
-		if (
-			page !== this.#page ||
-			!isRecord(frame) ||
-			frame['id'] !== page.id ||
-			!isString(frame['url']) ||
-			!isString(frame['loaderId'])
-		) {
-			return
-		}
-		this.#loader = frame['loaderId']
-		this.#committed.resolve(frame['url'])
-	}
-
-	#handleLifecycle(page: BrowserPageInterface, params: Readonly<Record<string, unknown>>): void {
-		if (
-			page !== this.#page ||
-			params['frameId'] !== page.id ||
-			params['name'] !== 'load' ||
-			this.#loader === undefined ||
-			params['loaderId'] !== this.#loader
-		) {
-			return
-		}
-		this.#loaded.resolve(this.#loader)
 	}
 }

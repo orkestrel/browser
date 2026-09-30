@@ -3,24 +3,33 @@ import type {
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserFrameInterface,
+	BrowserNavigationEventMap,
 	BrowserOutline,
 	BrowserOutlineOptions,
 	BrowserReadingInterface,
+	BrowserReferenceFunction,
 	BrowserViewInterface,
 	CDPClientInterface,
 	CDPTarget,
 	CDPTransportEventMap,
 	CDPTransportInterface,
 	BrowserWriterInterface,
+	CDPClientEventMap,
+	CDPHandler,
+	CDPSendOptions,
 } from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
 import {
 	BrowserCodegen,
 	BrowserError,
 	BrowserPage,
+	compileSubmitObserverExpression,
+	compileSubmitReadExpression,
 	createBrowserReading,
 	createCDPClient,
 } from '@src/core'
-import { isNumber, isRecord, isString } from '@orkestrel/contract'
+import { BrowserNavigationRecord } from '../src/core/BrowserNavigationRecord.js'
+import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { waitForEvent } from '@orkestrel/test'
 
@@ -150,6 +159,258 @@ export function evaluateBrowserHit(declaration: string): unknown {
 		return [(${declaration}).call(element, target), (${declaration}).call(element, sibling)]
 	`)
 	return Reflect.apply(evaluator, undefined, [])
+}
+
+/**
+ * Describes one inert `submit` event a submit-observer case dispatches.
+ *
+ * @remarks
+ * - `prevented` — the event's `defaultPrevented`
+ * - `form` — the form's attributes, such as `method` and `target`
+ * - `submitter` — the submitter's attributes, such as `formmethod`; absent for an implicit
+ *   submission, which has no submitter
+ * - `base` — the `target` of the document's `base` element; absent for a document without one
+ */
+export interface BrowserSubmitCase {
+	readonly prevented: boolean
+	readonly form: Readonly<Record<string, string>>
+	readonly submitter?: Readonly<Record<string, string>>
+	readonly base?: string
+}
+
+/**
+ * Pairs each submit-observer case, the submissions one action dispatches in order, with the
+ * destinations the read reports.
+ */
+export const BROWSER_SUBMIT_CASES: ReadonlyArray<
+	readonly [name: string, submits: readonly BrowserSubmitCase[], destinations: readonly string[]]
+> = [
+	['an implicit submission', [{ prevented: false, form: {} }], ['self']],
+	['a prevented submission', [{ prevented: true, form: {} }], []],
+	['a dialog form', [{ prevented: false, form: { method: 'dialog' } }], []],
+	['a dialog submitter', [{ prevented: false, form: {}, submitter: { formmethod: 'DIALOG' } }], []],
+	['a new-window form', [{ prevented: false, form: { target: '_blank' } }], []],
+	[
+		'a same-window submitter of a new-window form',
+		[{ prevented: false, form: { target: '_blank' }, submitter: { formtarget: '_self' } }],
+		['self'],
+	],
+	['a named-window base target', [{ prevented: false, form: {}, base: 'results' }], []],
+	['a parent-window form', [{ prevented: false, form: { target: '_parent' } }], ['parent']],
+	['a top-window form', [{ prevented: false, form: { target: '_TOP' } }], ['top']],
+	[
+		'a prevented submission followed by a navigating one',
+		[
+			{ prevented: true, form: {} },
+			{ prevented: false, form: {} },
+		],
+		['self'],
+	],
+	[
+		'a navigating submission followed by a prevented one',
+		[
+			{ prevented: false, form: {} },
+			{ prevented: true, form: {} },
+		],
+		['self'],
+	],
+	[
+		'three submissions to two destinations',
+		[
+			{ prevented: false, form: { target: '_top' } },
+			{ prevented: false, form: {} },
+			{ prevented: false, form: { target: '_top' } },
+		],
+		['top', 'self'],
+	],
+]
+
+/**
+ * Pairs each toolset action that can submit a form over the element fixture with its arguments,
+ * its receipt's action sentence, the protocol method of its first input, and the sessions whose
+ * documents it observes: the element's document for `click` and `type`, and every listed frame
+ * for `press`.
+ */
+export const BROWSER_SUBMIT_ACTIONS = [
+	['click', { ref: 'e1' }, 'Clicked e1 link "Home"', 'Input.dispatchMouseEvent', ['session-main']],
+	[
+		'type',
+		{ ref: 'e2', text: 'sam', submit: true },
+		'Typed "sam" into e2 textbox "Email" and submitted the form',
+		'Input.insertText',
+		['session-main'],
+	],
+	[
+		'press',
+		{ key: 'Enter' },
+		'Pressed Enter',
+		'Input.dispatchKeyEvent',
+		['session-main', 'session-child'],
+	],
+] as const
+
+/**
+ * Pairs each session arrangement of the element fixture's `child` iframe with its fixture `local`
+ * option and the session that reports the frame's navigation.
+ */
+export const BROWSER_CHILD_ARRANGEMENTS = [
+	['out-of-process', false, 'session-child'],
+	['in-process', true, 'session-main'],
+] as const
+
+/** Answers `getAttribute` over an inert attribute record, as a submit-observer form does. */
+export class BrowserSubmitElement {
+	readonly #attributes: Readonly<Record<string, string>>
+
+	constructor(attributes: Readonly<Record<string, string>>) {
+		this.#attributes = attributes
+	}
+
+	getAttribute(name: string): string | null {
+		return this.#attributes[name] ?? null
+	}
+}
+
+/**
+ * Stands in for the window, document, and global scope of one execution world the submit
+ * observer runs in: it registers `submit` listeners, honours `once`, dispatches inert events to
+ * them, answers the `base[target]` query, and evaluates an expression against itself.
+ */
+export class BrowserSubmitWindow {
+	readonly #listeners = new Map<unknown, boolean>()
+	readonly #globals: Record<string, unknown> = {}
+	readonly #base: string | undefined
+
+	constructor(base?: string) {
+		this.#base = base
+	}
+
+	get listeners(): number {
+		return this.#listeners.size
+	}
+
+	addEventListener(type: string, listener: unknown, options?: unknown): void {
+		if (type === 'submit')
+			this.#listeners.set(listener, isRecord(options) && options['once'] === true)
+	}
+
+	removeEventListener(type: string, listener: unknown): void {
+		if (type === 'submit') this.#listeners.delete(listener)
+	}
+
+	querySelector(selector: string): BrowserSubmitElement | null {
+		return selector === 'base[target]' && this.#base !== undefined
+			? new BrowserSubmitElement({ target: this.#base })
+			: null
+	}
+
+	dispatch(submit: BrowserSubmitCase): void {
+		const event = {
+			defaultPrevented: submit.prevented,
+			target: new BrowserSubmitElement(submit.form),
+			submitter: submit.submitter === undefined ? null : new BrowserSubmitElement(submit.submitter),
+		}
+		for (const [listener, once] of [...this.#listeners]) {
+			if (once) this.#listeners.delete(listener)
+			if (isFunction(listener)) Reflect.apply(listener, undefined, [event])
+		}
+	}
+
+	evaluate(expression: string): unknown {
+		const evaluator = new Function(
+			'addEventListener',
+			'removeEventListener',
+			'document',
+			'globalThis',
+			`return (${expression})`,
+		)
+		return Reflect.apply(evaluator, undefined, [
+			this.addEventListener.bind(this),
+			this.removeEventListener.bind(this),
+			this,
+			this.#globals,
+		])
+	}
+}
+
+/**
+ * Holds one {@link BrowserSubmitWindow} per execution world of a scripted page, keyed by the
+ * session and the execution context an evaluation names.
+ */
+export class BrowserSubmitWindows {
+	readonly #windows = new Map<string, BrowserSubmitWindow>()
+
+	get listeners(): number {
+		return [...this.#windows.values()].reduce((total, window) => total + window.listeners, 0)
+	}
+
+	window(session: string, context: number): BrowserSubmitWindow {
+		const key = `${session}:${context}`
+		const held = this.#windows.get(key)
+		if (held !== undefined) return held
+		const created = new BrowserSubmitWindow()
+		this.#windows.set(key, created)
+		return created
+	}
+
+	evaluate(message: CDPSentMessage): unknown {
+		const context = message.params?.['contextId']
+		return this.window(message.sessionId ?? '', isNumber(context) ? context : 0).evaluate(
+			readCDPExpression(message) ?? 'undefined',
+		)
+	}
+}
+
+/**
+ * Reads the owning token a compiled submit observer or read embeds.
+ * @param expression - The expression source, compiled alone or wrapped by an evaluation guard
+ * @returns The token, or `undefined` when the source embeds none
+ */
+export function readBrowserSubmitToken(expression: string): number | undefined {
+	const match = /\(\(\) => \{\n\tconst token = (-?\d+)\n/.exec(expression)
+	return match === null ? undefined : Number(match[1])
+}
+
+/**
+ * Checks whether an expression carries the submit observer installation for the token it embeds.
+ * @param expression - The expression source, compiled alone or wrapped by an evaluation guard
+ * @returns True if the source carries a compiled observer installation; false otherwise
+ */
+export function matchesBrowserSubmitObserver(expression: string): boolean {
+	const token = readBrowserSubmitToken(expression)
+	return token !== undefined && expression.includes(compileSubmitObserverExpression(token))
+}
+
+/**
+ * Checks whether an expression carries the submit observer read for the token it embeds.
+ * @param expression - The expression source, compiled alone or wrapped by an evaluation guard
+ * @returns True if the source carries a compiled observer read; false otherwise
+ */
+export function matchesBrowserSubmitRead(expression: string): boolean {
+	const token = readBrowserSubmitToken(expression)
+	return token !== undefined && expression.includes(compileSubmitReadExpression(token))
+}
+
+/**
+ * Evaluates the submit observer and its read in a {@link BrowserSubmitWindow}: installs the
+ * observer, dispatches the submissions in order, and reads it.
+ *
+ * @param observer - The observer expression source
+ * @param read - The read expression source
+ * @param submits - The submissions to dispatch. Default: none
+ * @param installs - How many times the observer is installed before the dispatch. Default: 1
+ * @returns The read's value and the count of `submit` listeners registered after the read
+ */
+export function evaluateBrowserSubmit(
+	observer: string,
+	read: string,
+	submits: readonly BrowserSubmitCase[] = [],
+	installs = 1,
+): readonly [value: unknown, listeners: number] {
+	const realm = new BrowserSubmitWindow(submits.find((submit) => submit.base !== undefined)?.base)
+	for (let index = 0; index < installs; index += 1) realm.evaluate(observer)
+	for (const submit of submits) realm.dispatch(submit)
+	return [realm.evaluate(read), realm.listeners]
 }
 
 // === Fake CDP transport
@@ -313,6 +574,134 @@ export async function createConnectedCDPClient(): Promise<ConnectedCDPFixture> {
 	return { client, transport }
 }
 
+/**
+ * Wraps a real {@link CDPClientInterface} and records its live event registrations, so a proof can
+ * show which handlers an operation adds or leaves behind; every call reaches the wrapped client.
+ *
+ * @remarks
+ * A registration is one handler for one method on one session, or on no session; registering the
+ * same handler twice holds one registration, as the client does.
+ */
+export class RecordingCDPClient implements CDPClientInterface {
+	readonly #client: CDPClientInterface
+	readonly #registrations = new Map<
+		string,
+		{
+			readonly method: string
+			readonly session: string | undefined
+			readonly handlers: Set<CDPHandler>
+		}
+	>()
+
+	constructor(client: CDPClientInterface) {
+		this.#client = client
+	}
+
+	get emitter(): EmitterInterface<CDPClientEventMap> {
+		return this.#client.emitter
+	}
+
+	get connected(): boolean {
+		return this.#client.connected
+	}
+
+	connect(): Promise<void> {
+		return this.#client.connect()
+	}
+
+	reconnect(): Promise<void> {
+		return this.#client.reconnect()
+	}
+
+	send(
+		method: string,
+		params?: Readonly<Record<string, unknown>>,
+		options?: CDPSendOptions,
+	): Promise<unknown> {
+		return this.#client.send(method, params, options)
+	}
+
+	subscribe(method: string, handler: CDPHandler, session?: string): void {
+		const key = `${method} ${session ?? ''}`
+		const held = this.#registrations.get(key) ?? {
+			method,
+			session,
+			handlers: new Set<CDPHandler>(),
+		}
+		held.handlers.add(handler)
+		this.#registrations.set(key, held)
+		this.#client.subscribe(method, handler, session)
+	}
+
+	unsubscribe(method: string, handler: CDPHandler, session?: string): void {
+		const key = `${method} ${session ?? ''}`
+		const held = this.#registrations.get(key)
+		held?.handlers.delete(handler)
+		if (held?.handlers.size === 0) this.#registrations.delete(key)
+		this.#client.unsubscribe(method, handler, session)
+	}
+
+	close(): Promise<void> {
+		return this.#client.close()
+	}
+
+	/**
+	 * Counts the live registrations, of `method` when given and on `session` when given.
+	 * @param method - The CDP event to count. Default: every event
+	 * @param session - The session to count on. Default: every session and none
+	 * @returns The count of live handler registrations that match
+	 */
+	registrations(method?: string, session?: string): number {
+		let count = 0
+		for (const held of this.#registrations.values())
+			if (
+				(method === undefined || held.method === method) &&
+				(session === undefined || held.session === session)
+			)
+				count += held.handlers.size
+		return count
+	}
+}
+
+/**
+ * Maps each frame of the navigation record fixture to its parent: `main` frames `child` and
+ * `side`, and `child` frames `nested`; `orphan` has no parent the page can name.
+ */
+export const BROWSER_RECORD_PARENTS: ReadonlyMap<string, string> = new Map([
+	['child', 'main'],
+	['side', 'main'],
+	['nested', 'child'],
+])
+
+/** Holds a navigation record opened over steps a test emits, with the lifetime that ends it. */
+export interface BrowserNavigationRecordFixture {
+	readonly steps: Emitter<BrowserNavigationEventMap>
+	readonly lifetime: AbortController
+	readonly record: BrowserNavigationRecord
+}
+
+/**
+ * Opens a real navigation record for `frame` over a fresh step emitter, the `main` frame, and
+ * {@link BROWSER_RECORD_PARENTS}, so a test emits the steps a page would accept.
+ * @param frame - The frame the record's input goes to
+ * @param steps - The steps the record follows. Default: a fresh emitter
+ * @returns The steps, the lifetime whose abort stands for the page closing, and the record
+ */
+export function openBrowserNavigationRecord(
+	frame: string,
+	steps: Emitter<BrowserNavigationEventMap> = new Emitter(),
+): BrowserNavigationRecordFixture {
+	const lifetime = new AbortController()
+	const record = new BrowserNavigationRecord(
+		steps,
+		'main',
+		BROWSER_RECORD_PARENTS.get.bind(BROWSER_RECORD_PARENTS),
+		frame,
+		lifetime.signal,
+	)
+	return { steps, lifetime, record }
+}
+
 /** Pairs a real page attached over the in-memory transport with the transport driving it. */
 export interface AttachedPageFixture extends ConnectedCDPFixture {
 	readonly page: BrowserPage
@@ -330,6 +719,23 @@ export async function createAttachedPage(session = 'session-1'): Promise<Attache
 }
 
 /**
+ * Creates a reference provider that numbers element references across every page it is passed to,
+ * as a browser context numbers them for its pages.
+ *
+ * @returns A provider whose calls answer `e1`, `e2`, and so on, independent of every other provider
+ * @example
+ * ```ts
+ * const reference = createReferenceSequence()
+ * reference() // 'e1'
+ * reference() // 'e2'
+ * ```
+ */
+export function createReferenceSequence(): BrowserReferenceFunction {
+	let sequence = 0
+	return () => `e${++sequence}`
+}
+
+/**
  * Reads the parameter record of every frame the transport recorded for one method.
  *
  * @param transport - The fake transport to read
@@ -343,6 +749,23 @@ export function readCDPParams(
 	return transport.sent
 		.filter((message) => message.method === method)
 		.map((message) => message.params ?? {})
+}
+
+/**
+ * Lists the methods the transport recorded for one session: those sent on it and those naming it as
+ * their `sessionId` parameter, such as `Target.detachFromTarget` sent through its owner.
+ *
+ * @param transport - The fake transport to read
+ * @param session - The session to follow
+ * @returns The matching methods, in send order
+ */
+export function readCDPSessionMethods(
+	transport: CDPTestTransportInterface,
+	session: string,
+): readonly string[] {
+	return transport.sent
+		.filter((message) => message.sessionId === session || message.params?.['sessionId'] === session)
+		.map((message) => message.method)
 }
 
 /**
@@ -531,8 +954,63 @@ export const BROWSER_ELEMENT_CHILD_FIXTURE = Object.freeze({
 	],
 })
 
+/**
+ * Holds the iframe tree of an in-process `child` frame, whose backends the page's renderer assigns
+ * apart from the main document's: a `Save` button on backend `23`.
+ */
+export const BROWSER_ELEMENT_FRAMED_FIXTURE = Object.freeze({
+	nodes: [
+		{
+			nodeId: 'framed-root',
+			backendDOMNodeId: 22,
+			role: { value: 'RootWebArea' },
+			childIds: ['framed-save'],
+		},
+		{
+			nodeId: 'framed-save',
+			parentId: 'framed-root',
+			backendDOMNodeId: 23,
+			role: { value: 'button' },
+			name: { value: ' Save ' },
+		},
+	],
+})
+
+/** Holds the iframe tree after its form submitted: a document whose heading reads `Voucher applied`. */
+export const BROWSER_ELEMENT_APPLIED_FIXTURE = Object.freeze({
+	nodes: [
+		{
+			nodeId: 'applied-root',
+			backendDOMNodeId: 30,
+			role: { value: 'RootWebArea' },
+			childIds: ['applied'],
+		},
+		{
+			nodeId: 'applied',
+			parentId: 'applied-root',
+			backendDOMNodeId: 31,
+			role: { value: 'heading' },
+			name: { value: 'Voucher applied' },
+		},
+	],
+})
+
+/** Maps each frame of the element fixture to the isolated-world context its page creates for it. */
+export const BROWSER_ELEMENT_WORLDS: Readonly<Record<string, number>> = Object.freeze({
+	main: 91,
+	child: 92,
+	nested: 93,
+	late: 94,
+})
+
 /** Configures protocol responses for discriminating element action tests. */
 export interface BrowserElementFixtureOptions {
+	readonly local?: boolean
+	readonly nested?: boolean
+	readonly roots?: ReadonlyMap<string, Readonly<Record<string, unknown>>>
+	readonly tree?: CDPSentHandler
+	readonly windows?: BrowserSubmitWindows
+	readonly observe?: CDPSentHandler
 	readonly loaderless?: boolean
 	readonly readiness?: CDPSentHandler
 	readonly title?: CDPSentHandler
@@ -550,8 +1028,10 @@ export interface BrowserElementFixtureOptions {
 	readonly released?: CDPSentHandler
 	readonly select?: CDPSentHandler
 	readonly text?: CDPSentHandler
+	readonly insert?: CDPSentHandler
 	readonly registry?: CDPSentHandler
 	readonly evaluation?: CDPSentHandler
+	readonly submit?: CDPSentHandler
 }
 
 /**
@@ -560,7 +1040,13 @@ export interface BrowserElementFixtureOptions {
  * `WebMCP.enable` fails with the method-not-found code `-32601`, as Chromium 141 answers, unless
  * `registry` answers it. `released` answers a `mouseReleased` dispatch in place of the reply,
  * `select` answers the select-option function call, and `text` answers the text-selection
- * function call, so a test can withhold or refuse any of them.
+ * function call, and `insert` answers `Input.insertText`, so a test can withhold or refuse any
+ * of them. The toolset's submit observer and
+ * its read run in the {@link BrowserSubmitWindow} of the session and world they name, from
+ * `windows`, unless `observe` answers the installation or `submit` answers the read; `nested` adds
+ * a `nested` frame inside `child` to the frame tree. `roots` names
+ * the root frame a session's `Page.getFrameTree` answers with in place of the page tree, unless
+ * `tree` answers every frame tree read.
  * @param transport - In-memory CDP boundary
  * @param options - Deliberate protocol refusal or observation
  */
@@ -568,6 +1054,7 @@ export function scriptBrowserElements(
 	transport: CDPTestTransportInterface,
 	options?: BrowserElementFixtureOptions,
 ): void {
+	const windows = options?.windows ?? new BrowserSubmitWindows()
 	replyOk(transport, 'Accessibility.enable')
 	replyOk(transport, 'Runtime.releaseObject')
 	for (const method of ['DOM.focus', 'DOM.scrollIntoViewIfNeeded'])
@@ -592,24 +1079,32 @@ export function scriptBrowserElements(
 			})
 	})
 	replyOk(transport, 'DOM.setFileInputFiles')
-	replyOk(transport, 'Input.insertText')
+	transport.onSend('Input.insertText', (message) => {
+		if (options?.insert !== undefined) options.insert(message)
+		else transport.reply(message.id, {})
+	})
 	replyOk(transport, 'Input.dispatchKeyEvent')
 	replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 	replyOk(transport, 'Page.enable')
 	replyOk(transport, 'Runtime.enable')
 	replyOk(transport, 'Page.setLifecycleEventsEnabled')
 	replyOk(transport, 'Target.setAutoAttach')
-	replyOk(transport, 'Page.getFrameTree', {
-		frameTree: {
-			frame: { id: 'main', url: 'https://example.test/cart' },
-			childFrames: [
-				{ frame: { id: 'child', parentId: 'main', url: 'https://example.test/checkout' } },
-			],
-		},
+	replyOk(transport, 'Runtime.runIfWaitingForDebugger')
+	transport.onSend('Page.getFrameTree', (message) => {
+		if (options?.tree !== undefined) {
+			options.tree(message)
+			return
+		}
+		const root =
+			message.sessionId === undefined ? undefined : options?.roots?.get(message.sessionId)
+		transport.reply(
+			message.id,
+			root === undefined ? buildBrowserElementTree(options) : { frameTree: { frame: root } },
+		)
 	})
 	transport.onSend('Page.createIsolatedWorld', (message) =>
 		transport.reply(message.id, {
-			executionContextId: message.params?.['frameId'] === 'child' ? 92 : 91,
+			executionContextId: BROWSER_ELEMENT_WORLDS[String(message.params?.['frameId'])] ?? 91,
 		}),
 	)
 	transport.onSend('Accessibility.getFullAXTree', (message) => {
@@ -663,7 +1158,9 @@ export function scriptBrowserElements(
 					? []
 					: message.params?.['backendNodeId'] === 13
 						? [[220, 160, 420, 160, 420, 360, 220, 360]]
-						: [[10, 20, 30, 20, 30, 40, 10, 40]],
+						: message.params?.['backendNodeId'] === 23
+							? [[300, 240, 340, 240, 340, 280, 300, 280]]
+							: [[10, 20, 30, 20, 30, 40, 10, 40]],
 		})
 	})
 	transport.onSend('DOM.getNodeForLocation', (message) =>
@@ -675,8 +1172,11 @@ export function scriptBrowserElements(
 						? 3
 						: message.params?.['x'] === 250
 							? 13
-							: 3,
-			frameId: message.sessionId === 'session-child' ? 'child' : 'main',
+							: message.params?.['x'] === 320
+								? 23
+								: 3,
+			frameId:
+				message.sessionId === 'session-child' || message.params?.['x'] === 320 ? 'child' : 'main',
 		}),
 	)
 	transport.onSend('WebMCP.enable', (message) => {
@@ -742,24 +1242,124 @@ export function scriptBrowserElements(
 		} else if (expression === 'document.title') {
 			if (options?.title !== undefined) options.title(message)
 			else transport.reply(message.id, { result: { value: 'Cart' } })
+		} else if (isString(expression) && matchesBrowserSubmitRead(expression)) {
+			if (options?.submit !== undefined) options.submit(message)
+			else transport.reply(message.id, { result: { value: windows.evaluate(message) } })
+		} else if (isString(expression) && matchesBrowserSubmitObserver(expression)) {
+			if (options?.observe !== undefined) options.observe(message)
+			else transport.reply(message.id, { result: { value: windows.evaluate(message) } })
 		} else if (options?.evaluation !== undefined) options.evaluation(message)
 		else transport.reply(message.id, { result: { value: true } })
 	})
 }
 
-/** Creates a page with a committed, DOM-ready document and scripted accessibility and DOM replies. */
-export async function createBrowserElementFixture(
-	options?: BrowserElementFixtureOptions,
-): Promise<AttachedPageFixture> {
-	const { client, transport } = await createConnectedCDPClient()
-	scriptBrowserElements(transport, options)
-	const page = new BrowserPage(
-		client,
-		'main',
-		'session-main',
-		undefined,
-		'https://example.test/cart',
-	)
+/**
+ * Builds the element fixture's page frame tree: `main` framing `child`, which frames `nested` when
+ * the `nested` option is `true`.
+ * @param options - The fixture options whose `nested` switch the tree reads
+ * @returns The `Page.getFrameTree` result
+ */
+export function buildBrowserElementTree(options?: BrowserElementFixtureOptions): unknown {
+	return {
+		frameTree: {
+			frame: { id: 'main', url: 'https://example.test/cart' },
+			childFrames: [
+				{
+					frame: { id: 'child', parentId: 'main', url: 'https://example.test/checkout' },
+					...(options?.nested === true
+						? {
+								childFrames: [
+									{
+										frame: { id: 'nested', parentId: 'child', url: 'https://example.test/coupon' },
+									},
+								],
+							}
+						: {}),
+				},
+			],
+		},
+	}
+}
+
+/**
+ * Answers a `Runtime.evaluate` message with the value its expression returns in the
+ * {@link BrowserSubmitWindow} of the session and world it names.
+ * @param transport - The fake transport the message was sent on
+ * @param windows - The windows the fixture's evaluations run in
+ * @param message - The evaluation to answer
+ */
+export function answerBrowserEvaluation(
+	transport: CDPTestTransportInterface,
+	windows: BrowserSubmitWindows,
+	message: CDPSentMessage,
+): void {
+	transport.reply(message.id, { result: { value: windows.evaluate(message) } })
+}
+
+/**
+ * Pairs each session move of the element fixture's `child` iframe during its navigation with the
+ * fixture `local` option, the session that reports the start, and the session that reports the
+ * commit and the load.
+ */
+export const BROWSER_SESSION_MOVES = [
+	['into a new out-of-process target', true, 'session-main', 'session-swap'],
+	['back into the page process', false, 'session-child', 'session-main'],
+] as const
+
+/**
+ * Names each protocol stage of one frame navigation that {@link emitBrowserNavigation} emits.
+ */
+export type BrowserNavigationStageEvent = 'request' | 'start' | 'commit' | 'load'
+
+/**
+ * Emits the protocol events of one frame navigation on a session, in order: the request in the
+ * current tab, the start with its loader, the commit, and the lifecycle `DOMContentLoaded` and
+ * `load` of the committed loader, as Chromium 141 reports each on the session that owns the frame.
+ * @param transport - The fake transport the page listens on
+ * @param session - The session that reports the events
+ * @param frame - The navigating frame's id
+ * @param url - The navigation's destination
+ * @param loader - The navigation's loader id
+ * @param stages - The events to emit. Default: `request`, `start`, `commit`, and `load`
+ */
+export function emitBrowserNavigation(
+	transport: CDPTestTransportInterface,
+	session: string,
+	frame: string,
+	url: string,
+	loader: string,
+	stages: readonly BrowserNavigationStageEvent[] = ['request', 'start', 'commit', 'load'],
+): void {
+	if (stages.includes('request'))
+		transport.event(
+			'Page.frameRequestedNavigation',
+			{ frameId: frame, reason: 'formSubmissionPost', url, disposition: 'currentTab' },
+			session,
+		)
+	if (stages.includes('start'))
+		transport.event(
+			'Page.frameStartedNavigating',
+			{ frameId: frame, url, loaderId: loader, navigationType: 'differentDocument' },
+			session,
+		)
+	if (stages.includes('commit'))
+		transport.event('Page.frameNavigated', { frame: { id: frame, url, loaderId: loader } }, session)
+	if (!stages.includes('load')) return
+	for (const name of ['DOMContentLoaded', 'load'])
+		transport.event('Page.lifecycleEvent', { frameId: frame, loaderId: loader, name }, session)
+}
+
+/**
+ * Attaches the fixture's `child` iframe as its own target on `session-child`, as Chromium attaches
+ * an out-of-process frame with the `main` frame as its parent, and waits for the page to announce
+ * the frame's session.
+ * @param transport - The fake transport the page listens on
+ * @param page - The page the frame belongs to
+ */
+export async function attachBrowserElementChild(
+	transport: CDPTestTransportInterface,
+	page: BrowserPage,
+): Promise<void> {
 	const attached = waitForEvent<readonly [BrowserFrameInterface]>((handler) => {
 		page.emitter.on('session', handler)
 		return () => page.emitter.off('session', handler)
@@ -768,12 +1368,49 @@ export async function createBrowserElementFixture(
 		'Target.attachedToTarget',
 		{
 			sessionId: 'session-child',
-			targetInfo: { targetId: 'child', type: 'iframe', url: 'https://example.test/checkout' },
+			targetInfo: {
+				targetId: 'child',
+				type: 'iframe',
+				url: 'https://example.test/checkout',
+				parentFrameId: 'main',
+			},
 		},
 		'session-main',
 	)
 	await attached
-	if (options?.loaderless === true) return { client, transport, page }
+}
+
+/**
+ * Holds the element fixture's page with the submit-observer windows its evaluations run in and
+ * the recording client the page runs over.
+ */
+export interface BrowserElementFixture extends AttachedPageFixture {
+	readonly windows: BrowserSubmitWindows
+	readonly recording: RecordingCDPClient
+}
+
+/**
+ * Creates a page with a committed, DOM-ready document and scripted accessibility and DOM replies.
+ * @remarks The `child` iframe attaches as its own target unless `local` is `true`, which keeps it
+ * in the page's process on `session-main`. The page runs over the {@link RecordingCDPClient} the
+ * fixture's `recording` holds, so a proof can count the registrations an operation leaves.
+ */
+export async function createBrowserElementFixture(
+	options?: BrowserElementFixtureOptions,
+): Promise<BrowserElementFixture> {
+	const { client, transport } = await createConnectedCDPClient()
+	const windows = options?.windows ?? new BrowserSubmitWindows()
+	scriptBrowserElements(transport, { ...options, windows })
+	const recording = new RecordingCDPClient(client)
+	const page = new BrowserPage(
+		recording,
+		'main',
+		'session-main',
+		undefined,
+		'https://example.test/cart',
+	)
+	if (options?.local !== true) await attachBrowserElementChild(transport, page)
+	if (options?.loaderless === true) return { client, transport, page, windows, recording }
 	transport.event(
 		'Page.frameNavigated',
 		{ frame: { id: 'main', url: page.url, loaderId: 'loader-main' } },
@@ -784,7 +1421,7 @@ export async function createBrowserElementFixture(
 		{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
 		'session-main',
 	)
-	return { client, transport, page }
+	return { client, transport, page, windows, recording }
 }
 
 /**
@@ -1034,6 +1671,7 @@ export function scriptCDPAttach(
 		'Network.enable',
 		'Network.disable',
 		'Target.setAutoAttach',
+		'Runtime.runIfWaitingForDebugger',
 		'Page.setInterceptFileChooserDialog',
 		'Browser.setDownloadBehavior',
 		'Emulation.setTouchEmulationEnabled',
@@ -1068,6 +1706,12 @@ export function readCDPExpression(message: CDPSentMessage | undefined): string |
 
 /** Lists the page history directions, in the order a history case matrix registers them. */
 export const BROWSER_HISTORY_DIRECTIONS = ['back', 'forward'] as const
+
+/** Pairs each page navigation operation with the protocol command that starts it. */
+export const BROWSER_NAVIGATION_COMMANDS = [
+	['navigate', 'Page.navigate'],
+	['reload', 'Page.reload'],
+] as const
 
 /**
  * Pairs each history direction with the current history index that gives it a target entry and
