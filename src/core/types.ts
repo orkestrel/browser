@@ -1,6 +1,7 @@
+import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { HTMLInterface } from '@orkestrel/html'
-import type { ToolContext, ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
+import type { ToolContext, ToolInterface, ToolManagerInterface, ToolResult } from '@orkestrel/tool'
 
 // === CDP transport
 
@@ -1576,6 +1577,534 @@ export type BrowserContextEventMap = {
 	readonly close: readonly []
 }
 
+// === Browser journeys
+
+/** Binds a native action's string argument to a literal or to one declared parameter by name. */
+export type BrowserJourneyBinding = string | { readonly parameter: string }
+
+/**
+ * Declares one parameter a journey takes: its default, or none when it is a secret.
+ *
+ * @remarks
+ * - `default` — the text a replay uses when its inputs omit the parameter
+ * - `secret` — if `true`, the parameter binds `type.text` only, has no default, and makes every
+ *   `type` step whose `text` binds it secret; if `false` or omitted, the parameter is plain text
+ *
+ * A parameter's name matches `BROWSER_JOURNEY_PARAMETER_PATTERN`.
+ */
+export interface BrowserJourneyParameter {
+	readonly default?: string
+	readonly secret?: boolean
+}
+
+/**
+ * Names the element an acting step acts on the way a receipt names it, with the record-time
+ * evidence a developer reads when a resolution is refused.
+ *
+ * @remarks
+ * - `role` — the element's accessibility role
+ * - `name` — the element's exact accessible name, as a literal or a binding
+ * - `css` — a CSS selector recorded as evidence; resolution never reads it
+ * - `reference` — the record-time element reference, as evidence; resolution never reads it
+ */
+export interface BrowserJourneyTarget {
+	readonly role: string
+	readonly name: BrowserJourneyBinding
+	readonly css?: string
+	readonly reference?: string
+}
+
+/**
+ * Names the tab a `switch` step moves to, portably.
+ *
+ * @remarks
+ * - `url` and `title` — the tab's address and document title, which resolve the tab from `tabs`
+ */
+export interface BrowserJourneyTab {
+	readonly url: string
+	readonly title: string
+}
+
+/**
+ * Describes one step before it holds an id: a call of a toolset tool with its element or tab named
+ * as data.
+ *
+ * @remarks
+ * - `action` — `click`, `type`, `press`, `navigate`, `wait`, `dialog`, `switch`, an adopted page
+ *   tool's name, or `unresolved`
+ * - `arguments` — the call's arguments; for a native action without `ref` or `tab`, its string
+ *   arguments binding a parameter; for a page tool, its literal JSON as sent
+ * - `target` — present exactly when a native action takes `ref`
+ * - `tab` — present exactly for `switch`
+ * - `gap` — on `unresolved`, why the recorder could not express the gesture; preparation refuses
+ *   the journey
+ */
+export interface BrowserJourneyStepInput {
+	readonly action: string
+	readonly arguments: Readonly<Record<string, BrowserJourneyBinding | JSONValue>>
+	readonly target?: BrowserJourneyTarget
+	readonly tab?: BrowserJourneyTab
+	readonly gap?: string
+}
+
+/**
+ * Describes a step with its identity: `s` followed by a positive integer, stable across edits and
+ * never reused.
+ */
+export interface BrowserJourneyStep extends BrowserJourneyStepInput {
+	readonly id: string
+}
+
+/**
+ * Describes one user intent as data; `next` is the number the next added step takes.
+ *
+ * @remarks
+ * - `format` — the file format, `BROWSER_JOURNEY_FORMAT`
+ * - `name` — the journey's name, matching `BROWSER_JOURNEY_NAME_PATTERN`
+ * - `description` — what the journey achieves, in one sentence
+ * - `parameters` — the declared parameters by name
+ * - `next` — the number the next added step takes, persisted so a removed id is never reused
+ * - `steps` — the steps in order
+ */
+export interface BrowserJourney {
+	readonly format: 1
+	readonly name: string
+	readonly description: string
+	readonly parameters: Readonly<Record<string, BrowserJourneyParameter>>
+	readonly next: number
+	readonly steps: readonly BrowserJourneyStep[]
+}
+
+/**
+ * Carries a journey with the revision the store assigned; `revision` is absent for a journey the
+ * store never held.
+ */
+export interface BrowserJourneyRevision {
+	readonly journey: BrowserJourney
+	readonly revision?: number
+}
+
+/**
+ * Describes one change to a journey; `editBrowserJourney` applies a batch to a copy, in order, and
+ * refuses it whole on the first invalid edit.
+ *
+ * @remarks
+ * - `add` — inserts `step` with the next id, before or after the step `before` or `after` names
+ * - `remove` — removes the step `id` names
+ * - `update` — merges `arguments` into the step `id` names by key, and replaces its `target` or
+ *   `tab`
+ * - `declare` — declares the parameter `name` names, which a step binds at the end of the batch
+ *
+ * A refused batch rejects with `BROWSER_JOURNEY_EDIT`, naming the edit's index and the reason.
+ */
+export type BrowserJourneyEdit =
+	| {
+			readonly operation: 'add'
+			readonly step: BrowserJourneyStepInput
+			readonly before?: string
+			readonly after?: string
+	  }
+	| { readonly operation: 'remove'; readonly id: string }
+	| {
+			readonly operation: 'update'
+			readonly id: string
+			readonly arguments?: Readonly<Record<string, BrowserJourneyBinding | JSONValue>>
+			readonly target?: BrowserJourneyTarget
+			readonly tab?: BrowserJourneyTab
+	  }
+	| {
+			readonly operation: 'declare'
+			readonly name: string
+			readonly parameter: BrowserJourneyParameter
+	  }
+
+/**
+ * Describes an edit as the `edit` tool receives it over the wire: an added or updated step can name
+ * `ref` instead of a target, converted from the current view before the pure editor runs.
+ */
+export type BrowserJourneyEditRequest =
+	| BrowserJourneyEdit
+	| {
+			readonly operation: 'add'
+			readonly step: Omit<BrowserJourneyStepInput, 'target'> & { readonly ref?: string }
+			readonly before?: string
+			readonly after?: string
+	  }
+	| {
+			readonly operation: 'update'
+			readonly id: string
+			readonly ref?: string
+			readonly arguments?: Readonly<Record<string, BrowserJourneyBinding | JSONValue>>
+	  }
+
+/**
+ * Maps the events a recorder emits.
+ *
+ * @remarks
+ * - `start` — recording started
+ * - `step` — one step was recorded
+ * - `stop` — recording stopped, carrying the recorded steps
+ * - `clear` — the recorded steps were dropped
+ */
+export type BrowserRecorderEventMap = {
+	readonly start: readonly []
+	readonly step: readonly [step: BrowserJourneyStep]
+	readonly stop: readonly [steps: readonly BrowserJourneyStep[]]
+	readonly clear: readonly []
+}
+
+/**
+ * Records the steps of a journey from one source as they happen and turns them into a journey.
+ *
+ * @remarks
+ * - `emitter` — emits `start`, `step`, `stop`, and `clear`
+ * - `started` — true while recording; false otherwise
+ */
+export interface BrowserRecorderInterface {
+	readonly emitter: EmitterInterface<BrowserRecorderEventMap>
+	readonly started: boolean
+	/** Begins recording from the recorder's source. */
+	start(): Promise<void>
+	/** Stops recording and returns the recorded steps. */
+	stop(): Promise<readonly BrowserJourneyStep[]>
+	/** Returns the steps recorded so far. */
+	steps(): readonly BrowserJourneyStep[]
+	/**
+	 * Returns the recorded steps as a journey with that name and description, with its parameters
+	 * derived: every secret marker declares a secret parameter named after its control's accessible
+	 * name in lower camel case, such as `confirmPassword`, falling back to `secret1`, `secret2`, and
+	 * so on when the derived name is invalid or taken; `next` is one past the highest id.
+	 */
+	journey(options: { readonly name: string; readonly description: string }): BrowserJourney
+	/** Drops the recorded steps. */
+	clear(): void
+	/** Stops recording and releases the recorder's listeners. */
+	destroy(): Promise<void>
+}
+
+/**
+ * Configures a recorder.
+ *
+ * @remarks
+ * - `on` — initial event listeners wired at construction
+ * - `error` — observer error handler forwarded to the emitter
+ */
+export interface BrowserRecorderOptions {
+	readonly on?: EmitterHooks<BrowserRecorderEventMap>
+	readonly error?: EmitterErrorHandler
+}
+
+/**
+ * Describes what became of one action the toolset performed.
+ *
+ * @remarks
+ * - `action` — the tool's name
+ * - `arguments` — the call's arguments, without the text of a secret `type`
+ * - `target` — the element the call's reference resolved to, captured before the input was
+ *   dispatched: its role, exact accessible name, reference, and, in the page placement, frame
+ * - `tab` — the tab a `switch` moved to
+ * - `secret` — if `true`, the action was a secret `type`
+ * - `outcome` — how the action ended
+ * - `stage` and `reason` — the stage and reason of the navigation the action settled, when one
+ *   started
+ * - `receipt` — the receipt line the tool returned
+ * - `elapsed` — the milliseconds the action took
+ */
+export interface BrowserAction {
+	readonly action: string
+	readonly arguments: Readonly<Record<string, JSONValue>>
+	readonly target?: {
+		readonly role: string
+		readonly name: string
+		readonly reference: string
+		readonly frame?: string
+	}
+	readonly tab?: BrowserJourneyTab
+	readonly secret?: boolean
+	readonly outcome: BrowserStepOutcome
+	readonly stage?: BrowserNavigationStage
+	readonly reason?: BrowserNavigationReason
+	readonly receipt: string
+	readonly elapsed: number
+}
+
+/**
+ * Names how one step ended.
+ *
+ * @remarks
+ * - `done` — the action completed
+ * - `refused` — the toolset refused the action
+ * - `timeout` — the text a `wait` names did not appear
+ * - `interrupted` — a dialog opened during the input, which stays pending until a `dialog` step
+ */
+export type BrowserStepOutcome = 'done' | 'refused' | 'timeout' | 'interrupted'
+
+/**
+ * Names how a run ended.
+ *
+ * @remarks
+ * - `complete` — every step completed
+ * - `stopped` — a step did not complete, and no step after it ran
+ * - `aborted` — the call's signal aborted the run
+ */
+export type BrowserRunOutcome = 'complete' | 'stopped' | 'aborted'
+
+/**
+ * Carries a performed call's tool result beside its structured action, present when the call
+ * reached a handler.
+ *
+ * @remarks
+ * - `result` — the tool result `tools.execute` returns for the same call
+ * - `action` — what became of the action; absent for a call the manager refused before any handler
+ */
+export interface BrowserToolsetResult {
+	readonly result: ToolResult
+	readonly action?: BrowserAction
+}
+
+/**
+ * Owns the toolset while a replay runs; `destroy` releases it.
+ *
+ * @remarks
+ * - `token` — the caller identity an action carries as `context.caller` to run under the hold
+ * - `name` — the name of the journey the hold replays
+ */
+export interface BrowserHoldInterface {
+	readonly token: string
+	readonly name: string
+	/** Releases the toolset to the calls behind the hold. */
+	destroy(): void
+}
+
+/**
+ * Describes one replayed step; `action`, `trigger`, and `result` carry the meaning of the skill's
+ * `JournalStep` fields.
+ *
+ * @remarks
+ * - `id` — the step's id
+ * - `action` — the step's action
+ * - `trigger` — a target's exact name for `click` and `type`; the key for `press`; the URL for
+ *   `navigate`; the text for `wait`; the tab's title for `switch`; `accept` or `dismiss` for
+ *   `dialog`; the tool's name for a page tool
+ * - `arguments` — the call's arguments with the bindings substituted, without a secret's value
+ * - `outcome`, `stage`, and `reason` — as the step's `BrowserAction` reports them
+ * - `result` — the step's receipt, or the refusal that stopped the run at the step
+ * - `capture` — the file name of the step's capture in the page placement, such as `s2.png`
+ * - `elapsed` — the milliseconds the step took
+ */
+export interface BrowserRunStep {
+	readonly id: string
+	readonly action: string
+	readonly trigger: string
+	readonly arguments: Readonly<Record<string, JSONValue>>
+	readonly outcome: BrowserStepOutcome
+	readonly stage?: BrowserNavigationStage
+	readonly reason?: BrowserNavigationReason
+	readonly result: string
+	readonly capture?: string
+	readonly elapsed: number
+}
+
+/**
+ * Describes one run of a journey; `inputs` omits secret values; `fault` carries the run file's
+ * write failure.
+ *
+ * @remarks
+ * - `format` — the file format, `BROWSER_JOURNEY_FORMAT`
+ * - `id` — the run id, the ISO time with `-` for `:` followed by `-` and 4 hexadecimal digits
+ * - `journey` and `revision` — the journey replayed and the revision the store held it at
+ * - `inputs` — the parameter values the run used, without a secret's value
+ * - `steps` — the replayed steps in order
+ * - `outcome` — how the run ended
+ * - `output` — the page's `console` and `error` events during the run, in the page placement;
+ *   absent for a journey with a secret parameter
+ * - `elapsed` — the milliseconds the run took
+ * - `fault` — why writing the run file failed
+ */
+export interface BrowserRun {
+	readonly format: 1
+	readonly id: string
+	readonly journey: BrowserJourney
+	readonly revision?: number
+	readonly inputs: Readonly<Record<string, string>>
+	readonly steps: readonly BrowserRunStep[]
+	readonly outcome: BrowserRunOutcome
+	readonly output?: readonly string[]
+	readonly elapsed: number
+	readonly fault?: string
+}
+
+/**
+ * Configures one replay.
+ *
+ * @remarks
+ * - `on` — initial event listeners wired at construction
+ * - `error` — observer error handler forwarded to the emitter
+ * - `inputs` — each parameter's value by name, merged over the parameters' defaults
+ * - `runs` — the store the run is written to; omitting it writes no run
+ */
+export interface BrowserReplayOptions {
+	readonly on?: EmitterHooks<BrowserReplayEventMap>
+	readonly error?: EmitterErrorHandler
+	readonly inputs?: Readonly<Record<string, string>>
+	readonly runs?: BrowserRunStoreInterface
+}
+
+/**
+ * Maps the events a replay emits.
+ *
+ * @remarks
+ * - `step` — one step was replayed
+ */
+export type BrowserReplayEventMap = { readonly step: readonly [step: BrowserRunStep] }
+
+/**
+ * Replays one journey over a toolset.
+ *
+ * @remarks
+ * - `emitter` — emits `step`
+ */
+export interface BrowserReplayInterface {
+	readonly emitter: EmitterInterface<BrowserReplayEventMap>
+	/**
+	 * Prepares the journey, holds the toolset, performs each step in order, and resolves with the
+	 * run, which stops at the first step that did not complete. Rejects with a coded `BrowserError`
+	 * at preparation, before any side effect, and on a destroyed toolset.
+	 */
+	execute(options?: BrowserCallOptions): Promise<BrowserRun>
+}
+
+/**
+ * Carries the signal a store call honours.
+ *
+ * @remarks
+ * - `signal` — aborts the call; the promise rejects with `signal.reason`
+ */
+export interface BrowserStoreOptions {
+	readonly signal?: AbortSignal
+}
+
+/**
+ * Names one entry a listing could not read.
+ *
+ * @remarks
+ * - `path` — the entry's path
+ * - `message` — why the entry could not be read
+ */
+export interface BrowserStoreFault {
+	readonly path: string
+	readonly message: string
+}
+
+/**
+ * Carries one page of a listing with the entries it could not read.
+ *
+ * @remarks
+ * - `entries` — the entries of the page, in order
+ * - `truncated` — true when more entries follow the page; false otherwise
+ * - `faults` — the entries the listing could not read
+ */
+export interface BrowserStorePage<T> {
+	readonly entries: readonly T[]
+	readonly truncated: boolean
+	readonly faults: readonly BrowserStoreFault[]
+}
+
+/** Keeps journeys by name with a revision per write. */
+export interface BrowserJourneyStoreInterface {
+	/**
+	 * Returns the journey saved under `name` with its revision, or `undefined` when none is saved.
+	 * Rejects with `BROWSER_JOURNEY_FILE` for a malformed entry, `BROWSER_JOURNEY_FORMAT` for an
+	 * unknown format, and `BROWSER_JOURNEY_ACCESS` for a permission error, each naming the path.
+	 */
+	get(name: string, options?: BrowserStoreOptions): Promise<BrowserJourneyRevision | undefined>
+	/**
+	 * Saves the journey under its name with the next revision and returns it. Rejects with
+	 * `BROWSER_JOURNEY_REVISION` when `expected` differs from the stored revision, and with
+	 * `BROWSER_JOURNEY_LOCKED` when another write holds the name.
+	 */
+	set(
+		journey: BrowserJourney,
+		expected?: number,
+		options?: BrowserStoreOptions,
+	): Promise<BrowserJourneyRevision>
+	/**
+	 * Removes the journey saved under `name` and keeps its revision count, so a recreated journey
+	 * continues it; a missing name is a no-op. Rejects with `BROWSER_JOURNEY_LOCKED` when another
+	 * write holds the name.
+	 */
+	delete(name: string, options?: BrowserStoreOptions): Promise<void>
+	/**
+	 * Returns one page of the saved journeys sorted by name, starting at `offset` and holding at
+	 * most `limit` entries, with the entries it could not read in `faults`.
+	 */
+	list(
+		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
+	): Promise<BrowserStorePage<BrowserJourneyRevision>>
+}
+
+/**
+ * Names the run directory a store opened, as data.
+ *
+ * @remarks
+ * - `id` — the run id
+ * - `directory` — the run directory the store created, which a capture is written into; absent
+ *   for a store without directories
+ */
+export interface BrowserRunSlot {
+	readonly id: string
+	readonly directory?: string
+}
+
+/** Keeps runs by the journey name and run id the run carries. */
+export interface BrowserRunStoreInterface {
+	/** Mints a run id for the journey and creates its run directory exclusively. */
+	open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot>
+	/** Returns the run stored under the journey name and id, or `undefined` when none is stored. */
+	get(name: string, id: string, options?: BrowserStoreOptions): Promise<BrowserRun | undefined>
+	/** Writes the run under the journey name and the run id it carries. */
+	set(run: BrowserRun, options?: BrowserStoreOptions): Promise<void>
+	/** Removes the run stored under the journey name and id; a missing run is a no-op. */
+	delete(name: string, id: string, options?: BrowserStoreOptions): Promise<void>
+	/**
+	 * Returns one page of the journey's runs, starting at `offset` and holding at most `limit`
+	 * entries, with the entries it could not read in `faults`.
+	 */
+	list(
+		name: string,
+		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
+	): Promise<BrowserStorePage<BrowserRun>>
+}
+
+/**
+ * Configures the journey toolset a toolset constructs.
+ *
+ * @remarks
+ * - `store` — keeps the journeys the tools record, list, edit, and replay
+ * - `runs` — keeps each replay's run; omitting it writes no run
+ * - `readonly` — if `true`, refuses `record`, `save`, and `edit` before any store access, and
+ *   `replay` still writes runs; if `false` or omitted, every tool runs
+ */
+export interface BrowserJourneyOptions {
+	readonly store: BrowserJourneyStoreInterface
+	readonly runs?: BrowserRunStoreInterface
+	readonly readonly?: boolean
+}
+
+/**
+ * Registers the five journey tools over a toolset and owns the recording and the active replay.
+ *
+ * @remarks
+ * - `recording` — the name of the journey being recorded, or `undefined` when none is
+ * - `replaying` — the name of the journey being replayed, or `undefined` when none is
+ */
+export interface BrowserJourneyToolsetInterface {
+	readonly recording: string | undefined
+	readonly replaying: string | undefined
+	/** Aborts the active replay and removes the five journey tools from the manager. */
+	destroy(): Promise<void>
+}
+
 // === Browser codegen
 
 /** Represents one recorded browser action captured during a codegen session. */
@@ -1615,6 +2144,18 @@ export interface BrowserCodegenOptions {
 
 /** Names the target language for a compiled codegen script. */
 export type BrowserCodegenLanguage = 'javascript' | 'typescript'
+
+/**
+ * Carries the module `compileBrowserJourney` emits with the gap steps it throws at.
+ *
+ * @remarks
+ * - `source` — the standalone module, which imports only `@orkestrel/browser`
+ * - `gaps` — one entry per gap step, in step order; the module throws at each
+ */
+export interface BrowserCodegenScript {
+	readonly source: string
+	readonly gaps: readonly string[]
+}
 
 /**
  * Describes the options for compiling recorded actions into a script.
@@ -1774,12 +2315,19 @@ export type BrowserWorldFunction = (
 	options?: BrowserCallOptions,
 ) => Promise<number>
 
-/** Describes an accessibility or CSS query within an optional element reference. */
+/**
+ * Describes an accessibility or CSS query within an optional element reference.
+ *
+ * @remarks
+ * - `exact` — if `true`, `name` matches the whole accessible name after whitespace normalization,
+ *   case-sensitively; if `false` or omitted, `name` matches a case-insensitive substring
+ */
 export interface BrowserElementQuery {
 	readonly role?: string
 	readonly name?: string
 	readonly css?: string
 	readonly within?: string
+	readonly exact?: boolean
 }
 
 /** Configures an element wait, including whether absence satisfies it. */
@@ -2115,8 +2663,9 @@ export interface BrowserRegistryPending {
 // === Browser toolset
 
 /**
- * Names a tool the browser toolset reserves: the seven generic tools, the staged `dialog`, and
- * the opt-in `tabs` and `switch`.
+ * Names a tool the browser toolset reserves: the seven generic tools, the staged `dialog`, the
+ * opt-in `tabs` and `switch`, and the journey tools `record`, `save`, `journeys`, `edit`, and
+ * `replay`, which a toolset constructed with `journeys` reserves.
  */
 export type BrowserToolName =
 	| 'look'
@@ -2129,6 +2678,11 @@ export type BrowserToolName =
 	| 'dialog'
 	| 'tabs'
 	| 'switch'
+	| 'record'
+	| 'save'
+	| 'journeys'
+	| 'edit'
+	| 'replay'
 
 /**
  * Names why a toolset declined a page tool.
@@ -2174,11 +2728,17 @@ export interface BrowserToolSourceInterface {
  * - `adopt` — a page tool was added to the manager
  * - `skip` — a page tool was declined, with the reason
  * - `select` — the toolset's current view changed
+ * - `action` — the toolset performed an action, carrying what became of it
+ * - `hold` — a replay of the named journey took the toolset
+ * - `release` — the hold of the named journey ended
  */
 export type BrowserToolsetEventMap = {
 	readonly adopt: readonly [tool: ToolInterface]
 	readonly skip: readonly [name: string, reason: BrowserToolsetReason]
 	readonly select: readonly [view: BrowserViewInterface]
+	readonly action: readonly [action: BrowserAction]
+	readonly hold: readonly [name: string]
+	readonly release: readonly [name: string]
 }
 
 /**
@@ -2200,6 +2760,8 @@ export type BrowserToolsetEventMap = {
  *   it alone; `destroy()` calls it one time, after the toolset's own teardown, and rejects with
  *   its rejection. A view or page supplied without it stays the caller's to end. Default: nothing
  *   is released
+ * - `journeys` — the stores behind the journey tools, which the toolset registers and reserves
+ *   through a journey toolset it constructs; omitting it leaves the journey tools unadvertised
  */
 export interface BrowserToolsetOptions {
 	readonly on?: EmitterHooks<BrowserToolsetEventMap>
@@ -2211,6 +2773,7 @@ export interface BrowserToolsetOptions {
 	readonly limit?: number
 	readonly schemes?: readonly string[]
 	readonly release?: () => Promise<void> | void
+	readonly journeys?: BrowserJourneyOptions
 }
 
 /**

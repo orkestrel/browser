@@ -1,6 +1,7 @@
 import type { ToolDefinition } from '@orkestrel/tool'
 import type {
 	BrowserElementRefusal,
+	BrowserJourney,
 	BrowserMouseButton,
 	BrowserNavigationReason,
 	BrowserToolName,
@@ -547,8 +548,10 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * Every tool declares at least one required parameter, because the streamed tool-call parser of
  * Ollama 0.34.4 rejects a call to a tool that declares no parameter. `look` takes `what` alone
  * and `read` takes `what` and `offset`; neither is scoped to an element, and an element's own
- * reading is `BrowserElementInterface.read`. `look` and `read` annotate `pure` and `untrusted`,
- * `wait` and `tabs` annotate `pure`, and the rest carry no annotation.
+ * reading is `BrowserElementInterface.read`. `look`, `read`, and `journeys` annotate `pure` and
+ * `untrusted`, `wait` and `tabs` annotate `pure`, and the rest carry no annotation. `type` takes
+ * `secret` beside `ref`, `text`, and `submit`. The journey tools `record`, `save`, `journeys`,
+ * `edit`, and `replay` are advertised only by a toolset constructed with `journeys`.
  */
 export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>> = Object.freeze({
 	look: Object.freeze({
@@ -610,6 +613,10 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 				submit: Object.freeze({
 					type: 'boolean',
 					description: 'True to submit its form after typing.',
+				}),
+				secret: Object.freeze({
+					type: 'boolean',
+					description: 'True to keep the text out of the receipt, such as a password.',
 				}),
 			}),
 			required: Object.freeze(['ref', 'text']),
@@ -691,4 +698,171 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 			required: Object.freeze(['tab']),
 		}),
 	}),
+	record: Object.freeze({
+		name: 'record',
+		description:
+			'Starts recording your next actions as a journey with that name; call save when it is done.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				journey: Object.freeze({
+					type: 'string',
+					description: 'The journey name: lowercase words joined by hyphens, such as add-kettle.',
+				}),
+			}),
+			required: Object.freeze(['journey']),
+		}),
+	}),
+	save: Object.freeze({
+		name: 'save',
+		description:
+			'Stops recording and saves the journey; describe what it achieves in one sentence.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				description: Object.freeze({
+					type: 'string',
+					description: 'What the journey achieves, in one sentence.',
+				}),
+			}),
+			required: Object.freeze(['description']),
+		}),
+	}),
+	journeys: Object.freeze({
+		name: 'journeys',
+		description: 'Lists the saved journeys with their steps and the parameters each one takes.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				what: Object.freeze({ type: 'string', description: 'What you are looking for.' }),
+				offset: Object.freeze({
+					type: 'integer',
+					description: 'The character to continue from, as the last reply names. Default: 0.',
+				}),
+			}),
+			required: Object.freeze(['what']),
+		}),
+		annotations: Object.freeze({ pure: true, untrusted: true }),
+	}),
+	edit: Object.freeze({
+		name: 'edit',
+		description:
+			'Changes a saved journey: add, remove, or update steps by their ids from journeys, or declare a parameter.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				journey: Object.freeze({
+					type: 'string',
+					description: 'The journey name, such as add-kettle.',
+				}),
+				edits: Object.freeze({
+					type: 'array',
+					description: 'The changes, applied in order; one invalid change refuses them all.',
+					items: Object.freeze({
+						type: 'object',
+						properties: Object.freeze({
+							operation: Object.freeze({
+								type: 'string',
+								enum: Object.freeze(['add', 'remove', 'update', 'declare']),
+								description: 'What the change does.',
+							}),
+							id: Object.freeze({
+								type: 'string',
+								description: 'The step to remove or update, such as s3.',
+							}),
+							step: Object.freeze({
+								type: 'object',
+								description: 'The step to add: its action, its arguments, and ref or tab.',
+							}),
+							before: Object.freeze({
+								type: 'string',
+								description: 'The step to add it before, such as s3.',
+							}),
+							after: Object.freeze({
+								type: 'string',
+								description: 'The step to add it after, such as s3.',
+							}),
+							ref: Object.freeze({
+								type: 'string',
+								description: 'The element the added or updated step acts on, such as e4.',
+							}),
+							arguments: Object.freeze({
+								type: 'object',
+								description: 'The arguments to change, merged by key.',
+							}),
+							name: Object.freeze({
+								type: 'string',
+								description: 'The parameter to declare, such as email.',
+							}),
+							parameter: Object.freeze({
+								type: 'object',
+								description: 'The parameter: its default, or secret set to true.',
+							}),
+						}),
+						required: Object.freeze(['operation']),
+					}),
+				}),
+			}),
+			required: Object.freeze(['journey', 'edits']),
+		}),
+	}),
+	replay: Object.freeze({
+		name: 'replay',
+		description: "Replays a saved journey step by step; give each parameter's value under inputs.",
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				journey: Object.freeze({
+					type: 'string',
+					description: 'The journey name, such as add-kettle.',
+				}),
+				inputs: Object.freeze({
+					type: 'object',
+					description: "Each parameter's value by its name.",
+					additionalProperties: Object.freeze({ type: 'string' }),
+				}),
+			}),
+			required: Object.freeze(['journey']),
+		}),
+	}),
 })
+
+// === Browser journeys
+
+/**
+ * Matches a journey name: lowercase letters and digits in words joined by single hyphens, at most
+ * 64 characters, and never a Windows reserved device name.
+ *
+ * @remarks
+ * A journey's name is its directory under the store's root, so the pattern refuses `con`, `prn`,
+ * `aux`, `nul`, `com1` to `com9`, and `lpt1` to `lpt9`, which a Windows host refuses as a path
+ * segment.
+ */
+export const BROWSER_JOURNEY_NAME_PATTERN =
+	/^(?=.{1,64}$)(?!(?:con|prn|aux|nul|com[1-9]|lpt[1-9])$)[a-z0-9]+(?:-[a-z0-9]+)*$/
+
+/** Matches a journey parameter name: a lowercase letter followed by letters and digits. */
+export const BROWSER_JOURNEY_PARAMETER_PATTERN = /^[a-z][a-zA-Z0-9]*$/
+
+/** Holds the journey and run file format this package writes and reads, `1`. */
+export const BROWSER_JOURNEY_FORMAT: BrowserJourney['format'] = 1
+
+/**
+ * Names the native actions a journey step can hold: `click`, `type`, `press`, `navigate`, `wait`,
+ * `dialog`, and `switch`.
+ *
+ * @remarks
+ * A step's action is one of these, an adopted page tool's name, or `unresolved`.
+ */
+export const BROWSER_JOURNEY_ACTIONS: readonly BrowserToolName[] = Object.freeze([
+	'click',
+	'type',
+	'press',
+	'navigate',
+	'wait',
+	'dialog',
+	'switch',
+])
+
+/** Holds the result the `journeys` tool returns when no journey is saved. */
+export const BROWSER_JOURNEY_EMPTY_LISTING = 'No journeys are saved; call record to start one.'

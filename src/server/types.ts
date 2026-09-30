@@ -320,3 +320,52 @@ export interface WebSocketCDPTransportOptions {
 	readonly url: string
 	readonly timeout?: number
 }
+
+// === Browser journey stores
+
+/**
+ * Configures a file store: its root under the checkout and the listing cap.
+ *
+ * @remarks
+ * - `root` — the directory the store keeps its entries under, such as `tmp/browsers`, resolved
+ *   through `realpath` one time; every path the store reads or writes lies inside it
+ * - `limit` — the most entries one `list` page holds
+ */
+export interface FileBrowserStoreOptions {
+	readonly root: string
+	readonly limit?: number
+}
+
+// === Browser MCP server
+
+/**
+ * Configures the browse server.
+ *
+ * @remarks
+ * - `root` — the directory the journeys, the runs, and the browser profiles live under, such as
+ *   `tmp/browsers`
+ * - `headless` — if `true`, launches Chromium without a window; if `false`, with one
+ * - `executable` — the path of the Chromium executable the server launches
+ * - `readonly` — if `true`, refuses `record`, `save`, and `edit`, and `replay` still writes runs;
+ *   if `false` or omitted, every tool runs
+ */
+export interface BrowserMCPServerOptions {
+	readonly root?: string
+	readonly headless?: boolean
+	readonly executable?: string
+	readonly readonly?: boolean
+}
+
+/** Serves the browser vocabulary and the journey tools over MCP on stdio. */
+export interface BrowserMCPServerInterface {
+	/**
+	 * Serves the tool list over stdio before Chromium starts; the first tool call launches Chromium
+	 * with a profile the server owns.
+	 */
+	start(): Promise<void>
+	/**
+	 * Stops admission, aborts the active replay, destroys the toolset and the browser it launched,
+	 * and removes its profile.
+	 */
+	destroy(): Promise<void>
+}

@@ -161,7 +161,7 @@ describe('BrowserToolset', () => {
 			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
 				'The look tool takes no ref parameter; call look with what.',
 				'The read tool takes no ref parameter; call read with what and offset.',
-				'The type tool takes no what parameter; call type with ref, text, and submit.',
+				'The type tool takes no what parameter; call type with ref, text, submit, and secret.',
 			])
 			expect(view.calls).toEqual([])
 			const refused = await Promise.resolve(
