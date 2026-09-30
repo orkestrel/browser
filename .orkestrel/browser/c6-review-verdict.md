@@ -55,3 +55,16 @@ Rulings (the fix brief `tmp/units/c6-settle-fix3-brief.md`):
 - I11 (the i5 limit): a test withholds the resume reply and shows the tree read and the publication proceed, pinning the send-without-waiting contract.
 
 A fourth objective review, scoped to I6–I11, follows.
+
+## Settlement unit, fourth review (after I6–I11)
+
+Astra `analyst`, read-only, scoped to I6–I11: `VERDICT: FAIL 26, D-I10-1; outside the claims: O1, O2`. Confirmed: 27 (the P2b tape at the cited positions, the start, commit, and load sharing one loader and the replayed lifecycle carrying another), 28 (the committed name stored on the attaching and the published record, rejected sessions unable to overwrite it, a same-document navigation keeping it; the i8 mutant red on both rows), 29 (every attach arrangement answering the resume, with the held-enablement test at `BrowserPage.test.ts:4246` pinning the order the audit's counts cannot), 30 (`readCDPSessionMethods` a projection with its proof), 31 (the send-without-waiting pin within its coverage), D-I6-1 as a placement (the six `#detachChild` sites walked: no holder path relies on the pause, and an opener's resume that took effect leaves no pause for a later holder failure), D-I9-1, and the mutation-evidence deviation. Unresolved: 26, because production sends `Target.detachFromTarget` without awaiting the resume's reply while the P8 control awaited it (resume reply #83 before detach #84); a detach the browser processes before the renderer's resume is the open ordering. Broken: D-I10-1, the U0 probe's 42 local functions (`architecture.md` § Functions and orchestration binds executable probe code outside the gates). Outside: `createReferenceSequence` is shared infrastructure placed in the test file (O1, required; `tests.md:184`); the beacon server binds without the loopback host (O2, required; `tests.md:31`). Recorded limits: the I11 test does not reject an implementation awaiting the resume under a timeout shorter than its 1 s condition, or only for a named-parent frame; when the frame tree lists a frame, its metadata precedes the committed name and no conflicting host reading exists. The gate set green on the tree (`test:src` 1193, `test:src:browser` 224, `test:setup` 138, `test:setup:browser` 21, `test:policy` 114, `test:config` 172, `test:conformance` 69, `test:service` 52).
+
+Rulings (the fix brief `tmp/units/c6-settle-fix4-brief.md`):
+
+- I12 (claim 26): `#detachChild` awaits the resume's reply, its error ignored, before it sends the detach, and the failed popup setup awaits it before `destroy()`; the reply proves the renderer processed the resume, so the ordering is deterministic rather than probed. The tests at 2302 and 2261 withhold the resume reply and show no detach until it arrives; mutant i9 (the detach sent without waiting) red.
+- I13 (D-I10-1): the U0 probe `tmp/probes/c6-navigation.test.ts` is rewritten with module-level functions and rerun once; the seven answers equal the recorded ones or the report states the difference.
+- I14 (O1): `createReferenceSequence` moves to `tests/setup.ts` with a proof of advancement and of the independence of two instances.
+- I15 (O2): the beacon server binds `127.0.0.1`; P8 rerun once after the edit and I12, its output retained.
+
+A fifth objective review, scoped to I12–I15, follows.
