@@ -290,7 +290,7 @@ describe('matchesToolReceipt', () => {
 		).toBe(true)
 		expect(
 			matchesToolReceipt(
-				'Clicked e1 link "Next"; the page is still loading http://127.0.0.1/next.\n\npage "" http://127.0.0.1/next\n(0 of 0 elements)',
+				`Clicked e1 link "Next"; the page is still loading http://127.0.0.1/next.\n\n${placed.view}`,
 				placed,
 			),
 		).toBe(true)
@@ -303,23 +303,23 @@ describe('matchesToolReceipt', () => {
 		)
 	})
 
-	it('accepts after a still-loading status only a view, the changed note, or the deadline note', () => {
+	it('accepts after a still-loading status only the destination view, the changed note, or the deadline note', () => {
 		const loading = 'Clicked e1 link "Next"; the page is still loading http://127.0.0.1/next.\n\n'
 		expect(
-			[
-				'page "Next note" http://127.0.0.1/next\n(0 of 0 elements)',
-				SERVICE_CHANGED_NOTE,
-				BROWSER_TOOL_DEADLINE_NOTE,
-			].map((suffix) => matchesToolReceipt(`${loading}${suffix}`, placed)),
+			[placed.view, SERVICE_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE].map((suffix) =>
+				matchesToolReceipt(`${loading}${suffix}`, placed),
+			),
 		).toEqual([true, true, true])
 		expect(
 			[
 				'',
 				'the page',
+				'page "" http://127.0.0.1/next\n(0 of 0 elements)',
+				view,
 				'(The view could not be read: gone; call look.)',
 				`${SERVICE_CHANGED_NOTE}\nextra`,
 			].map((suffix) => matchesToolReceipt(`${loading}${suffix}`, placed)),
-		).toEqual([false, false, false, false])
+		).toEqual([false, false, false, false, false, false])
 	})
 
 	it('refuses another view, another action, a capture error, a loading status without a navigation, and another URL', () => {

@@ -15,10 +15,15 @@ import {
 	compileReadFunction,
 	compileScreenshotPreparationExpression,
 	compileGuardedEvaluateExpression,
+	compileSubmitObserverExpression,
+	compileSubmitReadExpression,
+	BROWSER_SUBMIT_KEY,
 } from '@src/core'
 import {
 	evaluateJavaScript,
 	evaluateBrowserHit,
+	evaluateBrowserSubmit,
+	BROWSER_SUBMIT_CASES,
 	readBrowserCompiledTimers,
 	runBrowserCompiledTimers,
 } from '../../setup.js'
@@ -205,5 +210,29 @@ describe('compileCodegenScript', () => {
 	it('emits an empty body for an empty action list', () => {
 		const script = compileCodegenScript([])
 		expect(script).toBe('async function run(page) {\n}')
+	})
+})
+
+describe('compileSubmitObserverExpression and compileSubmitReadExpression', () => {
+	const observer = compileSubmitObserverExpression()
+	const read = compileSubmitReadExpression()
+
+	it.each(BROWSER_SUBMIT_CASES)(
+		'catches %s read with the wrong navigation or an observer left installed',
+		(_name, submits, destinations) => {
+			expect(evaluateBrowserSubmit(observer, read, submits)).toEqual([destinations, 0])
+		},
+	)
+
+	it('catches a read that reports a submit none fired, a read with no observer that throws, or a reinstallation that keeps the earlier listener', () => {
+		expect(evaluateBrowserSubmit(observer, read)).toEqual([[], 0])
+		expect(evaluateBrowserSubmit(observer, read, [], 0)).toEqual([[], 0])
+		expect(evaluateBrowserSubmit(observer, read, [], 2)).toEqual([[], 0])
+		expect(evaluateBrowserSubmit(observer, read, [{ prevented: false, form: {} }], 2)).toEqual([
+			['self'],
+			0,
+		])
+		expect(observer).toContain(JSON.stringify(BROWSER_SUBMIT_KEY))
+		expect(read).toContain(JSON.stringify(BROWSER_SUBMIT_KEY))
 	})
 })

@@ -1805,6 +1805,8 @@ export interface BrowserElementInterface {
 
 /** Provides trusted page input and capture for a referenced element. */
 export interface BrowserPageElementInterface extends BrowserElementInterface {
+	/** The id of the frame whose document holds the element. */
+	readonly frame: string
 	/** Moves the pointer onto the element with a trusted mouse event. */
 	hover(options?: BrowserCallOptions): Promise<void>
 	/**
@@ -2217,7 +2219,10 @@ export interface BrowserFrameInterface {
 	): Promise<unknown>
 	/** Subscribes to a CDP event in the frame's current target session. */
 	subscribe(method: string, handler: CDPHandler): Promise<void>
-	/** Removes a frame-session CDP event subscription. */
+	/**
+	 * Removes a frame-session CDP event subscription from every session this frame object made it on,
+	 * so a frame that moved to another session releases the registration where it was made.
+	 */
 	unsubscribe(method: string, handler: CDPHandler): Promise<void>
 	/**
 	 * Persists bytes through a page writer; a child frame rejects because it owns no writer.

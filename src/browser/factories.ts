@@ -1,6 +1,6 @@
 import type { BrowserToolsetInterface, CDPTransportInterface } from '@src/core'
 import type {
-	BrowserDocumentOptions,
+	BrowserDOMViewOptions,
 	BrowserDocumentToolsetOptions,
 	BrowserDOMViewInterface,
 	SocketCDPTransportOptions,
@@ -26,7 +26,7 @@ import { SocketCDPTransport } from './transports/SocketCDPTransport.js'
  * await view.elements.outline() // { text: 'page "" about:blank\n(0 of 0 elements)', … }
  * ```
  */
-export function createBrowserDOMView(options: BrowserDocumentOptions): BrowserDOMViewInterface {
+export function createBrowserDOMView(options: BrowserDOMViewOptions): BrowserDOMViewInterface {
 	return new BrowserDOMView(options)
 }
 

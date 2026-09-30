@@ -808,7 +808,7 @@ describe('Browser proofs against the fixture pages', () => {
 			}
 		})
 
-		it('P19 clicks an out-of-process frame button through page.elements into the frame document; P21 hit-tests it on the frame session and P26 offsets it by the content box, and the outer decoy stays unclicked', async () => {
+		it('clicks an out-of-process frame button through page.elements into the frame document, hit-testing it on the frame session and offsetting it by the content box, and leaves the outer decoy unclicked', async () => {
 			const [pay] = await page.elements.find({ role: 'button', name: 'Pay' })
 			const button = requireValue(pay)
 			expect((await button.quad()).center).toStrictEqual({
@@ -828,7 +828,7 @@ describe('Browser proofs against the fixture pages', () => {
 			expect(await page.evaluate('document.body.dataset.decoy')).toBeUndefined()
 		})
 
-		it('P19 control: the raw frame-local point lands on the outer decoy, not in the frame', async () => {
+		it('lands the raw frame-local point on the outer decoy, not in the frame (control for the frame click)', async () => {
 			const received = readEvaluationResult(
 				await child.send(
 					'Runtime.evaluate',
@@ -849,7 +849,7 @@ describe('Browser proofs against the fixture pages', () => {
 			).toBe(received)
 		})
 
-		it('P19 lists the out-of-process frame at its document URL', async () => {
+		it('lists the out-of-process frame at its document URL', async () => {
 			expect((await page.frames()).map((frame) => frame.url)).toStrictEqual([
 				fixtures.url('/frame/outer'),
 				fixtures.url('/frame/inner', 'localhost'),
@@ -857,7 +857,7 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	})
 
-	it('P11 refuses a click on an overlay-covered button with OCCLUDED naming the covering element (control: the uncovered button clicks)', async () => {
+	it('refuses a click on an overlay-covered button with OCCLUDED naming the covering element (control: the uncovered button clicks)', async () => {
 		const page = await browser.create({ url: fixtures.url('/overlay') })
 		opened.push(page)
 		const [save] = await page.elements.find({ role: 'button', name: 'Save' })
@@ -875,7 +875,7 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(await page.evaluate('document.body.dataset.plain')).toBe('yes')
 	})
 
-	it('P22 clicks a text input, a textarea, and a select, whose hit test resolves to the control rather than its user-agent shadow node (control: a plain button clicks)', async () => {
+	it('clicks a text input, a textarea, and a select, whose hit test resolves to the control rather than its user-agent shadow node (control: a plain button clicks)', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		const [name] = await page.elements.find({ role: 'textbox', name: 'Name' })
@@ -896,7 +896,7 @@ describe('Browser proofs against the fixture pages', () => {
 		)
 	})
 
-	it('P24 clicks a button below the fold after the page scrolls to it, hit-testing in document coordinates', async () => {
+	it('clicks a button below the fold after the page scrolls to it, hit-testing in document coordinates', async () => {
 		const page = await browser.create({ url: fixtures.url('/article') })
 		opened.push(page)
 		const viewport = Number(await page.evaluate('innerHeight'))
@@ -1009,7 +1009,7 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(Math.min(...next)).toBeGreaterThan(Math.max(...previous))
 	})
 
-	it('P18 binds no later element to an earlier reference after churn and garbage collection (control: a removed and collected element no longer resolves)', async () => {
+	it('binds no later element to an earlier reference after churn and garbage collection (control: a removed and collected element no longer resolves)', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		await page.evaluate(
@@ -1088,7 +1088,7 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	})
 
-	it('P16 marks a reading stale after a same-document route and keeps references (control: a DOM mutation leaves it fresh)', async () => {
+	it('marks a reading stale after a same-document route and keeps references (control: a DOM mutation leaves it fresh)', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		const reading = await page.read()
@@ -1116,7 +1116,7 @@ describe('Browser proofs against the fixture pages', () => {
 		expect((await page.read()).stale).toBe(false)
 	})
 
-	it('P25 leaves outline usable after a back-forward cache restore', async () => {
+	it('leaves the outline usable after a back-forward cache restore', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		const navigations = createRecorder<[Readonly<Record<string, unknown>>]>()
@@ -1178,7 +1178,7 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	})
 
-	it('P15 resolves registry.start() to whether Schema.getDomains lists WebMCP (control: the list names Page)', async () => {
+	it('resolves registry.start() to whether Schema.getDomains lists WebMCP (control: the list names Page)', async () => {
 		const page = await browser.create({ url: fixtures.url('/registry') })
 		opened.push(page)
 		const domains = requireValue(parseProtocolDomains(await page.send('Schema.getDomains')))

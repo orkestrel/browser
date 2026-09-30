@@ -1,7 +1,13 @@
 import { describe, expect, it } from 'vitest'
-import { isBrowserElementError, isBrowserError } from '@src/core'
+import {
+	BROWSER_RESULT_LIMIT,
+	createBrowserReading,
+	isBrowserElementError,
+	isBrowserError,
+	isBrowserResultLimitError,
+} from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
-import { requireValue, waitForEvent } from '@orkestrel/test'
+import { readProperty, requireValue, waitForEvent } from '@orkestrel/test'
 import { createProbeElements, findProbeElement, loadProbeFrame } from '../../setupBrowser.js'
 
 describe('BrowserDOMView', () => {
@@ -16,6 +22,26 @@ describe('BrowserDOMView', () => {
 			expect(reading.text().text).toContain('A paragraph the reader wants.')
 			expect(reading.text().text).not.toContain('Footer chrome')
 			expect(reading.text({ distill: false }).text).toContain('Footer chrome nobody reads')
+		})
+
+		it('catches a document over BROWSER_RESULT_LIMIT that is parsed, a smaller read after the refusal that stays refused, or a caller-created reading that is limited', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const filler = probe.document.createElement('p')
+			filler.textContent = 'x'.repeat(BROWSER_RESULT_LIMIT)
+			probe.document.body.append(filler)
+			const html = probe.document.documentElement.outerHTML
+			const refusal = await view.read().catch((error: unknown) => error)
+			expect(isBrowserResultLimitError(refusal) && refusal.context).toEqual({
+				length: expect.any(Number),
+				limit: BROWSER_RESULT_LIMIT,
+			})
+			expect(
+				readProperty<number>(readProperty<object>(refusal, 'context'), 'length'),
+			).toBeGreaterThan(BROWSER_RESULT_LIMIT)
+			expect(createBrowserReading({ url: view.url, title: 'Probe', html }).title).toBe('Probe')
+			filler.remove()
+			expect((await view.read()).text().text).toContain('A paragraph the reader wants.')
 		})
 	})
 

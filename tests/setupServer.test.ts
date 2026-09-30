@@ -365,7 +365,7 @@ describe('createCDPTestServer', () => {
 		await server.close()
 	})
 
-	it('P5 writes the invokeTool reply and the toolResponded event in one socket write, and every other frame in its own', async () => {
+	it('writes the invokeTool reply and the toolResponded event in one socket write, and every other frame in its own', async () => {
 		const server = await createCDPTestServer()
 		try {
 			const tools = [{ name: 'search', description: 'Search', frameId: 'main' }]
@@ -578,6 +578,8 @@ describe('renderFixturePage', () => {
 		const expected = {
 			'/form': 'Delivery form',
 			'/form/placed': 'Order placed',
+			'/shop': 'Cedar Tea Tray',
+			'/shop/cart': 'Cart',
 			'/frame/outer': 'Checkout',
 			'/frame/inner': 'Payment',
 			'/frame/voucher': 'Voucher',
@@ -839,6 +841,29 @@ describe('createFixtureServer', () => {
 			const manifest = await fetch(fixtures.url('/node_modules/@orkestrel/contract/package.json'))
 			expect(manifest.status).toBe(404)
 			await manifest.text()
+		} finally {
+			await fixtures.destroy()
+		}
+	})
+
+	it('answers a POST to the cart with a 303 to the cart page, and a GET of the cart with the page', async () => {
+		const fixtures = await createFixtureServer()
+		try {
+			const posted = await fetch(fixtures.url('/shop/cart'), {
+				method: 'POST',
+				body: new URLSearchParams({ item: 'Cedar Tea Tray' }),
+				redirect: 'manual',
+			})
+			expect([posted.status, posted.headers.get('location'), await posted.text()]).toEqual([
+				303,
+				'/shop/cart',
+				'',
+			])
+			const cart = await fetch(fixtures.url('/shop/cart'))
+			expect([cart.status, await cart.text()]).toEqual([
+				200,
+				renderFixturePage('/shop/cart', fixtures.port),
+			])
 		} finally {
 			await fixtures.destroy()
 		}

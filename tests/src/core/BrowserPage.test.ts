@@ -12,6 +12,7 @@ import type {
 	BrowserWebSocketInterface,
 	BrowserWorkerInterface,
 } from '@src/core'
+import type { CDPSentMessage } from '../../setup.js'
 import { describe, it, expect } from 'vitest'
 import {
 	BrowserPage,
@@ -50,6 +51,7 @@ import {
 	FRAME_TREE_FIXTURE,
 	BROWSER_HISTORY_DIRECTIONS,
 	BROWSER_HISTORY_RESTORE_CASES,
+	BROWSER_NAVIGATION_COMMANDS,
 	JPEG_BASE64,
 	PNG_BASE64,
 	throwListenerError,
@@ -3226,6 +3228,143 @@ describe('BrowserPage history under the back-forward cache', () => {
 				reason,
 			)
 			expect(transport.sent.map((message) => message.method)).toEqual([])
+		},
+	)
+})
+
+describe('BrowserPage navigation completion under a signal', () => {
+	it.each(BROWSER_NAVIGATION_COMMANDS)(
+		'catches %s() whose completion read ignores the signal that aborts during it',
+		async (operation, command) => {
+			const { client, transport } = await createConnectedCDPClient()
+			try {
+				transport.onSend(command, (message) => {
+					transport.reply(message.id, {})
+					transport.event('Page.loadEventFired', {}, 'session-1')
+				})
+				replyOk(transport, 'Page.stopLoading')
+				const reads = createRecorder<[message: CDPSentMessage]>()
+				transport.onSend('Runtime.evaluate', reads.handler)
+				const page = new BrowserPage(
+					client,
+					'target-1',
+					'session-1',
+					undefined,
+					undefined,
+					'frame-1',
+				)
+				const controller = new AbortController()
+				const reason = new Error('The caller left during the read')
+				const call = { signal: controller.signal, timeout: 2_000 }
+				const settled = createRecorder<[]>()
+				const going = (
+					operation === 'navigate'
+						? page.navigate('https://example.com/article', call)
+						: page.reload(call)
+				)
+					.catch((error: unknown) => error)
+					.finally(settled.handler)
+				await waitForCondition('the completion read is sent', () => reads.count === 1)
+
+				controller.abort(reason)
+				await waitForCondition(
+					'the operation settles before the read replies',
+					() => settled.count === 1,
+					{ budget: 500 },
+				)
+				transport.reply(requireValue(reads.calls[0])[0].id, {
+					result: { value: 'https://example.com/article' },
+				})
+
+				expect(await going).toBe(reason)
+				expect(
+					transport.sent.filter((message) => message.method === 'Page.stopLoading'),
+				).toHaveLength(1)
+			} finally {
+				await client.close()
+			}
+		},
+	)
+
+	it.each(BROWSER_NAVIGATION_COMMANDS)(
+		'catches %s() resolving when its signal aborts in the turn its completion read replies',
+		async (operation, command) => {
+			const { client, transport } = await createConnectedCDPClient()
+			try {
+				transport.onSend(command, (message) => {
+					transport.reply(message.id, {})
+					transport.event('Page.loadEventFired', {}, 'session-1')
+				})
+				replyOk(transport, 'Page.stopLoading')
+				const controller = new AbortController()
+				const reason = new Error('The caller left with the read')
+				transport.onSend('Runtime.evaluate', (message) => {
+					transport.reply(message.id, { result: { value: 'https://example.com/article' } })
+					controller.abort(reason)
+				})
+				const page = new BrowserPage(
+					client,
+					'target-1',
+					'session-1',
+					undefined,
+					undefined,
+					'frame-1',
+				)
+				const call = { signal: controller.signal, timeout: 2_000 }
+
+				await expect(
+					operation === 'navigate'
+						? page.navigate('https://example.com/article', call)
+						: page.reload(call),
+				).rejects.toBe(reason)
+				expect(
+					transport.sent.filter((message) => message.method === 'Runtime.evaluate'),
+				).toHaveLength(1)
+			} finally {
+				await client.close()
+			}
+		},
+	)
+
+	it.each(BROWSER_NAVIGATION_COMMANDS)(
+		'catches %s() reading its completion when its signal aborts in the turn its load settles',
+		async (operation, command) => {
+			const { client, transport } = await createConnectedCDPClient()
+			try {
+				const controller = new AbortController()
+				const reason = new Error('The caller left with the load')
+				transport.onSend(command, (message) => {
+					transport.reply(message.id, {})
+					transport.event('Page.loadEventFired', {}, 'session-1')
+					controller.abort(reason)
+				})
+				replyOk(transport, 'Page.stopLoading')
+				scriptEvaluate(
+					transport,
+					(expression) => expression.includes('location.href'),
+					'https://example.com/article',
+				)
+				const page = new BrowserPage(
+					client,
+					'target-1',
+					'session-1',
+					undefined,
+					undefined,
+					'frame-1',
+				)
+				const call = { signal: controller.signal, timeout: 2_000 }
+
+				await expect(
+					operation === 'navigate'
+						? page.navigate('https://example.com/article', call)
+						: page.reload(call),
+				).rejects.toBe(reason)
+				expect(
+					transport.sent.filter((message) => message.method === 'Runtime.evaluate'),
+				).toHaveLength(0)
+			} finally {
+				await client.close()
+			}
 		},
 	)
 })

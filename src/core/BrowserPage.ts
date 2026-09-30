@@ -89,7 +89,14 @@ import {
 	parseBrowserDownloadStart,
 	parseBrowserPageError,
 } from './parsers.js'
-import { isArray, isFiniteNumber, isInteger, isRecord, isString } from '@orkestrel/contract'
+import {
+	isArray,
+	isError,
+	isFiniteNumber,
+	isInteger,
+	isRecord,
+	isString,
+} from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
@@ -420,7 +427,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 					throw options.signal.reason
 				}
 				if (
-					!(error instanceof Error) ||
+					!isError(error) ||
 					!/execution context was destroyed|cannot find context with specified id/i.test(
 						error.message,
 					)
@@ -707,18 +714,18 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	): Promise<BrowserNavigationResult> {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
+		const signal = options?.signal
+		const call = { timeout, ...(signal === undefined ? {} : { signal }) }
 		const watch = this.#watchNavigation()
 		const condition = options?.condition ?? 'load'
-		const wait = this.#waitForLoadEvent(condition, timeout, options?.signal)
+		const wait = this.#waitForLoadEvent(condition, timeout, signal)
 		void wait.catch(() => undefined)
 		let loader: string | undefined
 
+		// A load or a completion read that settles in the same tick as an abort leaves the signal as
+		// the only witness, so cancellation is checked after the wait and after the completion read.
 		try {
-			const result = await this.send(
-				'Page.navigate',
-				{ url },
-				{ timeout, ...(options?.signal !== undefined ? { signal: options.signal } : {}) },
-			)
+			const result = await this.send('Page.navigate', { url }, call)
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError(`Navigation failed: ${result['errorText']}`)
 			}
@@ -727,37 +734,41 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				this.#loader = loader
 			}
 			await wait
+			signal?.throwIfAborted()
+			const completed = await this.#completeNavigation(watch, loader, call)
+			signal?.throwIfAborted()
+			return completed
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
 			this.#cancelLoad()
 			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
 			throw error
 		}
-
-		return await this.#completeNavigation(watch, loader)
 	}
 
 	async #reload(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult> {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
+		const signal = options?.signal
+		const call = { timeout, ...(signal === undefined ? {} : { signal }) }
 		const watch = this.#watchNavigation()
-		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout, options?.signal)
+		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout, signal)
 		void wait.catch(() => undefined)
 
+		// Cancellation is checked after the wait and after the completion read, as `#navigate` does.
 		try {
-			await this.send('Page.reload', undefined, {
-				timeout,
-				...(options?.signal === undefined ? {} : { signal: options.signal }),
-			})
+			await this.send('Page.reload', undefined, call)
 			await wait
+			signal?.throwIfAborted()
+			const completed = await this.#completeNavigation(watch, undefined, call)
+			signal?.throwIfAborted()
+			return completed
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
 			this.#cancelLoad()
 			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
 			throw error
 		}
-
-		return await this.#completeNavigation(watch)
 	}
 
 	async #history(

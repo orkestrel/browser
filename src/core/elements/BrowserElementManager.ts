@@ -13,7 +13,7 @@ import type {
 	BrowserPoint,
 	CDPHandler,
 } from '../types.js'
-import { BrowserElement } from './BrowserElement.js'
+import { BrowserPageElement } from './BrowserPageElement.js'
 import { BrowserElementError, BrowserError } from '../errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
@@ -47,7 +47,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	readonly #input: BrowserElementManagerInput
 	readonly #records = new Map<
 		string,
-		{ readonly node: BrowserOutlineNode; readonly element: BrowserElement }
+		{ readonly node: BrowserOutlineNode; readonly element: BrowserPageElement }
 	>()
 	readonly #owners = new Map<
 		string,
@@ -393,7 +393,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		}
 		const reference = this.#input.reference()
 		const row = { ...node, frame, session, reference, ...(tool === undefined ? {} : { tool }) }
-		const element = new BrowserElement({
+		const element = new BrowserPageElement({
 			...this.#input,
 			description: this.#description.bind(this, key, row),
 			node: row,
@@ -426,7 +426,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 
 	#record(reference: string): {
 		readonly node: BrowserOutlineNode
-		readonly element: BrowserElement
+		readonly element: BrowserPageElement
 	} {
 		const canonical = parseBrowserReference(reference)
 		const entry = [...this.#records.values()].find((record) => record.node.reference === canonical)

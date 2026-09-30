@@ -978,6 +978,17 @@ document.getElementById('summary').textContent = 'Delivery booked for ' + query.
 </script>
 </body></html>`
 
+const SHOP_PAGE = `<!doctype html><html><head><title>Cedar Tea Tray</title></head><body>
+<main><h1>Cedar Tea Tray</h1>
+<form action="/shop/cart" method="post"><input name="item" type="hidden" value="Cedar Tea Tray"><button id="add">Add to cart</button></form>
+<form action="/shop/cart" method="post" onsubmit="event.preventDefault(); document.body.dataset.held = 'yes'"><button id="hold">Save for later</button></form>
+</main>
+</body></html>`
+
+const CART_PAGE = `<!doctype html><html><head><title>Cart</title></head><body>
+<main><h1>Cart</h1><p>Your cart holds the Cedar Tea Tray.</p></main>
+</body></html>`
+
 // The 16 px button sits at the frame origin, so a point offset by the frame's border box rather
 // than its content box lands on the frame's 10 px border in the outer document.
 const INNER_PAGE = `<!doctype html><html><head><title>Payment</title><style>html,body{margin:0}#pay{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}</style></head><body>
@@ -1094,6 +1105,10 @@ try {
  *   recorded on `document.body.dataset.clicks`, a back-forward cache restore sets
  *   `document.body.dataset.restored`, and `section#pool`, outside the form, is an empty container
  * - `/form/placed` — the submission's result, whose summary names the submitted `name` and `speed`
+ * - `/shop` — a product page whose `Add to cart` button posts its form to `/shop/cart`, and whose
+ *   `Save for later` form's `submit` handler calls `preventDefault()` and sets
+ *   `document.body.dataset.held`
+ * - `/shop/cart` — the cart a `POST` to `/shop/cart` redirects to with `303`
  * - `/frame/outer` — a `127.0.0.1` document framing `/frame/inner` from `localhost` inside a
  *   10 px border at (220, 160), with a 16 px `Decoy` button under the frame-local point of the
  *   framed `Pay` button
@@ -1138,6 +1153,10 @@ export function renderFixturePage(path: string, port: number): string | undefine
 			return FORM_PAGE
 		case '/form/placed':
 			return PLACED_PAGE
+		case '/shop':
+			return SHOP_PAGE
+		case '/shop/cart':
+			return CART_PAGE
 		case '/frame/outer':
 			return `<!doctype html><html><head><title>Checkout</title><style>html,body{margin:0;height:100%}#decoy{position:absolute;left:0;top:0;width:16px;height:16px;margin:0;padding:0;border:0}iframe{position:absolute;left:220px;top:160px;width:300px;height:200px;border:10px solid gray;padding:0}</style></head><body>
 <button id="decoy" onclick="document.body.dataset.decoy = [document.body.dataset.decoy, event.target.id + ':' + event.isTrusted].filter(Boolean).join(' ')">Decoy</button>
@@ -1235,9 +1254,9 @@ export async function loadFixtureModule(
 /**
  * Starts the fixture page server on an ephemeral `127.0.0.1` port.
  *
- * @returns A {@link FixtureServerInterface} answering every {@link renderFixturePage} path with
- * `200` and HTML, every {@link loadFixtureModule} path with `200` and JavaScript, and any other
- * path with `404`
+ * @returns A {@link FixtureServerInterface} answering a `POST` to `/shop/cart` with `303` and the
+ * location `/shop/cart`, every {@link renderFixturePage} path with `200` and HTML, every
+ * {@link loadFixtureModule} path with `200` and JavaScript, and any other path with `404`
  * @remarks Chromium resolves `localhost` to the loopback interface, so the one listener serves
  * both {@link FixtureHost} origins.
  */
@@ -1259,6 +1278,12 @@ async function serveFixtureRequest(
 	response: ServerResponse,
 ): Promise<void> {
 	const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
+	if (request.method === 'POST' && path === '/shop/cart') {
+		request.resume()
+		response.writeHead(303, { location: '/shop/cart' })
+		response.end()
+		return
+	}
 	const page = renderFixturePage(path, request.socket.localPort ?? 0)
 	if (page !== undefined) {
 		response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })

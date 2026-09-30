@@ -179,6 +179,12 @@ export const BROWSER_HAR_CREATOR = Object.freeze({
 export const BROWSER_SCREENSHOT_ATTRIBUTE = 'data-orkestrel-screenshot'
 
 /**
+ * Names the isolated-world property that holds the `submit` observer an action installs before
+ * its input, `'__orkestrelSubmit'`.
+ */
+export const BROWSER_SUBMIT_KEY = '__orkestrelSubmit'
+
+/**
  * Bounds the best-effort `Page.stopLoading` call issued after a failed `navigate()` at `1_000`
  * milliseconds.
  *
@@ -496,11 +502,11 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * @remarks
  * Every tool description is at most 25 words and says what the tool shows or does, and for
  * `look` and `read` when to call it; every parameter description is at most 100 characters.
- * Every tool declares at least one required parameter: a streamed call to a tool declaring none
- * ended the stream with an error in the real-model runs. `look` takes `what` alone and `read`
- * takes `what` and `offset`; neither is scoped to an element, and an element's own reading is
- * `BrowserElementInterface.read`. `look` and `read` annotate `pure` and `untrusted`, `wait`
- * and `tabs` annotate `pure`, and the rest carry no annotation.
+ * Every tool declares at least one required parameter, because the streamed tool-call parser of
+ * Ollama 0.34.4 rejects a call to a tool that declares no parameter. `look` takes `what` alone
+ * and `read` takes `what` and `offset`; neither is scoped to an element, and an element's own
+ * reading is `BrowserElementInterface.read`. `look` and `read` annotate `pure` and `untrusted`,
+ * `wait` and `tabs` annotate `pure`, and the rest carry no annotation.
  */
 export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>> = Object.freeze({
 	look: Object.freeze({
@@ -561,7 +567,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 				}),
 				submit: Object.freeze({
 					type: 'boolean',
-					description: 'Whether to press Enter afterward.',
+					description: 'True to submit its form after typing.',
 				}),
 			}),
 			required: Object.freeze(['ref', 'text']),
@@ -591,7 +597,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	wait: Object.freeze({
 		name: 'wait',
-		description: 'Waits for that text to appear.',
+		description: 'Waits for that text to appear on the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -607,7 +613,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	dialog: Object.freeze({
 		name: 'dialog',
-		description: 'Accept or dismiss the open dialog.',
+		description: 'Accepts or dismisses the open dialog.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -622,7 +628,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	tabs: Object.freeze({
 		name: 'tabs',
-		description: 'List the open tabs; the current one is marked.',
+		description: 'Lists the open tabs; the current one is marked.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -634,7 +640,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	switch: Object.freeze({
 		name: 'switch',
-		description: 'Switch to a tab from tabs, such as t2.',
+		description: 'Switches to a tab from tabs, such as t2.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({

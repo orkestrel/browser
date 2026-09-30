@@ -6,13 +6,18 @@ import type {
 import type {
 	BrowserDOMElementInterface,
 	BrowserDOMViewInterface,
-	BrowserDocumentOptions,
+	BrowserDOMViewOptions,
 } from './types.js'
 import { BrowserError, createBrowserReading, validateBrowserTimeout } from '@src/core'
 import { BrowserDOMElementManager } from './elements/BrowserDOMElementManager.js'
 import { BROWSER_DOCUMENT_TIMEOUT_MS } from './constants.js'
 import { BrowserDOMWait } from './BrowserDOMWait.js'
-import { collectBrowserRoots, isBrowserDocument, listenBrowserNavigation } from './helpers.js'
+import {
+	collectBrowserRoots,
+	isBrowserDocument,
+	listenBrowserNavigation,
+	readBrowserCapture,
+} from './helpers.js'
 
 /**
  * Reads and drives a DOM document from a realm that can reach it, without trusted input.
@@ -49,7 +54,7 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 	#epoch = 0
 	#listeners = new AbortController()
 
-	constructor(options: BrowserDocumentOptions) {
+	constructor(options: BrowserDOMViewOptions) {
 		const document = options.document
 		if (!isBrowserDocument(document) || document.defaultView === null) {
 			throw new BrowserError(
@@ -94,11 +99,8 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
 		this.#release.signal.throwIfAborted()
 		options?.signal?.throwIfAborted()
-		const document = this.#current()
 		return createBrowserReading({
-			url: document.URL,
-			title: document.title,
-			html: document.documentElement.outerHTML,
+			...readBrowserCapture(this.#current().documentElement),
 			navigation: this.#navigation.bind(this),
 		})
 	}

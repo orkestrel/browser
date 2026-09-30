@@ -10,6 +10,7 @@ import {
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_SCREENSHOT_ATTRIBUTE,
 	BROWSER_STABLE_FRAME_COUNT,
+	BROWSER_SUBMIT_KEY,
 } from './constants.js'
 
 /**
@@ -104,6 +105,68 @@ export function compileHitFunction(): string {
 		}
 		return false
 	}`
+}
+
+/**
+ * Compiles the installation of a capture-phase `submit` observer on the window of the world it
+ * runs in.
+ *
+ * @remarks
+ * The observer records every `submit` event the window sees from installation until
+ * {@link compileSubmitReadExpression} reads and removes it, under {@link BROWSER_SUBMIT_KEY}, and
+ * replaces an observer an earlier installation left in place. A listener of an isolated world
+ * observes the events the page's own scripts dispatch, because both worlds share one DOM.
+ *
+ * @returns Expression source that resolves `true`
+ */
+export function compileSubmitObserverExpression(): string {
+	const key = JSON.stringify(BROWSER_SUBMIT_KEY)
+	return `(() => {
+	const previous = globalThis[${key}]
+	if (previous !== undefined) removeEventListener('submit', previous.listener, true)
+	const state = { events: [], listener: undefined }
+	state.listener = (event) => { state.events.push(event) }
+	globalThis[${key}] = state
+	addEventListener('submit', state.listener, true)
+	return true
+})()`
+}
+
+/**
+ * Compiles the read of the `submit` observer {@link compileSubmitObserverExpression} installs,
+ * removing the observer.
+ *
+ * @remarks
+ * The read lists, without repeats and in the order first recorded, the destination of every
+ * recorded `submit` that kept its default action: `self` for a target that is empty or `_self`,
+ * `parent` for `_parent`, and `top` for `_top`. The target is the one the submitter, the form, or
+ * the document's `base` element names. A prevented submission, one whose method is `dialog`, and
+ * one aimed at another browsing context add nothing. Every listener of an event has run by the
+ * time the input that fired it settles, so `defaultPrevented` is final by then. The list is empty
+ * when no observer is installed.
+ *
+ * @returns Expression source that resolves an array of `self`, `parent`, and `top`
+ */
+export function compileSubmitReadExpression(): string {
+	const key = JSON.stringify(BROWSER_SUBMIT_KEY)
+	return `(() => {
+	const state = globalThis[${key}]
+	delete globalThis[${key}]
+	if (state === undefined) return []
+	removeEventListener('submit', state.listener, true)
+	const destinations = { '': 'self', _self: 'self', _parent: 'parent', _top: 'top' }
+	const found = []
+	for (const event of state.events) {
+		if (event.defaultPrevented) continue
+		const submitter = event.submitter ?? null
+		const form = event.target
+		const method = (submitter?.getAttribute('formmethod') ?? form.getAttribute('method') ?? '').toLowerCase()
+		const target = (submitter?.getAttribute('formtarget') ?? form.getAttribute('target') ?? document.querySelector('base[target]')?.getAttribute('target') ?? '').toLowerCase()
+		const destination = Object.hasOwn(destinations, target) ? destinations[target] : undefined
+		if (method !== 'dialog' && destination !== undefined && !found.includes(destination)) found.push(destination)
+	}
+	return found
+})()`
 }
 
 /**

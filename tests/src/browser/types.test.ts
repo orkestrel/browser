@@ -6,7 +6,7 @@ import type {
 	BrowserViewInterface,
 } from '@src/core'
 import type {
-	BrowserDocumentOptions,
+	BrowserDOMViewOptions,
 	BrowserDocumentToolsetOptions,
 	BrowserDOMElement,
 	BrowserDOMElementInput,
@@ -57,8 +57,8 @@ type BrowserFaceContracts = [
 
 /** Holds one `true` per public browser face type the `@src/browser` barrel re-exports. */
 type BrowserFaceExports = [
-	Assignable<BrowserDocumentOptions, { readonly document: Document }>,
-	Assignable<BrowserDocumentToolsetOptions, BrowserDocumentOptions>,
+	Assignable<BrowserDOMViewOptions, { readonly document: Document }>,
+	Assignable<BrowserDocumentToolsetOptions, BrowserDOMViewOptions>,
 	Assignable<BrowserNameContext, { readonly hidden?: boolean }>,
 	Assignable<BrowserDOMElementInput, { readonly reference: string }>,
 	Assignable<BrowserDOMElementManagerInput, { readonly signal: AbortSignal }>,

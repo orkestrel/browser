@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest'
-import { isBrowserElementError, isBrowserError } from '@src/core'
+import {
+	BROWSER_RESULT_LIMIT,
+	isBrowserElementError,
+	isBrowserError,
+	isBrowserResultLimitError,
+} from '@src/core'
 import { BrowserDOMElement, createBrowserDOMView } from '@src/browser'
-import { createRecorder, requireValue } from '@orkestrel/test'
+import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
 import {
 	CollectedReference,
 	createProbeElements,
@@ -462,6 +467,24 @@ describe('BrowserDOMElement', () => {
 			expect(reading.title).toBe('Probe')
 			expect(reading.text({ distill: false }).text).toContain('Save')
 			expect(save.role).toBe('button')
+		})
+
+		it('catches an element over BROWSER_RESULT_LIMIT that is parsed, or a smaller read after the refusal that stays refused', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const save = await findProbeElement(view, 'button')
+			const filler = probe.document.createTextNode('x'.repeat(BROWSER_RESULT_LIMIT))
+			probe.save.append(filler)
+			const refusal = await save.read().catch((error: unknown) => error)
+			expect(isBrowserResultLimitError(refusal) && refusal.context).toEqual({
+				length: expect.any(Number),
+				limit: BROWSER_RESULT_LIMIT,
+			})
+			expect(
+				readProperty<number>(readProperty<object>(refusal, 'context'), 'length'),
+			).toBeGreaterThan(BROWSER_RESULT_LIMIT)
+			filler.remove()
+			expect((await save.read()).text({ distill: false }).text).toContain('Save')
 		})
 	})
 })

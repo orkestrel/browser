@@ -1649,6 +1649,61 @@ describe('BrowserContext', () => {
 
 			await expect(context.create()).rejects.toThrow('Browser context is closed')
 		})
+
+		it('catches a closed-context refusal without BROWSER_CONTEXT_CLOSED, or an attachment failure that loses the client error', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const held: CDPSentMessage[] = []
+			scriptCDPAttach(transport, 'session-1', undefined, (message) => {
+				if (message.method !== 'Runtime.enable') return false
+				held.push(message)
+				return true
+			})
+			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
+			replyOk(transport, 'Target.detachFromTarget')
+			replyOk(transport, 'Target.closeTarget')
+			const context = new BrowserContext(client)
+			try {
+				const creating = context.create().catch((error: unknown) => error)
+				await waitForCondition('the creation enables its runtime', () => held.length === 1)
+				const destroying = context.destroy()
+				transport.reply(requireValue(held[0], 'runtime enable').id, {})
+				const during = await creating
+				await destroying
+				const [created, synced] = await Promise.all([
+					context.create().catch((error: unknown) => error),
+					context.sync([]).catch((error: unknown) => error),
+				])
+				expect(
+					[during, created, synced].map((error) => [
+						isBrowserError(error) && error.message,
+						isBrowserError(error) && error.code,
+					]),
+				).toEqual([
+					['Browser context closed during page creation', 'BROWSER_CONTEXT_CLOSED'],
+					['Browser context is closed', 'BROWSER_CONTEXT_CLOSED'],
+					['Browser context is closed', 'BROWSER_CONTEXT_CLOSED'],
+				])
+			} finally {
+				await client.close()
+			}
+			const attached = await createConnectedCDPClient()
+			replyOk(attached.transport, 'Target.createTarget', { targetId: 'target-1' })
+			replyOk(attached.transport, 'Target.closeTarget')
+			attached.transport.onSend('Target.attachToTarget', (message) =>
+				attached.transport.fail(message.id, 'No target with given id found', -32602),
+			)
+			try {
+				const refusal = await new BrowserContext(attached.client)
+					.create()
+					.catch((error: unknown) => error)
+				expect(isBrowserError(refusal) && [refusal.code, refusal.message]).toEqual([
+					'BROWSER_CDP_ERROR',
+					'No target with given id found',
+				])
+			} finally {
+				await attached.client.close()
+			}
+		})
 	})
 
 	describe('emitter options', () => {
