@@ -479,6 +479,13 @@ describe('createStartedCodegen', () => {
 		)
 		expect(transport.sent.every((message) => message.sessionId === 'session-4')).toBe(true)
 	})
+
+	it('scripts the binding removal so stop() resolves on the started fixture', async () => {
+		const { codegen } = await createStartedCodegen()
+
+		await expect(codegen.stop()).resolves.toEqual([])
+		expect(codegen.started).toBe(false)
+	})
 })
 
 describe('createCodegenBindingPayload', () => {

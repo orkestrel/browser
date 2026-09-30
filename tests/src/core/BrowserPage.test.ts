@@ -1452,6 +1452,7 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Runtime.addBinding')
 			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
 			replyOk(transport, 'Runtime.evaluate')
+			replyOk(transport, 'Runtime.removeBinding')
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			const codegen = await page.codegen()
 
@@ -1469,6 +1470,7 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Runtime.addBinding')
 			replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
 			replyOk(transport, 'Runtime.evaluate')
+			replyOk(transport, 'Runtime.removeBinding')
 			replyOk(transport, 'Target.closeTarget')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')

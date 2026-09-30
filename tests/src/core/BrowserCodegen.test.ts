@@ -11,6 +11,20 @@ import {
 
 const SESSION_ID = 'session-1'
 
+async function createUnscriptedStop() {
+	const transport = createCDPTestTransport()
+	const client = createCDPClient({ transport })
+	await client.connect()
+	replyOk(transport, 'Runtime.enable')
+	replyOk(transport, 'Runtime.addBinding')
+	replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
+	replyOk(transport, 'Runtime.evaluate')
+	const stops = createRecorder<[unknown]>()
+	const codegen = new BrowserCodegen(client, SESSION_ID, { on: { stop: stops.handler } })
+	await codegen.start()
+	return { transport, codegen, stops }
+}
+
 // === BrowserCodegen
 
 describe('BrowserCodegen', () => {
@@ -325,6 +339,61 @@ describe('BrowserCodegen', () => {
 			expect(codegen.actions()).toEqual([])
 		})
 
+		it('sends one Runtime.removeBinding with the binding name on the recorder session', async () => {
+			const { transport, codegen } = await createStartedCodegen()
+
+			await codegen.stop()
+
+			const removals = transport.sent.filter((m) => m.method === 'Runtime.removeBinding')
+			expect(removals).toHaveLength(1)
+			expect(removals[0]?.params).toEqual({ name: '__orkestrelBrowserCodegen' })
+			expect(removals[0]?.sessionId).toBe(SESSION_ID)
+		})
+
+		it('keeps a binding call emitted before the removal reply', async () => {
+			const { transport, codegen } = await createUnscriptedStop()
+			transport.onSend('Runtime.removeBinding', (message) => {
+				transport.event(
+					'Runtime.bindingCalled',
+					createCodegenBindingPayload({
+						action: 'fill',
+						selector: '#editable',
+						value: 'hello world',
+					}),
+					SESSION_ID,
+				)
+				transport.reply(message.id, {})
+			})
+
+			const snapshot = await codegen.stop()
+
+			expect(snapshot).toEqual([{ action: 'fill', selector: '#editable', value: 'hello world' }])
+		})
+
+		it('resolves with the snapshot and detaches when the removal rejects', async () => {
+			const { transport, codegen, stops } = await createUnscriptedStop()
+			transport.event(
+				'Runtime.bindingCalled',
+				createCodegenBindingPayload({ action: 'click', selector: '#a' }),
+				SESSION_ID,
+			)
+			transport.onSend('Runtime.removeBinding', (message) => {
+				transport.fail(message.id, 'session gone')
+			})
+
+			const snapshot = await codegen.stop()
+			transport.event(
+				'Runtime.bindingCalled',
+				createCodegenBindingPayload({ action: 'click', selector: '#late' }),
+				SESSION_ID,
+			)
+
+			expect(snapshot).toEqual([{ action: 'click', selector: '#a' }])
+			expect(codegen.started).toBe(false)
+			expect(stops.count).toBe(1)
+			expect(codegen.actions()).toEqual([{ action: 'click', selector: '#a' }])
+		})
+
 		it('is a no-op returning the current snapshot when never started', async () => {
 			const transport = createCDPTestTransport()
 			const client = createCDPClient({ transport })
@@ -351,6 +420,15 @@ describe('BrowserCodegen', () => {
 			expect(codegen.started).toBe(false)
 			expect(codegen.actions()).toEqual([])
 			expect(codegen.emitter.destroyed).toBe(true)
+		})
+
+		it('resolves when the removal rejects', async () => {
+			const { transport, codegen } = await createUnscriptedStop()
+			transport.onSend('Runtime.removeBinding', (message) => {
+				transport.fail(message.id, 'session gone')
+			})
+
+			await expect(codegen.destroy()).resolves.toBeUndefined()
 		})
 
 		it('is idempotent', async () => {

@@ -148,8 +148,18 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	}
 
 	async #stop(): Promise<readonly BrowserCodegenAction[]> {
-		this.#unsubscribe()
-		this.#started = false
+		try {
+			await this.#client.send(
+				'Runtime.removeBinding',
+				{ name: BROWSER_CODEGEN_BINDING_NAME },
+				{ session: this.#session },
+			)
+		} catch {
+			// A rejected removal means the session is gone, so no further event can arrive
+		} finally {
+			this.#unsubscribe()
+			this.#started = false
+		}
 
 		const snapshot = this.actions()
 		this.#emitter.emit('stop', snapshot)
