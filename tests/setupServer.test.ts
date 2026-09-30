@@ -367,61 +367,63 @@ describe('createCDPTestServer', () => {
 
 	it('P5 writes the invokeTool reply and the toolResponded event in one socket write, and every other frame in its own', async () => {
 		const server = await createCDPTestServer()
-		const tools = [{ name: 'search', description: 'Search', frameId: 'main' }]
-		server.advertise(tools, { status: 'Completed', output: { found: 'book' } })
-		const frames: unknown[] = []
+		try {
+			const tools = [{ name: 'search', description: 'Search', frameId: 'main' }]
+			server.advertise(tools, { status: 'Completed', output: { found: 'book' } })
+			const frames: unknown[] = []
 
-		const client = new WebSocket(server.endpoint)
-		client.addEventListener('message', (event) => frames.push(JSON.parse(String(event.data))))
-		await new Promise<void>((resolve, reject) => {
-			client.addEventListener('open', () => resolve(), { once: true })
-			client.addEventListener(
-				'error',
-				() => reject(new Error('The CDP test server refused the upgrade')),
-				{ once: true },
+			const client = new WebSocket(server.endpoint)
+			client.addEventListener('message', (event) => frames.push(JSON.parse(String(event.data))))
+			await new Promise<void>((resolve, reject) => {
+				client.addEventListener('open', () => resolve(), { once: true })
+				client.addEventListener(
+					'error',
+					() => reject(new Error('The CDP test server refused the upgrade')),
+					{ once: true },
+				)
+			})
+
+			client.send(JSON.stringify({ id: 1, method: 'WebMCP.enable', sessionId: 'session-1' }))
+			client.send(
+				JSON.stringify({
+					id: 2,
+					method: 'WebMCP.invokeTool',
+					params: { frameId: 'main', toolName: 'search', input: { query: 'book' } },
+					sessionId: 'session-1',
+				}),
 			)
-		})
+			await waitForCondition(
+				'the CDP test server answered both requests',
+				() => frames.length === 4,
+				{
+					budget: 2000,
+				},
+			)
 
-		client.send(JSON.stringify({ id: 1, method: 'WebMCP.enable', sessionId: 'session-1' }))
-		client.send(
-			JSON.stringify({
-				id: 2,
-				method: 'WebMCP.invokeTool',
-				params: { frameId: 'main', toolName: 'search', input: { query: 'book' } },
+			const reply = { id: 2, result: { invocationId: 'invocation-2' } }
+			const responded = {
+				method: 'WebMCP.toolResponded',
+				params: { status: 'Completed', output: { found: 'book' }, invocationId: 'invocation-2' },
 				sessionId: 'session-1',
-			}),
-		)
-		await waitForCondition(
-			'the CDP test server answered both requests',
-			() => frames.length === 4,
-			{
-				budget: 2000,
-			},
-		)
-
-		const reply = { id: 2, result: { invocationId: 'invocation-2' } }
-		const responded = {
-			method: 'WebMCP.toolResponded',
-			params: { status: 'Completed', output: { found: 'book' }, invocationId: 'invocation-2' },
-			sessionId: 'session-1',
+			}
+			expect(
+				server.writes.map((chunk) =>
+					readWebSocketFrames(chunk).map((payload): unknown => JSON.parse(payload)),
+				),
+			).toStrictEqual([
+				[{ id: 1, result: {} }],
+				[{ method: 'WebMCP.toolsAdded', params: { tools }, sessionId: 'session-1' }],
+				[reply, responded],
+			])
+			expect(frames).toStrictEqual([
+				{ id: 1, result: {} },
+				{ method: 'WebMCP.toolsAdded', params: { tools }, sessionId: 'session-1' },
+				reply,
+				responded,
+			])
+		} finally {
+			await server.close()
 		}
-		expect(
-			server.writes.map((chunk) =>
-				readWebSocketFrames(chunk).map((payload): unknown => JSON.parse(payload)),
-			),
-		).toStrictEqual([
-			[{ id: 1, result: {} }],
-			[{ method: 'WebMCP.toolsAdded', params: { tools }, sessionId: 'session-1' }],
-			[reply, responded],
-		])
-		expect(frames).toStrictEqual([
-			{ id: 1, result: {} },
-			{ method: 'WebMCP.toolsAdded', params: { tools }, sessionId: 'session-1' },
-			reply,
-			responded,
-		])
-
-		await server.close()
 	})
 
 	it('counts the open sockets and closes each one', async () => {
@@ -630,13 +632,22 @@ describe('renderFixturePage', () => {
 			'<iframe title="Voucher form" src="http://localhost:4100/frame/field"></iframe>',
 		)
 		expect(renderFixturePage('/frame/field', 4200)).toContain(
-			'<form action="http://127.0.0.1:4200/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label></form>',
+			'<form action="http://127.0.0.1:4200/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label><input id="key" name="key" type="hidden"></form>',
+		)
+		expect(renderFixturePage('/frame/field', 4200)).toContain(
+			"document.getElementById('code').addEventListener('keydown', (event) => { if (event.key === 'Enter') document.getElementById('key').value = event.key })",
+		)
+		expect(renderFixturePage('/frame/done', 4200)).toContain(
+			"'Received key ' + new URLSearchParams(location.search).get('key')",
 		)
 	})
 
 	it('asks confirm on Delete, guards leaving the beforeunload page only, and opens the child page from the popup page', () => {
 		expect(renderFixturePage('/confirm', 4100)).toContain(
 			'onclick="document.body.dataset.answer = String(confirm(\'Delete the draft?\'))">Delete</button>',
+		)
+		expect(renderFixturePage('/confirm', 4100)).toContain(
+			'onclick="document.body.dataset.kept = String(Number(document.body.dataset.kept ?? \'0\') + 1)">Keep</button>',
 		)
 		expect(renderFixturePage('/beforeunload', 4100)).toContain(
 			"addEventListener('beforeunload', (event) => { event.preventDefault(); event.returnValue = '' })",

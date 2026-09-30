@@ -246,8 +246,12 @@ export interface CDPTestServerInterface {
 	/** Count of open WebSocket sockets (for close-propagation assertions). */
 	readonly sockets: number
 	/**
-	 * Every chunk the server wrote to an open WebSocket after its upgrade, one entry per socket
-	 * write, in write order: each reply, failure, and event, and each WebMCP burst.
+	 * Every CDP application-message write the server performed on an open WebSocket, one entry per
+	 * socket write, in write order: each reply, failure, and event, and each WebMCP burst.
+	 *
+	 * @remarks
+	 * The upgrade response, pongs, and close and other control frames go through
+	 * `@orkestrel/websocket`'s own socket writer and are not recorded.
 	 */
 	readonly writes: readonly Buffer[]
 	/** Set the targets returned by `/json/list` (drives `fetchCDPTargets`/`syncContexts`). */
@@ -981,7 +985,10 @@ const INNER_PAGE = `<!doctype html><html><head><title>Payment</title><style>html
 </body></html>`
 
 const DONE_PAGE = `<!doctype html><html><head><title>Voucher applied</title></head><body>
-<main><h1>Voucher applied</h1></main>
+<main><h1>Voucher applied</h1><p id="key">Pending</p></main>
+<script>
+document.getElementById('key').textContent = 'Received key ' + new URLSearchParams(location.search).get('key')
+</script>
 </body></html>`
 
 const OVERLAY_PAGE = `<!doctype html><html><head><title>Overlay</title><style>body{margin:0}#save,#plain{position:absolute;left:20px;width:120px;height:40px}#save{top:20px}#plain{top:200px}#veil{position:absolute;left:0;top:0;width:300px;height:100px;z-index:9;background:rgba(0,0,0,.2)}</style></head><body>
@@ -1013,7 +1020,7 @@ if (registry !== undefined) registry.registerTool({ name: 'fixture_echo', descri
 const CONFIRM_PAGE = `<!doctype html><html><head><title>Drafts</title></head><body>
 <main><h1>Drafts</h1>
 <button id="delete" type="button" onclick="document.body.dataset.answer = String(confirm('Delete the draft?'))">Delete</button>
-<button id="keep" type="button" onclick="document.body.dataset.kept = 'yes'">Keep</button>
+<button id="keep" type="button" onclick="document.body.dataset.kept = String(Number(document.body.dataset.kept ?? '0') + 1)">Keep</button>
 </main>
 </body></html>`
 
@@ -1095,8 +1102,10 @@ try {
  *   `document.body.dataset.decoy` in the outer document
  * - `/frame/voucher` — a `127.0.0.1` document framing `/frame/field` from `localhost`
  * - `/frame/field` — a form holding one `Code` text input, which an Enter submits to
- *   `/frame/done` on `127.0.0.1`, so the frame navigates to another site and process
- * - `/frame/done` — the voucher form's result
+ *   `/frame/done` on `127.0.0.1`, so the frame navigates to another site and process; a
+ *   `keydown` listener writes an Enter's key into the form's hidden `key` field before the
+ *   submission, so the submitted query carries `key=Enter` only when the key-down reached the frame
+ * - `/frame/done` — the voucher form's result, whose text reads back the submitted `key`
  * - `/overlay` — a `Save` button covered by `div#veil` and an uncovered `Plain` button
  * - `/late` — a `Reveal` button that inserts {@link FIXTURE_LATE_TEXT} after
  *   {@link FIXTURE_LATE_DELAY} milliseconds and records the insertion's epoch time in
@@ -1107,7 +1116,7 @@ try {
  * - `/registry` — registers the `fixture_echo` tool through the page's WebMCP registry when
  *   the browser exposes one
  * - `/confirm` — a `Delete` button whose click asks `confirm('Delete the draft?')` and records
- *   the answer on `document.body.dataset.answer`, and a `Keep` button that sets
+ *   the answer on `document.body.dataset.answer`, and a `Keep` button that counts its clicks on
  *   `document.body.dataset.kept` with no dialog
  * - `/beforeunload` — a `Next` link to `/beforeunload/next` on a page whose `beforeunload`
  *   handler asks to stay
@@ -1142,7 +1151,10 @@ export function renderFixturePage(path: string, port: number): string | undefine
 </body></html>`
 		case '/frame/field':
 			return `<!doctype html><html><head><title>Voucher form</title></head><body>
-<form action="http://127.0.0.1:${port}/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label></form>
+<form action="http://127.0.0.1:${port}/frame/done" method="get"><label>Code <input id="code" name="code" type="text"></label><input id="key" name="key" type="hidden"></form>
+<script>
+document.getElementById('code').addEventListener('keydown', (event) => { if (event.key === 'Enter') document.getElementById('key').value = event.key })
+</script>
 </body></html>`
 		case '/frame/done':
 			return DONE_PAGE

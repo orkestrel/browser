@@ -13,8 +13,10 @@
  */
 
 import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/server'
+import { BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
 import { findSystemBrowser } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
+import { waitForCondition } from '@orkestrel/test'
 
 /**
  * Lists the container-safe launch flags every live-browser proof shares.
@@ -279,4 +281,75 @@ export function requireToolText(result: unknown): string {
 	if (!isRecord(result) || result['success'] !== true || !isString(result['value']))
 		throw new Error('The tool call returned no text')
 	return result['value']
+}
+
+/**
+ * Holds the note a receipt carries when a navigation replaces the page while its view is captured.
+ */
+export const SERVICE_CHANGED_NOTE =
+	'(The view could not be read: outline is gone because the page changed; call look for fresh refs.; call look.)'
+
+/**
+ * Describes the receipt a correct toolset returns for an action whose view capture completes in
+ * time.
+ *
+ * @remarks
+ * - `action` — the receipt's action sentence without its closing period, such as
+ *   `Clicked e1 textbox "Name"`
+ * - `view` — the outline the capture reads
+ * - `url` — for an action that navigates, the URL the navigation commits
+ */
+export interface ServiceReceipt {
+	readonly action: string
+	readonly view: string
+	readonly url?: string
+}
+
+/**
+ * Checks whether a receipt is one a correct toolset returns for an action on a host whose load
+ * or capture can outrun the receipt deadline.
+ *
+ * @param receipt - The text the tool call returned
+ * @param expected - The action sentence, the captured view, and the committed URL of a navigation
+ * @returns True if the receipt is the action line followed by the expected view or by
+ * `BROWSER_TOOL_DEADLINE_NOTE`, or, when `expected.url` is given, the action line followed by
+ * the note that the navigation replaced the outline being captured, or the action line naming
+ * `the page is still loading URL` followed by any view; false otherwise
+ * @remarks A busy host can deliver the navigation request after the action's input command
+ * settles, so the capture starts on the page the navigation is leaving.
+ */
+export function matchesToolReceipt(receipt: string, expected: ServiceReceipt): boolean {
+	const line = `${expected.action}.\n\n`
+	if (receipt === `${line}${expected.view}` || receipt === `${line}${BROWSER_TOOL_DEADLINE_NOTE}`)
+		return true
+	return (
+		expected.url !== undefined &&
+		(receipt === `${line}${SERVICE_CHANGED_NOTE}` ||
+			receipt.startsWith(`${expected.action}; the page is still loading ${expected.url}.\n\n`))
+	)
+}
+
+/**
+ * Waits until the served document page reports its toolset started, or throws naming the cause.
+ *
+ * @param page - The page showing the fixture server's `/document` page; only its `evaluate` is read
+ * @param budget - The milliseconds the page has to report. Default: 10 000
+ * @throws Thrown when the page sets `document.body.dataset.failed`, naming the error it recorded,
+ * and when it sets neither flag within `budget`, naming the `dist/src/browser` import the page
+ * depends on.
+ */
+export async function requireDocumentToolset(
+	page: { evaluate(expression: string): Promise<unknown> },
+	budget = 10_000,
+): Promise<void> {
+	await waitForCondition(
+		'precondition: the document page imported dist/src/browser and started its toolset',
+		async () =>
+			(await page.evaluate('document.body.dataset.ready ?? document.body.dataset.failed')) !==
+			undefined,
+		{ budget, interval: 20 },
+	)
+	const failed = await page.evaluate('document.body.dataset.failed')
+	if (failed !== undefined)
+		throw new Error(`Precondition failed: the document toolset did not start: ${String(failed)}`)
 }

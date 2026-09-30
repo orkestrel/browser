@@ -21,7 +21,7 @@ import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BrowserOutlineNode } from '@src/core'
-import { renderBrowserOutline } from '@src/core'
+import { BROWSER_TOOL_DEADLINE_NOTE, renderBrowserOutline } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import * as setupService from './setupService.js'
@@ -29,6 +29,8 @@ import {
 	collectOutlinePairs,
 	extractOutlineReferences,
 	extractOutlineRows,
+	matchesToolReceipt,
+	requireDocumentToolset,
 	parseProtocolDomains,
 	REGISTRY_ABSENT_REASON,
 	requireCacheRestore,
@@ -38,6 +40,7 @@ import {
 	resolveServiceEngine,
 	scanServiceSkips,
 	SERVICE_BROWSER_ARGS,
+	SERVICE_CHANGED_NOTE,
 	SERVICE_ENGINE_ENV_KEY,
 	SERVICE_REGISTRY_ARGS,
 } from './setupService.js'
@@ -267,6 +270,104 @@ describe('requireToolText', () => {
 			tools.execute({ id: '3', name: 'count', arguments: {} }).then(requireToolText),
 		).rejects.toThrow('The tool call returned no text')
 		expect(() => requireToolText(undefined)).toThrow('The tool call returned no text')
+	})
+})
+
+describe('matchesToolReceipt', () => {
+	const view =
+		'page "Drafts" http://127.0.0.1/confirm\n# Drafts\ne2 button "Keep"\n(1 of 1 elements)'
+	const kept = { action: 'Clicked e2 button "Keep"', view }
+	const placed = {
+		action: 'Clicked e1 link "Next"',
+		view: 'page "Next note" http://127.0.0.1/next\n# Next note\n(0 of 0 elements)',
+		url: 'http://127.0.0.1/next',
+	}
+
+	it('accepts the captured view, the deadline note, and for a navigation the still-loading status', () => {
+		expect(matchesToolReceipt(`Clicked e2 button "Keep".\n\n${view}`, kept)).toBe(true)
+		expect(
+			matchesToolReceipt(`Clicked e2 button "Keep".\n\n${BROWSER_TOOL_DEADLINE_NOTE}`, kept),
+		).toBe(true)
+		expect(
+			matchesToolReceipt(
+				'Clicked e1 link "Next"; the page is still loading http://127.0.0.1/next.\n\npage "" http://127.0.0.1/next\n(0 of 0 elements)',
+				placed,
+			),
+		).toBe(true)
+		expect(matchesToolReceipt(`Clicked e1 link "Next".\n\n${placed.view}`, placed)).toBe(true)
+		expect(matchesToolReceipt(`Clicked e1 link "Next".\n\n${SERVICE_CHANGED_NOTE}`, placed)).toBe(
+			true,
+		)
+		expect(SERVICE_CHANGED_NOTE).toBe(
+			'(The view could not be read: outline is gone because the page changed; call look for fresh refs.; call look.)',
+		)
+	})
+
+	it('refuses another view, another action, a capture error, a loading status without a navigation, and another URL', () => {
+		expect(matchesToolReceipt(`Clicked e2 button "Keep".\n\n${view}\nextra`, kept)).toBe(false)
+		expect(matchesToolReceipt(`Clicked e3 button "Keep".\n\n${view}`, kept)).toBe(false)
+		expect(
+			matchesToolReceipt(
+				'Clicked e2 button "Keep".\n\n(The view could not be read: gone; call look.)',
+				kept,
+			),
+		).toBe(false)
+		expect(matchesToolReceipt(`Clicked e2 button "Keep".\n\n${SERVICE_CHANGED_NOTE}`, kept)).toBe(
+			false,
+		)
+		expect(
+			matchesToolReceipt(
+				`Clicked e2 button "Keep"; the page is still loading http://127.0.0.1/confirm.\n\n${view}`,
+				kept,
+			),
+		).toBe(false)
+		expect(
+			matchesToolReceipt(
+				'Clicked e1 link "Next"; the page is still loading http://127.0.0.1/other.\n\n',
+				placed,
+			),
+		).toBe(false)
+		expect(
+			matchesToolReceipt(
+				'Clicked e1 link "Next"; it requested http://127.0.0.1/next and the page did not change.\n\n',
+				placed,
+			),
+		).toBe(false)
+	})
+})
+
+describe('requireDocumentToolset', () => {
+	it('resolves after the page reports its toolset ready', async () => {
+		const read: string[] = []
+		const page = {
+			evaluate: (expression: string): Promise<unknown> => {
+				read.push(expression)
+				if (expression === 'document.body.dataset.failed') return Promise.resolve(undefined)
+				return Promise.resolve(read.length < 3 ? undefined : 'yes')
+			},
+		}
+
+		await expect(requireDocumentToolset(page, 1_000)).resolves.toBeUndefined()
+		expect(read).toStrictEqual([
+			'document.body.dataset.ready ?? document.body.dataset.failed',
+			'document.body.dataset.ready ?? document.body.dataset.failed',
+			'document.body.dataset.ready ?? document.body.dataset.failed',
+			'document.body.dataset.failed',
+		])
+	})
+
+	it('throws the error the page recorded, and names the import when the page reports nothing', async () => {
+		const failed = {
+			evaluate: (): Promise<unknown> => Promise.resolve('TypeError: Failed to fetch'),
+		}
+		const silent = { evaluate: (): Promise<unknown> => Promise.resolve(undefined) }
+
+		await expect(requireDocumentToolset(failed, 1_000)).rejects.toThrow(
+			'Precondition failed: the document toolset did not start: TypeError: Failed to fetch',
+		)
+		await expect(requireDocumentToolset(silent, 50)).rejects.toThrow(
+			'precondition: the document page imported dist/src/browser and started its toolset',
+		)
 	})
 })
 
