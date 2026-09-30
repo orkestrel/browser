@@ -13,6 +13,7 @@ import type {
 	BrowserKeyboardInterface,
 	BrowserMouseInterface,
 	BrowserNavigationEventMap,
+	BrowserNavigationReason,
 	BrowserNavigationOptions,
 	BrowserNavigationManagerInterface,
 	BrowserNavigationResult,
@@ -63,6 +64,8 @@ import { BrowserWorker } from './BrowserWorker.js'
 import { BrowserError } from './errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_NAVIGATION_REASONS,
+	BROWSER_RELOAD_NAVIGATION_TYPES,
 	BROWSER_REFERENCE_PREFIX,
 	BROWSER_FRAME_WORLD_NAME,
 	BROWSER_SNAPSHOT_NODE_LIMIT,
@@ -180,6 +183,16 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	> = new Map()
 	readonly #frameIds: Map<string, string> = new Map()
 	readonly #iframes: Map<string, BrowserFrameInfo> = new Map()
+	// The latest current-tab request per frame that no start has taken yet, from any session the
+	// page knows, because the document that initiates a navigation reports the request even when
+	// another session owns the navigating frame; the owning session's start for the same URL takes
+	// its reason unless it repeats a history entry. The next request replaces an entry, and every
+	// start of the frame, a same-document commit, the frame's removal, and the page's teardown delete
+	// it, so the map holds at most one entry per attached frame.
+	readonly #pending: Map<
+		string,
+		{ readonly url: string; readonly reason: BrowserNavigationReason | undefined }
+	> = new Map()
 	readonly #downloads: Map<string, BrowserDownload> = new Map()
 	readonly #workers: Map<string, BrowserWorker> = new Map()
 	readonly #popups: Map<string, BrowserPage> = new Map()
@@ -974,6 +987,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.unsubscribe('Browser.downloadProgress', this.#downloadProgressHandler)
 		this.#parents.clear()
 		this.#loaders.clear()
+		this.#pending.clear()
 		if (!this.#emitter.destroyed) {
 			this.#emitter.emit('close')
 			this.#emitter.destroy()
@@ -1586,6 +1600,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const frame = params['frameId']
 		const url = params['url']
 		if (!isString(frame) || !this.#accepts(session, frame)) return
+		this.#pending.delete(frame)
 		this.#handleSameDocument(params)
 		if (!isString(url)) return
 		this.#updateFrame(session, frame, { url })
@@ -1603,18 +1618,17 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	// A start the protocol announces with its loader is the step; the request that precedes it in the
-	// current tab is the step on a host that announces no start.
+	// current tab is the step on a host that announces no start, and carries the navigation's reason
+	// when it is a `BROWSER_NAVIGATION_REASONS` value.
 	#handleRequested(session: string, params: Readonly<Record<string, unknown>>): void {
 		const frame = params['frameId']
 		const url = params['url']
-		if (
-			params['disposition'] !== 'currentTab' ||
-			!isString(frame) ||
-			!isString(url) ||
-			!this.#accepts(session, frame)
-		)
-			return
-		this.#steps.emit('request', frame, url, undefined)
+		if (params['disposition'] !== 'currentTab' || !isString(frame) || !isString(url)) return
+		const reason = BROWSER_NAVIGATION_REASONS.find((candidate) => candidate === params['reason'])
+		if (session === this.#sessionId || this.#frameIds.has(session))
+			this.#pending.set(frame, { url, reason })
+		if (!this.#accepts(session, frame)) return
+		this.#steps.emit('request', frame, url, undefined, reason)
 	}
 
 	#handleStarted(session: string, params: Readonly<Record<string, unknown>>): void {
@@ -1623,7 +1637,20 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const loader = params['loaderId']
 		if (!isString(frame) || !isString(url) || !isString(loader) || !this.#accepts(session, frame))
 			return
-		this.#steps.emit('request', frame, url, loader)
+		// A reload or a history traversal repeats an entry rather than following a request.
+		const repeated = BROWSER_RELOAD_NAVIGATION_TYPES.some(
+			(type) => type === params['navigationType'],
+		)
+		// Every start ends the frame's pending request, and only the start it requested takes its reason.
+		const requested = this.#pending.get(frame)
+		this.#pending.delete(frame)
+		this.#steps.emit(
+			'request',
+			frame,
+			url,
+			loader,
+			!repeated && requested?.url === url ? requested.reason : undefined,
+		)
 	}
 
 	// Enabling lifecycle events replays earlier lifecycle names under a loader of no navigation, so a
@@ -1685,6 +1712,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		// session `Target.attachedToTarget` can have registered before this detach arrives.
 		if (!swapped) {
 			this.#frameSessions.delete(frame)
+			this.#pending.delete(frame)
 			this.#parents.delete(frame)
 			this.#loaders.delete(frame)
 			this.#emitter.emit('detach', frame)
@@ -1935,6 +1963,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const superseded = isString(session) && owner !== undefined && owner !== session
 		if (frame !== undefined && !superseded) {
 			if (this.#frameSessions.delete(frame)) this.#advanceFrame(frame)
+			this.#pending.delete(frame)
 			this.#iframes.delete(frame)
 			this.#worlds.delete(frame)
 			this.#creating.delete(frame)

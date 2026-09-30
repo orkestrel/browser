@@ -301,16 +301,18 @@ export interface BrowserNavigationManagerInterface {
 export interface BrowserNavigationRecordInterface {
 	/**
 	 * Resolves when the record's frame or one of its ancestors starts a navigation after the record
-	 * opened. Rejects at `timeout` with `BROWSER_NAVIGATION_TIMEOUT`, with `signal.reason` on abort,
-	 * and when the record ends or the page closes.
+	 * opened; `settle` reports that navigation's reason. Rejects at `timeout` with
+	 * `BROWSER_NAVIGATION_TIMEOUT`, with `signal.reason` on abort, and when the record ends or the
+	 * page closes.
 	 */
 	wait(options?: BrowserCallOptions): Promise<void>
 	/**
 	 * Follows the earliest navigation started after the record opened in the record's frame, one of
 	 * its ancestors, or a frame `destinations` names, waiting within `timeout` for a destination to
-	 * start one. Resolves with the stage reached at completion or at `timeout`, or `undefined` when
-	 * none started; a selected frame that detaches ends the wait with the stage it reached. Rejects
-	 * with `signal.reason` on abort, and when the record ends or the page closes.
+	 * start one. Resolves with the stage reached at completion or at `timeout` and the reason
+	 * `Page.frameRequestedNavigation` named for the navigation, or `undefined` when none started; a
+	 * selected frame that detaches ends the wait with the stage it reached. Rejects with
+	 * `signal.reason` on abort, and when the record ends or the page closes.
 	 */
 	settle(options?: BrowserSettlementOptions): Promise<BrowserSettlementResult | undefined>
 	/** Ends the record and rejects a pending `wait` or `settle`. */
@@ -351,15 +353,35 @@ export interface BrowserSettlementOptions extends BrowserCallOptions {
 export type BrowserNavigationStage = 'requested' | 'committed' | 'loaded'
 
 /**
+ * Names why a frame requested a navigation, mirroring the CDP `Page.ClientNavigationReason` values
+ * that `Page.frameRequestedNavigation` carries as of Chromium 141.
+ */
+export type BrowserNavigationReason =
+	| 'anchorClick'
+	| 'formSubmissionGet'
+	| 'formSubmissionPost'
+	| 'httpHeaderRefresh'
+	| 'initialFrameNavigation'
+	| 'metaTagRefresh'
+	| 'other'
+	| 'pageBlockInterstitial'
+	| 'reload'
+	| 'scriptInitiated'
+
+/**
  * Describes the navigation a record settled.
  *
  * @remarks
  * - `url` — the requested URL for `requested`, and the committed URL otherwise
  * - `stage` — how far the navigation got
+ * - `reason` — why the frame requested the navigation, from `Page.frameRequestedNavigation`;
+ *   undefined for a navigation the protocol announced with no reason, such as one the browser
+ *   started
  */
 export interface BrowserSettlementResult {
 	readonly url: string
 	readonly stage: BrowserNavigationStage
+	readonly reason: BrowserNavigationReason | undefined
 }
 
 /**
@@ -367,14 +389,22 @@ export interface BrowserSettlementResult {
  * its navigation and element managers.
  *
  * @remarks
- * - `request` — a frame started a navigation, with its loader when the protocol names one
+ * - `request` — a frame started a navigation, with its loader when the protocol names one and its
+ *   reason when the latest current-tab `Page.frameRequestedNavigation` for the frame since its
+ *   previous start, from any session the page knows, named the same URL and a known reason and the
+ *   start repeats no history entry
  * - `commit` — a frame committed a document, or a same-document navigation when `same` is `true`
  * - `load` — a frame's document loaded, with the loader of its commit
  * - `detach` — a frame left its document; `swapped` is `true` when the frame persists in another
  *   renderer
  */
 export type BrowserNavigationEventMap = {
-	readonly request: readonly [frame: string, url: string, loader: string | undefined]
+	readonly request: readonly [
+		frame: string,
+		url: string,
+		loader: string | undefined,
+		reason: BrowserNavigationReason | undefined,
+	]
 	readonly commit: readonly [frame: string, url: string, loader: string | undefined, same: boolean]
 	readonly load: readonly [frame: string, loader: string | undefined]
 	readonly detach: readonly [frame: string, swapped: boolean]

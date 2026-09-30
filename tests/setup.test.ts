@@ -28,6 +28,13 @@ import {
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_FRAMED_FIXTURE,
 	BROWSER_RECORD_PARENTS,
+	BROWSER_PENDING_REQUEST_CASES,
+	BROWSER_SUBMIT_EARLY_CASES,
+	BROWSER_SUBMIT_NEGATIVE_CASES,
+	BROWSER_SUBMIT_FOCUS_CASES,
+	BROWSER_SUBMIT_FOCUS_STEPS,
+	BROWSER_SUBMIT_MALFORMED_READS,
+	BROWSER_SUBMIT_UNREAD_CASES,
 	BrowserSubmitElement,
 	BrowserSubmitWindow,
 	BrowserSubmitWindows,
@@ -1008,6 +1015,124 @@ describe('submit observer fixtures', () => {
 		expect(new BrowserSubmitWindow().querySelector('base[target]')).toBeNull()
 	})
 
+	it('sends a key to the capture listeners, the focused element, and the bubbling listeners in that order, and sends none from an iframe or without a focus', () => {
+		const window = new BrowserSubmitWindow()
+		const seen: Array<readonly [phase: string, key: unknown, target: unknown, focus: unknown]> = []
+		window.addEventListener(
+			'keydown',
+			(event: unknown) =>
+				seen.push([
+					'bubble',
+					readProperty(event, 'key'),
+					readProperty(readProperty(event, 'target'), 'localName'),
+					window.activeElement?.localName,
+				]),
+			false,
+		)
+		window.addEventListener(
+			'keydown',
+			(event: unknown) =>
+				seen.push([
+					'capture',
+					readProperty(event, 'key'),
+					readProperty(readProperty(event, 'target'), 'localName'),
+					window.activeElement?.localName,
+				]),
+			{ capture: true },
+		)
+		expect(window.listeners).toBe(2)
+		window.press('Enter')
+		expect(seen).toEqual([])
+		window.focus({
+			name: 'input',
+			form: { method: 'post' },
+			moves: { name: 'textarea', form: { method: 'get' } },
+		})
+		window.press('Enter')
+		expect(seen).toEqual([
+			['capture', 'Enter', 'input', 'input'],
+			['bubble', 'Enter', 'input', 'textarea'],
+		])
+		expect(window.evaluate('document.activeElement.localName')).toBe('textarea')
+		expect(window.activeElement?.form?.getAttribute('method')).toBe('get')
+		window.focus({ name: 'iframe' })
+		window.press('Enter')
+		window.focus()
+		window.press('Enter')
+		expect(seen).toHaveLength(2)
+		expect(window.activeElement).toBeNull()
+	})
+
+	it('keeps one registration per type, listener, and capture flag, and removes only the matching one', () => {
+		const window = new BrowserSubmitWindow()
+		const keys = createRecorder<[event: unknown]>()
+		window.addEventListener('keydown', keys.handler, true)
+		window.addEventListener('keydown', keys.handler, { capture: true })
+		window.addEventListener('keydown', keys.handler)
+		expect(window.listeners).toBe(2)
+		window.removeEventListener('keydown', keys.handler)
+		expect(window.listeners).toBe(1)
+		window.focus({ name: 'input', form: {} })
+		window.press('Enter')
+		expect(keys.count).toBe(1)
+		window.removeEventListener('keydown', keys.handler, true)
+		expect(window.listeners).toBe(0)
+	})
+
+	it('presses a key in every window it holds', () => {
+		const windows = new BrowserSubmitWindows()
+		const main = createRecorder<[event: unknown]>()
+		const child = createRecorder<[event: unknown]>()
+		windows.window('session-main', 91).addEventListener('keydown', main.handler)
+		windows.window('session-child', 92).addEventListener('keydown', child.handler)
+		windows.window('session-main', 91).focus({ name: 'iframe' })
+		windows.window('session-child', 92).focus({ name: 'input', form: {} })
+		windows.press('Enter')
+		expect([main.count, child.count]).toEqual([0, 1])
+	})
+
+	it('holds the pending-request cases, focus steps, focus cases, early-navigation cases, negative-read cases, unread cases, and malformed reads the submit proofs register', () => {
+		expect(BROWSER_SUBMIT_FOCUS_STEPS).toHaveLength(9)
+		for (const [label, main, child, tool, args, line] of BROWSER_SUBMIT_FOCUS_STEPS) {
+			expect(label).not.toBe('')
+			expect([main, child].every((focus) => focus === undefined || focus.name !== '')).toBe(true)
+			expect(['type', 'press', 'click']).toContain(tool)
+			expect(Object.keys(args).length).toBeGreaterThan(0)
+			expect(line).toMatch(/^(?:Typed|Pressed|Clicked) .+\.$/)
+		}
+		expect(BROWSER_SUBMIT_FOCUS_CASES).toHaveLength(8)
+		expect(BROWSER_SUBMIT_FOCUS_CASES.filter(([, , , implicit]) => implicit)).toHaveLength(2)
+		expect(BROWSER_SUBMIT_EARLY_CASES.map(([, , reason, clause]) => [reason, clause])).toEqual([
+			['formSubmissionPost', 'and submitted the form'],
+			['anchorClick', 'and pressed Enter'],
+			['formSubmissionPost', 'and pressed Enter'],
+		])
+		expect(BROWSER_SUBMIT_EARLY_CASES[2]?.[1]).toEqual(['start'])
+		expect(BROWSER_SUBMIT_UNREAD_CASES).toHaveLength(4)
+		expect(BROWSER_SUBMIT_NEGATIVE_CASES.map(([, first]) => first)).toEqual([true, false])
+		expect(BROWSER_PENDING_REQUEST_CASES).toHaveLength(10)
+		expect(
+			BROWSER_PENDING_REQUEST_CASES.filter(([, , , , reason]) => reason !== undefined).map(
+				([name]) => name,
+			),
+		).toEqual([
+			'a start of the requested URL takes the request reason',
+			'a swapped frame keeps its request',
+		])
+		expect(
+			BROWSER_SUBMIT_UNREAD_CASES.filter(
+				([, , , , clause]) => clause === 'and submitted the form',
+			).map(([, stages, reason]) => [stages.includes('request'), reason]),
+		).toEqual([[true, 'formSubmissionGet']])
+		expect(BROWSER_SUBMIT_MALFORMED_READS.map(([name]) => name)).toEqual([
+			'a record without implicit',
+			'a record whose submitted is a string',
+			'a record whose destinations hold a number',
+			'null',
+			'a bare array',
+		])
+	})
+
 	it('evaluates an expression against globals of its own, apart from every other window', () => {
 		const first = new BrowserSubmitWindow()
 		const second = new BrowserSubmitWindow()
@@ -1144,6 +1269,17 @@ describe('navigation settlement fixtures', () => {
 			['commit'],
 		)
 		expect(frames.calls.map(([data]) => JSON.parse(data).method)).toEqual(['Page.frameNavigated'])
+		frames.clear()
+		emitBrowserNavigation(
+			transport,
+			'session-main',
+			'main',
+			'https://example.test/next',
+			'loader-next',
+			['request'],
+			'anchorClick',
+		)
+		expect(frames.calls.map(([data]) => JSON.parse(data).params.reason)).toEqual(['anchorClick'])
 	})
 
 	it('attaches the child frame on its own session under the main frame and waits for its publication', async () => {
@@ -1249,7 +1385,7 @@ describe('navigation settlement fixtures', () => {
 		const { steps, lifetime, record } = openBrowserNavigationRecord('nested')
 		expect(steps.count()).toBe(4)
 		const started = record.wait({ timeout: 1_000 })
-		steps.emit('request', 'child', 'https://example.test/applied', undefined)
+		steps.emit('request', 'child', 'https://example.test/applied', undefined, undefined)
 		await expect(started).resolves.toBeUndefined()
 		lifetime.abort(new Error('closed'))
 		await expect(record.settle()).rejects.toThrow('closed')
