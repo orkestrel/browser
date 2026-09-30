@@ -1519,7 +1519,7 @@ export interface BrowserCodegenInterface {
 	 * a torn-down recorder cannot be restarted and a fresh one is obtained through the page.
 	 */
 	start(): Promise<void>
-	/** Stops recording and returns the captured actions. */
+	/** Stops recording, waits for the session to acknowledge before it detaches so a report already emitted by the page is kept, and returns the captured actions. */
 	stop(): Promise<readonly BrowserCodegenAction[]>
 	/** Returns the current normalized action list. */
 	actions(): readonly BrowserCodegenAction[]

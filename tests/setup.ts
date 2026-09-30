@@ -981,6 +981,7 @@ export async function createStartedCodegen(session = 'session-1'): Promise<Start
 	replyOk(transport, 'Runtime.addBinding')
 	replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
 	replyOk(transport, 'Runtime.evaluate')
+	replyOk(transport, 'Runtime.removeBinding')
 
 	const codegen = new BrowserCodegen(client, session)
 	await codegen.start()
