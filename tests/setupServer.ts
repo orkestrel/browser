@@ -895,7 +895,7 @@ const OVERLAY_PAGE = `<!doctype html><html><head><title>Overlay</title><style>bo
 </body></html>`
 
 const LATE_PAGE = `<!doctype html><html><head><title>Late</title></head><body>
-<main><h1>Order</h1><button id="reveal" onclick="setTimeout(() => { const line = document.createElement('p'); line.textContent = '${FIXTURE_LATE_TEXT}'; document.querySelector('main').append(line) }, ${FIXTURE_LATE_DELAY})">Reveal</button></main>
+<main><h1>Order</h1><button id="reveal" onclick="setTimeout(() => { const line = document.createElement('p'); line.textContent = '${FIXTURE_LATE_TEXT}'; document.querySelector('main').append(line); document.body.dataset.inserted = String(performance.timeOrigin + performance.now()) }, ${FIXTURE_LATE_DELAY})">Reveal</button></main>
 </body></html>`
 
 const ARTICLE_PAGE = `<!doctype html><html><head><title>Field notes</title></head><body>
@@ -935,7 +935,9 @@ if (registry !== undefined) registry.registerTool({ name: 'fixture_echo', descri
  *   `document.body.dataset.decoy` in the outer document
  * - `/overlay` — a `Save` button covered by `div#veil` and an uncovered `Plain` button
  * - `/late` — a `Reveal` button that inserts {@link FIXTURE_LATE_TEXT} after
- *   {@link FIXTURE_LATE_DELAY} milliseconds
+ *   {@link FIXTURE_LATE_DELAY} milliseconds and records the insertion's epoch time in
+ *   milliseconds, `performance.timeOrigin + performance.now()`, on
+ *   `document.body.dataset.inserted`
  * - `/article` — a long article between navigation and footer chrome, ending in a
  *   `Subscribe` button below the fold
  * - `/registry` — registers the `fixture_echo` tool through the page's WebMCP registry when

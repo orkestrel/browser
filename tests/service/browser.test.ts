@@ -3,25 +3,42 @@
  *
  * Every case here launches or attaches to a real Chromium-family browser process
  * resolved by `tests/setupService.ts`, which hard-requires readiness and throws when the
- * host has none. Nothing in this file skips: a browserless host fails the project.
+ * host has none, so a browserless host fails the project. The one skip is the live `WebMCP`
+ * case's conditional context skip, taken only after it asserts the protocol reading its
+ * reason cites.
  */
 
 import type { BrowserInterface } from '@src/server'
-import type { BrowserPageInterface, BrowserReadResult } from '@src/core'
+import type {
+	BrowserPageElementInterface,
+	BrowserPageInterface,
+	BrowserPoint,
+	BrowserReadResult,
+	CDPClientInterface,
+} from '@src/core'
 import type { FixtureServerInterface } from '../setupServer.js'
 import { describe, it, expect, afterAll, afterEach, beforeAll } from 'vitest'
 import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createBrowser } from '@src/server'
+import { createBrowser, createCDPTransport } from '@src/server'
 import {
 	BROWSER_RESULT_LIMIT,
 	compileCodegenScript,
+	createCDPClient,
 	isBrowserError,
 	isBrowserResultLimitError,
+	readEvaluationResult,
 } from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
-import { createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
+import {
+	createRecorder,
+	createTeardown,
+	requireValue,
+	retryUntil,
+	waitForCondition,
+	waitForDelay,
+} from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
 	createFixtureServer,
@@ -29,7 +46,6 @@ import {
 	createTCPProxy,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
-	FIXTURE_LATE_DELAY,
 	FIXTURE_LATE_TEXT,
 	readServerPort,
 	reservePort,
@@ -39,8 +55,10 @@ import {
 	extractOutlineReferences,
 	parseProtocolDomains,
 	REGISTRY_ABSENT_REASON,
+	requireCacheRestore,
 	requireSystemBrowser,
 	SERVICE_BROWSER_ARGS,
+	SERVICE_REGISTRY_ARGS,
 } from '../setupService.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
@@ -617,21 +635,48 @@ describe('Browser real launch', () => {
 })
 
 describe('Browser proofs against the fixture pages', () => {
+	const teardown = createTeardown()
+	const opened: BrowserPageInterface[] = []
 	let fixtures: FixtureServerInterface
 	let browser: BrowserInterface
-	const opened: BrowserPageInterface[] = []
+	let registry: BrowserInterface
+	let port: number
 
+	// Each resource registers its release as soon as it exists, so a later acquisition that
+	// rejects still releases the earlier ones, and no release reads an unassigned binding.
 	beforeAll(async () => {
-		fixtures = await createFixtureServer()
-		browser = createBrowser({
+		const server = await createFixtureServer()
+		teardown.add(() => server.destroy())
+		fixtures = server
+
+		const profile = createTempDirectory('orkestrel-browser-profile-')
+		teardown.add(() => profile.destroy())
+		port = await reservePort()
+		const launched = createBrowser({
 			executable: REAL_BROWSER_EXECUTABLE,
 			headless: true,
-			profile: createTempDirectory('orkestrel-browser-profile-').path,
-			args: REAL_BROWSER_ARGS,
+			profile: profile.path,
+			args: [...REAL_BROWSER_ARGS, '--site-per-process'],
+			cdp: { port },
+			timeout: 20_000,
+		})
+		teardown.add(() => launched.destroy())
+		await launched.connect()
+		browser = launched
+
+		const flaggedProfile = createTempDirectory('orkestrel-browser-profile-')
+		teardown.add(() => flaggedProfile.destroy())
+		const flagged = createBrowser({
+			executable: REAL_BROWSER_EXECUTABLE,
+			headless: true,
+			profile: flaggedProfile.path,
+			args: [...REAL_BROWSER_ARGS, ...SERVICE_REGISTRY_ARGS],
 			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
-		await browser.connect()
+		teardown.add(() => flagged.destroy())
+		await flagged.connect()
+		registry = flagged
 	})
 
 	afterEach(async () => {
@@ -639,85 +684,185 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	afterAll(async () => {
-		await browser.destroy()
-		await fixtures.destroy()
-		await destroyTempDirectories()
+		await teardown.destroy()
 	})
 
-	// Fails against the landed source: `Page.frameDetached` with reason `swap`, which Chromium
-	// sends on the page session when the framed document moves into its own process, deletes the
-	// session `Target.attachedToTarget` registered for that frame, so `frames()` never lists it and
-	// the outline asks the page session for a frame it does not own.
-	it.fails('P19 clicks an out-of-process frame button through page.elements into the frame document; P21 hit-tests it on the frame session and P26 offsets it by the content box, while the raw frame-local point lands on the outer decoy', async () => {
-		const page = await browser.create({ url: fixtures.url('/frame/outer') })
-		opened.push(page)
-		await waitForCondition(
-			'the out-of-process frame attached to the page',
-			async () => (await page.frames()).length === 2,
-			{ budget: 10_000, interval: 50 },
-		)
-		const frame = requireValue((await page.frames()).find((child) => child.id !== page.id))
-		expect(await frame.evaluate('location.origin')).toBe(`http://localhost:${fixtures.port}`)
-		expect(await page.evaluate('location.origin')).toBe(`http://127.0.0.1:${fixtures.port}`)
+	describe('an out-of-process frame', () => {
+		let page: BrowserPageInterface
+		let child: CDPClientInterface
+		let session: string
+		let local: BrowserPoint
+		let content: BrowserPoint
 
-		const [pay] = await page.elements.find({ role: 'button', name: 'Pay' })
-		const button = requireValue(pay)
-		const local = {
-			x: Number(
-				await frame.evaluate(
-					"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.x + box.width / 2 })()",
+		// Establishes, outside every expected-failure body, that `--site-per-process` put the
+		// `localhost` document in its own target with its own session, and reads the framed
+		// button's centre through a second protocol connection that does not depend on the page's
+		// frame tracking.
+		beforeAll(async () => {
+			const outer = await browser.create()
+			teardown.add(() => outer.close())
+			page = outer
+			const attached = createRecorder<[Readonly<Record<string, unknown>>]>()
+			await page.subscribe('Target.attachedToTarget', attached.handler)
+			await page.navigate(fixtures.url('/frame/outer'))
+			await waitForCondition(
+				'precondition: the localhost frame attached as its own iframe target',
+				() =>
+					attached.calls.some(
+						([params]) =>
+							isRecord(params['targetInfo']) && params['targetInfo']['type'] === 'iframe',
+					),
+				{ budget: 10_000, interval: 20 },
+			)
+			const event = requireValue(
+				attached.calls.find(
+					([params]) => isRecord(params['targetInfo']) && params['targetInfo']['type'] === 'iframe',
 				),
-			),
-			y: Number(
-				await frame.evaluate(
-					"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.y + box.height / 2 })()",
+			)[0]
+			const target = isRecord(event['targetInfo']) ? event['targetInfo']['targetId'] : undefined
+			if (!isString(event['sessionId']) || !isString(target) || target === page.target)
+				throw new Error(
+					'Precondition failed: the framed document has no session of its own; launch Chromium with --site-per-process.',
+				)
+
+			const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
+			const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
+			if (!isString(endpoint))
+				throw new Error('Precondition failed: Chromium reported no debugger URL.')
+			const client = createCDPClient({
+				transport: createCDPTransport({ url: endpoint }),
+				timeout: 10_000,
+			})
+			teardown.add(() => client.close())
+			await client.connect()
+			child = client
+			const attachment = await client.send('Target.attachToTarget', {
+				targetId: target,
+				flatten: true,
+			})
+			const raw = isRecord(attachment) ? attachment['sessionId'] : undefined
+			if (!isString(raw) || raw === event['sessionId'])
+				throw new Error(
+					'Precondition failed: the second connection opened no session of its own on the frame.',
+				)
+			session = raw
+			await waitForCondition(
+				'precondition: the framed Pay button rendered',
+				async () =>
+					readEvaluationResult(
+						await client.send(
+							'Runtime.evaluate',
+							{ expression: "document.getElementById('pay') !== null", returnByValue: true },
+							{ session },
+						),
+					) === true,
+				{ budget: 10_000, interval: 20 },
+			)
+			const origin = readEvaluationResult(
+				await client.send(
+					'Runtime.evaluate',
+					{ expression: 'location.origin', returnByValue: true },
+					{ session },
 				),
-			),
-		}
-		const content = {
-			x: Number(
-				await page.evaluate(
-					"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().x + frame.clientLeft })()",
+			)
+			if (origin !== `http://localhost:${fixtures.port}`)
+				throw new Error(`Precondition failed: the framed document's origin is ${String(origin)}.`)
+			local = {
+				x: Number(
+					readEvaluationResult(
+						await client.send(
+							'Runtime.evaluate',
+							{
+								expression:
+									"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.x + box.width / 2 })()",
+								returnByValue: true,
+							},
+							{ session },
+						),
+					),
 				),
-			),
-			y: Number(
-				await page.evaluate(
-					"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().y + frame.clientTop })()",
+				y: Number(
+					readEvaluationResult(
+						await client.send(
+							'Runtime.evaluate',
+							{
+								expression:
+									"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.y + box.height / 2 })()",
+								returnByValue: true,
+							},
+							{ session },
+						),
+					),
 				),
-			),
-		}
-		expect((await button.quad()).center).toStrictEqual({
-			x: content.x + local.x,
-			y: content.y + local.y,
+			}
+			content = {
+				x: Number(
+					await page.evaluate(
+						"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().x + frame.clientLeft })()",
+					),
+				),
+				y: Number(
+					await page.evaluate(
+						"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().y + frame.clientTop })()",
+					),
+				),
+			}
 		})
 
-		await button.click()
-		expect(await frame.evaluate('document.body.dataset.received')).toBe('pay:true')
-		expect(await page.evaluate('document.body.dataset.decoy')).toBeUndefined()
+		// Fails against the landed source when `Target.attachedToTarget` precedes
+		// `Page.frameDetached` with reason `swap` and the frame session's enable completes after
+		// both: the detach deletes the pending session the attach installed, the completion then
+		// declines to publish it, and the outline asks the page session for a frame it does not own.
+		it.fails('P19 clicks an out-of-process frame button through page.elements into the frame document; P21 hit-tests it on the frame session and P26 offsets it by the content box, and the outer decoy stays unclicked', async () => {
+			const [pay] = await page.elements.find({ role: 'button', name: 'Pay' })
+			const button = requireValue(pay)
+			expect((await button.quad()).center).toStrictEqual({
+				x: content.x + local.x,
+				y: content.y + local.y,
+			})
+			await button.click()
+			expect(
+				readEvaluationResult(
+					await child.send(
+						'Runtime.evaluate',
+						{ expression: 'document.body.dataset.received', returnByValue: true },
+						{ session },
+					),
+				),
+			).toBe('pay:true')
+			expect(await page.evaluate('document.body.dataset.decoy')).toBeUndefined()
+		})
 
-		// Control: the raw frame-local point addresses the outer document, where the decoy sits.
-		await page.mouse.click(local)
-		expect(await page.evaluate('document.body.dataset.decoy')).toBe('decoy:true')
-		expect(await frame.evaluate('document.body.dataset.received')).toBe('pay:true')
-	})
+		it('P19 control: the raw frame-local point lands on the outer decoy, not in the frame', async () => {
+			const received = readEvaluationResult(
+				await child.send(
+					'Runtime.evaluate',
+					{ expression: 'document.body.dataset.received', returnByValue: true },
+					{ session },
+				),
+			)
+			await page.mouse.click(local)
+			expect(await page.evaluate('document.body.dataset.decoy')).toBe('decoy:true')
+			expect(
+				readEvaluationResult(
+					await child.send(
+						'Runtime.evaluate',
+						{ expression: 'document.body.dataset.received', returnByValue: true },
+						{ session },
+					),
+				),
+			).toBe(received)
+		})
 
-	// Fails against the landed source for the swap deletion the preceding case names, and, with
-	// that deletion skipped, because the page records the frame's URL from `Target.attachedToTarget`,
-	// which carries an empty URL before the framed document commits, and never updates it.
-	it.fails('P19 lists the out-of-process frame at its document URL', async () => {
-		const page = await browser.create({ url: fixtures.url('/frame/outer') })
-		opened.push(page)
-		const inner = fixtures.url('/frame/inner', 'localhost')
-
-		await waitForCondition(
-			'the out-of-process frame listed at its URL',
-			async () => (await page.frame(inner)) !== undefined,
-			{ budget: 10_000, interval: 50 },
-		)
-		expect((await page.frames()).map((frame) => frame.url)).toStrictEqual([
-			fixtures.url('/frame/outer'),
-			inner,
-		])
+		// Fails against the landed source for the ordering the preceding pin names, and, with that
+		// deletion skipped, because the page records the frame's URL from `Target.attachedToTarget`,
+		// which carries an empty URL before the framed document commits, and no handler updates it.
+		it.fails('P19 lists the out-of-process frame at its document URL', async () => {
+			expect((await page.frames()).map((frame) => frame.url)).toStrictEqual([
+				fixtures.url('/frame/outer'),
+				fixtures.url('/frame/inner', 'localhost'),
+			])
+		})
 	})
 
 	it('P11 refuses a click on an overlay-covered button with OCCLUDED naming the covering element (control: the uncovered button clicks)', async () => {
@@ -810,24 +955,41 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	})
 
-	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text rejects BROWSER_WAIT_TIMEOUT at the deadline)', async () => {
+	// The 300 ms bound is the proposal's performance requirement, held on a host running up to three
+	// Chromium instances at once; a busier host can exceed it without a library defect, and the
+	// 5 000 ms deadline carries the functional completion. Both instants are epoch milliseconds from
+	// one system clock: the page records `performance.timeOrigin + performance.now()` at the
+	// insertion, and this process reads the same sum at resolution; 2 ms covers the rounding each
+	// process applies to its origin.
+	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text stays pending before its deadline, then rejects BROWSER_WAIT_TIMEOUT)', async () => {
 		const page = await browser.create({ url: fixtures.url('/late') })
 		opened.push(page)
 		const [reveal] = await page.elements.find({ role: 'button', name: 'Reveal' })
 		const button = requireValue(reveal)
+		await page.wait('Order', { timeout: 5_000 })
 
-		const started = performance.now()
+		const settled = createRecorder<[]>()
+		const waiting = page.wait(FIXTURE_LATE_TEXT, { timeout: 5_000 })
+		void waiting.then(settled.handler, settled.handler)
+		expect(
+			await page.evaluate(`document.body.innerText.includes(${JSON.stringify(FIXTURE_LATE_TEXT)})`),
+		).toBe(false)
+		expect(settled.count).toBe(0)
+
 		await button.click()
-		await page.wait(FIXTURE_LATE_TEXT, { timeout: 5_000 })
-		const elapsed = performance.now() - started
-		expect(elapsed).toBeGreaterThanOrEqual(FIXTURE_LATE_DELAY)
-		expect(elapsed - FIXTURE_LATE_DELAY).toBeLessThan(300)
+		await waiting
+		const resolved = performance.timeOrigin + performance.now()
+		const latency = resolved - Number(await page.evaluate('document.body.dataset.inserted'))
+		expect(latency).toBeGreaterThanOrEqual(-2)
+		expect(latency).toBeLessThan(300)
 
-		const deadline = performance.now()
-		await expect(page.wait('Never shown', { timeout: 300 })).rejects.toMatchObject({
-			code: 'BROWSER_WAIT_TIMEOUT',
-		})
-		expect(performance.now() - deadline).toBeGreaterThanOrEqual(300)
+		// The checkpoint sits 900 ms before the deadline, a margin no host timer overshoots.
+		const pending = createRecorder<[]>()
+		const absent = page.wait('Never shown', { timeout: 1_000 })
+		void absent.then(pending.handler, pending.handler)
+		await waitForDelay(100)
+		expect(pending.count).toBe(0)
+		await expect(absent).rejects.toMatchObject({ code: 'BROWSER_WAIT_TIMEOUT' })
 	})
 
 	it('navigate clears references: a stale element refuses GONE naming look, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {
@@ -888,23 +1050,50 @@ describe('Browser proofs against the fixture pages', () => {
 		await expect(removed.click()).rejects.toSatisfy(isBrowserError)
 	})
 
-	// Fails against the landed source: `DOM.scrollIntoViewIfNeeded` on a removed node that the
-	// garbage collector reclaimed answers `No node found for given backend id`, which the element's
-	// failure classifier does not read as `GONE`, so the raw `CDPError` escapes the refusal contract.
-	it.fails('refuses a click on a removed and collected element GONE naming look', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
-		opened.push(page)
-		const [save] = await page.elements.find({ role: 'button', name: 'Save draft' })
-		const removed = requireValue(save)
-		await page.evaluate(
-			"(() => { document.getElementById('save').remove(); const pool = document.getElementById('pool'); for (let index = 0; index < 10000; index += 1) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
-		)
-		await page.send('HeapProfiler.collectGarbage')
+	describe('a removed and collected element', () => {
+		let removed: BrowserPageElementInterface
 
-		await expect(removed.click()).rejects.toMatchObject({
-			code: 'BROWSER_ELEMENT_ERROR',
-			context: { reference: removed.reference, reason: 'GONE' },
-			message: `Element ${removed.reference} is gone because the page changed; call look for fresh refs.`,
+		// Establishes outside the expected-failure body that the collector reclaimed the node: a
+		// detached but live node answers a different protocol error, which the classifier handles.
+		beforeAll(async () => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			teardown.add(() => page.close())
+			const [save] = await page.elements.find({ role: 'button', name: 'Save draft' })
+			removed = requireValue(save)
+			const backend = requireValue(
+				(await page.accessibility.snapshot()).nodes.find(
+					(node) => node.role === 'button' && node.name === 'Save draft',
+				)?.backend,
+			)
+			await page.evaluate("(() => { document.getElementById('save').remove(); return true })()")
+			// Collection is the collector's choice, so the churn and the forced collection repeat until
+			// the protocol reports the node reclaimed, and the hook fails naming that cause otherwise.
+			await retryUntil(
+				'precondition: the collector reclaimed the removed Save draft node',
+				async () => {
+					await page.evaluate(
+						"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 10000; index += 1) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
+					)
+					await page.send('HeapProfiler.collectGarbage')
+					return await page.send('DOM.scrollIntoViewIfNeeded', { backendNodeId: backend }).then(
+						() => 'resolved',
+						(error: unknown) => (error instanceof Error ? error.message : String(error)),
+					)
+				},
+				(answer) => answer === 'No node found for given backend id',
+				{ attempts: 10, interval: 50, budget: 20_000 },
+			)
+		})
+
+		// Fails against the landed source: `DOM.scrollIntoViewIfNeeded` on the reclaimed node answers
+		// `No node found for given backend id`, which the element's failure classifier does not read
+		// as `GONE`, so the raw `CDPError` escapes the refusal contract.
+		it.fails('refuses a click on a removed and collected element GONE naming look', async () => {
+			await expect(removed.click()).rejects.toMatchObject({
+				code: 'BROWSER_ELEMENT_ERROR',
+				context: { reference: removed.reference, reason: 'GONE' },
+				message: `Element ${removed.reference} is gone because the page changed; call look for fresh refs.`,
+			})
 		})
 	})
 
@@ -939,8 +1128,17 @@ describe('Browser proofs against the fixture pages', () => {
 	it('P25 leaves outline usable after a back-forward cache restore', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
+		const navigations = createRecorder<[Readonly<Record<string, unknown>>]>()
+		const misses = createRecorder<[Readonly<Record<string, unknown>>]>()
+		await page.subscribe('Page.frameNavigated', navigations.handler)
+		await page.subscribe('Page.backForwardCacheNotUsed', misses.handler)
 		await page.navigate(fixtures.url('/article', 'localhost'))
+		navigations.clear()
 		await page.back({ condition: 'commit' })
+		requireCacheRestore(
+			navigations.calls.map(([params]) => params),
+			misses.calls.map(([params]) => params),
+		)
 
 		expect(page.url).toBe(fixtures.url('/form'))
 		expect(await page.evaluate('document.body.dataset.restored')).toBe('yes')
@@ -951,18 +1149,45 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(await page.evaluate('document.body.dataset.clicks')).toBe('submit:true')
 	})
 
-	// Fails against the landed source: `back()` waits for `Page.loadEventFired` under its default
-	// `load` condition, and a back-forward cache restore commits through `Page.frameNavigated` of
-	// type `BackForwardCacheRestore` without firing a load event, so the call times out.
-	it.fails('resolves back() under its default load condition when the back-forward cache restores the entry', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
-		opened.push(page)
-		await page.navigate(fixtures.url('/article', 'localhost'))
+	describe('a back() served from the back-forward cache', () => {
+		let outcome: Readonly<Record<string, unknown>>
 
-		await expect(page.back({ timeout: 5_000 })).resolves.toMatchObject({
-			url: fixtures.url('/form'),
+		// Starts `back()` under its default condition and establishes, outside the expected-failure
+		// body, that the host restored the entry from the cache rather than evicting it.
+		beforeAll(async () => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			teardown.add(() => page.close())
+			const navigations = createRecorder<[Readonly<Record<string, unknown>>]>()
+			const misses = createRecorder<[Readonly<Record<string, unknown>>]>()
+			await page.subscribe('Page.frameNavigated', navigations.handler)
+			await page.subscribe('Page.backForwardCacheNotUsed', misses.handler)
+			await page.navigate(fixtures.url('/article', 'localhost'))
+			navigations.clear()
+			const going = page.back({ timeout: 5_000 }).then(
+				(result) => ({ status: 'resolved', url: result.url }),
+				(error: unknown) => ({
+					status: 'rejected',
+					message: error instanceof Error ? error.message : String(error),
+				}),
+			)
+			await waitForCondition(
+				'precondition: the history navigation committed or the host reported a cache miss',
+				() => navigations.count > 0 || misses.count > 0,
+				{ budget: 5_000, interval: 20 },
+			)
+			requireCacheRestore(
+				navigations.calls.map(([params]) => params),
+				misses.calls.map(([params]) => params),
+			)
+			outcome = await going
 		})
-		expect(await page.evaluate('document.body.dataset.restored')).toBe('yes')
+
+		// Fails against the landed source: `back()` waits for `Page.loadEventFired` under its default
+		// `load` condition, and a back-forward cache restore commits through `Page.frameNavigated` of
+		// type `BackForwardCacheRestore` without firing a load event, so the call times out.
+		it.fails('resolves back() under its default load condition when the back-forward cache restores the entry', () => {
+			expect(outcome).toStrictEqual({ status: 'resolved', url: fixtures.url('/form') })
+		})
 	})
 
 	it('P15 resolves registry.start() to whether Schema.getDomains lists WebMCP (control: the list names Page)', async () => {
@@ -974,8 +1199,8 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(await page.registry.start()).toBe(domains.includes('WebMCP'))
 	})
 
-	it('mirrors a page-registered tool through the live WebMCP domain', async (context) => {
-		const page = await browser.create({ url: fixtures.url('/registry') })
+	it('mirrors a page-registered tool through the live WebMCP domain on a browser launched with the WebMCP feature switch', async (context) => {
+		const page = await registry.create({ url: fixtures.url('/registry') })
 		opened.push(page)
 		const domains = requireValue(parseProtocolDomains(await page.send('Schema.getDomains')))
 		const started = await page.registry.start()

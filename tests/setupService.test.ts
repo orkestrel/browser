@@ -27,10 +27,13 @@ import {
 	extractOutlineReferences,
 	parseProtocolDomains,
 	REGISTRY_ABSENT_REASON,
+	requireCacheRestore,
 	requireSystemBrowser,
 	resolveServiceEngine,
+	scanServiceSkips,
 	SERVICE_BROWSER_ARGS,
 	SERVICE_ENGINE_ENV_KEY,
+	SERVICE_REGISTRY_ARGS,
 } from './setupService.js'
 
 const SERVICE_DIRECTORY = fileURLToPath(new URL('service/', import.meta.url))
@@ -154,6 +157,123 @@ describe('extractOutlineReferences', () => {
 	})
 })
 
+describe('SERVICE_REGISTRY_ARGS', () => {
+	it('carries the feature switch that exposes the WebMCP domain as a frozen list', () => {
+		expect([...SERVICE_REGISTRY_ARGS]).toStrictEqual(['--enable-features=WebMCP'])
+		expect(Object.isFrozen(SERVICE_REGISTRY_ARGS)).toBe(true)
+	})
+})
+
+describe('scanServiceSkips', () => {
+	const reasons = ['REGISTRY_ABSENT_REASON']
+
+	it('accepts a conditional context skip on an identifier, a member path, or a call citing a listed reason', () => {
+		expect(
+			scanServiceSkips(
+				[
+					'context.skip(!started, REGISTRY_ABSENT_REASON)',
+					'context.skip( !registry.started , REGISTRY_ABSENT_REASON )',
+					"context.skip(!domains.includes('WebMCP'), REGISTRY_ABSENT_REASON)",
+				].join('\n'),
+				reasons,
+			),
+		).toStrictEqual([])
+		expect(scanServiceSkips("it('runs', async () => undefined)", reasons)).toStrictEqual([])
+	})
+
+	it('reports chained and declared skips on every receiver', () => {
+		expect(
+			scanServiceSkips(
+				[
+					"it.skip.each([1])('case', () => undefined)",
+					"describe.skip('block', () => undefined)",
+					"test.skip('case', () => undefined)",
+					"it.skipIf(absent)('case', () => undefined)",
+					"it.runIf(present)('case', () => undefined)",
+					"it.concurrent.skip('case', () => undefined)",
+				].join('\n'),
+				reasons,
+			),
+		).toStrictEqual([
+			"it.skip.each([1])('case', () => undefined)",
+			"describe.skip('block', () => undefined)",
+			"test.skip('case', () => undefined)",
+			"it.skipIf(absent)('case', () => undefined)",
+			"it.runIf(present)('case', () => undefined)",
+			"concurrent.skip('case', () => undefined)",
+		])
+	})
+
+	it('reports a context skip whose condition is a literal or missing, or whose reason is not listed', () => {
+		expect(
+			scanServiceSkips(
+				[
+					'context.skip(!false, REGISTRY_ABSENT_REASON)',
+					'context.skip(!true, REGISTRY_ABSENT_REASON)',
+					'context.skip(REGISTRY_ABSENT_REASON)',
+					'context.skip(started, REGISTRY_ABSENT_REASON)',
+					"context.skip(!started, 'registry absent')",
+					'context.skip(!started, OTHER_REASON)',
+					'context.skip(!started, REGISTRY_ABSENT_REASON, extra)',
+					'context.skip()',
+					'const skip = context.skip',
+				].join('\n'),
+				reasons,
+			),
+		).toStrictEqual([
+			'context.skip(!false, REGISTRY_ABSENT_REASON)',
+			'context.skip(!true, REGISTRY_ABSENT_REASON)',
+			'context.skip(REGISTRY_ABSENT_REASON)',
+			'context.skip(started, REGISTRY_ABSENT_REASON)',
+			"context.skip(!started, 'registry absent')",
+			'context.skip(!started, OTHER_REASON)',
+			'context.skip(!started, REGISTRY_ABSENT_REASON, extra)',
+			'context.skip()',
+			'context.skip',
+		])
+	})
+})
+
+describe('requireCacheRestore', () => {
+	it('accepts a recorded back-forward cache restore with no reported miss', () => {
+		expect(
+			requireCacheRestore(
+				[
+					{ frame: { id: 'main' }, type: 'Navigation' },
+					{ frame: { id: 'main' }, type: 'BackForwardCacheRestore' },
+				],
+				[],
+			),
+		).toBeUndefined()
+	})
+
+	it('names every reported miss reason and the remedy, even beside a restore', () => {
+		expect(() =>
+			requireCacheRestore(
+				[{ type: 'BackForwardCacheRestore' }],
+				[
+					{
+						notRestoredExplanations: [
+							{ type: 'Circumstantial', reason: 'CacheLimit' },
+							{ type: 'Circumstantial', reason: 'TimeoutPuttingInCache' },
+						],
+					},
+					{ loaderId: 'L1' },
+				],
+			),
+		).toThrow(
+			'Precondition failed: the host did not restore the page from the back-forward cache (CacheLimit, TimeoutPuttingInCache, unnamed); run the service project with fewer concurrent browsers.',
+		)
+	})
+
+	it('refuses a navigation that was neither restored nor reported missed', () => {
+		expect(() => requireCacheRestore([{ type: 'Navigation' }], [])).toThrow(
+			'Precondition failed: the history navigation committed without a back-forward cache restore and without a reported cache miss.',
+		)
+		expect(() => requireCacheRestore([], [])).toThrow('without a back-forward cache restore')
+	})
+})
+
 describe('tests/service readiness', () => {
 	it('resolves its browser through requireSystemBrowser in every service proof and skips only with a reason this module cites', () => {
 		const proofs = readdirSync(SERVICE_DIRECTORY).filter((name) => name.endsWith('.test.ts'))
@@ -165,14 +285,8 @@ describe('tests/service readiness', () => {
 		expect(reasons).toContain('REGISTRY_ABSENT_REASON')
 		for (const proof of proofs) {
 			const source = readFileSync(join(SERVICE_DIRECTORY, proof), 'utf8')
-			const skips = [...source.matchAll(/\.skip(?:If)?\(([^)]*)\)/g)].map((match) => match[1])
 			expect(source).toContain('requireSystemBrowser(')
-			expect(source).not.toContain('.runIf(')
-			expect(
-				skips.filter(
-					(argument) => !reasons.includes(/^!\w+, (\w+)$/.exec(argument ?? '')?.[1] ?? ''),
-				),
-			).toStrictEqual([])
+			expect(scanServiceSkips(source, reasons)).toStrictEqual([])
 		}
 	})
 })

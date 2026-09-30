@@ -21,7 +21,14 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { basename, join } from 'node:path'
-import { readProperty, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
+import {
+	createRecorder,
+	readProperty,
+	requireValue,
+	retryUntil,
+	waitForCondition,
+	waitForEvent,
+} from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
 	COOPERATIVE_SIGTERM,
@@ -511,6 +518,9 @@ describe('renderFixturePage', () => {
 		expect(FIXTURE_LATE_DELAY).toBe(200)
 		expect(late).toContain(`line.textContent = '${FIXTURE_LATE_TEXT}'`)
 		expect(late).toContain(`}, ${FIXTURE_LATE_DELAY})">Reveal</button>`)
+		expect(late).toContain(
+			'append(line); document.body.dataset.inserted = String(performance.timeOrigin + performance.now()) }',
+		)
 		expect(late).not.toContain(FIXTURE_LATE_TEXT + '</')
 	})
 })
@@ -544,19 +554,36 @@ describe('createFixtureServer', () => {
 		}
 	})
 
-	it('releases its port on destroy and tolerates a second destroy', async () => {
+	it('closes an established connection on destroy and tolerates a second destroy', async () => {
 		const fixtures = await createFixtureServer()
-		await fixtures.destroy()
-		await fixtures.destroy()
+		const client = createConnection({ host: '127.0.0.1', port: fixtures.port })
+		const closes = createRecorder<[]>()
+		client.on('close', closes.handler)
+		client.on('error', () => undefined)
+		const answered = waitForEvent<[Buffer]>(
+			(listener) => {
+				client.once('data', listener)
+				return () => client.off('data', listener)
+			},
+			'the fixture answered the keep-alive request',
+			{ budget: 2000 },
+		)
+		client.write('GET /form HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n')
+		const [head] = await answered
 
-		const refused = await new Promise<string | undefined>((resolve) => {
-			const client = createConnection({ host: '127.0.0.1', port: fixtures.port })
-			client.once('connect', () => {
-				client.destroy()
-				resolve(undefined)
-			})
-			client.once('error', (error: NodeJS.ErrnoException) => resolve(error.code))
-		})
-		expect(refused).toBe('ECONNREFUSED')
+		expect(head.toString('utf8')).toMatch(/^HTTP\/1\.1 200 OK\r\n/)
+		expect(closes.count).toBe(0)
+
+		await fixtures.destroy()
+		await waitForCondition(
+			'the fixture closed the established connection',
+			() => closes.count === 1,
+			{
+				budget: 2000,
+				interval: 10,
+			},
+		)
+		await expect(fixtures.destroy()).resolves.toBeUndefined()
+		expect(closes.count).toBe(1)
 	})
 })
