@@ -33,3 +33,9 @@ Rulings (the fix brief `tmp/units/c7-fix3-brief.md`):
 - F10 (17, 25): the round's service runs are logged under `tmp/codex/c7-service-runs/` and cited by path.
 
 A third objective review, scoped to F7–F10, follows.
+
+## Third review (after F7–F10)
+
+Astra `analyst`, read-only, scoped to F7–F10: `VERDICT: FAIL 20, deviation 12, deviation 16, 17 (UNRESOLVED); outside the claims: none`. Confirmed: 19 and 29–31 (the fake window's capture order proven at invocation time; the real-DOM control with `stopPropagation()` red only under a bubbling registration), 25 and 33 (eight logged service runs, the exact clause in the six navigating cases), 27 and 28 (the nine lifetime rows and the removed-frames case), 32 (a settled form reason establishing the clause in both orderings), deviations 15, 17–19; deviation 12's cross-session premise verified by P9 (the middle frame's request on the inner session, its start on the middle session, the URLs equal). Broken: 20 and deviation 16, one sequence: a request for a frame at U with a form reason, an accepted start of that frame at V (which leaves U's entry in place), then a request-less start at U, which inherits the stale form reason. Unresolved: 17 as a historical measurement (the earlier round's either-clause runs were not logged; superseded by F6 and the logged runs). The gate set with the rebuilt dist green (`test:src` 1247, `test:src:browser` 225, `test:setup` 145, `test:guides` 207, `test:service` 53).
+
+Ruling F11 (20, deviation 16): the pending entry is deleted on every accepted start and its reason attributed only when the start's URL equals the entry's and the start is not a history or reload kind; the named sequence becomes a row. The reviewer specified the fix and its regression, so the Orchestrator verifies the round from the diff, the row, and the gate set, and no fourth review runs. Claim 17 closes as superseded.
