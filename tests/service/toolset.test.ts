@@ -446,7 +446,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		// opener's session, and Chromium 141 sends none for a `window.open` page
 		// (`tmp/codex/u11b-mutations/popup-trace.txt`), so the `popup` event never fires and the
 		// cursor stays on the opener.
-		it.fails('moves the cursor to the popup the click opened', async () => {
+		it('moves the cursor to the popup the click opened', async () => {
 			await expect(
 				waitForCondition('the view moved to the popup', () => toolset.view.url === child, {
 					budget: 5_000,

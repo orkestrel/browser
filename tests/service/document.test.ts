@@ -233,7 +233,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 
 		// `BrowserDOMElementManager` skips a `select` element's subtree after its combobox row, so the
 		// DOM look carries no `option` row, while the CDP outline lists one per option under it.
-		it.fails('lists the option rows of the select in the DOM look as the CDP outline does', () => {
+		it('lists the option rows of the select in the DOM look as the CDP outline does', () => {
 			expect(collectOutlinePairs(dom)).toStrictEqual(collectOutlinePairs(cdp))
 		})
 	})
