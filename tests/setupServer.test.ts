@@ -1,9 +1,9 @@
 /**
  * Proof for `tests/setupServer.ts`.
  *
- * The subject is the Node-only test infrastructure `tests/src/server/**` drives: the port
- * reservation helpers, the process wait, the scratch registry, the raw TCP fixtures, the in-process
- * CDP server, and the spawned fake browser. Every case uses the real resource the fixture exists to
+ * The subject is the Node-only test infrastructure `tests/src/server/**` and `tests/service/**`
+ * drive: the port reservation helpers, the process wait, the scratch registry, the raw TCP
+ * fixtures, the in-process CDP server, the spawned fake browser, and the fixture page server. Every case uses the real resource the fixture exists to
  * provide — real loopback sockets on ephemeral ports, real files, and real child processes.
  *
  * `tests/setupServer.ts` declares no DOM-driving export, so this file defers nothing to a browser
@@ -21,19 +21,30 @@ import { spawn } from 'node:child_process'
 import { existsSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { basename, join } from 'node:path'
-import { readProperty, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
+import {
+	createRecorder,
+	readProperty,
+	requireValue,
+	retryUntil,
+	waitForCondition,
+	waitForEvent,
+} from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
 	COOPERATIVE_SIGTERM,
 	createCDPTestServer,
 	createFakeBrowserProcess,
+	createFixtureServer,
 	createStallServer,
 	createTCPProxy,
 	createTempDirectory,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
+	FIXTURE_LATE_DELAY,
+	FIXTURE_LATE_TEXT,
 	readFixtureProcessId,
 	readServerPort,
+	renderFixturePage,
 	reservePort,
 	StallServer,
 	waitForProcessExit,
@@ -461,4 +472,118 @@ describe('createFakeBrowserProcess', () => {
 			expect([isRunning(pid), isRunning(descendant)]).toStrictEqual([false, false])
 		},
 	)
+})
+
+// === Fixture pages
+
+describe('renderFixturePage', () => {
+	it('renders every fixture path as a titled document and refuses an unknown path', () => {
+		const titles = Object.fromEntries(
+			['/form', '/frame/outer', '/frame/inner', '/overlay', '/late', '/article', '/registry'].map(
+				(path) => [path, /<title>([^<]*)<\/title>/.exec(renderFixturePage(path, 4100) ?? '')?.[1]],
+			),
+		)
+
+		expect(titles).toStrictEqual({
+			'/form': 'Delivery form',
+			'/frame/outer': 'Checkout',
+			'/frame/inner': 'Payment',
+			'/overlay': 'Overlay',
+			'/late': 'Late',
+			'/article': 'Field notes',
+			'/registry': 'Registry',
+		})
+		expect(renderFixturePage('/missing', 4100)).toBeUndefined()
+		expect(renderFixturePage('/form/review', 4100)).toBeUndefined()
+	})
+
+	it('frames the localhost inner page on the given port behind a decoy at the frame-local origin', () => {
+		const outer = requireValue(renderFixturePage('/frame/outer', 4100))
+
+		expect(outer).toContain('<iframe title="Payment" src="http://localhost:4100/frame/inner">')
+		expect(outer).toContain(
+			'iframe{position:absolute;left:220px;top:160px;width:300px;height:200px;border:10px solid gray;padding:0}',
+		)
+		expect(outer).toContain('#decoy{position:absolute;left:0;top:0;width:16px;height:16px;')
+		expect(renderFixturePage('/frame/inner', 4100)).toContain(
+			'#pay{position:absolute;left:0;top:0;width:16px;height:16px;',
+		)
+		expect(renderFixturePage('/frame/outer', 4200)).toContain('http://localhost:4200/frame/inner')
+	})
+
+	it('schedules the late text on the Reveal click after the late delay', () => {
+		const late = requireValue(renderFixturePage('/late', 4100))
+
+		expect(FIXTURE_LATE_TEXT).toBe('Confirmation code 4417')
+		expect(FIXTURE_LATE_DELAY).toBe(200)
+		expect(late).toContain(`line.textContent = '${FIXTURE_LATE_TEXT}'`)
+		expect(late).toContain(`}, ${FIXTURE_LATE_DELAY})">Reveal</button>`)
+		expect(late).toContain(
+			'append(line); document.body.dataset.inserted = String(performance.timeOrigin + performance.now()) }',
+		)
+		expect(late).not.toContain(FIXTURE_LATE_TEXT + '</')
+	})
+})
+
+describe('createFixtureServer', () => {
+	it('serves each fixture page on both loopback hosts of one port and answers 404 otherwise', async () => {
+		const fixtures = await createFixtureServer()
+		try {
+			expect(fixtures.url('/form')).toBe(`http://127.0.0.1:${fixtures.port}/form`)
+			expect(fixtures.url('/frame/inner', 'localhost')).toBe(
+				`http://localhost:${fixtures.port}/frame/inner`,
+			)
+
+			const outer = await fetch(fixtures.url('/frame/outer'))
+			expect(outer.status).toBe(200)
+			expect(outer.headers.get('content-type')).toBe('text/html; charset=utf-8')
+			expect(await outer.text()).toBe(renderFixturePage('/frame/outer', fixtures.port))
+
+			const inner = await fetch(fixtures.url('/frame/inner', 'localhost'))
+			expect(inner.status).toBe(200)
+			expect(await inner.text()).toBe(renderFixturePage('/frame/inner', fixtures.port))
+
+			const query = await fetch(fixtures.url('/article?page=2'))
+			expect(await query.text()).toBe(renderFixturePage('/article', fixtures.port))
+
+			const missing = await fetch(fixtures.url('/missing'))
+			expect(missing.status).toBe(404)
+			expect(await missing.text()).toBe('')
+		} finally {
+			await fixtures.destroy()
+		}
+	})
+
+	it('closes an established connection on destroy and tolerates a second destroy', async () => {
+		const fixtures = await createFixtureServer()
+		const client = createConnection({ host: '127.0.0.1', port: fixtures.port })
+		const closes = createRecorder<[]>()
+		client.on('close', closes.handler)
+		client.on('error', () => undefined)
+		const answered = waitForEvent<[Buffer]>(
+			(listener) => {
+				client.once('data', listener)
+				return () => client.off('data', listener)
+			},
+			'the fixture answered the keep-alive request',
+			{ budget: 2000 },
+		)
+		client.write('GET /form HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: keep-alive\r\n\r\n')
+		const [head] = await answered
+
+		expect(head.toString('utf8')).toMatch(/^HTTP\/1\.1 200 OK\r\n/)
+		expect(closes.count).toBe(0)
+
+		await fixtures.destroy()
+		await waitForCondition(
+			'the fixture closed the established connection',
+			() => closes.count === 1,
+			{
+				budget: 2000,
+				interval: 10,
+			},
+		)
+		await expect(fixtures.destroy()).resolves.toBeUndefined()
+		expect(closes.count).toBe(1)
+	})
 })
