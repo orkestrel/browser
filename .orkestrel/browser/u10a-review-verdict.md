@@ -35,3 +35,18 @@ Rulings, each carried by the fix brief `tmp/units/u10a-fix2-brief.md` (K1–K9):
 - Claim 13: `role` and `name` return `'generic'` and `''` after collection while the claim said `GONE`. K8 rules them the captured outline values (data, as in core), never recomputed and never a fallback; the actions keep rejecting `GONE`.
 - O1: no assertion observes the Vite runner's release. K9 exposes its lifecycle through the acquisition seam and records the mutation.
 - Confirmed: claims 3, 4, 7, 8, 11, 14, 15; the design choices except the budgets and the unasserted runner; the weak discriminations the review's table names are added to the mutation record.
+
+## Third review (Astra `analyst`, read-only, 475 802 ms; report `tmp/worktrees/u9/tmp/codex/u10a-review3-answer.md`)
+
+Verdict: FAIL 2, 5, 6, 12, 14, 16; outside the claims: O1 (required). Every second-round failing input is confirmed closed; the design choices are confirmed except `BROWSER_INTERACTIVE_CONTENT`'s membership (claim 2) and the first-binding identity (O1).
+
+Rulings, folded into unit U10b (`tmp/units/u10b-brief.md`, R8–R14) because the face is merged and U10b is its sole writer:
+
+- Claim 2: `img[controls]` is missing from the interactive-content list, so an image control inside a file-input label is refused. R8.
+- Claim 5: a hidden descendant of a visible `aria-labelledby` reference still contributes its embedded value, `aria-label`, or `title`. R9 applies accessible-name hiddenness before those alternatives while keeping the admitted hidden-reference traversal.
+- Claim 6: a `roots()` callback that aborts mid-reconciliation continues acquiring observers; an initial `check()` that aborts the caller loses the abort event; a `roots()` that consumes the deadline still runs a check. R10 guards every step with the release state, rechecks cancellation after caller callbacks, and rechecks the deadline before each check.
+- Claim 12 (UNRESOLVED): the default-budget measurements were reported without logs. R11 keeps the run logs.
+- Claim 14: the microtask marker admits a second-hop microtask notification. R12 adds a timer-marker control.
+- Claim 16: watcher emptiness does not prove the runner closed. R13 observes the real close completing, with a watcher-only negative control.
+- O1: the DOM manager discards the description a recapture computes, so an outline row and the wrapper's `name` disagree after an attribute change, unlike the core manager. R14 refreshes on recapture and keeps a snapshot after removal.
+- Confirmed: claims 1, 3, 4, 7–11, 13, 15; `BrowserNameContext`, `matchesBrowserActivation`, the `roots` getter, the setup seams, the narrow `Pick`, `createFailingBrowser`, the embedded `select` and `textarea` contributions, and the default budgets.
