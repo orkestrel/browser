@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BrowserElementError, isBrowserElementError } from '@src/core'
+import { BrowserElementError, isBrowserElementError, isCDPError } from '@src/core'
 import { requireValue } from '@orkestrel/test'
 import { createBrowserElementFixture } from '../../../setup.js'
 
@@ -231,6 +231,52 @@ describe('trusted element actions', () => {
 			await client.close()
 		}
 	})
+
+	it('catches a collected node whose scroll refusal leaks instead of GONE naming look', async () => {
+		const { page, client } = await createBrowserElementFixture({
+			failure: {
+				method: 'DOM.scrollIntoViewIfNeeded',
+				message: 'No node found for given backend id',
+			},
+		})
+		try {
+			await page.elements.outline()
+			const rejection = await requireValue(page.elements.element('e1'))
+				.click()
+				.catch((error: unknown) => error)
+			expect(rejection).toSatisfy(isBrowserElementError)
+			expect(rejection).toMatchObject({
+				code: 'BROWSER_ELEMENT_ERROR',
+				context: { reference: 'e1', reason: 'GONE' },
+				message: 'Element e1 is gone because the page changed; call look for fresh refs.',
+			})
+		} finally {
+			await client.close()
+		}
+	})
+
+	it.each(['Internal error', 'No node found at given location'])(
+		'catches classifying the unrelated protocol error %s as an element refusal',
+		async (message) => {
+			const { page, client } = await createBrowserElementFixture({
+				failure: { method: 'DOM.scrollIntoViewIfNeeded', message },
+			})
+			try {
+				await page.elements.outline()
+				const rejection = await requireValue(page.elements.element('e1'))
+					.click()
+					.catch((error: unknown) => error)
+				expect(rejection).toSatisfy(isCDPError)
+				expect(rejection).not.toSatisfy(isBrowserElementError)
+				expect(rejection).toMatchObject({
+					message,
+					context: { method: 'DOM.scrollIntoViewIfNeeded', message },
+				})
+			} finally {
+				await client.close()
+			}
+		},
+	)
 
 	it('catches disabled actionability being ignored', async () => {
 		const { page, client } = await createBrowserElementFixture({

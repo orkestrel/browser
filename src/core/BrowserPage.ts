@@ -144,10 +144,13 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	// invalidate it before it publishes.
 	readonly #creating: Map<string, { readonly session: string; readonly promise: Promise<number> }> =
 		new Map()
-	readonly #runtimeHandlers: Map<
+	readonly #sessionHandlers: Map<
 		string,
-		{ readonly destroyed: CDPHandler; readonly cleared: CDPHandler }
+		{ readonly destroyed: CDPHandler; readonly cleared: CDPHandler; readonly navigated: CDPHandler }
 	> = new Map()
+	// The frame of each attach whose domain enable has not settled, keyed by its frame session, so a
+	// navigation the frame session reports before publication reaches the published record.
+	readonly #attaching: Map<string, BrowserFrameInfo> = new Map()
 	#epoch = 0
 	#floor = 0
 	#closed = false
@@ -168,6 +171,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #navigationResponseHandler = this.#handleNavigationResponse.bind(this)
 	readonly #destroyHandler = this.#handleDestroy.bind(this)
 	readonly #loadHandler = this.#handleLoad.bind(this)
+	readonly #restoreHandler = this.#handleRestore.bind(this)
 	readonly #frameAttachedHandler = this.#handleFrameAttached.bind(this)
 	readonly #frameNavigatedHandler = this.#handleFrameNavigated.bind(this)
 	readonly #sameDocumentHandler = this.#handleSameDocument.bind(this)
@@ -262,9 +266,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.subscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.subscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
 		this.#client.subscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
-		const runtime = this.#runtimeHandlersFor(this.#sessionId)
-		this.#client.subscribe('Runtime.executionContextDestroyed', runtime.destroyed, this.#sessionId)
-		this.#client.subscribe('Runtime.executionContextsCleared', runtime.cleared, this.#sessionId)
+		const handlers = this.#sessionHandlersFor(this.#sessionId)
+		this.#client.subscribe('Runtime.executionContextDestroyed', handlers.destroyed, this.#sessionId)
+		this.#client.subscribe('Runtime.executionContextsCleared', handlers.cleared, this.#sessionId)
 		this.#client.subscribe('Browser.downloadWillBegin', this.#downloadHandler)
 		this.#client.subscribe('Browser.downloadProgress', this.#downloadProgressHandler)
 	}
@@ -717,8 +721,14 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 
 		const watch = this.#watchNavigation()
-		const wait = this.#waitForLoadEvent(options?.condition ?? 'load', timeout)
+		const condition = options?.condition ?? 'load'
+		const wait = this.#waitForLoadEvent(condition, timeout)
 		void wait.catch(() => undefined)
+		// A back-forward cache restore commits a document that already loaded, so Chromium fires no
+		// load or DOMContentLoaded event for it and the restore itself settles those two conditions.
+		const restorable = condition === 'load' || condition === 'domcontentloaded'
+		if (restorable)
+			this.#client.subscribe('Page.frameNavigated', this.#restoreHandler, this.#sessionId)
 		try {
 			await this.send('Page.navigateToHistoryEntry', { entryId: entry['id'] }, { timeout })
 			await wait
@@ -727,6 +737,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#cancelLoad()
 			await this.#stopLoading(Math.min(timeout, BROWSER_STOP_LOADING_TIMEOUT_MS))
 			throw error
+		} finally {
+			if (restorable)
+				this.#client.unsubscribe('Page.frameNavigated', this.#restoreHandler, this.#sessionId)
 		}
 
 		return await this.#completeNavigation(watch)
@@ -838,6 +851,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		for (const session of this.#frameIds.keys()) this.#unwatchSession(session)
 		this.#frameSessions.clear()
 		this.#frameIds.clear()
+		this.#attaching.clear()
 		this.#iframes.clear()
 		for (const worker of this.#workers.values()) worker.detach()
 		this.#workers.clear()
@@ -859,13 +873,13 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.unsubscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.unsubscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
 		this.#client.unsubscribe('Inspector.targetCrashed', this.#crashHandler, this.#sessionId)
-		const runtime = this.#runtimeHandlersFor(this.#sessionId)
+		const handlers = this.#sessionHandlersFor(this.#sessionId)
 		this.#client.unsubscribe(
 			'Runtime.executionContextDestroyed',
-			runtime.destroyed,
+			handlers.destroyed,
 			this.#sessionId,
 		)
-		this.#client.unsubscribe('Runtime.executionContextsCleared', runtime.cleared, this.#sessionId)
+		this.#client.unsubscribe('Runtime.executionContextsCleared', handlers.cleared, this.#sessionId)
 		this.#client.unsubscribe('Browser.downloadWillBegin', this.#downloadHandler)
 		this.#client.unsubscribe('Browser.downloadProgress', this.#downloadProgressHandler)
 		if (!this.#emitter.destroyed) {
@@ -1041,37 +1055,39 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		if (this.#creating.get(frame)?.promise === pending) this.#creating.delete(frame)
 	}
 
-	#runtimeHandlersFor(session: string): {
+	#sessionHandlersFor(session: string): {
 		readonly destroyed: CDPHandler
 		readonly cleared: CDPHandler
+		readonly navigated: CDPHandler
 	} {
-		const existing = this.#runtimeHandlers.get(session)
+		const existing = this.#sessionHandlers.get(session)
 		if (existing !== undefined) return existing
 		const created = {
 			destroyed: this.#handleContextDestroyed.bind(this, session),
 			cleared: this.#handleContextsCleared.bind(this, session),
+			navigated: this.#handleSessionNavigated.bind(this, session),
 		}
-		this.#runtimeHandlers.set(session, created)
+		this.#sessionHandlers.set(session, created)
 		return created
 	}
 
 	#watchSession(session: string): void {
+		const handlers = this.#sessionHandlersFor(session)
 		this.#client.subscribe('Page.frameDetached', this.#frameDetachedHandler, session)
-		this.#client.subscribe('Page.frameNavigated', this.#frameNavigatedHandler, session)
+		this.#client.subscribe('Page.frameNavigated', handlers.navigated, session)
 		this.#client.subscribe('Page.navigatedWithinDocument', this.#sameDocumentHandler, session)
-		const runtime = this.#runtimeHandlersFor(session)
-		this.#client.subscribe('Runtime.executionContextDestroyed', runtime.destroyed, session)
-		this.#client.subscribe('Runtime.executionContextsCleared', runtime.cleared, session)
+		this.#client.subscribe('Runtime.executionContextDestroyed', handlers.destroyed, session)
+		this.#client.subscribe('Runtime.executionContextsCleared', handlers.cleared, session)
 	}
 
 	#unwatchSession(session: string): void {
+		const handlers = this.#sessionHandlersFor(session)
 		this.#client.unsubscribe('Page.frameDetached', this.#frameDetachedHandler, session)
-		this.#client.unsubscribe('Page.frameNavigated', this.#frameNavigatedHandler, session)
+		this.#client.unsubscribe('Page.frameNavigated', handlers.navigated, session)
 		this.#client.unsubscribe('Page.navigatedWithinDocument', this.#sameDocumentHandler, session)
-		const runtime = this.#runtimeHandlersFor(session)
-		this.#client.unsubscribe('Runtime.executionContextDestroyed', runtime.destroyed, session)
-		this.#client.unsubscribe('Runtime.executionContextsCleared', runtime.cleared, session)
-		this.#runtimeHandlers.delete(session)
+		this.#client.unsubscribe('Runtime.executionContextDestroyed', handlers.destroyed, session)
+		this.#client.unsubscribe('Runtime.executionContextsCleared', handlers.cleared, session)
+		this.#sessionHandlers.delete(session)
 	}
 
 	async #resolveFrameSession(frame: string): Promise<string> {
@@ -1083,6 +1099,19 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		await this.#client.send('Page.enable', undefined, { session })
 		await this.#client.send('Runtime.enable', undefined, { session })
 		return session
+	}
+
+	// The frame's first commit can precede its session's `Page.enable`, which never replays it, so
+	// the session's own frame tree supplies the committed URL and name before publication. A
+	// session gone between its enable and this read publishes the record it already holds.
+	async #readFrameTree(session: string): Promise<void> {
+		const result = await this.#client
+			.send('Page.getFrameTree', undefined, { session })
+			.catch(() => undefined)
+		const [root] = readBrowserFrames(result)
+		const attaching = this.#attaching.get(session)
+		if (root === undefined || attaching === undefined || root.id !== attaching.id) return
+		this.#attaching.set(session, { ...attaching, url: root.url, name: root.name ?? attaching.name })
 	}
 
 	async #attachWorker(
@@ -1202,6 +1231,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 	}
 
+	#handleRestore(params: Readonly<Record<string, unknown>>): void {
+		const frame = params['frame']
+		if (params['type'] === 'BackForwardCacheRestore' && isRecord(frame) && frame['id'] === this.id)
+			this.#resolveLoad()
+	}
+
 	#handleFrameAttached(params: Readonly<Record<string, unknown>>): void {
 		const frame = params['frameId']
 		const parent = params['parentFrameId']
@@ -1241,6 +1276,21 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#emitter.emit('navigate', frame['url'], false)
 	}
 
+	// A frame session reports its own frame's committed URL, which `Target.attachedToTarget` does
+	// not carry before the framed document commits.
+	#handleSessionNavigated(session: string, params: Readonly<Record<string, unknown>>): void {
+		this.#handleFrameNavigated(params)
+		const frame = params['frame']
+		const id = this.#frameIds.get(session)
+		if (!isRecord(frame) || !isString(frame['url']) || id === undefined || frame['id'] !== id)
+			return
+		const url = frame['url']
+		const attaching = this.#attaching.get(session)
+		if (attaching !== undefined) this.#attaching.set(session, { ...attaching, url })
+		const listed = this.#iframes.get(id)
+		if (listed !== undefined) this.#iframes.set(id, { ...listed, url })
+	}
+
 	#handleSameDocument(params: Readonly<Record<string, unknown>>): void {
 		const frame = params['frameId']
 		if (!isString(frame)) return
@@ -1253,10 +1303,13 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#handleFrameDetached(params: Readonly<Record<string, unknown>>): void {
 		const frame = params['frameId']
 		if (!isString(frame)) return
-		this.#frameSessions.delete(frame)
 		this.#advanceFrame(frame)
 		this.#worlds.delete(frame)
 		this.#creating.delete(frame)
+		// CDP reports a process replacement as `swap`: the frame persists in another renderer, whose
+		// session `Target.attachedToTarget` can have registered before this detach arrives.
+		if (params['reason'] === 'swap') return
+		this.#frameSessions.delete(frame)
 		this.#emitter.emit('detach', frame)
 	}
 
@@ -1357,25 +1410,28 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		if (category !== 'iframe') return
 
 		const frame = target['targetId']
-		const info: BrowserFrameInfo = {
+		this.#attaching.set(session, {
 			id: frame,
 			parent: undefined,
 			name: undefined,
 			url: isString(target['url']) ? target['url'] : 'about:blank',
-		}
+		})
 		this.#worlds.delete(frame)
 		this.#creating.delete(frame)
 		this.#watchSession(session)
 		const attempt = this.#enableFrameSession(session)
 		this.#frameSessions.set(frame, attempt)
 		this.#frameIds.set(session, frame)
-		void attempt.then(
+		void attempt.then(this.#readFrameTree.bind(this, session)).then(
 			() => {
-				if (this.#closed || this.#frameSessions.get(frame) !== attempt) return
+				const info = this.#attaching.get(session)
+				this.#attaching.delete(session)
+				if (info === undefined || this.#closed || this.#frameSessions.get(frame) !== attempt) return
 				this.#iframes.set(frame, info)
 				this.#emitter.emit('session', this.#frame(info))
 			},
 			() => {
+				this.#attaching.delete(session)
 				if (this.#frameSessions.get(frame) === attempt) this.#frameSessions.delete(frame)
 				if (this.#frameIds.get(session) === frame) this.#frameIds.delete(session)
 				this.#unwatchSession(session)
