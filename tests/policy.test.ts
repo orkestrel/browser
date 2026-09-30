@@ -14,6 +14,8 @@ import {
 	inspectPolicyFilenamePaths,
 	inspectPolicyMirrorPaths,
 	inspectPolicyPortability,
+	inspectPolicySource,
+	POLICY_SOURCE_DEADLINES,
 	inspectPolicyWiring,
 	inspectPolicyWorkspace,
 	inspectSkillFamily,
@@ -803,6 +805,42 @@ describe('repository policy', () => {
 		expect(paths).toContain('.claude/settings.json')
 		expect(paths).toContain('package.json')
 		expect(paths).toContain('.gitattributes')
+	})
+
+	it('keeps src free of polling, deleted names, and any setTimeout outside the deadline allowlist', () => {
+		expect(inspectPolicySource(process.cwd())).toEqual([])
+		expect(POLICY_SOURCE_DEADLINES.length).toBeGreaterThan(0)
+	})
+
+	it('reports polling, a deleted name, an unlisted timer, and a stale allowlist entry in a scratch source', () => {
+		const scratch = createPolicyScratch({ prefix: 'policy-source-' })
+		try {
+			scratch.write(
+				'src/core/BrowserClock.ts',
+				[
+					'export function advance(): void {',
+					'\tsetInterval(() => undefined, 5)',
+					'\tsetTimeout(() => undefined, 5)',
+					'\tconst locator = BrowserLocator',
+					'}',
+					'export function scan(): void {',
+					'\tsetTimeout(() => undefined, 5)',
+					'}',
+				].join('\n'),
+			)
+			const found = inspectPolicySource(scratch.path)
+			expect(found).toContain('src/core/BrowserClock.ts:2 uses setInterval')
+			expect(found).toContain('src/core/BrowserClock.ts:4 uses BrowserLocator')
+			expect(found).toContain(
+				'src/core/BrowserClock.ts:7 setTimeout in scan is not an allowed deadline',
+			)
+			expect(found).not.toContain(
+				'src/core/BrowserClock.ts:3 setTimeout in advance is not an allowed deadline',
+			)
+			expect(found).toContain('src/core/BrowserMouse.ts allowlists click with no setTimeout call')
+		} finally {
+			scratch.destroy()
+		}
 	})
 
 	it('keeps every workspace path, script, and source portable', () => {

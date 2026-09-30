@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { BrowserContext } from '@src/core'
+import { BrowserContext, BrowserPage } from '@src/core'
 import { requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
@@ -349,6 +349,111 @@ describe('element manager', () => {
 			)
 			await page.elements.outline()
 			expect(page.elements.elements()[0]?.reference).toBe('e7')
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches ignoring a detached out-of-process child frame', async () => {
+		const { page, transport, client } = await createBrowserElementFixture()
+		try {
+			await page.elements.outline()
+			const main = requireValue(page.elements.element('e1'))
+			const child = requireValue(page.elements.element('e6'))
+			expect(child.name).toBe('Save')
+			const maximum = Math.max(
+				...page.elements.elements().map((element) => Number(element.reference.slice(1))),
+			)
+			transport.event('Page.frameDetached', { frameId: 'child', reason: 'remove' }, 'session-child')
+			expect(page.elements.element('e6')).toBeUndefined()
+			await expect(child.click()).rejects.toMatchObject({
+				code: 'BROWSER_ELEMENT_ERROR',
+				context: { reason: 'GONE' },
+			})
+			expect(page.elements.element('e1')).toBe(main)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'session-child-again',
+					targetInfo: { targetId: 'child', type: 'iframe', url: 'https://example.test/checkout' },
+				},
+				'session-main',
+			)
+			await waitForDelay()
+			await page.elements.outline()
+			const added = page.elements
+				.elements()
+				.filter((element) => Number(element.reference.slice(1)) > maximum)
+			expect(added.map((element) => element.name)).toEqual(['Save'])
+			expect(page.elements.element('e1')).toBe(main)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('catches ignoring a detached in-process child frame', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptBrowserElements(transport, {
+			accessibility: (message) =>
+				transport.reply(
+					message.id,
+					message.params?.['frameId'] === 'child'
+						? {
+								nodes: [
+									{
+										nodeId: 'child-root',
+										backendDOMNodeId: 40,
+										role: { value: 'RootWebArea' },
+										childIds: ['pay'],
+									},
+									{
+										nodeId: 'pay',
+										parentId: 'child-root',
+										backendDOMNodeId: 41,
+										role: { value: 'button' },
+										name: { value: 'Pay' },
+									},
+								],
+							}
+						: BROWSER_ELEMENT_AX_FIXTURE,
+				),
+		})
+		const page = new BrowserPage(
+			client,
+			'main',
+			'session-main',
+			undefined,
+			'https://example.test/cart',
+		)
+		try {
+			transport.event(
+				'Page.frameNavigated',
+				{ frame: { id: 'main', url: page.url, loaderId: 'loader-main' } },
+				'session-main',
+			)
+			transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
+				'session-main',
+			)
+			await page.elements.outline()
+			const main = requireValue(page.elements.element('e1'))
+			const child = requireValue(page.elements.elements().find((element) => element.name === 'Pay'))
+			const maximum = Math.max(
+				...page.elements.elements().map((element) => Number(element.reference.slice(1))),
+			)
+			transport.event('Page.frameDetached', { frameId: 'child', reason: 'remove' }, 'session-main')
+			expect(page.elements.element(child.reference)).toBeUndefined()
+			await expect(child.click()).rejects.toMatchObject({
+				code: 'BROWSER_ELEMENT_ERROR',
+				context: { reason: 'GONE' },
+			})
+			expect(page.elements.element('e1')).toBe(main)
+			await page.elements.outline()
+			const added = page.elements
+				.elements()
+				.filter((element) => Number(element.reference.slice(1)) > maximum)
+			expect(added.map((element) => element.name)).toEqual(['Pay'])
 		} finally {
 			await client.close()
 		}

@@ -1904,6 +1904,45 @@ describe('BrowserPage events', () => {
 		})
 	})
 
+	it('turns a protocol download cancel into aborted with one abort event and no complete', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(
+			client,
+			'target-1',
+			'session-1',
+			undefined,
+			undefined,
+			'frame-1',
+			'context-1',
+		)
+		const downloads = createRecorder<[download: BrowserDownloadInterface]>()
+		page.emitter.on('download', downloads.handler)
+
+		transport.event('Browser.downloadWillBegin', {
+			guid: 'download-2',
+			url: 'https://example.com/report',
+			suggestedFilename: 'report.txt',
+			frameId: 'frame-1',
+		})
+		const download = requireValue(downloads.calls[0]?.[0])
+		const aborts = createRecorder<[]>()
+		const completes = createRecorder<[path: string | undefined]>()
+		download.emitter.on('abort', aborts.handler)
+		download.emitter.on('complete', completes.handler)
+		expect(download.status).toBe('pending')
+
+		transport.event('Browser.downloadProgress', {
+			guid: 'download-2',
+			state: 'canceled',
+			receivedBytes: 3,
+			totalBytes: 10,
+		})
+
+		expect(download.status).toBe('aborted')
+		expect(aborts.calls).toHaveLength(1)
+		expect(completes.calls).toHaveLength(0)
+	})
+
 	it('promotes attached worker targets after enabling their Runtime session', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Runtime.enable')

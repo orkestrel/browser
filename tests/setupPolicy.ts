@@ -1932,6 +1932,178 @@ export function readPolicyPaths(root: string): readonly string[] {
 	return globSync(POLICY_PORTABILITY_GLOB, { cwd: root }).map(normalizePolicyPath).sort()
 }
 
+/** Names the source tokens that mark polling, an absent wait surface, or a deleted name. */
+export const POLICY_SOURCE_BANNED: readonly string[] = Object.freeze([
+	'setInterval',
+	'.until(',
+	'BrowserLocator',
+	'BrowserSelector',
+	'compileFunctionWaitExpression',
+	'waitForCDPReady',
+	'BROWSER_WAIT_POLL_INTERVAL_MS',
+	'BROWSER_TEST_ID_ATTRIBUTE',
+	'BROWSER_VISIBILITY_SOURCE',
+	'.article(',
+	'.content(',
+	'.cancel(',
+	"'cancelled'",
+])
+
+/** Records one `setTimeout` call site the source may keep, by path and enclosing declaration. */
+export interface PolicyDeadline {
+	readonly path: string
+	readonly declaration: string
+	readonly reason: string
+}
+
+/** Lists every `setTimeout` call site the source keeps, each a single deadline or input delay. */
+export const POLICY_SOURCE_DEADLINES: readonly PolicyDeadline[] = Object.freeze([
+	{
+		path: 'src/server/Browser.ts',
+		declaration: '#handleTransportLoss',
+		reason: 'one-shot deferral before a transport loss is confirmed',
+	},
+	{
+		path: 'src/server/Browser.ts',
+		declaration: '#waitForRemainderWithin',
+		reason: 'process-group drain, the named exception in PROPOSAL.md, Event and invalidation model',
+	},
+	{
+		path: 'src/server/transports/WebSocketCDPTransport.ts',
+		declaration: '#start',
+		reason: 'handshake deadline',
+	},
+	{
+		path: 'src/server/helpers.ts',
+		declaration: 'fetchCDPTargets',
+		reason: 'request deadline that aborts the fetch',
+	},
+	{
+		path: 'src/core/BrowserTracing.ts',
+		declaration: '#wait',
+		reason: 'trace completion deadline',
+	},
+	{
+		path: 'src/core/BrowserPage.ts',
+		declaration: '#parkReadiness',
+		reason: 'readiness deadline',
+	},
+	{
+		path: 'src/core/BrowserPage.ts',
+		declaration: '#waitForLoadEvent',
+		reason: 'load event deadline',
+	},
+	{
+		path: 'src/core/CDPClient.ts',
+		declaration: 'send',
+		reason: 'command reply deadline',
+	},
+	{
+		path: 'src/core/BrowserNavigationManager.ts',
+		declaration: '#park',
+		reason: 'navigation idle deadline',
+	},
+	{
+		path: 'src/core/BrowserKeyboard.ts',
+		declaration: 'press',
+		reason: 'caller-requested delay between key events, not a poll',
+	},
+	{
+		path: 'src/core/BrowserKeyboard.ts',
+		declaration: 'type',
+		reason: 'caller-requested delay between key events, not a poll',
+	},
+	{
+		path: 'src/core/BrowserMouse.ts',
+		declaration: 'click',
+		reason: 'caller-requested delay between button events, not a poll',
+	},
+	{
+		path: 'src/core/BrowserMouse.ts',
+		declaration: 'drag',
+		reason: 'caller-requested delay between button events, not a poll',
+	},
+	{
+		path: 'src/core/BrowserRegistry.ts',
+		declaration: 'execute',
+		reason: 'tool invocation deadline',
+	},
+	{
+		path: 'src/core/BrowserClock.ts',
+		declaration: 'advance',
+		reason: 'virtual-time budget deadline',
+	},
+	{
+		path: 'src/core/compilers.ts',
+		declaration: 'compileQueryWaitExpression',
+		reason: 'deadline inside the compiled mutation-driven wait',
+	},
+])
+
+const POLICY_SOURCE_HEADER =
+	/^\t?(?:export )?(?:async )?(?:static )?(?:function )?(#?[A-Za-z_]\w*)\s*(?:<[^>]*>)?\((?:.*\)(?::[^{=]+)? \{)?$/u
+const POLICY_SOURCE_STATEMENTS: ReadonlySet<string> = new Set([
+	'if',
+	'for',
+	'while',
+	'switch',
+	'catch',
+	'return',
+	'await',
+	'throw',
+	'super',
+])
+
+/**
+ * Names the method or function declaration that encloses a source line.
+ *
+ * @param lines - The source lines.
+ * @param index - The zero-based index of the line to place.
+ * @returns The enclosing declaration name, or `undefined` when none matches.
+ */
+export function readPolicyDeclaration(lines: readonly string[], index: number): string | undefined {
+	for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
+		const name = POLICY_SOURCE_HEADER.exec(lines[cursor] ?? '')?.[1]
+		if (name !== undefined && !POLICY_SOURCE_STATEMENTS.has(name)) return name
+	}
+	return undefined
+}
+
+/**
+ * Inspects `src/**\/*.ts` for polling, deleted names, and a `setTimeout` outside the deadline allowlist.
+ *
+ * @param root - The workspace root whose `src` directory is read.
+ * @returns Every banned token, unlisted timer site, and stale allowlist entry in path order.
+ */
+export function inspectPolicySource(root: string): readonly string[] {
+	const found: string[] = []
+	const used = new Set<string>()
+	const paths = globSync('src/**/*.ts', { cwd: root }).map(normalizePolicyPath).sort()
+	for (const path of paths) {
+		const lines = readFileSync(join(root, path), 'utf8').split('\n')
+		lines.forEach((text, index) => {
+			for (const token of POLICY_SOURCE_BANNED)
+				if (text.includes(token)) found.push(`${path}:${index + 1} uses ${token}`)
+			if (!text.includes('setTimeout(')) return
+			const declaration = readPolicyDeclaration(lines, index)
+			const key = `${path} ${declaration}`
+			if (
+				declaration !== undefined &&
+				POLICY_SOURCE_DEADLINES.some(
+					(entry) => entry.path === path && entry.declaration === declaration,
+				)
+			)
+				used.add(key)
+			else
+				found.push(`${path}:${index + 1} setTimeout in ${declaration} is not an allowed deadline`)
+		})
+	}
+	for (const entry of POLICY_SOURCE_DEADLINES)
+		if (!used.has(`${entry.path} ${entry.declaration}`))
+			found.push(`${entry.path} allowlists ${entry.declaration} with no setTimeout call`)
+	return found
+}
+
 /**
  * Inspects the workspace-authored path population for a name a Windows checkout cannot hold.
  *
