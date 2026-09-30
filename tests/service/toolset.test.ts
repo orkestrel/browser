@@ -133,7 +133,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'click', name: 'click', arguments: { ref: name } }),
 		)
 		expect(click).toSatisfy((receipt: string) =>
-			matchesToolReceipt(receipt, { action: `Clicked ${name} textbox "Name"`, view: form }),
+			matchesToolReceipt(receipt, {
+				action: `Clicked ${name} textbox "Name"; call type with ${name} to enter text`,
+				view: form,
+			}),
 		)
 		expect(await page.evaluate('document.activeElement.id')).toBe('name')
 
