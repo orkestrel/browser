@@ -38,3 +38,17 @@ The following table rules on each claim and outside finding; every BROKEN was re
 ## Held
 
 The lane attacked and held: `native` uncontaminated by staged, context, and adopted tools; all ten reserved names checked before registration; dialog handling bypassing held input; queued interruption sending nothing; late adoption dropped after a newer change, a popup-and-back move, or destruction; the view and reference keys resetting continuation; a child-frame navigation request not starting the main-frame wait; completed-start destruction removing owned tools and rejecting retained ones; exact-limit text intact; no toolset-level boundary timeout (the registry owns its deadline) and a late rejection observed by the race; the page-owned input and the removed selector fixtures.
+
+## Second review (Astra `analyst`, read-only, 532 103 ms; report `tmp/codex/u7-review2-answer.md`)
+
+Verdict: FAIL 9, 10, 12, 16, 21; outside the claims: O1 (required). Every first-round failing input is closed at the cited lines (claims 5, 9, 11, 12, 15; O1–O6 of the first round).
+
+Rulings, each carried by the fix brief `tmp/units/u7-fix2-brief.md`:
+
+- Claim 9 (BROKEN): a `#within` timer survives the enclosing race (a dialog or an abort) and the outline started inside the capture reserve keeps a fresh readiness timer past the receipt. Ruled G1: deadline timers die with their race, receipt-owned capture work is cancelled when the receipt settles, and the "under 6 s" claim is measured from the receipt deadline's own start.
+- Claim 10 (BROKEN): `extractBrowserSlice` disables pair protection at limit 1 and returns a lone high surrogate with a non-advancing continuation. Ruled G2: code-point-safe slices at every limit; a limit that cannot fit the next code point refuses with `BROWSER_TOOLSET_LIMIT`.
+- Claim 12 (BROKEN): a synchronous re-entrant `start()` from an `add` listener on a view-backed toolset gets a second promise and doubles the native tools. Ruled G3: the shared promise is assigned before initialization runs; the re-entry test asserts promise identity and removal on destroy.
+- Claim 16 (BROKEN): F13a/F13b do not discriminate the registry twin (the invariants live in the registry), F14b does not attack the restore branch, the signal test does not assert the inner rejection reason, the generation test does not hold one adoption across A → popup → A, F6 has no mutant. Ruled G4: mutate at the owners on scratch copies, add the two assertions, classify F6 as static evidence.
+- Claim 21 (BROKEN): a same-document navigation during the initial readiness seed discards the seed by the staleness epoch and caches a resolved promise with `#dom` unset, so every later `page.read()` times out. Ruled G5: seeds validate against document identity; the held-seed ordering becomes a regression test.
+- O1 (required): the engine never reads `view.trusted`, so U10b's factory-over-engine composition could not meet the proposal's `(untrusted event)` receipt. Ruled G6 in U7 (moved out of U10b's draft): the action line of a successful `click` or `type` receipt ends with ` (untrusted event)` when the view is untrusted; the view capture follows unchanged. PROPOSAL.md's "Receipts of `click` and `type` end" sentence is read as the action line at the merge.
+- Claim 22's note (a stale-session key-up after an Enter that navigated an out-of-process frame propagates from `element.submit()`): recorded as a gap for U11b's service proofs, not a fix in this round.
