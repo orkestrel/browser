@@ -104,7 +104,7 @@
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.3",
 		"@orkestrel/guide": "^0.0.21",
-		"@orkestrel/mcp": "^0.0.33",
+		"@orkestrel/mcp": "file:tmp/tarballs/orkestrel-mcp-0.0.34.tgz",
 		"@orkestrel/probe": "^0.0.19",
 		"@orkestrel/scaffold": "^0.0.81",
 		"@orkestrel/test": "^0.0.24",
