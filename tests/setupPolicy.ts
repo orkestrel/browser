@@ -2043,6 +2043,16 @@ export const POLICY_SOURCE_DEADLINES: readonly PolicyDeadline[] = Object.freeze(
 		declaration: 'compileQueryWaitExpression',
 		reason: 'deadline inside the compiled mutation-driven wait',
 	},
+	{
+		path: 'src/browser/BrowserDOMWait.ts',
+		declaration: 'execute',
+		reason: 'wait deadline, counted from entry and cleared on settlement',
+	},
+	{
+		path: 'src/browser/transports/SocketCDPTransport.ts',
+		declaration: '#start',
+		reason: 'socket open deadline',
+	},
 ])
 
 const POLICY_SOURCE_HEADER =
