@@ -57,7 +57,10 @@ import {
  * wrapper reports that latest capture, also after the manager drops the reference. A reference
  * and a reading from any walked document record that document's epoch, which advances on its own
  * navigation events and on the view's; that document's `pagehide` drops its references. A form
- * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A CSS query
+ * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A `select` row
+ * is followed by one `option` row per option, named by its label. Whitespace between two texts of
+ * one block renders as one space, as a rendered `br` between them does, and texts with neither
+ * between them stay joined. A CSS query
  * searches the document the view drives, not its child documents or shadow trees. After the
  * input's `signal` aborts, `outline`, `find`, and `wait` reject with its reason.
  *
@@ -228,20 +231,33 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			const quiet = muted || silenced !== undefined
 			if (!(node instanceof view.Element)) {
 				const parent = node.parentElement
+				const data = node.textContent ?? ''
+				const blank = data.trim() === ''
+				// Whitespace between two texts of one block separates them, so it joins the pending text
+				// and normalization collapses it; elsewhere it contributes nothing.
 				if (
 					!quiet &&
-					(node.textContent ?? '').trim() !== '' &&
+					(!blank || text !== '') &&
 					(parent === null || !matchesBrowserInvisible(parent))
 				) {
 					const container = readBrowserBlock(parent, root)
-					if (block !== undefined && block !== container) text = this.#flush(rows, text)
-					text += node.textContent ?? ''
-					block = container
+					if (!blank) {
+						if (block !== undefined && block !== container) text = this.#flush(rows, text)
+						text += data
+						block = container
+					} else if (container === block) text += data
 				}
 				node = walker.nextNode()
 				continue
 			}
 			const invisible = matchesBrowserInvisible(node)
+			// A rendered break separates the texts of its block the way whitespace does; the walker never
+			// reaches a hidden one.
+			if (node.localName === 'br') {
+				if (!quiet && text !== '') text += '\n'
+				node = walker.nextNode()
+				continue
+			}
 			if (node instanceof view.HTMLIFrameElement) {
 				text = this.#flush(rows, text)
 				const child = node.contentDocument
@@ -279,7 +295,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 				text = this.#flush(rows, text)
 				rows.push(this.#row(node, role, view, String(rows.length)))
 				if (silenced === undefined && BROWSER_CONTENT_NAMED_ROLES.has(role)) silenced = node
-				if (node.localName === 'select' || node.localName === 'textarea') {
+				if (node.localName === 'textarea') {
 					node = skipBrowserSubtree(walker)
 					continue
 				}

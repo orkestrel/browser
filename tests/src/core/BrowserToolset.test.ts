@@ -37,6 +37,7 @@ import {
 	BROWSER_TOOL_COPY,
 	BROWSER_TOOL_NAMES,
 	BrowserContext,
+	BrowserPage,
 	BrowserToolset,
 	createBrowserReading,
 	createBrowserToolset,
@@ -1269,6 +1270,28 @@ describe('BrowserToolset', () => {
 				expect(
 					await toolset.tools.execute({ id: 'nine', name: 'switch', arguments: { tab: 't9' } }),
 				).toMatchObject({ success: false, error: 'Tab "t9" is not open; call tabs.' })
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('keeps the view on the opener when a popup that already closed reaches it', async () => {
+			const { client, page } = await createBrowserElementFixture()
+			try {
+				const toolset = createBrowserToolset(page)
+				await toolset.start()
+				const selected = createRecorder<[view: BrowserViewInterface]>()
+				toolset.emitter.on('select', selected.handler)
+				const closed = new BrowserPage(client, 'gone', 'session-gone')
+				void closed.destroy()
+
+				page.emitter.emit('popup', closed)
+				await waitForDelay(20)
+
+				expect(closed.closed).toBe(true)
+				expect(selected.count).toBe(0)
+				expect(toolset.view).toBe(page)
+				await toolset.destroy()
 			} finally {
 				await client.close()
 			}

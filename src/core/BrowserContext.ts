@@ -6,6 +6,7 @@ import type {
 	BrowserDownloadOptions,
 	BrowserEmulationManagerInterface,
 	BrowserEmulationOptions,
+	BrowserPageEventMap,
 	BrowserPageInterface,
 	BrowserPageOptions,
 	BrowserPermissionManagerInterface,
@@ -15,7 +16,7 @@ import type {
 	CDPTarget,
 	BrowserWriterInterface,
 } from './types.js'
-import type { EmitterInterface } from '@orkestrel/emitter'
+import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCookieManager } from './BrowserCookieManager.js'
 import { BrowserTransition } from './BrowserTransition.js'
 import { BrowserEmulationManager } from './BrowserEmulationManager.js'
@@ -26,12 +27,19 @@ import { BrowserError } from './errors.js'
 import { BROWSER_REFERENCE_PREFIX } from './constants.js'
 import { readBrowserFrames, settleBrowserTeardown, validateBrowserViewport } from './helpers.js'
 import { instanceOf, isRecord, isString } from '@orkestrel/contract'
-import { Emitter } from '@orkestrel/emitter'
+import { Emitter, extractKeys } from '@orkestrel/emitter'
 
 // === BrowserContext
 
 /**
  * Owns pages and shared state inside one Chromium browser context.
+ *
+ * @remarks
+ * Every page a context constructs holds its target on the client's connection, so `sync` and a
+ * popup that discovery reports for the same target yield one page, and the first such page on a
+ * connection enables `Target.setDiscoverTargets` for it. The context adopts every popup its pages
+ * publish into `pages()` after its opener, and emits `page` once per page; a popup that closed
+ * before its adoption completed is not adopted.
  *
  * @example
  * ```ts
@@ -56,6 +64,9 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #pages: Map<string, BrowserPage> = new Map()
 	readonly #creating: Set<Promise<BrowserPage>> = new Set()
 	readonly #syncing: BrowserTransition = new BrowserTransition()
+	// The attach by `create` or `sync` in flight for each target, which a popup adoption waits for.
+	readonly #publishing: Map<string, Promise<void>> = new Map()
+	readonly #observed: WeakSet<BrowserPage> = new WeakSet()
 	#shutdown: Promise<void> | undefined
 	#reference = 0
 
@@ -174,10 +185,18 @@ export class BrowserContext implements BrowserContextInterface {
 
 		const targetId = result['targetId']
 		let page: BrowserPage | undefined
+		const published = await this.#acquire(targetId)
+		if (published === undefined) return await this.#join(targetId, options)
 
 		try {
 			const viewport = options?.viewport ?? this.#viewport
-			page = await this.#attach(targetId, options?.url ?? 'about:blank', viewport, options)
+			page = await this.#attach(
+				targetId,
+				options?.url ?? 'about:blank',
+				viewport,
+				published.promise,
+				options,
+			)
 
 			if (options?.url !== undefined && options.url !== 'about:blank') {
 				await page.navigate(options.url, {
@@ -188,16 +207,26 @@ export class BrowserContext implements BrowserContextInterface {
 				throw new BrowserError('Browser context closed during page creation')
 			}
 
-			this.#pages.set(targetId, page)
-			this.#emitter.emit('page', page)
+			if (!this.#publish(page)) throw this.#refuse(targetId)
+			published.resolve()
 			return page
 		} catch (error) {
 			if (page !== undefined) {
 				await page.close()
-			} else {
-				await this.#closeTarget(targetId)
+				throw error
 			}
+			// A target another path already holds stays open; the creation joins that path's page.
+			if (instanceOf(BrowserError)(error) && error.code === 'BROWSER_TARGET_HELD') {
+				this.#unreserve(targetId, published)
+				const retry = await this.#acquire(targetId)
+				if (retry === undefined) return await this.#join(targetId, options)
+				this.#unreserve(targetId, retry)
+				throw error
+			}
+			await this.#closeTarget(targetId)
 			throw error
+		} finally {
+			this.#unreserve(targetId, published)
 		}
 	}
 
@@ -212,18 +241,22 @@ export class BrowserContext implements BrowserContextInterface {
 		}
 
 		for (const target of pageTargets) {
-			if (this.#shutdown !== undefined || this.#pages.has(target.id)) continue
-
+			if (this.#shutdown !== undefined) continue
+			const published = await this.#acquire(target.id)
+			if (published === undefined) continue
 			try {
-				const page = await this.#reattach(target.id, target.url, this.#viewport)
+				const page = await this.#reattach(target.id, target.url, this.#viewport, published.promise)
 				if (this.#shutdown !== undefined) {
 					await page.destroy()
 					continue
 				}
-				this.#pages.set(target.id, page)
-				this.#emitter.emit('page', page)
+				// A page that closed before its publication settles the reservation as a failure.
+				if (this.#publish(page)) published.resolve()
 			} catch {
-				// A disappearing or unsupported target does not invalidate its siblings.
+				// A disappearing or unsupported target, or one a popup attach already holds, does not
+				// invalidate its siblings.
+			} finally {
+				this.#unreserve(target.id, published)
 			}
 		}
 	}
@@ -232,6 +265,7 @@ export class BrowserContext implements BrowserContextInterface {
 		targetId: string,
 		url: string,
 		viewport: BrowserViewport | undefined,
+		ready: Promise<void>,
 		options?: BrowserPageOptions,
 	): Promise<BrowserPage> {
 		let sessionId: string | undefined
@@ -252,11 +286,12 @@ export class BrowserContext implements BrowserContextInterface {
 				undefined,
 				options,
 				this.#nextReference.bind(this),
+				ready,
 			)
+			this.#observe(page)
 			await this.#configurePage(page)
 			await this.#emulation.attach(page)
-			if (viewport !== undefined) await this.#applyViewport(sessionId, viewport)
-			this.#observe(page)
+			if (viewport !== undefined) await this.#applyViewport(page, viewport)
 
 			return page
 		} catch (error) {
@@ -270,6 +305,7 @@ export class BrowserContext implements BrowserContextInterface {
 		targetId: string,
 		url: string,
 		viewport: BrowserViewport | undefined,
+		ready: Promise<void>,
 	): Promise<BrowserPage> {
 		let sessionId: string | undefined
 		let page: BrowserPage | undefined
@@ -289,11 +325,12 @@ export class BrowserContext implements BrowserContextInterface {
 				undefined,
 				undefined,
 				this.#nextReference.bind(this),
+				ready,
 			)
+			this.#observe(page)
 			await this.#configurePage(page)
 			await this.#emulation.attach(page)
-			if (viewport !== undefined) await this.#tryViewport(sessionId, viewport)
-			this.#observe(page)
+			if (viewport !== undefined) await this.#tryViewport(page, viewport)
 
 			return page
 		} catch (error) {
@@ -346,6 +383,98 @@ export class BrowserContext implements BrowserContextInterface {
 		await this.#syncing.pending?.catch(() => undefined)
 	}
 
+	// Acquires a target's reservation for `create` or `sync`: after every wait for the current
+	// reservation to settle, the check for a held page and for a current reservation and the
+	// installation of this one run as one synchronous step, so a waiter that resumes never installs
+	// over a reservation another path installed while it waited. Undefined when the context holds
+	// a page for the target.
+	async #acquire(target: string): Promise<PromiseWithResolvers<void> | undefined> {
+		for (
+			let current = this.#publishing.get(target);
+			current !== undefined;
+			current = this.#publishing.get(target)
+		)
+			await Promise.allSettled([current])
+		return this.#pages.has(target) ? undefined : this.#reserve(target)
+	}
+
+	// Joins a creation to the page another path published for its target, applying the creation's
+	// hooks, viewport, and navigation to it; a page that closed first or meanwhile rejects.
+	async #join(target: string, options?: BrowserPageOptions): Promise<BrowserPage> {
+		const page = this.#pages.get(target)
+		if (page === undefined || page.closed) throw this.#refuse(target)
+		const hooks = options?.on
+		if (hooks !== undefined)
+			for (const event of extractKeys(hooks)) this.#hook(page, event, hooks, options?.error)
+		try {
+			if (options?.viewport !== undefined) await this.#applyViewport(page, options.viewport)
+			// A joined page can have left the blank document the target was created at.
+			if (options?.url !== undefined) {
+				await page.navigate(options.url, {
+					...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+				})
+			}
+		} catch (error) {
+			if (page.closed) throw this.#refuse(target)
+			throw error
+		}
+		if (page.closed || this.#pages.get(target) !== page) throw this.#refuse(target)
+		return page
+	}
+
+	// Registers one creation hook on a joined page, reporting its throw to the creation's own
+	// `error` handler, as the emitter a creation constructs would, and never to the page's.
+	#hook<K extends keyof BrowserPageEventMap>(
+		page: BrowserPage,
+		event: K,
+		hooks: EmitterHooks<BrowserPageEventMap>,
+		report: EmitterErrorHandler | undefined,
+	): void {
+		const handler = hooks[event]
+		if (handler === undefined) return
+		page.emitter.on(event, (...args) => {
+			try {
+				handler(...args)
+			} catch (error) {
+				try {
+					report?.(error, String(event))
+				} catch {
+					// A throwing reporter is swallowed, as the emitter swallows its own.
+				}
+			}
+		})
+	}
+
+	#refuse(target: string): BrowserError {
+		return new BrowserError('Browser page closed during creation', 'BROWSER_PAGE_CLOSED', {
+			target,
+		})
+	}
+
+	// Installs a target's reservation, which a popup adoption of a descendant waits for; the page it
+	// passes as `ready` holds its target until the publication fails. `create` and `sync` install
+	// one only through `#acquire`; an adoption replaces the current one and waits for it.
+	#reserve(target: string): PromiseWithResolvers<void> {
+		const published = Promise.withResolvers<void>()
+		void published.promise.catch(() => undefined)
+		this.#publishing.set(target, published.promise)
+		return published
+	}
+
+	#unreserve(target: string, published: PromiseWithResolvers<void>): void {
+		if (this.#publishing.get(target) === published.promise) this.#publishing.delete(target)
+		published.reject(new BrowserError('Browser page was not published'))
+	}
+
+	// Publishes a live page once; true if the context holds it afterwards, false for a closed page.
+	#publish(page: BrowserPage): boolean {
+		if (page.closed) return false
+		if (this.#pages.get(page.target) === page) return true
+		this.#pages.set(page.target, page)
+		this.#emitter.emit('page', page)
+		return true
+	}
+
 	async #openSession(targetId: string): Promise<string> {
 		const result: unknown = await this.#client.send('Target.attachToTarget', {
 			targetId,
@@ -392,34 +521,26 @@ export class BrowserContext implements BrowserContextInterface {
 		await page.network.start()
 	}
 
-	async #applyViewport(sessionId: string, viewport: BrowserViewport): Promise<void> {
-		await this.#client.send(
-			'Emulation.setDeviceMetricsOverride',
-			{
-				width: viewport.width,
-				height: viewport.height,
-				deviceScaleFactor: viewport.scale ?? 1,
-				mobile: viewport.mobile ?? false,
-				screenOrientation:
-					viewport.landscape === undefined
-						? undefined
-						: {
-								type: viewport.landscape ? 'landscapePrimary' : 'portraitPrimary',
-								angle: viewport.landscape ? 90 : 0,
-							},
-			},
-			{ session: sessionId },
-		)
-		await this.#client.send(
-			'Emulation.setTouchEmulationEnabled',
-			{ enabled: viewport.touch ?? false },
-			{ session: sessionId },
-		)
+	async #applyViewport(page: BrowserPage, viewport: BrowserViewport): Promise<void> {
+		await page.send('Emulation.setDeviceMetricsOverride', {
+			width: viewport.width,
+			height: viewport.height,
+			deviceScaleFactor: viewport.scale ?? 1,
+			mobile: viewport.mobile ?? false,
+			screenOrientation:
+				viewport.landscape === undefined
+					? undefined
+					: {
+							type: viewport.landscape ? 'landscapePrimary' : 'portraitPrimary',
+							angle: viewport.landscape ? 90 : 0,
+						},
+		})
+		await page.send('Emulation.setTouchEmulationEnabled', { enabled: viewport.touch ?? false })
 	}
 
-	async #tryViewport(sessionId: string, viewport: BrowserViewport): Promise<void> {
+	async #tryViewport(page: BrowserPage, viewport: BrowserViewport): Promise<void> {
 		try {
-			await this.#applyViewport(sessionId, viewport)
+			await this.#applyViewport(page, viewport)
 		} catch {
 			// Reattached targets may not support viewport emulation.
 		}
@@ -442,6 +563,8 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	#observe(page: BrowserPage): void {
+		if (this.#observed.has(page)) return
+		this.#observed.add(page)
 		page.emitter.on('popup', (popup) => {
 			if (this.#shutdown !== undefined) {
 				void popup.destroy().catch(() => undefined)
@@ -458,18 +581,27 @@ export class BrowserContext implements BrowserContextInterface {
 		})
 	}
 
+	// An adoption takes over its target's reservation for as long as it runs, after the `create` or
+	// `sync` reservation it replaced settles; a popup that attach holds is published by it. Each
+	// adoption waits for its opener's publication, so each `page` event follows its opener's.
 	async #adoptPopup(popup: BrowserPage): Promise<void> {
+		this.#observe(popup)
+		const predecessor = this.#publishing.get(popup.target)
+		const published = this.#reserve(popup.target)
 		try {
+			await Promise.allSettled([this.#publishing.get(popup.opener?.target ?? ''), predecessor])
+			if (this.#pages.get(popup.target) === popup) return
 			await this.#emulation.attach(popup)
-			if (this.#shutdown !== undefined) {
+			if (this.#shutdown !== undefined || popup.closed) {
 				await popup.destroy()
 				return
 			}
-			this.#pages.set(popup.target, popup)
-			this.#observe(popup)
-			this.#emitter.emit('page', popup)
+			this.#publish(popup)
+			published.resolve()
 		} catch {
 			await popup.destroy().catch(() => undefined)
+		} finally {
+			this.#unreserve(popup.target, published)
 		}
 	}
 

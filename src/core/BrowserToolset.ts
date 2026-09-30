@@ -1174,7 +1174,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	#handlePopup(opener: BrowserPageInterface, popup: BrowserPageInterface): void {
-		if (opener !== this.#page) return
+		if (opener !== this.#page || popup.closed) return
 		void this.#select(popup, `The view moved to a new tab: ${popup.url}.`)
 	}
 

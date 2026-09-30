@@ -27,7 +27,13 @@ import {
 	compileGuardedEvaluateExpression,
 	compileReadFunction,
 } from '@src/core'
-import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
+import {
+	captureError,
+	createRecorder,
+	requireValue,
+	waitForCondition,
+	waitForDelay,
+} from '@orkestrel/test'
 import {
 	createBrowserElementFixture,
 	emitDocumentReady,
@@ -37,6 +43,7 @@ import {
 	createRecordingWriter,
 	readCDPExpression,
 	replyOk,
+	scriptCDPAttach,
 	scriptEvaluate,
 	scriptBrowserHistory,
 	scriptFrameTree,
@@ -2025,6 +2032,255 @@ describe('BrowserPage events', () => {
 					message.params?.['enabled'] === true,
 			),
 		).toBe(true)
+	})
+
+	it('attaches a page it opened that discovery reports on the browser session and reads the committed URL from its frame tree', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Target.attachToTarget', { sessionId: 'popup-session' })
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Page.getFrameTree', {
+			frameTree: { frame: { id: 'popup-frame', url: 'https://example.com/popup' } },
+		})
+		replyOk(transport, 'Target.setAutoAttach')
+		replyOk(transport, 'Page.setInterceptFileChooserDialog')
+		replyOk(transport, 'Network.enable')
+		replyOk(transport, 'Target.setDiscoverTargets')
+		let sequence = 0
+		const page = new BrowserPage(
+			client,
+			'target-1',
+			'session-1',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			() => `e${++sequence}`,
+		)
+		const popups = createRecorder<[page: BrowserPageInterface]>()
+		page.emitter.on('popup', popups.handler)
+
+		transport.event('Target.targetCreated', {
+			targetInfo: {
+				targetId: 'popup-1',
+				type: 'page',
+				url: '',
+				openerId: 'target-1',
+				browserContextId: 'default',
+			},
+		})
+		await waitForCondition('the popup event was delivered', () => popups.count === 1)
+
+		expect(popups.calls[0]?.[0]).toMatchObject({
+			target: 'popup-1',
+			url: 'https://example.com/popup',
+			opener: page,
+		})
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Target.attachToTarget')
+				.map((message) => [message.params, message.sessionId]),
+		).toEqual([[{ targetId: 'popup-1', flatten: true }, undefined]])
+	})
+
+	it('refuses a second live page for a held target on the same session, and forgets held targets and waiting reports when the connection ends', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptCDPAttach(transport)
+		let sequence = 0
+		const reference = (): string => `e${++sequence}`
+		const held = new BrowserPage(
+			client,
+			'target-1',
+			'session-1',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			reference,
+		)
+		const refusal = captureError(
+			() =>
+				new BrowserPage(
+					client,
+					'target-1',
+					'session-1',
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					reference,
+				),
+		)
+		expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_TARGET_HELD')
+		transport.event('Target.targetCreated', {
+			targetInfo: { targetId: 'popup', type: 'page', url: '', attached: false, openerId: 'later' },
+		})
+
+		await client.close()
+		const replacement = new BrowserPage(
+			client,
+			'target-1',
+			'session-2',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			reference,
+		)
+		await client.connect()
+		const later = new BrowserPage(
+			client,
+			'later',
+			'session-3',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			reference,
+		)
+		await waitForDelay(20)
+
+		expect([held.closed, replacement.closed, later.closed]).toEqual([false, false, false])
+		expect(transport.sent.filter((message) => message.method === 'Target.attachToTarget')).toEqual(
+			[],
+		)
+	})
+
+	it('publishes the popup of a page constructed directly with an opener and no ready', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Page.enable',
+			'Runtime.enable',
+			'Page.setLifecycleEventsEnabled',
+			'Target.setAutoAttach',
+			'Page.setInterceptFileChooserDialog',
+			'Network.enable',
+		])
+			replyOk(transport, method)
+		replyOk(transport, 'Page.getFrameTree', {
+			frameTree: { frame: { id: 'frame-c', url: 'https://example.com/c' } },
+		})
+		const opener = new BrowserPage(client, 'a', 'session-a')
+		const page = new BrowserPage(
+			client,
+			'b',
+			'session-b',
+			undefined,
+			undefined,
+			undefined,
+			undefined,
+			opener,
+		)
+		const popups = createRecorder<[page: BrowserPageInterface]>()
+		page.emitter.on('popup', popups.handler)
+
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'session-c',
+				targetInfo: { targetId: 'c', type: 'page', url: 'https://example.com/c' },
+			},
+			'session-b',
+		)
+		await waitForCondition('the page emits its popup', () => popups.count === 1)
+
+		expect(popups.calls[0]?.[0]).toMatchObject({ target: 'c', opener: page })
+		expect(page.opener).toBe(opener)
+	})
+
+	it('detaches a popup attached through its opener session on that session when its setup fails', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Page.getFrameTree', {
+			frameTree: { frame: { id: 'popup-frame', url: 'https://example.com/popup' } },
+		})
+		transport.onSend('Target.setAutoAttach', (message) =>
+			transport.fail(message.id, 'Target closed'),
+		)
+		replyOk(transport, 'Target.detachFromTarget')
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const popups = createRecorder<[page: BrowserPageInterface]>()
+		page.emitter.on('popup', popups.handler)
+
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'popup-child',
+				targetInfo: { targetId: 'popup-1', type: 'page', url: 'https://example.com/popup' },
+			},
+			'session-1',
+		)
+		await waitForCondition('the popup session detaches', () =>
+			transport.sent.some((message) => message.method === 'Target.detachFromTarget'),
+		)
+
+		expect(popups.count).toBe(0)
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Target.detachFromTarget')
+				.map((message) => [message.params?.['sessionId'], message.sessionId]),
+		).toEqual([['popup-child', 'session-1']])
+	})
+
+	it('detaches a child frame or worker session whose setup fails through the page session', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		transport.onSend('Page.enable', (message) => {
+			if (message.sessionId === 'frame-child') transport.fail(message.id, 'Target closed')
+			else transport.reply(message.id, {})
+		})
+		transport.onSend('Runtime.enable', (message) => {
+			if (message.sessionId === 'worker-child') transport.fail(message.id, 'Target closed')
+			else transport.reply(message.id, {})
+		})
+		replyOk(transport, 'Target.detachFromTarget')
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'frame-child',
+				targetInfo: { targetId: 'frame-1', type: 'iframe', url: 'https://example.com/frame' },
+			},
+			'session-1',
+		)
+		transport.event(
+			'Target.attachedToTarget',
+			{
+				sessionId: 'worker-child',
+				targetInfo: { targetId: 'worker-1', type: 'worker', url: 'https://example.com/w.js' },
+			},
+			'session-1',
+		)
+		await waitForCondition(
+			'both child sessions detach',
+			() =>
+				transport.sent.filter((message) => message.method === 'Target.detachFromTarget').length ===
+				2,
+		)
+
+		expect(
+			transport.sent
+				.filter((message) => message.method === 'Target.detachFromTarget')
+				.map((message) => [message.params?.['sessionId'], message.sessionId])
+				.sort(),
+		).toEqual([
+			['frame-child', 'session-1'],
+			['worker-child', 'session-1'],
+		])
+		expect(page.closed).toBe(false)
 	})
 
 	it('emits frame attach/detach and crash lifecycle events', async () => {
