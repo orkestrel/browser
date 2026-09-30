@@ -2692,6 +2692,23 @@ describe('BrowserToolset', () => {
 			)
 		})
 
+		it('catches a click receipt on a textbox that omits the type call or on a button that gains it', async () => {
+			const view = createBrowserViewDouble()
+			const toolset = new BrowserToolset(view)
+			await toolset.start()
+			const signal = new AbortController().signal
+			const click = requireValue(toolset.tools.tool('click'))
+			const outline =
+				'page "Form" https://example.test/form\ne1 button "Save"\ne2 textbox "Email"\ne3 combobox "Size"\n(3 of 3 elements)'
+			expect(await click.execute({ ref: 'e2' }, { signal })).toBe(
+				`Clicked e2 textbox "Email"; call type with e2 to enter text. (untrusted event)\n\n${outline}`,
+			)
+			expect(await click.execute({ ref: 'e1' }, { signal })).toBe(
+				`Clicked e1 button "Save". (untrusted event)\n\n${outline}`,
+			)
+			await toolset.destroy()
+		})
+
 		it('catches a trusted page click receipt that gains the marker', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {

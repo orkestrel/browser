@@ -97,7 +97,8 @@ import {
  * receipt aborts the capture. A capture that the page's change makes stale waits for the page's
  * readiness and reads the view once more inside the same deadline, and reports
  * `BROWSER_TOOL_CHANGED_NOTE` when that read fails too. `type` refuses an element whose role is
- * not in `BROWSER_TYPED_ROLES` before it sends anything, naming `click` as the next call. A click
+ * not in `BROWSER_TYPED_ROLES` before it sends anything, naming `click` as the next call. A `click` on an element whose role is in `BROWSER_TYPED_ROLES`
+ * adds `; call type with REF to enter text` to its receipt line. A click
  * or type over a view whose `trusted` is `false` ends its receipt line with ` (untrusted event)`.
  *
  * A page tool is skipped, with `skip` emitted, when its name is reserved, when the manager holds
@@ -424,7 +425,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const turn = await this.#acquire(context.signal)
 		try {
 			const element = this.#element(args['ref'])
-			const action = `Clicked ${renderBrowserElement(element)}`
+			const action = BROWSER_TYPED_ROLES.has(element.role)
+				? `Clicked ${renderBrowserElement(element)}; call type with ${element.reference} to enter text`
+				: `Clicked ${renderBrowserElement(element)}`
 			return [
 				await this.#settle(
 					element.click({ signal: context.signal }),
