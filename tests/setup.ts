@@ -2215,6 +2215,45 @@ export async function createBrowserElementFixture(
 }
 
 /**
+ * Creates a protocol fixture whose main-frame click opens a popup before the input reply.
+ * @returns The opener, transport, and client driving the popup's attachment and settlement
+ */
+export async function createBrowserPopupFixture(): Promise<BrowserElementFixture> {
+	const fixture = await createBrowserElementFixture({
+		held: true,
+		roots: new Map([['popup-session', { id: 'popup-1', url: 'https://example.test/popup' }]]),
+		title: (message) =>
+			fixture.transport.reply(message.id, {
+				result: { value: message.sessionId === 'popup-session' ? 'Details' : 'Cart' },
+			}),
+		released: (message) => {
+			emitBrowserWindowOpen(fixture.transport, 'session-main', 'https://example.test/popup')
+			fixture.transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'popup-session',
+					targetInfo: {
+						targetId: 'popup-1',
+						type: 'page',
+						url: 'https://example.test/popup',
+					},
+				},
+				'session-main',
+			)
+			fixture.transport.reply(message.id, {})
+		},
+	})
+	for (const method of [
+		'Page.setInterceptFileChooserDialog',
+		'Network.enable',
+		'Network.disable',
+		'Target.detachFromTarget',
+	])
+		replyOk(fixture.transport, method)
+	return fixture
+}
+
+/**
  * Emits a committed main-frame document and its `DOMContentLoaded`, so a page's readiness wait
  * resolves without the `document.readyState` seed.
  * @param transport - The fake transport the page listens on
