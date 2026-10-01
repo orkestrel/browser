@@ -1,7 +1,13 @@
 import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { HTMLInterface } from '@orkestrel/html'
-import type { ToolContext, ToolInterface, ToolManagerInterface, ToolResult } from '@orkestrel/tool'
+import type {
+	ToolCall,
+	ToolContext,
+	ToolInterface,
+	ToolManagerInterface,
+	ToolResult,
+} from '@orkestrel/tool'
 
 // === CDP transport
 
@@ -2793,6 +2799,10 @@ export interface BrowserToolsetInterface {
 	readonly tools: ToolManagerInterface
 	readonly native: readonly ToolInterface[]
 	readonly view: BrowserViewInterface
+	/** Performs a tool call and returns its structured action when a handler ran. */
+	perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
+	/** Takes a queue turn and reserves action admission for the returned caller token. */
+	hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface>
 	/**
 	 * Adds the tools, follows the view, and adopts the page's tools; concurrent calls share one
 	 * startup. Rejects with a coded `BrowserError` and adds nothing when the manager holds a

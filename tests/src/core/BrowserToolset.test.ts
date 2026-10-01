@@ -9,6 +9,7 @@
  */
 
 import type {
+	BrowserAction,
 	BrowserFrameInterface,
 	BrowserToolSourceEventMap,
 	BrowserToolSourceInterface,
@@ -38,6 +39,7 @@ import {
 	BrowserToolset,
 	createBrowserReading,
 	createBrowserToolset,
+	performBrowserStep,
 	isBrowserElementError,
 	isBrowserError,
 } from '@src/core'
@@ -70,6 +72,365 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	describe('journey actions', () => {
+		it('takes its hold after an already admitted dialog answer finishes', async () => {
+			const fixture = await createBrowserElementFixture()
+			const toolset = createBrowserToolset(fixture.page)
+			const answers: CDPSentMessage[] = []
+			fixture.transport.onSend('Page.handleJavaScriptDialog', (message) => answers.push(message))
+			try {
+				await toolset.start()
+				fixture.transport.event(
+					'Page.javascriptDialogOpening',
+					{ type: 'confirm', message: 'Continue?' },
+					'session-main',
+				)
+				const order: string[] = []
+				toolset.emitter.on('action', () => order.push('answer'))
+				toolset.emitter.on('hold', () => order.push('hold'))
+				const answering = toolset.perform({
+					id: 'answer',
+					name: 'dialog',
+					arguments: { accept: true },
+				})
+				await waitForCondition('the dialog answer is pending', () => answers.length === 1)
+				const holding = toolset.hold('add-kettle')
+				expect(order).toEqual([])
+				fixture.transport.reply(requireValue(answers[0]).id, {})
+				expect((await answering).action?.outcome).toBe('done')
+				const hold = await holding
+				expect(order).toEqual(['answer', 'hold'])
+				hold.destroy()
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		})
+
+		it('returns distinct actions for concurrent identical calls and emits the returned values', async () => {
+			const view = createBrowserViewDouble()
+			const toolset = new BrowserToolset(view)
+			const actions = createRecorder<readonly [BrowserAction]>()
+			toolset.emitter.on('action', actions.handler)
+			await toolset.start()
+			try {
+				const call = { id: 'same', name: 'click', arguments: { ref: 'e1' } }
+				const [first, second] = await Promise.all([toolset.perform(call), toolset.perform(call)])
+				expect(first.action).toMatchObject({
+					action: 'click',
+					arguments: { ref: 'e1' },
+					outcome: 'done',
+					target: { role: 'button', name: 'Save', reference: 'e1' },
+				})
+				expect(first.action).not.toBe(second.action)
+				expect(actions.calls[0]?.[0]).toBe(first.action)
+				expect(actions.calls[1]?.[0]).toBe(second.action)
+				expect(first.result).toEqual(second.result)
+				expect(first.action?.elapsed).toBeGreaterThanOrEqual(0)
+				const direct = await toolset.tools.execute(call)
+				expect(direct).toEqual(first.result)
+				expect(actions.calls[2]?.[0].receipt).toBe(first.action?.receipt)
+				expect(
+					(await toolset.perform({ id: 'look', name: 'look', arguments: { what: 'form' } })).action,
+				).toBeUndefined()
+				expect(
+					(await toolset.perform({ id: 'missing', name: 'missing', arguments: {} })).action,
+				).toBeUndefined()
+				expect(
+					(await toolset.perform({ id: 'refused', name: 'click', arguments: { ref: 'e99' } }))
+						.action?.outcome,
+				).toBe('refused')
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
+		it('captures the target before input replaces the document', async () => {
+			const fixture = await createBrowserElementFixture({
+				released: (message) => {
+					emitBrowserNavigation(
+						fixture.transport,
+						'session-main',
+						'main',
+						'https://example.test/next',
+						'journey-loader',
+					)
+					fixture.transport.reply(message.id, {})
+				},
+			})
+			const toolset = createBrowserToolset(fixture.page)
+			try {
+				await toolset.start()
+				await fixture.page.elements.outline()
+				const performed = await toolset.perform({
+					id: 's1',
+					name: 'click',
+					arguments: { ref: 'e4' },
+				})
+				expect(performed.action?.target).toEqual({
+					role: 'button',
+					name: 'Place order',
+					reference: 'e4',
+					frame: 'main',
+				})
+				expect(performed.action).toMatchObject({
+					outcome: 'done',
+					stage: 'loaded',
+					reason: 'formSubmissionPost',
+				})
+				expect(fixture.page.elements.element('e4')).toBeUndefined()
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		})
+
+		it('keeps secret text out of direct and structured receipts and action arguments', async () => {
+			const fixture = await createBrowserElementFixture()
+			const toolset = createBrowserToolset(fixture.page)
+			const actions = createRecorder<readonly [BrowserAction]>()
+			toolset.emitter.on('action', actions.handler)
+			try {
+				await toolset.start()
+				await fixture.page.elements.outline()
+				for (const submit of [false, true]) {
+					const performed = await toolset.perform({
+						id: 'secret',
+						name: 'type',
+						arguments: { ref: 'e2', text: 'private-value', secret: true, submit },
+					})
+					expect(performed.action).toMatchObject({
+						secret: true,
+						arguments: { ref: 'e2', secret: true, submit },
+						outcome: 'done',
+					})
+					expect(performed.action?.arguments).not.toHaveProperty('text')
+					expect(performed.action?.receipt).toMatch(/^Typed a secret into e2 textbox "Email"/)
+					expect(JSON.stringify(performed)).not.toContain('private-value')
+				}
+				const pressed = await toolset.perform({
+					id: 'enter',
+					name: 'press',
+					arguments: { key: 'Enter' },
+				})
+				expect(pressed.action).toMatchObject({
+					action: 'press',
+					arguments: { key: 'Enter' },
+					outcome: 'done',
+				})
+				const direct = await toolset.tools.execute({
+					id: 'direct',
+					name: 'type',
+					arguments: { ref: 'e2', text: 'private-value', secret: true },
+				})
+				expect(String(readProperty(direct, 'value'))).toMatch(/^Typed a secret into/)
+				expect(JSON.stringify([actions.calls, pressed, direct])).not.toContain('private-value')
+				expect(
+					fixture.transport.sent.some(
+						(message) =>
+							message.method === 'Input.insertText' && message.params?.['text'] === 'private-value',
+					),
+				).toBe(true)
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		})
+
+		it('reports a wait timeout without changing its receipt', async () => {
+			const toolset = new BrowserToolset(createBrowserViewDouble({ waited: false }))
+			await toolset.start()
+			try {
+				const performed = await toolset.perform({
+					id: 's3',
+					name: 'wait',
+					arguments: { text: 'Added to cart', timeout: 0.01 },
+				})
+				expect(performed.result).toMatchObject({
+					success: true,
+					value: '"Added to cart" did not appear within 0.01 s.',
+				})
+				expect(performed.action).toMatchObject({
+					outcome: 'timeout',
+					receipt: '"Added to cart" did not appear within 0.01 s.',
+				})
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
+		it('refuses an adopted action under a hold, lets observations and its owner pass, and releases on destroy', async () => {
+			const invoked = createRecorder<[]>()
+			const source = createToolManager()
+			source.add(createTool({ name: 'checkout', execute: invoked.handler }))
+			const toolset = new BrowserToolset(createBrowserViewDouble(), {
+				source: {
+					adopt: async () => source.tools(),
+					emitter: new Emitter<BrowserToolSourceEventMap>(),
+				},
+			})
+			const held = createRecorder<readonly [string]>()
+			const released = createRecorder<readonly [string]>()
+			toolset.emitter.on('hold', held.handler)
+			toolset.emitter.on('release', released.handler)
+			await toolset.start()
+			const hold = await toolset.hold('add-kettle')
+			try {
+				const refused = await toolset.perform({
+					id: 'foreign',
+					name: 'checkout',
+					arguments: { what: 'cart' },
+				})
+				expect(refused.result).toMatchObject({
+					success: false,
+					error: 'The toolset is replaying add-kettle until it finishes; call look.',
+				})
+				expect(invoked.count).toBe(0)
+				const denied = await Promise.resolve(
+					requireValue(toolset.tools.tool('click')).execute(
+						{ ref: 'e1' },
+						{ signal: new AbortController().signal },
+					),
+				).catch((error: unknown) => error)
+				expect(readProperty(denied, 'code')).toBe('BROWSER_TOOLSET_BUSY')
+				for (const call of [
+					{ id: 'look', name: 'look', arguments: { what: 'form' } },
+					{ id: 'read', name: 'read', arguments: { what: 'form' } },
+					{ id: 'wait', name: 'wait', arguments: { text: 'Form' } },
+				])
+					expect((await toolset.perform(call)).result.success).toBe(true)
+				expect(
+					(
+						await toolset.perform(
+							{ id: 'owner', name: 'checkout', arguments: { what: 'cart' } },
+							{ caller: hold.token, signal: new AbortController().signal },
+						)
+					).result.success,
+				).toBe(true)
+				expect(invoked.count).toBe(1)
+				expect(held.calls).toEqual([['add-kettle']])
+				await toolset.destroy()
+				hold.destroy()
+				expect(released.calls).toEqual([['add-kettle']])
+			} finally {
+				hold.destroy()
+				await toolset.destroy()
+			}
+		})
+
+		it('waits for admitted actions before holding and cancels a queued hold without blocking the queue', async () => {
+			const pending = Promise.withResolvers<string>()
+			const invoked = createRecorder<[]>()
+			const source = createToolManager()
+			source.add(
+				createTool({
+					name: 'checkout',
+					execute: () => {
+						invoked.handler()
+						return pending.promise
+					},
+				}),
+			)
+			const toolset = new BrowserToolset(createBrowserViewDouble(), {
+				source: {
+					adopt: async () => source.tools(),
+					emitter: new Emitter<BrowserToolSourceEventMap>(),
+				},
+			})
+			await toolset.start()
+			try {
+				const acting = toolset.perform({
+					id: 'before',
+					name: 'checkout',
+					arguments: { what: 'cart' },
+				})
+				await waitForCondition('adopted input started', () => invoked.count === 1)
+				const abort = new AbortController()
+				const abandoned = toolset
+					.hold('cancelled', { signal: abort.signal })
+					.catch((error: unknown) => error)
+				abort.abort('cancelled')
+				expect(await abandoned).toBe('cancelled')
+				const order: string[] = []
+				toolset.emitter.on('action', () => order.push('action'))
+				toolset.emitter.on('hold', () => order.push('hold'))
+				const holding = toolset.hold('add-kettle')
+				expect(order).toEqual([])
+				pending.resolve('checked out')
+				await acting
+				const hold = await holding
+				expect(order).toEqual(['action', 'hold'])
+				hold.destroy()
+				expect(
+					(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
+						.success,
+				).toBe(true)
+			} finally {
+				pending.resolve('cleanup')
+				await toolset.destroy()
+			}
+		})
+
+		it('returns an interrupted action immediately and admits only the hold owner to its dialog continuation', async () => {
+			const withheld: CDPSentMessage[] = []
+			const fixture = await createBrowserElementFixture({
+				released: (message) => withheld.push(message),
+			})
+			const toolset = createBrowserToolset(fixture.page)
+			try {
+				replyOk(fixture.transport, 'Page.handleJavaScriptDialog')
+				await toolset.start()
+				await fixture.page.elements.outline()
+				const hold = await toolset.hold('add-kettle')
+				const context = { signal: new AbortController().signal, caller: hold.token }
+				const acting = toolset.perform(
+					{ id: 's1', name: 'click', arguments: { ref: 'e4' } },
+					context,
+				)
+				await waitForCondition('input release withheld', () => withheld.length === 1)
+				fixture.transport.event(
+					'Page.javascriptDialogOpening',
+					{ type: 'confirm', message: 'Continue?' },
+					'session-main',
+				)
+				const interrupted = await acting
+				expect(interrupted.action?.outcome).toBe('interrupted')
+				expect(interrupted.action?.receipt).toContain('A confirm dialog is open')
+				const refused = await toolset.perform({
+					id: 'foreign',
+					name: 'dialog',
+					arguments: { accept: true },
+				})
+				expect(refused.result).toMatchObject({
+					success: false,
+					error: 'The toolset is replaying add-kettle until it finishes; call look.',
+				})
+				expect(
+					fixture.transport.sent.filter(
+						(message) => message.method === 'Page.handleJavaScriptDialog',
+					),
+				).toHaveLength(0)
+				const answered = await toolset.perform(
+					{ id: 's2', name: 'dialog', arguments: { accept: true } },
+					context,
+				)
+				expect(answered.action?.outcome).toBe('done')
+				fixture.transport.reply(requireValue(withheld[0]).id, {})
+				expect(
+					(
+						await toolset.perform(
+							{ id: 's3', name: 'press', arguments: { key: 'Escape' } },
+							context,
+						)
+					).action?.outcome,
+				).toBe('done')
+				hold.destroy()
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		})
+	})
 	describe('vocabulary', () => {
 		it('catches a tool outside the seven, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
 			const { client, page } = await createBrowserElementFixture()
@@ -3239,6 +3600,15 @@ describe('BrowserToolset', () => {
 				).not.toContain('tabs')
 				const toolset = createBrowserToolset(first, { context })
 				await toolset.start()
+				const actions = createRecorder<readonly [BrowserAction]>()
+				toolset.emitter.on('action', actions.handler)
+				await expect(
+					performBrowserStep(toolset, 's3', {
+						action: 'switch',
+						arguments: {},
+						tab: { title: 'Cart', url: 'about:blank' },
+					}),
+				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_AMBIGUOUS' })
 				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
 					'look',
 					'read',
@@ -3264,6 +3634,12 @@ describe('BrowserToolset', () => {
 				)
 				expect((await selected)[0]).toBe(second)
 				expect(toolset.view).toBe(second)
+				expect(actions.calls[0]?.[0]).toMatchObject({
+					action: 'switch',
+					tab: { title: 'Cart', url: 'about:blank' },
+					outcome: 'done',
+					arguments: { tab: 't2' },
+				})
 				expect(switched.startsWith('Switched to t2 about:blank.\n\npage "Cart" about:blank')).toBe(
 					true,
 				)

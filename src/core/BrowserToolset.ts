@@ -1,4 +1,7 @@
 import type {
+	BrowserAction,
+	BrowserHoldInterface,
+	BrowserToolsetResult,
 	BrowserCallOptions,
 	BrowserContextInterface,
 	BrowserDestination,
@@ -21,8 +24,15 @@ import type {
 	BrowserViewInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import type { ToolContext, ToolInterface, ToolManagerInterface } from '@orkestrel/tool'
+import type {
+	ToolCall,
+	ToolContext,
+	ToolInterface,
+	ToolManagerInterface,
+	ToolResult,
+} from '@orkestrel/tool'
 import {
+	cloneJSONRecord,
 	isArray,
 	isBoolean,
 	isError,
@@ -32,6 +42,7 @@ import {
 	isString,
 } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
+import { BrowserHold } from './BrowserHold.js'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	BROWSER_SCHEMES,
@@ -164,6 +175,17 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #adopted = new Map<string, ToolInterface>()
 	readonly #watches = new Map<BrowserPageInterface, BrowserToolsetWatch>()
 	readonly #dialogs = new Map<BrowserPageInterface, BrowserDialogInterface>()
+	readonly #handlers = new WeakMap<
+		ToolInterface,
+		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
+	>()
+	readonly #actions = new WeakMap<AbortSignal, Partial<BrowserAction>>()
+	readonly #invocations = new WeakMap<
+		ToolContext,
+		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
+	>()
+	readonly #faults = new WeakMap<BrowserToolsetResult, unknown>()
+	#reservation: BrowserHoldInterface | undefined
 	readonly #interrupts = new Map<PromiseWithResolvers<never>, string>()
 	readonly #notes: string[] = []
 	readonly #changeHandler = this.#handleChange.bind(this)
@@ -255,6 +277,86 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return this.#cursor
 	}
 
+	async perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
+		const tool = this.#tools.tool(call.name)
+		const entry =
+			(context === undefined ? undefined : this.#invocations.get(context)) ??
+			(tool === undefined ? undefined : this.#handlers.get(tool))
+		if (entry === undefined || context?.signal.aborted === true)
+			return { result: await this.#tools.execute(call, context) }
+		const signal = AbortSignal.any([
+			context?.signal ?? new AbortController().signal,
+			this.#lifetime.signal,
+		])
+		const started = performance.now()
+		const acting = !['look', 'read', 'tabs'].includes(call.name)
+		let result: ToolResult
+		let fault: unknown
+		try {
+			if (acting) {
+				const secret = call.name === 'type' && call.arguments['secret'] === true
+				this.#actions.set(signal, {
+					action: call.name,
+					arguments: cloneJSONRecord(
+						Object.fromEntries(
+							Object.entries(call.arguments).filter(([key]) => !secret || key !== 'text'),
+						),
+					),
+					...(secret ? { secret: true } : {}),
+				})
+			}
+			const value = await this.#execute(call.name, entry.clause, entry.handler, call.arguments, {
+				...context,
+				signal,
+			})
+			result = { id: call.id, name: call.name, success: true, value }
+		} catch (error) {
+			fault = error
+			result = {
+				id: call.id,
+				name: call.name,
+				success: false,
+				error: isError(error) ? error.message : String(error),
+			}
+		}
+		const state = this.#actions.get(signal)
+		this.#actions.delete(signal)
+		const action: BrowserAction | undefined =
+			state?.arguments === undefined
+				? undefined
+				: {
+						...state,
+						action: call.name,
+						arguments: state.arguments,
+						outcome: result.success ? (state.outcome ?? 'done') : 'refused',
+						receipt: result.success ? (state.receipt ?? String(result.value)) : result.error,
+						elapsed: performance.now() - started,
+					}
+		const performed = { result, ...(action === undefined ? {} : { action }) }
+		if (!result.success) this.#faults.set(performed, fault)
+		if (action !== undefined) this.#emitter.emit('action', action)
+		return performed
+	}
+
+	async hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface> {
+		this.#live()
+		const signal = AbortSignal.any([
+			options?.signal ?? new AbortController().signal,
+			this.#lifetime.signal,
+		])
+		const turn = await this.#acquire(signal, false, false)
+		try {
+			signal.throwIfAborted()
+			this.#admit('', undefined)
+			const hold = new BrowserHold(name, this.#releaseHold.bind(this))
+			this.#reservation = hold
+			this.#emitter.emit('hold', name)
+			return hold
+		} finally {
+			turn.resolve()
+		}
+	}
+
 	start(options?: BrowserCallOptions): Promise<void> {
 		if (this.#destroying !== undefined) return Promise.reject(this.#ended())
 		if (this.#starting === undefined) {
@@ -277,10 +379,49 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	#create(name: BrowserToolName, handler: BrowserToolsetHandler, clause: string): ToolInterface {
-		return createTool({
+		const validated = this.#validate.bind(this, name, handler)
+		const tool = createTool({
 			...BROWSER_TOOL_COPY[name],
-			execute: this.#execute.bind(this, name, clause, this.#validate.bind(this, name, handler)),
+			execute: this.#dispatch.bind(this, name, validated, clause),
 		})
+		this.#handlers.set(tool, { handler: validated, clause })
+		return tool
+	}
+
+	async #dispatch(
+		name: string,
+		handler: BrowserToolsetHandler,
+		clause: string,
+		args: Readonly<Record<string, unknown>>,
+		context: ToolContext,
+	): Promise<unknown> {
+		this.#live()
+		context.signal.throwIfAborted()
+		const invocation = { ...context }
+		this.#invocations.set(invocation, { handler, clause })
+		const performed = await this.perform({ id: '', name, arguments: args }, invocation)
+		if (!performed.result.success)
+			throw this.#faults.get(performed) ?? new BrowserError(performed.result.error)
+		return performed.result.value
+	}
+
+	#admit(name: string, caller: unknown): void {
+		const hold = this.#reservation
+		if (
+			hold !== undefined &&
+			caller !== hold.token &&
+			!['look', 'read', 'tabs', 'wait'].includes(name)
+		)
+			throw new BrowserError(
+				`The toolset is replaying ${hold.name} until it finishes; call look.`,
+				'BROWSER_TOOLSET_BUSY',
+			)
+	}
+
+	#releaseHold(): void {
+		const hold = this.#reservation
+		this.#reservation = undefined
+		if (hold !== undefined) this.#emitter.emit('release', hold.name)
 	}
 
 	// Refuses a parameter the tool does not advertise before its handler reads any argument.
@@ -343,9 +484,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		context: ToolContext,
 	): Promise<string> {
 		if (this.#destroying !== undefined) throw this.#ended()
-		const signal = AbortSignal.any([context.signal, this.#lifetime.signal])
+		const signal = context.signal
 		try {
 			signal.throwIfAborted()
+			this.#admit(name, context.caller)
 			const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
 			if (dialog !== undefined && name !== 'dialog') {
 				throw new BrowserError(
@@ -356,10 +498,17 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const [body, footer] = await handler(args, { ...context, signal })
 			// A cancellation that lands while the handler finishes wins over its result.
 			signal.throwIfAborted()
+			const state = this.#actions.get(signal)
+			if (state !== undefined)
+				this.#actions.set(signal, {
+					...state,
+					receipt: boundBrowserText(body.split('\n\n')[0] ?? body, this.#limit, clause),
+				})
 			return `${boundBrowserText(`${this.#drain()}${body}`, this.#limit, clause)}${footer}`
 		} catch (error) {
 			if (context.signal.aborted && error === context.signal.reason) throw error
 			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
+				this.#actions.set(signal, { ...this.#actions.get(signal), outcome: 'interrupted' })
 				return boundBrowserText(
 					`${this.#drain()}${error.message}`,
 					this.#limit,
@@ -455,7 +604,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
 		let record: BrowserNavigationRecordInterface | undefined
 		try {
-			const element = this.#element(args['ref'])
+			const element = this.#element(args['ref'], context.signal)
 			const action = BROWSER_TYPED_ROLES.has(element.role)
 				? `Clicked ${renderBrowserElement(element)}; call type with ${element.reference} to enter text`
 				: `Clicked ${renderBrowserElement(element)}`
@@ -497,6 +646,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	): Promise<readonly [string, string]> {
 		const text = readBrowserToolString(args, 'text')
 		const submit = args['submit']
+		const secret = args['secret']
+		if (secret !== undefined && !isBoolean(secret))
+			throw new BrowserError(
+				'The secret parameter must be a boolean.',
+				'BROWSER_TOOLSET_ARGUMENT',
+				{ key: 'secret' },
+			)
 		if (submit !== undefined && !isBoolean(submit)) {
 			throw new BrowserError(
 				'The submit parameter must be a boolean.',
@@ -509,7 +665,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
 		let record: BrowserNavigationRecordInterface | undefined
 		try {
-			const element = this.#element(args['ref'])
+			const element = this.#element(args['ref'], context.signal)
 			// The role the latest capture recorded decides, so a control that takes no text is
 			// refused before any protocol command reaches it.
 			if (!BROWSER_TYPED_ROLES.has(element.role)) {
@@ -519,8 +675,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					{ reference: element.reference, role: element.role },
 				)
 			}
-			const chosen = `Selected ${JSON.stringify(text)} in ${renderBrowserElement(element)} (programmatic)`
-			const typed = `Typed ${JSON.stringify(text)} into ${renderBrowserElement(element)}`
+			const chosen = `Selected ${secret === true ? 'a secret' : JSON.stringify(text)} in ${renderBrowserElement(element)} (programmatic)`
+			const typed = `Typed ${secret === true ? 'a secret' : JSON.stringify(text)} into ${renderBrowserElement(element)}`
 			// The observer and the record precede the edit, because the inserted text or the chosen
 			// option can run a handler that submits the form.
 			const page = this.#page
@@ -663,11 +819,18 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const turn = await this.#acquire(context.signal)
 		const page = this.#paged()
 		this.#navigating = page
+		const record = page.navigation.record(page.id)
 		try {
 			// The page's load wait rejects with the signal's reason after its cleanup, so the
 			// command stays the queue's barrier until that cleanup settles.
 			const navigation = page.navigate(url, { condition: 'load', signal: context.signal })
 			const result = await this.#command(navigation, `Navigating to ${url}`, navigation)
+			const settled = await record.settle({ signal: context.signal, timeout: 0 })
+			this.#actions.set(context.signal, {
+				...this.#actions.get(context.signal),
+				stage: 'loaded',
+				...(settled?.reason === undefined ? {} : { reason: settled.reason }),
+			})
 			const action = `Navigated to ${result.url}`
 			return [
 				renderBrowserReceipt({ action, view: await this.#capture(action, context.signal) }),
@@ -675,6 +838,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			]
 		} finally {
 			if (this.#navigating === page) this.#navigating = undefined
+			record.destroy()
 			turn.resolve()
 		}
 	}
@@ -710,6 +874,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				isBrowserError(error) &&
 				error.code === 'BROWSER_WAIT_TIMEOUT'
 			) {
+				this.#actions.set(context.signal, {
+					...this.#actions.get(context.signal),
+					outcome: 'timeout',
+				})
 				return [`${quoted} did not appear within ${timeout / 1000} s.`, '']
 			}
 			throw error
@@ -734,18 +902,26 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				key: 'text',
 			})
 		}
-		const page = this.#paged()
-		const dialog = this.#dialogs.get(page)
-		if (dialog === undefined) {
-			throw new BrowserError('No dialog is open; call look.', 'BROWSER_TOOLSET_DIALOG')
+		const turn = await this.#acquire(context.signal, true)
+		try {
+			const page = this.#paged()
+			const dialog = this.#dialogs.get(page)
+			if (dialog === undefined) {
+				throw new BrowserError('No dialog is open; call look.', 'BROWSER_TOOLSET_DIALOG')
+			}
+			context.signal.throwIfAborted()
+			if (accept) await dialog.accept(text)
+			else await dialog.dismiss()
+			if (this.#dialogs.get(page) === dialog) this.#dialogs.delete(page)
+			this.#stage()
+			const action = `${accept ? 'Accepted' : 'Dismissed'} the ${dialog.category} dialog ${JSON.stringify(dialog.message)}`
+			return [
+				renderBrowserReceipt({ action, view: await this.#capture(action, context.signal) }),
+				'',
+			]
+		} finally {
+			turn.resolve()
 		}
-		// The boundary checked the signal with no await since, and the answer takes no signal.
-		if (accept) await dialog.accept(text)
-		else await dialog.dismiss()
-		if (this.#dialogs.get(page) === dialog) this.#dialogs.delete(page)
-		this.#stage()
-		const action = `${accept ? 'Accepted' : 'Dismissed'} the ${dialog.category} dialog ${JSON.stringify(dialog.message)}`
-		return [renderBrowserReceipt({ action, view: await this.#capture(action, context.signal) }), '']
 	}
 
 	async #tabs(
@@ -779,6 +955,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				)
 			}
 			const action = `Switched to t${pages.indexOf(page) + 1} ${page.url}`
+			this.#actions.set(context.signal, {
+				...this.#actions.get(context.signal),
+				tab: { url: page.url, title: await page.title({ signal: context.signal }) },
+			})
 			await this.#select(page)
 			const front = page.send('Page.bringToFront', undefined, { signal: context.signal })
 			await this.#command(front, action, front)
@@ -797,15 +977,17 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
-		const input = synthetic
-			? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'what'))
-			: args
-		const output = await this.#race(
-			Promise.resolve(tool.execute(input, context)),
-			`Called ${tool.name}`,
-			context.signal,
-		)
-		return [renderBrowserToolOutput(output), '']
+		const turn = await this.#acquire(context.signal)
+		try {
+			const input = synthetic
+				? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'what'))
+				: args
+			const command = Promise.resolve(tool.execute(input, context))
+			const output = await this.#command(command, `Called ${tool.name}`, command, context.signal)
+			return [renderBrowserToolOutput(output), '']
+		} finally {
+			turn.resolve()
+		}
 	}
 
 	async #tab(page: BrowserPageInterface, index: number, signal: AbortSignal): Promise<string> {
@@ -836,7 +1018,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return false
 	}
 
-	#element(value: unknown): BrowserElementInterface {
+	#element(value: unknown, signal: AbortSignal): BrowserElementInterface {
 		const reference = requireBrowserReference(value)
 		const element = this.#cursor.elements.element(reference)
 		if (element === undefined) {
@@ -846,6 +1028,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				'is not in the current view; call look for fresh refs',
 			)
 		}
+		const frame = this.#page === undefined ? undefined : this.#resolveFrame(this.#page, reference)
+		this.#actions.set(signal, {
+			...this.#actions.get(signal),
+			target: {
+				role: element.role,
+				name: element.name,
+				reference: element.reference,
+				...(frame === undefined ? {} : { frame }),
+			},
+		})
 		return element
 	}
 
@@ -857,15 +1049,19 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	// Waits for the action queue and for a command an earlier receipt left pending.
-	async #acquire(signal: AbortSignal): Promise<PromiseWithResolvers<void>> {
+	async #acquire(
+		signal: AbortSignal,
+		answer = false,
+		interruptible = !answer,
+	): Promise<PromiseWithResolvers<void>> {
 		const previous = this.#tail
 		const turn = Promise.withResolvers<void>()
 		this.#tail = previous.then(() => turn.promise)
 		try {
-			await this.#race(previous, '', signal)
+			await this.#race(previous, '', signal, interruptible)
 			const pending = this.#pending
-			if (pending !== undefined) await this.#race(pending, '', signal)
-			if (this.#pending === pending) this.#pending = undefined
+			if (!answer && pending !== undefined) await this.#race(pending, '', signal, interruptible)
+			if (!answer && this.#pending === pending) this.#pending = undefined
 		} catch (error) {
 			turn.resolve()
 			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
@@ -929,6 +1125,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 							signal,
 						)
 			signal.throwIfAborted()
+			if (settled !== undefined)
+				this.#actions.set(signal, {
+					...this.#actions.get(signal),
+					stage: settled.stage,
+					...(settled.reason === undefined ? {} : { reason: settled.reason }),
+				})
 			// Without a surviving destination and a navigation, the observer names what became of the
 			// submission: a listener handled it, or no form received the Enter the action asked for.
 			const unmoved = settled === undefined && submissions.destinations.length === 0
@@ -965,9 +1167,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	// Races a command that carries the signal itself; a dialog leaves it pending for the next
 	// action to await.
-	async #command<T>(step: Promise<T>, action: string, command: Promise<unknown>): Promise<T> {
+	async #command<T>(
+		step: Promise<T>,
+		action: string,
+		command: Promise<unknown>,
+		signal?: AbortSignal,
+	): Promise<T> {
 		try {
-			return await this.#race(step, action)
+			return await this.#race(step, action, signal)
 		} catch (error) {
 			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') this.#hold(command)
 			throw error
@@ -1159,14 +1366,19 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	// Settles with the step, or rejects with the receipt naming a dialog that opens on the view
 	// first, or with the signal's reason.
-	async #race<T>(step: Promise<T>, action: string, signal?: AbortSignal): Promise<T> {
+	async #race<T>(
+		step: Promise<T>,
+		action: string,
+		signal?: AbortSignal,
+		interruptible = true,
+	): Promise<T> {
 		const interrupt = Promise.withResolvers<never>()
 		const abort = signal === undefined ? undefined : this.#abandon.bind(this, interrupt, signal)
-		this.#interrupts.set(interrupt, action)
+		if (interruptible) this.#interrupts.set(interrupt, action)
 		if (abort !== undefined) signal?.addEventListener('abort', abort, { once: true })
 		if (signal?.aborted === true) interrupt.reject(signal.reason)
 		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
-		if (dialog !== undefined) this.#interrupt(dialog)
+		if (interruptible && dialog !== undefined) this.#interrupt(dialog)
 		try {
 			return await Promise.race([step, interrupt.promise])
 		} finally {
@@ -1380,6 +1592,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				reasons.set(name, 'held')
 				continue
 			}
+			const handler = this.#invoke.bind(this, tool, parameters !== tool.parameters)
 			const wrapper = createTool({
 				name,
 				...(tool.title === undefined ? {} : { title: tool.title }),
@@ -1387,12 +1600,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				...(tool.summary === undefined ? {} : { summary: tool.summary }),
 				parameters,
 				annotations: { ...tool.annotations, untrusted: true },
-				execute: this.#execute.bind(
-					this,
-					name,
-					BROWSER_TOOL_CUT_FOOTER,
-					this.#invoke.bind(this, tool, parameters !== tool.parameters),
-				),
+				execute: this.#dispatch.bind(this, name, handler, BROWSER_TOOL_CUT_FOOTER),
+			})
+			this.#handlers.set(wrapper, {
+				handler,
+				clause: BROWSER_TOOL_CUT_FOOTER,
 			})
 			this.#adopted.set(name, wrapper)
 			this.#add(wrapper)
@@ -1456,6 +1668,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	async #teardown(): Promise<void> {
+		this.#reservation?.destroy()
 		this.#generation += 1
 		this.#lifetime.abort(this.#ended())
 		this.#listen(undefined)

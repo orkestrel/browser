@@ -2124,6 +2124,49 @@ export interface BrowserViewDoubleOptions {
 	readonly waited?: boolean
 }
 
+/** Holds native journey calls whose service receipts are compared on independently reset pages. */
+export const BROWSER_JOURNEY_SERVICE_CASES = Object.freeze([
+	{
+		name: 'click',
+		route: '/form',
+		action: 'click',
+		arguments: {},
+		target: { role: 'button', name: 'Save draft' },
+	},
+	{
+		name: 'type',
+		route: '/form',
+		action: 'type',
+		arguments: { text: 'Grace Hopper' },
+		target: { role: 'textbox', name: 'Name' },
+	},
+	{
+		name: 'submitted form',
+		route: '/form',
+		action: 'type',
+		arguments: { text: 'Grace Hopper', submit: true },
+		target: { role: 'textbox', name: 'Name' },
+	},
+	{
+		name: 'delayed child submission',
+		route: '/frame/local',
+		action: 'type',
+		arguments: { text: 'SPRING', submit: true },
+		target: { role: 'textbox', name: 'Code' },
+	},
+	{ name: 'press', route: '/form', action: 'press', arguments: { key: 'Escape' } },
+	{ name: 'navigate', route: '/form', action: 'navigate', arguments: { url: '/shop' } },
+	{ name: 'wait', route: '/form', action: 'wait', arguments: { text: 'Delivery form' } },
+] as const)
+
+/** Holds an editable combobox whose suggestion remains a text input. */
+export const BROWSER_JOURNEY_COMBOBOX_HTML =
+	'<label>Destination <input list="places"></label><datalist id="places"><option value="Harbor"></datalist>'
+
+/** Holds a same-origin child document whose button records its input. */
+export const BROWSER_JOURNEY_FRAME_HTML =
+	'<button onclick="document.body.dataset.clicked = \'yes\'">Save in frame</button>'
+
 /** Records an element's operations into its view double's call list. */
 export class BrowserElementDouble implements BrowserElementInterface {
 	readonly #reference: string
