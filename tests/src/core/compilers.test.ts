@@ -222,9 +222,9 @@ describe('compileBrowserJourney', () => {
 		expect(typed.filter((line) => line.includes('secret: true'))).toStrictEqual([call])
 	})
 
-	it('checks the inputs before a gap and before the toolset starts: a name no parameter carries, then each required input', () => {
+	it('checks the inputs before a gap and before the toolset starts: a name no parameter carries, then each required input, then each defaulted input', () => {
 		const lines = compileBrowserJourney(BROWSER_JOURNEY_ACTION_FIXTURE).source.split('\n')
-		const preflight = lines.slice(3, 6).join('\n')
+		const preflight = lines.slice(3, 10).join('\n')
 		const cases: ReadonlyArray<readonly [inputs: string, expected: object]> = [
 			["{ customer: 'Ada', password: 'hunter2' }", { success: true, value: 'checked' }],
 			[
@@ -248,13 +248,49 @@ describe('compileBrowserJourney', () => {
 				"{ coupon: 'SPRING' }",
 				{ success: false, error: { message: 'coupon: no parameter has that name' } },
 			],
+			[
+				"{ customer: 'Ada', password: 'hunter2', key: 13 }",
+				{ success: false, error: { message: 'key: the input is not a string' } },
+			],
+			[
+				"{ customer: 'Ada', password: 'hunter2', key: undefined, reply: undefined }",
+				{ success: true, value: 'checked' },
+			],
+			['{ store: 42 }', { success: false, error: { message: 'customer: the input is missing' } }],
 		]
-		expect(lines.slice(2, 8)).toStrictEqual([
+		expect(lines.slice(2, 12)).toStrictEqual([
 			'export async function execute(page, inputs) {',
 			"\tfor (const name of Object.keys(inputs ?? {})) if (!['store', 'product', 'customer', 'password', 'key', 'reply'].includes(name)) throw new Error(name + ': no parameter has that name')",
 			"\tif (typeof inputs?.customer !== 'string') throw new Error('customer: the input is missing')",
 			"\tif (typeof inputs?.password !== 'string') throw new Error('password: the input is missing')",
+			"\tif (inputs.store !== undefined && typeof inputs.store !== 'string') throw new Error('store: the input is not a string')",
+			"\tif (inputs.product !== undefined && typeof inputs.product !== 'string') throw new Error('product: the input is not a string')",
+			"\tif (inputs.key !== undefined && typeof inputs.key !== 'string') throw new Error('key: the input is not a string')",
+			"\tif (inputs.reply !== undefined && typeof inputs.reply !== 'string') throw new Error('reply: the input is not a string')",
 			"\tthrow new Error('s11: the element is in a child frame; handle it here')",
+			'\tconst toolset = createBrowserToolset(page)',
+		])
+		for (const [inputs, expected] of cases)
+			expect(
+				attempt(() =>
+					evaluateJavaScript(`((inputs) => { ${preflight}\nreturn 'checked' })(${inputs})`),
+				),
+			).toMatchObject(expected)
+	})
+
+	it('refuses a defaulted input that is neither omitted nor a string and falls back to the default otherwise', () => {
+		const lines = compileBrowserJourney(BROWSER_JOURNEY_FIXTURE).source.split('\n')
+		const preflight = lines.slice(3, 5).join('\n')
+		const cases: ReadonlyArray<readonly [inputs: string, expected: object]> = [
+			['{ email: 42 }', { success: false, error: { message: 'email: the input is not a string' } }],
+			['{ email: undefined }', { success: true, value: 'checked' }],
+			['{}', { success: true, value: 'checked' }],
+			["{ email: 'ada@example.test' }", { success: true, value: 'checked' }],
+		]
+		expect(lines.slice(2, 6)).toStrictEqual([
+			'export async function execute(page, inputs = {}) {',
+			"\tfor (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')",
+			"\tif (inputs.email !== undefined && typeof inputs.email !== 'string') throw new Error('email: the input is not a string')",
 			'\tconst toolset = createBrowserToolset(page)',
 		])
 		for (const [inputs, expected] of cases)
@@ -267,7 +303,7 @@ describe('compileBrowserJourney', () => {
 
 	it('reports the first required input as missing when execute receives no inputs object', () => {
 		const lines = compileBrowserJourney(BROWSER_JOURNEY_ACTION_FIXTURE).source.split('\n')
-		const preflight = lines.slice(3, 6).join('\n')
+		const preflight = lines.slice(3, 10).join('\n')
 		expect(lines[2]).toBe('export async function execute(page, inputs) {')
 		expect(
 			attempt(() =>
@@ -362,15 +398,26 @@ describe('compileBrowserJourney', () => {
 			parameters: { toString: { default: 'sam@example.test' } },
 			steps: [{ ...field, arguments: { text: { parameter: 'toString' }, submit: true } }],
 		}
-		const expression = `(Object.hasOwn(inputs, 'toString') ? inputs.toString : undefined) ?? 'sam@example.test'`
+		const read = `(Object.hasOwn(inputs, 'toString') ? inputs.toString : undefined)`
+		const expression = `${read} ?? 'sam@example.test'`
 		const lines = compileBrowserJourney(journey).source.split('\n')
-		expect(lines[7]).toBe(
+		const defaulted = `\tif (${read} !== undefined && typeof ${read} !== 'string') throw new Error('toString: the input is not a string')`
+		expect(lines[4]).toBe(defaulted)
+		expect(lines[8]).toBe(
 			`\t\tawait performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: ${expression}, submit: true }, target: { role: 'textbox', name: 'Email' } })`,
 		)
 		expect(evaluateJavaScript(`((inputs) => ${expression})({})`)).toBe('sam@example.test')
 		expect(
 			evaluateJavaScript(`((inputs) => ${expression})({ toString: 'ada@example.test' })`),
 		).toBe('ada@example.test')
+		expect(evaluateJavaScript(`((inputs) => { ${defaulted}\nreturn 'checked' })({})`)).toBe(
+			'checked',
+		)
+		expect(
+			attempt(() =>
+				evaluateJavaScript(`((inputs) => { ${defaulted}\nreturn 'checked' })({ toString: 7 })`),
+			),
+		).toMatchObject({ success: false, error: { message: 'toString: the input is not a string' } })
 		const required = compileBrowserJourney({
 			...journey,
 			parameters: { toString: {} },

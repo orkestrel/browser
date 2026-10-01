@@ -2,7 +2,7 @@
  * src/core/helpers.ts tests.
  */
 
-import type { BrowserTargetOptions, BrowserToolSourceEventMap } from '@src/core'
+import type { BrowserAction, BrowserToolSourceEventMap } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
 import { describe, it, expect, expectTypeOf } from 'vitest'
 import { attempt } from '@orkestrel/contract'
@@ -13,7 +13,7 @@ import {
 	renderBrowserRun,
 	renderBrowserRunResult,
 	collectBrowserJourneyBindings,
-	collectBrowserJourneySecrets,
+	collectBrowserJourneyTextBindings,
 	editBrowserJourney,
 	validateBrowserJourneyStep,
 	renderBrowserJourney,
@@ -63,6 +63,8 @@ import {
 	renderBrowserElement,
 	renderBrowserReceipt,
 	isBrowserElementError,
+	isBrowserError,
+	isBrowserStepError,
 } from '@src/core'
 import { createRecorder, readProperty, requireValue, waitForCondition } from '@orkestrel/test'
 import {
@@ -100,39 +102,74 @@ describe('journey step helpers', () => {
 			}),
 		).toThrow('malformed native arguments')
 	})
-	it('carries a timed out action in the step error context', async () => {
+	it('throws a BrowserStepError that carries the performed action when a step times out', async () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble({ waited: false }))
+		const performed = createRecorder<readonly [BrowserAction]>()
+		toolset.emitter.on('action', performed.handler)
 		await toolset.start()
 		try {
-			await expect(
-				performBrowserStep(toolset, 's1', {
+			const error = await performBrowserStep(toolset, 's1', {
+				action: 'wait',
+				arguments: { text: 'Saved', timeout: 0.01 },
+			}).then(
+				() => undefined,
+				(caught: unknown) => caught,
+			)
+			expect(isBrowserStepError(error)).toBe(true)
+			expect(isBrowserError(error)).toBe(true)
+			expect(error).toMatchObject({
+				name: 'BrowserStepError',
+				code: 'BROWSER_STEP_ERROR',
+				message: 's1: "Saved" did not appear within 0.01 s.',
+				context: { step: 's1' },
+				action: {
 					action: 'wait',
 					arguments: { text: 'Saved', timeout: 0.01 },
-				}),
-			).rejects.toMatchObject({
-				name: 'BrowserError',
-				context: {
-					action: {
-						action: 'wait',
-						arguments: { text: 'Saved', timeout: 0.01 },
-						outcome: 'timeout',
-						receipt: '"Saved" did not appear within 0.01 s.',
-					},
+					outcome: 'timeout',
+					receipt: '"Saved" did not appear within 0.01 s.',
 				},
 			})
+			expect(performed.calls).toHaveLength(1)
+			expect(isBrowserStepError(error) ? error.action : undefined).toEqual(performed.calls[0]?.[0])
+			expect(isBrowserStepError(new BrowserError('s1: refused'))).toBe(false)
+			expect(isBrowserStepError(performed.calls[0]?.[0])).toBe(false)
 		} finally {
 			await toolset.destroy()
 		}
 	})
-	it('collects recorded text parameter names without interpreting literal arguments', () => {
-		expect(collectBrowserJourneySecrets([])).toEqual([])
+	it('throws a plain BrowserError with no action when the manager refuses the call before any handler', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		await toolset.start()
+		try {
+			const error = await performBrowserStep(toolset, 's5', {
+				action: 'missing',
+				arguments: {},
+			}).then(
+				() => undefined,
+				(caught: unknown) => caught,
+			)
+			expect(error).toMatchObject({ name: 'BrowserError', message: 's5: tool not found: missing' })
+			expect(isBrowserStepError(error)).toBe(false)
+		} finally {
+			await toolset.destroy()
+		}
+	})
+	it('collects the names a native type text binds and ignores a page tool literal argument', () => {
+		expect(collectBrowserJourneyTextBindings([])).toEqual([])
 		expect(
-			collectBrowserJourneySecrets([
-				{ id: 's1', action: 'type', arguments: { text: { parameter: 'password' } } },
-				{ id: 's2', action: 'type', arguments: { text: 'literal' } },
-				{ id: 's3', action: 'press', arguments: { key: { parameter: 'key' } } },
-				{ id: 's4', action: 'type', arguments: { text: { parameter: 3 } } },
-				{ id: 's5', action: 'type', arguments: { text: { parameter: 'secret1' } } },
+			collectBrowserJourneyTextBindings([
+				{ action: 'type', arguments: { text: { parameter: 'password' } } },
+				{ action: 'type', arguments: { text: 'literal' } },
+				{ action: 'press', arguments: { key: { parameter: 'key' } } },
+				{ action: 'type', arguments: { text: { parameter: 3 } } },
+				{ action: 'type', arguments: { text: { parameter: 'secret1' } } },
+				{ action: 'checkout', arguments: { text: { parameter: 'confirmPassword' } } },
+				{ action: 'type', arguments: { text: { parameter: 'password' } } },
+				{
+					action: 'click',
+					arguments: {},
+					target: { role: 'button', name: { parameter: 'label' } },
+				},
 			]),
 		).toEqual(['password', 'secret1'])
 	})
@@ -256,18 +293,18 @@ describe('journey step helpers', () => {
 		}
 	})
 	it('resolves a unique semantic target and refuses a missing target without sending input', async () => {
-		expectTypeOf<Parameters<typeof locateBrowserTarget>[2]>().toEqualTypeOf<BrowserTargetOptions>()
+		expectTypeOf<Parameters<typeof locateBrowserTarget>[1]>().toEqualTypeOf<string>()
+		expectTypeOf<Parameters<typeof performBrowserStep>[1]>().toEqualTypeOf<string>()
 		const fixture = await createBrowserElementFixture()
 		try {
-			const target = await locateBrowserTarget(
-				fixture.page,
-				{ role: 'textbox', name: 'Email' },
-				{ id: 's2' },
-			)
+			const target = await locateBrowserTarget(fixture.page, 's2', {
+				role: 'textbox',
+				name: 'Email',
+			})
 			expect(target.name).toBe('Email')
 			expect(target.frame).toBe('main')
 			await expect(
-				locateBrowserTarget(fixture.page, { role: 'button', name: 'Add to cart' }, { id: 's3' }),
+				locateBrowserTarget(fixture.page, 's3', { role: 'button', name: 'Add to cart' }),
 			).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_TARGET',
 				message:
@@ -296,7 +333,7 @@ describe('journey step helpers', () => {
 		try {
 			await toolset.start()
 			const target = { role: 'button', name: 'Delete', reference: 'e1', css: '#delete' }
-			await expect(locateBrowserTarget(fixture.page, target, { id: 's8' })).rejects.toMatchObject({
+			await expect(locateBrowserTarget(fixture.page, 's8', target)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_AMBIGUOUS',
 				message:
 					'Step s8 names button "Delete", which 2 elements carry; call edit to remove or replace s8.',

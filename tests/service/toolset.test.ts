@@ -127,7 +127,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await toolset.start()
 				const target = { role: 'combobox', name: 'Destination' }
 				if (direct) {
-					const element = await locateBrowserTarget(page, target, { id: 's1' })
+					const element = await locateBrowserTarget(page, 's1', target)
 					receipts.push(
 						requireToolText(
 							await toolset.tools.execute({
@@ -193,7 +193,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 							: scenario.arguments
 					const target =
 						'target' in scenario
-							? await locateBrowserTarget(page, scenario.target, { id: 's1' })
+							? await locateBrowserTarget(page, 's1', scenario.target)
 							: undefined
 					const call = {
 						id: 's1',
@@ -226,11 +226,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				const toolset = createBrowserToolset(page)
 				toolsets.push(toolset)
 				await toolset.start()
-				const target = await locateBrowserTarget(
-					page,
-					{ role: 'button', name: 'Delete' },
-					{ id: 's1' },
-				)
+				const target = await locateBrowserTarget(page, 's1', { role: 'button', name: 'Delete' })
 				const actions: BrowserAction[] = []
 				toolset.emitter.on('action', (action) => actions.push(action))
 				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
@@ -299,11 +295,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				const toolset = createBrowserToolset(page, { context })
 				toolsets.push(toolset)
 				await toolset.start()
-				const target = await locateBrowserTarget(
-					page,
-					{ role: 'link', name: 'Open details' },
-					{ id: 's1' },
-				)
+				const target = await locateBrowserTarget(page, 's1', { role: 'link', name: 'Open details' })
 				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
 				if (direct) {
 					toolset.emitter.on('action', (action) => actions.push(action))

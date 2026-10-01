@@ -25,7 +25,7 @@ import { compileBrowserJourney } from '../compilers.js'
 import { BrowserError } from '../errors.js'
 import {
 	buildBrowserJourney,
-	collectBrowserJourneySecrets,
+	collectBrowserJourneyTextBindings,
 	deriveBrowserJourneySecret,
 	readBrowserAXValue,
 	readBrowserFrames,
@@ -377,7 +377,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 			if (this.#pending?.key !== key) this.#flush()
 			let text = gesture.secret ? this.#pending?.step.arguments['text'] : gesture.value
 			if (gesture.secret && !isRecord(text)) {
-				const taken = collectBrowserJourneySecrets(this.#steps)
+				const taken = collectBrowserJourneyTextBindings(this.#steps)
 				text = {
 					parameter: deriveBrowserJourneySecret(isString(target.name) ? target.name : '', taken),
 				}

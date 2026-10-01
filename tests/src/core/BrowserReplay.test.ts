@@ -1,4 +1,5 @@
 import type {
+	BrowserAction,
 	BrowserRun,
 	BrowserRunSlot,
 	BrowserRunStep,
@@ -25,6 +26,7 @@ import {
 	createBrowserSecretSelectFixture,
 	createBrowserElementFixture,
 	createBrowserJourneyFixture,
+	createBrowserJourneyMalformedInputs,
 	createBrowserViewDouble,
 	PNG_BASE64,
 	replyOk,
@@ -165,6 +167,38 @@ describe('BrowserReplay', () => {
 		}
 	})
 
+	it('reads an own undefined input as omitted and refuses a defaulted input that is not a string, as the generated module does', async () => {
+		const view = createBrowserViewDouble()
+		const toolset = new BrowserToolset(view)
+		const holds = createRecorder<readonly [string]>()
+		toolset.emitter.on('hold', holds.handler)
+		await toolset.start()
+		const journey = createBrowserJourneyFixture(
+			[{ action: 'wait', arguments: { text: { parameter: 'status' } } }],
+			{ parameters: { status: { default: 'Ready' } } },
+		)
+		try {
+			await expect(
+				new BrowserReplay(
+					toolset,
+					{ journey },
+					{ inputs: createBrowserJourneyMalformedInputs('status', 42) },
+				).execute(),
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'status' } })
+			expect(holds.count).toBe(0)
+			expect(view.calls).toEqual([])
+			const omitted = await new BrowserReplay(
+				toolset,
+				{ journey },
+				{ inputs: createBrowserJourneyMalformedInputs('status', undefined) },
+			).execute()
+			expect(omitted).toMatchObject({ inputs: { status: 'Ready' }, outcome: 'complete' })
+			expect(view.calls).toEqual(['wait Ready'])
+		} finally {
+			await toolset.destroy()
+		}
+	})
+
 	it.each(['press', 'navigate', 'dialog', 'switch'])(
 		'refuses unsupported %s before a supported prefix',
 		async (action) => {
@@ -256,6 +290,34 @@ describe('BrowserReplay', () => {
 			expect(run.steps).toHaveLength(1)
 			expect(run.steps[0]?.outcome).toBe('timeout')
 			expect(view.calls).toEqual(['wait Absent'])
+		} finally {
+			await toolset.destroy()
+		}
+	})
+
+	it("records a step that did not complete from the step error's action", async () => {
+		const view = createBrowserViewDouble({ waited: false })
+		const toolset = new BrowserToolset(view)
+		const performed = createRecorder<readonly [BrowserAction]>()
+		toolset.emitter.on('action', performed.handler)
+		await toolset.start()
+		const journey = createBrowserJourneyFixture([{ action: 'wait', arguments: { text: 'Absent' } }])
+		try {
+			const run = await new BrowserReplay(toolset, { journey }).execute()
+			const action = requireValue(performed.calls[0]?.[0])
+			expect(performed.calls).toHaveLength(1)
+			expect(run.steps).toEqual([
+				{
+					id: 's1',
+					action: 'wait',
+					trigger: 'Absent',
+					arguments: action.arguments,
+					outcome: action.outcome,
+					result: action.receipt,
+					elapsed: action.elapsed,
+				},
+			])
+			expect(run.steps[0]?.outcome).toBe('timeout')
 		} finally {
 			await toolset.destroy()
 		}

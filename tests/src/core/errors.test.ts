@@ -1,8 +1,10 @@
+import type { BrowserAction } from '@src/core'
 import {
 	BrowserConnectionError,
 	BrowserElementError,
 	BrowserError,
 	BrowserResultLimitError,
+	BrowserStepError,
 	CDPConnectionError,
 	CDPError,
 	CDPTimeoutError,
@@ -10,6 +12,7 @@ import {
 	isBrowserElementError,
 	isBrowserError,
 	isBrowserResultLimitError,
+	isBrowserStepError,
 	isCDPConnectionError,
 	isCDPError,
 	isCDPTimeoutError,
@@ -24,6 +27,31 @@ describe('core browser error guards', () => {
 		expect(isCDPConnectionError(new CDPConnectionError('failure'))).toBe(true)
 		expect(isCDPTimeoutError(new CDPTimeoutError('failure'))).toBe(true)
 		expect(isBrowserResultLimitError(new BrowserResultLimitError('failure'))).toBe(true)
+	})
+
+	it('carries the performed action of a step that did not complete, with the step in its message and context', () => {
+		const action: BrowserAction = {
+			action: 'wait',
+			arguments: { text: 'Saved' },
+			outcome: 'timeout',
+			receipt: '"Saved" did not appear within 5 s.',
+			elapsed: 5000,
+		}
+		const error = new BrowserStepError('s3', action)
+
+		expect(error).toMatchObject({
+			name: 'BrowserStepError',
+			code: 'BROWSER_STEP_ERROR',
+			message: 's3: "Saved" did not appear within 5 s.',
+			context: { step: 's3' },
+		})
+		expect(error.action).toBe(action)
+		expect(isBrowserStepError(error)).toBe(true)
+		expect(isBrowserError(error)).toBe(true)
+		expect(isBrowserStepError(new BrowserError('s3: "Saved" did not appear within 5 s.'))).toBe(
+			false,
+		)
+		expect(isBrowserStepError(action)).toBe(false)
 	})
 
 	it('names an UNTRUSTED or other non-GONE refusal with its detail and no fresh-refs instruction', () => {

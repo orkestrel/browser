@@ -1,4 +1,4 @@
-import type { BrowserElementReason, BrowserElementSubject } from './types.js'
+import type { BrowserAction, BrowserElementReason, BrowserElementSubject } from './types.js'
 import { isInstance, isString } from '@orkestrel/contract'
 
 // === Browser errors
@@ -65,6 +65,34 @@ export class BrowserElementError extends BrowserError {
  */
 export function isBrowserElementError(value: unknown): value is BrowserElementError {
 	return isInstance(value, BrowserElementError)
+}
+
+/**
+ * Reports a journey step whose action did not complete, under the code `BROWSER_STEP_ERROR`, with
+ * the performed action in `action`.
+ *
+ * @remarks
+ * The message is `ID: RECEIPT`, where `ID` is the step's id and `RECEIPT` the action's receipt, and
+ * `context` names the step under `step`. A caller reads the outcome, stage, reason, receipt, and
+ * elapsed time from `action` rather than from the message.
+ */
+export class BrowserStepError extends BrowserError {
+	readonly action: BrowserAction
+
+	constructor(id: string, action: BrowserAction) {
+		super(`${id}: ${action.receipt}`, 'BROWSER_STEP_ERROR', { step: id })
+		this.name = 'BrowserStepError'
+		this.action = action
+	}
+}
+
+/**
+ * Checks whether a value is a journey step error.
+ * @param value - Caught value
+ * @returns True if the value is a step error; false otherwise
+ */
+export function isBrowserStepError(value: unknown): value is BrowserStepError {
+	return isInstance(value, BrowserStepError)
 }
 
 /**
