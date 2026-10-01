@@ -59,6 +59,7 @@ import {
 	BROWSER_RUN_FIXTURE,
 	createBrowserElementFixture,
 	createBrowserJourneyFixture,
+	createBrowserViewDouble,
 	replyOk,
 } from './setup.js'
 
@@ -1428,6 +1429,154 @@ async function serveFixtureRequest(
  */
 export function describeFileBrowserStores(): void {
 	describe('file store filesystem contracts', () => {
+		it('refuses save when a second store saved the name between record and save', async () => {
+			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
+			const { BrowserJourneyToolset, BrowserToolset } = await import('../src/core/index.js')
+			const scratch = createScratch()
+			const first = new FileBrowserJourneyStore({ root: scratch.path })
+			const second = new FileBrowserJourneyStore({ root: scratch.path })
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const journeys = new BrowserJourneyToolset(toolset, { store: first })
+			try {
+				await toolset.start()
+				expect(
+					await toolset.tools.execute({
+						id: '1',
+						name: 'record',
+						arguments: { journey: 'check-ready' },
+					}),
+				).toMatchObject({ success: true })
+				const saved = await second.set(createBrowserJourneyFixture())
+				expect(
+					await toolset.tools.execute({
+						id: '2',
+						name: 'save',
+						arguments: { description: 'Replacement' },
+					}),
+				).toMatchObject({
+					success: false,
+					error: 'A journey named "check-ready" is saved; call journeys, or record another name.',
+				})
+				expect(await first.get('check-ready')).toEqual(saved)
+			} finally {
+				await journeys.destroy()
+				await toolset.destroy()
+				scratch.destroy()
+			}
+		})
+
+		it('skips non-journey names without faults or hiding journeys beyond the cap', async () => {
+			const { mkdir } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
+			const scratch = createScratch()
+			try {
+				const store = new FileBrowserJourneyStore({ root: scratch.path, limit: 1 })
+				await mkdir(join(scratch.path, '.profiles'))
+				await mkdir(join(scratch.path, 'Not-a-journey'))
+				for (const name of ['alpine', 'harbor'])
+					await store.set(createBrowserJourneyFixture([], { name }))
+				const first = await store.list()
+				const next = await store.list({ offset: first.entries.length })
+				expect(first.faults).toEqual([])
+				expect(next.faults).toEqual([])
+				expect(first.truncated).toBe(true)
+				expect(next.truncated).toBe(false)
+				expect([...first.entries, ...next.entries].map((entry) => entry.journey.name)).toEqual([
+					'alpine',
+					'harbor',
+				])
+			} finally {
+				scratch.destroy()
+			}
+		})
+
+		it('recovers a dead holder lock after refusing the live child', async () => {
+			const { readFile } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
+			const scratch = createScratch()
+			scratch.write(
+				'holder.ts',
+				`
+import { registerHooks } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
+import { once } from 'node:events'
+registerHooks({
+	resolve(specifier, context, next) {
+		try { return next(specifier, context) }
+		catch (error) {
+			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
+				return next(specifier.slice(0, -3) + '.ts', context)
+			throw error
+		}
+	}
+})
+const { FileBrowserStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserStore.ts')).href)
+const files = new FileBrowserStore({ root: process.argv[2] })
+await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async () => {
+	process.send?.('held')
+	await once(process, 'message')
+})
+`,
+			)
+			const child = spawnProcess(
+				process.execPath,
+				[join(scratch.path, 'holder.ts'), scratch.path],
+				{ stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
+			)
+			try {
+				const ready = await waitForEvent<[unknown]>(
+					(listener) => {
+						child.once('message', listener)
+						return () => {
+							child.off('message', listener)
+						}
+					},
+					'child holds journey lock',
+					{ budget: 10000 },
+				)
+				expect(ready[0]).toBe('held')
+				const store = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				const lock = join(scratch.path, journey.name, 'journey.lock')
+				await expect(store.set(journey)).rejects.toMatchObject({
+					code: 'BROWSER_JOURNEY_LOCKED',
+					message: `Journey is locked: ${lock}`,
+				})
+				expect(await readFile(lock, 'utf8')).toBe(String(child.pid))
+				const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
+					(listener) => {
+						child.once('exit', listener)
+						return () => {
+							child.off('exit', listener)
+						}
+					},
+					'lock holder dies',
+					{ budget: 10000 },
+				)
+				child.kill('SIGKILL')
+				await exit
+				expect((await store.set(journey)).revision).toBe(1)
+				expect(await store.get(journey.name)).toMatchObject({ journey, revision: 1 })
+				await expect(readFile(lock, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+			} finally {
+				if (child.exitCode === null && child.signalCode === null) {
+					const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
+						(listener) => {
+							child.once('exit', listener)
+							return () => {
+								child.off('exit', listener)
+							}
+						},
+						'terminated lock holder',
+						{ budget: 10000 },
+					)
+					child.kill('SIGKILL')
+					await exit
+				}
+				scratch.destroy()
+			}
+		}, 15000)
 		it('allows exactly one competing process to save the same expected revision', async () => {
 			const { spawn } = await import('node:child_process')
 			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
