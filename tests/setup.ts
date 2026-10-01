@@ -26,6 +26,7 @@ import type {
 	CDPHandler,
 	CDPSendOptions,
 } from '@src/core'
+import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RecorderInterface } from '@orkestrel/test'
 import {
@@ -2353,6 +2354,73 @@ export function createBrowserJourneyServiceJourney(
 	)
 }
 
+/**
+ * Describes a native journey whose replay the claim 5 proof compares step by step with direct
+ * `tools.execute` calls, each over a toolset given the context of a fresh page.
+ *
+ * @remarks
+ * - `route` — the fixture path the context opens first
+ * - `tabs` — the fixture paths the context opens after `route`, in order
+ * - `steps` — the journey's steps, each `tab` URL a fixture path
+ * - `calls` — each step's direct arguments, which also take the target's reference as `ref` when
+ *   the step names a target
+ * - `outcomes` — the outcome of each step's action
+ */
+export interface BrowserJourneySequenceCase {
+	readonly name: string
+	readonly route: string
+	readonly tabs: readonly string[]
+	readonly steps: readonly BrowserJourneyStepInput[]
+	readonly calls: ReadonlyArray<Readonly<Record<string, JSONValue>>>
+	readonly outcomes: ReadonlyArray<BrowserAction['outcome']>
+}
+
+/**
+ * Holds the native journeys whose replay and direct calls the claim 5 proof compares step by step:
+ * a click the `/confirm` route's confirm dialog interrupts followed by the `dialog` step that
+ * accepts it, and a `switch` to the `/popup/child` tab titled `Details`.
+ */
+export const BROWSER_JOURNEY_SEQUENCE_CASES: readonly BrowserJourneySequenceCase[] = Object.freeze([
+	{
+		name: 'interrupted click and its dialog',
+		route: '/confirm',
+		tabs: [],
+		steps: [
+			{ action: 'click', arguments: {}, target: { role: 'button', name: 'Delete' } },
+			{ action: 'dialog', arguments: { accept: true } },
+		],
+		calls: [{}, { accept: true }],
+		outcomes: ['interrupted', 'done'],
+	},
+	{
+		name: 'switch with a context',
+		route: '/popup',
+		tabs: ['/popup/child'],
+		steps: [{ action: 'switch', arguments: {}, tab: { url: '/popup/child', title: 'Details' } }],
+		calls: [{ tab: 't2' }],
+		outcomes: ['done'],
+	},
+])
+
+/**
+ * Creates the journey that replays a {@link BROWSER_JOURNEY_SEQUENCE_CASES} row, named for the row,
+ * with each `tab` path resolved to the absolute URL the `tabs` tool lists.
+ * @param scenario - The row whose steps the journey carries
+ * @param resolve - Returns the absolute URL the fixture server answers for a path
+ * @returns The journey whose steps are `s1` onward
+ */
+export function createBrowserJourneySequenceJourney(
+	scenario: BrowserJourneySequenceCase,
+	resolve: (path: string) => string,
+): BrowserJourney {
+	return createBrowserJourneyFixture(
+		scenario.steps.map((step) =>
+			step.tab === undefined ? step : { ...step, tab: { ...step.tab, url: resolve(step.tab.url) } },
+		),
+		{ name: scenario.name.replaceAll(' ', '-'), description: `Perform the ${scenario.name}` },
+	)
+}
+
 /** Holds an editable combobox whose suggestion remains a text input. */
 export const BROWSER_JOURNEY_COMBOBOX_HTML =
 	'<label>Destination <input list="places"></label><datalist id="places"><option value="Harbor"></datalist>'
@@ -3416,6 +3484,7 @@ export const BROWSER_JOURNEY_MODULE = `import type { BrowserPageInterface } from
 import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
 
 export async function execute(page: BrowserPageInterface, inputs: { readonly email?: string } = {}): Promise<void> {
+	for (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
@@ -3434,6 +3503,7 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly ema
 export const BROWSER_JOURNEY_MODULE_JAVASCRIPT = `import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
 
 export async function execute(page, inputs = {}) {
+	for (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
@@ -3526,6 +3596,9 @@ export const BROWSER_JOURNEY_ACTION_MODULE = String.raw`import type { BrowserPag
 import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
 
 export async function execute(page: BrowserPageInterface, inputs: { readonly store?: string; readonly product?: string; readonly customer: string; readonly password: string; readonly key?: string; readonly reply?: string }): Promise<void> {
+	for (const name of Object.keys(inputs ?? {})) if (!['store', 'product', 'customer', 'password', 'key', 'reply'].includes(name)) throw new Error(name + ': no parameter has that name')
+	if (typeof inputs?.customer !== 'string') throw new Error('customer: the input is missing')
+	if (typeof inputs?.password !== 'string') throw new Error('password: the input is missing')
 	throw new Error('s11: the element is in a child frame; handle it here')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
@@ -3838,6 +3911,10 @@ export const BROWSER_JOURNEY_MODULE_CASES: readonly BrowserJourneyModuleCase[] =
 	},
 ])
 
+/** Reads the `/form` route's click log and whether its `Save draft` button saved the draft. */
+export const BROWSER_JOURNEY_DRAFT_STATE =
+	"({ clicks: document.body.dataset.clicks ?? '', saved: document.body.dataset.saved ?? 'no' })"
+
 /**
  * Holds a journey whose gap follows a click that saves the form page's draft: the module and the
  * replay both refuse it before that click, so the page's click log stays empty.
@@ -3854,8 +3931,7 @@ export const BROWSER_JOURNEY_GAP_CASE: BrowserJourneyModuleCase = Object.freeze(
 		{ name: 'save-draft', description: 'Save the delivery draft and submit it' },
 	),
 	inputs: {},
-	state:
-		"({ clicks: document.body.dataset.clicks ?? '', saved: document.body.dataset.saved ?? 'no' })",
+	state: BROWSER_JOURNEY_DRAFT_STATE,
 	outcome: [{ clicks: '', saved: 'no' }],
 })
 
@@ -4063,6 +4139,47 @@ export const BROWSER_JOURNEY_PREPARATION_CASES: readonly BrowserJourneyPreparati
 			code: 'BROWSER_JOURNEY_PLACEMENT',
 		},
 	])
+
+/**
+ * Describes one journey a generated module refuses before its first step and a replay refuses at
+ * preparation.
+ *
+ * @remarks
+ * - `message` — the message of the error the module throws
+ * - `code` — the `BrowserError` code the replay's refusal carries
+ */
+export interface BrowserJourneyRefusalCase extends BrowserJourneyModuleCase {
+	readonly message: string
+	readonly code: string
+}
+
+/**
+ * Holds the inputs on which the generated module of {@link BROWSER_JOURNEY_PREPARED_JOURNEY} and its
+ * replay both refuse before the `Save draft` click, so the `/form` route's click log stays empty:
+ * no value for the required `name`, and a `nmae` that names no parameter.
+ */
+export const BROWSER_JOURNEY_INPUT_CASES: readonly BrowserJourneyRefusalCase[] = Object.freeze([
+	{
+		name: 'a missing input',
+		route: '/form',
+		journey: BROWSER_JOURNEY_PREPARED_JOURNEY,
+		inputs: {},
+		state: BROWSER_JOURNEY_DRAFT_STATE,
+		outcome: [{ clicks: '', saved: 'no' }],
+		message: 'name: the input is missing',
+		code: 'BROWSER_JOURNEY_INPUT',
+	},
+	{
+		name: 'an unknown input',
+		route: '/form',
+		journey: BROWSER_JOURNEY_PREPARED_JOURNEY,
+		inputs: { name: 'Grace', nmae: 'Grace' },
+		state: BROWSER_JOURNEY_DRAFT_STATE,
+		outcome: [{ clicks: '', saved: 'no' }],
+		message: 'nmae: no parameter has that name',
+		code: 'BROWSER_JOURNEY_INPUT',
+	},
+])
 
 /**
  * Holds the `/document` journey the DOM placement refuses at preparation: a click on the

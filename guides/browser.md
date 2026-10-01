@@ -486,7 +486,7 @@ The helpers are pure: they decode protocol payloads, validate options, compile i
 | `generateBrowserRunId`                   | function | Generates a run id from an ISO timestamp and a cryptographic hexadecimal suffix.                                                                                                                    |
 | `locateBrowserTarget`                    | function | Resolves one exact semantic target and refuses missing or ambiguous matches.                                                                                                                        |
 | `performBrowserStep`                     | function | Performs a resolved journey step through the toolset's action boundary.                                                                                                                             |
-| `compileBrowserJourney`                  | function | Compiles a journey into a standalone module that performs each step through `performBrowserStep` over a toolset the module constructs on the page.                                                  |
+| `compileBrowserJourney`                  | function | Compiles a journey into a standalone module that performs each step through `performBrowserStep` over a toolset the module constructs on the page. The module checks its inputs before any step.    |
 | `compileBrowserJourneyValue`             | function | Compiles a JSON value into the JavaScript literal a generated journey module carries.                                                                                                               |
 
 The following fence composes the snapshot, page recorder, and evaluation helpers around captured CDP payloads.
@@ -3186,6 +3186,8 @@ export async function execute(
 	page: BrowserPageInterface,
 	inputs: { readonly email?: string } = {},
 ): Promise<void> {
+	for (const name of Object.keys(inputs))
+		if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
@@ -3218,7 +3220,7 @@ export async function execute(
 }
 ```
 
-A secret parameter compiles to a required input and passes `{ secret: true }` to its `type` step, and a parameter without a default compiles to a required input. A gap step compiles to `throw new Error('s6: the element is in a child frame; handle it here')` at its position, and `gaps` lists it. `performBrowserStep` throws `sN: RECEIPT` when a step did not complete and returns the `BrowserAction` of an `interrupted` action, so a `dialog` step that follows it answers the pending input.
+A secret parameter compiles to a required input and passes `{ secret: true }` to its `type` step, and a parameter without a default compiles to a required input. The module checks its inputs before its toolset starts, as replay refuses them at preparation with `BROWSER_JOURNEY_INPUT`: an input that names no parameter throws `NAME: no parameter has that name`, then a required input without a string value throws `NAME: the input is missing`, where `NAME` is the input's name. A module with a required parameter reports the first one as missing when `execute` receives no inputs. A journey without parameters compiles no check. A gap step compiles to `throw new Error('s6: the element is in a child frame; handle it here')` at its position, and `gaps` lists it. `performBrowserStep` throws `sN: RECEIPT` when a step did not complete and returns the `BrowserAction` of an `interrupted` action, so a `dialog` step that follows it answers the pending input.
 
 ### Reattach to a running session
 

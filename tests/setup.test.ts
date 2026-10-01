@@ -1563,15 +1563,16 @@ describe('instrumentBrowserJourneyModule', () => {
 	it('exports an actions array before execute and hooks the toolset the module constructs, leaving every step call as written', () => {
 		const lines = instrumentBrowserJourneyModule(BROWSER_JOURNEY_MODULE_JAVASCRIPT).split('\n')
 
-		expect(lines.slice(0, 6)).toStrictEqual([
+		expect(lines.slice(0, 7)).toStrictEqual([
 			"import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'",
 			'',
 			'export const actions = []',
 			'',
 			'export async function execute(page, inputs = {}) {',
+			"\tfor (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')",
 			'\tconst toolset = createBrowserToolset(page, { on: { action: (action) => actions.push(action) } })',
 		])
-		expect(lines.slice(6)).toStrictEqual(BROWSER_JOURNEY_MODULE_JAVASCRIPT.split('\n').slice(4))
+		expect(lines.slice(7)).toStrictEqual(BROWSER_JOURNEY_MODULE_JAVASCRIPT.split('\n').slice(5))
 	})
 
 	it('refuses a module that constructs no toolset over its page', () => {
