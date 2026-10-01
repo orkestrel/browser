@@ -86,7 +86,7 @@ describe('createBrowserToolset', () => {
 			const tools = createToolManager()
 			const toolset = createBrowserToolset(page, { tools })
 			expect(toolset).toBeInstanceOf(BrowserToolset)
-			expect(toolset.tools).toBe(tools)
+			expect(toolset.tools.emitter).toBe(tools.emitter)
 			expect(tools.count).toBe(0)
 			await toolset.start()
 			expect(tools.tools()).toEqual(toolset.native)

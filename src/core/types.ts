@@ -2805,8 +2805,8 @@ export interface BrowserToolsetOptions {
  * tools beside them.
  *
  * @remarks
- * - `emitter` — emits `adopt`, `skip`, and `select`
- * - `tools` — the manager the toolset fills
+ * - `emitter` — emits `adopt`, `skip`, `select`, `action`, `hold`, and `release`
+ * - `tools` — the manager the toolset fills, with execution through the `perform` boundary
  * - `native` — the generic tools alone, which a consumer publishes to a built-in agent: the
  *   seven for a page-backed toolset, and `look`, `read`, `click`, `type`, and `wait` for a
  *   view-backed one
@@ -2817,6 +2817,8 @@ export interface BrowserToolsetInterface {
 	readonly tools: ToolManagerInterface
 	readonly native: readonly ToolInterface[]
 	readonly view: BrowserViewInterface
+	/** Reports the character limit before a result or error footer. */
+	readonly limit: number
 	/** Names the acquired hold, or returns undefined while no hold owns the toolset. */
 	readonly held: string | undefined
 	/** Performs a tool call and returns its structured action when a handler ran. */
@@ -2829,6 +2831,7 @@ export interface BrowserToolsetInterface {
 	 * and `The toolset is replaying NAME until it finishes; call look.`, while waiting and while held;
 	 * the actions admitted before the call complete first; a wait that aborts or fails releases the
 	 * pending reservation.
+	 * A second hold waits for earlier holds to release and honours its signal while waiting.
 	 * An open dialog or an input left pending by an earlier receipt refuses with
 	 * `BROWSER_TOOLSET_DIALOG` before admission is reserved. A dialog that opens while the
 	 * queue drains also refuses the hold, leaving its answer admissible.

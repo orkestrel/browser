@@ -98,6 +98,95 @@ describe('BrowserToolset', () => {
 		}
 	})
 	describe('journey actions', () => {
+		it('preserves the supplied manager surface and returns bounded batch execution results', async () => {
+			const manager = createToolManager()
+			const toolset = new BrowserToolset(createBrowserViewDouble(), { tools: manager })
+			try {
+				await toolset.start()
+				expect(toolset.tools.emitter).toBe(manager.emitter)
+				expect(toolset.tools.count).toBe(manager.count)
+				expect(toolset.tools.tools()).toEqual(manager.tools())
+				expect(toolset.tools.definitions()).toEqual(manager.definitions())
+				expect(toolset.tools.tool('look')).toBe(manager.tool('look'))
+				const call = { id: 'look', name: 'look', arguments: { what: 'form' } }
+				const missing = { id: 'missing', name: 'missing', arguments: {} }
+				expect(await toolset.tools.execute([call, missing])).toEqual([
+					await manager.execute(call),
+					await manager.execute(missing),
+				])
+				expect(await toolset.tools.execute([])).toEqual([])
+				const secret = {
+					id: 'secret',
+					name: 'type',
+					arguments: { ref: 'e1', text: BROWSER_SELECT_SECRET, secret: true },
+				}
+				const signal = AbortSignal.abort(`Rejected ${JSON.stringify(BROWSER_SELECT_SECRET)}`)
+				expect(await toolset.tools.execute([secret, call], { signal })).toEqual([
+					{ id: 'secret', name: 'type', success: false, error: 'Rejected [redacted]' },
+					await manager.execute(call, { signal }),
+				])
+				const extra = createTool({ name: 'extra', execute: ignoreCall })
+				toolset.tools.add(extra)
+				expect(manager.tool('extra')).toBe(extra)
+				expect(toolset.tools.remove('extra')).toBe(true)
+				expect(manager.tool('extra')).toBeUndefined()
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
+		it('waits for the first hold to release before granting the second hold', async () => {
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const events: string[] = []
+			toolset.emitter.on('hold', (name) => events.push(`hold ${name}`))
+			toolset.emitter.on('release', (name) => events.push(`release ${name}`))
+			try {
+				const first = await toolset.hold('first')
+				const second = toolset.hold('second').catch((error: unknown) => error)
+				await waitForDelay()
+				expect(toolset.held, 'h1c: the second hold waits for release').toBe('first')
+				expect(events).toEqual(['hold first'])
+				first.destroy()
+				await second
+				expect(toolset.held).toBe('second')
+				expect(events).toEqual(['hold first', 'release first', 'hold second'])
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
+		it('aborts a second hold while the first remains held and admits a later hold', async () => {
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const controller = new AbortController()
+			const reason = new Error('The waiting hold was aborted')
+			try {
+				const first = await toolset.hold('first')
+				const second = toolset
+					.hold('second', { signal: controller.signal })
+					.catch((error: unknown) => error)
+				controller.abort(reason)
+				expect(await second).toBe(reason)
+				expect(toolset.held).toBe('first')
+				const third = toolset.hold('third')
+				first.destroy()
+				const held = await third
+				expect(toolset.held).toBe('third')
+				held.destroy()
+				expect(toolset.held).toBeUndefined()
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
+		it('reports its configured limit', async () => {
+			const toolset = new BrowserToolset(createBrowserViewDouble(), { limit: 10 })
+			try {
+				expect(toolset.limit).toBe(10)
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
 		it('redacts a secret abort reason before admission and keeps ordinary refusal text', async () => {
 			const message = `Rejected ${JSON.stringify(BROWSER_SELECT_SECRET)}`
 			const fixture = await createBrowserSecretSelectFixture(message)
@@ -110,21 +199,35 @@ describe('BrowserToolset', () => {
 					name: 'type',
 					arguments: { ref: 'e2', text: BROWSER_SELECT_SECRET, secret: true },
 				}
-				const signal = AbortSignal.abort(new Error(message))
+				const signal = AbortSignal.abort(message)
 				const performed = await toolset.perform(call, { signal })
 				expect(performed.result.success).toBe(false)
 				expect(performed.action).toBeUndefined()
-				expect(JSON.stringify(performed)).not.toContain('Zq7#')
+				expect(performed.result).toMatchObject({ success: false, error: 'Rejected [redacted]' })
+				const managed = await toolset.tools.execute(call, { signal })
+				expect(managed, 'h1a: managed pre-abort redacts the complete secret').toEqual(
+					performed.result,
+				)
+				expect(
+					await toolset.tools.execute(call, { signal: AbortSignal.abort(new Error(message)) }),
+				).toMatchObject({ success: false, error: 'Error: Rejected [redacted]' })
 				const error = await Promise.resolve(
 					requireValue(toolset.tools.tool('type')).execute(call.arguments, { signal }),
 				).catch((caught: unknown) => caught)
-				expect(String(error)).toContain('Rejected')
-				expect(String(error)).not.toContain('Zq7#')
+				expect(readProperty(error, 'message')).toBe('Rejected [redacted]')
 				const ordinary = await toolset.perform({
 					...call,
 					arguments: { ...call.arguments, secret: false },
 				})
 				expect(ordinary.result).toMatchObject({ success: false, error: message })
+				const ordinaryAbort = { ...call, arguments: { ...call.arguments, secret: false } }
+				expect(await toolset.tools.execute(ordinaryAbort, { signal })).toEqual(
+					(await toolset.perform(ordinaryAbort, { signal })).result,
+				)
+				expect(await toolset.tools.execute(ordinaryAbort, { signal })).toMatchObject({
+					success: false,
+					error: message,
+				})
 			} finally {
 				await toolset.destroy()
 				await fixture.client.close()
@@ -151,22 +254,30 @@ describe('BrowserToolset', () => {
 						expect(performed.result.success).toBe(false)
 						expect(performed.action).toMatchObject({ secret: true, outcome: 'refused' })
 						expect(performed.action?.arguments).not.toHaveProperty('text')
-						expect(performed.action?.receipt).toContain('Rejected')
-						expect(JSON.stringify(performed), 'perform must redact before clipping').not.toContain(
-							'Zq7#',
-						)
+						expect(
+							performed.result,
+							'h1b: redaction removes the suffix before clipping',
+						).toMatchObject({
+							success: false,
+							error: 'Rejected [redacted] and [redacted].',
+						})
+						expect(performed.action?.receipt).toBe('Rejected [redacted] and [redacted].')
 						const managed = await toolset.tools.execute(call)
 						expect(managed.success).toBe(false)
-						expect(JSON.stringify(managed)).not.toContain('Zq7#')
+						expect(managed).toEqual(performed.result)
 						const error = await Promise.resolve(
 							requireValue(toolset.tools.tool('type')).execute(call.arguments, {
 								signal: new AbortController().signal,
 							}),
 						).catch((caught: unknown) => caught)
 						expect(isBrowserError(error)).toBe(true)
-						expect(String(error)).not.toContain('Zq7#')
+						expect(readProperty(error, 'message')).toBe('Rejected [redacted] and [redacted].')
 						expect(actions.count).toBe(3)
-						expect(JSON.stringify(actions.calls)).not.toContain('Zq7#')
+						expect(actions.calls.map(([action]) => action.receipt)).toEqual([
+							'Rejected [redacted] and [redacted].',
+							'Rejected [redacted] and [redacted].',
+							'Rejected [redacted] and [redacted].',
+						])
 					} finally {
 						await toolset.destroy()
 					}
@@ -192,10 +303,19 @@ describe('BrowserToolset', () => {
 				expect(result.success).toBe(true)
 				expect(result.success && result.value).toMatch(/^Selected a secret in/)
 				expect(actions.calls[0]?.[0].receipt).toMatch(/^Selected a secret in/)
-				expect(JSON.stringify(result)).not.toContain('Zq7#')
-				expect(JSON.stringify(actions.calls.map(([action]) => action.receipt))).not.toContain(
-					'Zq7#',
-				)
+				for (const fragment of [
+					BROWSER_JOURNEY_SECRET.slice(0, 4),
+					BROWSER_JOURNEY_SECRET.slice(4),
+				]) {
+					expect(JSON.stringify(result)).not.toContain(fragment)
+					expect(JSON.stringify(actions.calls.map(([action]) => action.receipt))).not.toContain(
+						fragment,
+					)
+					expect(JSON.stringify(result)).not.toContain(JSON.stringify(fragment).slice(1, -1))
+					expect(JSON.stringify(actions.calls.map(([action]) => action.receipt))).not.toContain(
+						JSON.stringify(fragment).slice(1, -1),
+					)
+				}
 			} finally {
 				await toolset.destroy()
 				await fixture.client.close()
@@ -278,6 +398,7 @@ describe('BrowserToolset', () => {
 				])
 				expect(pending, 'a closed dialog still leaves its input pending').toMatchObject({
 					code: 'BROWSER_TOOLSET_DIALOG',
+					message: 'An earlier input is still pending; call look.',
 				})
 				fixture.transport.reply(requireValue(withheld[0]).id, {})
 				await waitForDelay()
@@ -390,7 +511,8 @@ describe('BrowserToolset', () => {
 					})
 					expect(performed.action?.arguments).not.toHaveProperty('text')
 					expect(performed.action?.receipt).toMatch(/^Typed a secret into e2 textbox "Email"/)
-					expect(JSON.stringify(performed)).not.toContain('private-value')
+					for (const fragment of ['priv', 'ate-value'])
+						expect(JSON.stringify(performed)).not.toContain(fragment)
 				}
 				const pressed = await toolset.perform({
 					id: 'enter',
@@ -408,7 +530,8 @@ describe('BrowserToolset', () => {
 					arguments: { ref: 'e2', text: 'private-value', secret: true },
 				})
 				expect(String(readProperty(direct, 'value'))).toMatch(/^Typed a secret into/)
-				expect(JSON.stringify([actions.calls, pressed, direct])).not.toContain('private-value')
+				for (const fragment of ['priv', 'ate-value'])
+					expect(JSON.stringify([actions.calls, pressed, direct])).not.toContain(fragment)
 				expect(
 					fixture.transport.sent.some(
 						(message) =>
@@ -771,10 +894,14 @@ describe('BrowserToolset', () => {
 		it('catches a limit that is not a positive integer', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
-				for (const limit of [0, -1, 1.5, Number.NaN])
+				for (const limit of [0, -1, 1.5, Number.NaN]) {
 					expect(() => createBrowserToolset(page, { limit })).toThrow(
 						'Browser toolset limit must be a positive integer',
 					)
+					expect(captureError(() => createBrowserToolset(page, { limit }))).toMatchObject({
+						code: 'BROWSER_TOOLSET_ARGUMENT',
+					})
+				}
 			} finally {
 				await client.close()
 			}

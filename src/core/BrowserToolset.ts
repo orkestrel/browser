@@ -49,6 +49,7 @@ import { BrowserJourneyToolset } from './BrowserJourneyToolset.js'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_TOOL_NAMES,
+	BROWSER_OBSERVATION_TOOL_NAMES,
 	BROWSER_SCHEMES,
 	BROWSER_TOOL_CAPTURE_MS,
 	BROWSER_TOOL_CHANGED_NOTE,
@@ -58,6 +59,7 @@ import {
 	BROWSER_TOOL_HANDLED_STATUS,
 	BROWSER_TOOL_LIMIT,
 	BROWSER_TOOL_NAMES,
+	BROWSER_TOOL_PENDING_NOTE,
 	BROWSER_TOOL_NAME_PATTERN,
 	BROWSER_TOOL_TIMEOUT_LIMIT_MS,
 	BROWSER_TOOL_TIMEOUT_MS,
@@ -150,7 +152,7 @@ import {
  * adds `; call type with REF to enter text` to its receipt line. A click
  * or type over a view whose `trusted` is `false` ends its receipt line with ` (untrusted event)`.
  *
- * A page tool is skipped, with `skip` emitted, when its name is reserved, when the manager holds
+ * A page tool is skipped, with `skip` emitted, when its name is reserved (`unresolved` included), when the manager holds
  * its name under a tool the toolset did not add (checked again immediately before each addition),
  * when its name falls outside `BROWSER_TOOL_NAME_PATTERN`, when its parameters or, for a source
  * that supplies `tools()`, its selected registration declare `what` optional, or when that
@@ -174,6 +176,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #view: BrowserViewInterface
 	readonly #origin: BrowserPageInterface | undefined
 	readonly #tools: ToolManagerInterface
+	readonly #manager: ToolManagerInterface
 	readonly #source: BrowserToolSourceInterface | undefined
 	readonly #context: BrowserContextInterface | undefined
 	readonly #limit: number
@@ -200,7 +203,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	>()
 	readonly #faults = new WeakMap<BrowserToolsetResult, unknown>()
 	#reservation: BrowserHoldInterface | undefined
-	#waiting: BrowserHoldInterface | undefined
+	readonly #holds = new Map<PromiseWithResolvers<void>, BrowserHoldInterface>()
 	readonly #interrupts = new Map<PromiseWithResolvers<never>, string>()
 	readonly #notes: string[] = []
 	readonly #changeHandler = this.#handleChange.bind(this)
@@ -229,9 +232,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	constructor(view: BrowserViewInterface, options?: BrowserToolsetOptions) {
 		const limit = options?.limit ?? BROWSER_TOOL_LIMIT
 		if (!isInteger(limit) || limit < 1) {
-			throw new BrowserError('Browser toolset limit must be a positive integer', undefined, {
-				limit,
-			})
+			throw new BrowserError(
+				'Browser toolset limit must be a positive integer',
+				'BROWSER_TOOLSET_ARGUMENT',
+				{
+					limit,
+				},
+			)
 		}
 		if (options?.context !== undefined && options.page === undefined) {
 			throw new BrowserError('Browser toolset context requires a page', 'BROWSER_TOOLSET_CONTEXT')
@@ -240,6 +247,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		this.#origin = options?.page
 		this.#page = options?.page
 		this.#tools = options?.tools ?? createToolManager()
+		this.#manager = new Proxy(this.#tools, { get: this.#readManager.bind(this) })
 		this.#source = options?.source
 		this.#context = options?.context
 		this.#limit = limit
@@ -293,7 +301,28 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	get tools(): ToolManagerInterface {
-		return this.#tools
+		return this.#manager
+	}
+
+	get limit(): number {
+		return this.#limit
+	}
+
+	#readManager(target: ToolManagerInterface, key: string | symbol): unknown {
+		if (key === 'execute') return this.#performManaged.bind(this)
+		const value: unknown = Reflect.get(target, key, target)
+		return typeof value === 'function' ? value.bind(target) : value
+	}
+
+	#performManaged(call: ToolCall, context?: ToolContext): Promise<ToolResult>
+	#performManaged(calls: readonly ToolCall[], context?: ToolContext): Promise<readonly ToolResult[]>
+	async #performManaged(
+		calls: ToolCall | readonly ToolCall[],
+		context?: ToolContext,
+	): Promise<ToolResult | readonly ToolResult[]> {
+		if (isArray(calls))
+			return Promise.all(calls.map(async (call) => (await this.perform(call, context)).result))
+		return (await this.perform(calls, context)).result
 	}
 
 	get native(): readonly ToolInterface[] {
@@ -335,7 +364,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			this.#lifetime.signal,
 		])
 		const started = performance.now()
-		const acting = !['look', 'read', 'tabs'].includes(call.name)
+		const acting = !BROWSER_OBSERVATION_TOOL_NAMES.includes(call.name)
 		let result: ToolResult
 		let fault: unknown
 		try {
@@ -391,23 +420,26 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			this.#lifetime.signal,
 		])
 		signal.throwIfAborted()
-		this.#admit('hold', undefined)
 		this.#holdable()
-		const hold = new BrowserHold(name, this.#releaseHold.bind(this))
-		this.#waiting = hold
+		const released = Promise.withResolvers<void>()
+		const hold = new BrowserHold(name, this.#releaseHold.bind(this, released))
+		const earlier = [...this.#holds.keys()]
+		this.#holds.set(released, hold)
 		try {
+			if (earlier.length > 0)
+				await this.#race(Promise.all(earlier.map((entry) => entry.promise)), '', signal)
 			const turn = await this.#acquire(signal, false, true)
 			try {
 				signal.throwIfAborted()
 				this.#reservation = hold
-				this.#waiting = undefined
 				this.#emitter.emit('hold', name)
 				return hold
 			} finally {
 				turn.resolve()
 			}
-		} finally {
-			if (this.#waiting === hold) this.#waiting = undefined
+		} catch (error) {
+			hold.destroy()
+			throw error
 		}
 	}
 
@@ -459,8 +491,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return performed.result.value
 	}
 
-	#admit(category: 'observation' | 'action' | 'hold', caller: unknown): void {
-		const hold = this.#reservation ?? this.#waiting
+	#admit(category: 'observation' | 'action', caller: unknown): void {
+		const hold = this.#reservation ?? this.#holds.values().next().value
 		if (hold !== undefined && caller !== hold.token && category !== 'observation')
 			throw new BrowserError(
 				`The toolset is replaying ${hold.name} until it finishes; call look.`,
@@ -473,16 +505,20 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		if (dialog !== undefined || this.#pending !== undefined)
 			throw new BrowserError(
 				dialog === undefined
-					? 'An earlier input is still pending; call look.'
+					? BROWSER_TOOL_PENDING_NOTE
 					: renderBrowserReceipt({ action: '', dialog }),
 				'BROWSER_TOOLSET_DIALOG',
 			)
 	}
 
-	#releaseHold(): void {
-		const hold = this.#reservation
-		this.#reservation = undefined
-		if (hold !== undefined) this.#emitter.emit('release', hold.name)
+	#releaseHold(released: PromiseWithResolvers<void>): void {
+		const hold = this.#holds.get(released)
+		this.#holds.delete(released)
+		released.resolve()
+		if (hold !== undefined && this.#reservation === hold) {
+			this.#reservation = undefined
+			this.#emitter.emit('release', hold.name)
+		}
 	}
 
 	// Refuses a parameter the tool does not advertise before its handler reads any argument.
@@ -550,7 +586,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			signal.throwIfAborted()
 			this.#admit(
-				['look', 'read', 'tabs', 'wait'].includes(name) ? 'observation' : 'action',
+				BROWSER_OBSERVATION_TOOL_NAMES.includes(name) || name === 'wait' ? 'observation' : 'action',
 				context.caller,
 			)
 			const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
@@ -1202,7 +1238,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			)
 			deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS
 			const bound = deadline - BROWSER_TOOL_CAPTURE_MS
-			if (first) this.#hold(command)
+			if (first) this.#parkInput(command)
 			const submissions =
 				first || observation === undefined
 					? { destinations: [], prevented: false, submitted: undefined, implicit: false }
@@ -1322,12 +1358,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			return await this.#race(step, action, signal)
 		} catch (error) {
-			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') this.#hold(command)
+			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')
+				this.#parkInput(command)
 			throw error
 		}
 	}
 
-	#hold(command: Promise<unknown>): void {
+	#parkInput(command: Promise<unknown>): void {
 		const pending = command.then(
 			() => undefined,
 			() => undefined,
