@@ -22,6 +22,10 @@ The browser guide's "Register the browse binary" pattern is the validated hookup
 
 `@orkestrel/browser` moves from layer 3 to layer 5 with `@orkestrel/mcp ^0.0.34`, `@orkestrel/router ^0.0.16`, and `@orkestrel/server ^0.0.21` beside its existing dependencies, at the version the publish wave gives it. Gate: the scaffold policy project is green; the row equals the manifest after the wave.
 
+## 6. `configs/policy.ts`, `FUNCTION_DOMAIN_FOLDERS`
+
+`src/core/journeys` joins the register so the browser package can move `performBrowserStep` and `locateBrowserTarget` out of `helpers.ts` into one function module each; `.claude/rules/architecture.md` § Kind or folder makes an added domain a fleet-canon change with no workspace-local path. Gate: the scaffold policy project is green; `scaffold repair` delivers the register to the browser checkout; the browser's `policy/no-misplaced-function` accepts the two modules.
+
 ## The order
 
-Items 1, 2, 3, and 5 are one `builder` unit in the scaffold checkout after the owner's consent; item 4 waits on the owner's dependency ruling.
+Items 1, 2, 3, 5, and 6 are one `builder` unit in the scaffold checkout after the owner's consent; item 4 waits on the owner's dependency ruling. The browser's move of the two functions is a follow-on unit after item 6 lands.
