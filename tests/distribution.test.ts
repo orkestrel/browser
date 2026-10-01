@@ -34,7 +34,7 @@ import { createTeardown, requireValue } from '@orkestrel/test'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { BROWSER_TOOL_TIMEOUT_MS, compileBrowserJourney } from '@src/core'
-import { BROWSER_JOURNEY_LOCK_FILE, createFileBrowserJourneyStore } from '@src/server'
+import { BROWSER_JOURNEY_SNAPSHOT_FILE, createFileBrowserJourneyStore } from '@src/server'
 import { BROWSER_JOURNEY_ACTION_FIXTURE, BROWSER_JOURNEY_FIXTURE } from './setup.js'
 import {
 	BROWSE_ENDINGS,
@@ -50,7 +50,6 @@ import {
 	openFifoWriter,
 	readBundleImports,
 	readChromiumProcesses,
-	readExitedProcessId,
 	readProfiles,
 	startBrowseChild,
 } from './setupServer.js'
@@ -1419,11 +1418,9 @@ describe('packed browse binary', () => {
 		},
 	)
 
-	// The edit reads revision 1, then its write parks on a FIFO standing at the journey's lock while
-	// the server reads the holder's identifier. A direct store moves the journey to revision 2 inside
-	// that pause, and an exited process's identifier lets the server reclaim the lock, so its write
-	// meets the moved revision. The store raises the staleness and the core toolset words it, so the
-	// sentence survives only when both halves of the packed binary share one `BrowserError` class.
+	// The edit's initial snapshot read parks on a FIFO. A direct store advances the restored
+	// snapshot before that read receives revision 1, so the edit meets revision 2 inside its lock.
+	// The packed core toolset must recognize the server's BrowserError and render staleness.
 	it(
 		'refuses an edit whose journey moved after the tool read it with the stale sentence [requires the registry and a browser]',
 		{ timeout: 120_000 },
@@ -1433,7 +1430,7 @@ describe('packed browse binary', () => {
 			requireFifo(context)
 			const root = join(stage.consumer, 'tmp/browsers')
 			const name = 'stale-edit'
-			const lock = join(root, name, BROWSER_JOURNEY_LOCK_FILE)
+			const snapshot = join(root, name, BROWSER_JOURNEY_SNAPSHOT_FILE)
 			const teardown = createTeardown()
 			try {
 				const fixtures = await createFixtureServer()
@@ -1448,8 +1445,10 @@ describe('packed browse binary', () => {
 				expect(await callBrowse(client, 'save', { description: 'Opens the late page' })).toMatch(
 					/^Saved stale-edit with 1 step\./u,
 				)
-				createFifo(lock)
-				teardown.add(() => rmSync(lock, { force: true }))
+				const original = readFileSync(snapshot, 'utf8')
+				rmSync(snapshot)
+				createFifo(snapshot)
+				teardown.add(() => rmSync(snapshot, { force: true }))
 				const edit = {
 					journey: name,
 					edits: [
@@ -1460,14 +1459,15 @@ describe('packed browse binary', () => {
 					() => undefined,
 					(error: unknown) => error,
 				)
-				const writer = await openFifoWriter(lock, { budget: 30_000 })
+				const writer = await openFifoWriter(snapshot, { budget: 30_000 })
 				teardown.add(() => writer.close())
-				rmSync(lock)
+				rmSync(snapshot)
+				writeFileSync(snapshot, original)
 				const store = createFileBrowserJourneyStore({ root })
 				const read = requireValue(await store.get(name), `no ${name} under ${root}`)
 				expect(read.revision).toBe(1)
 				expect((await store.set(read.journey, read.revision)).revision).toBe(2)
-				await writer.writeFile(String(readExitedProcessId()))
+				await writer.writeFile(original)
 				await writer.close()
 				expect(await refusal).toHaveProperty(
 					'message',

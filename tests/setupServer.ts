@@ -7,7 +7,7 @@ import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { RetryOptions, TeardownInterface } from '@orkestrel/test'
 import type { MCPTransportInterface } from '@orkestrel/mcp'
-import type { BrowserContextInterface, BrowserPageInterface } from '@src/core'
+import type { BrowserContextInterface, BrowserPageInterface, BrowserStoreOptions } from '@src/core'
 import type {
 	BrowserConnection,
 	BrowserDiscoveryResult,
@@ -16,6 +16,7 @@ import type {
 	BrowserLaunchFunction,
 	BrowserOptions,
 	BrowserStatus,
+	FileBrowserStoreOptions,
 } from '@src/server'
 import type { BrowserElementFixture, CDPSentMessage, CDPTestTransportInterface } from './setup.js'
 import { spawn as spawnProcess, spawnSync } from 'node:child_process'
@@ -47,9 +48,16 @@ import {
 	WEBSOCKET_READY_OPEN,
 } from '@orkestrel/websocket'
 import { createLoopback, createScratch, isRunning, readErrorCode } from '@orkestrel/test/server'
-import { createTeardown, requireValue, retryUntil, waitForCondition } from '@orkestrel/test'
+import {
+	createTeardown,
+	requireValue,
+	retryUntil,
+	waitForCondition,
+	waitForEvent,
+} from '@orkestrel/test'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
+import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
 import { createBrowserElementFixture, replyOk } from './setup.js'
 
 /**
@@ -2383,4 +2391,88 @@ function isBrowserContextValue(value: unknown): value is BrowserContextInterface
 		isFunction(Reflect.get(value, 'pages')) &&
 		isFunction(Reflect.get(value, 'destroy'))
 	)
+}
+
+/** Parks a real lock recoverer after reading the dead entry, before its unlink. */
+export const BROWSER_LOCK_RECOVERER = `
+import { registerHooks } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
+import { once } from 'node:events'
+${SOURCE_HOOK}
+const { FileBrowserStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserStore.ts')).href)
+class LockBarrier extends FileBrowserStore {
+	#observed = false
+	async check(path, options) {
+		const exists = await super.check(path, options)
+		if (!this.#observed && path === resolve(process.argv[2], 'journey.lock', process.argv[3])) {
+			this.#observed = true
+			const resume = once(process, 'message')
+			process.send?.('observed')
+			await resume
+		}
+		return exists
+	}
+}
+try {
+	const files = new LockBarrier({ root: process.argv[2] })
+	await files.lock(resolve(process.argv[2], 'journey.lock'), async () => {
+		const release = once(process, 'message')
+		process.send?.('entered')
+		await release
+	})
+	process.send?.('released')
+} catch (error) {
+	process.send?.(error instanceof Error && 'code' in error ? error.code : String(error))
+} finally {
+	process.disconnect?.()
+}
+`
+
+/** Waits for the next IPC result from a filesystem fixture process. */
+export async function waitForBrowserChild(child: ChildProcess): Promise<unknown> {
+	const [message] = await waitForEvent<[unknown]>(
+		(listener) => {
+			child.once('message', listener)
+			return () => {
+				child.off('message', listener)
+			}
+		},
+		'filesystem child message',
+		{ budget: 10000 },
+	)
+	return message
+}
+
+/** Terminates an owned filesystem fixture process and observes its exit. */
+export async function stopBrowserChild(child: ChildProcess): Promise<void> {
+	if (child.exitCode !== null || child.signalCode !== null) return
+	const ending = waitForEvent<[number | null, NodeJS.Signals | null]>(
+		(listener) => {
+			child.once('exit', listener)
+			return () => {
+				child.off('exit', listener)
+			}
+		},
+		'filesystem child exit',
+		{ budget: 10000 },
+	)
+	child.kill('SIGKILL')
+	await ending
+}
+
+/** Runs an external filesystem interleaving after each real component check. */
+export class BrowserLockObserver extends FileBrowserStore {
+	readonly #observe: (path: string) => Promise<void>
+
+	constructor(options: FileBrowserStoreOptions, observe: (path: string) => Promise<void>) {
+		super(options)
+		this.#observe = observe
+	}
+
+	override async check(path: string, options?: BrowserStoreOptions): Promise<boolean> {
+		const present = await super.check(path, options)
+		await this.#observe(path)
+		return present
+	}
 }

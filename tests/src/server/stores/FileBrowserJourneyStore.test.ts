@@ -1,7 +1,7 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { afterEach, describe, it, expect } from 'vitest'
 import { watch } from 'node:fs'
-import { mkdir, rename, symlink, writeFile, readFile, readdir } from 'node:fs/promises'
+import { mkdir, rename, symlink, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createBrowserJourneyFixture, createBrowserViewDouble } from '../../../setup.js'
 import { createScratch } from '@orkestrel/test/server'
@@ -74,12 +74,14 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 					: component === 'journey'
 						? join(root, journey.name)
 						: join(root, journey.name, component)
-			if (component === 'journey.lock') await writeFile(path, '')
+			if (component === 'journey.lock') await mkdir(path)
 			await rename(path, path + '-moved')
 			await symlink(
 				path + '-moved',
 				path,
-				component === 'root' || component === 'journey' ? 'dir' : 'file',
+				component === 'root' || component === 'journey' || component === 'journey.lock'
+					? 'dir'
+					: 'file',
 			)
 			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
 			await expect(store.delete(journey.name)).rejects.toMatchObject({
