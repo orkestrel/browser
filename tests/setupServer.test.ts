@@ -4,8 +4,9 @@
  * The subject is the Node-only test infrastructure `tests/src/server/**` and `tests/service/**`
  * drive: the port reservation helpers, the process wait, the scratch registry, the raw TCP
  * fixtures, the in-process CDP server and the frames of each socket write it performs, the spawned
- * fake browser, the fixture page and module server, and the built-bundle precondition of the
- * document page. Every case uses the real resource the fixture exists to provide — real loopback
+ * fake browser, the fixture page and module server, the built-bundle precondition of the
+ * document page, and the stage that imports a generated journey module through a link to this
+ * package. Every case uses the real resource the fixture exists to provide — real loopback
  * sockets on ephemeral ports, real files, and real child processes.
  *
  * `tests/setupServer.ts` declares no DOM-driving export, so this file defers nothing to a browser
@@ -14,14 +15,15 @@
  * Expected values are derived by a route the module does not share: a second socket connecting to
  * the port `readServerPort` reports, the platform `WebSocket` client driving the CDP fixture, the
  * child's own `spawn` handle carrying the identifier the fixture publishes, `existsSync` reading
- * the directories the scratch registry removes, and Node's own module resolution for the entries
- * the document page's import map names.
+ * the directories the scratch registry removes, Node's own module resolution for the entries
+ * the document page's import map names, and `realpathSync` reading the stage's link.
  */
 
 import type { CDPTestServerInterface } from './setupServer.js'
+import { createAttachedPage } from './setup.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, realpathSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -37,6 +39,7 @@ import {
 import { isRunning } from '@orkestrel/test/server'
 import {
 	COOPERATIVE_SIGTERM,
+	createBrowserJourneyStage,
 	createCDPTestServer,
 	createFakeBrowserProcess,
 	createFixtureServer,
@@ -979,5 +982,40 @@ describe('createFixtureServer', () => {
 		)
 		await expect(fixtures.destroy()).resolves.toBeUndefined()
 		expect(closes.count).toBe(1)
+	})
+})
+
+// === Compiled journey modules
+
+describe('createBrowserJourneyStage', () => {
+	it('links the workspace package, imports a module through Node, reads the receipts it recorded, and removes only its own directory', async () => {
+		const stage = createBrowserJourneyStage()
+		const { client, page } = await createAttachedPage()
+		const greeting = stage.load(
+			'greeting.js',
+			"export const actions = []\n\nexport async function execute(page, inputs) {\n\tactions.push({ receipt: 'Greeted ' + inputs.name + ' on ' + page.target + '.' })\n}\n",
+		)
+		await greeting.execute(page, { name: 'Grace' })
+		const linked = realpathSync(join(stage.path, 'node_modules/@orkestrel/browser'))
+
+		expect(linked).toBe(realpathSync(WORKSPACE))
+		expect(greeting.receipts()).toStrictEqual(['Greeted Grace on target-1.'])
+		stage.destroy()
+		await client.close()
+		expect([existsSync(stage.path), existsSync(join(WORKSPACE, 'package.json'))]).toStrictEqual([
+			false,
+			true,
+		])
+	})
+
+	it('refuses a module that exports no execute, and reads no receipts from one that exports no actions', () => {
+		const stage = createBrowserJourneyStage()
+		const silent = stage.load('silent.js', 'export async function execute() {}\n')
+
+		expect(() => stage.load('empty.js', 'export const actions = []\n')).toThrow(
+			'empty.js exports no execute function',
+		)
+		expect(() => silent.receipts()).toThrow('silent.js exports no actions array')
+		stage.destroy()
 	})
 })

@@ -2,7 +2,8 @@
  * Proof for `tests/setup.ts`.
  *
  * The subject is the exported test infrastructure the workspace's suites drive: the in-memory CDP
- * transport, the scripting helpers layered on it, the protocol fixtures, and the encoded constants.
+ * transport, the scripting helpers layered on it, the protocol fixtures, the encoded constants,
+ * and the rewrite that records a generated journey module's actions.
  * Production behavior is not re-proven here — where a case sends a real frame through
  * `createCDPClient`, the client is the driver and the assertion is on what the fixture answered.
  *
@@ -12,7 +13,8 @@
  * that collects this file does the same.
  *
  * Every expected value is derived by a route the module does not share: hand-written protocol
- * literals, a parent-index walk over the raw snapshot columns, and `atob` over the base64 constants.
+ * literals, a parent-index walk over the raw snapshot columns, `atob` over the base64 constants, and
+ * hand-written module lines.
  */
 
 import type { CDPSentMessage } from './setup.js'
@@ -78,6 +80,8 @@ import {
 	BROWSER_HISTORY_DIRECTIONS,
 	BROWSER_HISTORY_RESTORE_CASES,
 	throwListenerError,
+	BROWSER_JOURNEY_MODULE_JAVASCRIPT,
+	instrumentBrowserJourneyModule,
 } from './setup.js'
 
 describe('element protocol and compiler fixtures', () => {
@@ -1429,5 +1433,34 @@ describe('RecordingCDPClient', () => {
 			await recording.close()
 		}
 		expect(client.connected).toBe(false)
+	})
+})
+
+// === Compiled journey modules
+
+describe('instrumentBrowserJourneyModule', () => {
+	it('exports an actions array before execute and hooks the toolset the module constructs, leaving every step call as written', () => {
+		const lines = instrumentBrowserJourneyModule(BROWSER_JOURNEY_MODULE_JAVASCRIPT).split('\n')
+
+		expect(lines.slice(0, 6)).toStrictEqual([
+			"import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'",
+			'',
+			'export const actions = []',
+			'',
+			'export async function execute(page, inputs = {}) {',
+			'\tconst toolset = createBrowserToolset(page, { on: { action: (action) => actions.push(action) } })',
+		])
+		expect(lines.slice(6)).toStrictEqual(BROWSER_JOURNEY_MODULE_JAVASCRIPT.split('\n').slice(4))
+	})
+
+	it('refuses a module that constructs no toolset over its page', () => {
+		expect(() =>
+			instrumentBrowserJourneyModule(
+				BROWSER_JOURNEY_MODULE_JAVASCRIPT.replace(
+					'createBrowserToolset(page)',
+					'createBrowserToolset(view)',
+				),
+			),
+		).toThrow('The module declares no execute that constructs a toolset over its page')
 	})
 })
