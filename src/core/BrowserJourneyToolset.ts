@@ -204,9 +204,15 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		await recorder.stop()
 		let saved: BrowserJourneyRevision
 		try {
-			saved = await this.#store.set(recorder.journey({ name, description }), undefined, { signal })
+			saved = await this.#store.set(recorder.journey({ name, description }), 0, { signal })
 		} catch (error) {
 			if (signal.aborted) throw error
+			if (isBrowserError(error) && error.code === 'BROWSER_JOURNEY_STALE')
+				throw new BrowserError(
+					`A journey named "${name}" is saved; call journeys, or record another name.`,
+					error.code,
+					{ name },
+				)
 			if (isBrowserError(error) && error.code === 'BROWSER_JOURNEY_LOCKED')
 				throw new BrowserError(`Journey ${name} is locked; call save again.`, error.code, { name })
 			throw new BrowserError(
@@ -234,12 +240,18 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		}
 		const listings: string[] = []
+		const faults = new Set<string>()
 		let position = 0
 		for (;;) {
 			const page = await this.#store.list({ signal, offset: position })
 			listings.push(...page.entries.map((entry) => renderBrowserJourney(entry.journey)))
-			// An entry the store could not read still occupies its place in the store's order.
-			const span = page.entries.length + page.faults.length
+			// File stores can report the same unreadable path on successive pages.
+			for (const fault of page.faults) {
+				if (faults.has(fault.path)) continue
+				faults.add(fault.path)
+				listings.push(`Journey ${JSON.stringify(fault.path)} cannot be read: ${fault.message}`)
+			}
+			const span = page.entries.length
 			position += span
 			if (!page.truncated || span === 0) break
 		}

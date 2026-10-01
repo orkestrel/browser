@@ -34,9 +34,9 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?.signal?.throwIfAborted()
 		validateBrowserJourney(journey)
 		const previous = this.#revisions.get(journey.name)
-		if (expected !== undefined && expected !== this.#journeys.get(journey.name)?.revision)
+		if (expected !== undefined && expected !== (this.#journeys.get(journey.name)?.revision ?? 0))
 			throw new BrowserError(
-				`Journey ${journey.name} changed; read it before writing again.`,
+				`Journey ${journey.name} changed since you read it`,
 				'BROWSER_JOURNEY_STALE',
 			)
 		const revision = (previous ?? 0) + 1

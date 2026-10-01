@@ -22,8 +22,8 @@ import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { createConnection, createServer as createNetServer } from 'node:net'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
@@ -44,7 +44,7 @@ import {
 	WEBSOCKET_OPCODE_TEXT,
 	WEBSOCKET_READY_OPEN,
 } from '@orkestrel/websocket'
-import { createLoopback, createScratch, isRunning } from '@orkestrel/test/server'
+import { createLoopback, createScratch, isRunning, readErrorCode } from '@orkestrel/test/server'
 import {
 	createTeardown,
 	requireValue,
@@ -59,6 +59,7 @@ import {
 	BROWSER_RUN_FIXTURE,
 	createBrowserElementFixture,
 	createBrowserJourneyFixture,
+	createBrowserViewDouble,
 	replyOk,
 } from './setup.js'
 
@@ -1428,6 +1429,154 @@ async function serveFixtureRequest(
  */
 export function describeFileBrowserStores(): void {
 	describe('file store filesystem contracts', () => {
+		it('refuses save when a second store saved the name between record and save', async () => {
+			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
+			const { BrowserJourneyToolset, BrowserToolset } = await import('../src/core/index.js')
+			const scratch = createScratch()
+			const first = new FileBrowserJourneyStore({ root: scratch.path })
+			const second = new FileBrowserJourneyStore({ root: scratch.path })
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const journeys = new BrowserJourneyToolset(toolset, { store: first })
+			try {
+				await toolset.start()
+				expect(
+					await toolset.tools.execute({
+						id: '1',
+						name: 'record',
+						arguments: { journey: 'check-ready' },
+					}),
+				).toMatchObject({ success: true })
+				const saved = await second.set(createBrowserJourneyFixture())
+				expect(
+					await toolset.tools.execute({
+						id: '2',
+						name: 'save',
+						arguments: { description: 'Replacement' },
+					}),
+				).toMatchObject({
+					success: false,
+					error: 'A journey named "check-ready" is saved; call journeys, or record another name.',
+				})
+				expect(await first.get('check-ready')).toEqual(saved)
+			} finally {
+				await journeys.destroy()
+				await toolset.destroy()
+				scratch.destroy()
+			}
+		})
+
+		it('skips non-journey names without faults or hiding journeys beyond the cap', async () => {
+			const { mkdir } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
+			const scratch = createScratch()
+			try {
+				const store = new FileBrowserJourneyStore({ root: scratch.path, limit: 1 })
+				await mkdir(join(scratch.path, '.profiles'))
+				await mkdir(join(scratch.path, 'Not-a-journey'))
+				for (const name of ['alpine', 'harbor'])
+					await store.set(createBrowserJourneyFixture([], { name }))
+				const first = await store.list()
+				const next = await store.list({ offset: first.entries.length })
+				expect(first.faults).toEqual([])
+				expect(next.faults).toEqual([])
+				expect(first.truncated).toBe(true)
+				expect(next.truncated).toBe(false)
+				expect([...first.entries, ...next.entries].map((entry) => entry.journey.name)).toEqual([
+					'alpine',
+					'harbor',
+				])
+			} finally {
+				scratch.destroy()
+			}
+		})
+
+		it('recovers a dead holder lock after refusing the live child', async () => {
+			const { readFile } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
+			const scratch = createScratch()
+			scratch.write(
+				'holder.ts',
+				`
+import { registerHooks } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
+import { once } from 'node:events'
+registerHooks({
+	resolve(specifier, context, next) {
+		try { return next(specifier, context) }
+		catch (error) {
+			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
+				return next(specifier.slice(0, -3) + '.ts', context)
+			throw error
+		}
+	}
+})
+const { FileBrowserStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserStore.ts')).href)
+const files = new FileBrowserStore({ root: process.argv[2] })
+await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async () => {
+	process.send?.('held')
+	await once(process, 'message')
+})
+`,
+			)
+			const child = spawnProcess(
+				process.execPath,
+				[join(scratch.path, 'holder.ts'), scratch.path],
+				{ stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
+			)
+			try {
+				const ready = await waitForEvent<[unknown]>(
+					(listener) => {
+						child.once('message', listener)
+						return () => {
+							child.off('message', listener)
+						}
+					},
+					'child holds journey lock',
+					{ budget: 10000 },
+				)
+				expect(ready[0]).toBe('held')
+				const store = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				const lock = join(scratch.path, journey.name, 'journey.lock')
+				await expect(store.set(journey)).rejects.toMatchObject({
+					code: 'BROWSER_JOURNEY_LOCKED',
+					message: `Journey is locked: ${lock}`,
+				})
+				expect(await readFile(lock, 'utf8')).toBe(String(child.pid))
+				const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
+					(listener) => {
+						child.once('exit', listener)
+						return () => {
+							child.off('exit', listener)
+						}
+					},
+					'lock holder dies',
+					{ budget: 10000 },
+				)
+				child.kill('SIGKILL')
+				await exit
+				expect((await store.set(journey)).revision).toBe(1)
+				expect(await store.get(journey.name)).toMatchObject({ journey, revision: 1 })
+				await expect(readFile(lock, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+			} finally {
+				if (child.exitCode === null && child.signalCode === null) {
+					const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
+						(listener) => {
+							child.once('exit', listener)
+							return () => {
+								child.off('exit', listener)
+							}
+						},
+						'terminated lock holder',
+						{ budget: 10000 },
+					)
+					child.kill('SIGKILL')
+					await exit
+				}
+				scratch.destroy()
+			}
+		}, 15000)
 		it('allows exactly one competing process to save the same expected revision', async () => {
 			const { spawn } = await import('node:child_process')
 			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
@@ -2309,6 +2458,164 @@ export class BrowseChild {
 			this.#child.kill('SIGKILL')
 		await this.#ending
 	}
+}
+
+/** Names a way a host ends a browse server: the end of its standard input, or `SIGTERM`. */
+export type BrowseEnding = 'EOF' | 'SIGTERM'
+
+/** Lists every way a host ends a browse server, as {@link BrowseEnding} names them. */
+export const BROWSE_ENDINGS: readonly BrowseEnding[] = Object.freeze(['EOF', 'SIGTERM'])
+
+/**
+ * Ends a browse child the way a host does: closes its standard input, or signals it.
+ *
+ * @param child - The spawned child
+ * @param ending - The way to end it
+ */
+export function endBrowseChild(child: BrowseChild, ending: BrowseEnding): void {
+	if (ending === 'EOF') child.end()
+	else child.kill(ending)
+}
+
+/**
+ * Opens the protocol on a browse child and makes its first `look` call, which launches the
+ * child's Chromium.
+ *
+ * @param child - The spawned child
+ * @returns The text the `look` call answered
+ * @throws Thrown when the call answers an error, or when no answer arrives within 60 seconds
+ */
+export async function startBrowseChild(child: BrowseChild): Promise<string> {
+	child.send(
+		{
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'initialize',
+			params: {
+				protocolVersion: '2025-06-18',
+				capabilities: {},
+				clientInfo: { name: 'browse-test', version: '1.0.0' },
+			},
+		},
+		{
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/call',
+			params: { name: 'look', arguments: { what: 'the page' } },
+		},
+	)
+	const answer = await retryUntil(
+		'the answer to the first look',
+		() =>
+			child.lines
+				.map((line): unknown => parseJSON(line))
+				.find((message) => isRecord(message) && message['id'] === 2),
+		(message) => message !== undefined,
+		{ budget: 60_000, interval: 10 },
+	)
+	const result = isRecord(answer) ? answer['result'] : undefined
+	const content = isRecord(result) ? result['content'] : undefined
+	const first: unknown = isArray(content) ? content[0] : undefined
+	const text = isRecord(first) ? first['text'] : undefined
+	if (!isString(text) || !isRecord(result) || result['isError'] === true)
+		throw new Error(`the first look answered ${JSON.stringify(answer)}`)
+	return text
+}
+
+/**
+ * Reports whether this host lists every process's arguments in a `/proc` table.
+ *
+ * @remarks
+ * Linux exposes a process's arguments at `/proc/PID/cmdline`. Windows and macOS expose no such
+ * table, so a case that reads a Chromium command line gates on this reading.
+ */
+export const PROCESS_TABLE = existsSync('/proc/self/cmdline')
+
+/**
+ * Describes a running Chromium process found by the profile its command line names.
+ *
+ * @remarks
+ * - `pid` — the process identifier
+ * - `profile` — the `--user-data-dir` value its command line carries
+ * - `browser` — true for the browser process itself; false for a zygote, GPU, utility, or renderer
+ *   process, each of which carries a `--type=` switch
+ */
+export interface ChromiumProcess {
+	readonly pid: number
+	readonly profile: string
+	readonly browser: boolean
+}
+
+/**
+ * Lists the running Chromium processes whose `--user-data-dir` sits directly in a directory, read
+ * from the host's `/proc` table.
+ *
+ * @remarks
+ * A process that ends between the table's listing and the read of its arguments is left out, and so
+ * is a process that has ended but not been reaped, whose argument list reads empty.
+ *
+ * @param profiles - The directory the profiles sit in
+ * @returns The processes, ordered by identifier
+ * @throws Thrown when {@link PROCESS_TABLE} is false
+ */
+export function readChromiumProcesses(profiles: string): readonly ChromiumProcess[] {
+	if (!PROCESS_TABLE) throw new Error('This host exposes no /proc process table')
+	const directory = resolvePath(profiles)
+	const found: ChromiumProcess[] = []
+	for (const name of readdirSync('/proc')) {
+		if (!/^\d+$/u.test(name)) continue
+		try {
+			const args = readFileSync(join('/proc', name, 'cmdline'), 'utf8').split('\0')
+			const profile = args
+				.find((arg) => arg.startsWith('--user-data-dir='))
+				?.slice('--user-data-dir='.length)
+			if (profile === undefined || dirname(resolvePath(profile)) !== directory) continue
+			found.push({
+				pid: Number(name),
+				profile,
+				browser: !args.some((arg) => arg.startsWith('--type=')),
+			})
+		} catch (error) {
+			if (readErrorCode(error) !== 'ENOENT' && readErrorCode(error) !== 'ESRCH') throw error
+		}
+	}
+	return found.sort((first, second) => first.pid - second.pid)
+}
+
+/**
+ * Kills every Chromium process whose profile sits directly in a directory and waits until none
+ * runs, the teardown for a proof that failed with a browser still open.
+ *
+ * @param profiles - The directory the profiles sit in
+ * @returns Resolves after no such process runs
+ * @throws Thrown when one still runs after 5 seconds
+ */
+export async function destroyChromiumProcesses(profiles: string): Promise<void> {
+	for (const chromium of readChromiumProcesses(profiles)) {
+		try {
+			process.kill(chromium.pid, 'SIGKILL')
+		} catch (error) {
+			if (readErrorCode(error) !== 'ESRCH') throw error
+		}
+	}
+	await waitForCondition(
+		`no Chromium runs with a profile in ${profiles}`,
+		() => readChromiumProcesses(profiles).length === 0,
+		{ budget: 5000, interval: 50 },
+	)
+}
+
+/**
+ * Lists the absolute paths of the entries in a profiles directory.
+ *
+ * @param profiles - The directory the profiles sit in
+ * @returns The entries' paths in name order, or none when the directory is absent
+ */
+export function readProfiles(profiles: string): readonly string[] {
+	if (!existsSync(profiles)) return []
+	return readdirSync(profiles)
+		.sort()
+		.map((name) => join(profiles, name))
 }
 
 /**

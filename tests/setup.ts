@@ -3399,9 +3399,26 @@ export function describeBrowserJourneyStore(
 			expect((await store.set({ ...journey, description: 'Accepted' }, 1)).revision).toBe(2)
 			await expect(store.set({ ...journey, description: 'Stale' }, 1)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_STALE',
-				message: 'Journey check-ready changed; read it before writing again.',
+				message: 'Journey check-ready changed since you read it',
 			})
 			expect((await store.get(journey.name))?.journey.description).toBe('Accepted')
+		})
+		it('creates only an absent journey with expected zero, including after deletion', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			const saved = await store.set(journey, 0)
+			expect(saved.revision).toBe(1)
+			await expect(store.set({ ...journey, description: 'Replacement' }, 0)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_STALE',
+				message: `Journey ${journey.name} changed since you read it`,
+			})
+			expect(await store.get(journey.name)).toEqual(saved)
+			await store.delete(journey.name)
+			expect((await store.set(journey, 0)).revision).toBe(2)
+			await expect(store.set(journey, 1)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_STALE',
+				message: `Journey ${journey.name} changed since you read it`,
+			})
 		})
 		it('counts revisions across delete and recreate and refuses a stale writer', async () => {
 			const store = await factory()
