@@ -2,6 +2,7 @@ import type {
 	BrowserAction,
 	BrowserJourneyStepInput,
 	BrowserJourney,
+	BrowserJourneyStoreInterface,
 	BrowserJourneyStep,
 	BrowserRun,
 	BrowserCallOptions,
@@ -44,6 +45,30 @@ import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, waitForEvent } from '@orkestrel/test'
+
+/**
+ * Refuses scripted writes at the store boundary before delegating subsequent writes to the store.
+ * @param store - The real store retaining successful writes
+ * @param failures - The errors successive writes throw
+ * @returns A store boundary with the scripted write failures
+ */
+export function createBrowserFailingJourneyStore(
+	store: BrowserJourneyStoreInterface,
+	failures: readonly unknown[],
+): BrowserJourneyStoreInterface {
+	const pending = [...failures]
+	return {
+		get: store.get.bind(store),
+		delete: store.delete.bind(store),
+		list: store.list.bind(store),
+		set: async (journey, expected, options) => {
+			const failure = pending.shift()
+			if (failure !== undefined) throw failure
+			return store.set(journey, expected, options)
+		},
+	}
+}
+
 /** Describes a timer call observed while evaluating a natively parsed expression. */
 export interface BrowserCompiledTimer {
 	readonly name: string

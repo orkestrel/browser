@@ -1816,6 +1816,10 @@ export interface BrowserRecorderInterface {
 	 * derived: every secret marker declares a secret parameter named after its control's accessible
 	 * name in lower camel case, such as `confirmPassword`, falling back to `secret1`, `secret2`, and
 	 * so on when the derived name is invalid or taken; `next` is one past the highest id.
+	 *
+	 * @remarks
+	 * The toolset recorder includes an unanswered interrupted action as a gap in this snapshot
+	 * without stopping the recording or consuming that action's pending dialog continuation.
 	 */
 	journey(options: { readonly name: string; readonly description: string }): BrowserJourney
 	/** Drops the recorded steps. */
@@ -2805,6 +2809,8 @@ export interface BrowserToolsetInterface {
 	readonly tools: ToolManagerInterface
 	readonly native: readonly ToolInterface[]
 	readonly view: BrowserViewInterface
+	/** Names the acquired hold, or returns undefined while no hold owns the toolset. */
+	readonly held: string | undefined
 	/** Performs a tool call and returns its structured action when a handler ran. */
 	perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
 	/**
@@ -2815,6 +2821,9 @@ export interface BrowserToolsetInterface {
 	 * and `The toolset is replaying NAME until it finishes; call look.`, while waiting and while held;
 	 * the actions admitted before the call complete first; a wait that aborts or fails releases the
 	 * pending reservation.
+	 * An open dialog or an input left pending by an earlier receipt refuses with
+	 * `BROWSER_TOOLSET_DIALOG` before admission is reserved. A dialog that opens while the
+	 * queue drains also refuses the hold, leaving its answer admissible.
 	 */
 	hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface>
 	/**

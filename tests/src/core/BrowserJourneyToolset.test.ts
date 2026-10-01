@@ -28,12 +28,78 @@ import {
 	BROWSER_JOURNEY_LISTING,
 	createBrowserActionFixture,
 	createBrowserElementFixture,
+	createBrowserFailingJourneyStore,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
+	createBrowserPendingToolsetFixture,
 	ignoreCall,
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('refuses record while a blocked replay holds the toolset', async () => {
+		const { toolset, pending, invoked } = createBrowserPendingToolsetFixture()
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(
+			createBrowserJourneyFixture([{ action: 'checkout', arguments: { what: 'cart' } }]),
+		)
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		const replaying = toolset.tools.execute({
+			id: 'replay',
+			name: 'replay',
+			arguments: { journey: 'check-ready' },
+		})
+		try {
+			await waitForCondition('replay input is blocked', () => invoked.count === 1)
+			const recorded = await toolset.tools.execute({
+				id: 'record',
+				name: 'record',
+				arguments: { journey: 'during-replay' },
+			})
+			expect(recorded, 'g5a2: recording cannot begin during replay').toMatchObject({
+				success: false,
+				error: 'The toolset is replaying check-ready until it finishes; call look.',
+			})
+			expect(journeys.recording).toBeUndefined()
+		} finally {
+			pending.resolve('checked out')
+			await replaying
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+
+	it('keeps recording actions after a refused save and saves them on retry', async () => {
+		const memory = createMemoryBrowserJourneyStore()
+		const store = createBrowserFailingJourneyStore(memory, [new Error('the disk is full')])
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		try {
+			await toolset.tools.execute({
+				id: 'record',
+				name: 'record',
+				arguments: { journey: 'check-form' },
+			})
+			await toolset.perform({ id: 'before', name: 'wait', arguments: { text: 'Ready' } })
+			const save = { id: 'save', name: 'save', arguments: { description: 'Check the form' } }
+			expect(await toolset.tools.execute(save)).toMatchObject({ success: false })
+			expect(journeys.recording).toBe('check-form')
+			expect(
+				(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
+					.success,
+			).toBe(true)
+			expect(await toolset.tools.execute(save)).toMatchObject({ success: true })
+			expect(
+				(await memory.get('check-form'))?.journey.steps.map((step) => step.action),
+				'g5a3: retry retains actions recorded after the refusal',
+			).toEqual(['wait', 'click'])
+			expect(journeys.recording).toBeUndefined()
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
 	describe('tools', () => {
 		it('registers the five tools with their copy, a required parameter each, and journeys pure and untrusted', async () => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
@@ -231,22 +297,12 @@ s2 click button "Save"`,
 			}
 		})
 
-		it('stops the recorder, keeps the recording open when the write fails or is locked, and saves its steps after', async () => {
+		it('keeps recording when the write fails or is locked and saves the interrupted gap', async () => {
 			const memory = createMemoryBrowserJourneyStore()
-			const failures: unknown[] = [
+			const store = createBrowserFailingJourneyStore(memory, [
 				new Error('the disk is full.'),
 				new BrowserError('Journey check-form is locked.', 'BROWSER_JOURNEY_LOCKED'),
-			]
-			const store: BrowserJourneyStoreInterface = {
-				get: memory.get.bind(memory),
-				delete: memory.delete.bind(memory),
-				list: memory.list.bind(memory),
-				set: async (journey, expected, options) => {
-					const failure = failures.shift()
-					if (failure !== undefined) throw failure
-					return memory.set(journey, expected, options)
-				},
-			}
+			])
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			await toolset.start()
@@ -257,7 +313,7 @@ s2 click button "Save"`,
 					arguments: { journey: 'check-form' },
 				})
 				await toolset.tools.execute({ id: '2', name: 'wait', arguments: { text: 'Ready' } })
-				// A click no dialog answered stays pending in the recorder until it stops.
+				// The snapshot includes an unanswered click as a gap without stopping the recorder.
 				toolset.emitter.emit('action', createBrowserActionFixture({ outcome: 'interrupted' }))
 				const failed = await toolset.tools.execute({
 					id: '3',

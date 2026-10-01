@@ -301,6 +301,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return this.#cursor
 	}
 
+	get held(): string | undefined {
+		return this.#reservation?.name
+	}
+
 	async perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
 		const tool = this.#tools.tool(call.name)
 		const entry =
@@ -368,11 +372,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			options?.signal ?? new AbortController().signal,
 			this.#lifetime.signal,
 		])
-		this.#admit('', undefined)
+		signal.throwIfAborted()
+		this.#admit('hold', undefined)
+		this.#holdable()
 		const hold = new BrowserHold(name, this.#releaseHold.bind(this))
 		this.#waiting = hold
 		try {
-			const turn = await this.#acquire(signal, false, false)
+			const turn = await this.#acquire(signal, false, true)
 			try {
 				signal.throwIfAborted()
 				this.#reservation = hold
@@ -435,16 +441,23 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return performed.result.value
 	}
 
-	#admit(name: string, caller: unknown): void {
+	#admit(category: 'observation' | 'action' | 'hold', caller: unknown): void {
 		const hold = this.#reservation ?? this.#waiting
-		if (
-			hold !== undefined &&
-			caller !== hold.token &&
-			!['look', 'read', 'tabs', 'wait'].includes(name)
-		)
+		if (hold !== undefined && caller !== hold.token && category !== 'observation')
 			throw new BrowserError(
 				`The toolset is replaying ${hold.name} until it finishes; call look.`,
 				'BROWSER_TOOLSET_BUSY',
+			)
+	}
+
+	#holdable(): void {
+		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
+		if (dialog !== undefined || this.#pending !== undefined)
+			throw new BrowserError(
+				dialog === undefined
+					? 'An earlier input is still pending; call look.'
+					: renderBrowserReceipt({ action: '', dialog }),
+				'BROWSER_TOOLSET_DIALOG',
 			)
 	}
 
@@ -517,7 +530,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const signal = context.signal
 		try {
 			signal.throwIfAborted()
-			this.#admit(name, context.caller)
+			this.#admit(
+				['look', 'read', 'tabs', 'wait'].includes(name) ? 'observation' : 'action',
+				context.caller,
+			)
 			const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
 			if (dialog !== undefined && name !== 'dialog') {
 				throw new BrowserError(
@@ -1098,15 +1114,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	async #acquire(
 		signal: AbortSignal,
 		answer = false,
-		interruptible = !answer,
+		holding = false,
 	): Promise<PromiseWithResolvers<void>> {
 		const previous = this.#tail
 		const turn = Promise.withResolvers<void>()
 		this.#tail = previous.then(() => turn.promise)
 		try {
-			await this.#race(previous, '', signal, interruptible)
+			await this.#race(previous, '', signal, !answer)
+			if (holding) this.#holdable()
 			const pending = this.#pending
-			if (!answer && pending !== undefined) await this.#race(pending, '', signal, interruptible)
+			if (!answer && pending !== undefined) await this.#race(pending, '', signal, !answer)
 			if (!answer && this.#pending === pending) this.#pending = undefined
 		} catch (error) {
 			turn.resolve()
@@ -1282,10 +1299,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	#hold(command: Promise<unknown>): void {
-		this.#pending = command.then(
+		const pending = command.then(
 			() => undefined,
 			() => undefined,
 		)
+		this.#pending = pending
+		void pending.then(() => {
+			if (this.#pending === pending) this.#pending = undefined
+		})
 	}
 
 	// Returns the frame whose document receives an input on the referenced element: the frame the
@@ -1725,6 +1746,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		census: readonly BrowserTool[] | undefined,
 	): BrowserToolsetReason | undefined {
 		if (
+			name === 'unresolved' ||
 			BROWSER_TOOL_NAMES.some((reserved) => reserved === name) ||
 			(this.#journeys !== undefined &&
 				BROWSER_JOURNEY_TOOL_NAMES.some((reserved) => reserved === name))

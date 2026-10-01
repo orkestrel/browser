@@ -17,6 +17,32 @@ import {
 } from '../../../setup.js'
 
 describe('BrowserRecorder', () => {
+	it('starts with a gap when constructed after a hold was acquired', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		await toolset.start()
+		const hold = await toolset.hold('add-kettle')
+		const recorder = new BrowserRecorder(toolset)
+		try {
+			await recorder.start()
+			await toolset.perform(
+				{ id: 'held', name: 'click', arguments: { ref: 'e1' } },
+				{ caller: hold.token, signal: new AbortController().signal },
+			)
+			expect(recorder.steps().map((step) => step.gap ?? step.action)).toEqual([
+				'replayed add-kettle',
+			])
+			hold.destroy()
+			await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })
+			expect(recorder.steps().map((step) => step.gap ?? step.action)).toEqual([
+				'replayed add-kettle',
+				'click',
+			])
+		} finally {
+			hold.destroy()
+			await recorder.destroy()
+			await toolset.destroy()
+		}
+	})
 	it('records completed actions with semantic targets and portable tab evidence', async () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const recorder = new BrowserRecorder(toolset)
@@ -128,6 +154,11 @@ describe('BrowserRecorder', () => {
 		await recorder.start()
 		toolset.emitter.emit('action', createBrowserActionFixture({ outcome: 'interrupted' }))
 		expect(recorder.steps()).toEqual([])
+		expect(recorder.journey({ name: 'save', description: 'Save' }).steps).toEqual([
+			{ id: 's1', action: 'unresolved', arguments: {}, gap: 'interrupted click' },
+		])
+		expect(recorder.started).toBe(true)
+		expect(recorder.steps(), 'a snapshot preserves the pending dialog continuation').toEqual([])
 		toolset.emitter.emit('action', {
 			action: 'dialog',
 			arguments: { accept: true },
@@ -269,10 +300,10 @@ describe('BrowserRecorder', () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const recorder = new BrowserRecorder(toolset)
 		await recorder.start()
-		toolset.emitter.emit('hold', 'add-kettle')
+		const hold = await toolset.hold('add-kettle')
 		toolset.emitter.emit('action', createBrowserActionFixture())
 		toolset.emitter.emit('action', createBrowserActionFixture())
-		toolset.emitter.emit('release', 'add-kettle')
+		hold.destroy()
 		toolset.emitter.emit('action', createBrowserActionFixture())
 		expect(recorder.steps().map((step) => step.gap ?? step.action)).toEqual([
 			'replayed add-kettle',
