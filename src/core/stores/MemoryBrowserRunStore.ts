@@ -6,8 +6,7 @@ import type {
 	BrowserStorePage,
 } from '../types.js'
 import { BrowserError } from '../errors.js'
-import { generateBrowserRunId } from '../helpers.js'
-import { validateBrowserRun } from '../validators.js'
+import { generateBrowserRunId, validateBrowserRun } from '../helpers.js'
 
 /**
  * Keeps owned runs under their journey names and producer ids without directories.

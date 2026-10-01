@@ -9,6 +9,7 @@ import { attempt } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool } from '@orkestrel/tool'
 import {
+	buildBrowserJourney,
 	renderBrowserRun,
 	renderBrowserRunResult,
 	collectBrowserJourneyBindings,
@@ -1321,5 +1322,48 @@ s3 Step s3 names button "Add to cart", which no element carries.`)
 		expect(renderBrowserRun({ ...BROWSER_RUN_FIXTURE, outcome: 'aborted', steps: [] })).toBe(
 			'Replay of add-kettle aborted at s1 of 5.',
 		)
+	})
+})
+
+describe('buildBrowserJourney', () => {
+	it('owns recorded steps and declares secret text bindings', () => {
+		const steps = [
+			{
+				id: 's1',
+				action: 'type',
+				arguments: { text: { parameter: 'password' } },
+				target: { role: 'textbox', name: 'Password' },
+			},
+		]
+		const journey = buildBrowserJourney(steps, { name: 'sign-in', description: 'Sign in' })
+		expect(journey).toEqual({
+			format: 1,
+			name: 'sign-in',
+			description: 'Sign in',
+			parameters: { password: { secret: true } },
+			next: 2,
+			steps,
+		})
+		Reflect.set(steps[0]?.arguments ?? {}, 'text', 'changed')
+		expect(journey.steps[0]?.arguments['text']).toEqual({ parameter: 'password' })
+	})
+	it('builds an empty journey and refuses invalid names and ids', () => {
+		expect(buildBrowserJourney([], { name: 'empty', description: '' })).toEqual({
+			format: 1,
+			name: 'empty',
+			description: '',
+			parameters: {},
+			next: 1,
+			steps: [],
+		})
+		expect(() => buildBrowserJourney([], { name: 'Bad name', description: '' })).toThrow(
+			'Invariant 1',
+		)
+		expect(() =>
+			buildBrowserJourney([{ id: 's2', action: 'wait', arguments: { text: 'Ready' } }], {
+				name: 'ready',
+				description: '',
+			}),
+		).toThrow('Invariant 2')
 	})
 })

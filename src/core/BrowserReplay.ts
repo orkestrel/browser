@@ -28,8 +28,9 @@ import {
 	generateBrowserRunId,
 	performBrowserStep,
 	resolveBrowserJourneyBinding,
+	validateBrowserJourney,
 } from './helpers.js'
-import { isBrowserJourneyBinding, validateBrowserJourney } from './validators.js'
+import { isBrowserJourneyBinding, isBrowserSecretBinding } from './validators.js'
 /**
  * Prepares and replays a journey under a toolset hold, retaining its executed prefix.
  * @example
@@ -245,12 +246,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 					? resolveBrowserJourneyBinding(value, inputs)
 					: value
 		}
-		const binding = step.arguments['text']
-		const secret =
-			step.action === 'type' &&
-			isBrowserJourneyBinding(binding) &&
-			!isString(binding) &&
-			parameters[binding.parameter]?.secret === true
+		const secret = isBrowserSecretBinding(step, parameters)
 		this.#action = undefined
 		let refusal: string | undefined
 		try {

@@ -1,4 +1,4 @@
 import { MemoryBrowserJourneyStore } from '@src/core'
-import { describeBrowserJourneyStore } from '../../../setup.js'
+import { describeBrowserJourneyStore } from './suite.js'
 
 describeBrowserJourneyStore('MemoryBrowserJourneyStore', () => new MemoryBrowserJourneyStore())

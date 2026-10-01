@@ -35,8 +35,8 @@ import {
 	renderBrowserRunResult,
 	requireBrowserReference,
 	validateBrowserToolArguments,
+	validateBrowserJourneyEdit,
 } from './helpers.js'
-import { validateBrowserJourneyEdit } from './validators.js'
 
 /**
  * Registers the journey tools `record`, `save`, `journeys`, `edit`, and `replay` over a toolset
@@ -240,12 +240,18 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		}
 		const listings: string[] = []
+		const faults = new Set<string>()
 		let position = 0
 		for (;;) {
 			const page = await this.#store.list({ signal, offset: position })
 			listings.push(...page.entries.map((entry) => renderBrowserJourney(entry.journey)))
-			// An entry the store could not read still occupies its place in the store's order.
-			const span = page.entries.length + page.faults.length
+			// File stores can report the same unreadable path on successive pages.
+			for (const fault of page.faults) {
+				if (faults.has(fault.path)) continue
+				faults.add(fault.path)
+				listings.push(`Journey ${JSON.stringify(fault.path)} cannot be read: ${fault.message}`)
+			}
+			const span = page.entries.length
 			position += span
 			if (!page.truncated || span === 0) break
 		}
