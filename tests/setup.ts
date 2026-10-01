@@ -3464,3 +3464,219 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly sto
 	}
 }
 `
+
+// === Compiled journey modules
+
+/**
+ * Describes one journey the compiled-module proof runs as a generated module and as a replay.
+ *
+ * @remarks
+ * - `route` — the fixture path each run opens a fresh page on
+ * - `markup` — the HTML each run writes into the page's `main` before the journey starts
+ * - `inputs` — the inputs both the module and the replay receive
+ * - `state` — the page expression whose value is the fixture's own state
+ * - `outcome` — the state each run leaves on its page and on each popup the page opened, in that
+ *   order
+ */
+export interface BrowserJourneyModuleCase {
+	readonly name: string
+	readonly route: string
+	readonly markup?: string
+	readonly journey: BrowserJourney
+	readonly inputs: Readonly<Record<string, string>>
+	readonly state: string
+	readonly outcome: readonly unknown[]
+}
+
+/** Holds the journeys a generated module and a replay run to the same page outcome and receipts. */
+export const BROWSER_JOURNEY_MODULE_CASES: readonly BrowserJourneyModuleCase[] = Object.freeze([
+	{
+		name: 'delayed in-frame submission',
+		route: '/checkout',
+		journey: createBrowserJourneyFixture(
+			[
+				{
+					action: 'type',
+					arguments: { text: { parameter: 'name' }, submit: true },
+					target: { role: 'textbox', name: 'Name' },
+				},
+				{ action: 'wait', arguments: { text: 'placed for Grace.' } },
+			],
+			{
+				name: 'place-order',
+				description: 'Place an order under a name',
+				parameters: { name: { default: 'Ada' } },
+			},
+		),
+		inputs: { name: 'Grace' },
+		state:
+			"({ name: document.getElementById('name').value, lines: [...document.querySelectorAll('main > p')].map((line) => line.textContent) })",
+		outcome: [{ name: 'Grace', lines: ['Order A1042 placed for Grace.'] }],
+	},
+	{
+		name: 'editable combobox',
+		route: '/form',
+		markup: BROWSER_JOURNEY_COMBOBOX_HTML,
+		journey: createBrowserJourneyFixture(
+			[
+				{
+					action: 'type',
+					arguments: { text: { parameter: 'place' } },
+					target: { role: 'combobox', name: 'Destination' },
+				},
+			],
+			{
+				name: 'choose-destination',
+				description: 'Choose a destination',
+				parameters: { place: { default: 'Harbor' } },
+			},
+		),
+		inputs: {},
+		state:
+			"({ value: document.querySelector('main input').value, clicks: document.body.dataset.clicks ?? '' })",
+		outcome: [{ value: 'Harbor', clicks: '' }],
+	},
+	{
+		name: 'form whose submit navigates',
+		route: '/form',
+		journey: createBrowserJourneyFixture(
+			[
+				{
+					action: 'type',
+					arguments: { text: { parameter: 'name' }, submit: true },
+					target: { role: 'textbox', name: 'Name' },
+				},
+				{ action: 'wait', arguments: { text: 'Delivery booked for Grace Hopper' } },
+			],
+			{
+				name: 'book-delivery',
+				description: 'Book a delivery under a name',
+				parameters: { name: { default: 'Ada' } },
+			},
+		),
+		inputs: { name: 'Grace Hopper' },
+		state:
+			"({ path: location.pathname + location.search, summary: document.getElementById('summary')?.textContent ?? '' })",
+		outcome: [
+			{
+				path: '/form/placed?name=Grace+Hopper&notes=Leave+at+the+door&speed=Standard',
+				summary: 'Delivery booked for Grace Hopper at Standard speed.',
+			},
+		],
+	},
+	{
+		name: 'click that opens a dialog',
+		route: '/confirm',
+		journey: createBrowserJourneyFixture(
+			[
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Delete' } },
+				{ action: 'dialog', arguments: { accept: true } },
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Keep' } },
+			],
+			{ name: 'delete-draft', description: 'Delete the draft and keep the page' },
+		),
+		inputs: {},
+		state:
+			"({ answer: document.body.dataset.answer ?? '', kept: document.body.dataset.kept ?? '0' })",
+		outcome: [{ answer: 'true', kept: '1' }],
+	},
+	{
+		name: 'click that opens a popup',
+		route: '/popup',
+		journey: createBrowserJourneyFixture(
+			[
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Open details' } },
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Like' } },
+			],
+			{ name: 'like-details', description: 'Like the details a popup shows' },
+		),
+		inputs: {},
+		state:
+			"({ path: location.pathname, stayed: document.body.dataset.stayed ?? 'no', liked: document.body.dataset.liked ?? 'no' })",
+		outcome: [
+			{ path: '/popup', stayed: 'no', liked: 'no' },
+			{ path: '/popup/child', stayed: 'no', liked: 'yes' },
+		],
+	},
+])
+
+/**
+ * Holds a journey whose gap follows a step without side effect: the module throws at the gap and
+ * the replay refuses at preparation, and both leave the form page's click log empty.
+ */
+export const BROWSER_JOURNEY_GAP_CASE: BrowserJourneyModuleCase = Object.freeze({
+	name: 'gap after a wait',
+	route: '/form',
+	journey: createBrowserJourneyFixture(
+		[
+			{ action: 'wait', arguments: { text: 'Delivery form' } },
+			{ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+			{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+		],
+		{ name: 'save-draft', description: 'Save the delivery draft' },
+	),
+	inputs: {},
+	state:
+		"({ clicks: (document.body.dataset.clicks ?? '').split(' ').filter(Boolean).length, saved: document.body.dataset.saved ?? 'no' })",
+	outcome: [{ clicks: 0, saved: 'no' }],
+})
+
+/**
+ * Rewrites a generated JavaScript module so the toolset it constructs records every action it
+ * performs into an exported `actions` array, leaving every step call as generated.
+ *
+ * @param source - The JavaScript source `compileBrowserJourney` returned
+ * @returns The source with `export const actions = []` before `execute` and an `action` hook on the
+ * toolset's construction
+ * @throws Thrown when the source declares no `execute` or constructs no toolset over its page.
+ */
+export function instrumentBrowserJourneyModule(source: string): string {
+	const declaration = 'export async function execute('
+	const construction = '\tconst toolset = createBrowserToolset(page)\n'
+	if (!source.includes(declaration) || !source.includes(construction))
+		throw new Error('The module declares no execute that constructs a toolset over its page')
+	return source
+		.replace(declaration, `export const actions = []\n\n${declaration}`)
+		.replace(
+			construction,
+			'\tconst toolset = createBrowserToolset(page, { on: { action: (action) => actions.push(action) } })\n',
+		)
+}
+
+/**
+ * Opens a fresh page on a fixture URL and writes a case's markup into its `main`.
+ *
+ * @param context - The context the page opens in
+ * @param url - The fixture URL
+ * @param markup - The HTML that replaces the children of `main`; the route's own markup stays when
+ * absent
+ * @returns The opened page
+ */
+export async function openBrowserJourneyPage<
+	P extends { evaluate(expression: string): Promise<unknown> },
+>(
+	context: { create(options: { readonly url: string }): Promise<P> },
+	url: string,
+	markup?: string,
+): Promise<P> {
+	const page = await context.create({ url })
+	if (markup !== undefined)
+		await page.evaluate(`document.querySelector('main').innerHTML = ${JSON.stringify(markup)}`)
+	return page
+}
+
+/**
+ * Reads a page's state and the state of each popup it opened.
+ *
+ * @param pages - Every page the context holds
+ * @param page - The page a run started on
+ * @param expression - The page expression whose value is the fixture's state
+ * @returns The value on `page`, then the value on each page whose `opener` is `page`, in context
+ * order
+ */
+export async function readBrowserJourneyOutcome<
+	P extends { readonly opener: unknown; evaluate(expression: string): Promise<unknown> },
+>(pages: readonly P[], page: P, expression: string): Promise<readonly unknown[]> {
+	const shown = [page, ...pages.filter((candidate) => candidate.opener === page)]
+	return Promise.all(shown.map((candidate) => candidate.evaluate(expression)))
+}
