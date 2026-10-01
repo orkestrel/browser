@@ -1385,6 +1385,54 @@ export async function createAttachedPage(session = 'session-1'): Promise<Attache
 }
 
 /**
+ * Creates a real {@link BrowserPage} that takes part in target discovery, as `BrowserContext`
+ * constructs every page, over a connected in-memory CDP client whose attach handshake answers
+ * every attach with `popup-session`.
+ *
+ * @param withheld - Reports a message the attach handshake leaves unanswered, for the test to answer
+ * @returns The page holding `target-1` on `session-1`, its client, and the scriptable transport
+ */
+export async function createDiscoveringPage(
+	withheld?: (message: CDPSentMessage) => boolean,
+): Promise<AttachedPageFixture> {
+	const { client, transport } = await createConnectedCDPClient()
+	scriptCDPAttach(transport, 'popup-session', undefined, withheld)
+	const page = new BrowserPage(
+		client,
+		'target-1',
+		'session-1',
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		createReferenceSequence(),
+	)
+	return { client, transport, page }
+}
+
+/**
+ * Reports a window a page's document opened as Chromium 141 reports it on the opener's session,
+ * through `Page.windowOpen`, which names the address and no target.
+ *
+ * @param transport - The fake transport the opener listens on
+ * @param session - The opener's session
+ * @param url - The address the window opens. Default: `https://example.com/popup`
+ */
+export function emitBrowserWindowOpen(
+	transport: CDPTestTransportInterface,
+	session: string,
+	url = 'https://example.com/popup',
+): void {
+	transport.event(
+		'Page.windowOpen',
+		{ url, windowName: '', windowFeatures: [], userGesture: true },
+		session,
+	)
+}
+
+/**
  * Creates a reference provider that numbers element references across every page it is passed to,
  * as a browser context numbers them for its pages.
  *
@@ -1733,6 +1781,7 @@ export const BROWSER_ELEMENT_WORLDS: Readonly<Record<string, number>> = Object.f
 /** Configures protocol responses for discriminating element action tests. */
 export interface BrowserElementFixtureOptions {
 	readonly local?: boolean
+	readonly held?: boolean
 	readonly nested?: boolean
 	readonly roots?: ReadonlyMap<string, Readonly<Record<string, unknown>>>
 	readonly tree?: CDPSentHandler
@@ -2126,7 +2175,9 @@ export interface BrowserElementFixture extends AttachedPageFixture {
  * Creates a page with a committed, DOM-ready document and scripted accessibility and DOM replies.
  * @remarks The `child` iframe attaches as its own target unless `local` is `true`, which keeps it
  * in the page's process on `session-main`. The page runs over the {@link RecordingCDPClient} the
- * fixture's `recording` holds, so a proof can count the registrations an operation leaves.
+ * fixture's `recording` holds, so a proof can count the registrations an operation leaves. With
+ * `held`, the page takes part in target discovery, as `BrowserContext` constructs every page, so it
+ * counts the `Page.windowOpen` reports its popup records follow.
  */
 export async function createBrowserElementFixture(
 	options?: BrowserElementFixtureOptions,
@@ -2135,12 +2186,18 @@ export async function createBrowserElementFixture(
 	const windows = options?.windows ?? new BrowserSubmitWindows()
 	scriptBrowserElements(transport, { ...options, windows })
 	const recording = new RecordingCDPClient(client)
+	if (options?.held === true) replyOk(transport, 'Target.setDiscoverTargets')
 	const page = new BrowserPage(
 		recording,
 		'main',
 		'session-main',
 		undefined,
 		'https://example.test/cart',
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		options?.held === true ? createReferenceSequence() : undefined,
 	)
 	if (options?.local !== true) await attachBrowserElementChild(transport, page)
 	if (options?.loaderless === true) return { client, transport, page, windows, recording }
@@ -2232,6 +2289,13 @@ export const BROWSER_JOURNEY_SERVICE_CASES = Object.freeze([
 /** Holds an editable combobox whose suggestion remains a text input. */
 export const BROWSER_JOURNEY_COMBOBOX_HTML =
 	'<label>Destination <input list="places"></label><datalist id="places"><option value="Harbor"></datalist>'
+
+/**
+ * Holds the `/popup` route's `main` with a link that opens `/popup/child` in a new tab through
+ * `target="_blank"`.
+ */
+export const BROWSER_JOURNEY_POPUP_LINK_HTML =
+	'<h1>Catalog</h1><a href="/popup/child" target="_blank">Open details</a>'
 
 /** Holds a same-origin child document whose button records its input. */
 export const BROWSER_JOURNEY_FRAME_HTML =

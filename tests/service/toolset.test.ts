@@ -11,10 +11,8 @@
  * the capture outruns the receipt deadline, and the state the action produced is then read
  * independently; the `performance` block asserts the captured view within the deadline.
  *
- * One case is an expected failure: Chromium never attaches a page that `window.open` creates to
- * its opener's session, so the page's `popup` event never fires. Its block establishes every
- * precondition, the popup target included, before the one inverted assertion; the cursor
- * mechanism is proven between two tabs of one context.
+ * Chromium 141 attaches no page that `window.open` creates to its opener's session; the page
+ * adopts it through target discovery, and the click that opened it settles on it.
  */
 
 import type { BrowserInterface } from '@src/server'
@@ -68,6 +66,7 @@ import {
 	BROWSER_JOURNEY_SERVICE_CASES,
 	BROWSER_JOURNEY_COMBOBOX_HTML,
 	BROWSER_JOURNEY_FRAME_HTML,
+	BROWSER_JOURNEY_POPUP_LINK_HTML,
 } from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
@@ -272,6 +271,47 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect(actions[1]?.receipt).toBe(actions[0]?.receipt)
 			expect(actions[1]?.arguments).toEqual({ tab: 't2' })
 			expect(actions[1]?.tab).toEqual({ title: 'Details', url: fixtures.url('/popup/child') })
+		})
+
+		it('matches the direct receipt of a click on a link that opens a popup, each settling on the popup with the move in its result', async () => {
+			const child = fixtures.url('/popup/child')
+			const results: string[] = []
+			const actions: BrowserAction[] = []
+			for (const direct of [true, false]) {
+				const context = await browser.isolate()
+				contexts.push(context)
+				const page = await context.create({ url: fixtures.url('/popup') })
+				await page.evaluate(
+					`document.querySelector('main').innerHTML = ${JSON.stringify(BROWSER_JOURNEY_POPUP_LINK_HTML)}`,
+				)
+				const toolset = createBrowserToolset(page, { context })
+				toolsets.push(toolset)
+				await toolset.start()
+				const target = await locateBrowserTarget(page, { role: 'link', name: 'Open details' })
+				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
+				if (direct) {
+					toolset.emitter.on('action', (action) => actions.push(action))
+					results.push(requireToolText(await toolset.tools.execute(call)))
+				} else {
+					const performed = await toolset.perform(call)
+					actions.push(requireValue(performed.action))
+					results.push(requireToolText(performed.result))
+				}
+				expect(toolset.view).not.toBe(page)
+				expect(toolset.view.url).toBe(child)
+				expect(context.pages()).toContain(toolset.view)
+			}
+			const [first, second] = results.map((result) => maskBrowserReferences(result))
+			expect(second).toBe(first)
+			expect(
+				first?.startsWith(
+					`The view moved to a new tab: ${child}.\n\nClicked e# link "Open details".\n\npage "Details" ${child}\n# Details`,
+				),
+			).toBe(true)
+			expect(actions.map((action) => [action.outcome, action.tab])).toEqual([
+				['done', { url: child, title: 'Details' }],
+				['done', { url: child, title: 'Details' }],
+			])
 		})
 	})
 
@@ -660,8 +700,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		let toolset: BrowserToolsetInterface
 		let child: string
 
-		// Establishes, outside the inverted assertion, every step before the popup event: the
-		// context, the navigation, the toolset, the reference, the activation click, and a second
+		// Establishes every step before the cursor assertion: the context, the navigation, the
+		// toolset, the reference, the activation click, whose receipt names the move, and a second
 		// protocol connection's `Target.getTargets` listing the child page with the opener's
 		// `openerId`.
 		beforeAll(async () => {
@@ -682,10 +722,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await tools.execute({ id: 'click', name: 'click', arguments: { ref: open } }),
 			)
 			if (
-				!matchesToolReceipt(clicked, {
-					action: `Clicked ${open} button "Open details"`,
-					view: catalog,
-				})
+				!clicked.startsWith(
+					`The view moved to a new tab: ${child}.\n\nClicked ${open} button "Open details".\n\n`,
+				)
 			)
 				throw new Error(
 					`Precondition failed: the Open details click returned ${JSON.stringify(clicked)}`,
@@ -718,10 +757,6 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await suite.destroy()
 		})
 
-		// `BrowserPage` builds a popup only from `Target.attachedToTarget` of type `page` on the
-		// opener's session, and Chromium 141 sends none for a `window.open` page
-		// (`tmp/codex/u11b-mutations/popup-trace.txt`), so the `popup` event never fires and the
-		// cursor stays on the opener.
 		it('moves the cursor to the popup the click opened', async () => {
 			await expect(
 				waitForCondition('the view moved to the popup', () => toolset.view.url === child, {

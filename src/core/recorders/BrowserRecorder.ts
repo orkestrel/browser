@@ -182,7 +182,9 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 							reference: action.target.reference,
 						},
 					}),
-			...(action.tab === undefined ? {} : { tab: action.tab }),
+			// A click that opened a popup carries the popup's tab as settlement evidence; only a switch
+			// step names a tab.
+			...(action.action !== 'switch' || action.tab === undefined ? {} : { tab: action.tab }),
 		})
 	}
 
