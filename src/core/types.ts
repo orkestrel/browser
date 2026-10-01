@@ -2184,6 +2184,8 @@ export interface BrowserCodegenScript {
 
 /** Records semantic page gestures and compiles the resulting journey. */
 export interface BrowserCodegenInterface extends BrowserRecorderInterface {
+	/** Installs recording on an attached frame before its owner resumes it. */
+	attach(session: string): Promise<void>
 	/** Compiles the recorded journey into a standalone module and lists its gaps. */
 	script(options: {
 		readonly name: string

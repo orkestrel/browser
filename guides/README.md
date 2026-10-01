@@ -4,9 +4,9 @@ A dual-axis index into this repository's guides — by concept, and by directory
 
 ## By concept
 
-| Concept | Spec                       | Source                                                                                    | Tests                                                                                                                         |
-| ------- | -------------------------- | ----------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| Browser | [`browser.md`](browser.md) | [`src/core`](../src/core), [`src/browser`](../src/browser), [`src/server`](../src/server) | [`tests/src/core`](../tests/src/core), [`tests/src/browser`](../tests/src/browser), [`tests/src/server`](../tests/src/server) |
+| Concept | Spec                       | Source                                                                                                             | Tests                                                                                                                                                              |
+| ------- | -------------------------- | ------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Browser | [`browser.md`](browser.md) | [`src/core`](../src/core), [`src/browser`](../src/browser), [`src/server`](../src/server), [`src/bin`](../src/bin) | [`tests/src/core`](../tests/src/core), [`tests/src/browser`](../tests/src/browser), [`tests/src/server`](../tests/src/server), [`tests/src/bin`](../tests/src/bin) |
 
 ## By directory
 
@@ -15,6 +15,7 @@ A dual-axis index into this repository's guides — by concept, and by directory
 | `src/core`    | [`browser.md`](browser.md) |
 | `src/browser` | [`browser.md`](browser.md) |
 | `src/server`  | [`browser.md`](browser.md) |
+| `src/bin`     | [`browser.md`](browser.md) |
 
 ## Dependency reference
 

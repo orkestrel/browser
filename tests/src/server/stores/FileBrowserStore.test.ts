@@ -6,6 +6,17 @@ import { FileBrowserStore } from '@src/server'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 
 describe('FileBrowserStore', () => {
+	it('refuses a missing root with BROWSER_JOURNEY_PATH naming the root', () => {
+		const scratch = createScratch()
+		try {
+			const root = join(scratch.path, 'absent')
+			expect(() => new FileBrowserStore({ root })).toThrow(
+				expect.objectContaining({ code: 'BROWSER_JOURNEY_PATH', message: `Missing root: ${root}` }),
+			)
+		} finally {
+			scratch.destroy()
+		}
+	})
 	it('retries a shared first producer candidate with exclusive allocation', async () => {
 		const scratch = createScratch()
 		try {
