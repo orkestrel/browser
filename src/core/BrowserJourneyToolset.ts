@@ -204,9 +204,15 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		await recorder.stop()
 		let saved: BrowserJourneyRevision
 		try {
-			saved = await this.#store.set(recorder.journey({ name, description }), undefined, { signal })
+			saved = await this.#store.set(recorder.journey({ name, description }), 0, { signal })
 		} catch (error) {
 			if (signal.aborted) throw error
+			if (isBrowserError(error) && error.code === 'BROWSER_JOURNEY_STALE')
+				throw new BrowserError(
+					`A journey named "${name}" is saved; call journeys, or record another name.`,
+					error.code,
+					{ name },
+				)
 			if (isBrowserError(error) && error.code === 'BROWSER_JOURNEY_LOCKED')
 				throw new BrowserError(`Journey ${name} is locked; call save again.`, error.code, { name })
 			throw new BrowserError(

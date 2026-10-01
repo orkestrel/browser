@@ -8,6 +8,7 @@ import type {
 import type { FileBrowserStoreOptions } from '../types.js'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import { BrowserError } from '../../core/errors.js'
+import { BROWSER_JOURNEY_NAME_PATTERN } from '../../core/constants.js'
 import { validateBrowserJourney } from '../../core/validators.js'
 import {
 	BROWSER_JOURNEY_FILE,
@@ -18,7 +19,7 @@ import { FileBrowserStore } from './FileBrowserStore.js'
 
 /**
  * Persists journeys with exclusive writes and revision counters retained across deletion.
- * @remarks Requires an existing root. A held lock refuses immediately; callers can retry.
+ * @remarks Requires an existing root. A live holder refuses immediately; a dead holder's lock is reclaimed once.
  * @example
  * const store = new FileBrowserJourneyStore({ root: directory })
  * await store.set(journey)
@@ -35,8 +36,8 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<BrowserJourneyRevision | undefined> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(name)
-		const path = this.#files.path(name, BROWSER_JOURNEY_FILE)
+		this.#files.validateName(name)
+		const path = this.#files.resolvePath(name, BROWSER_JOURNEY_FILE)
 		const source = await this.#files.read(path, options)
 		if (source === undefined) return undefined
 		try {
@@ -55,7 +56,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 				throw new BrowserError('Journey name differs from its directory', 'BROWSER_JOURNEY_FILE')
 			return { journey: value['journey'], revision: value['revision'] }
 		} catch (error) {
-			throw this.#files.error(path, error)
+			throw this.#files.translateError(path, error)
 		}
 	}
 
@@ -65,18 +66,18 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<BrowserJourneyRevision> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(journey.name)
+		this.#files.validateName(journey.name)
 		validateBrowserJourney(journey)
 		const owned = structuredClone(journey)
-		const path = this.#files.path(owned.name, BROWSER_JOURNEY_FILE)
-		const counter = this.#files.path(owned.name, BROWSER_JOURNEY_REVISION_FILE)
+		const path = this.#files.resolvePath(owned.name, BROWSER_JOURNEY_FILE)
+		const counter = this.#files.resolvePath(owned.name, BROWSER_JOURNEY_REVISION_FILE)
 		return this.#files.lock(
-			this.#files.path(owned.name, BROWSER_JOURNEY_LOCK_FILE),
+			this.#files.resolvePath(owned.name, BROWSER_JOURNEY_LOCK_FILE),
 			async () => {
 				const current = await this.get(owned.name, options)
-				if (expected !== undefined && expected !== current?.revision)
+				if (expected !== undefined && expected !== (current?.revision ?? 0))
 					throw new BrowserError(
-						`Journey ${owned.name} changed; read it before writing again.`,
+						`Journey ${owned.name} changed since you read it`,
 						'BROWSER_JOURNEY_STALE',
 					)
 				const source = await this.#files.read(counter, options)
@@ -104,20 +105,20 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 
 	async delete(name: string, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(name)
+		this.#files.validateName(name)
 		await this.#files.lock(
-			this.#files.path(name, BROWSER_JOURNEY_LOCK_FILE),
+			this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_FILE),
 			async () => {
 				const current = await this.get(name, options)
 				if (current === undefined) return
-				const counter = this.#files.path(name, BROWSER_JOURNEY_REVISION_FILE)
+				const counter = this.#files.resolvePath(name, BROWSER_JOURNEY_REVISION_FILE)
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
 				if (!Number.isSafeInteger(previous) || previous < 0 || source?.trim() === '')
 					throw new BrowserError(`Malformed revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
 				// Preserve the committed revision even if a process exited before updating its counter.
 				await this.#files.write(counter, String(Math.max(previous, current.revision ?? 0)), options)
-				await this.#files.remove(this.#files.path(name, BROWSER_JOURNEY_FILE), options)
+				await this.#files.remove(this.#files.resolvePath(name, BROWSER_JOURNEY_FILE), options)
 			},
 			options,
 		)
@@ -127,6 +128,13 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
 	): Promise<BrowserStorePage<BrowserJourneyRevision>> {
 		options?.signal?.throwIfAborted()
-		return this.#files.list(this.#files.path(), (name) => this.get(name, options), options)
+		return this.#files.list(
+			this.#files.resolvePath(),
+			async (name) => {
+				if (!BROWSER_JOURNEY_NAME_PATTERN.test(name)) return undefined
+				return this.get(name, options)
+			},
+			options,
+		)
 	}
 }

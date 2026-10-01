@@ -2065,6 +2065,8 @@ export interface BrowserJourneyStoreInterface {
 	 * Saves the journey under its name with the next revision and returns it. Rejects with
 	 * `BROWSER_JOURNEY_STALE` when `expected` differs from the stored revision, and with
 	 * `BROWSER_JOURNEY_LOCKED` when another write holds the name.
+	 * An omitted `expected` permits replacement. `expected: 0` requires no stored journey,
+	 * including after deletion; the retained revision count still advances on recreation.
 	 */
 	set(
 		journey: BrowserJourney,

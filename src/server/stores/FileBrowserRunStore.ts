@@ -33,9 +33,9 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 
 	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(name)
+		this.#files.validateName(name)
 		const directory = await this.#files.allocate(
-			this.#files.path(name, BROWSER_RUN_DIRECTORY),
+			this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY),
 			generateBrowserRunId,
 			options,
 		)
@@ -51,9 +51,9 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<BrowserRun | undefined> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(name)
-		this.#files.id(id)
-		const path = this.#files.path(name, BROWSER_RUN_DIRECTORY, id, BROWSER_RUN_FILE)
+		this.#files.validateName(name)
+		this.#files.validateId(id)
+		const path = this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY, id, BROWSER_RUN_FILE)
 		const source = await this.#files.read(path, options)
 		if (source === undefined) return undefined
 		try {
@@ -70,19 +70,19 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 				throw new BrowserError('Run identity differs from its directory', 'BROWSER_JOURNEY_FILE')
 			return value
 		} catch (error) {
-			throw this.#files.error(path, error)
+			throw this.#files.translateError(path, error)
 		}
 	}
 
 	async set(run: BrowserRun, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(run.journey.name)
-		this.#files.id(run.id)
+		this.#files.validateName(run.journey.name)
+		this.#files.validateId(run.id)
 		validateBrowserRun(run)
 		const source = JSON.stringify(run)
-		const directory = this.#files.path(run.journey.name, BROWSER_RUN_DIRECTORY, run.id)
+		const directory = this.#files.resolvePath(run.journey.name, BROWSER_RUN_DIRECTORY, run.id)
 		await this.#requireDirectory(directory, options)
-		await this.#files.write(this.#files.path(directory, BROWSER_RUN_FILE), source, options)
+		await this.#files.write(this.#files.resolvePath(directory, BROWSER_RUN_FILE), source, options)
 	}
 
 	async capture(
@@ -100,16 +100,16 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 			)
 		const owned = new Uint8Array(bytes)
 		await this.#requireDirectory(directory, options)
-		await this.#files.write(this.#files.path(directory, name), owned, options)
+		await this.#files.write(this.#files.resolvePath(directory, name), owned, options)
 		return name
 	}
 
 	async delete(name: string, id: string, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(name)
-		this.#files.id(id)
-		const directory = this.#files.path(name, BROWSER_RUN_DIRECTORY, id)
-		await this.#files.check(this.#files.path(directory, BROWSER_RUN_FILE), options)
+		this.#files.validateName(name)
+		this.#files.validateId(id)
+		const directory = this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY, id)
+		await this.#files.check(this.#files.resolvePath(directory, BROWSER_RUN_FILE), options)
 		try {
 			options?.signal?.throwIfAborted()
 			await rm(directory, { recursive: true, force: true, maxRetries: 3 })
@@ -117,7 +117,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 			options?.signal?.throwIfAborted()
 		} catch (error) {
 			options?.signal?.throwIfAborted()
-			throw this.#files.error(directory, error)
+			throw this.#files.translateError(directory, error)
 		}
 	}
 
@@ -126,9 +126,9 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
 	): Promise<BrowserStorePage<BrowserRun>> {
 		options?.signal?.throwIfAborted()
-		this.#files.name(name)
+		this.#files.validateName(name)
 		return this.#files.list(
-			this.#files.path(name, BROWSER_RUN_DIRECTORY),
+			this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY),
 			(id) => this.get(name, id, options),
 			options,
 		)
@@ -151,7 +151,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 				)
 		} catch (error) {
 			options?.signal?.throwIfAborted()
-			throw this.#files.error(directory, error)
+			throw this.#files.translateError(directory, error)
 		}
 	}
 }

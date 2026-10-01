@@ -1,5 +1,6 @@
 import type { BrowserStoreOptions, BrowserStorePage, BrowserStoreFault } from '../../core/types.js'
 import type { FileBrowserStoreOptions } from '../types.js'
+import type { FileHandle } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
@@ -14,7 +15,7 @@ import { BROWSER_FILE_STORE_LIMIT, BROWSER_FILE_STORE_RESERVED } from '../consta
  * replacement between a check and its use by another filesystem writer is outside this boundary.
  * @example
  * const files = new FileBrowserStore({ root: directory })
- * files.name('check-ready')
+ * files.validateName('check-ready')
  */
 export class FileBrowserStore {
 	readonly #root: string
@@ -30,24 +31,24 @@ export class FileBrowserStore {
 		try {
 			this.#root = realpathSync(options.root)
 		} catch (error) {
-			throw this.error(options.root, error)
+			throw this.translateError(options.root, error)
 		}
 	}
 
 	/** Checks a journey name before filesystem access. @param name - Journey name */
-	name(name: string): void {
+	validateName(name: string): void {
 		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name) || BROWSER_FILE_STORE_RESERVED.includes(name))
 			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
 	}
 
 	/** Checks a run id before filesystem access. @param id - Producer id */
-	id(id: string): void {
+	validateId(id: string): void {
 		if (!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-f0-9]{4}$/.test(id))
 			throw new BrowserError(`Refused run id: ${id}`, 'BROWSER_JOURNEY_PATH')
 	}
 
 	/** Resolves a confined target. @param parts - Relative components @returns Absolute target */
-	path(...parts: readonly string[]): string {
+	resolvePath(...parts: readonly string[]): string {
 		const path = resolve(this.#root, ...parts)
 		if (
 			path !== this.#root &&
@@ -64,7 +65,7 @@ export class FileBrowserStore {
 	 * @returns True if the target exists; false if a component is missing
 	 */
 	async check(path: string, options?: BrowserStoreOptions): Promise<boolean> {
-		this.path(path)
+		this.resolvePath(path)
 		let current = this.#root
 		const parts = relative(this.#root, path).split(sep).filter(Boolean)
 		for (let index = 0; index <= parts.length; index += 1) {
@@ -79,25 +80,25 @@ export class FileBrowserStore {
 			} catch (error) {
 				options?.signal?.throwIfAborted()
 				if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false
-				throw this.error(current, error)
+				throw this.translateError(current, error)
 			}
 			const part = parts[index]
-			if (part !== undefined) current = this.path(current, part)
+			if (part !== undefined) current = this.resolvePath(current, part)
 		}
 		return true
 	}
 
 	/** Creates checked directories one component at a time. @param path - Directory @param options - Cancellation options */
-	async directory(path: string, options?: BrowserStoreOptions): Promise<void> {
+	async createDirectory(path: string, options?: BrowserStoreOptions): Promise<void> {
 		if (await this.check(path, options)) return
 		if (path === this.#root) throw new BrowserError(`Missing root: ${path}`, 'BROWSER_JOURNEY_PATH')
-		await this.directory(dirname(path), options)
+		await this.createDirectory(dirname(path), options)
 		options?.signal?.throwIfAborted()
 		try {
 			await mkdir(path)
 		} catch (error) {
 			if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST'))
-				throw this.error(path, error)
+				throw this.translateError(path, error)
 		}
 		await this.check(path, options)
 	}
@@ -113,7 +114,7 @@ export class FileBrowserStore {
 		} catch (error) {
 			options?.signal?.throwIfAborted()
 			if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined
-			throw this.error(path, error)
+			throw this.translateError(path, error)
 		}
 	}
 
@@ -123,7 +124,7 @@ export class FileBrowserStore {
 		value: string | Uint8Array,
 		options?: BrowserStoreOptions,
 	): Promise<void> {
-		const temporary = this.path(dirname(path), `.${randomUUID()}.tmp`)
+		const temporary = this.resolvePath(dirname(path), `.${randomUUID()}.tmp`)
 		let owned = false
 		try {
 			await this.check(path, options)
@@ -144,7 +145,7 @@ export class FileBrowserStore {
 			owned = false
 		} catch (error) {
 			options?.signal?.throwIfAborted()
-			throw this.error(path, error)
+			throw this.translateError(path, error)
 		} finally {
 			if (owned) await this.remove(temporary)
 		}
@@ -159,27 +160,57 @@ export class FileBrowserStore {
 		} catch (error) {
 			options?.signal?.throwIfAborted()
 			if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
-				throw this.error(path, error)
+				throw this.translateError(path, error)
 		}
 	}
 
 	/**
 	 * Holds an exclusive journey lock through a mutation and releases it on every outcome.
+	 * Reclaims a dead process's lock and retries acquisition once; a live or unknown holder refuses.
 	 * @param path - Lock file
 	 * @param action - Mutation inside the lock
 	 * @param options - Cancellation options
 	 * @returns The mutation result
 	 */
 	async lock<T>(path: string, action: () => Promise<T>, options?: BrowserStoreOptions): Promise<T> {
-		await this.directory(dirname(path), options)
+		await this.createDirectory(dirname(path), options)
 		await this.check(path, options)
 		options?.signal?.throwIfAborted()
-		const file = await open(path, 'wx').catch((error: unknown) => {
-			if (error instanceof Error && 'code' in error && error.code === 'EEXIST')
-				throw new BrowserError(`Journey is locked: ${path}; call again.`, 'BROWSER_JOURNEY_LOCKED')
-			throw this.error(path, error)
-		})
+		let file: FileHandle | undefined
+		for (let attempt = 0; attempt < 2; attempt += 1) {
+			options?.signal?.throwIfAborted()
+			try {
+				file = await open(path, 'wx')
+				break
+			} catch (error) {
+				if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST'))
+					throw this.translateError(path, error)
+				if (attempt !== 0) break
+				const source = await this.read(path, options)
+				// A holder can release its lock between exclusive create and the read.
+				if (source === undefined) continue
+				const pid = Number(source)
+				if (!Number.isSafeInteger(pid) || pid <= 0) break
+				try {
+					process.kill(pid, 0)
+					break
+				} catch (cause) {
+					// Permission denial and other failures do not establish that the holder died.
+					if (!(cause instanceof Error && 'code' in cause && cause.code === 'ESRCH')) break
+				}
+				await this.remove(path, options)
+			}
+		}
+		if (file === undefined)
+			throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
 		try {
+			options?.signal?.throwIfAborted()
+			await file
+				.writeFile(String(process.pid), { signal: options?.signal })
+				.catch((error: unknown) => {
+					options?.signal?.throwIfAborted()
+					throw this.translateError(path, error)
+				})
 			options?.signal?.throwIfAborted()
 			return await action()
 		} finally {
@@ -219,7 +250,7 @@ export class FileBrowserStore {
 			names = (await readdir(path)).sort()
 		} catch (error) {
 			options?.signal?.throwIfAborted()
-			throw this.error(path, error)
+			throw this.translateError(path, error)
 		}
 		let count = 0
 		for (const name of names) {
@@ -233,7 +264,7 @@ export class FileBrowserStore {
 			} catch (error) {
 				options?.signal?.throwIfAborted()
 				faults.push({
-					path: this.path(path, name),
+					path: this.resolvePath(path, name),
 					message: error instanceof Error ? error.message : String(error),
 				})
 			}
@@ -253,12 +284,12 @@ export class FileBrowserStore {
 		candidate: () => string,
 		options?: BrowserStoreOptions,
 	): Promise<{ readonly id: string; readonly path: string }> {
-		await this.directory(parent, options)
+		await this.createDirectory(parent, options)
 		for (;;) {
 			options?.signal?.throwIfAborted()
 			const id = candidate()
-			this.id(id)
-			const path = this.path(parent, id)
+			this.validateId(id)
+			const path = this.resolvePath(parent, id)
 			await this.check(path, options)
 			try {
 				options?.signal?.throwIfAborted()
@@ -268,13 +299,13 @@ export class FileBrowserStore {
 			} catch (error) {
 				options?.signal?.throwIfAborted()
 				if (error instanceof Error && 'code' in error && error.code === 'EEXIST') continue
-				throw this.error(path, error)
+				throw this.translateError(path, error)
 			}
 		}
 	}
 
 	/** Translates filesystem and validation failures with their path. @param path - Failed path @param error - Cause @returns Coded error */
-	error(path: string, error: unknown): BrowserError {
+	translateError(path: string, error: unknown): BrowserError {
 		const code = error instanceof Error && 'code' in error ? error.code : undefined
 		return new BrowserError(
 			`${path}: ${error instanceof Error ? error.message : String(error)}`,
