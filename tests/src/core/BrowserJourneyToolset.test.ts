@@ -16,6 +16,7 @@ import {
 	BROWSER_TOOL_COPY,
 	BrowserError,
 	BrowserJourneyToolset,
+	BrowserReplay,
 	BrowserToolset,
 	MemoryBrowserRunStore,
 	createBrowserToolset,
@@ -23,6 +24,7 @@ import {
 } from '@src/core'
 import {
 	BROWSER_JOURNEY_FIXTURE,
+	BROWSER_PREPARATION_CASES,
 	BROWSER_JOURNEY_LISTING,
 	createBrowserActionFixture,
 	createBrowserElementFixture,
@@ -122,6 +124,36 @@ describe('BrowserJourneyToolset', () => {
 	})
 
 	describe('record and save', () => {
+		it('refuses save when the recorded name was saved in the meantime', async () => {
+			const store = createMemoryBrowserJourneyStore()
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const journeys = new BrowserJourneyToolset(toolset, { store })
+			await toolset.start()
+			try {
+				expect(
+					await toolset.tools.execute({
+						id: '1',
+						name: 'record',
+						arguments: { journey: 'check-ready' },
+					}),
+				).toMatchObject({ success: true })
+				const saved = await store.set(createBrowserJourneyFixture())
+				expect(
+					await toolset.tools.execute({
+						id: '2',
+						name: 'save',
+						arguments: { description: 'Replacement' },
+					}),
+				).toMatchObject({
+					success: false,
+					error: 'A journey named "check-ready" is saved; call journeys, or record another name.',
+				})
+				expect(await store.get('check-ready')).toEqual(saved)
+			} finally {
+				await journeys.destroy()
+				await toolset.destroy()
+			}
+		})
 		it('records the actions, saves before it publishes, and returns the receipts verbatim', async () => {
 			const view = createBrowserViewDouble()
 			const toolset = new BrowserToolset(view)
@@ -616,6 +648,46 @@ e3 combobox "Size"
 				await toolset.destroy()
 			}
 		})
+
+		it.each(BROWSER_PREPARATION_CASES)(
+			'reads $name preparation context and renders its sentence',
+			async (candidate) => {
+				const memory = createMemoryBrowserJourneyStore()
+				const journey = structuredClone(candidate.journey)
+				if (candidate.corrupt !== undefined) Reflect.set(journey, ...candidate.corrupt)
+				const store: BrowserJourneyStoreInterface = {
+					get: async () => ({ journey }),
+					set: memory.set.bind(memory),
+					list: memory.list.bind(memory),
+					delete: memory.delete.bind(memory),
+				}
+				const view = createBrowserViewDouble()
+				const toolset = new BrowserToolset(view)
+				const journeys = new BrowserJourneyToolset(toolset, { store })
+				const holds = createRecorder<readonly [string]>()
+				toolset.emitter.on('hold', holds.handler)
+				await toolset.start()
+				try {
+					await expect(
+						new BrowserReplay(toolset, { journey }, { inputs: candidate.inputs }).execute(),
+					).rejects.toMatchObject({
+						code: candidate.code,
+						context: candidate.context,
+					})
+					const result = await toolset.tools.execute({
+						id: 'preparation',
+						name: 'replay',
+						arguments: { journey: journey.name, inputs: { ...candidate.inputs } },
+					})
+					expect(result).toMatchObject({ success: false, error: candidate.sentence })
+					expect(holds.count).toBe(0)
+					expect(view.calls).toEqual([])
+				} finally {
+					await journeys.destroy()
+					await toolset.destroy()
+				}
+			},
+		)
 
 		it('maps every preparation refusal and a missing journey to its sentence', async () => {
 			const store = createMemoryBrowserJourneyStore()

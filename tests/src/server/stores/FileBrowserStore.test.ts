@@ -6,12 +6,23 @@ import { FileBrowserStore } from '@src/server'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 
 describe('FileBrowserStore', () => {
+	it('refuses a missing root with BROWSER_JOURNEY_PATH naming the root', () => {
+		const scratch = createScratch()
+		try {
+			const root = join(scratch.path, 'absent')
+			expect(() => new FileBrowserStore({ root })).toThrow(
+				expect.objectContaining({ code: 'BROWSER_JOURNEY_PATH', message: `Missing root: ${root}` }),
+			)
+		} finally {
+			scratch.destroy()
+		}
+	})
 	it('retries a shared first producer candidate with exclusive allocation', async () => {
 		const scratch = createScratch()
 		try {
 			const first = new FileBrowserStore({ root: scratch.path })
 			const second = new FileBrowserStore({ root: scratch.path })
-			const parent = first.path('check-ready', 'runs')
+			const parent = first.resolvePath('check-ready', 'runs')
 			const candidates = [
 				BROWSER_RUN_FIXTURE.id,
 				BROWSER_RUN_FIXTURE.id.replace(/-[a-f0-9]{4}$/, '-abcd'),
@@ -40,7 +51,7 @@ describe('FileBrowserStore', () => {
 		const scratch = createScratch()
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
-			const path = files.path('destination')
+			const path = files.resolvePath('destination')
 			await mkdir(path)
 			await writeFile(join(path, 'previous'), 'saved')
 			await expect(files.write(path, 'replacement')).rejects.toMatchObject({
@@ -56,19 +67,19 @@ describe('FileBrowserStore', () => {
 		const scratch = createScratch()
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
-			await writeFile(files.path('target'), 'saved')
-			await symlink(files.path('target'), files.path('.temporary.tmp'))
-			await expect(files.check(files.path('.temporary.tmp'))).rejects.toMatchObject({
+			await writeFile(files.resolvePath('target'), 'saved')
+			await symlink(files.resolvePath('target'), files.resolvePath('.temporary.tmp'))
+			await expect(files.check(files.resolvePath('.temporary.tmp'))).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
-			expect(() => files.path('..', 'escape')).toThrow('Refused path')
-			expect(() => files.id('../escape')).toThrow('Refused run id')
+			expect(() => files.resolvePath('..', 'escape')).toThrow('Refused path')
+			expect(() => files.validateId('../escape')).toThrow('Refused run id')
 			expect(() => new FileBrowserStore({ root: scratch.path, limit: NaN })).toThrow('listing cap')
-			await expect(files.list(files.path(), async () => undefined, { offset: -1 })).rejects.toThrow(
-				'Paging',
-			)
 			await expect(
-				files.list(files.path(), async () => undefined, { limit: Infinity }),
+				files.list(files.resolvePath(), async () => undefined, { offset: -1 }),
+			).rejects.toThrow('Paging')
+			await expect(
+				files.list(files.resolvePath(), async () => undefined, { limit: Infinity }),
 			).rejects.toThrow('Paging')
 		} finally {
 			scratch.destroy()
@@ -80,10 +91,10 @@ describe('FileBrowserStore', () => {
 			await mkdir(join(scratch.path, 'root'))
 			await symlink(join(scratch.path, 'root'), join(scratch.path, 'alias'), 'dir')
 			const files = new FileBrowserStore({ root: join(scratch.path, 'alias') })
-			expect(files.path('entry')).toBe(join(scratch.path, 'root', 'entry'))
+			expect(files.resolvePath('entry')).toBe(join(scratch.path, 'root', 'entry'))
 			await rename(join(scratch.path, 'root'), join(scratch.path, 'moved'))
 			await symlink(join(scratch.path, 'moved'), join(scratch.path, 'root'), 'dir')
-			await expect(files.read(files.path('entry'))).rejects.toMatchObject({
+			await expect(files.read(files.resolvePath('entry'))).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
 		} finally {
@@ -95,13 +106,15 @@ describe('FileBrowserStore', () => {
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
 			const controller = new AbortController()
-			const path = files.path('journey.lock')
+			const path = files.resolvePath('journey.lock')
 			await expect(
 				files.lock(
 					path,
 					async () => {
 						controller.abort(new Error('between steps'))
-						await files.write(files.path('journey.json'), '{}', { signal: controller.signal })
+						await files.write(files.resolvePath('journey.json'), '{}', {
+							signal: controller.signal,
+						})
 					},
 					{ signal: controller.signal },
 				),

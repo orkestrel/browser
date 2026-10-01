@@ -17,6 +17,8 @@ import type {
 	BrowserReadingInterface,
 	BrowserReferenceFunction,
 	BrowserViewInterface,
+	BrowserToolsetInterface,
+	BrowserToolSourceEventMap,
 	CDPClientInterface,
 	CDPTarget,
 	CDPTransportEventMap,
@@ -27,12 +29,14 @@ import type {
 	CDPSendOptions,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import type { RecorderInterface } from '@orkestrel/test'
 import { describe, it, expect } from 'vitest'
 import {
 	BrowserCodegen,
 	BROWSER_CODEGEN_SOURCE,
 	BrowserError,
 	BrowserPage,
+	BrowserToolset,
 	compileSubmitObserverExpression,
 	compileSubmitReadExpression,
 	createBrowserReading,
@@ -41,7 +45,8 @@ import {
 import { BrowserNavigationRecord } from '../src/core/BrowserNavigationRecord.js'
 import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { waitForEvent } from '@orkestrel/test'
+import { createTool, createToolManager } from '@orkestrel/tool'
+import { createRecorder, waitForEvent } from '@orkestrel/test'
 /** Describes a timer call observed while evaluating a natively parsed expression. */
 export interface BrowserCompiledTimer {
 	readonly name: string
@@ -2215,6 +2220,45 @@ export async function createBrowserElementFixture(
 }
 
 /**
+ * Creates a protocol fixture whose main-frame click opens a popup before the input reply.
+ * @returns The opener, transport, and client driving the popup's attachment and settlement
+ */
+export async function createBrowserPopupFixture(): Promise<BrowserElementFixture> {
+	const fixture = await createBrowserElementFixture({
+		held: true,
+		roots: new Map([['popup-session', { id: 'popup-1', url: 'https://example.test/popup' }]]),
+		title: (message) =>
+			fixture.transport.reply(message.id, {
+				result: { value: message.sessionId === 'popup-session' ? 'Details' : 'Cart' },
+			}),
+		released: (message) => {
+			emitBrowserWindowOpen(fixture.transport, 'session-main', 'https://example.test/popup')
+			fixture.transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'popup-session',
+					targetInfo: {
+						targetId: 'popup-1',
+						type: 'page',
+						url: 'https://example.test/popup',
+					},
+				},
+				'session-main',
+			)
+			fixture.transport.reply(message.id, {})
+		},
+	})
+	for (const method of [
+		'Page.setInterceptFileChooserDialog',
+		'Network.enable',
+		'Network.disable',
+		'Target.detachFromTarget',
+	])
+		replyOk(fixture.transport, method)
+	return fixture
+}
+
+/**
  * Emits a committed main-frame document and its `DOMContentLoaded`, so a page's readiness wait
  * resolves without the `document.readyState` seed.
  * @param transport - The fake transport the page listens on
@@ -2482,6 +2526,41 @@ export class BrowserViewDouble implements BrowserViewInterface {
  */
 export function createBrowserViewDouble(options?: BrowserViewDoubleOptions): BrowserViewDouble {
 	return new BrowserViewDouble(options)
+}
+
+/** Describes an adopted action whose completion the caller controls. */
+export interface BrowserPendingToolsetFixture {
+	readonly toolset: BrowserToolsetInterface
+	readonly view: BrowserViewDouble
+	readonly pending: PromiseWithResolvers<string>
+	readonly invoked: RecorderInterface<[]>
+}
+
+/**
+ * Creates a toolset with an adopted checkout action waiting for an explicit completion.
+ * @returns The unstarted toolset, its view, the completion, and the invocation recorder
+ */
+export function createBrowserPendingToolsetFixture(): BrowserPendingToolsetFixture {
+	const pending = Promise.withResolvers<string>()
+	const invoked = createRecorder<[]>()
+	const source = createToolManager()
+	source.add(
+		createTool({
+			name: 'checkout',
+			execute: () => {
+				invoked.handler()
+				return pending.promise
+			},
+		}),
+	)
+	const view = createBrowserViewDouble()
+	const toolset = new BrowserToolset(view, {
+		source: {
+			adopt: async () => source.tools(),
+			emitter: new Emitter<BrowserToolSourceEventMap>(),
+		},
+	})
+	return { toolset, view, pending, invoked }
 }
 
 /**
@@ -3180,6 +3259,78 @@ export function createBrowserActionFixture(options?: Partial<BrowserAction>): Br
 	}
 }
 
+/** Describes a preparation refusal and its tool sentence. */
+export interface BrowserPreparationCase {
+	readonly name: string
+	readonly journey: BrowserJourney
+	readonly inputs: Readonly<Record<string, string>>
+	readonly code: string
+	readonly context: Readonly<Record<string, unknown>>
+	readonly sentence: string
+	readonly corrupt?: readonly [string, unknown]
+}
+
+/** Supplies preparation refusals through real replay and journey tools. */
+export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Object.freeze([
+	{
+		name: 'missing input',
+		journey: createBrowserJourneyFixture(
+			[{ action: 'wait', arguments: { text: { parameter: 'status' } } }],
+			{ parameters: { status: {} } },
+		),
+		inputs: {},
+		code: 'BROWSER_JOURNEY_INPUT',
+		context: { parameter: 'status' },
+		sentence: 'Journey check-ready needs the input "status"; call replay with inputs.',
+	},
+	{
+		name: 'unknown input',
+		journey: createBrowserJourneyFixture(),
+		inputs: { extra: 'Ready' },
+		code: 'BROWSER_JOURNEY_INPUT',
+		context: { parameter: 'extra' },
+		sentence: 'Journey check-ready has no parameter "extra"; call journeys.',
+	},
+	{
+		name: 'gap',
+		journey: createBrowserJourneyFixture([
+			{ action: 'unresolved', arguments: {}, gap: 'child frame' },
+		]),
+		inputs: {},
+		code: 'BROWSER_JOURNEY_GAP',
+		context: { step: 's1' },
+		sentence:
+			'Journey check-ready has a gap at s1 (child frame); call edit to remove or replace s1.',
+	},
+	{
+		name: 'placement',
+		journey: createBrowserJourneyFixture([{ action: 'press', arguments: { key: 'Enter' } }]),
+		inputs: {},
+		code: 'BROWSER_JOURNEY_PLACEMENT',
+		context: { step: 's1', action: 'press', placement: 'dom' },
+		sentence:
+			'Journey check-ready cannot run here: s1 press is not available in a page toolset; call journeys.',
+	},
+	{
+		name: 'format',
+		journey: createBrowserJourneyFixture(),
+		inputs: {},
+		corrupt: ['format', 9],
+		code: 'BROWSER_JOURNEY_FORMAT',
+		context: { action: 'replay', placement: 'dom' },
+		sentence: 'Journey check-ready cannot be read: Has an unknown journey format; call journeys.',
+	},
+	{
+		name: 'invalid',
+		journey: createBrowserJourneyFixture(),
+		inputs: {},
+		corrupt: ['next', 0],
+		code: 'BROWSER_JOURNEY_INVALID',
+		context: { action: 'replay', placement: 'dom' },
+		sentence: 'Journey check-ready cannot be read: has an invalid next counter; call journeys.',
+	},
+])
+
 /**
  * Registers the shared journey-store contract against an isolated store per case.
  * @param name - Suite label
@@ -3216,8 +3367,26 @@ export function describeBrowserJourneyStore(
 			expect((await store.set({ ...journey, description: 'Accepted' }, 1)).revision).toBe(2)
 			await expect(store.set({ ...journey, description: 'Stale' }, 1)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_STALE',
+				message: 'Journey check-ready changed since you read it',
 			})
 			expect((await store.get(journey.name))?.journey.description).toBe('Accepted')
+		})
+		it('creates only an absent journey with expected zero, including after deletion', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			const saved = await store.set(journey, 0)
+			expect(saved.revision).toBe(1)
+			await expect(store.set({ ...journey, description: 'Replacement' }, 0)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_STALE',
+				message: `Journey ${journey.name} changed since you read it`,
+			})
+			expect(await store.get(journey.name)).toEqual(saved)
+			await store.delete(journey.name)
+			expect((await store.set(journey, 0)).revision).toBe(2)
+			await expect(store.set(journey, 1)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_STALE',
+				message: `Journey ${journey.name} changed since you read it`,
+			})
 		})
 		it('counts revisions across delete and recreate and refuses a stale writer', async () => {
 			const store = await factory()
@@ -3228,6 +3397,17 @@ export function describeBrowserJourneyStore(
 			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
 			expect((await store.set(journey)).revision).toBe(2)
 			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
+		})
+		it('refuses negative journey paging', async () => {
+			const store = await factory()
+			await expect(store.list({ offset: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
+			await expect(store.list({ limit: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
 		})
 		it('sorts by name and pages with truthful truncation and empty faults', async () => {
 			const store = await factory()
@@ -3281,6 +3461,31 @@ export function describeBrowserRunStore(
 	factory: () => BrowserRunStoreInterface | Promise<BrowserRunStoreInterface>,
 ): void {
 	describe(`${name}`, () => {
+		it('refuses writing a run this store never opened', async () => {
+			const store = await factory()
+			await expect(store.set(BROWSER_RUN_FIXTURE)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+			})
+			expect(
+				await store.get(BROWSER_RUN_FIXTURE.journey.name, BROWSER_RUN_FIXTURE.id),
+			).toBeUndefined()
+			const other = await factory()
+			const slot = await other.open(BROWSER_RUN_FIXTURE.journey.name)
+			await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+			})
+		})
+		it('refuses negative run paging', async () => {
+			const store = await factory()
+			await expect(store.list('add-kettle', { offset: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
+			await expect(store.list('add-kettle', { limit: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
+		})
 		it('refuses capture on a slot the store did not open', async () => {
 			const store = await factory()
 			await expect(
@@ -3543,6 +3748,7 @@ export const BROWSER_JOURNEY_ACTION_MODULE = String.raw`import type { BrowserPag
 import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
 
 export async function execute(page: BrowserPageInterface, inputs: { readonly store?: string; readonly product?: string; readonly customer: string; readonly password: string; readonly key?: string; readonly reply?: string }): Promise<void> {
+	throw new Error('s11: the element is in a child frame; handle it here')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
@@ -3556,7 +3762,7 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly sto
 		await performBrowserStep(toolset, 's8', { action: 'dialog', arguments: { accept: false, text: inputs.reply ?? 'It\'s "fine"' } })
 		await performBrowserStep(toolset, 's9', { action: 'dialog', arguments: { accept: true } })
 		await performBrowserStep(toolset, 's10', { action: 'switch', arguments: {}, tab: { url: 'https://shop.example.test/cart', title: 'Cart' } })
-		throw new Error('s11: the element is in a child frame; handle it here')
+		// s11: the element is in a child frame; handle it here
 		await performBrowserStep(toolset, 's12', { action: 'reserve', arguments: { ref: 'sku7', tab: 'stock', value: { parameter: 'customer' }, count: 2, gift: null, tags: ['a\\b', 'it\'s'], 'line\nbreak': '', 'gift-wrap': true, nested: {}, list: [] } })
 	} finally {
 		await toolset.destroy()
@@ -3855,24 +4061,24 @@ export const BROWSER_JOURNEY_MODULE_CASES: readonly BrowserJourneyModuleCase[] =
 ])
 
 /**
- * Holds a journey whose gap follows a step without side effect: the module throws at the gap and
- * the replay refuses at preparation, and both leave the form page's click log empty.
+ * Holds a journey whose gap follows a click that saves the form page's draft: the module and the
+ * replay both refuse it before that click, so the page's click log stays empty.
  */
 export const BROWSER_JOURNEY_GAP_CASE: BrowserJourneyModuleCase = Object.freeze({
-	name: 'gap after a wait',
+	name: 'gap after a click',
 	route: '/form',
 	journey: createBrowserJourneyFixture(
 		[
-			{ action: 'wait', arguments: { text: 'Delivery form' } },
-			{ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
 			{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+			{ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+			{ action: 'click', arguments: {}, target: { role: 'button', name: 'Submit' } },
 		],
-		{ name: 'save-draft', description: 'Save the delivery draft' },
+		{ name: 'save-draft', description: 'Save the delivery draft and submit it' },
 	),
 	inputs: {},
 	state:
-		"({ clicks: (document.body.dataset.clicks ?? '').split(' ').filter(Boolean).length, saved: document.body.dataset.saved ?? 'no' })",
-	outcome: [{ clicks: 0, saved: 'no' }],
+		"({ clicks: document.body.dataset.clicks ?? '', saved: document.body.dataset.saved ?? 'no' })",
+	outcome: [{ clicks: '', saved: 'no' }],
 })
 
 /**

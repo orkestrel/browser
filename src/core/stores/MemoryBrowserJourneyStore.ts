@@ -34,9 +34,9 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?.signal?.throwIfAborted()
 		validateBrowserJourney(journey)
 		const previous = this.#revisions.get(journey.name)
-		if (expected !== undefined && expected !== this.#journeys.get(journey.name)?.revision)
+		if (expected !== undefined && expected !== (this.#journeys.get(journey.name)?.revision ?? 0))
 			throw new BrowserError(
-				`Journey ${journey.name} changed since you read it; call journeys, then edit again.`,
+				`Journey ${journey.name} changed since you read it`,
 				'BROWSER_JOURNEY_STALE',
 			)
 		const revision = (previous ?? 0) + 1
@@ -60,6 +60,8 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			.map(([, revision]) => revision)
 		const offset = options?.offset ?? 0
 		const limit = options?.limit ?? entries.length
+		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0)
+			throw new BrowserError('Paging requires nonnegative integers', 'BROWSER_JOURNEY_PATH')
 		return {
 			entries: structuredClone(entries.slice(offset, offset + limit)),
 			truncated: offset + limit < entries.length,
