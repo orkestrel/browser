@@ -66,10 +66,11 @@ import {
 	BROWSER_SUBMIT_NEGATIVE_CASES,
 	BROWSER_SUBMIT_UNREAD_CASES,
 	createBrowserElementFixture,
+	createBrowserPopupFixture,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
+	createBrowserPendingToolsetFixture,
 	createConnectedCDPClient,
-	emitBrowserWindowOpen,
 	ignoreCall,
 	readCDPExpression,
 	readBrowserCompiledTimers,
@@ -127,6 +128,7 @@ describe('BrowserToolset', () => {
 					outcome: 'done',
 					target: { role: 'button', name: 'Save', reference: 'e1' },
 				})
+				expect(second.action).toBeDefined()
 				expect(first.action).not.toBe(second.action)
 				expect(actions.calls[0]?.[0]).toBe(first.action)
 				expect(actions.calls[1]?.[0]).toBe(second.action)
@@ -150,7 +152,7 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('captures the target before input replaces the document', async () => {
+		it('captures the main-frame target without a frame before input replaces the document', async () => {
 			const fixture = await createBrowserElementFixture({
 				released: (message) => {
 					emitBrowserNavigation(
@@ -176,7 +178,6 @@ describe('BrowserToolset', () => {
 					role: 'button',
 					name: 'Place order',
 					reference: 'e4',
-					frame: 'main',
 				})
 				expect(performed.action).toMatchObject({
 					outcome: 'done',
@@ -323,25 +324,52 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('waits for admitted actions before holding and cancels a queued hold without blocking the queue', async () => {
-			const pending = Promise.withResolvers<string>()
-			const invoked = createRecorder<[]>()
-			const source = createToolManager()
-			source.add(
-				createTool({
-					name: 'checkout',
-					execute: () => {
-						invoked.handler()
-						return pending.promise
-					},
-				}),
-			)
-			const toolset = new BrowserToolset(createBrowserViewDouble(), {
-				source: {
-					adopt: async () => source.tools(),
-					emitter: new Emitter<BrowserToolSourceEventMap>(),
-				},
+		it('reserves admission while a hold waits for an earlier adopted action', async () => {
+			const { toolset, view, pending, invoked } = createBrowserPendingToolsetFixture()
+			const order: string[] = []
+			toolset.emitter.on('action', (action) => {
+				if (action.outcome === 'done') order.push(action.action)
 			})
+			toolset.emitter.on('hold', () => order.push('hold'))
+			await toolset.start()
+			try {
+				const acting = toolset.perform({
+					id: 'before',
+					name: 'checkout',
+					arguments: { what: 'cart' },
+				})
+				await waitForCondition('adopted input started', () => invoked.count === 1)
+				const holding = toolset.hold('add-kettle')
+				const foreign = Promise.resolve(
+					requireValue(toolset.tools.tool('click')).execute(
+						{ ref: 'e1' },
+						{ signal: new AbortController().signal },
+					),
+				).catch((error: unknown) => error)
+				expect(order).toEqual([])
+				pending.resolve('checked out')
+				expect((await acting).result.success).toBe(true)
+				const hold = await holding
+				const denied = await foreign
+				expect(denied).toMatchObject({
+					code: 'BROWSER_TOOLSET_BUSY',
+					message: 'The toolset is replaying add-kettle until it finishes; call look.',
+				})
+				expect(order).toEqual(['checkout', 'hold'])
+				expect(view.calls).not.toContain('click e1')
+				hold.destroy()
+				expect(
+					(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
+						.success,
+				).toBe(true)
+			} finally {
+				pending.resolve('cleanup')
+				await toolset.destroy()
+			}
+		})
+
+		it('waits for admitted actions before holding and cancels a queued hold without blocking the queue', async () => {
+			const { toolset, pending, invoked } = createBrowserPendingToolsetFixture()
 			await toolset.start()
 			try {
 				const acting = toolset.perform({
@@ -356,6 +384,7 @@ describe('BrowserToolset', () => {
 					.catch((error: unknown) => error)
 				abort.abort('cancelled')
 				expect(await abandoned).toBe('cancelled')
+				const foreign = toolset.perform({ id: 'foreign', name: 'click', arguments: { ref: 'e1' } })
 				const order: string[] = []
 				toolset.emitter.on('action', () => order.push('action'))
 				toolset.emitter.on('hold', () => order.push('hold'))
@@ -363,8 +392,9 @@ describe('BrowserToolset', () => {
 				expect(order).toEqual([])
 				pending.resolve('checked out')
 				await acting
+				expect((await foreign).result.success).toBe(true)
 				const hold = await holding
-				expect(order).toEqual(['action', 'hold'])
+				expect(order).toEqual(['action', 'action', 'hold'])
 				hold.destroy()
 				expect(
 					(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
@@ -3785,39 +3815,7 @@ describe('BrowserToolset', () => {
 		it.each(['tools.execute', 'perform'] as const)(
 			'settles a click that opens a popup on the popup through %s: the result carries the move and the popup view, and the action the popup as its tab',
 			async (path) => {
-				const fixture = await createBrowserElementFixture({
-					held: true,
-					title: (message) =>
-						fixture.transport.reply(message.id, {
-							result: { value: message.sessionId === 'popup-session' ? 'Details' : 'Cart' },
-						}),
-					// Chromium 141 reports the window on the opener's session before it answers the
-					// release; the popup's attach comes before the reply here too.
-					released: (message) => {
-						emitBrowserWindowOpen(fixture.transport, 'session-main', 'https://example.test/popup')
-						fixture.transport.event(
-							'Target.attachedToTarget',
-							{
-								sessionId: 'popup-session',
-								targetInfo: {
-									targetId: 'popup-1',
-									type: 'page',
-									url: 'https://example.test/popup',
-								},
-							},
-							'session-main',
-						)
-						fixture.transport.reply(message.id, {})
-					},
-				})
-				const { client, page, transport } = fixture
-				for (const method of [
-					'Page.setInterceptFileChooserDialog',
-					'Network.enable',
-					'Network.disable',
-					'Target.detachFromTarget',
-				])
-					replyOk(transport, method)
+				const { client, page } = await createBrowserPopupFixture()
 				const toolset = createBrowserToolset(page)
 				try {
 					await toolset.start()

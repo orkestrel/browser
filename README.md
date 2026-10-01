@@ -5,7 +5,7 @@
 > and publishes them as agent tools, an in-page face that drives a DOM document with native APIs,
 > and a Node runtime that finds, launches, and connects to the browser itself.
 
-Connect to a running browser or launch one with the `createBrowser` function, open a page, and drive it through stable element references and trusted input. Read the page as Markdown in bounded slices, and hand the whole vocabulary to an agent as `@orkestrel/tool` tools with `createBrowserToolset`. Inside a page, `createDocumentToolset` drives a DOM document with native APIs, and `createSocketCDPTransport` carries the core client over the browser's own `WebSocket`. Part of the `@orkestrel` line.
+Connect to a running browser or launch one with the `createBrowser` function, open a page, and drive it through stable element references and trusted input. Read the page as Markdown in bounded slices, and hand the whole vocabulary to an agent as `@orkestrel/tool` tools with `createBrowserToolset`. Inside a page, `createDocumentToolset` drives a DOM document with native APIs, and `createSocketCDPTransport` carries the core client over the browser's own `WebSocket`. Record a journey, one user intent kept as JSON, from a model's tool calls or a person's gestures on a page, then list, edit, and replay it through the five journey tools, or compile it with `compileBrowserJourney` into a module a developer runs and customizes. Part of the `@orkestrel` line.
 
 ## Install
 
@@ -68,17 +68,23 @@ const result = await client.send('Page.navigate', { url: 'https://example.com' }
 await client.close()
 ```
 
+## Browse binary
+
+The package ships the `browse` binary, which serves the browser vocabulary and the journey tools over MCP on stdio and launches Chromium on the first tool call, keeping journeys and runs under `tmp/browsers`. Register it for a checkout with `claude mcp add --scope project browse -- node node_modules/@orkestrel/browser/dist/bin/main.js`, which writes the `browse` entry of the project's `.mcp.json`, then start `claude` in the checkout and approve the server; `BROWSE_ROOT`, `BROWSE_HEADLESS`, `BROWSE_EXECUTABLE`, and `BROWSE_READONLY` configure it. See [Register the browse binary with Claude Code](guides/browser.md#register-the-browse-binary-with-claude-code) for the entry, the approval, and a recorded exchange.
+
 ## Guide
 
-For the full surface of the three faces, the method tables, the toolset vocabulary, the relation to WebMCP, and the contract, see [`guides/browser.md`](guides/browser.md).
+For the full surface of the three faces, the method tables, the toolset vocabulary, the journeys, the relation to WebMCP, and the contract, see [`guides/browser.md`](guides/browser.md).
 
 ## Package
 
 The `exports` field in `package.json` names three entry points:
 
-- `.`, the environment-agnostic core: `CDPClient`, `BrowserContext`, `BrowserPage`, `BrowserFrame`, `BrowserNavigationManager`, the element managers, `BrowserPageElement`, `BrowserReading`, `BrowserToolset`, `BrowserSnapshot`, `BrowserCodegen`, and the factories `createCDPClient`, `createBrowserReading`, `createBrowserSnapshot`, and `createBrowserToolset`;
+- `.`, the environment-agnostic core: `CDPClient`, `BrowserContext`, `BrowserPage`, `BrowserFrame`, `BrowserNavigationManager`, the element managers, `BrowserPageElement`, `BrowserReading`, `BrowserToolset`, `BrowserSnapshot`, `BrowserCodegen`, `BrowserRecorder`, `BrowserReplay`, `BrowserJourneyToolset`, the memory journey and run stores, `compileBrowserJourney`, and the factories `createCDPClient`, `createBrowserReading`, `createBrowserSnapshot`, `createBrowserToolset`, `createBrowserRecorder`, `createBrowserReplay`, `createMemoryBrowserJourneyStore`, and `createMemoryBrowserRunStore`;
 - `./browser`, the in-page face: `BrowserDOMView`, `BrowserDOMElement`, `BrowserDOMElementManager`, `SocketCDPTransport`, and the factories `createBrowserDOMView`, `createDocumentToolset`, and `createSocketCDPTransport`;
-- `./server`, the Node runtime: `Browser`, `WebSocketCDPTransport`, `FileBrowserWriter`, and the factories `createBrowser`, `createCDPTransport`, and `createBrowserWriter`.
+- `./server`, the Node runtime: `Browser`, `WebSocketCDPTransport`, `FileBrowserWriter`, the file journey and run stores, `BrowserMCPServer`, and the factories `createBrowser`, `createCDPTransport`, `createBrowserWriter`, `createFileBrowserJourneyStore`, `createFileBrowserRunStore`, and `createBrowserMCPServer`.
+
+The `bin` field names `browse`, which runs `dist/bin/main.js`.
 
 ## License
 

@@ -1844,6 +1844,7 @@ export interface BrowserRecorderOptions {
  * - `arguments` — the call's arguments, without the text of a secret `type`
  * - `target` — the element the call's reference resolved to, captured before the input was
  *   dispatched: its role, exact accessible name, reference, and, in the page placement, frame
+ *   only when it differs from the dispatching page's main frame
  * - `tab` — the tab a `switch` moved to, or the popup a `click`, a `type` with `submit`, or a
  *   `press` of Enter opened and moved the view to
  * - `secret` — if `true`, the action was a secret `type`
@@ -2169,11 +2170,12 @@ export interface BrowserJourneyToolsetInterface {
 export type BrowserCodegenLanguage = 'javascript' | 'typescript'
 
 /**
- * Carries the module `compileBrowserJourney` emits with the gap steps it throws at.
+ * Carries the module `compileBrowserJourney` emits with the gap steps that refuse it.
  *
  * @remarks
  * - `source` — the standalone module, which imports only `@orkestrel/browser`
- * - `gaps` — one entry per gap step, in step order; the module throws at each
+ * - `gaps` — one entry per gap step, in step order; the module throws at the first before any
+ *   step and marks each with a comment at its position
  */
 export interface BrowserCodegenScript {
 	readonly source: string
@@ -2182,6 +2184,8 @@ export interface BrowserCodegenScript {
 
 /** Records semantic page gestures and compiles the resulting journey. */
 export interface BrowserCodegenInterface extends BrowserRecorderInterface {
+	/** Installs recording on an attached frame before its owner resumes it. */
+	attach(session: string): Promise<void>
 	/** Compiles the recorded journey into a standalone module and lists its gaps. */
 	script(options: {
 		readonly name: string
@@ -2799,7 +2803,15 @@ export interface BrowserToolsetInterface {
 	readonly view: BrowserViewInterface
 	/** Performs a tool call and returns its structured action when a handler ran. */
 	perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
-	/** Takes a queue turn and reserves action admission for the returned caller token. */
+	/**
+	 * Takes a queue turn and reserves action admission from the call for the returned caller token.
+	 *
+	 * @remarks
+	 * An action without the token that arrives after the call is refused with `BROWSER_TOOLSET_BUSY`
+	 * and `The toolset is replaying NAME until it finishes; call look.`, while waiting and while held;
+	 * the actions admitted before the call complete first; a wait that aborts or fails releases the
+	 * pending reservation.
+	 */
 	hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface>
 	/**
 	 * Adds the tools, follows the view, and adopts the page's tools; concurrent calls share one

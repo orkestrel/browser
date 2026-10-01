@@ -66,6 +66,18 @@ const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 ])
 /** The receipt the guide's Tools section quotes for a `look` call that carries `ref`. */
 const UNADVERTISED_RECEIPT = 'The look tool takes no ref parameter; call look with what.'
+/** The headings that open and close the guide's Tools table. */
+const TOOLS_SECTION = Object.freeze(['\n### Tools\n', '\n### Receipts\n'])
+/** The heading of the fence that shows the `add-kettle` listing. */
+const LISTING_TITLE = 'The listing'
+/** The heading of the fence that shows the render of a complete `add-kettle` run. */
+const RUN_TITLE = 'Replay a journey'
+/** The heading of the fence that carries the `add-kettle` module the compiler emits. */
+const MODULE_TITLE = 'Generate a module from a journey'
+/** Matches one string literal of a generated module, quotes and escapes included. */
+const MODULE_STRING = /('(?:[^'\\\n]|\\.)*')/u
+/** Matches a `` `name` (detail) `` parameter entry of a Tools table cell. */
+const TOOL_PARAMETER = /`(\w+)` \(([^)]*)\)/gu
 /** Matches an in-page assignment or property definition that replaces a page dialog function. */
 const DIALOG_OVERRIDE =
 	/\b(?:alert|confirm|prompt)\s*=(?!=)|defineProperty\([^)]*['"](?:alert|confirm|prompt)['"]/
@@ -210,6 +222,116 @@ await new GuideCommand({
 		} finally {
 			await client.close()
 		}
+	})
+
+	// The guide's Tools table and journey fences quote what the source advertises and returns. A
+	// name check proves neither, so each row is compared with `BROWSER_TOOL_COPY`, and each fence
+	// with what the renderers and the compiler return for the design's `add-kettle` journey.
+	describe('Journeys', () => {
+		const fences = own.guide.fences().filter((fence) => fence.language === EXAMPLE_LANGUAGE)
+
+		it('lists every tool BROWSER_TOOL_COPY advertises, with its parameters, annotations, and description', async () => {
+			const { BROWSER_TOOL_COPY } = await import('@src/core')
+			const text = files[GUIDE_SPEC] ?? ''
+			const [open = '', close = ''] = TOOLS_SECTION
+			const section = text.slice(text.indexOf(open), text.indexOf(close))
+			const table = section
+				.split('\n')
+				.filter((line) => line.startsWith('| `'))
+				.map((line) =>
+					line
+						.replace(/^\|\s*|\s*\|$/gu, '')
+						.split(' | ')
+						.map((cell) => cell.trim()),
+				)
+			expect(table.map(([tool]) => tool)).toEqual(
+				Object.keys(BROWSER_TOOL_COPY).map((name) => `\`${name}\``),
+			)
+			for (const [index, copy] of Object.values(BROWSER_TOOL_COPY).entries()) {
+				const [, parameters = '', annotations = '', , description = ''] = table[index] ?? []
+				const schema = isRecord(copy.parameters) ? copy.parameters : {}
+				const properties = isRecord(schema['properties']) ? Object.keys(schema['properties']) : []
+				const required = Array.isArray(schema['required']) ? schema['required'] : []
+				const listed = [...parameters.matchAll(TOOL_PARAMETER)]
+				expect(listed.map((match) => match[1])).toEqual(properties)
+				expect(
+					listed.filter((match) => /\brequired\b/u.test(match[2] ?? '')).map((match) => match[1]),
+				).toEqual(properties.filter((name) => required.includes(name)))
+				const marked = Object.entries(copy.annotations ?? {})
+					.filter(([, value]) => value === true)
+					.map(([name]) => `\`${name}\``)
+				expect(annotations).toBe(marked.length === 0 ? 'none' : marked.join(', '))
+				expect(description).toBe(`\`${copy.description}\``)
+			}
+		})
+
+		it('shows the listing renderBrowserJourney returns for add-kettle', async () => {
+			const { renderBrowserJourney } = await import('@src/core')
+			const { BROWSER_JOURNEY_FIXTURE } = await import('./setup.js')
+			const shown = fences.filter((fence) => fence.title === LISTING_TITLE)
+			expect(shown).toHaveLength(1)
+			const comment = (shown[0]?.code ?? '')
+				.split('\n')
+				.filter((line) => line.startsWith('//'))
+				.map((line) => line.replace(/^\/\/ ?/u, ''))
+				.join('\n')
+			expect(comment).toBe(renderBrowserJourney(BROWSER_JOURNEY_FIXTURE))
+		})
+
+		it('shows the render renderBrowserRun returns for a complete add-kettle run', async () => {
+			const { renderBrowserRun } = await import('@src/core')
+			const { BROWSER_RUN_FIXTURE, BROWSER_RUN_VIEW } = await import('./setup.js')
+			const shown = fences.filter((fence) => fence.title === RUN_TITLE)
+			expect(shown).toHaveLength(1)
+			const comment = (shown[0]?.code ?? '')
+				.split('\n')
+				.filter((line) => line.startsWith('//'))
+				.map((line) => line.replace(/^\/\/ ?/u, ''))
+				.join('\n')
+			expect(comment).toBe(renderBrowserRun(BROWSER_RUN_FIXTURE, BROWSER_RUN_VIEW))
+		})
+
+		// The formatter lays the guide's fence out at its print width, so the fence and the compiled
+		// source are compared outside their string literals with whitespace and trailing commas
+		// dropped. The control proves the comparison still sees a removed step.
+		it('carries the module compileBrowserJourney emits for add-kettle, laid out by the formatter', async () => {
+			const { compileBrowserJourney, editBrowserJourney } = await import('@src/core')
+			const { BROWSER_JOURNEY_FIXTURE } = await import('./setup.js')
+			const shown = fences.filter((fence) => fence.title === MODULE_TITLE)
+			expect(shown).toHaveLength(1)
+			const [guide, compiled, shortened] = [
+				shown[0]?.code ?? '',
+				compileBrowserJourney(BROWSER_JOURNEY_FIXTURE, { language: 'typescript' }).source,
+				compileBrowserJourney(
+					editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [{ operation: 'remove', id: 's3' }]),
+					{ language: 'typescript' },
+				).source,
+			].map((code) =>
+				code
+					.split(MODULE_STRING)
+					.map((part, index) => (index % 2 === 1 ? part : part.replace(/\s+/gu, '')))
+					.join('')
+					.replace(/,(?=[)\]}])/gu, ''),
+			)
+			expect(guide).toBe(compiled)
+			expect(shortened).not.toBe(compiled)
+		})
+
+		it('quotes the journey refusals the constants hold', async () => {
+			const {
+				BROWSER_JOURNEY_EMPTY_LISTING,
+				BROWSER_JOURNEY_IDLE_REFUSAL,
+				BROWSER_JOURNEY_READONLY_REFUSAL,
+				BROWSER_JOURNEY_RECORDING_REFUSAL,
+			} = await import('@src/core')
+			for (const quoted of [
+				BROWSER_JOURNEY_EMPTY_LISTING,
+				BROWSER_JOURNEY_IDLE_REFUSAL,
+				BROWSER_JOURNEY_READONLY_REFUSAL,
+				BROWSER_JOURNEY_RECORDING_REFUSAL,
+			])
+				expect(files[GUIDE_SPEC]).toContain(`\`${quoted}\``)
+		})
 	})
 
 	// The guide's Contract records that the in-page face never replaces `alert`, `confirm`, or
