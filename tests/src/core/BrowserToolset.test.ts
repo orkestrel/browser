@@ -127,6 +127,7 @@ describe('BrowserToolset', () => {
 					outcome: 'done',
 					target: { role: 'button', name: 'Save', reference: 'e1' },
 				})
+				expect(second.action).toBeDefined()
 				expect(first.action).not.toBe(second.action)
 				expect(actions.calls[0]?.[0]).toBe(first.action)
 				expect(actions.calls[1]?.[0]).toBe(second.action)

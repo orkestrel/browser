@@ -3180,6 +3180,78 @@ export function createBrowserActionFixture(options?: Partial<BrowserAction>): Br
 	}
 }
 
+/** Describes a preparation refusal and its tool sentence. */
+export interface BrowserPreparationCase {
+	readonly name: string
+	readonly journey: BrowserJourney
+	readonly inputs: Readonly<Record<string, string>>
+	readonly code: string
+	readonly context: Readonly<Record<string, unknown>>
+	readonly sentence: string
+	readonly corrupt?: readonly [string, unknown]
+}
+
+/** Supplies preparation refusals through real replay and journey tools. */
+export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Object.freeze([
+	{
+		name: 'missing input',
+		journey: createBrowserJourneyFixture(
+			[{ action: 'wait', arguments: { text: { parameter: 'status' } } }],
+			{ parameters: { status: {} } },
+		),
+		inputs: {},
+		code: 'BROWSER_JOURNEY_INPUT',
+		context: { parameter: 'status' },
+		sentence: 'Journey check-ready needs the input "status"; call replay with inputs.',
+	},
+	{
+		name: 'unknown input',
+		journey: createBrowserJourneyFixture(),
+		inputs: { extra: 'Ready' },
+		code: 'BROWSER_JOURNEY_INPUT',
+		context: { parameter: 'extra' },
+		sentence: 'Journey check-ready has no parameter "extra"; call journeys.',
+	},
+	{
+		name: 'gap',
+		journey: createBrowserJourneyFixture([
+			{ action: 'unresolved', arguments: {}, gap: 'child frame' },
+		]),
+		inputs: {},
+		code: 'BROWSER_JOURNEY_GAP',
+		context: { step: 's1' },
+		sentence:
+			'Journey check-ready has a gap at s1 (child frame); call edit to remove or replace s1.',
+	},
+	{
+		name: 'placement',
+		journey: createBrowserJourneyFixture([{ action: 'press', arguments: { key: 'Enter' } }]),
+		inputs: {},
+		code: 'BROWSER_JOURNEY_PLACEMENT',
+		context: { step: 's1', action: 'press', placement: 'dom' },
+		sentence:
+			'Journey check-ready cannot run here: s1 press is not available in a page toolset; call journeys.',
+	},
+	{
+		name: 'format',
+		journey: createBrowserJourneyFixture(),
+		inputs: {},
+		corrupt: ['format', 9],
+		code: 'BROWSER_JOURNEY_FORMAT',
+		context: { action: 'replay', placement: 'dom' },
+		sentence: 'Journey check-ready cannot be read: Has an unknown journey format; call journeys.',
+	},
+	{
+		name: 'invalid',
+		journey: createBrowserJourneyFixture(),
+		inputs: {},
+		corrupt: ['next', 0],
+		code: 'BROWSER_JOURNEY_INVALID',
+		context: { action: 'replay', placement: 'dom' },
+		sentence: 'Journey check-ready cannot be read: has an invalid next counter; call journeys.',
+	},
+])
+
 /**
  * Registers the shared journey-store contract against an isolated store per case.
  * @param name - Suite label
@@ -3216,6 +3288,7 @@ export function describeBrowserJourneyStore(
 			expect((await store.set({ ...journey, description: 'Accepted' }, 1)).revision).toBe(2)
 			await expect(store.set({ ...journey, description: 'Stale' }, 1)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_STALE',
+				message: 'Journey check-ready changed; read it before writing again.',
 			})
 			expect((await store.get(journey.name))?.journey.description).toBe('Accepted')
 		})
@@ -3228,6 +3301,17 @@ export function describeBrowserJourneyStore(
 			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
 			expect((await store.set(journey)).revision).toBe(2)
 			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
+		})
+		it('refuses negative journey paging', async () => {
+			const store = await factory()
+			await expect(store.list({ offset: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
+			await expect(store.list({ limit: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
 		})
 		it('sorts by name and pages with truthful truncation and empty faults', async () => {
 			const store = await factory()
@@ -3281,6 +3365,31 @@ export function describeBrowserRunStore(
 	factory: () => BrowserRunStoreInterface | Promise<BrowserRunStoreInterface>,
 ): void {
 	describe(`${name}`, () => {
+		it('refuses writing a run this store never opened', async () => {
+			const store = await factory()
+			await expect(store.set(BROWSER_RUN_FIXTURE)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+			})
+			expect(
+				await store.get(BROWSER_RUN_FIXTURE.journey.name, BROWSER_RUN_FIXTURE.id),
+			).toBeUndefined()
+			const other = await factory()
+			const slot = await other.open(BROWSER_RUN_FIXTURE.journey.name)
+			await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+			})
+		})
+		it('refuses negative run paging', async () => {
+			const store = await factory()
+			await expect(store.list('add-kettle', { offset: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
+			await expect(store.list('add-kettle', { limit: -1 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+				message: 'Paging requires nonnegative integers',
+			})
+		})
 		it('refuses capture on a slot the store did not open', async () => {
 			const store = await factory()
 			await expect(
