@@ -5,6 +5,7 @@ import type {
 	BrowserStoreOptions,
 	BrowserStorePage,
 } from '../types.js'
+import { BROWSER_JOURNEY_NAME_PATTERN } from '../constants.js'
 import { BrowserError } from '../errors.js'
 import { validateBrowserJourney } from '../helpers.js'
 
@@ -23,6 +24,8 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<BrowserJourneyRevision | undefined> {
 		options?.signal?.throwIfAborted()
+		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
+			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
 		return structuredClone(this.#journeys.get(name))
 	}
 
@@ -48,6 +51,8 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 
 	async delete(name: string, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
+		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
+			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
 		this.#journeys.delete(name)
 	}
 
@@ -59,9 +64,12 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))
 			.map(([, revision]) => revision)
 		const offset = options?.offset ?? 0
-		const limit = options?.limit ?? entries.length
-		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0)
-			throw new BrowserError('Paging requires nonnegative integers', 'BROWSER_JOURNEY_PATH')
+		const limit = options?.limit ?? Math.max(1, entries.length)
+		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
+			throw new BrowserError(
+				'Paging requires a nonnegative integer offset and a positive integer limit',
+				'BROWSER_JOURNEY_ARGUMENT',
+			)
 		return {
 			entries: structuredClone(entries.slice(offset, offset + limit)),
 			truncated: offset + limit < entries.length,

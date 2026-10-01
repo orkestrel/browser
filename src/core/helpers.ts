@@ -76,6 +76,7 @@ import {
 	parseEnum,
 } from '@orkestrel/contract'
 import {
+	BROWSER_TOOL_COPY,
 	BROWSER_JOURNEY_ACTIONS,
 	BROWSER_JOURNEY_FORMAT_VERSION,
 	BROWSER_JOURNEY_NAME_PATTERN,
@@ -96,7 +97,12 @@ import {
 	isBrowserJourneyTab,
 	isBrowserSecretBinding,
 } from './validators.js'
-import { BrowserElementError, BrowserError, BrowserResultLimitError } from './errors.js'
+import {
+	BrowserElementError,
+	BrowserError,
+	BrowserResultLimitError,
+	isBrowserError,
+} from './errors.js'
 import {
 	parseBrowserAXString,
 	parseBrowserCookiePartition,
@@ -2392,6 +2398,7 @@ export async function locateBrowserTarget<E extends BrowserElementInterface>(
  *
  * @remarks
  * `options.secret` marks a substituted secret text. `options.caller` carries a hold token.
+ * A failed action travels in the thrown BrowserError context under `action`.
  * An interrupted action returns with its outcome; the following dialog call answers the pending input.
  *
  * @param toolset - The toolset and its structurally typed live view
@@ -2429,7 +2436,7 @@ export async function performBrowserStep<E extends BrowserElementInterface>(
 			{ id, name: 'tabs', arguments: { what: 'journey target' } },
 			context,
 		)
-		if (!listed.result.success) throw new Error(`${id}: ${listed.result.error}`)
+		if (!listed.result.success) throw new BrowserError(`${id}: ${listed.result.error}`)
 		const matches = String(listed.result.value)
 			.split('\n')
 			.filter((line) => {
@@ -2451,8 +2458,10 @@ export async function performBrowserStep<E extends BrowserElementInterface>(
 		action.stage === 'requested' ||
 		action.stage === 'committed'
 	)
-		throw new Error(
+		throw new BrowserError(
 			`${id}: ${action?.receipt ?? (performed.result.success ? String(performed.result.value) : performed.result.error)}`,
+			undefined,
+			{ action },
 		)
 	return action
 }
@@ -2499,6 +2508,8 @@ export function editBrowserJourney(
 	let next = journey.next
 	let index = 0
 	const declarations = new Map<string, number>()
+	const origins = new Map<string, number>()
+	const secrets = new Map<string, number>()
 	try {
 		for (const edit of edits) {
 			index += 1
@@ -2511,6 +2522,10 @@ export function editBrowserJourney(
 					if (position < 0) throw new BrowserError(`names unknown anchor "${anchor}"`)
 					const step = { ...edit.step, id: `s${next}` }
 					next += 1
+					if (!Number.isSafeInteger(next))
+						throw new BrowserError('Invariant 2 (ids): has an invalid next counter')
+					for (const field of [...Object.keys(step.arguments), 'target.name'])
+						origins.set(step.id + '.' + field, index)
 					steps.splice(position + (edit.after === undefined ? 0 : 1), 0, step)
 					break
 				}
@@ -2528,11 +2543,22 @@ export function editBrowserJourney(
 							...(edit.tab === undefined ? {} : { tab: edit.tab }),
 						}
 						validateBrowserJourneyStep(updated)
+						const fields = [
+							...Object.entries(edit.arguments ?? {}),
+							...(edit.target === undefined ? [] : [['target.name', edit.target.name]]),
+						]
+						for (const [field, value] of fields) {
+							if (!isString(field)) continue
+							const previous = field === 'target.name' ? step.target?.name : step.arguments[field]
+							if (JSON.stringify(previous) !== JSON.stringify(value))
+								origins.set(step.id + '.' + field, index)
+						}
 						steps[position] = updated
 					}
 					break
 				}
 				case 'declare':
+					if (edit.parameter.secret !== parameters[edit.name]?.secret) secrets.set(edit.name, index)
 					parameters = { ...parameters, [edit.name]: edit.parameter }
 					declarations.set(edit.name, index)
 			}
@@ -2548,7 +2574,37 @@ export function editBrowserJourney(
 			Object.entries(parameters).filter(([name]) => bindings.has(name)),
 		)
 		const candidate = { ...journey, steps, parameters, next }
-		validateBrowserJourney(candidate)
+		try {
+			validateBrowserJourney(candidate)
+		} catch (error) {
+			const parameter = isBrowserError(error) ? error.context?.['parameter'] : undefined
+			if (isString(parameter)) {
+				for (const step of steps) {
+					if (!BROWSER_JOURNEY_ACTIONS.some((action) => action === step.action)) continue
+					const fields = [
+						...Object.entries(step.arguments),
+						...(step.target === undefined ? [] : [['target.name', step.target.name]]),
+					]
+					const invalid = fields.find(
+						([field, value]) =>
+							!isString(value) &&
+							isBrowserJourneyBinding(value) &&
+							value.parameter === parameter &&
+							(!Object.hasOwn(parameters, parameter) ||
+								(parameters[parameter]?.secret === true &&
+									(step.action !== 'type' || field !== 'text'))),
+					)
+					if (invalid !== undefined) {
+						index = Math.max(
+							origins.get(step.id + '.' + invalid[0]) ?? 0,
+							secrets.get(parameter) ?? 0,
+						)
+						break
+					}
+				}
+			}
+			throw error
+		}
 		return structuredClone(candidate)
 	} catch (error) {
 		const reason = (error instanceof Error ? error.message : 'has an invalid edit')
@@ -2838,24 +2894,35 @@ export function validateBrowserJourneyStep(
 			'BROWSER_JOURNEY_INVALID',
 		)
 	if (!native) return
-	const text =
-		action === 'type' || action === 'wait'
-			? 'text'
-			: action === 'navigate'
-				? 'url'
-				: action === 'press'
-					? 'key'
-					: undefined
-	const allowed = text === undefined ? [] : [text]
-	if (action === 'type') allowed.push('submit')
-	if (action === 'dialog') allowed.push('accept', 'text')
+	const name = BROWSER_JOURNEY_ACTIONS.find((candidate) => candidate === action)
+	if (name === undefined) return
+	const schema = BROWSER_TOOL_COPY[name].parameters
+	const properties = schema?.['properties']
+	const required = schema?.['required']
+	const fields = isRecord(properties)
+		? Object.entries(properties).filter(
+				([key]) => key !== 'ref' && key !== 'tab' && key !== 'secret',
+			)
+		: []
 	if (
-		Object.keys(args).some((key) => !allowed.includes(key)) ||
-		(text !== undefined && !isBrowserJourneyBinding(args[text])) ||
-		(args['submit'] !== undefined && !isBoolean(args['submit'])) ||
-		(action === 'dialog' &&
-			(!isBoolean(args['accept']) ||
-				(args['text'] !== undefined && !isBrowserJourneyBinding(args['text']))))
+		Object.keys(args).some((key) => !fields.some(([field]) => field === key)) ||
+		fields.some(([key, property]) => {
+			const argument = args[key]
+			if (argument === undefined) return isArray(required) && required.includes(key)
+			if (!isRecord(property)) return true
+			switch (property['type']) {
+				case 'string':
+					return !isBrowserJourneyBinding(argument)
+				case 'boolean':
+					return !isBoolean(argument)
+				case 'integer':
+					return !isInteger(argument)
+				case 'number':
+					return !isFiniteNumber(argument)
+				default:
+					return true
+			}
+		})
 	)
 		throw new BrowserError(
 			'Invariant 7 (actions): has malformed native arguments',
@@ -2929,6 +2996,7 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 			throw new BrowserError(
 				`Invariant 4 (bindings): binds undeclared parameter "${name}"`,
 				'BROWSER_JOURNEY_INVALID',
+				{ parameter: name },
 			)
 		const parameter = value['parameters'][name]
 		validateBrowserJourneyParameter(parameter)
@@ -2946,6 +3014,7 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 			throw new BrowserError(
 				`Invariant 5 (secrets): binds secret "${name}" outside type.text`,
 				'BROWSER_JOURNEY_INVALID',
+				{ parameter: name },
 			)
 	}
 }

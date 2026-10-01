@@ -1,6 +1,7 @@
 import type {
 	BrowserAction,
 	BrowserJourneyStepInput,
+	BrowserJourneyEdit,
 	BrowserJourney,
 	BrowserJourneyStep,
 	BrowserRun,
@@ -3250,6 +3251,80 @@ export const BROWSER_JOURNEY_EDIT_REFUSALS: ReadonlyArray<{
 	},
 ]
 
+/** Supplies final-candidate binding failures and the edit that introduced each. */
+export const BROWSER_JOURNEY_EDIT_ORIGINS: ReadonlyArray<{
+	readonly name: string
+	readonly edits: readonly BrowserJourneyEdit[]
+	readonly index: number
+}> = [
+	{
+		name: 'an undeclared prototype member binding',
+		index: 1,
+		edits: [
+			{ operation: 'update', id: 's4', arguments: { text: { parameter: 'constructor' } } },
+			{ operation: 'remove', id: 's5' },
+		],
+	},
+	{
+		name: 'added binding before a later removal',
+		index: 1,
+		edits: [
+			{ operation: 'add', step: { action: 'wait', arguments: { text: { parameter: 'missing' } } } },
+			{ operation: 'remove', id: 's5' },
+		],
+	},
+	{
+		name: 'target binding before an argument update',
+		index: 1,
+		edits: [
+			{
+				operation: 'update',
+				id: 's4',
+				target: { role: 'textbox', name: { parameter: 'missing' } },
+			},
+			{ operation: 'update', id: 's4', arguments: { submit: false } },
+		],
+	},
+	{
+		name: 'same binding repeated after its introduction',
+		index: 1,
+		edits: [
+			{ operation: 'update', id: 's4', arguments: { text: { parameter: 'missing' } } },
+			{
+				operation: 'update',
+				id: 's4',
+				arguments: { text: { parameter: 'missing' }, submit: false },
+			},
+		],
+	},
+	{
+		name: 'secret declaration after a wait binding',
+		index: 2,
+		edits: [
+			{ operation: 'update', id: 's5', arguments: { text: { parameter: 'email' } } },
+			{ operation: 'declare', name: 'email', parameter: { secret: true } },
+			{ operation: 'remove', id: 's1' },
+		],
+	},
+	{
+		name: 'wait binding after a secret declaration',
+		index: 2,
+		edits: [
+			{ operation: 'declare', name: 'email', parameter: { secret: true } },
+			{ operation: 'update', id: 's5', arguments: { text: { parameter: 'email' } } },
+			{ operation: 'remove', id: 's1' },
+		],
+	},
+	{
+		name: 'unbound declaration before a later update',
+		index: 1,
+		edits: [
+			{ operation: 'declare', name: 'missing', parameter: {} },
+			{ operation: 'update', id: 's5', arguments: { text: 'Ready' } },
+		],
+	},
+]
+
 /**
  * Creates an independently editable journey with sequential ids.
  * @param steps - Steps in execution order
@@ -4103,3 +4178,13 @@ export const BROWSER_JOURNEY_PASSWORD_HTML =
 
 /** Holds the secret the secrecy proof types; no fixture page or journey name carries its first four characters. */
 export const BROWSER_JOURNEY_SECRET = 'Zq7#Marlin-Velvet'
+
+/** Lists invalid names shared by the memory and file store proofs. */
+export const BROWSER_STORE_INVALID_NAMES: readonly string[] = [
+	'',
+	'../escape',
+	'Not-valid',
+	'con',
+	'lpt9',
+	'a'.repeat(65),
+]

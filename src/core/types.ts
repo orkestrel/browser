@@ -2145,12 +2145,14 @@ export interface BrowserRunStoreInterface {
  * @remarks
  * - `store` — keeps the journeys the tools record, list, edit, and replay
  * - `runs` — keeps each replay's run; omitting it writes no run
+ * - `limit` — positive integer listing cap in characters; defaults to the enclosing toolset's limit
  * - `readonly` — if `true`, refuses `record`, `save`, and `edit` before any store access, and
  *   `replay` still writes runs; if `false` or omitted, every tool runs
  */
 export interface BrowserJourneyOptions {
 	readonly store: BrowserJourneyStoreInterface
 	readonly runs?: BrowserRunStoreInterface
+	readonly limit?: number
 	readonly readonly?: boolean
 }
 

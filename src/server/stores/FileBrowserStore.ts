@@ -22,10 +22,10 @@ export class FileBrowserStore {
 
 	constructor(options: FileBrowserStoreOptions) {
 		this.#limit = options.limit ?? BROWSER_FILE_STORE_LIMIT
-		if (!Number.isSafeInteger(this.#limit) || this.#limit < 0)
+		if (!Number.isSafeInteger(this.#limit) || this.#limit < 1)
 			throw new BrowserError(
-				'The listing cap must be a nonnegative integer',
-				'BROWSER_JOURNEY_PATH',
+				'The listing cap must be a positive integer',
+				'BROWSER_JOURNEY_ARGUMENT',
 			)
 		try {
 			this.#root = realpathSync(options.root)
@@ -240,9 +240,12 @@ export class FileBrowserStore {
 			!Number.isSafeInteger(offset) ||
 			offset < 0 ||
 			!Number.isSafeInteger(requested) ||
-			requested < 0
+			requested < 1
 		)
-			throw new BrowserError('Paging requires nonnegative integers', 'BROWSER_JOURNEY_PATH')
+			throw new BrowserError(
+				'Paging requires a nonnegative integer offset and a positive integer limit',
+				'BROWSER_JOURNEY_ARGUMENT',
+			)
 		const limit = Math.min(requested, this.#limit)
 		const entries: T[] = []
 		const faults: BrowserStoreFault[] = []

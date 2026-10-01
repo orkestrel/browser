@@ -282,7 +282,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		this.#journeys =
 			options?.journeys === undefined
 				? undefined
-				: new BrowserJourneyToolset(this, options.journeys, limit)
+				: new BrowserJourneyToolset(this, {
+						...options.journeys,
+						limit: options.journeys.limit ?? limit,
+					})
 	}
 
 	get emitter(): EmitterInterface<BrowserToolsetEventMap> {

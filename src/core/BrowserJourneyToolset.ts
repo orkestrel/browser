@@ -87,15 +87,16 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	#held: string | undefined
 	#destroying: Promise<void> | undefined
 
-	constructor(
-		toolset: BrowserToolsetInterface,
-		options: BrowserJourneyOptions,
-		limit = BROWSER_TOOL_LIMIT,
-	) {
-		if (!isInteger(limit) || limit < 1) {
-			throw new BrowserError('Browser toolset limit must be a positive integer', undefined, {
-				limit,
-			})
+	constructor(toolset: BrowserToolsetInterface, options: BrowserJourneyOptions) {
+		const limit = options.limit ?? BROWSER_TOOL_LIMIT
+		if (!Number.isSafeInteger(limit) || limit < 1) {
+			throw new BrowserError(
+				'Browser toolset limit must be a positive integer',
+				'BROWSER_JOURNEY_ARGUMENT',
+				{
+					limit,
+				},
+			)
 		}
 		const held = BROWSER_JOURNEY_TOOL_NAMES.find((name) => toolset.tools.tool(name) !== undefined)
 		if (held !== undefined) {
@@ -235,7 +236,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		if (!isInteger(offset) || offset < 0) {
 			throw new BrowserError(
 				'The offset parameter must be a non-negative integer.',
-				'BROWSER_TOOLSET_ARGUMENT',
+				'BROWSER_JOURNEY_ARGUMENT',
 				{ key: 'offset' },
 			)
 		}
@@ -249,7 +250,15 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			for (const fault of page.faults) {
 				if (faults.has(fault.path)) continue
 				faults.add(fault.path)
-				listings.push(`Journey ${JSON.stringify(fault.path)} cannot be read: ${fault.message}`)
+				const name =
+					fault.path.replaceAll('\\', '/').split('/').filter(Boolean).at(-1) ?? fault.path
+				const reason = this.#describe(
+					fault.message
+						.replace(/(?:[A-Za-z]:)?[/\\][^\n]*?: /g, '')
+						.replace(/(?:[A-Za-z]:)?[/\\]\S+/g, '')
+						.trim(),
+				)
+				listings.push(`${name} cannot be read: ${reason}`)
 			}
 			const span = page.entries.length
 			position += span

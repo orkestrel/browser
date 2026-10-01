@@ -34,6 +34,62 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('inherits the toolset cap and accepts a journey-specific override', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(createBrowserJourneyFixture())
+		const inherited = new BrowserToolset(createBrowserViewDouble(), {
+			limit: 10,
+			journeys: { store },
+		})
+		const overridden = new BrowserToolset(createBrowserViewDouble(), {
+			limit: 10,
+			journeys: { store, limit: 20 },
+		})
+		try {
+			expect(
+				await inherited.tools.execute({
+					id: 'inherited',
+					name: 'journeys',
+					arguments: { what: 'all' },
+				}),
+			).toMatchObject({
+				value: 'check-read\n\n[characters 0–10 of 45; call journeys with offset 10 for more]',
+			})
+			expect(
+				await overridden.tools.execute({
+					id: 'overridden',
+					name: 'journeys',
+					arguments: { what: 'all' },
+				}),
+			).toMatchObject({
+				value:
+					'check-ready "Check r\n\n[characters 0–20 of 45; call journeys with offset 20 for more]',
+			})
+			await expect(
+				requireValue(overridden.tools.tool('journeys')).execute(
+					{ what: 'all', offset: -1 },
+					{ signal: new AbortController().signal },
+				),
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_ARGUMENT' })
+		} finally {
+			await inherited.destroy()
+			await overridden.destroy()
+		}
+	})
+	it('refuses a zero listing cap through its options', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		try {
+			expect(
+				() =>
+					new BrowserJourneyToolset(toolset, {
+						store: createMemoryBrowserJourneyStore(),
+						limit: 0,
+					}),
+			).toThrow(expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }))
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	describe('tools', () => {
 		it('registers the five tools with their copy, a required parameter each, and journeys pure and untrusted', async () => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
@@ -177,7 +233,11 @@ e3 combobox "Size"
 (3 of 3 elements)`,
 				})
 				expect(journeys.recording).toBe('check-form')
-				await toolset.tools.execute({ id: '2', name: 'wait', arguments: { text: 'Ready' } })
+				await toolset.tools.execute({
+					id: '2',
+					name: 'wait',
+					arguments: { text: 'Ready', timeout: 2 },
+				})
 				await toolset.tools.execute({ id: '3', name: 'click', arguments: { ref: 'e1' } })
 				const saved = await toolset.tools.execute({
 					id: '4',
@@ -194,6 +254,10 @@ s2 click button "Save"`,
 				})
 				expect(journeys.recording).toBeUndefined()
 				expect((await store.get('check-form'))?.revision).toBe(1)
+				expect((await store.get('check-form'))?.journey.steps[0]?.arguments).toEqual({
+					text: 'Ready',
+					timeout: 2,
+				})
 			} finally {
 				await journeys.destroy()
 				await toolset.destroy()
@@ -391,7 +455,7 @@ s1 wait "Ready"`,
 			)
 			await store.set(createBrowserJourneyFixture())
 			const toolset = new BrowserToolset(createBrowserViewDouble())
-			const journeys = new BrowserJourneyToolset(toolset, { store }, 40)
+			const journeys = new BrowserJourneyToolset(toolset, { store, limit: 40 })
 			try {
 				const results = await toolset.tools.execute([
 					{ id: '1', name: 'journeys', arguments: { what: 'all' } },
@@ -421,9 +485,9 @@ s1 wait "Ready"`,
 				createBrowserJourneyFixture(undefined, { name: 'brew-tea', description: 'Brew 🍵' }),
 			)
 			const toolset = new BrowserToolset(createBrowserViewDouble())
-			const journeys = new BrowserJourneyToolset(toolset, { store }, 16)
+			const journeys = new BrowserJourneyToolset(toolset, { store, limit: 16 })
 			const narrow = new BrowserToolset(createBrowserViewDouble())
-			const single = new BrowserJourneyToolset(narrow, { store }, 1)
+			const single = new BrowserJourneyToolset(narrow, { store, limit: 1 })
 			try {
 				expect(
 					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { what: 'all' } }),

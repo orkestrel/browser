@@ -1,6 +1,10 @@
 import type { BrowserJourneyStoreInterface, BrowserRunStoreInterface } from '@src/core'
 import { describe, it, expect } from 'vitest'
-import { BROWSER_RUN_FIXTURE, createBrowserJourneyFixture } from '../../../setup.js'
+import {
+	BROWSER_RUN_FIXTURE,
+	BROWSER_STORE_INVALID_NAMES,
+	createBrowserJourneyFixture,
+} from '../../../setup.js'
 
 /**
  * Registers the shared journey-store contract against an isolated store per case.
@@ -17,6 +21,23 @@ export function describeBrowserJourneyStore(
 			expect(await store.get('missing')).toBeUndefined()
 			await store.delete('missing')
 			expect(await store.list()).toEqual({ entries: [], truncated: false, faults: [] })
+		})
+		it('refuses zero journey limits', async () => {
+			const store = await factory()
+			await expect(store.list({ limit: 0 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_ARGUMENT',
+			})
+			await store.set(createBrowserJourneyFixture())
+			await expect(store.list({ limit: 0 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_ARGUMENT',
+			})
+		})
+		it('refuses invalid journey names in point operations', async () => {
+			const store = await factory()
+			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
+				await expect(store.get(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+				await expect(store.delete(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+			}
 		})
 		it('owns input, returned values, and listings', async () => {
 			const store = await factory()
@@ -72,12 +93,12 @@ export function describeBrowserJourneyStore(
 		it('refuses negative journey paging', async () => {
 			const store = await factory()
 			await expect(store.list({ offset: -1 })).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
-				message: 'Paging requires nonnegative integers',
+				code: 'BROWSER_JOURNEY_ARGUMENT',
+				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 			await expect(store.list({ limit: -1 })).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
-				message: 'Paging requires nonnegative integers',
+				code: 'BROWSER_JOURNEY_ARGUMENT',
+				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 		})
 		it('sorts by name and pages with truthful truncation and empty faults', async () => {
@@ -99,7 +120,6 @@ export function describeBrowserJourneyStore(
 				truncated: false,
 				faults: [],
 			})
-			expect((await store.list({ limit: 0 })).truncated).toBe(true)
 		})
 		it('refuses an unknown format before replacing a saved journey', async () => {
 			const store = await factory()
@@ -132,6 +152,25 @@ export function describeBrowserRunStore(
 	factory: () => BrowserRunStoreInterface | Promise<BrowserRunStoreInterface>,
 ): void {
 	describe(`${name}`, () => {
+		it('refuses zero run limits', async () => {
+			const store = await factory()
+			await expect(store.list('add-kettle', { limit: 0 })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_ARGUMENT',
+			})
+		})
+		it('refuses invalid journey names in run operations', async () => {
+			const store = await factory()
+			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
+				await expect(store.open(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+				await expect(store.get(invalid, BROWSER_RUN_FIXTURE.id)).rejects.toMatchObject({
+					code: 'BROWSER_JOURNEY_PATH',
+				})
+				await expect(store.delete(invalid, BROWSER_RUN_FIXTURE.id)).rejects.toMatchObject({
+					code: 'BROWSER_JOURNEY_PATH',
+				})
+				await expect(store.list(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+			}
+		})
 		it('refuses writing a run this store never opened', async () => {
 			const store = await factory()
 			await expect(store.set(BROWSER_RUN_FIXTURE)).rejects.toMatchObject({
@@ -149,12 +188,12 @@ export function describeBrowserRunStore(
 		it('refuses negative run paging', async () => {
 			const store = await factory()
 			await expect(store.list('add-kettle', { offset: -1 })).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
-				message: 'Paging requires nonnegative integers',
+				code: 'BROWSER_JOURNEY_ARGUMENT',
+				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 			await expect(store.list('add-kettle', { limit: -1 })).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
-				message: 'Paging requires nonnegative integers',
+				code: 'BROWSER_JOURNEY_ARGUMENT',
+				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 		})
 		it('refuses capture on a slot the store did not open', async () => {

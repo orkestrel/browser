@@ -44,7 +44,7 @@ describe('BrowserReplay', () => {
 				new BrowserReplay(toolset, { journey }, { runs, inputs: { password: 'Ready' } }).execute(),
 			).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_INVALID',
-				context: { action: 'replay', placement: 'dom' },
+				context: { parameter: 'password' },
 			})
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
