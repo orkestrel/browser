@@ -20,6 +20,9 @@ import {
 	validateBrowserRun,
 } from '@src/core'
 import {
+	BROWSER_SELECT_SECRET,
+	RecordingBrowserRunStore,
+	createBrowserSecretSelectFixture,
 	createBrowserElementFixture,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
@@ -28,6 +31,50 @@ import {
 } from '../../setup.js'
 
 describe('BrowserReplay', () => {
+	it('keeps an upstream secret select refusal out of the recorded run and render', async () => {
+		const fixture = await createBrowserSecretSelectFixture(
+			`No option ${JSON.stringify(BROWSER_SELECT_SECRET)} or ${BROWSER_SELECT_SECRET}`,
+		)
+		const toolset = createBrowserToolset(fixture.page)
+		const runs = new RecordingBrowserRunStore()
+		const steps = createRecorder<readonly [BrowserRunStep]>()
+		const journey = createBrowserJourneyFixture(
+			[
+				{
+					action: 'type',
+					arguments: { text: { parameter: 'password' } },
+					target: { role: 'combobox', name: 'Access level' },
+				},
+			],
+			{ parameters: { password: { secret: true } } },
+		)
+		try {
+			await toolset.start()
+			const run = await new BrowserReplay(
+				toolset,
+				{ journey },
+				{
+					inputs: { password: BROWSER_SELECT_SECRET },
+					on: { step: steps.handler },
+					runs,
+				},
+			).execute()
+			expect(run.outcome).toBe('stopped')
+			expect(run.steps[0]).toMatchObject({ outcome: 'refused', arguments: { secret: true } })
+			expect(run.steps[0]?.result).toContain('No option')
+			expect(runs.writes.count).toBeGreaterThan(0)
+			expect(steps.count).toBe(1)
+			expect(JSON.stringify(runs.writes.calls)).not.toContain('Zq7#')
+			expect(JSON.stringify(steps.calls)).not.toContain('Zq7#')
+			expect(JSON.stringify(run)).not.toContain('Zq7#')
+			expect(renderBrowserRun(run)).not.toContain('Zq7#')
+			expect(await runs.get(journey.name, run.id)).toEqual(run)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
 	it('refuses a secret bound to wait.text before taking a hold or writing a run', async () => {
 		const view = createBrowserViewDouble()
 		const toolset = new BrowserToolset(view)

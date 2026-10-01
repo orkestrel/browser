@@ -123,11 +123,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		)
 		const missing = values.find((_value, index) => selected[index] === undefined)
 		if (missing !== undefined) {
-			throw new BrowserElementError(
-				this.reference,
-				'UNKNOWN',
-				`has no option ${JSON.stringify(missing)}`,
-			)
+			throw new BrowserElementError(this.reference, 'UNKNOWN', 'has no such option')
 		}
 		for (const option of choices) option.selected = selected.includes(option)
 		node.dispatchEvent(new view.Event('input', { bubbles: true, composed: true }))

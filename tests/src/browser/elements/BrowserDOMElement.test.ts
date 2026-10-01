@@ -1,12 +1,23 @@
+import type { BrowserAction } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_RESULT_LIMIT,
+	BrowserReplay,
+	BrowserToolset,
+	renderBrowserRun,
 	isBrowserElementError,
 	isBrowserError,
 	isBrowserResultLimitError,
 } from '@src/core'
 import { BrowserDOMElement, createBrowserDOMView } from '@src/browser'
 import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
+import {
+	BROWSER_SECRET_SELECT_HTML,
+	BROWSER_SELECT_SECRET,
+	BROWSER_JOURNEY_SECRET,
+	RecordingBrowserRunStore,
+	createBrowserJourneyFixture,
+} from '../../../setup.js'
 import {
 	CollectedReference,
 	createProbeElements,
@@ -321,6 +332,90 @@ describe('BrowserDOMElement', () => {
 	})
 
 	describe('select', () => {
+		it('keeps a missing secret option out of DOM results, actions, stored runs, and renders', async () => {
+			const probe = await loadProbeDocument(BROWSER_SECRET_SELECT_HTML)
+			const view = createBrowserDOMView({ document: probe })
+			const element = await findProbeElement(view, 'select')
+			const refusal = await element.select([BROWSER_SELECT_SECRET]).catch((error: unknown) => error)
+			expect(
+				isBrowserElementError(refusal) && refusal.message,
+				'the element must not quote the missing option',
+			).toBe(`Element ${element.reference} has no such option.`)
+			const toolset = new BrowserToolset(view)
+			const actions = createRecorder<readonly [BrowserAction]>()
+			toolset.emitter.on('action', actions.handler)
+			const runs = new RecordingBrowserRunStore()
+			try {
+				await toolset.start()
+				const performed = await toolset.perform({
+					id: 'missing',
+					name: 'type',
+					arguments: { ref: element.reference, text: BROWSER_SELECT_SECRET, secret: true },
+				})
+				expect(performed.result.success).toBe(false)
+				expect(performed.action).toMatchObject({ outcome: 'refused', secret: true })
+				expect(performed.action?.receipt).toBe(`Element ${element.reference} has no such option.`)
+				expect(JSON.stringify(performed)).not.toContain('Zq7#')
+				const journey = createBrowserJourneyFixture(
+					[
+						{
+							action: 'type',
+							arguments: { text: { parameter: 'password' } },
+							target: { role: 'combobox', name: 'Access level' },
+						},
+					],
+					{ parameters: { password: { secret: true } } },
+				)
+				const run = await new BrowserReplay(
+					toolset,
+					{ journey },
+					{
+						inputs: { password: BROWSER_SELECT_SECRET },
+						runs,
+					},
+				).execute()
+				expect(run.outcome).toBe('stopped')
+				expect(run.steps[0]?.result).toBe(`Element ${element.reference} has no such option.`)
+				expect(runs.writes.count).toBeGreaterThan(0)
+				expect(actions.count).toBe(2)
+				expect(JSON.stringify(actions.calls)).not.toContain('Zq7#')
+				expect(JSON.stringify(runs.writes.calls)).not.toContain('Zq7#')
+				expect(JSON.stringify(run)).not.toContain('Zq7#')
+				expect(renderBrowserRun(run)).not.toContain('Zq7#')
+				expect(await runs.get(journey.name, run.id)).toEqual(run)
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
+		it('reports Selected a secret for a direct type into a DOM select with the option', async () => {
+			const probe = await loadProbeDocument(BROWSER_SECRET_SELECT_HTML)
+			const select = requireValue(probe.querySelector('select'))
+			const option = requireValue(select.options[0])
+			option.value = BROWSER_JOURNEY_SECRET
+			const view = createBrowserDOMView({ document: probe })
+			const element = await findProbeElement(view, 'select')
+			const toolset = new BrowserToolset(view)
+			try {
+				await toolset.start()
+				const result = await requireValue(toolset.tools.tool('type')).execute(
+					{
+						ref: element.reference,
+						text: BROWSER_JOURNEY_SECRET,
+						secret: true,
+					},
+					{ signal: new AbortController().signal },
+				)
+				expect(String(result).split('\n')[0]).toBe(
+					`Selected a secret in ${element.reference} combobox "Access level" (programmatic). (untrusted event)`,
+				)
+				expect(select.value).toBe(BROWSER_JOURNEY_SECRET)
+				expect(String(result)).not.toContain('Zq7#')
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
 		it('selects by value or label and refuses a missing option and a non-select', async () => {
 			const probe = await loadProbeDocument(
 				'<select aria-label="Size"><option value="s">Small</option><option value="l">Large</option></select><input>',
@@ -341,7 +436,9 @@ describe('BrowserDOMElement', () => {
 			const missing = await size.select(['Huge']).catch((error: unknown) => error)
 			const field = await findProbeElement(view, 'input')
 			const text = await field.select(['x']).catch((error: unknown) => error)
-			expect(isBrowserElementError(missing) && missing.message).toMatch(/has no option "Huge"/)
+			expect(isBrowserElementError(missing) && missing.message).toBe(
+				`Element ${size.reference} has no such option.`,
+			)
 			expect(isBrowserError(text) && text.message).toMatch(/not a select control/)
 			expect(isBrowserElementError(missing) && missing.context).toMatchObject({ reason: 'UNKNOWN' })
 			expect(isBrowserElementError(text) && text.context).toMatchObject({ reason: 'UNKNOWN' })
