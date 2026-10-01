@@ -2,7 +2,8 @@
  * src/core/compilers.ts tests.
  */
 
-import type { BrowserCodegenAction } from '@src/core'
+import type { BrowserCodegenAction, BrowserJourney } from '@src/core'
+import { attempt } from '@orkestrel/contract'
 import { describe, it, expect } from 'vitest'
 import {
 	compileTextWaitExpression,
@@ -11,6 +12,8 @@ import {
 	compileHitFunction,
 	BROWSER_RESULT_LIMIT_PATTERN,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
+	compileBrowserJourney,
+	compileBrowserJourneyValue,
 	compileCodegenScript,
 	compileReadFunction,
 	compileScreenshotPreparationExpression,
@@ -20,6 +23,11 @@ import {
 	BROWSER_SUBMIT_KEY,
 } from '@src/core'
 import {
+	BROWSER_JOURNEY_ACTION_FIXTURE,
+	BROWSER_JOURNEY_ACTION_MODULE,
+	BROWSER_JOURNEY_FIXTURE,
+	BROWSER_JOURNEY_MODULE,
+	BROWSER_JOURNEY_MODULE_JAVASCRIPT,
 	evaluateJavaScript,
 	evaluateBrowserHit,
 	evaluateBrowserSubmit,
@@ -213,6 +221,159 @@ describe('compileCodegenScript', () => {
 	it('emits an empty body for an empty action list', () => {
 		const script = compileCodegenScript([])
 		expect(script).toBe('async function run(page) {\n}')
+	})
+})
+
+describe('compileBrowserJourney', () => {
+	it('emits the add-kettle module byte for byte in TypeScript', () => {
+		expect(
+			compileBrowserJourney(BROWSER_JOURNEY_FIXTURE, { language: 'typescript' }),
+		).toStrictEqual({ source: BROWSER_JOURNEY_MODULE, gaps: [] })
+	})
+
+	it('emits the JavaScript twin without the type import and the annotations, by default', () => {
+		const twin = { source: BROWSER_JOURNEY_MODULE_JAVASCRIPT, gaps: [] }
+		expect(compileBrowserJourney(BROWSER_JOURNEY_FIXTURE)).toStrictEqual(twin)
+		expect(
+			compileBrowserJourney(BROWSER_JOURNEY_FIXTURE, { language: 'javascript' }),
+		).toStrictEqual(twin)
+	})
+
+	it("renders every action's arguments, keeps a page tool's arguments literal, and drops the target evidence", () => {
+		expect(
+			compileBrowserJourney(BROWSER_JOURNEY_ACTION_FIXTURE, { language: 'typescript' }),
+		).toStrictEqual({ source: BROWSER_JOURNEY_ACTION_MODULE, gaps: ['s11'] })
+	})
+
+	it('requires a secret input and forwards it with secret: true and no literal fallback', () => {
+		const journey: BrowserJourney = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: { email: { secret: true } },
+		}
+		const typed = compileBrowserJourney(journey, { language: 'typescript' }).source.split('\n')
+		const plain = compileBrowserJourney(journey).source.split('\n')
+		const call = `\t\tawait performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.email, submit: true }, target: { role: 'textbox', name: 'Email' } }, { secret: true })`
+		expect(typed[3]).toBe(
+			'export async function execute(page: BrowserPageInterface, inputs: { readonly email: string }): Promise<void> {',
+		)
+		expect(plain[2]).toBe('export async function execute(page, inputs) {')
+		expect(typed[10]).toBe(call)
+		expect(plain[9]).toBe(call)
+		expect(typed.filter((line) => line.includes('secret: true'))).toStrictEqual([call])
+	})
+
+	it('compiles each gap to a throw at its position and lists every gap in order', () => {
+		const [navigate, , click] = BROWSER_JOURNEY_FIXTURE.steps
+		if (navigate === undefined || click === undefined) throw new Error('The fixture lost a step')
+		const journey: BrowserJourney = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [
+				navigate,
+				{ id: 's2', action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+				click,
+				{ id: 's4', action: 'unresolved', arguments: {}, gap: "the option's value repeats" },
+			],
+		}
+		const script = compileBrowserJourney(journey, { language: 'typescript' })
+		expect(script.gaps).toStrictEqual(['s2', 's4'])
+		expect(script.source.split('\n').slice(7, 11)).toStrictEqual([
+			`\t\tawait performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })`,
+			`\t\tthrow new Error('s2: the element is in a child frame; handle it here')`,
+			`\t\tawait performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })`,
+			`\t\tthrow new Error('s4: the option\\'s value repeats; handle it here')`,
+		])
+	})
+
+	it('takes no inputs when the journey declares no parameter', () => {
+		const [navigate] = BROWSER_JOURNEY_FIXTURE.steps
+		if (navigate === undefined) throw new Error('The fixture lost a step')
+		const journey: BrowserJourney = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [navigate],
+		}
+		expect(compileBrowserJourney(journey, { language: 'typescript' }).source.split('\n')[3]).toBe(
+			'export async function execute(page: BrowserPageInterface): Promise<void> {',
+		)
+		expect(compileBrowserJourney(journey).source.split('\n')[2]).toBe(
+			'export async function execute(page) {',
+		)
+	})
+
+	it('reads only an own input for a parameter that names an inherited member', () => {
+		const field = BROWSER_JOURNEY_FIXTURE.steps[3]
+		if (field === undefined) throw new Error('The fixture lost a step')
+		const journey: BrowserJourney = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: { toString: { default: 'sam@example.test' } },
+			steps: [{ ...field, arguments: { text: { parameter: 'toString' }, submit: true } }],
+		}
+		const expression = `(Object.hasOwn(inputs, 'toString') ? inputs.toString : undefined) ?? 'sam@example.test'`
+		const lines = compileBrowserJourney(journey).source.split('\n')
+		expect(lines[6]).toBe(
+			`\t\tawait performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: ${expression}, submit: true }, target: { role: 'textbox', name: 'Email' } })`,
+		)
+		expect(evaluateJavaScript(`((inputs) => ${expression})({})`)).toBe('sam@example.test')
+		expect(
+			evaluateJavaScript(`((inputs) => ${expression})({ toString: 'ada@example.test' })`),
+		).toBe('ada@example.test')
+	})
+
+	it('refuses an invalid journey with the validator code before compiling any source', () => {
+		const cases: ReadonlyArray<readonly [journey: BrowserJourney, code: string]> = [
+			[{ ...BROWSER_JOURNEY_FIXTURE, name: 'Add Kettle' }, 'BROWSER_JOURNEY_INVALID'],
+			[
+				{ ...BROWSER_JOURNEY_FIXTURE, parameters: { email: { secret: true, default: 'x' } } },
+				'BROWSER_JOURNEY_INVALID',
+			],
+			[{ ...BROWSER_JOURNEY_FIXTURE, parameters: {} }, 'BROWSER_JOURNEY_INVALID'],
+			// `Object.assign` types the unknown format as the declared literal, as a parsed file reaches the compiler.
+			[Object.assign({ ...BROWSER_JOURNEY_FIXTURE }, { format: 2 }), 'BROWSER_JOURNEY_FORMAT'],
+		]
+		for (const [journey, code] of cases) {
+			expect(attempt(() => compileBrowserJourney(journey))).toMatchObject({
+				success: false,
+				error: { code },
+			})
+		}
+	})
+})
+
+describe('compileBrowserJourneyValue', () => {
+	it('compiles quoting, keys, and nesting into a literal that evaluates back to the value', () => {
+		expect(
+			compileBrowserJourneyValue({
+				plain: `it's "quoted"`,
+				'gift-wrap': 'a\\b\nc',
+				list: [1, -2.5, true, null, {}, []],
+			}),
+		).toBe(
+			`{ plain: 'it\\'s "quoted"', 'gift-wrap': 'a\\\\b\\nc', list: [1, -2.5, true, null, {}, []] }`,
+		)
+		const value = {
+			['__proto__']: { own: true },
+			'': [' ', '\u0000', '\\'],
+			'line\nbreak': `'"`,
+		}
+		const evaluated = evaluateJavaScript(compileBrowserJourneyValue(value))
+		expect(evaluated).toStrictEqual(value)
+		expect(Object.getPrototypeOf(evaluated)).toBe(Object.prototype)
+		expect(Object.hasOwn(Object(evaluated), '__proto__')).toBe(true)
+	})
+
+	it('replaces only a binding the map names and keeps every other parameter object literal', () => {
+		const value = {
+			text: { parameter: 'email' },
+			other: { parameter: 'name' },
+			pair: { parameter: 'email', extra: 1 },
+		}
+		expect(compileBrowserJourneyValue(value, new Map([['email', 'inputs.email']]))).toBe(
+			`{ text: inputs.email, other: { parameter: 'name' }, pair: { parameter: 'email', extra: 1 } }`,
+		)
+		expect(compileBrowserJourneyValue(value)).toBe(
+			`{ text: { parameter: 'email' }, other: { parameter: 'name' }, pair: { parameter: 'email', extra: 1 } }`,
+		)
 	})
 })
 

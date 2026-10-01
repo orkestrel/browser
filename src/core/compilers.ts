@@ -1,17 +1,24 @@
 import type {
 	BrowserActionabilityOptions,
 	BrowserCodegenAction,
+	BrowserCodegenLanguage,
+	BrowserCodegenScript,
 	BrowserCodegenScriptOptions,
+	BrowserJourney,
 	BrowserRect,
 	BrowserScreenshotOptions,
 	BrowserStorageOrigin,
 } from './types.js'
+import type { JSONValue } from '@orkestrel/contract'
+import { isArray, isRecord, isString } from '@orkestrel/contract'
 import {
+	BROWSER_JOURNEY_ACTIONS,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_SCREENSHOT_ATTRIBUTE,
 	BROWSER_STABLE_FRAME_COUNT,
 	BROWSER_SUBMIT_KEY,
 } from './constants.js'
+import { validateBrowserJourney } from './validators.js'
 
 /**
  * Compiles a mutation-driven wait with one deadline and explicit disconnect ownership.
@@ -462,6 +469,152 @@ export function compileCodegenScript(
 	}
 
 	return [`async function run(page) {`, ...lines.map((line) => `\t${line}`), `}`].join('\n')
+}
+
+/**
+ * Compiles a JSON value into the JavaScript literal a generated journey module carries.
+ *
+ * @remarks
+ * A string takes single quotes, an object key that is an identifier stays bare, and an own
+ * `__proto__` key compiles to a computed key so the literal keeps it as an own property. An object
+ * whose only member is a `parameter` string that `bindings` names compiles to the expression
+ * `bindings` maps that name to; without `bindings`, every value compiles literally.
+ *
+ * @param value - The JSON value to compile
+ * @param bindings - The expression each parameter's binding compiles to, by parameter name
+ * @returns Expression source that evaluates to the value
+ * @example
+ * ```ts
+ * compileBrowserJourneyValue({ text: { parameter: 'email' }, submit: true }, new Map([['email', 'inputs.email']]))
+ * // "{ text: inputs.email, submit: true }"
+ * ```
+ */
+export function compileBrowserJourneyValue(
+	value: JSONValue,
+	bindings?: ReadonlyMap<string, string>,
+): string {
+	if (isString(value))
+		return `'${JSON.stringify(value)
+			.slice(1, -1)
+			.replace(/\\"|'/g, (escape) => (escape === "'" ? "\\'" : '"'))}'`
+	if (isArray(value))
+		return `[${value.map((member) => compileBrowserJourneyValue(member, bindings)).join(', ')}]`
+	if (!isRecord(value)) return JSON.stringify(value)
+	const entries = Object.entries(value)
+	const parameter = value['parameter']
+	const expression =
+		entries.length === 1 && isString(parameter) ? bindings?.get(parameter) : undefined
+	if (expression !== undefined) return expression
+	if (entries.length === 0) return '{}'
+	const members = entries.map(([key, member]) => {
+		const name =
+			key === '__proto__'
+				? `['__proto__']`
+				: /^[A-Za-z_$][\w$]*$/.test(key)
+					? key
+					: compileBrowserJourneyValue(key)
+		return `${name}: ${compileBrowserJourneyValue(member, bindings)}`
+	})
+	return `{ ${members.join(', ')} }`
+}
+
+/**
+ * Compiles a journey into a standalone module that performs each step through
+ * `performBrowserStep` over a toolset the module constructs on the page.
+ *
+ * @remarks
+ * The module imports only `@orkestrel/browser` and exports `execute(page, inputs)`, which starts
+ * the toolset, performs the steps in order, and destroys the toolset in `finally`.
+ * - A parameter with a default compiles to an optional input that falls back to the default; a
+ *   secret and a parameter without a default compile to a required input, and `inputs` then takes
+ *   no default. `execute` takes no `inputs` when the journey declares no parameter.
+ * - A step passes its action, its arguments, and its target's role and name or its tab's URL and
+ *   title as literals, with each native binding replaced by its input; a page tool's arguments
+ *   stay literal. A `type` step whose text binds a secret passes `{ secret: true }`.
+ * - A gap step compiles to an unconditional throw at its position and is listed in `gaps`.
+ *
+ * The JavaScript module is the TypeScript module without the type import and the annotations.
+ * `options.language` selects `'javascript'` or `'typescript'`. Default: `'javascript'`.
+ *
+ * @param journey - The journey to compile
+ * @param options - The target language
+ * @returns The module source and the gap step ids in step order
+ * @throws BrowserError - Thrown with `BROWSER_JOURNEY_FORMAT` or `BROWSER_JOURNEY_INVALID` when the
+ * journey fails validation, before any source is compiled
+ * @example
+ * ```ts
+ * const script = compileBrowserJourney(journey, { language: 'typescript' })
+ * // script.source begins with the two `@orkestrel/browser` imports; script.gaps lists the gap ids
+ * ```
+ */
+export function compileBrowserJourney(
+	journey: BrowserJourney,
+	options?: { readonly language?: BrowserCodegenLanguage },
+): BrowserCodegenScript {
+	validateBrowserJourney(journey)
+	const typed = options?.language === 'typescript'
+	const parameters = Object.entries(journey.parameters)
+	const bindings = new Map(
+		parameters.map(([name, parameter]): [string, string] => {
+			if (parameter.default === undefined) return [name, `inputs.${name}`]
+			// An inherited member such as `toString` is not an input, so only an own property counts.
+			const input =
+				name in Object.prototype
+					? `(Object.hasOwn(inputs, '${name}') ? inputs.${name} : undefined)`
+					: `inputs.${name}`
+			return [name, `${input} ?? ${compileBrowserJourneyValue(parameter.default)}`]
+		}),
+	)
+	const shape = parameters
+		.map(
+			([name, parameter]) =>
+				`readonly ${name}${parameter.default === undefined ? '' : '?'}: string`,
+		)
+		.join('; ')
+	const fallback = parameters.every(([, parameter]) => parameter.default !== undefined)
+	const inputs =
+		parameters.length === 0
+			? ''
+			: `, inputs${typed ? `: { ${shape} }` : ''}${fallback ? ' = {}' : ''}`
+	const statements = journey.steps.map((step) => {
+		if (step.action === 'unresolved')
+			return `\t\tthrow new Error(${compileBrowserJourneyValue(`${step.id}: ${step.gap ?? ''}; handle it here`)})`
+		const text = step.arguments['text']
+		const secret =
+			step.action === 'type' &&
+			isRecord(text) &&
+			isString(text['parameter']) &&
+			journey.parameters[text['parameter']]?.secret === true
+		const call: JSONValue = {
+			action: step.action,
+			arguments: step.arguments,
+			...(step.target === undefined
+				? {}
+				: { target: { role: step.target.role, name: step.target.name } }),
+			...(step.tab === undefined ? {} : { tab: { url: step.tab.url, title: step.tab.title } }),
+		}
+		const native = BROWSER_JOURNEY_ACTIONS.some((action) => action === step.action)
+		return `\t\tawait performBrowserStep(toolset, ${compileBrowserJourneyValue(step.id)}, ${compileBrowserJourneyValue(call, native ? bindings : undefined)}${secret ? ', { secret: true }' : ''})`
+	})
+	const source = [
+		...(typed ? [`import type { BrowserPageInterface } from '@orkestrel/browser'`] : []),
+		`import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'`,
+		'',
+		`export async function execute(page${typed ? ': BrowserPageInterface' : ''}${inputs})${typed ? ': Promise<void>' : ''} {`,
+		'\tconst toolset = createBrowserToolset(page)',
+		'\tawait toolset.start()',
+		'\ttry {',
+		...statements,
+		'\t} finally {',
+		'\t\tawait toolset.destroy()',
+		'\t}',
+		'}',
+		'',
+	].join('\n')
+	return {
+		source,
+		gaps: journey.steps.filter((step) => step.action === 'unresolved').map((step) => step.id),
+	}
 }
 
 /**

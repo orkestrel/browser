@@ -3325,3 +3325,139 @@ export const BROWSER_JOURNEY_TARGET_HTML = Object.freeze({
 /** Installs the document-owned input log after replacing fixture content. */
 export const BROWSER_JOURNEY_TARGET_LOG =
 	'document.body.dataset.clicks = "[]"; document.body.onclick = event => { if (event.target instanceof HTMLButtonElement) document.body.dataset.clicks = JSON.stringify([...JSON.parse(document.body.dataset.clicks), { id: event.target.id, trusted: event.isTrusted }]) }'
+
+/** Supplies the design's `add-kettle` module fence, which the TypeScript compilation equals byte for byte. */
+export const BROWSER_JOURNEY_MODULE = `import type { BrowserPageInterface } from '@orkestrel/browser'
+import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
+
+export async function execute(page: BrowserPageInterface, inputs: { readonly email?: string } = {}): Promise<void> {
+	const toolset = createBrowserToolset(page)
+	await toolset.start()
+	try {
+		await performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })
+		await performBrowserStep(toolset, 's2', { action: 'click', arguments: {}, target: { role: 'link', name: 'Alpine Kettle' } })
+		await performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })
+		await performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.email ?? 'sam@example.test', submit: true }, target: { role: 'textbox', name: 'Email' } })
+		await performBrowserStep(toolset, 's5', { action: 'wait', arguments: { text: 'Added to cart' } })
+	} finally {
+		await toolset.destroy()
+	}
+}
+`
+
+/** Supplies the JavaScript twin of the `add-kettle` module: no type import and no annotations. */
+export const BROWSER_JOURNEY_MODULE_JAVASCRIPT = `import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
+
+export async function execute(page, inputs = {}) {
+	const toolset = createBrowserToolset(page)
+	await toolset.start()
+	try {
+		await performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })
+		await performBrowserStep(toolset, 's2', { action: 'click', arguments: {}, target: { role: 'link', name: 'Alpine Kettle' } })
+		await performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })
+		await performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.email ?? 'sam@example.test', submit: true }, target: { role: 'textbox', name: 'Email' } })
+		await performBrowserStep(toolset, 's5', { action: 'wait', arguments: { text: 'Added to cart' } })
+	} finally {
+		await toolset.destroy()
+	}
+}
+`
+
+/**
+ * Supplies a journey holding every action: bound, required, and secret inputs, quoted text, both
+ * dialog answers, a tab, a gap, and a page tool whose arguments stay literal JSON.
+ */
+export const BROWSER_JOURNEY_ACTION_FIXTURE: BrowserJourney = {
+	format: 1,
+	name: 'checkout',
+	description: 'Pay for the Alpine Kettle',
+	parameters: {
+		store: { default: 'https://shop.example.test/' },
+		product: { default: 'Alpine Kettle' },
+		customer: {},
+		password: { secret: true },
+		key: { default: 'Enter' },
+		reply: { default: `It's "fine"` },
+	},
+	next: 13,
+	steps: [
+		{ id: 's1', action: 'navigate', arguments: { url: { parameter: 'store' } } },
+		{
+			id: 's2',
+			action: 'click',
+			arguments: {},
+			target: { role: 'link', name: { parameter: 'product' }, css: '#kettle', reference: 'e12' },
+		},
+		{
+			id: 's3',
+			action: 'type',
+			arguments: { text: { parameter: 'customer' } },
+			target: { role: 'textbox', name: 'Name' },
+		},
+		{
+			id: 's4',
+			action: 'type',
+			arguments: { text: { parameter: 'password' }, submit: true },
+			target: { role: 'textbox', name: 'Password' },
+		},
+		{ id: 's5', action: 'press', arguments: { key: { parameter: 'key' } } },
+		{ id: 's6', action: 'wait', arguments: { text: 'Paid' } },
+		{
+			id: 's7',
+			action: 'click',
+			arguments: {},
+			target: { role: 'button', name: 'Delete "draft"' },
+		},
+		{ id: 's8', action: 'dialog', arguments: { accept: false, text: { parameter: 'reply' } } },
+		{ id: 's9', action: 'dialog', arguments: { accept: true } },
+		{
+			id: 's10',
+			action: 'switch',
+			arguments: {},
+			tab: { url: 'https://shop.example.test/cart', title: 'Cart' },
+		},
+		{ id: 's11', action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+		{
+			id: 's12',
+			action: 'reserve',
+			arguments: {
+				ref: 'sku7',
+				tab: 'stock',
+				value: { parameter: 'customer' },
+				count: 2,
+				gift: null,
+				tags: ['a\\b', `it's`],
+				'line\nbreak': '',
+				'gift-wrap': true,
+				nested: {},
+				list: [],
+			},
+		},
+	],
+}
+
+/** Supplies the TypeScript module the action journey compiles to, transcribed by hand. */
+export const BROWSER_JOURNEY_ACTION_MODULE = String.raw`import type { BrowserPageInterface } from '@orkestrel/browser'
+import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
+
+export async function execute(page: BrowserPageInterface, inputs: { readonly store?: string; readonly product?: string; readonly customer: string; readonly password: string; readonly key?: string; readonly reply?: string }): Promise<void> {
+	const toolset = createBrowserToolset(page)
+	await toolset.start()
+	try {
+		await performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: inputs.store ?? 'https://shop.example.test/' } })
+		await performBrowserStep(toolset, 's2', { action: 'click', arguments: {}, target: { role: 'link', name: inputs.product ?? 'Alpine Kettle' } })
+		await performBrowserStep(toolset, 's3', { action: 'type', arguments: { text: inputs.customer }, target: { role: 'textbox', name: 'Name' } })
+		await performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.password, submit: true }, target: { role: 'textbox', name: 'Password' } }, { secret: true })
+		await performBrowserStep(toolset, 's5', { action: 'press', arguments: { key: inputs.key ?? 'Enter' } })
+		await performBrowserStep(toolset, 's6', { action: 'wait', arguments: { text: 'Paid' } })
+		await performBrowserStep(toolset, 's7', { action: 'click', arguments: {}, target: { role: 'button', name: 'Delete "draft"' } })
+		await performBrowserStep(toolset, 's8', { action: 'dialog', arguments: { accept: false, text: inputs.reply ?? 'It\'s "fine"' } })
+		await performBrowserStep(toolset, 's9', { action: 'dialog', arguments: { accept: true } })
+		await performBrowserStep(toolset, 's10', { action: 'switch', arguments: {}, tab: { url: 'https://shop.example.test/cart', title: 'Cart' } })
+		throw new Error('s11: the element is in a child frame; handle it here')
+		await performBrowserStep(toolset, 's12', { action: 'reserve', arguments: { ref: 'sku7', tab: 'stock', value: { parameter: 'customer' }, count: 2, gift: null, tags: ['a\\b', 'it\'s'], 'line\nbreak': '', 'gift-wrap': true, nested: {}, list: [] } })
+	} finally {
+		await toolset.destroy()
+	}
+}
+`
