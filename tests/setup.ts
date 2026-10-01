@@ -7,6 +7,7 @@ import type {
 	BrowserJourneyStep,
 	BrowserRun,
 	BrowserStoreOptions,
+	BrowserStoreFault,
 	BrowserCallOptions,
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
@@ -49,6 +50,12 @@ import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, waitForEvent } from '@orkestrel/test'
+
+/** Supplies a path-free fault whose slash belongs to its reason rather than a filesystem path. */
+export const BROWSER_STORE_FAULT_FIXTURE: BrowserStoreFault = Object.freeze({
+	name: 'broken-journey',
+	reason: 'The read/write mode is unsupported',
+})
 
 /**
  * Refuses scripted writes at the store boundary before delegating subsequent writes to the store.
@@ -3491,7 +3498,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 		inputs: { extra: 'Ready' },
 		code: 'BROWSER_JOURNEY_INPUT',
 		context: { parameter: 'extra' },
-		sentence: 'Journey check-ready has no parameter "extra"; call journeys.',
+		sentence: 'Journey check-ready has no parameter named "extra"; call journeys.',
 	},
 	{
 		name: 'gap',

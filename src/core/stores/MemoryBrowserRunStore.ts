@@ -5,9 +5,13 @@ import type {
 	BrowserStoreOptions,
 	BrowserStorePage,
 } from '../types.js'
-import { BROWSER_JOURNEY_NAME_PATTERN } from '../constants.js'
 import { BrowserError } from '../errors.js'
-import { generateBrowserRunId, validateBrowserRun } from '../helpers.js'
+import {
+	generateBrowserRunId,
+	validateBrowserRun,
+	validateBrowserJourneyName,
+	validateBrowserStorePage,
+} from '../helpers.js'
 
 /**
  * Keeps owned runs under their journey names and producer ids without directories.
@@ -22,8 +26,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 
 	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
-		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+		validateBrowserJourneyName(name)
 		const slots = this.#slots.get(name) ?? new Set<string>()
 		let id = generateBrowserRunId()
 		while (slots.has(id) || this.#runs.get(name)?.has(id)) id = generateBrowserRunId()
@@ -40,8 +43,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<BrowserRun | undefined> {
 		options?.signal?.throwIfAborted()
-		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+		validateBrowserJourneyName(name)
 		return structuredClone(this.#runs.get(name)?.get(id))
 	}
 
@@ -70,8 +72,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 
 	async delete(name: string, id: string, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
-		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+		validateBrowserJourneyName(name)
 		this.#runs.get(name)?.delete(id)
 		this.#slots.get(name)?.delete(id)
 	}
@@ -81,18 +82,13 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
 	): Promise<BrowserStorePage<BrowserRun>> {
 		options?.signal?.throwIfAborted()
-		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+		validateBrowserJourneyName(name)
 		const entries = [...(this.#runs.get(name)?.values() ?? [])].sort((left, right) =>
 			left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
 		)
 		const offset = options?.offset ?? 0
 		const limit = options?.limit ?? Math.max(1, entries.length)
-		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
-			throw new BrowserError(
-				'Paging requires a nonnegative integer offset and a positive integer limit',
-				'BROWSER_JOURNEY_ARGUMENT',
-			)
+		validateBrowserStorePage(offset, limit)
 		return {
 			entries: structuredClone(entries.slice(offset, offset + limit)),
 			truncated: offset + limit < entries.length,

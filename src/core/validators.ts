@@ -1,6 +1,31 @@
-import type { BrowserJourneyBinding, BrowserJourneyTarget, BrowserJourneyTab } from './types.js'
+import type {
+	BrowserJourneyBinding,
+	BrowserJourneyTarget,
+	BrowserJourneyTab,
+	BrowserJourneyValidationContext,
+} from './types.js'
 import { attempt, isRecord, isString } from '@orkestrel/contract'
 import { BROWSER_JOURNEY_PARAMETER_PATTERN } from './constants.js'
+
+/**
+ * Checks whether a validation context identifies a parameter, step, and field.
+ * @param value - Candidate error context
+ * @returns True if the binding coordinates are strings; false otherwise
+ * @example
+ * isBrowserJourneyValidationContext({ parameter: 'email', step: 's4', field: 'text' })
+ */
+export function isBrowserJourneyValidationContext(
+	value: unknown,
+): value is BrowserJourneyValidationContext {
+	const result = attempt(
+		() =>
+			isRecord(value) &&
+			isString(value['parameter']) &&
+			isString(value['step']) &&
+			isString(value['field']),
+	)
+	return result.success && result.value
+}
 
 /**
  * Checks whether a native string argument is a literal or a parameter binding.

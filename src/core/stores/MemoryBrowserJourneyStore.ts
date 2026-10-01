@@ -5,9 +5,12 @@ import type {
 	BrowserStoreOptions,
 	BrowserStorePage,
 } from '../types.js'
-import { BROWSER_JOURNEY_NAME_PATTERN } from '../constants.js'
 import { BrowserError } from '../errors.js'
-import { validateBrowserJourney } from '../helpers.js'
+import {
+	validateBrowserJourney,
+	validateBrowserJourneyName,
+	validateBrowserStorePage,
+} from '../helpers.js'
 
 /**
  * Keeps owned journey snapshots and revision counters across deletion.
@@ -24,8 +27,7 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<BrowserJourneyRevision | undefined> {
 		options?.signal?.throwIfAborted()
-		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+		validateBrowserJourneyName(name)
 		return structuredClone(this.#journeys.get(name))
 	}
 
@@ -35,6 +37,7 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<BrowserJourneyRevision> {
 		options?.signal?.throwIfAborted()
+		validateBrowserJourneyName(journey.name)
 		validateBrowserJourney(journey)
 		const previous = this.#revisions.get(journey.name)
 		if (expected !== undefined && expected !== (this.#journeys.get(journey.name)?.revision ?? 0))
@@ -51,8 +54,7 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 
 	async delete(name: string, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
-		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+		validateBrowserJourneyName(name)
 		this.#journeys.delete(name)
 	}
 
@@ -65,11 +67,7 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			.map(([, revision]) => revision)
 		const offset = options?.offset ?? 0
 		const limit = options?.limit ?? Math.max(1, entries.length)
-		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
-			throw new BrowserError(
-				'Paging requires a nonnegative integer offset and a positive integer limit',
-				'BROWSER_JOURNEY_ARGUMENT',
-			)
+		validateBrowserStorePage(offset, limit)
 		return {
 			entries: structuredClone(entries.slice(offset, offset + limit)),
 			truncated: offset + limit < entries.length,

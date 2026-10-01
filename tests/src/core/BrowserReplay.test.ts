@@ -149,7 +149,11 @@ describe('BrowserReplay', () => {
 					{ journey },
 					{ runs, inputs: { status: 'Ready', extra: 'unknown' } },
 				).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'extra' } })
+			).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_INPUT',
+				context: { parameter: 'extra' },
+				message: 'Journey check-ready has no parameter named "extra".',
+			})
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			const gap = createBrowserJourneyFixture([

@@ -24,6 +24,7 @@ import {
 } from '@src/core'
 import {
 	BROWSER_JOURNEY_FIXTURE,
+	BROWSER_STORE_FAULT_FIXTURE,
 	BROWSER_PREPARATION_CASES,
 	BROWSER_JOURNEY_LISTING,
 	createBrowserActionFixture,
@@ -36,6 +37,165 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('h2c renders structured faults without scraping the reason and deduplicates names', async () => {
+		const memory = createMemoryBrowserJourneyStore()
+		const store: BrowserJourneyStoreInterface = {
+			get: memory.get.bind(memory),
+			set: memory.set.bind(memory),
+			delete: memory.delete.bind(memory),
+			list: async () => ({
+				entries: [],
+				truncated: false,
+				faults: [BROWSER_STORE_FAULT_FIXTURE, BROWSER_STORE_FAULT_FIXTURE],
+			}),
+		}
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		try {
+			expect(
+				await toolset.tools.execute({
+					id: 'listing',
+					name: 'journeys',
+					arguments: { what: 'all' },
+				}),
+				'h2c: the store reason is rendered verbatim once',
+			).toMatchObject({
+				success: true,
+				value: 'broken-journey cannot be read: The read/write mode is unsupported',
+			})
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('releases a refused recording reservation before another name starts', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(createBrowserJourneyFixture())
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		try {
+			const record = requireValue(toolset.tools.tool('record'))
+			const context = { signal: new AbortController().signal }
+			await expect(record.execute({ journey: 'check-ready' }, context)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_SAVED',
+			})
+			expect(journeys.recording).toBeUndefined()
+			await expect(record.execute({ journey: 'another-name' }, context)).resolves.toContain(
+				'Recording another-name;',
+			)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('releases an aborted recording reservation without leaving subscriptions', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		const listeners = toolset.emitter.count('action')
+		try {
+			const record = requireValue(toolset.tools.tool('record'))
+			const controller = new AbortController()
+			const starting = record.execute(
+				{ journey: 'aborted-recording' },
+				{ signal: controller.signal },
+			)
+			controller.abort(new Error('recording aborted'))
+			await expect(starting).rejects.toThrow('recording aborted')
+			expect(journeys.recording).toBeUndefined()
+			expect(toolset.emitter.count('action')).toBe(listeners)
+			await expect(
+				record.execute({ journey: 'next-recording' }, { signal: new AbortController().signal }),
+			).resolves.toContain('Recording next-recording;')
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('h2a reserves concurrent records and retains the first recorder', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		const listeners = toolset.emitter.count('action')
+		try {
+			const record = requireValue(toolset.tools.tool('record'))
+			const context = { signal: new AbortController().signal }
+			const results = await Promise.allSettled([
+				record.execute({ journey: 'first-recording' }, context),
+				record.execute({ journey: 'second-recording' }, context),
+			])
+			expect(results, 'h2a: one recording wins and the second is refused').toMatchObject([
+				{ status: 'fulfilled' },
+				{ status: 'rejected', reason: { code: 'BROWSER_JOURNEY_RECORDING' } },
+			])
+			expect(journeys.recording, 'h2a: the first recorder remains owned').toBe('first-recording')
+			expect(toolset.emitter.count('action')).toBe(listeners + 1)
+			await toolset.perform({ id: 'step', name: 'wait', arguments: { text: 'Ready' } })
+			expect(
+				await toolset.tools.execute({
+					id: 'save',
+					name: 'save',
+					arguments: { description: 'Keep the first recording' },
+				}),
+			).toMatchObject({ success: true })
+			expect(
+				(await store.get('first-recording'))?.journey.steps.map((step) => step.action),
+			).toEqual(['wait'])
+			expect(await store.get('second-recording')).toBeUndefined()
+			expect(toolset.emitter.count('action'), 'h2a: no recorder subscription leaks').toBe(listeners)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('refuses record under a foreign hold with the busy sentence', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, {
+			store: createMemoryBrowserJourneyStore(),
+		})
+		await toolset.start()
+		const hold = await toolset.hold('foreign-journey')
+		try {
+			await expect(
+				requireValue(toolset.tools.tool('record')).execute(
+					{ journey: 'during-hold' },
+					{ signal: new AbortController().signal },
+				),
+			).rejects.toMatchObject({
+				code: 'BROWSER_TOOLSET_BUSY',
+				message: 'The toolset is replaying foreign-journey until it finishes; call look.',
+			})
+			expect(journeys.recording).toBeUndefined()
+		} finally {
+			hold.destroy()
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('h2b inherits the owner cap when constructed directly', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(createBrowserJourneyFixture())
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { limit: 10 })
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		try {
+			expect(
+				await toolset.tools.execute({
+					id: 'listing',
+					name: 'journeys',
+					arguments: { what: 'all' },
+				}),
+				'h2b: direct construction lists at the owner cap of 10',
+			).toMatchObject({
+				value: 'check-read\n\n[characters 0–10 of 45; call journeys with offset 10 for more]',
+			})
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
 	it('inherits the toolset cap and accepts a journey-specific override', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		await store.set(createBrowserJourneyFixture())
@@ -87,7 +247,12 @@ describe('BrowserJourneyToolset', () => {
 						store: createMemoryBrowserJourneyStore(),
 						limit: 0,
 					}),
-			).toThrow(expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }))
+			).toThrow(
+				expect.objectContaining({
+					code: 'BROWSER_JOURNEY_ARGUMENT',
+					message: 'The journeys limit must be a positive integer',
+				}),
+			)
 		} finally {
 			await toolset.destroy()
 		}
@@ -557,7 +722,7 @@ s1 wait "Ready"`,
 					arguments: { what: 'all', offset: 15 },
 				})
 				expect(readProperty(refused, 'error')).toBe(
-					'The journeys limit of 1 characters cannot hold the next character at offset 15; raise the toolset limit.',
+					'The journeys limit of 1 characters cannot hold the next character at offset 15; raise the journeys limit.',
 				)
 			} finally {
 				await single.destroy()
@@ -877,7 +1042,7 @@ e3 combobox "Size"
 				expect(errors).toEqual([
 					'No journey is named "checkout"; call journeys.',
 					'Journey add-kettle needs the input "email"; call replay with inputs.',
-					'Journey add-kettle has no parameter "emial"; call journeys.',
+					'Journey add-kettle has no parameter named "emial"; call journeys.',
 					'Journey gap-kettle has a gap at s2 (the element is in a child frame); call edit to remove or replace s2.',
 					'Journey press-kettle cannot run here: s2 press is not available in a page toolset; call journeys.',
 					'Journey switch-kettle cannot run here: s2 switch needs a browser context; call journeys.',

@@ -7,7 +7,12 @@ import type {
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
 import { isRecord, parseJSON } from '@orkestrel/contract'
-import { BROWSER_JOURNEY_NAME_PATTERN, BrowserError, validateBrowserJourney } from '@src/core'
+import {
+	BROWSER_JOURNEY_NAME_PATTERN,
+	BrowserError,
+	validateBrowserJourney,
+	normalizeBrowserJourneyReason,
+} from '@src/core'
 import {
 	BROWSER_JOURNEY_SNAPSHOT_FILE,
 	BROWSER_JOURNEY_REVISION_FILE,
@@ -54,7 +59,11 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 				throw new BrowserError('Journey name differs from its directory', 'BROWSER_JOURNEY_FILE')
 			return { journey: value['journey'], revision: value['revision'] }
 		} catch (error) {
-			throw this.#files.translateError(path, error)
+			const translated = this.#files.translateError(path, error)
+			throw new BrowserError(translated.message, translated.code, {
+				...translated.context,
+				reason: normalizeBrowserJourneyReason(error),
+			})
 		}
 	}
 
