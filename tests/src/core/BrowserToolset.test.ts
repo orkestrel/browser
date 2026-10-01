@@ -769,6 +769,28 @@ describe('BrowserToolset', () => {
 		})
 	})
 	describe('vocabulary', () => {
+		it('bounds the serialized journey and full tool copy', () => {
+			// Count compact JSON UTF-16 code units as a tokenizer-independent proxy: models read
+			// name, description, and parameters (the input schema), not title or annotations.
+			const definitions = Object.values(BROWSER_TOOL_COPY).map(
+				({ name, description, parameters }) => ({ name, description, parameters }),
+			)
+			const journeys = definitions.filter(({ name }) =>
+				BROWSER_JOURNEY_TOOL_NAMES.some((journey) => journey === name),
+			)
+			const secret = {
+				secret: readProperty<object>(
+					readProperty<object>(BROWSER_TOOL_COPY.type.parameters, 'properties'),
+					'secret',
+				),
+			}
+			// Include the secret property's name and schema without charging for the rest of type.
+			expect
+				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
+				.toBeLessThanOrEqual(3100)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(5900)
+		})
+
 		it('catches a tool outside the seven, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
