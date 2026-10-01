@@ -22,8 +22,8 @@ import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { createConnection, createServer as createNetServer } from 'node:net'
-import { existsSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
@@ -44,7 +44,7 @@ import {
 	WEBSOCKET_OPCODE_TEXT,
 	WEBSOCKET_READY_OPEN,
 } from '@orkestrel/websocket'
-import { createLoopback, createScratch, isRunning } from '@orkestrel/test/server'
+import { createLoopback, createScratch, isRunning, readErrorCode } from '@orkestrel/test/server'
 import {
 	createTeardown,
 	requireValue,
@@ -2241,6 +2241,164 @@ export class BrowseChild {
 			this.#child.kill('SIGKILL')
 		await this.#ending
 	}
+}
+
+/** Names a way a host ends a browse server: the end of its standard input, or `SIGTERM`. */
+export type BrowseEnding = 'EOF' | 'SIGTERM'
+
+/** Lists every way a host ends a browse server, as {@link BrowseEnding} names them. */
+export const BROWSE_ENDINGS: readonly BrowseEnding[] = Object.freeze(['EOF', 'SIGTERM'])
+
+/**
+ * Ends a browse child the way a host does: closes its standard input, or signals it.
+ *
+ * @param child - The spawned child
+ * @param ending - The way to end it
+ */
+export function endBrowseChild(child: BrowseChild, ending: BrowseEnding): void {
+	if (ending === 'EOF') child.end()
+	else child.kill(ending)
+}
+
+/**
+ * Opens the protocol on a browse child and makes its first `look` call, which launches the
+ * child's Chromium.
+ *
+ * @param child - The spawned child
+ * @returns The text the `look` call answered
+ * @throws Thrown when the call answers an error, or when no answer arrives within 60 seconds
+ */
+export async function startBrowseChild(child: BrowseChild): Promise<string> {
+	child.send(
+		{
+			jsonrpc: '2.0',
+			id: 1,
+			method: 'initialize',
+			params: {
+				protocolVersion: '2025-06-18',
+				capabilities: {},
+				clientInfo: { name: 'browse-test', version: '1.0.0' },
+			},
+		},
+		{
+			jsonrpc: '2.0',
+			id: 2,
+			method: 'tools/call',
+			params: { name: 'look', arguments: { what: 'the page' } },
+		},
+	)
+	const answer = await retryUntil(
+		'the answer to the first look',
+		() =>
+			child.lines
+				.map((line): unknown => parseJSON(line))
+				.find((message) => isRecord(message) && message['id'] === 2),
+		(message) => message !== undefined,
+		{ budget: 60_000, interval: 10 },
+	)
+	const result = isRecord(answer) ? answer['result'] : undefined
+	const content = isRecord(result) ? result['content'] : undefined
+	const first: unknown = isArray(content) ? content[0] : undefined
+	const text = isRecord(first) ? first['text'] : undefined
+	if (!isString(text) || !isRecord(result) || result['isError'] === true)
+		throw new Error(`the first look answered ${JSON.stringify(answer)}`)
+	return text
+}
+
+/**
+ * Reports whether this host lists every process's arguments in a `/proc` table.
+ *
+ * @remarks
+ * Linux exposes a process's arguments at `/proc/PID/cmdline`. Windows and macOS expose no such
+ * table, so a case that reads a Chromium command line gates on this reading.
+ */
+export const PROCESS_TABLE = existsSync('/proc/self/cmdline')
+
+/**
+ * Describes a running Chromium process found by the profile its command line names.
+ *
+ * @remarks
+ * - `pid` — the process identifier
+ * - `profile` — the `--user-data-dir` value its command line carries
+ * - `browser` — true for the browser process itself; false for a zygote, GPU, utility, or renderer
+ *   process, each of which carries a `--type=` switch
+ */
+export interface ChromiumProcess {
+	readonly pid: number
+	readonly profile: string
+	readonly browser: boolean
+}
+
+/**
+ * Lists the running Chromium processes whose `--user-data-dir` sits directly in a directory, read
+ * from the host's `/proc` table.
+ *
+ * @remarks
+ * A process that ends between the table's listing and the read of its arguments is left out, and so
+ * is a process that has ended but not been reaped, whose argument list reads empty.
+ *
+ * @param profiles - The directory the profiles sit in
+ * @returns The processes, ordered by identifier
+ * @throws Thrown when {@link PROCESS_TABLE} is false
+ */
+export function readChromiumProcesses(profiles: string): readonly ChromiumProcess[] {
+	if (!PROCESS_TABLE) throw new Error('This host exposes no /proc process table')
+	const directory = resolvePath(profiles)
+	const found: ChromiumProcess[] = []
+	for (const name of readdirSync('/proc')) {
+		if (!/^\d+$/u.test(name)) continue
+		try {
+			const args = readFileSync(join('/proc', name, 'cmdline'), 'utf8').split('\0')
+			const profile = args
+				.find((arg) => arg.startsWith('--user-data-dir='))
+				?.slice('--user-data-dir='.length)
+			if (profile === undefined || dirname(resolvePath(profile)) !== directory) continue
+			found.push({
+				pid: Number(name),
+				profile,
+				browser: !args.some((arg) => arg.startsWith('--type=')),
+			})
+		} catch (error) {
+			if (readErrorCode(error) !== 'ENOENT' && readErrorCode(error) !== 'ESRCH') throw error
+		}
+	}
+	return found.sort((first, second) => first.pid - second.pid)
+}
+
+/**
+ * Kills every Chromium process whose profile sits directly in a directory and waits until none
+ * runs, the teardown for a proof that failed with a browser still open.
+ *
+ * @param profiles - The directory the profiles sit in
+ * @returns Resolves after no such process runs
+ * @throws Thrown when one still runs after 5 seconds
+ */
+export async function destroyChromiumProcesses(profiles: string): Promise<void> {
+	for (const chromium of readChromiumProcesses(profiles)) {
+		try {
+			process.kill(chromium.pid, 'SIGKILL')
+		} catch (error) {
+			if (readErrorCode(error) !== 'ESRCH') throw error
+		}
+	}
+	await waitForCondition(
+		`no Chromium runs with a profile in ${profiles}`,
+		() => readChromiumProcesses(profiles).length === 0,
+		{ budget: 5000, interval: 50 },
+	)
+}
+
+/**
+ * Lists the absolute paths of the entries in a profiles directory.
+ *
+ * @param profiles - The directory the profiles sit in
+ * @returns The entries' paths in name order, or none when the directory is absent
+ */
+export function readProfiles(profiles: string): readonly string[] {
+	if (!existsSync(profiles)) return []
+	return readdirSync(profiles)
+		.sort()
+		.map((name) => join(profiles, name))
 }
 
 /**

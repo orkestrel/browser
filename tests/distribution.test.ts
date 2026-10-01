@@ -16,6 +16,7 @@ import {
 	mkdtempSync,
 	readdirSync,
 	readFileSync,
+	realpathSync,
 	rmSync,
 	statSync,
 	writeFileSync,
@@ -32,9 +33,21 @@ import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { createTeardown, requireValue } from '@orkestrel/test'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
-import { compileBrowserJourney } from '@src/core'
+import { BROWSER_TOOL_TIMEOUT_MS, compileBrowserJourney } from '@src/core'
 import { BROWSER_JOURNEY_ACTION_FIXTURE, BROWSER_JOURNEY_FIXTURE } from './setup.js'
-import { BROWSE_VOCABULARY, FIXTURE_LATE_TEXT, createFixtureServer } from './setupServer.js'
+import {
+	BROWSE_ENDINGS,
+	BROWSE_VOCABULARY,
+	BrowseChild,
+	FIXTURE_LATE_TEXT,
+	PROCESS_TABLE,
+	createFixtureServer,
+	destroyChromiumProcesses,
+	endBrowseChild,
+	readChromiumProcesses,
+	readProfiles,
+	startBrowseChild,
+} from './setupServer.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
@@ -1121,6 +1134,43 @@ for (const entry of STAGE?.entries ?? []) {
 	})
 }
 
+// The installed `browse` entry the manifest's `bin` names, relative to the consumer's directory.
+function readBrowseEntry(stage: Stage): string {
+	const manifest = readJson(join(stage.installed, 'package.json'))
+	const bin = isRecord(manifest) ? manifest['bin'] : undefined
+	const entry = isRecord(bin) ? bin['browse'] : undefined
+	if (typeof entry !== 'string') throw new Error('The installed manifest names no browse binary')
+	return join(stage.installed.slice(stage.consumer.length + 1), entry)
+}
+
+// The Chromium executable the packed binary launches, or a skip naming why none resolved.
+function requireBrowseExecutable(context: TestContext): string {
+	const options = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
+	const executable = options.launchOptions?.executablePath ?? resolvePinnedBrowser()
+	if (executable === undefined || !existsSync(executable)) {
+		const cause = `${describeBrowser(options)} names no executable file`
+		if (RELEASE) throw new Error(`The release gate requires a browser, and ${cause}`)
+		return context.skip(`No browser to launch. ${cause}`)
+	}
+	return executable
+}
+
+// Which Chromium processes run, and with which profile, is read off the host's process table. A
+// host without one has nothing to count, so the release gate fails there and every other run skips.
+// Only Linux exposes the table, so a case behind this gate also runs where `SIGTERM` is cooperative.
+function requireProcessTable(context: TestContext): void {
+	if (PROCESS_TABLE) return
+	const cause = 'this host exposes no /proc table to read a Chromium command line from'
+	if (RELEASE) throw new Error(`The release gate requires a process table, and ${cause}`)
+	context.skip(`No Chromium process to count: ${cause}`)
+}
+
+// The directory the packed binary's default root keeps its profiles in, resolved the way the
+// binary's working directory resolves it, so a path the table reads compares equal.
+function resolveProfiles(stage: Stage): string {
+	return join(realpathSync(stage.consumer), 'tmp/browsers/.profiles')
+}
+
 // Connects a client to the packed `browse` binary the way an MCP host registers it:
 // `node <installed entry>` from the consumer's own directory. The stdio client spawns its child in
 // this process's working directory and takes no other, so the consumer is that directory until
@@ -1130,14 +1180,10 @@ async function connectBrowse(
 	stage: Stage,
 	environment: Readonly<Record<string, string>>,
 ): Promise<MCPClientInterface> {
-	const manifest = readJson(join(stage.installed, 'package.json'))
-	const bin = isRecord(manifest) ? manifest['bin'] : undefined
-	const entry = isRecord(bin) ? bin['browse'] : undefined
-	if (typeof entry !== 'string') throw new Error('The installed manifest names no browse binary')
 	const client = createMCPClient({
 		transport: createStdioClientTransport({
 			command: process.execPath,
-			args: [join(stage.installed.slice(stage.consumer.length + 1), entry)],
+			args: [readBrowseEntry(stage)],
 			env: { BROWSE_ROOT: '', BROWSE_HEADLESS: 'true', BROWSE_READONLY: '', ...environment },
 		}),
 		identity: { name: 'distribution-consumer', version: '1.0.0' },
@@ -1167,7 +1213,10 @@ async function callBrowse(
 
 // The `browse` binary as a consumer installs it: spawned from the installed tree through the mcp
 // package's stdio client, it lists its vocabulary without Chromium, then drives the pinned
-// Chromium through one journey whose files land under the consumer's own `tmp/browsers`.
+// Chromium through one journey whose files land under the consumer's own `tmp/browsers`. The later
+// cases read the host's process table and the profiles directory for the Chromium each server
+// launches: one launch for concurrent first calls, one profile per server, and none left after the
+// server's input ends or it receives `SIGTERM`.
 describe('packed browse binary', () => {
 	it(
 		'lists the vocabulary without Chromium, then records, saves, lists, edits, and replays a journey [requires the registry and a browser]',
@@ -1185,13 +1234,7 @@ describe('packed browse binary', () => {
 				await absent.disconnect()
 				expect(existsSync(root)).toBe(false)
 
-				const options = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
-				const executable = options.launchOptions?.executablePath ?? resolvePinnedBrowser()
-				if (executable === undefined || !existsSync(executable)) {
-					const cause = `${describeBrowser(options)} names no executable file`
-					if (RELEASE) throw new Error(`The release gate requires a browser, and ${cause}`)
-					return context.skip(`No browser to launch. ${cause}`)
-				}
+				const executable = requireBrowseExecutable(context)
 				const fixtures = await createFixtureServer()
 				teardown.add(() => fixtures.destroy())
 				const client = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
@@ -1240,6 +1283,120 @@ describe('packed browse binary', () => {
 				// Closing the client ends the child with `SIGTERM`, whose handler removes the profile.
 				await client.disconnect()
 				expect(readdirSync(join(root, '.profiles'))).toStrictEqual([])
+			} finally {
+				await teardown.destroy()
+			}
+		},
+	)
+
+	// One stdio channel carries one client, so the two first calls share a server: sent before
+	// either answers, both reach it before its launch settles and must await that one launch.
+	it(
+		'launches one Chromium in one profile for two first calls sent at once, and ends both when the client closes [requires the registry and a browser]',
+		{ timeout: 120_000 },
+		async (context) => {
+			const stage = requireStage(context)
+			const executable = requireBrowseExecutable(context)
+			requireProcessTable(context)
+			const profiles = resolveProfiles(stage)
+			const before = readProfiles(profiles)
+			const teardown = createTeardown()
+			teardown.add(() => destroyChromiumProcesses(profiles))
+			try {
+				const client = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
+				teardown.add(() => client.disconnect())
+				const views = await Promise.all([
+					callBrowse(client, 'look', { what: 'the page' }),
+					callBrowse(client, 'look', { what: 'the title' }),
+				])
+				expect(views).toStrictEqual([
+					expect.stringMatching(/^page /u),
+					expect.stringMatching(/^page /u),
+				])
+				const created = readProfiles(profiles).filter((profile) => !before.includes(profile))
+				expect(created).toHaveLength(1)
+				const browsers = readChromiumProcesses(profiles).filter((running) => running.browser)
+				expect(browsers.map((running) => running.profile)).toStrictEqual(created)
+				await client.disconnect()
+				expect(readChromiumProcesses(profiles)).toStrictEqual([])
+				expect(readProfiles(profiles)).toStrictEqual(before)
+			} finally {
+				await teardown.destroy()
+			}
+		},
+	)
+
+	it(
+		'gives two servers in one consumer directory a Chromium and a profile each, and ending one leaves the other [requires the registry and a browser]',
+		{ timeout: 120_000 },
+		async (context) => {
+			const stage = requireStage(context)
+			const executable = requireBrowseExecutable(context)
+			requireProcessTable(context)
+			const profiles = resolveProfiles(stage)
+			const before = readProfiles(profiles)
+			const teardown = createTeardown()
+			teardown.add(() => destroyChromiumProcesses(profiles))
+			try {
+				const first = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
+				teardown.add(() => first.disconnect())
+				const second = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
+				teardown.add(() => second.disconnect())
+				await Promise.all([
+					callBrowse(first, 'look', { what: 'the page' }),
+					callBrowse(second, 'look', { what: 'the page' }),
+				])
+				const created = readProfiles(profiles).filter((profile) => !before.includes(profile))
+				expect(created).toHaveLength(2)
+				const browsers = readChromiumProcesses(profiles).filter((running) => running.browser)
+				expect(browsers.map((running) => running.profile).sort()).toStrictEqual(created)
+				await first.disconnect()
+				const remaining = readChromiumProcesses(profiles).filter((running) => running.browser)
+				expect(remaining).toHaveLength(1)
+				expect(browsers).toContainEqual(remaining[0])
+				expect(readProfiles(profiles).filter((profile) => !before.includes(profile))).toStrictEqual(
+					remaining.map((running) => running.profile),
+				)
+				await second.disconnect()
+				expect(readChromiumProcesses(profiles)).toStrictEqual([])
+				expect(readProfiles(profiles)).toStrictEqual(before)
+			} finally {
+				await teardown.destroy()
+			}
+		},
+	)
+
+	// The child is spawned directly rather than through the stdio client, whose close signals it,
+	// so each ending reaches the server alone and the child's own exit status is read.
+	it.for(BROWSE_ENDINGS)(
+		'ends its Chromium and removes its profile within the tool deadline on %s [requires the registry and a browser]',
+		{ timeout: 120_000 },
+		async (ending, context) => {
+			const stage = requireStage(context)
+			const executable = requireBrowseExecutable(context)
+			requireProcessTable(context)
+			const profiles = resolveProfiles(stage)
+			const before = readProfiles(profiles)
+			const teardown = createTeardown()
+			teardown.add(() => destroyChromiumProcesses(profiles))
+			try {
+				const child = new BrowseChild(readBrowseEntry(stage), stage.consumer, {
+					BROWSE_EXECUTABLE: executable,
+					BROWSE_HEADLESS: 'true',
+				})
+				teardown.add(() => child.destroy())
+				expect(await startBrowseChild(child)).toMatch(/^page /u)
+				const created = readProfiles(profiles).filter((profile) => !before.includes(profile))
+				expect(created).toHaveLength(1)
+				const browsers = readChromiumProcesses(profiles).filter((running) => running.browser)
+				expect(browsers.map((running) => running.profile)).toStrictEqual(created)
+				const started = performance.now()
+				endBrowseChild(child, ending)
+				expect(await child.ending).toStrictEqual({ code: 0, signal: null })
+				expect(performance.now() - started).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
+				expect(readChromiumProcesses(profiles)).toStrictEqual([])
+				expect(readProfiles(profiles)).toStrictEqual(before)
+				expect(child.stderr).toBe('')
 			} finally {
 				await teardown.destroy()
 			}
