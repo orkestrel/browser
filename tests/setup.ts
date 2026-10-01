@@ -1732,7 +1732,6 @@ export const BROWSER_ELEMENT_WORLDS: Readonly<Record<string, number>> = Object.f
 
 /** Configures protocol responses for discriminating element action tests. */
 export interface BrowserElementFixtureOptions {
-	readonly writer?: BrowserWriterInterface
 	readonly local?: boolean
 	readonly nested?: boolean
 	readonly roots?: ReadonlyMap<string, Readonly<Record<string, unknown>>>
@@ -2140,7 +2139,7 @@ export async function createBrowserElementFixture(
 		recording,
 		'main',
 		'session-main',
-		options?.writer,
+		undefined,
 		'https://example.test/cart',
 	)
 	if (options?.local !== true) await attachBrowserElementChild(transport, page)
@@ -3218,6 +3217,29 @@ export function describeBrowserRunStore(
 	factory: () => BrowserRunStoreInterface | Promise<BrowserRunStoreInterface>,
 ): void {
 	describe(`${name}`, () => {
+		it('refuses capture on a slot the store did not open', async () => {
+			const store = await factory()
+			await expect(
+				store.capture({ id: BROWSER_RUN_FIXTURE.id }, 's1.png', new Uint8Array([137, 80])),
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+		})
+		it('refuses capture on a slot opened by another store', async () => {
+			const store = await factory()
+			const other = await factory()
+			const slot = await other.open('add-kettle')
+			await expect(store.capture(slot, 's1.png', new Uint8Array([137, 80]))).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+			})
+		})
+		it('honours an aborted signal when capturing an opened slot', async () => {
+			const store = await factory()
+			const slot = await store.open('add-kettle')
+			await expect(
+				store.capture(slot, 's1.png', new Uint8Array([137, 80]), {
+					signal: AbortSignal.abort(new Error('capture aborted')),
+				}),
+			).rejects.toThrow('capture aborted')
+		})
 		it('opens unique ids and gets and deletes missing runs', async () => {
 			const store = await factory()
 			const first = await store.open('add-kettle')

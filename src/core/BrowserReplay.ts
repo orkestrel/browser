@@ -15,6 +15,7 @@ import type {
 	BrowserRunOutcome,
 	BrowserRunSlot,
 	BrowserRunStep,
+	BrowserScreenshotResult,
 	BrowserToolsetResult,
 	BrowserToolsetInterface,
 } from './types.js'
@@ -105,8 +106,8 @@ export class BrowserReplay implements BrowserReplayInterface {
 				)
 				steps.push(recorded)
 				try {
-					if (!secret && slot.directory !== undefined && !options?.signal?.aborted) {
-						const capture = await this.#capture(slot.directory, step.id, options)
+					if (!secret && !options?.signal?.aborted) {
+						const capture = await this.#capture(slot, step.id, options)
 						if (capture !== undefined) {
 							recorded = { ...recorded, capture }
 							steps[steps.length - 1] = recorded
@@ -309,19 +310,26 @@ export class BrowserReplay implements BrowserReplayInterface {
 	}
 
 	async #capture(
-		directory: string,
+		slot: BrowserRunSlot,
 		id: string,
 		options?: BrowserCallOptions,
 	): Promise<string | undefined> {
 		const view = this.#toolset.view
-		if (!view.trusted || !('screenshot' in view) || typeof view.screenshot !== 'function')
+		const runs = this.#options?.runs
+		if (
+			runs === undefined ||
+			!view.trusted ||
+			!('screenshot' in view) ||
+			typeof view.screenshot !== 'function'
+		)
 			return undefined
-		await view.screenshot({
-			path: `${directory}/${id}.png`,
+		const screenshot: BrowserScreenshotResult = await view.screenshot({
 			signal: options?.signal,
 			timeout: options?.timeout,
 		})
-		return `${id}.png`
+		return runs.capture(slot, `${id}.png`, screenshot.bytes, {
+			...(options?.signal === undefined ? {} : { signal: options.signal }),
+		})
 	}
 
 	async #write(run: BrowserRun): Promise<void> {

@@ -2054,8 +2054,8 @@ export interface BrowserJourneyStoreInterface {
  *
  * @remarks
  * - `id` — the run id
- * - `directory` — the run directory the store created, which a capture is written into; absent
- *   for a store without directories
+ * - `directory` — the run directory the store created; absent for a store without directories.
+ *   A capture is written through the store's `capture` method, never by the caller.
  */
 export interface BrowserRunSlot {
 	readonly id: string
@@ -2070,6 +2070,21 @@ export interface BrowserRunStoreInterface {
 	get(name: string, id: string, options?: BrowserStoreOptions): Promise<BrowserRun | undefined>
 	/** Writes the run under the journey name and the run id it carries. */
 	set(run: BrowserRun, options?: BrowserStoreOptions): Promise<void>
+	/**
+	 * Writes capture bytes under the name into the run directory `open` created for the slot.
+	 * @param slot - Slot opened by this store
+	 * @param name - Capture file name
+	 * @param bytes - Screenshot bytes to persist
+	 * @param options - Cancellation options
+	 * @returns Name the step records, or `undefined` for a store without directories
+	 * @throws {@link BrowserError} Thrown with `BROWSER_JOURNEY_PATH` when this store did not open the slot.
+	 */
+	capture(
+		slot: BrowserRunSlot,
+		name: string,
+		bytes: Uint8Array,
+		options?: BrowserStoreOptions,
+	): Promise<string | undefined>
 	/** Removes the run stored under the journey name and id; a missing run is a no-op. */
 	delete(name: string, id: string, options?: BrowserStoreOptions): Promise<void>
 	/**
