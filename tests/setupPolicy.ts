@@ -1,3 +1,4 @@
+import type { Blueprint } from '@orkestrel/scaffold'
 import {
 	createGuide,
 	extractSourceLines,
@@ -5,7 +6,10 @@ import {
 	resolveLink,
 } from '@orkestrel/guide'
 import { BASE_DEV_DEPENDENCIES, HOST_PATHS } from '@orkestrel/scaffold'
+import { spawnSync } from 'node:child_process'
+import { createRequire } from 'node:module'
 import {
+	realpathSync,
 	existsSync,
 	globSync,
 	mkdirSync,
@@ -18,7 +22,7 @@ import {
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, matchesGlob, relative as relativePath, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseSync } from 'vite'
+import { parseAst, parseSync } from 'vite'
 import { stripPolicyCode, textToPolicyHits } from '../configs/policy.js'
 
 /** Names a rule the fleet sweep decides from workspace text and paths. */
@@ -97,7 +101,7 @@ export const POLICY_SURFACE_BARREL_PATTERN =
 	/^\s*export\s+\*\s+from\s+(?:'(\.\.?\/[^']+\.js)'|"(\.\.?\/[^"]+\.js)")\s*;?\s*$/u
 
 /** Names the workspace-relative styles side-effect entry the workspace rule prescribes. */
-export const POLICY_SURFACE_STYLES_ENTRY = 'src/styles/index.ts'
+export const POLICY_SURFACE_STYLES_ENTRY = 'src/styles/sheet.ts'
 
 /** Names the violation reported when the styles side-effect entry does not import `./index.scss` alone. */
 export const POLICY_SURFACE_STYLES_MESSAGE =
@@ -147,6 +151,8 @@ export function createPolicySurfaceFixture(): PolicyScratchInterface {
 	try {
 		writePolicySurfaceHost(scratch)
 		scratch.write('package.json', '{"name":"@orkestrel/sample"}\n')
+		scratch.write('tests/setup.ts', '')
+		scratch.write('tests/setup.test.ts', "import './setupServer.js'\n")
 		return scratch
 	} catch (error) {
 		scratch.destroy()
@@ -176,11 +182,14 @@ export interface PolicyScratchInterface {
 /**
  * Creates a contained temporary directory owned by one vendored test.
  *
- * @param options - The temporary directory name prefix.
+ * @param options - The temporary directory name prefix and optional parent directory.
  * @returns The owned scratch directory.
  */
-export function createPolicyScratch(options: { readonly prefix: string }): PolicyScratchInterface {
-	const root = mkdtempSync(join(tmpdir(), options.prefix))
+export function createPolicyScratch(options: {
+	readonly prefix: string
+	readonly parent?: string
+}): PolicyScratchInterface {
+	const root = mkdtempSync(join(options.parent ?? tmpdir(), options.prefix))
 	return {
 		path: root,
 		write(target, text) {
@@ -513,7 +522,58 @@ export function inspectPolicyMirrors(root: string): readonly PolicyViolation[] {
 		...globSync(POLICY_MODULE_GLOB, { cwd: root }).sort().map(normalizePolicyPath),
 		...globSync(POLICY_TESTS_MODULE_GLOB, { cwd: root }).sort().map(normalizePolicyPath),
 	])
-	return inspectPolicyMirrorPaths(tests, modules)
+	return [...inspectPolicyMirrorPaths(tests, modules), ...inspectPolicySetup(root)]
+}
+
+/**
+ * Inspects root setup modules and their proofs in both directions.
+ *
+ * @param root - The workspace root to inspect.
+ * @returns Missing modules and uncovered exporting setup modules.
+ */
+export function inspectPolicySetup(root: string): readonly PolicyViolation[] {
+	const paths = new Set(globSync('tests/setup*.ts', { cwd: root }).map(normalizePolicyPath))
+	const shared = paths.has('tests/setup.test.ts')
+		? readFileSync(join(root, 'tests/setup.test.ts'), 'utf8')
+		: ''
+	const imports = new Set<string>()
+	for (const declaration of parseAst(shared, { lang: 'ts' }).body) {
+		if (declaration.type !== 'ImportDeclaration') continue
+		const specifier = declaration.source.value
+		if (/^\.\/setup[^/]*\.(?:js|ts)$/u.test(specifier))
+			imports.add('tests/' + specifier.slice(2).replace(/\.js$/u, '.ts'))
+	}
+	const violations: PolicyViolation[] = []
+	for (const path of [...paths].sort()) {
+		const module = path.endsWith('.test.ts') ? path.replace(/\.test\.ts$/u, '.ts') : path
+		if (
+			HOST_PATHS.some(
+				(vendored) =>
+					module === normalizePolicyPath(vendored) ||
+					module.startsWith(normalizePolicyPath(vendored) + '/'),
+			)
+		)
+			continue
+		if (path.endsWith('.test.ts')) {
+			if (!paths.has(module))
+				violations.push(
+					createPolicyViolation('mirror', path, `setup proof requires its module: ${module}`),
+				)
+		} else if (
+			/^export /m.test(readFileSync(join(root, path), 'utf8')) &&
+			!paths.has(path.replace(/\.ts$/u, '.test.ts')) &&
+			!imports.has(path)
+		) {
+			violations.push(
+				createPolicyViolation(
+					'mirror',
+					path,
+					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
+				),
+			)
+		}
+	}
+	return violations
 }
 
 /**
@@ -1932,203 +1992,6 @@ export function readPolicyPaths(root: string): readonly string[] {
 	return globSync(POLICY_PORTABILITY_GLOB, { cwd: root }).map(normalizePolicyPath).sort()
 }
 
-/** Names the source tokens that mark polling, an absent wait surface, or a deleted name. */
-export const POLICY_SOURCE_BANNED: readonly string[] = Object.freeze([
-	'setInterval',
-	'.until(',
-	'BrowserLocator',
-	'BrowserSelector',
-	'compileFunctionWaitExpression',
-	'waitForCDPReady',
-	'BROWSER_WAIT_POLL_INTERVAL_MS',
-	'BROWSER_TEST_ID_ATTRIBUTE',
-	'BROWSER_VISIBILITY_SOURCE',
-	'.article(',
-	'.content(',
-	'.cancel(',
-	"'cancelled'",
-])
-
-/** Records one `setTimeout` call site the source may keep, by path and enclosing declaration. */
-export interface PolicyDeadline {
-	readonly path: string
-	readonly declaration: string
-	readonly reason: string
-}
-
-/** Lists every `setTimeout` call site the source keeps, each a single deadline or input delay. */
-export const POLICY_SOURCE_DEADLINES: readonly PolicyDeadline[] = Object.freeze([
-	{
-		path: 'src/server/Browser.ts',
-		declaration: '#handleTransportLoss',
-		reason: 'one-shot deferral before a transport loss is confirmed',
-	},
-	{
-		path: 'src/server/Browser.ts',
-		declaration: '#waitForRemainderWithin',
-		reason: 'process-group drain, the named exception in guide invariant 13',
-	},
-	{
-		path: 'src/server/transports/WebSocketCDPTransport.ts',
-		declaration: '#start',
-		reason: 'handshake deadline',
-	},
-	{
-		path: 'src/server/helpers.ts',
-		declaration: 'fetchCDPTargets',
-		reason: 'request deadline that aborts the fetch',
-	},
-	{
-		path: 'src/core/BrowserTracing.ts',
-		declaration: '#wait',
-		reason: 'trace completion deadline',
-	},
-	{
-		path: 'src/core/BrowserToolset.ts',
-		declaration: '#bounded',
-		reason: 'receipt deadline, cleared by the enclosing race',
-	},
-	{
-		path: 'src/core/BrowserPage.ts',
-		declaration: '#parkReadiness',
-		reason: 'readiness deadline',
-	},
-	{
-		path: 'src/core/BrowserPage.ts',
-		declaration: '#waitForLoadEvent',
-		reason: 'load event deadline',
-	},
-	{
-		path: 'src/core/CDPClient.ts',
-		declaration: 'send',
-		reason: 'command reply deadline',
-	},
-	{
-		path: 'src/core/BrowserNavigationManager.ts',
-		declaration: '#park',
-		reason: 'navigation idle deadline',
-	},
-	{
-		path: 'src/core/BrowserNavigationRecord.ts',
-		declaration: 'wait',
-		reason: 'navigation start deadline, cleared on settlement',
-	},
-	{
-		path: 'src/core/BrowserNavigationRecord.ts',
-		declaration: 'settle',
-		reason: 'settlement deadline that resolves the stage reached, cleared on settlement',
-	},
-	{
-		path: 'src/core/BrowserKeyboard.ts',
-		declaration: 'press',
-		reason: 'caller-requested delay between key events, not a poll',
-	},
-	{
-		path: 'src/core/BrowserKeyboard.ts',
-		declaration: 'type',
-		reason: 'caller-requested delay between key events, not a poll',
-	},
-	{
-		path: 'src/core/BrowserMouse.ts',
-		declaration: 'click',
-		reason: 'caller-requested delay between button events, not a poll',
-	},
-	{
-		path: 'src/core/BrowserMouse.ts',
-		declaration: 'drag',
-		reason: 'caller-requested delay between button events, not a poll',
-	},
-	{
-		path: 'src/core/BrowserRegistry.ts',
-		declaration: 'execute',
-		reason: 'tool invocation deadline',
-	},
-	{
-		path: 'src/core/BrowserClock.ts',
-		declaration: 'advance',
-		reason: 'virtual-time budget deadline',
-	},
-	{
-		path: 'src/core/compilers.ts',
-		declaration: 'compileQueryWaitExpression',
-		reason: 'deadline inside the compiled mutation-driven wait',
-	},
-	{
-		path: 'src/browser/BrowserDOMWait.ts',
-		declaration: 'execute',
-		reason: 'wait deadline, counted from entry and cleared on settlement',
-	},
-	{
-		path: 'src/browser/transports/SocketCDPTransport.ts',
-		declaration: '#start',
-		reason: 'socket open deadline',
-	},
-])
-
-const POLICY_SOURCE_HEADER =
-	/^\t?(?:export )?(?:async )?(?:static )?(?:function )?(#?[A-Za-z_]\w*)\s*(?:<[^>]*>)?\((?:.*\)(?::[^{=]+)? \{)?$/u
-const POLICY_SOURCE_STATEMENTS: ReadonlySet<string> = new Set([
-	'if',
-	'for',
-	'while',
-	'switch',
-	'catch',
-	'return',
-	'await',
-	'throw',
-	'super',
-])
-
-/**
- * Names the method or function declaration that encloses a source line.
- *
- * @param lines - The source lines.
- * @param index - The zero-based index of the line to place.
- * @returns The enclosing declaration name, or `undefined` when none matches.
- */
-export function readPolicyDeclaration(lines: readonly string[], index: number): string | undefined {
-	for (let cursor = index - 1; cursor >= 0; cursor -= 1) {
-		const name = POLICY_SOURCE_HEADER.exec(lines[cursor] ?? '')?.[1]
-		if (name !== undefined && !POLICY_SOURCE_STATEMENTS.has(name)) return name
-	}
-	return undefined
-}
-
-/**
- * Inspects `src/**\/*.ts` for polling, deleted names, and a `setTimeout` outside the deadline allowlist.
- *
- * @param root - The workspace root whose `src` directory is read.
- * @returns Every banned token, unlisted timer site, and stale allowlist entry in path order.
- */
-export function inspectPolicySource(root: string): readonly string[] {
-	const found: string[] = []
-	const used = new Set<string>()
-	const paths = globSync('src/**/*.ts', { cwd: root }).map(normalizePolicyPath).sort()
-	for (const path of paths) {
-		const lines = readFileSync(join(root, path), 'utf8').split('\n')
-		lines.forEach((text, index) => {
-			for (const token of POLICY_SOURCE_BANNED)
-				if (text.includes(token)) found.push(`${path}:${index + 1} uses ${token}`)
-			if (!text.includes('setTimeout(')) return
-			const declaration = readPolicyDeclaration(lines, index)
-			const key = `${path} ${declaration}`
-			if (
-				declaration !== undefined &&
-				POLICY_SOURCE_DEADLINES.some(
-					(entry) => entry.path === path && entry.declaration === declaration,
-				)
-			)
-				used.add(key)
-			else
-				found.push(`${path}:${index + 1} setTimeout in ${declaration} is not an allowed deadline`)
-		})
-	}
-	for (const entry of POLICY_SOURCE_DEADLINES)
-		if (!used.has(`${entry.path} ${entry.declaration}`))
-			found.push(`${entry.path} allowlists ${entry.declaration} with no setTimeout call`)
-	return found
-}
-
 /**
  * Inspects the workspace-authored path population for a name a Windows checkout cannot hold.
  *
@@ -2542,22 +2405,26 @@ export function collectPolicyDeclarations(
  * @param root - The workspace root to inspect.
  * @returns The parsed declarations and incomplete-population violations.
  * @remarks
- * The `src/styles/index.ts` side-effect entry is excluded from barrel validation and instead
- * requires exactly one bare `./index.scss` import.
+ * Every `index.ts` follows barrel validation. Each selected sheet's `sheet.ts` entry requires
+ * exactly one bare `./index.scss` import, including styles extensions and themes.
  */
 export function readPolicySurface(root: string): PolicySurfacePopulation {
 	const files: Record<string, string> = {}
 	for (const path of globSync('src/**/*.ts', { cwd: root }).map(normalizePolicyPath).sort()) {
 		files[path] = readFileSync(join(root, path), 'utf8')
 	}
-	const barrels = Object.keys(files).filter(
-		(path) => path.endsWith('/index.ts') && path !== POLICY_SURFACE_STYLES_ENTRY,
-	)
+	const barrels = Object.keys(files).filter((path) => path.endsWith('/index.ts'))
 	const targets = new Set<string>()
 	const violations: PolicyViolation[] = []
-	const stylesEntry = files[POLICY_SURFACE_STYLES_ENTRY]
-	if (stylesEntry !== undefined) {
-		const stylesSource = parseSync(POLICY_SURFACE_STYLES_ENTRY, stylesEntry)
+	const sheets = new Set([
+		POLICY_SURFACE_STYLES_ENTRY,
+		...collectSheets(root).map((face) => `src/${face}/sheet.ts`),
+		'src/styles/themes/sheet.ts',
+	])
+	for (const path of sheets) {
+		const stylesEntry = files[path]
+		if (stylesEntry === undefined) continue
+		const stylesSource = parseSync(path, stylesEntry)
 		const stylesStatement =
 			stylesSource.errors.length === 0 ? stylesSource.program.body[0] : undefined
 		const stylesValid =
@@ -2571,14 +2438,7 @@ export function readPolicySurface(root: string): PolicySurfacePopulation {
 				stylesStatement === undefined
 					? 1
 					: stylesEntry.slice(0, stylesStatement.start).split(/\r\n|\n/u).length
-			violations.push(
-				createPolicyViolation(
-					'surface',
-					POLICY_SURFACE_STYLES_ENTRY,
-					POLICY_SURFACE_STYLES_MESSAGE,
-					line,
-				),
-			)
+			violations.push(createPolicyViolation('surface', path, POLICY_SURFACE_STYLES_MESSAGE, line))
 		}
 	}
 	for (const path of barrels) {
@@ -2872,6 +2732,176 @@ export const POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
 		],
 	},
 ])
+
+/** Lists root setup mirror controls and their expected mirror readings. */
+export const SETUP_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
+	{
+		label: 'rejects an exporting setup module without proof',
+		membership: 'target-owned exporting root setup modules',
+		rule: 'mirror',
+		files: [{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' }],
+		violations: [
+			{
+				rule: 'mirror',
+				path: 'tests/setupCanvas.ts',
+				message:
+					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
+			},
+		],
+	},
+	{
+		label: 'admits a non-exporting setup module without proof',
+		membership: 'root setup modules without exports',
+		rule: 'mirror',
+		files: [{ path: 'tests/setupCanvas.ts', content: 'const canvas = 1\nvoid canvas\n' }],
+		violations: [],
+	},
+	{
+		label: 'rejects a setup proof without its module',
+		membership: 'target-owned root setup proofs',
+		rule: 'mirror',
+		files: [{ path: 'tests/setupCanvas.test.ts', content: '' }],
+		violations: [
+			{
+				rule: 'mirror',
+				path: 'tests/setupCanvas.test.ts',
+				message: 'setup proof requires its module: tests/setupCanvas.ts',
+			},
+		],
+	},
+	{
+		label: 'admits a module imported by the shared setup proof',
+		membership: 'root setup modules with shared proof imports',
+		rule: 'mirror',
+		files: [
+			{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' },
+			{ path: 'tests/setup.ts', content: '' },
+			{ path: 'tests/setup.test.ts', content: "import { CANVAS } from './setupCanvas.js'\n" },
+		],
+		violations: [],
+	},
+	{
+		label: 'rejects a commented import in the shared setup proof',
+		membership: 'exporting root setup modules named only by comments',
+		rule: 'mirror',
+		files: [
+			{ path: 'tests/setupCanvas.ts', content: 'export const CANVAS = 1\n' },
+			{ path: 'tests/setup.ts', content: '' },
+			{
+				path: 'tests/setup.test.ts',
+				content: "/*\nimport { CANVAS } from './setupCanvas.js'\n*/\nexport {}\n",
+			},
+		],
+		violations: [
+			{
+				rule: 'mirror',
+				path: 'tests/setupCanvas.ts',
+				message:
+					'exporting setup module requires its sibling proof or an import from tests/setup.test.ts',
+			},
+		],
+	},
+	{
+		label: 'admits an inventory-vendored setup module without proof',
+		membership: 'host-inventory setup modules outside the mirror population',
+		rule: 'mirror',
+		files: [{ path: 'tests/setupPolicy.ts', content: 'export const POLICY = 1\n' }],
+		violations: [],
+	},
+])
+
+/** Lists standalone sheet selections and their core-bearing control for the vendored proof. */
+export const SHEET_POLICY_SELECTIONS: ReadonlyArray<
+	Pick<Blueprint, 'src' | 'styles' | 'themes'> & {
+		readonly conformance?: boolean
+		readonly integration?: boolean
+		readonly files?: readonly PolicySource[]
+		readonly control?: {
+			readonly before: string
+			readonly after: string
+			readonly failure: string
+		}
+	}
+> = Object.freeze([
+	{ src: [], styles: true, themes: true },
+	{ src: [], styles: false, themes: true },
+	{ src: [], styles: false, themes: true, integration: true },
+	{ src: ['core'], styles: true, themes: true },
+	{
+		src: ['core', 'browser'],
+		styles: true,
+		themes: true,
+		conformance: true,
+		integration: true,
+		files: [
+			{
+				path: 'src/styles/_tokens.scss',
+				content:
+					'// Every published sheet opens with the same full statement so load order cannot change layer order.\n@layer reset, base, bootstrap, theme, elements, components, surfaces, composables, modifiers, utilities;\n',
+			},
+			{
+				path: 'src/styles/themes/index.scss',
+				content:
+					"// Tokens declares only the shared layer order, so this sheet carries no styles defaults.\n@use '../tokens';\n@use 'default';\n",
+			},
+			{ path: 'tests/conformance.test.ts', content: 'export {}\n' },
+			{ path: 'tests/integration.test.ts', content: 'export {}\n' },
+			{ path: 'tests/setupServer.ts', content: 'export {}\n' },
+		],
+	},
+	{
+		src: ['core'],
+		styles: false,
+		themes: false,
+		conformance: true,
+		files: [{ path: 'tests/conformance.test.ts', content: 'export {}\n' }],
+		control: {
+			before: "setupFiles: ['./tests/setup.ts', './tests/setupServer.ts']",
+			after: "setupFiles: ['./tests/setup.ts']",
+			failure: './tests/setupServer.ts',
+		},
+	},
+	{
+		src: ['core'],
+		styles: true,
+		themes: false,
+		integration: true,
+		control: {
+			before:
+				"setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts', './tests/setupStyles.ts']",
+			after: "setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts']",
+			failure: './tests/setupStyles.ts',
+		},
+	},
+	{
+		src: ['core', 'browser'],
+		styles: false,
+		themes: false,
+		integration: true,
+		control: {
+			before: "include: ['tests/integration.test.ts'],\n\t\t\tsetupFiles: ['./tests/setup.ts']",
+			after:
+				"include: ['tests/integration.test.ts'],\n\t\t\tsetupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts']",
+			failure: './tests/setupBrowser.ts',
+		},
+	},
+])
+
+/** Matches the required opening themes directives without fixing quote style. */
+export const SHEET_POLICY_BARREL_PATTERN =
+	/^@use\s+(['"])\.\.\/tokens\1;\s*@use\s+(['"])default\2;/u
+
+/** Matches a sheet's opening layer order with at least two authored names. */
+export const SHEET_POLICY_ORDER_PATTERN = /^@layer\s+[-\w.]+(?:\s*,\s*[-\w.]+)+\s*;/u
+
+/**
+ * Reads a stylesheet after its leading comments and whitespace.
+ * @param text - The authored stylesheet.
+ * @returns The stylesheet beginning at its first directive or rule.
+ */
+export function readSheetPrelude(text: string): string {
+	return text.replace(/^(?:\s|\/\/[^\r\n]*(?:\r\n|\n|$)|\/\*[\s\S]*?\*\/)+/u, '')
+}
 
 /** Lists the physical in-family controls for every skill-family assertion class. */
 export const SKILL_POLICY_CONTROLS: readonly PolicyControl[] = Object.freeze([
@@ -3825,3 +3855,150 @@ export const PORTABILITY_POLICY_CONTROLS: readonly PolicyControl[] = Object.free
 		],
 	},
 ])
+
+/**
+ * Collects sheet faces from their source markers.
+ * @param directory - The workspace root.
+ * @returns Source-selected sheet names in sorted order.
+ */
+export function collectSheets(directory: string): readonly string[] {
+	if (!existsSync(resolve(directory, 'src'))) return []
+	return readdirSync(resolve(directory, 'src'), { withFileTypes: true })
+		.filter(
+			(entry) =>
+				entry.isDirectory() &&
+				existsSync(resolve(directory, 'src', entry.name, 'index.scss')) &&
+				existsSync(resolve(directory, 'src', entry.name, 'sheet.ts')),
+		)
+		.map((entry) => entry.name)
+		.sort()
+}
+
+/**
+ * Collects occupied framework faces from the source and application trees.
+ * @param directory - The workspace root.
+ * @returns Occupied axis and framework paths.
+ */
+export function collectFrameworks(directory: string): readonly string[] {
+	return ['src', 'app'].flatMap((axis) =>
+		existsSync(resolve(directory, axis))
+			? readdirSync(resolve(directory, axis), { withFileTypes: true })
+					.filter((entry) => entry.isDirectory() && entry.name === 'vue')
+					.map((entry) => `${axis}/${entry.name}`)
+			: [],
+	)
+}
+
+/**
+ * Reads a configuration record without asserting its type.
+ * @param value - The configuration value to validate.
+ * @returns The record's own entries; throws for a non-record.
+ */
+export function readConfigRecord(value: unknown): Readonly<Record<string, unknown>> {
+	if (typeof value !== 'object' || value === null || Array.isArray(value))
+		throw new Error('Expected a configuration record')
+	return Object.fromEntries(Object.entries(value))
+}
+
+/**
+ * Reads a declared script and refuses an absent script.
+ * @param scripts - The manifest's script record.
+ * @param name - The required script name.
+ * @returns The declared command; throws for a missing command.
+ */
+export function readConfigScript(scripts: Readonly<Record<string, unknown>>, name: string): string {
+	const script = scripts[name]
+	if (typeof script !== 'string') throw new Error(`Missing script ${name}`)
+	return script
+}
+
+/**
+ * Reads source-selected wrappers and refuses a missing wrapper.
+ * @param directory - The workspace root.
+ * @returns Required wrapper paths; throws for a missing path.
+ */
+export function collectFaceWrappers(directory: string): readonly string[] {
+	const wrappers = [
+		...collectSheets(directory).map((face) => `configs/src/vite.${face}.config.ts`),
+		...collectFrameworks(directory).map(
+			(face) => `configs/${face.replace('/', '/vite.')}.config.ts`,
+		),
+	]
+	for (const wrapper of wrappers)
+		if (!existsSync(resolve(directory, wrapper))) throw new Error(`Missing wrapper ${wrapper}`)
+	return wrappers
+}
+
+/**
+ * Inspects sheet setup membership and themes ordering from configuration data.
+ * @param project - The resolved sheet project.
+ * @param script - The optional chained styles and themes build command.
+ * @returns Missing setup paths and invalid isolation or ordering fields.
+ */
+export function inspectSheetConfiguration(project: unknown, script?: string): readonly string[] {
+	const test = readConfigRecord(readConfigRecord(project).test)
+	const setup = test.setupFiles
+	const failures: string[] = []
+	for (const path of ['./tests/setup.ts', './tests/setupBrowser.ts', './tests/setupStyles.ts'])
+		if (!Array.isArray(setup) || !setup.includes(path)) failures.push(path)
+	if (test.isolate !== false) failures.push('isolate')
+	if (
+		script !== undefined &&
+		(!script.includes('vite.styles.config.ts') ||
+			!script.includes('vite.themes.config.ts') ||
+			script.indexOf('vite.styles.config.ts') > script.indexOf('vite.themes.config.ts'))
+	)
+		failures.push('themes order')
+	return failures
+}
+
+/**
+ * Reads import restrictions and collection sentinels from the installed linter.
+ * @param directory - The fixture workspace containing the lint configuration.
+ * @param paths - The fixtures carrying debugger collection sentinels.
+ * @returns Diagnostic codes paired with workspace-relative paths.
+ */
+export function readImportDiagnostics(
+	directory: string,
+	paths: readonly string[],
+): ReadonlySet<string> {
+	const manifestPath = createRequire(import.meta.url).resolve('oxlint/package.json')
+	const manifest = readConfigRecord(JSON.parse(readFileSync(manifestPath, 'utf8')))
+	const entry =
+		typeof manifest.bin === 'string' ? manifest.bin : readConfigRecord(manifest.bin).oxlint
+	if (typeof entry !== 'string') throw new Error('Missing Oxlint binary')
+	const result = spawnSync(
+		process.execPath,
+		[
+			resolve(dirname(manifestPath), entry),
+			'--config',
+			resolve(directory, '.oxlintrc.json'),
+			'--no-ignore',
+			'--format',
+			'json',
+			...paths,
+		],
+		{ cwd: directory, encoding: 'utf8', timeout: 15_000, windowsHide: true },
+	)
+	if (result.error !== undefined) throw result.error
+	if (result.status !== 1)
+		throw new Error(
+			JSON.stringify({ status: result.status, stdout: result.stdout, stderr: result.stderr }),
+		)
+	const diagnostics = readConfigRecord(JSON.parse(result.stdout)).diagnostics
+	if (!Array.isArray(diagnostics)) throw new Error('Missing lint diagnostics')
+	const codes = new Set<string>()
+	for (const value of diagnostics) {
+		const diagnostic = readConfigRecord(value)
+		if (typeof diagnostic.code !== 'string' || typeof diagnostic.filename !== 'string')
+			throw new Error('Missing diagnostic location')
+		codes.add(
+			diagnostic.code +
+				' ' +
+				normalizePolicyFilename(realpathSync.native(directory), diagnostic.filename),
+		)
+	}
+	for (const path of paths)
+		if (!codes.has('eslint(no-debugger) ' + path)) throw new Error(`Uncollected fixture ${path}`)
+	return codes
+}

@@ -4,11 +4,20 @@ import { playwright } from '@vitest/browser-playwright'
 import { defineConfig } from 'vitest/config'
 import manifest from './package.json' with { type: 'json' }
 import tsconfig from './tsconfig.json' with { type: 'json' }
-import { enforceBuildLog, environmentBoundary, outputBoundary } from './configs/helpers.js'
+import {
+	enforceBuildLog,
+	environmentBoundary,
+	outputBoundary,
+	resolveExternal,
+} from './configs/helpers.js'
 import { resolveBrowser, resolvePinnedBrowser } from './configs/browsers.js'
 import { fileURLToPath, URL } from 'node:url'
 
 const browserOptions = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
+
+const optimizeDeps = {
+	include: ['@orkestrel/test', '@orkestrel/test/browser', '@orkestrel/contract'],
+}
 
 export function resolveWorkspacePath(relativePath: string): string {
 	return fileURLToPath(new URL(relativePath, import.meta.url))
@@ -106,6 +115,17 @@ function isNamedPlugin(plugin: PluginOption): plugin is { name: string } {
 	)
 }
 
+function resolveSourceExternal(id: string): boolean {
+	return (
+		id === '@src/core' ||
+		resolveExternal(id, {
+			peers,
+			refused: [],
+			siblings: [resolveWorkspacePath('src/core/index.ts')],
+		})
+	)
+}
+
 export function srcCore(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
@@ -127,9 +147,14 @@ export function srcCore(override?: UserConfig): UserConfig {
 	return mergeOverride(project, override)
 }
 
+function resolveBrowserFilename(): string {
+	return 'index.js'
+}
+
 export function srcBrowser(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
+		optimizeDeps,
 		publicDir: false,
 		plugins: [outputBoundary('dist/src/browser'), environmentBoundary('src/browser')],
 		build: {
@@ -139,15 +164,12 @@ export function srcBrowser(override?: UserConfig): UserConfig {
 			lib: {
 				entry: resolveWorkspacePath('src/browser/index.ts'),
 				formats: ['es'],
-				fileName: () => 'index.js',
+				fileName: resolveBrowserFilename,
 			},
 			outDir: 'dist/src/browser',
 			rolldownOptions: {
 				onLog: enforceBuildLog,
-				external: (id: string) =>
-					id === '@src/core' ||
-					id.startsWith('@orkestrel/') ||
-					peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+				external: resolveSourceExternal,
 				output: { paths: { '@src/core': '../core/index.js' } },
 			},
 		},
@@ -169,6 +191,10 @@ export function srcBrowser(override?: UserConfig): UserConfig {
 	return mergeOverride(project, override)
 }
 
+function resolveServerFilename(format: string): string {
+	return format === 'es' ? 'index.js' : 'index.cjs'
+}
+
 export function srcServer(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
@@ -181,18 +207,14 @@ export function srcServer(override?: UserConfig): UserConfig {
 			lib: {
 				entry: resolveWorkspacePath('src/server/index.ts'),
 				formats: ['es', 'cjs'],
-				fileName: (format: string) => (format === 'es' ? 'index.js' : 'index.cjs'),
+				fileName: resolveServerFilename,
 			},
 			outDir: 'dist/src/server',
 			target: 'node22',
 			rolldownOptions: {
 				onLog: enforceBuildLog,
 				platform: 'node',
-				external: (id: string) =>
-					id === '@src/core' ||
-					id.startsWith('node:') ||
-					id.startsWith('@orkestrel/') ||
-					peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+				external: resolveSourceExternal,
 				output: [
 					{
 						format: 'es',
@@ -219,6 +241,14 @@ export function srcServer(override?: UserConfig): UserConfig {
 	return mergeOverride(project, override)
 }
 
+function resolveBinFilename(): string {
+	return 'main.js'
+}
+
+function resolveBinExternal(id: string): boolean {
+	return id.startsWith('@src/') || resolveExternal(id, { peers, refused: [], siblings: [] })
+}
+
 export function srcBin(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
@@ -231,17 +261,13 @@ export function srcBin(override?: UserConfig): UserConfig {
 			lib: {
 				entry: resolveWorkspacePath('src/bin/main.ts'),
 				formats: ['es'],
-				fileName: () => 'main.js',
+				fileName: resolveBinFilename,
 			},
 			outDir: 'dist/bin',
 			target: 'node22',
 			rolldownOptions: {
 				onLog: enforceBuildLog,
-				external: (id: string) =>
-					id.startsWith('node:') ||
-					id.startsWith('@orkestrel/') ||
-					id.startsWith('@src/') ||
-					peers.some((peer) => id === peer || id.startsWith(peer + '/')),
+				external: resolveBinExternal,
 			},
 		},
 		test: {
@@ -250,10 +276,10 @@ export function srcBin(override?: UserConfig): UserConfig {
 			setupFiles: ['./tests/setup.ts', './tests/setupServer.ts'],
 			environment: 'node',
 			browser: { enabled: false },
-			// A bin test drives the built executable as a child process, so it spends seconds in
-			// process startup rather than milliseconds, and Vitest's five-second default clears one
-			// alone and times out under a full suite.
-			testTimeout: 30_000,
+			// A bin test drives the real executable over a real temporary repository, so it
+			// spends seconds in process startup and filesystem work rather than milliseconds.
+			// Vitest's five-second default clears one alone and times out under a full suite.
+			testTimeout: 15_000,
 		},
 	}
 	return mergeOverride(project, override)
@@ -297,8 +323,10 @@ export function setup(override?: UserConfig): UserConfig {
 		test: {
 			name: { label: 'setup', color: 'white' },
 			include: ['tests/setup*.test.ts'],
-			exclude: ['tests/setupBrowser.test.ts'],
+			exclude: ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts'],
 			setupFiles: ['./tests/setup.ts'],
+			pool: 'threads',
+			isolate: false,
 			environment: 'node',
 			browser: { enabled: false },
 		},
@@ -309,9 +337,10 @@ export function setup(override?: UserConfig): UserConfig {
 export function setupBrowser(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
+		optimizeDeps,
 		test: {
 			name: { label: 'setup:browser', color: 'blue' },
-			include: ['tests/setupBrowser.test.ts'],
+			include: ['tests/setupBrowser.test.ts', 'tests/setupStyles.test.ts'],
 			setupFiles: ['./tests/setup.ts', './tests/setupBrowser.ts'],
 			globalSetup: ['./tests/setupGlobal.ts'],
 			browser: {
@@ -339,13 +368,17 @@ export function guides(override?: UserConfig): UserConfig {
 	return mergeOverride(project, override)
 }
 
+// Where this package drifts from the official tooling it stays compatible with.
+// The subject is this package, so the proof is hermetic and stays in `npm test`.
 export function conformance(override?: UserConfig): UserConfig {
 	const project: UserConfig = {
 		resolve,
 		test: {
-			name: { label: 'conformance', color: 'green' },
+			name: { label: 'conformance', color: 'magenta' },
 			include: ['tests/conformance.test.ts'],
-			setupFiles: ['./tests/setup.ts'],
+			setupFiles: ['./tests/setup.ts', './tests/setupServer.ts'],
+			pool: 'threads',
+			isolate: false,
 			environment: 'node',
 			browser: { enabled: false },
 		},
