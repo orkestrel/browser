@@ -11,15 +11,15 @@ Opened 2026-10-01 when the journeys campaign in `@orkestrel/browser` closed on b
 | Packages | `@orkestrel/mcp` (layer 4), `@orkestrel/browser` (layer 5), `@orkestrel/ollama` (consumer), `@orkestrel/scaffold` (host), `@orkestrel/contract` (layer 0), `@orkestrel/tool` (layer 2, one item) |
 | Layer order | mcp, then browser, then ollama and the scaffold catalog; contract and tool on their own |
 | Authority | the owner publishes and merges; a session runs each package's units from its plan; every lane is `astra` (Codex) or `opus`, never the session model |
-| Branches | browser `ccr-d15a48b1-yyyll6`; mcp `ccr-d15a48b1-yyyll6` (`619699b`, 0.0.34); scaffold `ccr-d15a48b1-yyyll6` (`437a74b`, main `7bc3142` merged); ollama `ccr-d15a48b1-yyyll6` (`f97df76`) and the local `ccr-d15a48b1-yyyll6-journeys` (`6d61a5a`) |
+| Branches | browser `ccr-d15a48b1-yyyll6` (`5363263`, `ROADMAP.md` items 1, 2, 4, and 5 landed); mcp `ccr-d15a48b1-yyyll6` (`619699b`, 0.0.34); scaffold `ccr-d15a48b1-yyyll6` (`dc1c96e`, main `7bc3142` merged, item 39 closed); ollama `ccr-d15a48b1-yyyll6` (`f97df76`) and the local `ccr-d15a48b1-yyyll6-journeys` (`6d61a5a`) |
 
 ## The order, easiest first
 
-1. **Browser, no publish needed** (`ROADMAP.md` items 5, 4, 2, 1): one lane each in a worktree, landed through a `--no-ff` merge after the full gate set; see the Landing section.
-2. **Scaffold item 39** (`scaffold/plan.md`): a documentation unit on the scaffold session branch; no publish needed.
-3. **The publish wave** (`release.md`): the owner's credential; mcp first, then browser.
-4. **After the wave**: ollama (`ollama/plan.md`), scaffold item 38 and the catalog verb (`scaffold/plan.md`), browser item 3 with `@orkestrel/tool`.
-5. **Separate sessions**: contract (`contract/plan.md`, the repository is not attached here) and scaffold item 38 (a design decision over the generator).
+The units that needed no publish are landed: browser `ROADMAP.md` items 5 and 4 (`3ac285e`), 1 (`ae81af5`), and 2 (`5363263`), and scaffold item 39 (`dc1c96e`). What remains, in order:
+
+1. **The publish wave** (`release.md`): the owner's credential; mcp first, then browser.
+2. **After the wave**: ollama (`ollama/plan.md`), scaffold item 38 and the catalog verb (`scaffold/plan.md`), browser item 3 with `@orkestrel/tool`.
+3. **Separate sessions**: contract (`contract/plan.md`, the repository is not attached here) and scaffold item 38 (a design decision over the generator).
 
 ## Landing a browser unit
 
