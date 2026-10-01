@@ -115,7 +115,7 @@ describe('journey step helpers', () => {
 		}
 	})
 
-	it('answers the dialog after an interrupted helper call and continues the pending input', async () => {
+	it('returns an interrupted action, answers the dialog, and continues the pending input', async () => {
 		const withheld: CDPSentMessage[] = []
 		const fixture = await createBrowserElementFixture({
 			released: (message) => withheld.push(message),
@@ -128,7 +128,7 @@ describe('journey step helpers', () => {
 				action: 'click',
 				arguments: {},
 				target: { role: 'button', name: 'Place order' },
-			}).catch((error: unknown) => error)
+			})
 			await waitForCondition('the helper input is pending', () => withheld.length === 1)
 			fixture.transport.event(
 				'Page.javascriptDialogOpening',
@@ -136,8 +136,9 @@ describe('journey step helpers', () => {
 				'session-main',
 			)
 			expect(await clicking).toMatchObject({
-				message:
-					's1: Clicked e4 button "Place order". A confirm dialog is open: "Continue?"; call dialog.',
+				outcome: 'interrupted',
+				receipt:
+					'Clicked e4 button "Place order". A confirm dialog is open: "Continue?"; call dialog.',
 			})
 			const answered = await performBrowserStep(toolset, 's2', {
 				action: 'dialog',

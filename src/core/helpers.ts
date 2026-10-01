@@ -2421,14 +2421,14 @@ export async function locateBrowserTarget<E extends BrowserElementInterface>(
  *
  * @remarks
  * `options.secret` marks a substituted secret text. `options.caller` carries a hold token.
- * An interrupted action throws its receipt; a following dialog call can answer the pending input.
+ * An interrupted action returns with its outcome; the following dialog call answers the pending input.
  *
  * @param toolset - The toolset and its structurally typed live view
  * @param id - The step identity used in a refusal
  * @param step - The action, literal arguments, and optional semantic element or tab target
  * @param options - The call signal, caller identity, and secret flag
  * @returns The completed structured action
- * @throws Thrown when resolution fails or the action does not finish
+ * @throws Thrown when resolution fails, the action is refused or times out, or its navigation is still pending
  */
 export async function performBrowserStep<E extends BrowserElementInterface>(
 	toolset: Pick<BrowserToolsetInterface, 'perform'> & {
@@ -2476,7 +2476,7 @@ export async function performBrowserStep<E extends BrowserElementInterface>(
 	const action = performed.action
 	if (
 		action === undefined ||
-		action.outcome !== 'done' ||
+		(action.outcome !== 'done' && action.outcome !== 'interrupted') ||
 		action.stage === 'requested' ||
 		action.stage === 'committed'
 	)
