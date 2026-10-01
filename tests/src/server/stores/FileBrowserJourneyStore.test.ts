@@ -29,7 +29,7 @@ describe('BrowserJourneyToolset file listing', () => {
 		const journeys = new BrowserJourneyToolset(toolset, { store })
 		try {
 			for (const name of ['zebra', 'broken', 'alpine', 'harbor'])
-				await store.set(createBrowserJourneyFixture([], { name }))
+				await store.set(createBrowserJourneyFixture(undefined, { name }))
 			scratch.write('broken/journey.json', '{')
 			const result = await toolset.tools.execute({
 				id: 'listing',
@@ -45,10 +45,10 @@ describe('BrowserJourneyToolset file listing', () => {
 				'zebra "Check readiness"',
 			])
 			expect(result.value.split('\n\n')).toEqual([
-				'alpine "Check readiness"',
+				'alpine "Check readiness"\ns1 wait "Ready"',
 				'broken cannot be read: Malformed journey revision',
-				'harbor "Check readiness"',
-				'zebra "Check readiness"',
+				'harbor "Check readiness"\ns1 wait "Ready"',
+				'zebra "Check readiness"\ns1 wait "Ready"',
 			])
 		} finally {
 			await journeys.destroy()

@@ -71,6 +71,7 @@ export function describeFileBrowserStores(): void {
 					}),
 				).toMatchObject({ success: true })
 				const saved = await second.set(createBrowserJourneyFixture())
+				await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
 				expect(
 					await toolset.tools.execute({
 						id: '2',
@@ -98,7 +99,7 @@ export function describeFileBrowserStores(): void {
 				await mkdir(join(scratch.path, '.profiles'))
 				await mkdir(join(scratch.path, 'Not-a-journey'))
 				for (const name of ['alpine', 'harbor'])
-					await store.set(createBrowserJourneyFixture([], { name }))
+					await store.set(createBrowserJourneyFixture(undefined, { name }))
 				const first = await store.list()
 				const next = await store.list({ offset: first.entries.length })
 				expect(first.faults).toEqual([])
@@ -602,7 +603,7 @@ console.log(JSON.stringify({
 			try {
 				const store = new FileBrowserJourneyStore({ root: scratch.path, limit: 1 })
 				for (const name of ['zebra', 'broken', 'alpine', 'harbor'])
-					await store.set(createBrowserJourneyFixture([], { name }))
+					await store.set(createBrowserJourneyFixture(undefined, { name }))
 				await writeFile(join(scratch.path, 'broken', 'journey.json'), '{')
 				const first = await store.list({ limit: 999 })
 				expect(first.entries.map((entry) => entry.journey.name)).toEqual(['alpine'])

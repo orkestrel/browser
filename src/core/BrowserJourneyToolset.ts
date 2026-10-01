@@ -13,7 +13,7 @@ import type {
 	BrowserToolsetInterface,
 } from './types.js'
 import type { ToolContext, ToolInterface } from '@orkestrel/tool'
-import { isArray, isInteger, isRecord, isString } from '@orkestrel/contract'
+import { attempt, isArray, isInteger, isRecord, isString } from '@orkestrel/contract'
 import { createTool } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
@@ -54,7 +54,9 @@ import {
  * its run. The call's signal reaches every store call and every replayed step, and `destroy()`
  * aborts it as well. `save` writes a snapshot before it ends the recording, so a failed or
  * locked write keeps the recorder recording with its steps for the next
- * `save`. `journeys` joins the listings with one blank line and cuts the result at `limit`
+ * `save`. An empty snapshot refuses with `BROWSER_JOURNEY_EMPTY` and keeps recording.
+ * `edit` accepts an array or its JSON string and names a parse error when the string is invalid.
+ * `journeys` joins the listings with one blank line and cuts the result at `limit`
  * characters with a footer that names the next offset. `replay` returns the run's render followed
  * by the view after the run.
  *
@@ -80,6 +82,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	readonly #tools: readonly ToolInterface[]
 	#recorder: BrowserRecorderInterface | undefined
 	#recording: string | undefined
+	#saved: string | undefined
 	#replaying: string | undefined
 	#replay: Promise<void> | undefined
 	#destroying: Promise<void> | undefined
@@ -175,7 +178,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		try {
 			if ((await this.#read(name, signal)) !== undefined) {
 				throw new BrowserError(
-					`A journey named ${JSON.stringify(name)} is saved; call journeys, or record another name.`,
+					`Journey ${JSON.stringify(name)} is saved already and nothing is recording; call journeys to list it, edit to change it, or replay to run it.`,
 					'BROWSER_JOURNEY_SAVED',
 					{ name },
 				)
@@ -203,10 +206,29 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		const recorder = this.#recorder
 		const name = this.#recording
 		if (recorder === undefined || name === undefined)
-			throw new BrowserError(BROWSER_JOURNEY_IDLE_REFUSAL, 'BROWSER_JOURNEY_RECORDING')
+			throw new BrowserError(
+				this.#saved === undefined
+					? BROWSER_JOURNEY_IDLE_REFUSAL
+					: `Nothing is recording; ${JSON.stringify(this.#saved)} was saved. Call journeys, edit, or replay.`,
+				'BROWSER_JOURNEY_RECORDING',
+			)
+		const snapshot = attempt(() => recorder.journey({ name, description }))
+		if (!snapshot.success) {
+			if (
+				isBrowserError(snapshot.error) &&
+				snapshot.error.code === 'BROWSER_JOURNEY_INVALID' &&
+				snapshot.error.context?.['field'] === 'steps'
+			)
+				throw new BrowserError(
+					`Nothing is recorded for ${name}; perform an action, then call save.`,
+					'BROWSER_JOURNEY_EMPTY',
+					{ name },
+				)
+			throw snapshot.error
+		}
 		let saved: BrowserJourneyRevision
 		try {
-			saved = await this.#store.set(recorder.journey({ name, description }), 0, { signal })
+			saved = await this.#store.set(snapshot.value, 0, { signal })
 		} catch (error) {
 			if (signal.aborted) throw error
 			if (isBrowserError(error) && error.code === 'BROWSER_JOURNEY_STALE')
@@ -223,6 +245,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				{ name },
 			)
 		}
+		this.#saved = name
 		if (this.#recorder === recorder) {
 			this.#recorder = undefined
 			this.#recording = undefined
@@ -280,11 +303,26 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		if (this.#readonly)
 			throw new BrowserError(BROWSER_JOURNEY_READONLY_REFUSAL, 'BROWSER_JOURNEY_READONLY')
 		const name = readBrowserToolString(args, 'journey')
-		const requests = args['edits']
+		let requests = args['edits']
+		if (isString(requests)) {
+			const text = requests
+			const parsed = attempt<unknown>(() => JSON.parse(text))
+			if (!parsed.success)
+				throw new BrowserError(
+					`The edits parameter is not valid JSON: ${normalizeBrowserJourneyReason(parsed.error)}; pass an array or a JSON string of the array.`,
+					'BROWSER_TOOLSET_ARGUMENT',
+					{ key: 'edits' },
+				)
+			requests = parsed.value
+		}
 		if (!isArray(requests)) {
-			throw new BrowserError('The edits parameter must be an array.', 'BROWSER_TOOLSET_ARGUMENT', {
-				key: 'edits',
-			})
+			throw new BrowserError(
+				'The edits parameter must be an array or a JSON string of the array.',
+				'BROWSER_TOOLSET_ARGUMENT',
+				{
+					key: 'edits',
+				},
+			)
 		}
 		const revision = await this.#find(name, signal)
 		const edits = requests.map((request, index) => this.#convert(request, index + 1))
@@ -435,7 +473,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		} catch (error) {
 			const reason = normalizeBrowserJourneyReason(error)
 			throw new BrowserError(
-				`Edit ${index} is refused: it ${reason}; call journeys.`,
+				`Edit ${index} is refused: ${reason.startsWith('its ') ? reason : `it ${reason}`}; call journeys.`,
 				'BROWSER_JOURNEY_EDIT',
 				{ index, reason },
 			)

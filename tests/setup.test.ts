@@ -101,7 +101,7 @@ import {
 describe('element protocol and compiler fixtures', () => {
 	it('records run writes while retaining the memory store validation and persistence', async () => {
 		const store = new RecordingBrowserRunStore()
-		const journey = createBrowserJourneyFixture([])
+		const journey = createBrowserJourneyFixture()
 		const slot = await store.open(journey.name)
 		await store.set({
 			format: 1,
@@ -109,7 +109,7 @@ describe('element protocol and compiler fixtures', () => {
 			journey,
 			inputs: {},
 			steps: [],
-			outcome: 'complete',
+			outcome: 'aborted',
 			elapsed: 0,
 		})
 		expect(store.writes.count).toBe(1)
@@ -122,7 +122,7 @@ describe('element protocol and compiler fixtures', () => {
 				journey,
 				inputs: {},
 				steps: [],
-				outcome: 'complete',
+				outcome: 'aborted',
 				elapsed: 0,
 			}),
 		).rejects.toThrow('not opened')

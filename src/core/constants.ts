@@ -714,8 +714,9 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 					description: 'The journey name, such as add-kettle.',
 				}),
 				edits: Object.freeze({
-					type: 'array',
-					description: 'The changes, applied in order; one invalid change refuses them all.',
+					type: Object.freeze(['array', 'string']),
+					description:
+						'The changes, as an array or a JSON string of the array, applied in order; one invalid change refuses them all.',
 					items: Object.freeze({
 						type: 'object',
 						properties: Object.freeze({

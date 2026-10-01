@@ -2510,7 +2510,7 @@ export function collectBrowserJourneyBindings(
 }
 
 /**
- * Applies an ordered edit batch to a copy and validates its final bindings.
+ * Applies an ordered edit batch to a copy and validates its nonempty result and final bindings.
  * @param journey - Valid journey to edit
  * @param edits - Edits in application order
  * @returns The edited journey, with unbound parameters removed
@@ -2525,6 +2525,7 @@ export function editBrowserJourney(
 	let parameters = { ...journey.parameters }
 	let next = journey.next
 	let index = 0
+	let removal = 0
 	const declarations = new Map<string, number>()
 	const origins = new Map<string, number>()
 	const secrets = new Map<string, number>()
@@ -2552,8 +2553,10 @@ export function editBrowserJourney(
 					const position = steps.findIndex((step) => step.id === edit.id)
 					const step = steps[position]
 					if (step === undefined) throw new BrowserError(`names unknown step "${edit.id}"`)
-					if (edit.operation === 'remove') steps.splice(position, 1)
-					else {
+					if (edit.operation === 'remove') {
+						steps.splice(position, 1)
+						removal = index
+					} else {
 						const updated = {
 							...step,
 							arguments: { ...step.arguments, ...edit.arguments },
@@ -2581,6 +2584,10 @@ export function editBrowserJourney(
 					declarations.set(edit.name, index)
 			}
 		}
+		if (steps.length === 0) {
+			index = removal
+			throw new BrowserError('removes the last step')
+		}
 		const bindings = collectBrowserJourneyBindings(steps)
 		for (const [name, declaration] of declarations) {
 			if (!bindings.has(name)) {
@@ -2604,10 +2611,14 @@ export function editBrowserJourney(
 		return structuredClone(candidate)
 	} catch (error) {
 		const reason = normalizeBrowserJourneyReason(error)
-		throw new BrowserError(`Edit ${index} is refused: it ${reason}`, 'BROWSER_JOURNEY_EDIT', {
-			index,
-			reason,
-		})
+		throw new BrowserError(
+			`Edit ${index} is refused: ${reason.startsWith('its ') ? reason : `it ${reason}`}`,
+			'BROWSER_JOURNEY_EDIT',
+			{
+				index,
+				reason,
+			},
+		)
 	}
 }
 
@@ -2991,7 +3002,7 @@ export function validateBrowserJourneyStep(
 }
 
 /**
- * Validates the journey format and its name, ids, bindings, secrets, JSON, and actions.
+ * Validates the journey format and its name, nonempty steps, ids, bindings, secrets, JSON, and actions.
  * @param value - Candidate journey
  * @throws BrowserError - Thrown with BROWSER_JOURNEY_FORMAT for an unknown format, or BROWSER_JOURNEY_INVALID naming the failed invariant
  */
@@ -3013,6 +3024,10 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 			'Invariant 6 (JSON round trip): has malformed journey fields',
 			'BROWSER_JOURNEY_INVALID',
 		)
+	if (value['steps'].length === 0)
+		throw new BrowserError('Invariant 2 (ids): has no steps', 'BROWSER_JOURNEY_INVALID', {
+			field: 'steps',
+		})
 	if (!Number.isSafeInteger(value['next']) || !isFiniteNumber(value['next']) || value['next'] < 1)
 		throw new BrowserError(
 			'Invariant 2 (ids): has an invalid next counter',
@@ -3082,55 +3097,95 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 }
 
 /**
- * Validates an edit structure before its position-dependent checks.
+ * Validates an edit structure and names the operation and field in each refusal.
  * @param value - Candidate edit
  * @throws BrowserError - Thrown when the operation or its fields are malformed
  */
 export function validateBrowserJourneyEdit(value: unknown): asserts value is BrowserJourneyEdit {
-	if (!isJSONValue(value) || !isRecord(value))
-		throw new BrowserError('has a malformed edit', 'BROWSER_JOURNEY_EDIT')
-	switch (value['operation']) {
-		case 'add':
-			if (
-				Object.keys(value).some((key) => !['operation', 'step', 'before', 'after'].includes(key)) ||
-				(value['before'] !== undefined && !isString(value['before'])) ||
-				(value['after'] !== undefined && !isString(value['after'])) ||
-				(value['before'] !== undefined && value['after'] !== undefined)
+	if (!isRecord(value))
+		throw new BrowserError('has no edit object with an "operation" field', 'BROWSER_JOURNEY_EDIT')
+	const operation = value['operation']
+	const fields =
+		operation === 'add'
+			? ['operation', 'step', 'before', 'after']
+			: operation === 'remove'
+				? ['operation', 'id']
+				: operation === 'update'
+					? ['operation', 'id', 'arguments', 'target', 'tab']
+					: operation === 'declare'
+						? ['operation', 'name', 'parameter']
+						: undefined
+	if (fields === undefined)
+		throw new BrowserError(
+			'names no operation among add, update, remove, and declare',
+			'BROWSER_JOURNEY_EDIT',
+		)
+	for (const [field, content] of Object.entries(value)) {
+		if (!fields.includes(field))
+			throw new BrowserError(
+				`its "${operation}" carries an unknown field ${JSON.stringify(field)}`,
+				'BROWSER_JOURNEY_EDIT',
 			)
-				break
-			validateBrowserJourneyStep(value['step'])
-			if ('id' in value['step']) break
+		if (!isJSONValue(content))
+			throw new BrowserError(
+				`its "${operation}" has non-JSON content in ${JSON.stringify(field)}`,
+				'BROWSER_JOURNEY_EDIT',
+			)
+	}
+	switch (operation) {
+		case 'add':
+			if (value['before'] !== undefined && value['after'] !== undefined)
+				throw new BrowserError(
+					'its "add" carries both "before" and "after"',
+					'BROWSER_JOURNEY_EDIT',
+				)
+			for (const field of ['before', 'after']) {
+				if (value[field] !== undefined && (!isString(value[field]) || value[field].length === 0))
+					throw new BrowserError(`its "add" has no step id in "${field}"`, 'BROWSER_JOURNEY_EDIT')
+			}
+			try {
+				validateBrowserJourneyStep(value['step'])
+			} catch (error) {
+				throw new BrowserError(
+					`its "add" has an invalid "step": ${normalizeBrowserJourneyReason(error)}`,
+					'BROWSER_JOURNEY_EDIT',
+				)
+			}
+			if ('id' in value['step'])
+				throw new BrowserError(
+					'its "add" supplies "step.id", which is assigned automatically',
+					'BROWSER_JOURNEY_EDIT',
+				)
 			return
 		case 'remove':
-			if (
-				!isString(value['id']) ||
-				Object.keys(value).some((key) => key !== 'operation' && key !== 'id')
-			)
-				break
+			if (!isString(value['id']) || value['id'].length === 0)
+				throw new BrowserError('its "remove" names no step in "id"', 'BROWSER_JOURNEY_EDIT')
 			return
 		case 'update':
-			if (
-				!isString(value['id']) ||
-				Object.keys(value).some(
-					(key) => !['operation', 'id', 'arguments', 'target', 'tab'].includes(key),
-				) ||
-				(value['arguments'] !== undefined && !isRecord(value['arguments'])) ||
-				(value['target'] !== undefined && !isBrowserJourneyTarget(value['target'])) ||
-				(value['tab'] !== undefined && !isBrowserJourneyTab(value['tab']))
-			)
-				break
+			if (!isString(value['id']) || value['id'].length === 0)
+				throw new BrowserError('its "update" names no step in "id"', 'BROWSER_JOURNEY_EDIT')
+			if (value['arguments'] !== undefined && !isRecord(value['arguments']))
+				throw new BrowserError('its "update" has no object in "arguments"', 'BROWSER_JOURNEY_EDIT')
+			if (value['target'] !== undefined && !isBrowserJourneyTarget(value['target']))
+				throw new BrowserError('its "update" has an invalid "target"', 'BROWSER_JOURNEY_EDIT')
+			if (value['tab'] !== undefined && !isBrowserJourneyTab(value['tab']))
+				throw new BrowserError('its "update" has an invalid "tab"', 'BROWSER_JOURNEY_EDIT')
 			return
 		case 'declare':
-			if (
-				!isString(value['name']) ||
-				!BROWSER_JOURNEY_PARAMETER_PATTERN.test(value['name']) ||
-				Object.keys(value).some((key) => !['operation', 'name', 'parameter'].includes(key))
-			)
-				break
-			validateBrowserJourneyParameter(value['parameter'])
+			if (!isString(value['name']) || value['name'].length === 0)
+				throw new BrowserError('its "declare" has no "name"', 'BROWSER_JOURNEY_EDIT')
+			if (!BROWSER_JOURNEY_PARAMETER_PATTERN.test(value['name']))
+				throw new BrowserError('its "declare" has an invalid "name"', 'BROWSER_JOURNEY_EDIT')
+			try {
+				validateBrowserJourneyParameter(value['parameter'])
+			} catch (error) {
+				throw new BrowserError(
+					`its "declare" has an invalid "parameter": ${normalizeBrowserJourneyReason(error)}`,
+					'BROWSER_JOURNEY_EDIT',
+				)
+			}
 			return
 	}
-	throw new BrowserError('has a malformed edit or duplicate anchors', 'BROWSER_JOURNEY_EDIT')
 }
 
 /**
