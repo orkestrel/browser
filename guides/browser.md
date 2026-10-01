@@ -1110,6 +1110,7 @@ The following table lists the core types.
 | `BrowserElementInterface`           | interface | Provides actions and reading through a stable document element reference.                                                                                                                                                                                          |
 | `BrowserPageElementInterface`       | interface | Provides trusted page input and capture for a referenced element.                                                                                                                                                                                                  |
 | `BrowserElementManagerInterface`    | interface | Captures, queries, and retains references to a view's elements.                                                                                                                                                                                                    |
+| `BrowserViewEventMap`               | type      | Maps the `console` and `error` events of a view that observes its document's output.                                                                                                                                                                               |
 | `BrowserViewInterface`              | interface | Provides the document operations shared by remote and DOM-native views.                                                                                                                                                                                            |
 | `BrowserCallOptions`                | interface | Describes the options every asynchronous page, frame, handle, and worker call accepts.                                                                                                                                                                             |
 | `BrowserToolAnnotation`             | interface | Transliterates the WebMCP protocol's `Annotation` type, retaining its wire spelling.                                                                                                                                                                               |
@@ -1664,13 +1665,14 @@ child?.update('https://example.com/checkout') // record a URL observed elsewhere
 
 #### `BrowserViewInterface`
 
-The document operations a remote page and a DOM view share, and the contract a `BrowserToolset` drives. `trusted` is `true` for a `BrowserPage` and `false` for a `BrowserDOMView`, and `elements` is the view's element manager.
+The document operations a remote page and a DOM view share, and the contract a `BrowserToolset` drives. `trusted` is `true` for a `BrowserPage` and `false` for a `BrowserDOMView`, and `elements` is the view's element manager. The capture capability is optional: `emitter` reports the document's output as `BrowserViewEventMap` `console` and `error` events, and `screenshot` captures the view's image bytes. A `BrowserPage` declares both, and a `BrowserDOMView` declares neither. A replay reads output and captures only from a view whose `trusted` is `true` and that declares the member.
 
-| Method  | Returns                            | Summary                                                                                                                                                         |
-| ------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `title` | `Promise<string>`                  | Resolves the document title.                                                                                                                                    |
-| `read`  | `Promise<BrowserReadingInterface>` | Captures the document URL, title, and markup as a reading whose `stale` flag tracks later navigations.                                                          |
-| `wait`  | `Promise<void>`                    | Resolves when `text` is visible in the document; rejects with a `BrowserError` coded `BROWSER_WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort. |
+| Method       | Returns                            | Summary                                                                                                                                                         |
+| ------------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `screenshot` | `Promise<BrowserScreenshotResult>` | Captures PNG or JPEG bytes of the view.                                                                                                                         |
+| `title`      | `Promise<string>`                  | Resolves the document title.                                                                                                                                    |
+| `read`       | `Promise<BrowserReadingInterface>` | Captures the document URL, title, and markup as a reading whose `stale` flag tracks later navigations.                                                          |
+| `wait`       | `Promise<void>`                    | Resolves when `text` is visible in the document; rejects with a `BrowserError` coded `BROWSER_WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort. |
 
 The following fence drives a view without knowing its placement.
 
@@ -2085,7 +2087,7 @@ Replays one journey over a toolset. `execute` runs four stages:
 1. Preparation, before any side effect: the journey is validated, the inputs are merged over the parameters' defaults, and a missing or unknown input, a gap step, or a native action the placement cannot execute rejects `execute` with `BROWSER_JOURNEY_INPUT`, `BROWSER_JOURNEY_GAP`, `BROWSER_JOURNEY_PLACEMENT`, or the validator's code before any run exists. A page-backed toolset executes `click`, `type`, `press`, `navigate`, `wait`, `dialog`, and, with `context`, `switch`; the DOM placement executes `click`, `type`, `wait`, and its adopted page tools.
 2. Hold: `toolset.hold(name)` takes a queue turn under the call's signal, and the replay destroys the hold in `finally`, abort included.
 3. Steps, in order: each step runs through the toolset's `follow`, which resolves its target on the live view by role and exact name, each call carries the hold's token, and the replay judges the `BrowserAction` the toolset returns, never the receipt's text. The run stops after the first step whose outcome is not `done`, and after a navigation that stopped at `requested` or `committed`; an `interrupted` action admits only an immediately following `dialog` step.
-4. Finalization: with `runs`, the replay opens a run slot before the first step, writes each capture through `runs.capture` in the page placement, and writes the run with a bounded write of its own signal, so an aborted run is still written; a failed write is recorded in `fault`.
+4. Finalization: with `runs`, the replay opens a run slot before the first step, writes each capture of a trusted view that declares `screenshot` through `runs.capture`, and writes the run with a bounded write of its own signal, so an aborted run is still written; a failed write is recorded in `fault`.
 
 See [Parameters and secrets](#parameters-and-secrets) for the run of a journey with a secret parameter.
 
@@ -2807,14 +2809,15 @@ await context.emulation.clear()
 
 #### `BrowserDOMViewInterface`
 
-A view over one DOM document in the realm that runs it. The view follows its window, so a navigation of that window moves it to the window's next document and drops every reference. A reading goes stale on the Navigation API's `navigatesuccess` where the browser ships it, and on `popstate`, `hashchange`, and `pagehide` otherwise. `destroy` releases the listeners, fails pending waits, and makes every later call refuse with `BROWSER_DOCUMENT_DESTROYED`.
+A view over one DOM document in the realm that runs it. The view follows its window, so a navigation of that window moves it to the window's next document and drops every reference. A reading goes stale on the Navigation API's `navigatesuccess` where the browser ships it, and on `popstate`, `hashchange`, and `pagehide` otherwise. `destroy` releases the listeners, fails pending waits, and makes every later call refuse with `BROWSER_DOCUMENT_DESTROYED`. The view declares neither `emitter` nor `screenshot`, so a replay over it collects no output and takes no capture.
 
-| Method    | Returns                            | Summary                                                                                                                                                         |
-| --------- | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `destroy` | `void`                             | Releases the navigation listeners and every element reference.                                                                                                  |
-| `title`   | `Promise<string>`                  | Resolves the document title.                                                                                                                                    |
-| `read`    | `Promise<BrowserReadingInterface>` | Captures the document URL, title, and markup as a reading whose `stale` flag tracks later navigations.                                                          |
-| `wait`    | `Promise<void>`                    | Resolves when `text` is visible in the document; rejects with a `BrowserError` coded `BROWSER_WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort. |
+| Method       | Returns                            | Summary                                                                                                                                                         |
+| ------------ | ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `destroy`    | `void`                             | Releases the navigation listeners and every element reference.                                                                                                  |
+| `screenshot` | `Promise<BrowserScreenshotResult>` | Captures PNG or JPEG bytes of the view.                                                                                                                         |
+| `title`      | `Promise<string>`                  | Resolves the document title.                                                                                                                                    |
+| `read`       | `Promise<BrowserReadingInterface>` | Captures the document URL, title, and markup as a reading whose `stale` flag tracks later navigations.                                                          |
+| `wait`       | `Promise<void>`                    | Resolves when `text` is visible in the document; rejects with a `BrowserError` coded `BROWSER_WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort. |
 
 The following fence reads and waits on a child document.
 
@@ -3006,7 +3009,7 @@ renderBrowserJourney(journey)
 
 `replay` replays a saved journey as it was recorded, or with `inputs` that replace the parameters' defaults; a parameter without a default, a secret included, needs an input. See [`BrowserReplayInterface`](#browserreplayinterface) for the four stages. The replay resolves each target on the live page by role and exact name, refuses a name that several elements carry or that none carries, and stops at the first step that did not complete, so a step never acts on an element the journey did not name.
 
-A replay writes one `BrowserRun` through its run store: the journey and its revision, the inputs without a secret's value, one `BrowserRunStep` per step executed with its `trigger`, arguments, outcome, receipt, and capture, the page's `console` and `error` output in the page placement, and the outcome `complete`, `stopped`, or `aborted`. The `replay` tool returns `renderBrowserRun`: the head line, one line per step with the receipt's directive stripped, a blank line, and the view after the run. The following fence shows the render of a complete `add-kettle` run with the input `ada@example.test`.
+A replay writes one `BrowserRun` through its run store: the journey and its revision, the inputs without a secret's value, one `BrowserRunStep` per step executed with its `trigger`, arguments, outcome, receipt, and capture, the `console` and `error` output of a trusted view that declares `emitter`, and the outcome `complete`, `stopped`, or `aborted`. The `replay` tool returns `renderBrowserRun`: the head line, one line per step with the receipt's directive stripped, a blank line, and the view after the run. The following fence shows the render of a complete `add-kettle` run with the input `ada@example.test`.
 
 ```ts
 renderBrowserRun(run, view)
