@@ -200,6 +200,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	>()
 	readonly #faults = new WeakMap<BrowserToolsetResult, unknown>()
 	#reservation: BrowserHoldInterface | undefined
+	#waiting: BrowserHoldInterface | undefined
 	readonly #interrupts = new Map<PromiseWithResolvers<never>, string>()
 	readonly #notes: string[] = []
 	readonly #changeHandler = this.#handleChange.bind(this)
@@ -367,16 +368,22 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			options?.signal ?? new AbortController().signal,
 			this.#lifetime.signal,
 		])
-		const turn = await this.#acquire(signal, false, false)
+		this.#admit('', undefined)
+		const hold = new BrowserHold(name, this.#releaseHold.bind(this))
+		this.#waiting = hold
 		try {
-			signal.throwIfAborted()
-			this.#admit('', undefined)
-			const hold = new BrowserHold(name, this.#releaseHold.bind(this))
-			this.#reservation = hold
-			this.#emitter.emit('hold', name)
-			return hold
+			const turn = await this.#acquire(signal, false, false)
+			try {
+				signal.throwIfAborted()
+				this.#reservation = hold
+				this.#waiting = undefined
+				this.#emitter.emit('hold', name)
+				return hold
+			} finally {
+				turn.resolve()
+			}
 		} finally {
-			turn.resolve()
+			if (this.#waiting === hold) this.#waiting = undefined
 		}
 	}
 
@@ -429,7 +436,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	#admit(name: string, caller: unknown): void {
-		const hold = this.#reservation
+		const hold = this.#reservation ?? this.#waiting
 		if (
 			hold !== undefined &&
 			caller !== hold.token &&

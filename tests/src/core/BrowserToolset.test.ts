@@ -69,6 +69,7 @@ import {
 	createBrowserPopupFixture,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
+	createBrowserPendingToolsetFixture,
 	createConnectedCDPClient,
 	ignoreCall,
 	readCDPExpression,
@@ -322,25 +323,52 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('waits for admitted actions before holding and cancels a queued hold without blocking the queue', async () => {
-			const pending = Promise.withResolvers<string>()
-			const invoked = createRecorder<[]>()
-			const source = createToolManager()
-			source.add(
-				createTool({
-					name: 'checkout',
-					execute: () => {
-						invoked.handler()
-						return pending.promise
-					},
-				}),
-			)
-			const toolset = new BrowserToolset(createBrowserViewDouble(), {
-				source: {
-					adopt: async () => source.tools(),
-					emitter: new Emitter<BrowserToolSourceEventMap>(),
-				},
+		it('reserves admission while a hold waits for an earlier adopted action', async () => {
+			const { toolset, view, pending, invoked } = createBrowserPendingToolsetFixture()
+			const order: string[] = []
+			toolset.emitter.on('action', (action) => {
+				if (action.outcome === 'done') order.push(action.action)
 			})
+			toolset.emitter.on('hold', () => order.push('hold'))
+			await toolset.start()
+			try {
+				const acting = toolset.perform({
+					id: 'before',
+					name: 'checkout',
+					arguments: { what: 'cart' },
+				})
+				await waitForCondition('adopted input started', () => invoked.count === 1)
+				const holding = toolset.hold('add-kettle')
+				const foreign = Promise.resolve(
+					requireValue(toolset.tools.tool('click')).execute(
+						{ ref: 'e1' },
+						{ signal: new AbortController().signal },
+					),
+				).catch((error: unknown) => error)
+				expect(order).toEqual([])
+				pending.resolve('checked out')
+				expect((await acting).result.success).toBe(true)
+				const hold = await holding
+				const denied = await foreign
+				expect(denied).toMatchObject({
+					code: 'BROWSER_TOOLSET_BUSY',
+					message: 'The toolset is replaying add-kettle until it finishes; call look.',
+				})
+				expect(order).toEqual(['checkout', 'hold'])
+				expect(view.calls).not.toContain('click e1')
+				hold.destroy()
+				expect(
+					(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
+						.success,
+				).toBe(true)
+			} finally {
+				pending.resolve('cleanup')
+				await toolset.destroy()
+			}
+		})
+
+		it('waits for admitted actions before holding and cancels a queued hold without blocking the queue', async () => {
+			const { toolset, pending, invoked } = createBrowserPendingToolsetFixture()
 			await toolset.start()
 			try {
 				const acting = toolset.perform({
@@ -355,6 +383,7 @@ describe('BrowserToolset', () => {
 					.catch((error: unknown) => error)
 				abort.abort('cancelled')
 				expect(await abandoned).toBe('cancelled')
+				const foreign = toolset.perform({ id: 'foreign', name: 'click', arguments: { ref: 'e1' } })
 				const order: string[] = []
 				toolset.emitter.on('action', () => order.push('action'))
 				toolset.emitter.on('hold', () => order.push('hold'))
@@ -362,8 +391,9 @@ describe('BrowserToolset', () => {
 				expect(order).toEqual([])
 				pending.resolve('checked out')
 				await acting
+				expect((await foreign).result.success).toBe(true)
 				const hold = await holding
-				expect(order).toEqual(['action', 'hold'])
+				expect(order).toEqual(['action', 'action', 'hold'])
 				hold.destroy()
 				expect(
 					(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
