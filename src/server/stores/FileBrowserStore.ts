@@ -1,12 +1,11 @@
-import type { BrowserStoreOptions, BrowserStorePage, BrowserStoreFault } from '../../core/types.js'
+import type { BrowserStoreOptions, BrowserStorePage, BrowserStoreFault } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
 import type { FileHandle } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { BrowserError } from '../../core/errors.js'
-import { BROWSER_JOURNEY_NAME_PATTERN } from '../../core/constants.js'
+import { BrowserError, BROWSER_JOURNEY_NAME_PATTERN } from '@src/core'
 import { BROWSER_FILE_STORE_LIMIT, BROWSER_FILE_STORE_RESERVED } from '../constants.js'
 
 /**

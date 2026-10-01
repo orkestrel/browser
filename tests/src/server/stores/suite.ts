@@ -6,6 +6,7 @@ import { describe, it, expect } from 'vitest'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import { createScratch } from '@orkestrel/test/server'
 import { waitForEvent } from '@orkestrel/test'
+import { SOURCE_HOOK } from '../../../setupServer.js'
 import {
 	BROWSER_RUN_FIXTURE,
 	createBrowserJourneyFixture,
@@ -90,16 +91,7 @@ import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { once } from 'node:events'
-registerHooks({
-	resolve(specifier, context, next) {
-		try { return next(specifier, context) }
-		catch (error) {
-			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
-				return next(specifier.slice(0, -3) + '.ts', context)
-			throw error
-		}
-	}
-})
+${SOURCE_HOOK}
 const { FileBrowserStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserStore.ts')).href)
 const files = new FileBrowserStore({ root: process.argv[2] })
 await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async () => {
@@ -181,16 +173,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
-registerHooks({
-	resolve(specifier, context, next) {
-		try { return next(specifier, context) }
-		catch (error) {
-			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
-				return next(specifier.slice(0, -3) + '.ts', context)
-			throw error
-		}
-	}
-})
+${SOURCE_HOOK}
 const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
 const store = new FileBrowserJourneyStore({ root: process.argv[2] })
 process.once('message', async (journey) => {
@@ -404,16 +387,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-registerHooks({
-	resolve(specifier, context, next) {
-		try { return next(specifier, context) }
-		catch (error) {
-			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
-				return next(specifier.slice(0, -3) + '.ts', context)
-			throw error
-		}
-	}
-})
+${SOURCE_HOOK}
 assert.notEqual(process.getuid?.(), 0)
 const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
 const { FileBrowserRunStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserRunStore.ts')).href)
