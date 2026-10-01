@@ -2,7 +2,7 @@
  * src/core/helpers.ts tests.
  */
 
-import type { BrowserCodegenAction, BrowserToolSourceEventMap } from '@src/core'
+import type { BrowserToolSourceEventMap } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
 import { describe, it, expect } from 'vitest'
 import { attempt } from '@orkestrel/contract'
@@ -45,8 +45,6 @@ import {
 	isBrowserNodeVisible,
 	isBrowserResultLimitError,
 	matchesBrowserNode,
-	normalizeCodegenActions,
-	parseCodegenActionPayload,
 	settleBrowserTeardown,
 	readBrowserFrames,
 	readBrowserHeaders,
@@ -54,7 +52,6 @@ import {
 	readBrowserWorld,
 	readEvaluationResult,
 	requireBrowserString,
-	compileCodegenScript,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BASE64_CHARS,
 	boundBrowserText,
@@ -1041,89 +1038,6 @@ describe('snapshot node helpers', () => {
 		expect(isBrowserNodeVisible(text)).toBe(false)
 		expect(node.attributes['id']).toBe('hero')
 		expect(node.attributes['missing']).toBeUndefined()
-	})
-})
-
-describe('normalizeCodegenActions', () => {
-	it('passes through a list with no consecutive fills unchanged', () => {
-		const actions: BrowserCodegenAction[] = [
-			{ action: 'navigate', url: 'about:blank' },
-			{ action: 'click', selector: '#a' },
-		]
-		expect(normalizeCodegenActions(actions)).toEqual(actions)
-	})
-
-	it('collapses consecutive fills on the same selector to the latest value', () => {
-		const actions: BrowserCodegenAction[] = [
-			{ action: 'fill', selector: '#a', value: 'h' },
-			{ action: 'fill', selector: '#a', value: 'he' },
-			{ action: 'fill', selector: '#a', value: 'hello' },
-		]
-		expect(normalizeCodegenActions(actions)).toEqual([
-			{ action: 'fill', selector: '#a', value: 'hello' },
-		])
-	})
-
-	it('does not collapse fills on different selectors', () => {
-		const actions: BrowserCodegenAction[] = [
-			{ action: 'fill', selector: '#a', value: 'x' },
-			{ action: 'fill', selector: '#b', value: 'y' },
-		]
-		expect(normalizeCodegenActions(actions)).toEqual(actions)
-	})
-
-	it('preserves order and restarts collapsing after an intervening action', () => {
-		const actions: BrowserCodegenAction[] = [
-			{ action: 'fill', selector: '#a', value: 'x' },
-			{ action: 'click', selector: '#b' },
-			{ action: 'fill', selector: '#a', value: 'y' },
-			{ action: 'fill', selector: '#a', value: 'z' },
-		]
-		expect(normalizeCodegenActions(actions)).toEqual([
-			{ action: 'fill', selector: '#a', value: 'x' },
-			{ action: 'click', selector: '#b' },
-			{ action: 'fill', selector: '#a', value: 'z' },
-		])
-	})
-
-	it('returns an empty array for an empty input', () => {
-		expect(normalizeCodegenActions([])).toEqual([])
-	})
-})
-
-describe('contenteditable fill — parse/normalize/compile pipeline', () => {
-	it('flows a contenteditable fill binding payload through parse, normalize, and compile unchanged in shape', () => {
-		const payload = JSON.stringify({ action: 'fill', selector: '#editor', value: 'hello world' })
-		const parsed = parseCodegenActionPayload(payload)
-		expect(parsed).toEqual({ action: 'fill', selector: '#editor', value: 'hello world' })
-
-		const normalized = normalizeCodegenActions(parsed !== undefined ? [parsed] : [])
-		expect(normalized).toEqual([{ action: 'fill', selector: '#editor', value: 'hello world' }])
-
-		const script = compileCodegenScript(normalized)
-		expect(script).toContain(
-			`await (await page.elements.find({ css: "#editor" }))[0].fill("hello world")`,
-		)
-	})
-
-	it('collapses consecutive contenteditable-originated fill payloads to the latest value', () => {
-		const payloads = [
-			{ action: 'fill', selector: '#editor', value: 'h' },
-			{ action: 'fill', selector: '#editor', value: 'he' },
-			{ action: 'fill', selector: '#editor', value: 'hello' },
-		].map((entry) => JSON.stringify(entry))
-
-		const parsed = payloads
-			.map((payload) => parseCodegenActionPayload(payload))
-			.filter((action): action is BrowserCodegenAction => action !== undefined)
-
-		const normalized = normalizeCodegenActions(parsed)
-		expect(normalized).toEqual([{ action: 'fill', selector: '#editor', value: 'hello' }])
-
-		const script = compileCodegenScript(normalized)
-		expect(script).toContain(
-			`await (await page.elements.find({ css: "#editor" }))[0].fill("hello")`,
-		)
 	})
 })
 

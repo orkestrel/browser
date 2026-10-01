@@ -1,9 +1,7 @@
 import type {
 	BrowserActionabilityOptions,
-	BrowserCodegenAction,
 	BrowserCodegenLanguage,
 	BrowserCodegenScript,
-	BrowserCodegenScriptOptions,
 	BrowserJourney,
 	BrowserRect,
 	BrowserScreenshotOptions,
@@ -422,53 +420,6 @@ export function compileReadFunction(): string {
 	const root = document.documentElement
 	return { url: location.href, title: document.title, html: root ? root.outerHTML : '' }
 }`
-}
-
-/**
- * Compiles recorded codegen actions into a replayable JavaScript or TypeScript script.
- *
- * @remarks
- * Emits one statement per action against a `page` object shaped like
- * {@link BrowserPageInterface}. A `click`, `fill`, or `select` action resolves its
- * selector through `page.elements.find({ css })`, takes the first match, and calls the
- * element action (`await (await page.elements.find({ css: "#save" }))[0].click()`);
- * `navigate` calls `page.navigate(...)`.
- * Both target languages emit an `async function run(page)` body whose
- * statements are `await`-ed; `language` only toggles whether the `page`
- * parameter carries a TypeScript type annotation (default `'javascript'`).
- *
- * @param actions - Normalized actions to compile
- * @param options - Compilation options (target language)
- * @returns The compiled script source
- */
-export function compileCodegenScript(
-	actions: readonly BrowserCodegenAction[],
-	options?: BrowserCodegenScriptOptions,
-): string {
-	const language = options?.language ?? 'javascript'
-
-	const lines = actions.map((action) => {
-		switch (action.action) {
-			case 'navigate':
-				return `await page.navigate(${JSON.stringify(action.url)})`
-			case 'click':
-				return `await (await page.elements.find({ css: ${JSON.stringify(action.selector)} }))[0].click()`
-			case 'fill':
-				return `await (await page.elements.find({ css: ${JSON.stringify(action.selector)} }))[0].fill(${JSON.stringify(action.value)})`
-			case 'select':
-				return `await (await page.elements.find({ css: ${JSON.stringify(action.selector)} }))[0].select(${JSON.stringify(action.values)})`
-		}
-	})
-
-	if (language === 'typescript') {
-		return [
-			`async function run(page: import('@orkestrel/browser').BrowserPageInterface): Promise<void> {`,
-			...lines.map((line) => `\t${line}`),
-			`}`,
-		].join('\n')
-	}
-
-	return [`async function run(page) {`, ...lines.map((line) => `\t${line}`), `}`].join('\n')
 }
 
 /**

@@ -2,7 +2,7 @@
  * src/core/compilers.ts tests.
  */
 
-import type { BrowserCodegenAction, BrowserJourney } from '@src/core'
+import type { BrowserJourney } from '@src/core'
 import { attempt } from '@orkestrel/contract'
 import { describe, it, expect } from 'vitest'
 import {
@@ -14,7 +14,6 @@ import {
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	compileBrowserJourney,
 	compileBrowserJourneyValue,
-	compileCodegenScript,
 	compileReadFunction,
 	compileScreenshotPreparationExpression,
 	compileGuardedEvaluateExpression,
@@ -177,50 +176,6 @@ describe('compileReadFunction', () => {
 				{ href: 'about:blank' },
 			]),
 		).toEqual({ url: 'about:blank', title: '', html: '' })
-	})
-})
-
-describe('compileCodegenScript', () => {
-	const actions: BrowserCodegenAction[] = [
-		{ action: 'navigate', url: 'about:blank' },
-		{ action: 'click', selector: '#a' },
-		{ action: 'fill', selector: '#b', value: 'hi' },
-		{ action: 'select', selector: '#c', values: ['x', 'y'] },
-	]
-
-	it('emits an async run(page) wrapper with one statement per action (javascript default)', () => {
-		const script = compileCodegenScript(actions)
-		expect(script.startsWith('async function run(page) {')).toBe(true)
-		expect(script).not.toContain('import(')
-		const lines = script.split('\n')
-		expect(lines).toHaveLength(actions.length + 2)
-		expect(lines[1]).toBe(`\tawait page.navigate("about:blank")`)
-		expect(lines[2]).toBe(`\tawait (await page.elements.find({ css: "#a" }))[0].click()`)
-		expect(lines[3]).toBe(`\tawait (await page.elements.find({ css: "#b" }))[0].fill("hi")`)
-		expect(lines[4]).toBe(`\tawait (await page.elements.find({ css: "#c" }))[0].select(["x","y"])`)
-	})
-
-	it('emits a TypeScript-typed page parameter only when language is typescript', () => {
-		const script = compileCodegenScript(actions, { language: 'typescript' })
-		expect(
-			script.startsWith(
-				`async function run(page: import('@orkestrel/browser').BrowserPageInterface): Promise<void> {`,
-			),
-		).toBe(true)
-	})
-
-	it('embeds a selector containing quotes safely through JSON-safe quoting', () => {
-		const withQuote: BrowserCodegenAction[] = [{ action: 'click', selector: `div[data-x="y"]` }]
-		const script = compileCodegenScript(withQuote)
-		const expectedLine = `\tawait (await page.elements.find({ css: ${JSON.stringify(`div[data-x="y"]`)} }))[0].click()`
-		expect(script).toContain(expectedLine)
-		// The embedded quotes are escaped, not left bare.
-		expect(script).toContain('\\"y\\"')
-	})
-
-	it('emits an empty body for an empty action list', () => {
-		const script = compileCodegenScript([])
-		expect(script).toBe('async function run(page) {\n}')
 	})
 })
 
