@@ -28,6 +28,31 @@ import {
 } from '../../setup.js'
 
 describe('BrowserReplay', () => {
+	it('refuses a secret bound to wait.text before taking a hold or writing a run', async () => {
+		const view = createBrowserViewDouble()
+		const toolset = new BrowserToolset(view)
+		const holds = createRecorder<readonly [string]>()
+		toolset.emitter.on('hold', holds.handler)
+		await toolset.start()
+		const journey = createBrowserJourneyFixture(
+			[{ action: 'wait', arguments: { text: { parameter: 'password' } } }],
+			{ parameters: { password: { secret: true } } },
+		)
+		const runs = new MemoryBrowserRunStore()
+		try {
+			await expect(
+				new BrowserReplay(toolset, { journey }, { runs, inputs: { password: 'Ready' } }).execute(),
+			).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_INVALID',
+				context: { action: 'replay', placement: 'dom' },
+			})
+			expect(holds.count).toBe(0)
+			expect(view.calls).toEqual([])
+			expect((await runs.list(journey.name)).entries).toEqual([])
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	it('validates before taking a hold or writing a run', async () => {
 		const view = createBrowserViewDouble()
 		const toolset = new BrowserToolset(view)

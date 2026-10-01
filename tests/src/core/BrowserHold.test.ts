@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { createRecorder } from '@orkestrel/test'
-import { BrowserHold } from '@src/core'
+import { BrowserHold } from '../../../src/core/BrowserHold.js'
 
 describe('BrowserHold', () => {
 	it('releases once, including reentrant destruction, and gives each hold its own token', () => {

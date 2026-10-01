@@ -6,8 +6,8 @@ import { join } from 'node:path'
 import { createBrowserJourneyFixture } from '../../../setup.js'
 import { createScratch } from '@orkestrel/test/server'
 import { FileBrowserJourneyStore } from '@src/server'
-import { describeBrowserJourneyStore } from '../../../setup.js'
-import { describeFileBrowserStores } from '../../../setupServer.js'
+import { describeBrowserJourneyStore } from '../../core/stores/suite.js'
+import { describeFileBrowserStores } from './suite.js'
 
 const scratches: ScratchInterface[] = []
 afterEach(() => {

@@ -6,7 +6,7 @@ import type {
 	BrowserStorePage,
 } from '../types.js'
 import { BrowserError } from '../errors.js'
-import { validateBrowserJourney } from '../validators.js'
+import { validateBrowserJourney } from '../helpers.js'
 
 /**
  * Keeps owned journey snapshots and revision counters across deletion.

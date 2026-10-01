@@ -1,6 +1,6 @@
 import { expect, it } from 'vitest'
 import { MemoryBrowserRunStore } from '@src/core'
-import { describeBrowserRunStore } from '../../../setup.js'
+import { describeBrowserRunStore } from './suite.js'
 
 describeBrowserRunStore('MemoryBrowserRunStore', () => new MemoryBrowserRunStore())
 

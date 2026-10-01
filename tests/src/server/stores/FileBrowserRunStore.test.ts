@@ -4,7 +4,8 @@ import { createScratch } from '@orkestrel/test/server'
 import { lstat, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { FileBrowserRunStore } from '@src/server'
-import { BROWSER_RUN_FIXTURE, describeBrowserRunStore } from '../../../setup.js'
+import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
+import { describeBrowserRunStore } from '../../core/stores/suite.js'
 
 const scratches: ScratchInterface[] = []
 afterEach(() => {

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest'
 import { createScratch } from '@orkestrel/test/server'
 import { mkdir, readdir, readFile, rename, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
-import { FileBrowserStore } from '@src/server'
+import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 
 describe('FileBrowserStore', () => {

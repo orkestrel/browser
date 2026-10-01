@@ -35,8 +35,8 @@ import {
 	renderBrowserRunResult,
 	requireBrowserReference,
 	validateBrowserToolArguments,
+	validateBrowserJourneyEdit,
 } from './helpers.js'
-import { validateBrowserJourneyEdit } from './validators.js'
 
 /**
  * Registers the journey tools `record`, `save`, `journeys`, `edit`, and `replay` over a toolset

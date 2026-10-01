@@ -9,7 +9,7 @@ import type { FileBrowserStoreOptions } from '../types.js'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import { BrowserError } from '../../core/errors.js'
 import { BROWSER_JOURNEY_NAME_PATTERN } from '../../core/constants.js'
-import { validateBrowserJourney } from '../../core/validators.js'
+import { validateBrowserJourney } from '../../core/helpers.js'
 import {
 	BROWSER_JOURNEY_SNAPSHOT_FILE,
 	BROWSER_JOURNEY_REVISION_FILE,

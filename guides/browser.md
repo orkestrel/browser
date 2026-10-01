@@ -172,7 +172,6 @@ The following table lists the core classes. Each implements the behavioral inter
 | `CDPClient`                 | class | Provides a lightweight Chrome DevTools Protocol client over a `CDPTransportInterface`.                                                       |
 | `BrowserPageElement`        | class | Drives a referenced DOM element through its document's isolated world and the page input stream.                                             |
 | `BrowserElementManager`     | class | Captures accessibility trees and binds stable references to their owning frame sessions.                                                     |
-| `BrowserHold`               | class | Owns a replay's caller token and releases its admission reservation once.                                                                    |
 | `BrowserRecorder`           | class | Records semantic steps from completed toolset actions and marks replay boundaries as gaps.                                                   |
 | `BrowserReplay`             | class | Prepares and replays a journey under a toolset hold, retaining its executed prefix.                                                          |
 | `BrowserJourneyToolset`     | class | Registers the journey tools `record`, `save`, `journeys`, `edit`, and `replay` over a toolset and owns the recording and the active replay.  |
@@ -468,6 +467,8 @@ The helpers are pure: they decode protocol payloads, validate options, compile i
 | `validateBrowserJourneyParameter`        | function | Validates a parameter declaration, including the secret-default exclusion.                                                                                                                          |
 | `validateBrowserJourneyEdit`             | function | Validates an edit structure before its position-dependent checks.                                                                                                                                   |
 | `validateBrowserRun`                     | function | Validates a persisted run and the journey it carries.                                                                                                                                               |
+| `buildBrowserJourney`                    | function | Builds a validated journey from recorded steps and declares their secret bindings.                                                                                                                  |
+| `isBrowserSecretBinding`                 | function | Checks whether a step binds a declared secret through type.text.                                                                                                                                    |
 | `isBrowserJourneyBinding`                | function | Checks whether a native string argument is a literal or a parameter binding.                                                                                                                        |
 | `isBrowserJourneyTarget`                 | function | Checks whether a target carries its role, name, and optional evidence.                                                                                                                              |
 | `isBrowserJourneyTab`                    | function | Checks whether a tab carries its portable URL and title.                                                                                                                                            |
@@ -538,6 +539,7 @@ The following fence validates, edits, renders, and compiles the `add-kettle` jou
 ```ts
 import type { BrowserJourney } from '@orkestrel/browser'
 import {
+	buildBrowserJourney,
 	collectBrowserJourneyBindings,
 	compileBrowserJourney,
 	compileBrowserJourneyValue,
@@ -545,6 +547,7 @@ import {
 	deriveBrowserJourneyTrigger,
 	editBrowserJourney,
 	generateBrowserRunId,
+	isBrowserSecretBinding,
 	isBrowserJourneyBinding,
 	isBrowserJourneyTab,
 	isBrowserJourneyTarget,
@@ -591,6 +594,8 @@ validateBrowserRun(JSON.parse(runFile)) // a run.json file's parsed text
 parseBrowserJourney({ ...journey, name: 'Add kettle' }) // undefined
 parseBrowserJourneyEdit({ operation: 'rename', id: 's3' }) // undefined
 parseBrowserRun(JSON.parse(runFile)) // BrowserRun | undefined
+buildBrowserJourney([], { name: 'check-ready', description: 'Check readiness' })
+isBrowserSecretBinding(journey.steps[3], journey.parameters) // false
 isBrowserJourneyBinding({ parameter: 'email' }) // true
 isBrowserJourneyTarget({ role: 'button', name: 'Add to cart' }) // true
 isBrowserJourneyTab({ url: 'https://shop.example.test/cart', title: 'Cart' }) // true
@@ -1061,7 +1066,7 @@ The following table lists the core types.
 | `BrowserJourneyToolsetInterface`    | interface | Registers the five journey tools over a toolset and owns the recording and the active replay.                                                                                                                                                            |
 | `BrowserCodegenLanguage`            | type      | Names the target language for a compiled codegen script.                                                                                                                                                                                                 |
 | `BrowserCodegenInterface`           | interface | Records semantic page gestures and compiles the resulting journey.                                                                                                                                                                                       |
-| `BrowserCodegenScript`              | interface | Carries the module `compileBrowserJourney` emits with the gap steps that refuse it.                                                                                                                                                                        |
+| `BrowserCodegenScript`              | interface | Carries the module `compileBrowserJourney` emits with the gap steps that refuse it.                                                                                                                                                                      |
 | `BrowserCodegenGesture`             | interface | Carries a sanitized gesture from the page listener without password values.                                                                                                                                                                              |
 | `BrowserReadOptions`                | interface | Describes the options for one slice of a reading's Markdown or plain-text projection.                                                                                                                                                                    |
 | `BrowserReadResult`                 | interface | Describes one slice of a reading's projection.                                                                                                                                                                                                           |
@@ -1175,7 +1180,6 @@ The following table lists the server classes.
 | `Browser`                 | class | Discovers, launches, connects to, and owns Chromium-family browser sessions.                                                                                                        |
 | `WebSocketCDPTransport`   | class | Provides a raw CDP text transport backed by `@orkestrel/websocket`.                                                                                                                 |
 | `FileBrowserWriter`       | class | Persists captured browser bytes to the filesystem through `node:fs/promises`.                                                                                                       |
-| `FileBrowserStore`        | class | Shares confined filesystem operations between the journey and run stores.                                                                                                           |
 | `FileBrowserJourneyStore` | class | Persists journeys with exclusive writes and revision counters retained across deletion.                                                                                             |
 | `FileBrowserRunStore`     | class | Persists runs and captures only in directories allocated by this instance.                                                                                                          |
 | `BrowserMCPServer`        | class | Implements `BrowserMCPServerInterface`: serves the browser vocabulary and the journey tools over the Model Context Protocol on stdio, and launches Chromium on the first tool call. |
@@ -1893,7 +1897,7 @@ A `click`, a `type` with `submit`, or a `press` of Enter also opens `page.popups
 | Method    | Returns                         | Summary                                                                                                                                                                                                                                                                                                                          |
 | --------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `perform` | `Promise<BrowserToolsetResult>` | Performs a tool call and returns its structured action when a handler ran.                                                                                                                                                                                                                                                       |
-| `hold`    | `Promise<BrowserHoldInterface>` | Takes a queue turn and reserves action admission from the call for the returned caller token.                                                                                                                                                                                                                                                  |
+| `hold`    | `Promise<BrowserHoldInterface>` | Takes a queue turn and reserves action admission from the call for the returned caller token.                                                                                                                                                                                                                                    |
 | `start`   | `Promise<void>`                 | Adds the tools, follows the view, and adopts the page's tools; concurrent calls share one startup. Rejects with a coded `BrowserError` and adds nothing when the manager holds a reserved name under a tool the toolset did not add, and rejects with `the browser session ended` when `destroy()` runs before startup finishes. |
 | `destroy` | `Promise<void>`                 | Stops following the view, rejects queued actions, and removes every tool the toolset added that the manager still holds, then calls the `release` option one time; a second call returns the first call's promise.                                                                                                               |
 
@@ -2089,7 +2093,7 @@ Keeps journeys by name with a revision per write. `MemoryBrowserJourneyStore` ho
 | Method   | Returns                                             | Summary                                                                                                                                                                                                                                                                            |
 | -------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `get`    | `Promise<BrowserJourneyRevision \| undefined>`      | Returns the journey saved under `name` with its revision, or `undefined` when none is saved. Rejects with `BROWSER_JOURNEY_FILE` for a malformed entry, `BROWSER_JOURNEY_FORMAT` for an unknown format, and `BROWSER_JOURNEY_ACCESS` for a permission error, each naming the path. |
-| `set`    | `Promise<BrowserJourneyRevision>`                   | Saves the journey under its name with the next revision and returns it.                                                |
+| `set`    | `Promise<BrowserJourneyRevision>`                   | Saves the journey under its name with the next revision and returns it.                                                                                                                                                                                                            |
 | `delete` | `Promise<void>`                                     | Removes the journey saved under `name` and keeps its revision count, so a recreated journey continues it; a missing name is a no-op. Rejects with `BROWSER_JOURNEY_LOCKED` when another write holds the name.                                                                      |
 | `list`   | `Promise<BrowserStorePage<BrowserJourneyRevision>>` | Returns one page of the saved journeys sorted by name, starting at `offset` and holding at most `limit` entries, with the entries it could not read in `faults`.                                                                                                                   |
 
