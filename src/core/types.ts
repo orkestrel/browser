@@ -2026,7 +2026,7 @@ export interface BrowserJourneyStoreInterface {
 	get(name: string, options?: BrowserStoreOptions): Promise<BrowserJourneyRevision | undefined>
 	/**
 	 * Saves the journey under its name with the next revision and returns it. Rejects with
-	 * `BROWSER_JOURNEY_REVISION` when `expected` differs from the stored revision, and with
+	 * `BROWSER_JOURNEY_STALE` when `expected` differs from the stored revision, and with
 	 * `BROWSER_JOURNEY_LOCKED` when another write holds the name.
 	 */
 	set(

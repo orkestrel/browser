@@ -1,4 +1,8 @@
 import type {
+	BrowserAction,
+	BrowserJourneyStoreInterface,
+	BrowserRunStoreInterface,
+	BrowserJourneyStepInput,
 	BrowserJourney,
 	BrowserJourneyStep,
 	BrowserRun,
@@ -23,6 +27,7 @@ import type {
 	CDPSendOptions,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import { describe, it, expect } from 'vitest'
 import {
 	BrowserCodegen,
 	BrowserError,
@@ -36,7 +41,6 @@ import { BrowserNavigationRecord } from '../src/core/BrowserNavigationRecord.js'
 import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { waitForEvent } from '@orkestrel/test'
-
 /** Describes a timer call observed while evaluating a natively parsed expression. */
 export interface BrowserCompiledTimer {
 	readonly name: string
@@ -1727,6 +1731,7 @@ export const BROWSER_ELEMENT_WORLDS: Readonly<Record<string, number>> = Object.f
 
 /** Configures protocol responses for discriminating element action tests. */
 export interface BrowserElementFixtureOptions {
+	readonly writer?: BrowserWriterInterface
 	readonly local?: boolean
 	readonly nested?: boolean
 	readonly roots?: ReadonlyMap<string, Readonly<Record<string, unknown>>>
@@ -2134,7 +2139,7 @@ export async function createBrowserElementFixture(
 		recording,
 		'main',
 		'session-main',
-		undefined,
+		options?.writer,
 		'https://example.test/cart',
 	)
 	if (options?.local !== true) await attachBrowserElementChild(transport, page)
@@ -3060,6 +3065,269 @@ export const BROWSER_JOURNEY_EDIT_REFUSALS: ReadonlyArray<{
 		edit: { operation: 'update', id: 's4', arguments: { text: { parameter: 'missing' } } },
 	},
 ]
+
+/**
+ * Creates an independently editable journey with sequential ids.
+ * @param steps - Steps in execution order
+ * @param options - Journey metadata and parameters
+ * @returns The journey fixture
+ */
+export function createBrowserJourneyFixture(
+	steps: readonly BrowserJourneyStepInput[] = [{ action: 'wait', arguments: { text: 'Ready' } }],
+	options?: Partial<Pick<BrowserJourney, 'name' | 'description' | 'parameters'>>,
+): BrowserJourney {
+	return {
+		format: 1,
+		name: 'check-ready',
+		description: 'Check readiness',
+		parameters: {},
+		...options,
+		next: steps.length + 1,
+		steps: steps.map((step, index) => ({ ...structuredClone(step), id: 's' + (index + 1) })),
+	}
+}
+
+/**
+ * Creates a structured action event for the recorder boundary.
+ * @param options - Action fields to replace
+ * @returns The independent action value
+ */
+export function createBrowserActionFixture(options?: Partial<BrowserAction>): BrowserAction {
+	return {
+		action: 'click',
+		arguments: { ref: 'e1' },
+		target: { role: 'button', name: 'Save', reference: 'e1' },
+		outcome: 'done',
+		receipt: 'Clicked e1 button "Save".',
+		elapsed: 1,
+		...options,
+	}
+}
+
+/**
+ * Registers the shared journey-store contract against an isolated store per case.
+ * @param name - Suite label
+ * @param factory - Fresh store, synchronously or asynchronously created
+ */
+export function describeBrowserJourneyStore(
+	name: string,
+	factory: () => BrowserJourneyStoreInterface | Promise<BrowserJourneyStoreInterface>,
+): void {
+	describe(`${name}`, () => {
+		it('gets missing entries and deletes missing names', async () => {
+			const store = await factory()
+			expect(await store.get('missing')).toBeUndefined()
+			await store.delete('missing')
+			expect(await store.list()).toEqual({ entries: [], truncated: false, faults: [] })
+		})
+		it('owns input, returned values, and listings', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			const saved = await store.set(journey)
+			Reflect.set(journey, 'description', 'caller edit')
+			Reflect.set(saved.journey, 'description', 'result edit')
+			const fetched = await store.get(journey.name)
+			expect(fetched?.journey.description).toBe('Check readiness')
+			if (fetched !== undefined) Reflect.set(fetched.journey, 'description', 'get edit')
+			const listed = await store.list()
+			for (const entry of listed.entries) Reflect.set(entry.journey, 'description', 'list edit')
+			expect((await store.get(journey.name))?.journey.description).toBe('Check readiness')
+		})
+		it('refuses stale expected revisions and retains the accepted value', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			expect((await store.set(journey)).revision).toBe(1)
+			expect((await store.set({ ...journey, description: 'Accepted' }, 1)).revision).toBe(2)
+			await expect(store.set({ ...journey, description: 'Stale' }, 1)).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_STALE',
+			})
+			expect((await store.get(journey.name))?.journey.description).toBe('Accepted')
+		})
+		it('counts revisions across delete and recreate and refuses a stale writer', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			await store.delete(journey.name)
+			expect(await store.get(journey.name)).toBeUndefined()
+			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
+			expect((await store.set(journey)).revision).toBe(2)
+			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
+		})
+		it('sorts by name and pages with truthful truncation and empty faults', async () => {
+			const store = await factory()
+			for (const journeyName of ['zebra', 'alpine', 'harbor'])
+				await store.set(createBrowserJourneyFixture([], { name: journeyName }))
+			expect((await store.list()).entries.map((entry) => entry.journey.name)).toEqual([
+				'alpine',
+				'harbor',
+				'zebra',
+			])
+			const page = await store.list({ offset: 1, limit: 1 })
+			expect(page.entries.map((entry) => entry.journey.name)).toEqual(['harbor'])
+			expect(page.truncated).toBe(true)
+			expect(page.faults).toEqual([])
+			expect((await store.list({ offset: 2, limit: 1 })).truncated).toBe(false)
+			expect(await store.list({ offset: 9, limit: 1 })).toEqual({
+				entries: [],
+				truncated: false,
+				faults: [],
+			})
+			expect((await store.list({ limit: 0 })).truncated).toBe(true)
+		})
+		it('refuses an unknown format before replacing a saved journey', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			Reflect.set(journey, 'format', 9)
+			await expect(store.set(journey)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_FORMAT' })
+			expect((await store.get(journey.name))?.revision).toBe(1)
+		})
+		it('honours an aborted signal on every primitive', async () => {
+			const store = await factory()
+			const options = { signal: AbortSignal.abort(new Error('store aborted')) }
+			await expect(store.get('missing', options)).rejects.toThrow('store aborted')
+			await expect(store.set(createBrowserJourneyFixture(), undefined, options)).rejects.toThrow(
+				'store aborted',
+			)
+			await expect(store.delete('missing', options)).rejects.toThrow('store aborted')
+			await expect(store.list(options)).rejects.toThrow('store aborted')
+		})
+	})
+}
+
+/**
+ * Registers shared run-store semantics against an isolated store per case.
+ * @param name - Suite label
+ * @param factory - Fresh store, synchronously or asynchronously created
+ */
+export function describeBrowserRunStore(
+	name: string,
+	factory: () => BrowserRunStoreInterface | Promise<BrowserRunStoreInterface>,
+): void {
+	describe(`${name}`, () => {
+		it('opens unique ids and gets and deletes missing runs', async () => {
+			const store = await factory()
+			const first = await store.open('add-kettle')
+			const second = await store.open('add-kettle')
+			expect(first.id).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[0-9a-f]{4}$/)
+			expect(first.id).not.toBe(second.id)
+			expect(await store.get('add-kettle', first.id)).toBeUndefined()
+			await store.delete('add-kettle', first.id)
+			expect(await store.list('add-kettle')).toEqual({ entries: [], truncated: false, faults: [] })
+		})
+		it('owns snapshots and keys runs by journey name and id', async () => {
+			const store = await factory()
+			const run = structuredClone(BROWSER_RUN_FIXTURE)
+			const slot = await store.open(run.journey.name)
+			const saved = { ...run, id: slot.id }
+			await store.set(saved)
+			Reflect.set(saved, 'elapsed', 99)
+			const fetched = await store.get(run.journey.name, slot.id)
+			expect(fetched?.elapsed).toBe(25)
+			if (fetched !== undefined) Reflect.set(fetched, 'elapsed', 100)
+			for (const entry of (await store.list(run.journey.name)).entries)
+				Reflect.set(entry, 'elapsed', 101)
+			expect((await store.get(run.journey.name, slot.id))?.elapsed).toBe(25)
+			expect(await store.get('other-journey', slot.id)).toBeUndefined()
+			await store.delete(run.journey.name, slot.id)
+			expect(await store.get(run.journey.name, slot.id)).toBeUndefined()
+		})
+		it('pages runs by id and isolates journey listings', async () => {
+			const store = await factory()
+			const ids: string[] = []
+			for (let index = 0; index < 3; index += 1) {
+				const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
+				ids.push(slot.id)
+				await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+			}
+			ids.sort()
+			const page = await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 1, limit: 1 })
+			expect(page.entries.map((run) => run.id)).toEqual(ids.slice(1, 2))
+			expect(page.truncated).toBe(true)
+			expect(page.faults).toEqual([])
+			expect(
+				(await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 2, limit: 1 })).truncated,
+			).toBe(false)
+			expect(
+				(await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 20, limit: 1 })).entries,
+			).toEqual([])
+			expect((await store.list('other-journey')).entries).toEqual([])
+		})
+		it('refuses an unknown format before overwriting a run', async () => {
+			const store = await factory()
+			const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
+			const run = { ...structuredClone(BROWSER_RUN_FIXTURE), id: slot.id }
+			await store.set(run)
+			Reflect.set(run, 'format', 9)
+			await expect(store.set(run)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_FORMAT' })
+			expect((await store.get(run.journey.name, run.id))?.format).toBe(1)
+		})
+		it('honours an aborted signal on every primitive', async () => {
+			const store = await factory()
+			const options = { signal: AbortSignal.abort(new Error('store aborted')) }
+			await expect(store.open('add-kettle', options)).rejects.toThrow('store aborted')
+			await expect(store.get('add-kettle', BROWSER_RUN_FIXTURE.id, options)).rejects.toThrow(
+				'store aborted',
+			)
+			await expect(store.set(BROWSER_RUN_FIXTURE, options)).rejects.toThrow('store aborted')
+			await expect(store.delete('add-kettle', BROWSER_RUN_FIXTURE.id, options)).rejects.toThrow(
+				'store aborted',
+			)
+			await expect(store.list('add-kettle', options)).rejects.toThrow('store aborted')
+		})
+	})
+}
+
+/**
+ * Records outbound CDP frames while forwarding them unchanged to a real transport.
+ * @example
+ * const recording = new BrowserJourneyTransportRecorder(transport)
+ * const client = createCDPClient({ transport: recording })
+ */
+export class BrowserJourneyTransportRecorder implements CDPTransportInterface {
+	readonly #transport: CDPTransportInterface
+	readonly #sent: string[] = []
+	constructor(transport: CDPTransportInterface) {
+		this.#transport = transport
+	}
+	get emitter(): EmitterInterface<CDPTransportEventMap> {
+		return this.#transport.emitter
+	}
+	get sent(): readonly string[] {
+		return [...this.#sent]
+	}
+	start(): Promise<void> {
+		return this.#transport.start()
+	}
+	async send(message: string): Promise<void> {
+		this.#sent.push(message)
+		await this.#transport.send(message)
+	}
+	close(): Promise<void> {
+		return this.#transport.close()
+	}
+	clear(): void {
+		this.#sent.length = 0
+	}
+}
+
+/** Holds record and replay documents with changed ids, classes, and control order. */
+export const BROWSER_JOURNEY_TARGET_HTML = Object.freeze({
+	record:
+		'<button id="archive" class="plain">Archive</button><button id="delete" class="danger">Delete</button><button id="all" class="large">Delete all</button><label>Title <input id="title"></label>',
+	changed:
+		'<button id="bulk" class="muted">Delete all</button><section><button id="k1" class="changed">Delete</button></section><button id="k2" class="archived">Archive</button><label>Title <input id="last"></label>',
+	duplicate:
+		'<button id="bulk" class="muted">Delete all</button><section><button id="k1" class="changed">Delete</button></section><aside><button id="second">Delete</button></aside>',
+	css: '<button id="save">Save</button><button id="cancel">Cancel</button><a href="#help">Help</a>',
+})
+
+/**
+ * Installs the journey proofs' own click log after replacing fixture content; its key differs from
+ * the fixture page's `data-clicks` log, which the page's document listener keeps appending to.
+ */
+export const BROWSER_JOURNEY_TARGET_LOG =
+	'document.body.dataset.journeyClicks = "[]"; document.body.onclick = event => { if (event.target instanceof HTMLButtonElement) document.body.dataset.journeyClicks = JSON.stringify([...JSON.parse(document.body.dataset.journeyClicks), { id: event.target.id, trusted: event.isTrusted }]) }'
 
 /** Supplies the design's `add-kettle` module fence, which the TypeScript compilation equals byte for byte. */
 export const BROWSER_JOURNEY_MODULE = `import type { BrowserPageInterface } from '@orkestrel/browser'

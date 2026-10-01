@@ -1,4 +1,11 @@
 import type {
+	BrowserJourneyRevision,
+	BrowserJourneyStoreInterface,
+	BrowserRecorderInterface,
+	BrowserRecorderOptions,
+	BrowserReplayInterface,
+	BrowserReplayOptions,
+	BrowserRunStoreInterface,
 	BrowserPageInterface,
 	BrowserReadingInput,
 	BrowserReadingInterface,
@@ -9,11 +16,14 @@ import type {
 	CDPClientInterface,
 	CDPClientOptions,
 } from './types.js'
+import { BrowserRecorder } from './recorders/BrowserRecorder.js'
+import { BrowserReplay } from './BrowserReplay.js'
+import { MemoryBrowserJourneyStore } from './stores/MemoryBrowserJourneyStore.js'
+import { MemoryBrowserRunStore } from './stores/MemoryBrowserRunStore.js'
 import { BrowserReading } from './BrowserReading.js'
 import { BrowserSnapshot } from './BrowserSnapshot.js'
 import { BrowserToolset } from './BrowserToolset.js'
 import { CDPClient } from './CDPClient.js'
-
 /**
  * Creates a `CDPClientInterface` bound to the given `CDPTransportInterface`.
  *
@@ -147,4 +157,59 @@ export function createBrowserToolset(
 	options?: BrowserToolsetOptions,
 ): BrowserToolsetInterface {
 	return new BrowserToolset(page, { ...options, page })
+}
+
+/**
+ * Creates a recorder over toolset actions.
+ * @param toolset - The recording source
+ * @param options - Event hooks and observer error handling
+ * @returns The recorder
+ * @example
+ * const recorder = createBrowserRecorder(toolset)
+ * await recorder.start()
+ */
+export function createBrowserRecorder(
+	toolset: BrowserToolsetInterface,
+	options?: BrowserRecorderOptions,
+): BrowserRecorderInterface {
+	return new BrowserRecorder(toolset, options)
+}
+
+/**
+ * Creates a replay of one journey revision.
+ * @param toolset - The toolset that performs the steps
+ * @param revision - The journey and optional stored revision
+ * @param options - Inputs, run store, and event hooks
+ * @returns The replay
+ * @example
+ * const run = await createBrowserReplay(toolset, { journey }).execute()
+ */
+export function createBrowserReplay(
+	toolset: BrowserToolsetInterface,
+	revision: BrowserJourneyRevision,
+	options?: BrowserReplayOptions,
+): BrowserReplayInterface {
+	return new BrowserReplay(toolset, revision, options)
+}
+
+/**
+ * Creates an in-memory journey store with persistent revision counters.
+ * @returns The store
+ * @example
+ * const store = createMemoryBrowserJourneyStore()
+ * await store.set(journey)
+ */
+export function createMemoryBrowserJourneyStore(): BrowserJourneyStoreInterface {
+	return new MemoryBrowserJourneyStore()
+}
+
+/**
+ * Creates an in-memory run store without capture directories.
+ * @returns The store
+ * @example
+ * const runs = createMemoryBrowserRunStore()
+ * await runs.set(run)
+ */
+export function createMemoryBrowserRunStore(): BrowserRunStoreInterface {
+	return new MemoryBrowserRunStore()
 }
