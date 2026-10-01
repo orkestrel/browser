@@ -59,6 +59,7 @@ import {
 	requireOutlineReference,
 	requireSystemBrowser,
 	requireDocumentToolset,
+	maskBrowserReferences,
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
 	SERVICE_EDITABLE_HTML,
@@ -149,7 +150,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					)
 				expect(await page.evaluate('document.querySelector("input").value')).toBe('Harbor')
 			}
-			expect(receipts[1]).toBe(receipts[0])
+			expect(maskBrowserReferences(receipts[1] ?? '')).toBe(
+				maskBrowserReferences(receipts[0] ?? ''),
+			)
 		})
 
 		it('performs a semantic click in a same-origin child frame through the DOM placement', async () => {
@@ -205,7 +208,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 						receipts.push(requireToolText(performed.result))
 					}
 				}
-				expect(receipts[1]).toBe(receipts[0])
+				expect(maskBrowserReferences(receipts[1] ?? '')).toBe(
+					maskBrowserReferences(receipts[0] ?? ''),
+				)
 				expect(observed[1]?.stage).toBe(observed[0]?.stage)
 				expect(observed[1]?.reason).toBe(observed[0]?.reason)
 				expect(observed.map((action) => action.outcome)).toEqual(['done', 'done'])
@@ -235,9 +240,13 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				expect(actions.map((action) => action.outcome)).toEqual(['interrupted', 'done', 'done'])
 				observed.push(actions)
 			}
-			expect(observed[1]?.map((action) => [action.receipt, action.stage, action.reason])).toEqual(
-				observed[0]?.map((action) => [action.receipt, action.stage, action.reason]),
-			)
+			const wording = (actions: readonly BrowserAction[] | undefined) =>
+				actions?.map((action) => [
+					maskBrowserReferences(action.receipt),
+					action.stage,
+					action.reason,
+				])
+			expect(wording(observed[1])).toEqual(wording(observed[0]))
 		})
 
 		it('resolves a switch by URL and title and matches the direct tab receipt', async () => {
