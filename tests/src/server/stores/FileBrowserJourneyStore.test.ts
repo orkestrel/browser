@@ -3,9 +3,10 @@ import { afterEach, describe, it, expect } from 'vitest'
 import { watch } from 'node:fs'
 import { mkdir, rename, symlink, writeFile, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createBrowserJourneyFixture } from '../../../setup.js'
+import { createBrowserJourneyFixture, createBrowserViewDouble } from '../../../setup.js'
 import { createScratch } from '@orkestrel/test/server'
-import { FileBrowserJourneyStore } from '@src/server'
+import { BrowserJourneyToolset, BrowserToolset } from '@src/core'
+import { createFileBrowserJourneyStore, FileBrowserJourneyStore } from '@src/server'
 import { describeBrowserJourneyStore } from '../../core/stores/suite.js'
 import { describeFileBrowserStores } from './suite.js'
 
@@ -19,6 +20,43 @@ describeBrowserJourneyStore('FileBrowserJourneyStore', () => {
 	return new FileBrowserJourneyStore({ root: scratch.path })
 })
 describeFileBrowserStores()
+
+describe('BrowserJourneyToolset file listing', () => {
+	it('lists every readable journey exactly once across store pages and reports a repeated fault once', async () => {
+		const scratch = createScratch()
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const store = createFileBrowserJourneyStore({ root: scratch.path, limit: 1 })
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		try {
+			for (const name of ['zebra', 'broken', 'alpine', 'harbor'])
+				await store.set(createBrowserJourneyFixture([], { name }))
+			const path = scratch.write('broken/journey.json', '{')
+			const result = await toolset.tools.execute({
+				id: 'listing',
+				name: 'journeys',
+				arguments: { what: 'all' },
+			})
+			expect(result).toMatchObject({ success: true })
+			if (!result.success || typeof result.value !== 'string')
+				throw new Error('The journeys tool did not return a listing')
+			expect(result.value.match(/^(alpine|harbor|zebra) "Check readiness"$/gm)).toEqual([
+				'alpine "Check readiness"',
+				'harbor "Check readiness"',
+				'zebra "Check readiness"',
+			])
+			expect(result.value.split('\n\n')).toEqual([
+				'alpine "Check readiness"',
+				expect.stringContaining(`cannot be read: ${path}: Malformed journey revision`),
+				'harbor "Check readiness"',
+				'zebra "Check readiness"',
+			])
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+			scratch.destroy()
+		}
+	})
+})
 
 describe('FileBrowserJourneyStore filesystem boundaries', () => {
 	it('refuses links at every journey component', async () => {

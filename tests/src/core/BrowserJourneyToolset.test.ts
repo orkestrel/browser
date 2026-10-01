@@ -445,28 +445,10 @@ s1 wait "Ready"`,
 			}
 		})
 
-		it('pages the store past the entries it could not read', async () => {
-			const memory = createMemoryBrowserJourneyStore()
-			await memory.set(createBrowserJourneyFixture(undefined, { name: 'brew-tea' }))
-			await memory.set(createBrowserJourneyFixture())
-			const [brew, check] = (await memory.list()).entries
-			const offsets = createRecorder<readonly [number | undefined]>()
-			const store: BrowserJourneyStoreInterface = {
-				get: memory.get.bind(memory),
-				set: memory.set.bind(memory),
-				delete: memory.delete.bind(memory),
-				// Two readable entries and one unreadable entry between them, two to a page.
-				list: async (options) => {
-					offsets.handler(options?.offset)
-					return options?.offset === 2
-						? { entries: [requireValue(check)], truncated: false, faults: [] }
-						: {
-								entries: [requireValue(brew)],
-								truncated: true,
-								faults: [{ path: 'tmp/browsers/broken/journey.json', message: 'malformed' }],
-							}
-				},
-			}
+		it('lists the memory store in name order', async () => {
+			const store = createMemoryBrowserJourneyStore()
+			await store.set(createBrowserJourneyFixture())
+			await store.set(createBrowserJourneyFixture(undefined, { name: 'brew-tea' }))
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			try {
@@ -479,7 +461,6 @@ s1 wait "Ready"
 check-ready "Check readiness"
 s1 wait "Ready"`,
 				})
-				expect(offsets.calls).toEqual([[0], [2]])
 			} finally {
 				await journeys.destroy()
 			}

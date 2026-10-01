@@ -2327,6 +2327,32 @@ export const BROWSER_JOURNEY_SERVICE_CASES = Object.freeze([
 	{ name: 'wait', route: '/form', action: 'wait', arguments: { text: 'Delivery form' } },
 ] as const)
 
+/**
+ * Creates the one-step journey that replays a {@link BROWSER_JOURNEY_SERVICE_CASES} row, named
+ * for the row, with a `navigate` path resolved to the absolute URL the tool requires.
+ * @param scenario - The row whose action, arguments, and target the step carries
+ * @param resolve - Returns the absolute URL the fixture server answers for a path
+ * @returns The journey whose one step is `s1`
+ */
+export function createBrowserJourneyServiceJourney(
+	scenario: (typeof BROWSER_JOURNEY_SERVICE_CASES)[number],
+	resolve: (path: string) => string,
+): BrowserJourney {
+	return createBrowserJourneyFixture(
+		[
+			{
+				action: scenario.action,
+				arguments:
+					scenario.action === 'navigate'
+						? { url: resolve(scenario.arguments.url) }
+						: { ...scenario.arguments },
+				...('target' in scenario ? { target: { ...scenario.target } } : {}),
+			},
+		],
+		{ name: scenario.name.replaceAll(' ', '-'), description: `Perform the ${scenario.name} step` },
+	)
+}
+
 /** Holds an editable combobox whose suggestion remains a text input. */
 export const BROWSER_JOURNEY_COMBOBOX_HTML =
 	'<label>Destination <input list="places"></label><datalist id="places"><option value="Harbor"></datalist>'
@@ -2341,6 +2367,12 @@ export const BROWSER_JOURNEY_POPUP_LINK_HTML =
 /** Holds a same-origin child document whose button records its input. */
 export const BROWSER_JOURNEY_FRAME_HTML =
 	'<button onclick="document.body.dataset.clicked = \'yes\'">Save in frame</button>'
+
+/** Holds the one-step journey that clicks the {@link BROWSER_JOURNEY_FRAME_HTML} button by name. */
+export const BROWSER_JOURNEY_FRAME_JOURNEY: BrowserJourney = createBrowserJourneyFixture(
+	[{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save in frame' } }],
+	{ name: 'save-in-frame', description: 'Save inside the child frame' },
+)
 
 /** Records an element's operations into its view double's call list. */
 export class BrowserElementDouble implements BrowserElementInterface {
