@@ -1081,7 +1081,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				role: element.role,
 				name: element.name,
 				reference: element.reference,
-				...(frame === undefined ? {} : { frame }),
+				...(frame === undefined || frame === this.#page?.id ? {} : { frame }),
 			},
 		})
 		return element
