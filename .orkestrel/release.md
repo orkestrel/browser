@@ -12,12 +12,17 @@ Run the wave with the `orkestrel-publish` skill: the visit (`wave.ts --visit`), 
 | W3 | `@orkestrel/markdown` | 0.0.17 | `5a61e00` | contract and html ranges moved |
 | W3 | `@orkestrel/mcp` | 0.0.34 | `528d466` | dist moved and contract and tool ranges moved; the distribution proof's overrides moved with them |
 | W4 | `@orkestrel/browser` | 0.0.19 | `cd153f0` | dist moved and every runtime range moved; the manifest carried 0.0.19 from the campaign |
+| W5 | `@orkestrel/ollama` | 0.0.20 | `f2efe02` | contract, tool, and browser ranges moved; the store proof's turn lever |
+| SV | `@orkestrel/server` | 0.0.22 | `28e678e` | dist moved (`stop()` ends a connection that never carried an exchange) |
+| SV | `@orkestrel/mcp` | 0.0.35 | `4a05c2b` | server range moved |
+| SV | `@orkestrel/browser` | 0.0.20 | `1b1b3aa` | server and mcp ranges moved |
+| W6 | `@orkestrel/scaffold` | 0.0.83 | `d131a26` | dist moved (`@orkestrel/browser` joins a rendering blueprint) and every catalog range moved |
 
 ## Remaining
 
-- W5 `@orkestrel/ollama` 0.0.20: the visit re-pins contract `^0.0.19`, tool `^0.0.18`, and browser `^0.0.19` (development); unit O1 lands; bump from 0.0.19; `prepublishOnly`; release commit; upload.
-- W6 `@orkestrel/scaffold` 0.0.83: the visit, scaffold item 40 (`npm install` for the `@orkestrel/browser` `^0.0.19` development range, then the `catalog` verb after W5 so the table reads every wave release), bump from 0.0.82, `prepublishOnly`, release commit, upload.
+- S43 `@orkestrel/scaffold` 0.0.84: the cycle guard lands; the visit with `--prior 0.0.83`; bump; `prepublishOnly` with npm 11 on `PATH` (a generated workspace declares `devEngines` npm `>=11.6.0`); release commit; upload. Then mcp's propagation visit reruns and every session repository re-pins `^0.0.84`.
 
 ## Readings
 
 - The registry lists a version in the packument at once and serves its tarball minutes later: contract 0.0.19 published at 16:45:24Z and its tarball answered 200 at 16:50:48Z. Before a dependent's install, poll the tarball URL until it answers 200; a distribution proof that installs the packed archive earlier fails `E404`.
+- A distribution proof that installs a scaffold-generated workspace needs npm 11.6.0 or later; the session host runs npm 10.9.7, so prepend `/home/user/.wave/npm11/node_modules/.bin` to `PATH`. After a publish, set `npm_config_prefer_online=true` so a cached packument does not answer `notarget`.

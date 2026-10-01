@@ -27,7 +27,9 @@ Each window publishes one layer after every package in it visited green, bumped 
 
 ## Status, 2026-10-01
 
-W1 to W4 are on the registry, each confirmed by `npm view`: contract 0.0.19, html 0.0.12, tool 0.0.18, markdown 0.0.17, mcp 0.0.34, browser 0.0.19. W5 (ollama) and W6 (scaffold) remain; their visits run first.
+Every window is on the registry, each confirmed by `npm view`: contract 0.0.19, html 0.0.12, tool 0.0.18, markdown 0.0.17, mcp 0.0.34 then 0.0.35, browser 0.0.19 then 0.0.20, server 0.0.22, ollama 0.0.20, and scaffold 0.0.83. Server 0.0.22 ends a connection that never carried an exchange when `stop()` runs (the ollama relay cancellation hang); mcp 0.0.35 and browser 0.0.20 re-pinned it.
+
+Scaffold 0.0.83 propagated to contract, html, tool, markdown, server, browser, and ollama with no bump. Its overwrite refuses mcp: mcp has a `src/browser` environment, so the S38 condition plans `@orkestrel/browser`, which depends on mcp at runtime. Unit S43 omits `@orkestrel/browser` from every workspace in the browser package's runtime dependency closure; it ships as scaffold 0.0.84, then mcp's visit reruns and the other session repositories re-pin `^0.0.84`.
 
 ## Units
 
@@ -35,11 +37,12 @@ W1 to W4 are on the registry, each confirmed by `npm view`: contract 0.0.19, htm
 | --- | --- | --- | --- |
 | C1: `schemaToShape` converts a `type` array to the union of its members | contract | astra | landed `704e5d4`, published 0.0.19 |
 | B3: the coded fault of a `perform` rides `BrowserToolsetResult`; browser `ROADMAP.md` item 3 | browser | opus | landed `188a2d7`, published in 0.0.19 |
-| S38: `@orkestrel/browser` joins the development dependencies of a browser, Vue, or styles blueprint; the `browse` registration has one home | scaffold | opus | landed `438e808`; scaffold item 40 (lockfile install and catalog) rides W6 |
+| S38: `@orkestrel/browser` joins the development dependencies of a browser, Vue, or styles blueprint; the `browse` registration has one home | scaffold | opus | landed `438e808`; published in 0.0.83 |
 | M0: markdown proves `tests/setupGuides.ts` in its sibling test, as the scaffold 0.0.82 policy requires | markdown | opus | landed `f106c4f`, published in 0.0.17 |
-| O1: retire `normalizeSchemaTypes`, the turn lever in the store proof's turn handling, three live runs (`ollama/plan.md`) | ollama | opus | the journeys history is rebased onto `f97df76` at `df7ecd6`; the visit re-pins it; the lane follows |
-| V1: veneer's visit proves scaffold 0.0.83 delivers `@orkestrel/browser` and the `browse` rule; register `browse` and record a journey against veneer's app | veneer | host and opus | after W6 |
-| Close: re-pin `@orkestrel/scaffold` `^0.0.83` and `repair` in each session repository; empty `.orkestrel/` | all | host | after W6 |
+| O1: retire `normalizeSchemaTypes`, the turn lever in the store proof's turn handling, three live runs | ollama | opus | landed; published in 0.0.20 |
+| S43: omit `@orkestrel/browser` from a workspace in its own runtime dependency closure | scaffold | opus | running; ships as 0.0.84 |
+| V1: veneer's visit proves scaffold 0.0.84 delivers `@orkestrel/browser` and the `browse` rule; register `browse` and record a journey against veneer's app | veneer | host and opus | after W6 |
+| Close: re-pin `@orkestrel/scaffold` `^0.0.84` and overwrite in each session repository; empty `.orkestrel/` | all | host | after S43 |
 
 ## Out-of-session obligations
 
