@@ -77,7 +77,7 @@ describe('journey semantic replay', () => {
 	describe('claim 3: changed markup and duplicate refusal', () => {
 		it('replays by exact name after ids, classes, and order change, then refuses duplicates without input', async () => {
 			await page.evaluate(
-				`document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.record)}; ${BROWSER_JOURNEY_TARGET_LOG}`,
+				`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.record)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 			)
 			const recorder = createBrowserRecorder(toolset)
 			try {
@@ -100,15 +100,15 @@ describe('journey semantic replay', () => {
 					reference: target.reference,
 				})
 				await page.evaluate(
-					`document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.changed)}; ${BROWSER_JOURNEY_TARGET_LOG}`,
+					`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.changed)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 				)
 				const changed = await createBrowserReplay(toolset, { journey }).execute()
 				expect(changed.outcome).toBe('complete')
-				expect(await page.evaluate('JSON.parse(document.body.dataset.clicks)')).toEqual([
+				expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([
 					{ id: 'k1', trusted: true },
 				])
 				await page.evaluate(
-					`document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.duplicate)}; ${BROWSER_JOURNEY_TARGET_LOG}`,
+					`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.duplicate)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 				)
 				transport.clear()
 				const duplicate = await createBrowserReplay(toolset, { journey }).execute()
@@ -118,7 +118,7 @@ describe('journey semantic replay', () => {
 				expect(
 					transport.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
 				).toEqual([])
-				expect(await page.evaluate('JSON.parse(document.body.dataset.clicks)')).toEqual([])
+				expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([])
 				await expect(
 					locateBrowserTarget(page, { role: 'button', name: 'Delete' }),
 				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_AMBIGUOUS' })
@@ -127,7 +127,7 @@ describe('journey semantic replay', () => {
 				expect(transport.sent.some((frame) => frame.includes('Input.dispatchMouseEvent'))).toBe(
 					true,
 				)
-				expect(await page.evaluate('JSON.parse(document.body.dataset.clicks)')).toEqual([
+				expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([
 					{ id: 'k1', trusted: true },
 				])
 			} finally {
@@ -139,7 +139,7 @@ describe('journey semantic replay', () => {
 	describe('claim 4: CSS evidence never resolves a target', () => {
 		it('refuses an absent semantic name even when CSS uniquely matches a different control', async () => {
 			await page.evaluate(
-				`document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.css)}; ${BROWSER_JOURNEY_TARGET_LOG}`,
+				`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.css)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 			)
 			expect(await page.elements.find({ css: '#cancel' })).toHaveLength(1)
 			const target = { role: 'button', name: 'Submit order', css: '#cancel', reference: 'e1' }
@@ -155,10 +155,10 @@ describe('journey semantic replay', () => {
 				[],
 			)
 			expect(transport.sent.filter((frame) => frame.includes('DOM.querySelectorAll'))).toEqual([])
-			expect(await page.evaluate('JSON.parse(document.body.dataset.clicks)')).toEqual([])
+			expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([])
 			await (await locateBrowserTarget(page, { role: 'button', name: 'Cancel' })).click()
 			expect(transport.sent.some((frame) => frame.includes('Input.dispatchMouseEvent'))).toBe(true)
-			expect(await page.evaluate('JSON.parse(document.body.dataset.clicks)')).toEqual([
+			expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([
 				{ id: 'cancel', trusted: true },
 			])
 		})

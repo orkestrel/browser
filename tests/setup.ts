@@ -3322,9 +3322,12 @@ export const BROWSER_JOURNEY_TARGET_HTML = Object.freeze({
 	css: '<button id="save">Save</button><button id="cancel">Cancel</button><a href="#help">Help</a>',
 })
 
-/** Installs the document-owned input log after replacing fixture content. */
+/**
+ * Installs the journey proofs' own click log after replacing fixture content; its key differs from
+ * the fixture page's `data-clicks` log, which the page's document listener keeps appending to.
+ */
 export const BROWSER_JOURNEY_TARGET_LOG =
-	'document.body.dataset.clicks = "[]"; document.body.onclick = event => { if (event.target instanceof HTMLButtonElement) document.body.dataset.clicks = JSON.stringify([...JSON.parse(document.body.dataset.clicks), { id: event.target.id, trusted: event.isTrusted }]) }'
+	'document.body.dataset.journeyClicks = "[]"; document.body.onclick = event => { if (event.target instanceof HTMLButtonElement) document.body.dataset.journeyClicks = JSON.stringify([...JSON.parse(document.body.dataset.journeyClicks), { id: event.target.id, trusted: event.isTrusted }]) }'
 
 /** Supplies the design's `add-kettle` module fence, which the TypeScript compilation equals byte for byte. */
 export const BROWSER_JOURNEY_MODULE = `import type { BrowserPageInterface } from '@orkestrel/browser'
