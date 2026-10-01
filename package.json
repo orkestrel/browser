@@ -99,13 +99,15 @@
 		"@orkestrel/emitter": "^0.0.11",
 		"@orkestrel/html": "^0.0.11",
 		"@orkestrel/markdown": "^0.0.16",
+		"@orkestrel/mcp": "file:tmp/tarballs/orkestrel-mcp-0.0.34.tgz",
+		"@orkestrel/router": "^0.0.16",
+		"@orkestrel/server": "^0.0.21",
 		"@orkestrel/tool": "^0.0.17",
 		"@orkestrel/websocket": "^0.0.14"
 	},
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.3",
 		"@orkestrel/guide": "^0.0.21",
-		"@orkestrel/mcp": "file:tmp/tarballs/orkestrel-mcp-0.0.34.tgz",
 		"@orkestrel/probe": "^0.0.19",
 		"@orkestrel/scaffold": "^0.0.81",
 		"@orkestrel/test": "^0.0.24",
