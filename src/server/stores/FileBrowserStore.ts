@@ -5,11 +5,8 @@ import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'no
 import { dirname, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { BrowserError, BROWSER_JOURNEY_NAME_PATTERN, BROWSER_RUN_ID_PATTERN } from '@src/core'
-import {
-	BROWSER_FILE_STORE_LIMIT,
-	BROWSER_FILE_STORE_RESERVED,
-	BROWSER_JOURNEY_LOCK_ATTEMPTS,
-} from '../constants.js'
+import { BROWSER_FILE_STORE_LIMIT, BROWSER_JOURNEY_LOCK_ATTEMPTS } from '../constants.js'
+import { formatBrowserLockEntry, parseBrowserLockEntry } from '../helpers.js'
 
 /**
  * Shares confined filesystem operations between the journey and run stores.
@@ -43,7 +40,7 @@ export class FileBrowserStore {
 
 	/** Checks a journey name before filesystem access. @param name - Journey name */
 	validateName(name: string): void {
-		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name) || BROWSER_FILE_STORE_RESERVED.includes(name))
+		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
 			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
 	}
 
@@ -172,7 +169,7 @@ export class FileBrowserStore {
 
 	/**
 	 * Holds a directory lock through a mutation and releases only its named entry.
-	 * Reclaims dead or empty locks within a bounded attempt count; a live or unknown holder refuses.
+	 * @remarks Reclaims dead or empty locks within a bounded attempt count; a live or unknown holder refuses.
 	 * @param path - Lock directory
 	 * @param action - Mutation inside the lock
 	 * @param options - Cancellation options
@@ -180,7 +177,7 @@ export class FileBrowserStore {
 	 */
 	async lock<T>(path: string, action: () => Promise<T>, options?: BrowserStoreOptions): Promise<T> {
 		await this.createDirectory(dirname(path), options)
-		const name = `${process.pid}-${randomUUID()}`
+		const name = formatBrowserLockEntry(process.pid, randomUUID())
 		const entry = this.resolvePath(path, name)
 		for (let attempt = 0; attempt < BROWSER_JOURNEY_LOCK_ATTEMPTS; attempt += 1) {
 			await this.check(path, options)
@@ -195,10 +192,8 @@ export class FileBrowserStore {
 				if (entries.length > 1) break
 				const holder = entries[0]
 				if (holder !== undefined) {
-					const match =
-						/^([1-9]\d*)-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.exec(holder)
-					const pid = Number(match?.[1])
-					if (!Number.isSafeInteger(pid) || pid <= 0) break
+					const pid = parseBrowserLockEntry(holder)
+					if (pid === undefined) break
 					try {
 						process.kill(pid, 0)
 						break

@@ -7,8 +7,9 @@ import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { RetryOptions, TeardownInterface } from '@orkestrel/test'
 import type { MCPTransportInterface } from '@orkestrel/mcp'
-import type { BrowserContextInterface, BrowserPageInterface } from '@src/core'
+import type { BrowserContextInterface, BrowserPageInterface, BrowserStoreOptions } from '@src/core'
 import type {
+	FileBrowserStoreOptions,
 	BrowserConnection,
 	BrowserDiscoveryResult,
 	BrowserEventMap,
@@ -57,6 +58,7 @@ import {
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
 import { createBrowserElementFixture, replyOk } from './setup.js'
+import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
 
 /**
  * Reports whether this platform delivers `SIGTERM` as a catchable signal a
@@ -2457,4 +2459,20 @@ export async function stopBrowserChild(child: ChildProcess): Promise<void> {
 	)
 	child.kill('SIGKILL')
 	await ending
+}
+
+/** Runs an external filesystem interleaving after each real component check. */
+export class BrowserLockObserver extends FileBrowserStore {
+	readonly #observe: (path: string) => Promise<void>
+
+	constructor(options: FileBrowserStoreOptions, observe: (path: string) => Promise<void>) {
+		super(options)
+		this.#observe = observe
+	}
+
+	override async check(path: string, options?: BrowserStoreOptions): Promise<boolean> {
+		const present = await super.check(path, options)
+		await this.#observe(path)
+		return present
+	}
 }

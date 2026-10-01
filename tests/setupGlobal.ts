@@ -14,7 +14,6 @@ import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createTeardown } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { createServer as createViteServer } from 'vite'
-import { reservePort } from './setupServer.js'
 
 declare module 'vitest' {
 	interface ProvidedContext {
@@ -49,6 +48,7 @@ export interface BrowserServerModuleInterface {
 export interface BrowserServiceModuleInterface {
 	readonly SERVICE_BROWSER_ARGS: readonly string[]
 	requireSystemBrowser(options?: SystemBrowserOptions): SystemBrowser
+	reservePort(): Promise<number>
 }
 
 /** Launches Chromium browsers through this package's own `createBrowser`. */
@@ -78,13 +78,14 @@ export function isBrowserServerModule(value: unknown): value is BrowserServerMod
  * Narrows a loaded module to the service-setup exports the launcher reads.
  *
  * @param value - The loaded module namespace
- * @returns True if the module exports the service flags and `requireSystemBrowser`; false
+ * @returns True if the module exports the service flags, `requireSystemBrowser`, and `reservePort`; false
  * otherwise
  */
 export function isBrowserServiceModule(value: unknown): value is BrowserServiceModuleInterface {
 	return (
 		isRecord(value) &&
 		typeof value['requireSystemBrowser'] === 'function' &&
+		typeof value['reservePort'] === 'function' &&
 		isArray(value['SERVICE_BROWSER_ARGS']) &&
 		value['SERVICE_BROWSER_ARGS'].every((flag) => isString(flag))
 	)
@@ -125,7 +126,9 @@ export async function createBrowserLauncher(
 		const server: unknown = await runner.ssrLoadModule('/src/server/index.ts')
 		const service: unknown = await runner.ssrLoadModule('/tests/setupService.ts')
 		if (!isBrowserServerModule(server) || !isBrowserServiceModule(service)) {
-			throw new Error('the launcher modules do not export createBrowser and the service flags')
+			throw new Error(
+				'the launcher modules lack createBrowser, service flags, requireSystemBrowser, or reservePort',
+			)
 		}
 		return {
 			launch(args: readonly string[]): Promise<BrowserEndpointInterface> {
@@ -175,7 +178,7 @@ export async function launchBrowserEndpoint(
 			headless: true,
 			profile: profile.path,
 			args: [...service.SERVICE_BROWSER_ARGS, ...args],
-			cdp: { port: await reservePort() },
+			cdp: { port: await service.reservePort() },
 			timeout: 20_000,
 		})
 		teardown.add(() => browser.destroy())

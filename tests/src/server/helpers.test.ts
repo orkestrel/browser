@@ -32,12 +32,58 @@ import {
 	removeBrowserProfile,
 	readBrowserEndpoint,
 	fetchCDPTargets,
+	formatBrowserLockEntry,
+	parseBrowserLockEntry,
 } from '@src/server'
 import { isBrowserConnectionError } from '@src/core'
 import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
+
+describe('formatBrowserLockEntry', () => {
+	it('joins the holder pid and acquisition token in the persisted format', () => {
+		expect(formatBrowserLockEntry(123, '11111111-1111-4111-8111-111111111111')).toBe(
+			'123-11111111-1111-4111-8111-111111111111',
+		)
+	})
+})
+
+describe('parseBrowserLockEntry', () => {
+	it('reads a positive safe holder pid only from a complete lowercase UUID entry', () => {
+		expect(parseBrowserLockEntry('123-11111111-1111-4111-8111-111111111111')).toBe(123)
+		expect(
+			parseBrowserLockEntry(formatBrowserLockEntry(1, 'abcdef12-abcd-abcd-abcd-abcdef123456')),
+		).toBe(1)
+		expect(
+			parseBrowserLockEntry(
+				formatBrowserLockEntry(Number.MAX_SAFE_INTEGER, '11111111-1111-4111-8111-111111111111'),
+			),
+		).toBe(Number.MAX_SAFE_INTEGER)
+		expect(parseBrowserLockEntry('')).toBeUndefined()
+		expect(parseBrowserLockEntry('123')).toBeUndefined()
+		expect(parseBrowserLockEntry('123-invalid')).toBeUndefined()
+		expect(parseBrowserLockEntry('0123-11111111-1111-4111-8111-111111111111')).toBeUndefined()
+		expect(
+			parseBrowserLockEntry(formatBrowserLockEntry(0, '11111111-1111-4111-8111-111111111111')),
+		).toBeUndefined()
+		expect(
+			parseBrowserLockEntry(formatBrowserLockEntry(-1, '11111111-1111-4111-8111-111111111111')),
+		).toBeUndefined()
+		expect(
+			parseBrowserLockEntry(formatBrowserLockEntry(1.5, '11111111-1111-4111-8111-111111111111')),
+		).toBeUndefined()
+		expect(
+			parseBrowserLockEntry(
+				formatBrowserLockEntry(Number.MAX_SAFE_INTEGER + 1, '11111111-1111-4111-8111-111111111111'),
+			),
+		).toBeUndefined()
+		expect(
+			parseBrowserLockEntry(formatBrowserLockEntry(123, 'ABCDEF12-abcd-abcd-abcd-abcdef123456')),
+		).toBeUndefined()
+		expect(parseBrowserLockEntry('123-11111111-1111-4111-8111-111111111111/entry')).toBeUndefined()
+	})
+})
 const scratches: ScratchInterface[] = []
 afterEach(async () => {
 	await server?.close()

@@ -36,6 +36,34 @@ import {
 	BROWSER_PROFILE_PREFIX,
 } from './constants.js'
 
+/**
+ * Formats a process identifier and UUID token as a lock entry name.
+ * @param pid - Positive safe integer identifying the holder process
+ * @param token - Lowercase UUID token identifying this acquisition
+ * @returns The entry name
+ * @example
+ * formatBrowserLockEntry(123, '11111111-1111-4111-8111-111111111111')
+ */
+export function formatBrowserLockEntry(pid: number, token: string): string {
+	return `${pid}-${token}`
+}
+
+/**
+ * Parses the holder process identifier from a lock entry name.
+ * @remarks Requires a positive safe integer followed by a lowercase UUID token.
+ * @param name - Directory entry name
+ * @returns The process identifier, or undefined when the entry is malformed
+ * @example
+ * parseBrowserLockEntry('123-11111111-1111-4111-8111-111111111111') // 123
+ */
+export function parseBrowserLockEntry(name: string): number | undefined {
+	const match = /^([1-9]\d*)-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.exec(
+		name,
+	)
+	const pid = Number(match?.[1])
+	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+}
+
 // === Discovery helpers
 
 /**
