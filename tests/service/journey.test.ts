@@ -131,7 +131,11 @@ describe('journey semantic replay', () => {
 			const recorder = createBrowserRecorder(toolset)
 			try {
 				await recorder.start()
-				const target = await locateBrowserTarget(page, { role: 'button', name: 'Delete' })
+				const target = await locateBrowserTarget(
+					page,
+					{ role: 'button', name: 'Delete' },
+					{ id: 'record' },
+				)
 				expect(
 					(
 						await toolset.perform({
@@ -169,7 +173,7 @@ describe('journey semantic replay', () => {
 				).toEqual([])
 				expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([])
 				await expect(
-					locateBrowserTarget(page, { role: 'button', name: 'Delete' }),
+					locateBrowserTarget(page, { role: 'button', name: 'Delete' }, { id: 's1' }),
 				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_AMBIGUOUS' })
 				const controls = await page.elements.find({ css: '#k1' })
 				await controls[0]?.click()
@@ -194,7 +198,7 @@ describe('journey semantic replay', () => {
 			const target = { role: 'button', name: 'Submit order', css: '#cancel', reference: 'e1' }
 			const journey = createBrowserJourneyFixture([{ action: 'click', arguments: {}, target }])
 			transport.clear()
-			await expect(locateBrowserTarget(page, target)).rejects.toMatchObject({
+			await expect(locateBrowserTarget(page, target, { id: 's1' })).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_TARGET',
 			})
 			const run = await createBrowserReplay(toolset, { journey }).execute()
@@ -205,7 +209,9 @@ describe('journey semantic replay', () => {
 			)
 			expect(transport.sent.filter((frame) => frame.includes('DOM.querySelectorAll'))).toEqual([])
 			expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([])
-			await (await locateBrowserTarget(page, { role: 'button', name: 'Cancel' })).click()
+			await (
+				await locateBrowserTarget(page, { role: 'button', name: 'Cancel' }, { id: 's1' })
+			).click()
 			expect(transport.sent.some((frame) => frame.includes('Input.dispatchMouseEvent'))).toBe(true)
 			expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([
 				{ id: 'cancel', trusted: true },
@@ -459,7 +465,11 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 						toolset.perform({ id: 'foreign', name: 'dialog', arguments: { accept: false } }),
 					)
 			})
-			const keep = await locateBrowserTarget(page, { role: 'button', name: 'Keep' })
+			const keep = await locateBrowserTarget(
+				page,
+				{ role: 'button', name: 'Keep' },
+				{ id: 'early' },
+			)
 			const reached = Promise.withResolvers<void>()
 			const replay = createBrowserReplay(
 				toolset,
@@ -557,7 +567,11 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			expect(released.calls).toEqual([['keep-draft']])
 			expect(await page.evaluate('document.body.dataset.slow')).toBe('done')
 			expect(await page.evaluate('document.body.dataset.kept ?? "none"')).toBe('none')
-			const keep = await locateBrowserTarget(page, { role: 'button', name: 'Keep' })
+			const keep = await locateBrowserTarget(
+				page,
+				{ role: 'button', name: 'Keep' },
+				{ id: 'after' },
+			)
 			const after = await toolset.perform({
 				id: 'after',
 				name: 'click',
@@ -1034,7 +1048,9 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 			toolset.emitter.on('action', (action) => actions.push(action))
 			await toolset.start()
 			const target =
-				'target' in scenario ? await locateBrowserTarget(page, scenario.target) : undefined
+				'target' in scenario
+					? await locateBrowserTarget(page, scenario.target, { id: step.id })
+					: undefined
 			const text = requireToolText(
 				await toolset.tools.execute({
 					id: step.id,

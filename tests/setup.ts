@@ -2742,6 +2742,9 @@ export async function createStartedCodegen(
 ): Promise<StartedCodegenFixture> {
 	const { client, transport } = await createConnectedCDPClient()
 	replyOk(transport, 'Page.enable')
+	replyOk(transport, 'Page.getFrameTree', {
+		frameTree: { frame: { id: 'main', url: 'https://example.test/' } },
+	})
 	replyOk(transport, 'Runtime.releaseObject')
 	replyOk(transport, 'Accessibility.getPartialAXTree', {
 		nodes: [{ role: { value: target.role }, name: { value: target.name } }],

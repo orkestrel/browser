@@ -2586,6 +2586,12 @@ export interface BrowserCallOptions {
 	readonly signal?: AbortSignal
 }
 
+/** Supplies the step identity and call limits for semantic target resolution. */
+export interface BrowserTargetOptions extends BrowserCallOptions {
+	/** Identifies the step in missing-target and ambiguity refusals. */
+	readonly id: string
+}
+
 /** Transliterates the WebMCP protocol's `Annotation` type, retaining its wire spelling. */
 export interface BrowserToolAnnotation {
 	readonly readOnly?: boolean

@@ -231,6 +231,8 @@ The following table lists the core constants.
 | `BROWSER_JOURNEY_ACTIONS`              | const | Names the native actions a journey step can hold: `click`, `type`, `press`, `navigate`, `wait`, `dialog`, and `switch`.                                                                                                                                          |
 | `BROWSER_JOURNEY_NAME_PATTERN`         | const | Matches a journey name: lowercase letters and digits in words joined by single hyphens, at most 64 characters, and never a Windows reserved device name.                                                                                                         |
 | `BROWSER_JOURNEY_PARAMETER_PATTERN`    | const | Matches a journey parameter name: a lowercase letter followed by letters and digits.                                                                                                                                                                             |
+| `BROWSER_RUN_ID_PATTERN`               | const | Matches a run id containing an ISO timestamp with hyphenated time and a hexadecimal suffix.                                                                                                                                                                      |
+| `BROWSER_JOURNEY_NON_STEP_TOOLS`       | const | Names observation and journey tools that cannot become journey steps.                                                                                                                                                                                            |
 | `BROWSER_JOURNEY_FORMAT_VERSION`       | const | Holds the journey and run file format this package writes and reads, `1`.                                                                                                                                                                                        |
 | `BROWSER_JOURNEY_EMPTY_LISTING`        | const | Holds the result the `journeys` tool returns when no journey is saved.                                                                                                                                                                                           |
 | `BROWSER_JOURNEY_READONLY_REFUSAL`     | const | Holds the refusal `record`, `save`, and `edit` return when the journeys are read-only.                                                                                                                                                                           |
@@ -483,8 +485,9 @@ The helpers are pure: they decode protocol payloads, validate options, compile i
 | `renderBrowserRunResult`                 | function | Renders a step receipt without its tool directive or appended view.                                                                                                                                 |
 | `deriveBrowserJourneyTrigger`            | function | Derives the trigger text a run records for an action.                                                                                                                                               |
 | `deriveBrowserJourneySecret`             | function | Derives an unused lower camel case secret parameter name from an accessible name.                                                                                                                   |
+| `collectBrowserJourneySecrets`           | function | Collects parameter names already bound to recorded text arguments.                                                                                                                                  |
 | `generateBrowserRunId`                   | function | Generates a run id from an ISO timestamp and a cryptographic hexadecimal suffix.                                                                                                                    |
-| `locateBrowserTarget`                    | function | Resolves one exact semantic target and refuses missing or ambiguous matches.                                                                                                                        |
+| `locateBrowserTarget`                    | function | Resolves one exact semantic target and names the caller's step in missing or ambiguous refusals.                                                                                                    |
 | `performBrowserStep`                     | function | Performs a resolved journey step through the toolset's action boundary.                                                                                                                             |
 | `compileBrowserJourney`                  | function | Compiles a journey into a standalone module that performs each step through `performBrowserStep` over a toolset the module constructs on the page.                                                  |
 | `compileBrowserJourneyValue`             | function | Compiles a JSON value into the JavaScript literal a generated journey module carries.                                                                                                               |
@@ -541,6 +544,7 @@ import type { BrowserJourney } from '@orkestrel/browser'
 import {
 	buildBrowserJourney,
 	collectBrowserJourneyBindings,
+	collectBrowserJourneySecrets,
 	compileBrowserJourney,
 	compileBrowserJourneyValue,
 	deriveBrowserJourneySecret,
@@ -604,6 +608,8 @@ resolveBrowserJourneyBinding({ parameter: 'email' }, { email: 'ada@example.test'
 deriveBrowserJourneyTrigger(journey.steps[3]) // 'Email'
 deriveBrowserJourneySecret('Confirm password') // 'confirmPassword'
 deriveBrowserJourneySecret('Password', ['password']) // 'secret1'
+const taken = collectBrowserJourneySecrets(journey.steps)
+deriveBrowserJourneySecret('Password', taken)
 generateBrowserRunId() // '2026-10-01T03-10-46.448Z-b0cc'
 const edited = editBrowserJourney(journey, [
 	{ operation: 'remove', id: 's3' },
@@ -1096,6 +1102,7 @@ The following table lists the core types.
 | `BrowserElementManagerInterface`    | interface | Captures, queries, and retains references to a view's elements.                                                                                                                                                                                          |
 | `BrowserViewInterface`              | interface | Provides the document operations shared by remote and DOM-native views.                                                                                                                                                                                  |
 | `BrowserCallOptions`                | interface | Describes the options every asynchronous page, frame, handle, and worker call accepts.                                                                                                                                                                   |
+| `BrowserTargetOptions`              | interface | Supplies the step identity and call limits for semantic target resolution.                                                                                                                                                                               |
 | `BrowserToolAnnotation`             | interface | Transliterates the WebMCP protocol's `Annotation` type, retaining its wire spelling.                                                                                                                                                                     |
 | `BrowserTool`                       | interface | Describes a registered WebMCP tool and its owning document.                                                                                                                                                                                              |
 | `BrowserToolRemoval`                | interface | Identifies a removed WebMCP tool by document and name.                                                                                                                                                                                                   |

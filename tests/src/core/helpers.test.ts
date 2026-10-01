@@ -2,9 +2,9 @@
  * src/core/helpers.ts tests.
  */
 
-import type { BrowserToolSourceEventMap } from '@src/core'
+import type { BrowserTargetOptions, BrowserToolSourceEventMap } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, expectTypeOf } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool } from '@orkestrel/tool'
@@ -13,6 +13,7 @@ import {
 	renderBrowserRun,
 	renderBrowserRunResult,
 	collectBrowserJourneyBindings,
+	collectBrowserJourneySecrets,
 	editBrowserJourney,
 	renderBrowserJourney,
 	deriveBrowserJourneyTrigger,
@@ -83,6 +84,18 @@ import {
 } from '../../setup.js'
 
 describe('journey step helpers', () => {
+	it('collects recorded text parameter names without interpreting literal arguments', () => {
+		expect(collectBrowserJourneySecrets([])).toEqual([])
+		expect(
+			collectBrowserJourneySecrets([
+				{ id: 's1', action: 'type', arguments: { text: { parameter: 'password' } } },
+				{ id: 's2', action: 'type', arguments: { text: 'literal' } },
+				{ id: 's3', action: 'press', arguments: { key: { parameter: 'key' } } },
+				{ id: 's4', action: 'type', arguments: { text: { parameter: 3 } } },
+				{ id: 's5', action: 'type', arguments: { text: { parameter: 'secret1' } } },
+			]),
+		).toEqual(['password', 'secret1'])
+	})
 	it('passes a page tool its literal arguments unchanged without resolving an element target', async () => {
 		const invoked = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
 		const tool = createTool({
@@ -203,9 +216,14 @@ describe('journey step helpers', () => {
 		}
 	})
 	it('resolves a unique semantic target and refuses a missing target without sending input', async () => {
+		expectTypeOf<Parameters<typeof locateBrowserTarget>[2]>().toEqualTypeOf<BrowserTargetOptions>()
 		const fixture = await createBrowserElementFixture()
 		try {
-			const target = await locateBrowserTarget(fixture.page, { role: 'textbox', name: 'Email' })
+			const target = await locateBrowserTarget(
+				fixture.page,
+				{ role: 'textbox', name: 'Email' },
+				{ id: 's2' },
+			)
 			expect(target.name).toBe('Email')
 			expect(target.frame).toBe('main')
 			await expect(
@@ -238,6 +256,11 @@ describe('journey step helpers', () => {
 		try {
 			await toolset.start()
 			const target = { role: 'button', name: 'Delete', reference: 'e1', css: '#delete' }
+			await expect(locateBrowserTarget(fixture.page, target, { id: 's8' })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_AMBIGUOUS',
+				message:
+					'Step s8 names button "Delete", which 2 elements carry; call edit to remove or replace s8.',
+			})
 			await expect(
 				performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target }),
 			).rejects.toMatchObject({

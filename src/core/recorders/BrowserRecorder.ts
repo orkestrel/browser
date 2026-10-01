@@ -10,9 +10,13 @@ import type {
 } from '../types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { Emitter } from '@orkestrel/emitter'
-import { BROWSER_JOURNEY_ACTIONS } from '../constants.js'
+import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_NON_STEP_TOOLS } from '../constants.js'
 import { BrowserError } from '../errors.js'
-import { buildBrowserJourney, deriveBrowserJourneySecret } from '../helpers.js'
+import {
+	buildBrowserJourney,
+	collectBrowserJourneySecrets,
+	deriveBrowserJourneySecret,
+} from '../helpers.js'
 
 /**
  * Records semantic steps from completed toolset actions and marks replay boundaries as gaps.
@@ -100,12 +104,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 			else
 				this.#append({ action: 'unresolved', arguments: {}, gap: `interrupted ${pending.action}` })
 		}
-		if (
-			['look', 'read', 'tabs', 'record', 'save', 'journeys', 'edit', 'replay'].includes(
-				action.action,
-			) ||
-			action.outcome === 'refused'
-		)
+		if (BROWSER_JOURNEY_NON_STEP_TOOLS.includes(action.action) || action.outcome === 'refused')
 			return
 		if (action.outcome === 'interrupted') {
 			this.#pending = structuredClone(action)
@@ -132,15 +131,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 			delete args['secret']
 		}
 		if (action.action === 'type' && action.secret === true) {
-			const taken = this.#steps.flatMap((step) => {
-				const value = step.arguments['text']
-				return typeof value === 'object' &&
-					value !== null &&
-					'parameter' in value &&
-					typeof value.parameter === 'string'
-					? [value.parameter]
-					: []
-			})
+			const taken = collectBrowserJourneySecrets(this.#steps)
 			args['text'] = { parameter: deriveBrowserJourneySecret(action.target?.name ?? '', taken) }
 		}
 		this.#append({

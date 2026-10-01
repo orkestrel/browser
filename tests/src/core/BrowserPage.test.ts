@@ -1613,6 +1613,7 @@ describe('BrowserPage', () => {
 	describe('codegen()', () => {
 		it('starts a recorder and returns the same instance on repeat calls', async () => {
 			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
 			replyOk(transport, 'Runtime.enable')
 			replyOk(transport, 'Page.setLifecycleEventsEnabled')
 			replyOk(transport, 'Target.setAutoAttach')
@@ -1654,6 +1655,7 @@ describe('BrowserPage', () => {
 
 		it('releases an active recorder when the target is externally destroyed', async () => {
 			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
 			replyOk(transport, 'Runtime.enable')
 			replyOk(transport, 'Page.setLifecycleEventsEnabled')
 			replyOk(transport, 'Target.setAutoAttach')
@@ -1675,6 +1677,7 @@ describe('BrowserPage', () => {
 
 		it('tears down an active codegen recorder before closing', async () => {
 			const { client, transport } = await createConnectedCDPClient()
+			scriptFrameTree(transport)
 			replyOk(transport, 'Runtime.enable')
 			replyOk(transport, 'Page.setLifecycleEventsEnabled')
 			replyOk(transport, 'Target.setAutoAttach')
