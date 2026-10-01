@@ -178,7 +178,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		try {
 			if ((await this.#read(name, signal)) !== undefined) {
 				throw new BrowserError(
-					`Journey ${JSON.stringify(name)} is saved already and nothing is recording; call journeys to list it, edit to change it, or replay to run it.`,
+					`Journey ${JSON.stringify(name)} is saved already; do not call record for it again. Call journeys to list it, edit to change it, or replay to run it, or answer the user.`,
 					'BROWSER_JOURNEY_SAVED',
 					{ name },
 				)
@@ -220,7 +220,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				snapshot.error.context?.['field'] === 'steps'
 			)
 				throw new BrowserError(
-					`Nothing is recorded for ${name}; perform an action, then call save.`,
+					`Nothing is recorded for ${name}: the actions before record are not steps. Perform the flow's actions and call save, or answer the user when the task is done.`,
 					'BROWSER_JOURNEY_EMPTY',
 					{ name },
 				)

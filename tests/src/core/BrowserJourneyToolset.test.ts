@@ -1,6 +1,7 @@
 import type { BrowserJourneyRevision, BrowserJourneyStoreInterface } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
+import { createContract, schemaToShape } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	captureError,
@@ -38,6 +39,57 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('k3b advertises edits as an array with an item schema or a JSON string', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, {
+			store: createMemoryBrowserJourneyStore(),
+		})
+		try {
+			const parameters = requireValue(toolset.tools.tool('edit')?.parameters)
+			const edits = readProperty(readProperty(parameters, 'properties'), 'edits')
+			expect(
+				edits,
+				'k3b: edits advertises anyOf and preserves its array item schema',
+			).toMatchObject({
+				description:
+					'The changes, as an array or a JSON string of the array, applied in order; one invalid change refuses them all.',
+				anyOf: [
+					{
+						type: 'array',
+						items: {
+							type: 'object',
+							properties: {
+								operation: { type: 'string', enum: ['add', 'remove', 'update', 'declare'] },
+								id: { type: 'string' },
+								step: { type: 'object' },
+								before: { type: 'string' },
+								after: { type: 'string' },
+								ref: { type: 'string' },
+								arguments: { type: 'object' },
+								name: { type: 'string' },
+								parameter: { type: 'object' },
+							},
+							required: ['operation'],
+						},
+					},
+					{ type: 'string' },
+				],
+			})
+			expect(edits).not.toHaveProperty('type')
+			const contract = createContract(schemaToShape(parameters))
+			expect(
+				contract.is({ journey: 'check-ready', edits: [{ operation: 'remove', id: 's1' }] }),
+			).toBe(true)
+			expect(
+				contract.is({ journey: 'check-ready', edits: '[{"operation":"remove","id":"s1"}]' }),
+			).toBe(true)
+			expect(contract.is({ journey: 'check-ready', edits: 3 })).toBe(false)
+			expect(contract.is({ journey: 'check-ready', edits: [{ id: 's1' }] })).toBe(false)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
 	it.each(BROWSER_JOURNEY_EDIT_SHAPES)(
 		'names the malformed edit field for %j',
 		async (edit, reason) => {
@@ -74,15 +126,17 @@ describe('BrowserJourneyToolset', () => {
 				name: 'record',
 				arguments: { journey: 'check-ready' },
 			})
-			await expect(
-				requireValue(toolset.tools.tool('save')).execute(
-					{ description: 'Check readiness' },
-					{ signal: new AbortController().signal },
-				),
+			expect(
+				await toolset.tools.execute({
+					id: 'empty-save',
+					name: 'save',
+					arguments: { description: 'Check readiness' },
+				}),
 				'k1a: empty recordings are refused before a store write',
-			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_EMPTY',
-				message: 'Nothing is recorded for check-ready; perform an action, then call save.',
+			).toMatchObject({
+				success: false,
+				error:
+					"Nothing is recorded for check-ready: the actions before record are not steps. Perform the flow's actions and call save, or answer the user when the task is done.",
 			})
 			expect(journeys.recording).toBe('check-ready')
 			expect(await store.get('check-ready')).toBeUndefined()
@@ -102,7 +156,7 @@ describe('BrowserJourneyToolset', () => {
 				{ id: 'save', name: 'save', arguments: { description: 'Check readiness' } },
 			])
 			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
-				'Journey "check-ready" is saved already and nothing is recording; call journeys to list it, edit to change it, or replay to run it.',
+				'Journey "check-ready" is saved already; do not call record for it again. Call journeys to list it, edit to change it, or replay to run it, or answer the user.',
 				'Nothing is recording; "check-ready" was saved. Call journeys, edit, or replay.',
 			])
 		} finally {
@@ -645,7 +699,7 @@ s2 click button "Save"`,
 			}
 		})
 
-		it('refuses an invalid name, a saved name, a recording in progress, and a save with nothing recording', async () => {
+		it('k3a directs an idle save to answer the user and refuses invalid, saved, and recording names', async () => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const store = createMemoryBrowserJourneyStore()
 			await store.set(BROWSER_JOURNEY_FIXTURE)
@@ -658,9 +712,9 @@ s2 click button "Save"`,
 					{ id: '3', name: 'record', arguments: { journey: 'add-kettle' } },
 				])
 				expect(results.map((result) => readProperty(result, 'error'))).toEqual([
-					'No journey is recording; call record first.',
+					'No journey is recording, so nothing can be saved; answer the user. A journey holds only the actions after record, so call record before them.',
 					'"Add kettle" is not a journey name; use lowercase words joined by hyphens, such as add-kettle.',
-					'Journey "add-kettle" is saved already and nothing is recording; call journeys to list it, edit to change it, or replay to run it.',
+					'Journey "add-kettle" is saved already; do not call record for it again. Call journeys to list it, edit to change it, or replay to run it, or answer the user.',
 				])
 				await toolset.tools.execute({ id: '4', name: 'record', arguments: { journey: 'brew-tea' } })
 				const again = await toolset.tools.execute({

@@ -714,52 +714,57 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 					description: 'The journey name, such as add-kettle.',
 				}),
 				edits: Object.freeze({
-					type: Object.freeze(['array', 'string']),
 					description:
 						'The changes, as an array or a JSON string of the array, applied in order; one invalid change refuses them all.',
-					items: Object.freeze({
-						type: 'object',
-						properties: Object.freeze({
-							operation: Object.freeze({
-								type: 'string',
-								enum: Object.freeze(['add', 'remove', 'update', 'declare']),
-								description: 'What the change does.',
-							}),
-							id: Object.freeze({
-								type: 'string',
-								description: 'The step to remove or update, such as s3.',
-							}),
-							step: Object.freeze({
+					anyOf: Object.freeze([
+						Object.freeze({
+							type: 'array',
+							items: Object.freeze({
 								type: 'object',
-								description: 'The step to add: its action, its arguments, and ref or tab.',
-							}),
-							before: Object.freeze({
-								type: 'string',
-								description: 'The step to add it before, such as s3.',
-							}),
-							after: Object.freeze({
-								type: 'string',
-								description: 'The step to add it after, such as s3.',
-							}),
-							ref: Object.freeze({
-								type: 'string',
-								description: 'The element the added or updated step acts on, such as e4.',
-							}),
-							arguments: Object.freeze({
-								type: 'object',
-								description: 'The arguments to change, merged by key.',
-							}),
-							name: Object.freeze({
-								type: 'string',
-								description: 'The parameter to declare, such as email.',
-							}),
-							parameter: Object.freeze({
-								type: 'object',
-								description: 'The parameter: its default, or secret set to true.',
+								properties: Object.freeze({
+									operation: Object.freeze({
+										type: 'string',
+										enum: Object.freeze(['add', 'remove', 'update', 'declare']),
+										description: 'What the change does.',
+									}),
+									id: Object.freeze({
+										type: 'string',
+										description: 'The step to remove or update, such as s3.',
+									}),
+									step: Object.freeze({
+										type: 'object',
+										description: 'The step to add: its action, its arguments, and ref or tab.',
+									}),
+									before: Object.freeze({
+										type: 'string',
+										description: 'The step to add it before, such as s3.',
+									}),
+									after: Object.freeze({
+										type: 'string',
+										description: 'The step to add it after, such as s3.',
+									}),
+									ref: Object.freeze({
+										type: 'string',
+										description: 'The element the added or updated step acts on, such as e4.',
+									}),
+									arguments: Object.freeze({
+										type: 'object',
+										description: 'The arguments to change, merged by key.',
+									}),
+									name: Object.freeze({
+										type: 'string',
+										description: 'The parameter to declare, such as email.',
+									}),
+									parameter: Object.freeze({
+										type: 'object',
+										description: 'The parameter: its default, or secret set to true.',
+									}),
+								}),
+								required: Object.freeze(['operation']),
 							}),
 						}),
-						required: Object.freeze(['operation']),
-					}),
+						Object.freeze({ type: 'string' }),
+					]),
 				}),
 			}),
 			required: Object.freeze(['journey', 'edits']),
@@ -878,4 +883,5 @@ export const BROWSER_JOURNEY_READONLY_REFUSAL = 'The journeys are read-only; cal
 export const BROWSER_JOURNEY_RECORDING_REFUSAL = 'A journey is recording; call save first.'
 
 /** Holds the refusal `save` returns when no journey is recording. */
-export const BROWSER_JOURNEY_IDLE_REFUSAL = 'No journey is recording; call record first.'
+export const BROWSER_JOURNEY_IDLE_REFUSAL =
+	'No journey is recording, so nothing can be saved; answer the user. A journey holds only the actions after record, so call record before them.'
