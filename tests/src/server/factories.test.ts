@@ -7,13 +7,20 @@
  */
 
 import type { ScratchInterface } from '@orkestrel/test/server'
+import type { CDPTestServerInterface } from '../../setupServer.js'
 import { describe, it, expect, afterEach } from 'vitest'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { createScratch } from '@orkestrel/test/server'
-import { createBrowser, createCDPTransport, createBrowserWriter } from '@src/server'
+import {
+	createFileBrowserJourneyStore,
+	createFileBrowserRunStore,
+	createBrowser,
+	createCDPTransport,
+	createBrowserWriter,
+} from '@src/server'
+import { BROWSER_RUN_FIXTURE, createBrowserJourneyFixture } from '../../setup.js'
 import { createCDPTestServer } from '../../setupServer.js'
-import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
 let scratch: ScratchInterface | undefined
@@ -82,5 +89,26 @@ describe('createBrowser', () => {
 		expect(typeof browser.contexts).toBe('function')
 		expect(typeof browser.create).toBe('function')
 		expect(typeof browser.destroy).toBe('function')
+	})
+})
+
+describe('file store factories', () => {
+	it('creates a journey store that persists a revision', async () => {
+		scratch = createScratch()
+		const store = createFileBrowserJourneyStore({ root: scratch.path })
+		const saved = await store.set(createBrowserJourneyFixture())
+		expect(
+			await createFileBrowserJourneyStore({ root: scratch.path }).get(saved.journey.name),
+		).toEqual(saved)
+	})
+	it('creates a run store that allocates and persists a run', async () => {
+		scratch = createScratch()
+		const store = createFileBrowserRunStore({ root: scratch.path })
+		const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
+		const run = { ...BROWSER_RUN_FIXTURE, id: slot.id }
+		await store.set(run)
+		expect(
+			await createFileBrowserRunStore({ root: scratch.path }).get(run.journey.name, run.id),
+		).toEqual(run)
 	})
 })

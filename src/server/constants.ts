@@ -209,3 +209,41 @@ export const BROWSER_STORE_GLOBS: Readonly<Record<string, string>> = Object.free
 	darwin: 'chromium-*/chrome-mac*/Chromium.app/Contents/MacOS/Chromium',
 	win32: 'chromium-*/chrome-win*/chrome.exe',
 })
+
+/** Names the persisted journey snapshot. */
+export const BROWSER_JOURNEY_FILE = 'journey.json'
+/** Names the retained journey revision counter. */
+export const BROWSER_JOURNEY_REVISION_FILE = 'revision'
+/** Names the exclusive journey write lock. */
+export const BROWSER_JOURNEY_LOCK_FILE = 'journey.lock'
+/** Names the persisted run snapshot. */
+export const BROWSER_RUN_FILE = 'run.json'
+/** Names the journey directory holding its runs. */
+export const BROWSER_RUN_DIRECTORY = 'runs'
+/** Bounds a file-store listing page by default. */
+export const BROWSER_FILE_STORE_LIMIT = 100
+/** Lists reserved filesystem names refused as journey names on every host. */
+export const BROWSER_FILE_STORE_RESERVED: readonly string[] = Object.freeze([
+	'con',
+	'prn',
+	'aux',
+	'nul',
+	'com1',
+	'com2',
+	'com3',
+	'com4',
+	'com5',
+	'com6',
+	'com7',
+	'com8',
+	'com9',
+	'lpt1',
+	'lpt2',
+	'lpt3',
+	'lpt4',
+	'lpt5',
+	'lpt6',
+	'lpt7',
+	'lpt8',
+	'lpt9',
+])

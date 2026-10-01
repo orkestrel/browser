@@ -1,5 +1,17 @@
-import type { CDPTransportInterface, BrowserWriterInterface } from '@src/core'
-import type { BrowserInterface, BrowserOptions, WebSocketCDPTransportOptions } from './types.js'
+import type {
+	BrowserJourneyStoreInterface,
+	BrowserRunStoreInterface,
+	CDPTransportInterface,
+	BrowserWriterInterface,
+} from '@src/core'
+import type {
+	FileBrowserStoreOptions,
+	BrowserInterface,
+	BrowserOptions,
+	WebSocketCDPTransportOptions,
+} from './types.js'
+import { FileBrowserJourneyStore } from './stores/FileBrowserJourneyStore.js'
+import { FileBrowserRunStore } from './stores/FileBrowserRunStore.js'
 import { Browser } from './Browser.js'
 import { WebSocketCDPTransport } from './transports/WebSocketCDPTransport.js'
 import { FileBrowserWriter } from './writers/FileBrowserWriter.js'
@@ -45,4 +57,30 @@ export function createCDPTransport(options: WebSocketCDPTransportOptions): CDPTr
  */
 export function createBrowserWriter(): BrowserWriterInterface {
 	return new FileBrowserWriter()
+}
+
+/**
+ * Creates a journey store over an existing filesystem root.
+ * @param options - Root and listing cap
+ * @returns A durable journey store
+ * @example
+ * const store = createFileBrowserJourneyStore({ root: directory })
+ */
+export function createFileBrowserJourneyStore(
+	options: FileBrowserStoreOptions,
+): BrowserJourneyStoreInterface {
+	return new FileBrowserJourneyStore(options)
+}
+
+/**
+ * Creates a run store over an existing filesystem root.
+ * @param options - Root and listing cap
+ * @returns A durable run and capture store
+ * @example
+ * const store = createFileBrowserRunStore({ root: directory })
+ */
+export function createFileBrowserRunStore(
+	options: FileBrowserStoreOptions,
+): BrowserRunStoreInterface {
+	return new FileBrowserRunStore(options)
 }
