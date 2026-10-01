@@ -12,6 +12,7 @@ import type {
 	BrowserFrameInterface,
 	BrowserNavigationRecordInterface,
 	BrowserPageInterface,
+	BrowserPopupRecordInterface,
 	BrowserReadingInterface,
 	BrowserTool,
 	BrowserToolName,
@@ -94,7 +95,7 @@ import {
  * `page.registry` by default; with `options.context` as well it advertises `tabs` and `switch`.
  * With `options.journeys` the constructor constructs a `BrowserJourneyToolset`, which adds
  * `record`, `save`, `journeys`, `edit`, and `replay` to the manager and reserves those names, and
- * `destroy()` destroys it first. The next result names each move of the view.
+ * `destroy()` destroys it first. The result that carries the view after a move names the move.
  *
  * Every tool, the page tools included, runs through one boundary. The boundary refuses with
  * `the browser session ended` after `destroy()`, refuses an aborted signal before the tool runs,
@@ -114,9 +115,16 @@ import {
  * Every pending step is raced against the page's `dialog` event, so a dialog returns the receipt
  * that names it while the blocked command settles later without a second receipt. Before `click`
  * sends its input and before `type` edits the control, the action opens the page's navigation
- * record for the element's frame, and `press` opens one for the main frame. Before that, `click`
- * and `type` with `submit` install a `submit` observer in the isolated world of the element's
- * document, and `press` in every document one `page.frames()` call lists; an action whose input
+ * record for the element's frame, and `press` opens one for the main frame. `click`, `type` with
+ * `submit`, and `press` of Enter open the page's popup record beside it: after the navigation
+ * settles, the receipt waits under the same deadline for the popups the record's reports name,
+ * moves the view to the first one still open with the note `The view moved to a new tab: URL.`,
+ * and records that popup's URL and title as the action's `tab`, so the receipt carries the popup's
+ * view. A popup the current page announces outside such an action, or during one that did not
+ * move to it, moves the view when the page announces it or when the action ends. Before the
+ * navigation record opens, `click` and `type` with `submit` install a `submit` observer in the
+ * isolated world of the element's document, and `press` in every document one `page.frames()`
+ * call lists; an action whose input
  * document cannot be observed is refused with `BROWSER_TOOLSET_OBSERVE` before any input, and a
  * document `press` did not list is not observed. A navigation that starts in the input's frame or
  * an ancestor before the input settles is followed; when the input settles first, each observed
@@ -207,6 +215,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// Numbers each action, so the observer it installs answers only its own read and removal.
 	#sequence = 0
 	#navigating: BrowserPageInterface | undefined
+	// The popups announced while an action holds a popup record, with their openers; the action
+	// moves the view itself, and the rest follow when it ends.
+	#arrivals:
+		| ReadonlyArray<readonly [opener: BrowserPageInterface, popup: BrowserPageInterface]>
+		| undefined
 	#generation = 0
 	#started = false
 	#starting: Promise<void> | undefined
@@ -613,6 +626,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const turn = await this.#acquire(context.signal)
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
 		let record: BrowserNavigationRecordInterface | undefined
+		let popups: BrowserPopupRecordInterface | undefined
 		try {
 			const element = this.#element(args['ref'], context.signal)
 			const action = BROWSER_TYPED_ROLES.has(element.role)
@@ -628,6 +642,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					context.signal,
 				)
 				record = page.navigation.record(frame)
+				popups = this.#recordPopups(page)
 			}
 			return [
 				await this.#settle(
@@ -636,12 +651,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					context.signal,
 					this.#view.trusted,
 					record,
+					popups,
 					observation,
 				),
 				'',
 			]
 		} finally {
 			record?.destroy()
+			popups?.destroy()
+			this.#flushArrivals()
 			try {
 				await this.#unobserve(observation, context.signal)
 			} finally {
@@ -674,6 +692,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const turn = await this.#acquire(context.signal)
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
 		let record: BrowserNavigationRecordInterface | undefined
+		let popups: BrowserPopupRecordInterface | undefined
 		try {
 			const element = this.#element(args['ref'], context.signal)
 			// The role the latest capture recorded decides, so a control that takes no text is
@@ -700,6 +719,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 						context.signal,
 					)
 				record = page.navigation.record(frame)
+				if (submit === true) popups = this.#recordPopups(page)
 			}
 			// A combobox or listbox role names a select element or a text input with suggestions;
 			// the receipt names the path taken, and a dialog mid-edit names the path attempted.
@@ -728,6 +748,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 						context.signal,
 						this.#view.trusted,
 						record,
+						popups,
 						observation,
 					),
 					'',
@@ -748,6 +769,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					context.signal,
 					this.#view.trusted,
 					record,
+					popups,
 					observation,
 					page === undefined
 						? undefined
@@ -757,6 +779,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			]
 		} finally {
 			record?.destroy()
+			popups?.destroy()
+			this.#flushArrivals()
 			try {
 				await this.#unobserve(observation, context.signal)
 			} finally {
@@ -773,6 +797,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const turn = await this.#acquire(context.signal)
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
 		let record: BrowserNavigationRecordInterface | undefined
+		let popups: BrowserPopupRecordInterface | undefined
 		try {
 			const page = this.#paged()
 			// The focused document receives the keys, so every document one census lists is observed,
@@ -780,6 +805,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const frames = await this.#race(page.frames(), '', context.signal)
 			await this.#observe(frames, page.id, observation, context.signal)
 			record = page.navigation.record(page.id)
+			if (key === 'Enter') popups = this.#recordPopups(page)
 			// The keyboard takes no signal and sends each release without one, so the signal is
 			// checked before the first key goes down.
 			context.signal.throwIfAborted()
@@ -791,6 +817,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					context.signal,
 					true,
 					record,
+					popups,
 					observation,
 					key === 'Enter' ? { explicit: false, action } : undefined,
 				),
@@ -798,6 +825,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			]
 		} finally {
 			record?.destroy()
+			popups?.destroy()
+			this.#flushArrivals()
 			try {
 				await this.#unobserve(observation, context.signal)
 			} finally {
@@ -1092,13 +1121,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// the Enter's target, and the `action` line that replaces the attempt when a read recorded a
 	// submission, or when the settled navigation's reason names a form submission, which a form in a
 	// document the observer does not cover can start; a navigation with another reason or none does
-	// not prove one.
+	// not prove one. A popup the input opened is part of the settlement: after the navigation, the
+	// popup record waits within the same bound for the popups its reports name, and the view moves to
+	// the first open one before the capture, so the receipt carries the popup's view and the move.
 	async #settle(
 		command: Promise<void>,
 		action: string,
 		signal: AbortSignal,
 		trusted: boolean,
 		record?: BrowserNavigationRecordInterface,
+		popups?: BrowserPopupRecordInterface,
 		observation?: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
 		enter?: { readonly explicit: boolean; readonly action: string },
 	): Promise<string> {
@@ -1135,6 +1167,17 @@ export class BrowserToolset implements BrowserToolsetInterface {
 							signal,
 						)
 			signal.throwIfAborted()
+			const opened =
+				popups === undefined
+					? []
+					: await this.#race(
+							popups.settle({ timeout: Math.max(0, bound - performance.now()), signal }),
+							action,
+							signal,
+						)
+			signal.throwIfAborted()
+			const popup = opened.find((page) => !page.closed)
+			if (popup !== undefined) await this.#followPopup(popup, action, signal, bound)
 			if (settled !== undefined)
 				this.#actions.set(signal, {
 					...this.#actions.get(signal),
@@ -1173,6 +1216,46 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			record?.destroy()
 			if (observation !== undefined) await this.#unobserve(observation, signal, deadline)
 		}
+	}
+
+	// Opens the popup record of an action into `page`; until the action ends, a popup the page
+	// announces waits for the action, which moves the view itself.
+	#recordPopups(page: BrowserPageInterface): BrowserPopupRecordInterface {
+		const popups = page.popups.record()
+		this.#arrivals = []
+		return popups
+	}
+
+	// Hands the popups announced during the action to the popup handler once the action ends, which
+	// moves the view to none the action already moved it past.
+	#flushArrivals(): void {
+		const arrivals = this.#arrivals ?? []
+		this.#arrivals = undefined
+		for (const [opener, popup] of arrivals) this.#handlePopup(opener, popup)
+	}
+
+	// Moves the view to a popup the action opened and records it as the action's tab; a title the
+	// popup cannot answer within `bound` is empty.
+	async #followPopup(
+		popup: BrowserPageInterface,
+		action: string,
+		signal: AbortSignal,
+		bound: number,
+	): Promise<void> {
+		const title = await this.#bounded(
+			popup.title({ signal }).catch((error: unknown) => {
+				if (signal.aborted) throw error
+				return ''
+			}),
+			bound,
+			action,
+			signal,
+		)
+		this.#actions.set(signal, {
+			...this.#actions.get(signal),
+			tab: { url: popup.url, title: title ?? '' },
+		})
+		await this.#select(popup, `The view moved to a new tab: ${popup.url}.`)
 	}
 
 	// Races a command that carries the signal itself; a dialog leaves it pending for the next
@@ -1736,8 +1819,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		if (page === this.#page) this.#stage()
 	}
 
+	// Follows a popup opened outside an action; one announced during an action that holds a popup
+	// record waits for that action, and once the view moved to it, its opener is no longer the view.
 	#handlePopup(opener: BrowserPageInterface, popup: BrowserPageInterface): void {
 		if (opener !== this.#page || popup.closed) return
+		if (this.#arrivals !== undefined) {
+			this.#arrivals = [...this.#arrivals, [opener, popup]]
+			return
+		}
 		void this.#select(popup, `The view moved to a new tab: ${popup.url}.`)
 	}
 

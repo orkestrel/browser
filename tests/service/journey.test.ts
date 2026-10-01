@@ -4,12 +4,17 @@ import type {
 	BrowserPageInterface,
 	BrowserToolsetInterface,
 } from '@src/core'
-import type { FixtureServerInterface } from '../setupServer.js'
+import type {
+	BrowserJourneyConnectionInterface,
+	BrowserJourneyStageInterface,
+	FixtureServerInterface,
+} from '../setupServer.js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { isRecord, isString } from '@orkestrel/contract'
-import { createTeardown } from '@orkestrel/test'
+import { createTeardown, requireValue } from '@orkestrel/test'
 import {
 	BrowserContext,
+	compileBrowserJourney,
 	createBrowserRecorder,
 	createBrowserReplay,
 	createBrowserToolset,
@@ -17,13 +22,27 @@ import {
 	locateBrowserTarget,
 } from '@src/core'
 import { createBrowser, createCDPTransport } from '@src/server'
-import { createFixtureServer, createTempDirectory, reservePort } from '../setupServer.js'
-import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../setupService.js'
+import {
+	createBrowserJourneyStage,
+	createFixtureServer,
+	createTempDirectory,
+	reservePort,
+} from '../setupServer.js'
+import {
+	maskBrowserReferences,
+	requireSystemBrowser,
+	SERVICE_BROWSER_ARGS,
+} from '../setupService.js'
 import {
 	BrowserJourneyTransportRecorder,
+	BROWSER_JOURNEY_GAP_CASE,
+	BROWSER_JOURNEY_MODULE_CASES,
 	BROWSER_JOURNEY_TARGET_HTML,
 	BROWSER_JOURNEY_TARGET_LOG,
 	createBrowserJourneyFixture,
+	instrumentBrowserJourneyModule,
+	openBrowserJourneyPage,
+	readBrowserJourneyOutcome,
 } from '../setup.js'
 
 describe('journey semantic replay', () => {
@@ -162,5 +181,178 @@ describe('journey semantic replay', () => {
 				{ id: 'cancel', trusted: true },
 			])
 		})
+	})
+})
+
+describe('compiled module equality', () => {
+	const cleanup = createTeardown()
+	let fixtures: FixtureServerInterface
+	let context: BrowserContextInterface
+	let stage: BrowserJourneyStageInterface
+	let built: BrowserJourneyConnectionInterface
+
+	// The generated module imports the built package through the stage's link and runs over a page
+	// that package's own context opens, so the module's toolset and its page share one module
+	// instance; the replay runs from the workspace source over a page of a second connection to the
+	// same browser.
+	beforeAll(async () => {
+		fixtures = await createFixtureServer()
+		cleanup.add(() => fixtures.destroy())
+		const profile = createTempDirectory('journey-module-service-')
+		cleanup.add(() => profile.destroy())
+		const port = await reservePort()
+		const browser = createBrowser({
+			executable: requireSystemBrowser().executable,
+			headless: true,
+			profile: profile.path,
+			args: SERVICE_BROWSER_ARGS,
+			cdp: { port },
+			timeout: 20_000,
+		})
+		cleanup.add(() => browser.destroy())
+		await browser.connect()
+		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
+		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
+		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
+		const client = createCDPClient({ transport: createCDPTransport({ url: endpoint }) })
+		cleanup.add(() => client.close())
+		await client.connect()
+		context = new BrowserContext(client)
+		cleanup.add(() => context.destroy())
+		stage = createBrowserJourneyStage()
+		cleanup.add(() => stage.destroy())
+		built = await stage.connect(endpoint)
+		cleanup.add(() => built.destroy())
+	})
+	afterEach(async () => {
+		for (const page of [...context.pages(), ...built.context.pages()].reverse())
+			if (!page.closed) await page.close()
+	})
+	afterAll(async () => {
+		await cleanup.destroy()
+	})
+
+	it.each(BROWSER_JOURNEY_MODULE_CASES)(
+		'runs the generated module of a $name to the page outcome and the receipts of its replay',
+		async (scenario) => {
+			const script = compileBrowserJourney(scenario.journey)
+			const plain = stage.load(`${scenario.journey.name}.js`, script.source)
+			const recorded = stage.load(
+				`${scenario.journey.name}.recorded.js`,
+				instrumentBrowserJourneyModule(script.source),
+			)
+			const outcomes: Array<readonly unknown[]> = []
+			const failures: unknown[] = []
+			for (const module of [plain, recorded]) {
+				const page = await openBrowserJourneyPage(
+					built.context,
+					fixtures.url(scenario.route),
+					scenario.markup,
+				)
+				failures.push(
+					await module.execute(page, scenario.inputs).then(
+						() => undefined,
+						(error: unknown) => error,
+					),
+				)
+				outcomes.push(await readBrowserJourneyOutcome(built.context.pages(), page, scenario.state))
+			}
+			const page = await openBrowserJourneyPage(
+				context,
+				fixtures.url(scenario.route),
+				scenario.markup,
+			)
+			const toolset = createBrowserToolset(page)
+			await toolset.start()
+			const run = await createBrowserReplay(
+				toolset,
+				{ journey: scenario.journey },
+				{ inputs: scenario.inputs },
+			).execute()
+			const replayed = await readBrowserJourneyOutcome(context.pages(), page, scenario.state)
+			await toolset.destroy()
+
+			expect({
+				outcome: run.outcome,
+				receipts: run.steps.map((step) => maskBrowserReferences(step.result)),
+			}).toStrictEqual({
+				outcome: 'complete',
+				receipts: recorded.receipts().map(maskBrowserReferences),
+			})
+			expect(replayed).toStrictEqual(scenario.outcome)
+			expect(outcomes).toStrictEqual([replayed, replayed])
+			expect(failures).toStrictEqual([undefined, undefined])
+			expect(script.gaps).toStrictEqual([])
+		},
+	)
+
+	it('throws at the gap of a generated module with the page untouched, as the replay refuses the journey at preparation', async () => {
+		const scenario = BROWSER_JOURNEY_GAP_CASE
+		const script = compileBrowserJourney(scenario.journey)
+		const url = fixtures.url(scenario.route)
+		const module = stage.load(`${scenario.journey.name}.js`, script.source)
+		const page = await openBrowserJourneyPage(built.context, url, scenario.markup)
+		const failure = await module.execute(page, scenario.inputs).then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+		const executed = await readBrowserJourneyOutcome(built.context.pages(), page, scenario.state)
+		const fresh = await openBrowserJourneyPage(context, url, scenario.markup)
+		const toolset = createBrowserToolset(fresh)
+		await toolset.start()
+		const refusal = await createBrowserReplay(
+			toolset,
+			{ journey: scenario.journey },
+			{ inputs: scenario.inputs },
+		)
+			.execute()
+			.then(
+				() => undefined,
+				(error: unknown) => error,
+			)
+		const refused = await readBrowserJourneyOutcome(context.pages(), fresh, scenario.state)
+		await toolset.destroy()
+		const control = stage.load(
+			`${scenario.journey.name}.control.js`,
+			script.source.replace(/^\t\tthrow .*\n/mu, ''),
+		)
+		const clicked = await openBrowserJourneyPage(built.context, url, scenario.markup)
+		await control.execute(clicked, scenario.inputs)
+
+		expect(refused).toStrictEqual(scenario.outcome)
+		expect(executed).toStrictEqual(refused)
+		expect(script.gaps).toStrictEqual(['s2'])
+		expect(failure).toMatchObject({
+			message: 's2: the element is in a child frame; handle it here',
+		})
+		expect(refusal).toMatchObject({ code: 'BROWSER_JOURNEY_GAP' })
+		expect(
+			await readBrowserJourneyOutcome(built.context.pages(), clicked, scenario.state),
+		).toStrictEqual([{ clicks: 1, saved: 'yes' }])
+	})
+
+	it('type-checks the TypeScript module of every journey against the built declarations and refuses a misspelled input', () => {
+		const sources = Object.fromEntries(
+			[...BROWSER_JOURNEY_MODULE_CASES, BROWSER_JOURNEY_GAP_CASE].map((scenario) => [
+				`${scenario.journey.name}.ts`,
+				compileBrowserJourney(scenario.journey, { language: 'typescript' }).source,
+			]),
+		)
+		const misspelled = requireValue(sources['place-order.ts']).replace('inputs.name', 'inputs.nmae')
+
+		expect(Object.keys(sources)).toStrictEqual([
+			'place-order.ts',
+			'choose-destination.ts',
+			'book-delivery.ts',
+			'delete-draft.ts',
+			'like-details.ts',
+			'save-draft.ts',
+		])
+		expect(stage.check(sources)).toStrictEqual([])
+		expect(stage.check({ 'control.ts': misspelled })).toStrictEqual([
+			expect.stringMatching(
+				/^control\.ts\(\d+,\d+\): error TS2339: Property 'nmae' does not exist/u,
+			),
+		])
 	})
 })

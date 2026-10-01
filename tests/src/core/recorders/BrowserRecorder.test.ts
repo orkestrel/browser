@@ -34,6 +34,32 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
+	it('records a click that opened a popup as a click without the popup tab', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const recorder = new BrowserRecorder(toolset)
+		await recorder.start()
+		toolset.emitter.emit('action', {
+			...createBrowserActionFixture({
+				receipt:
+					'Clicked e1 button "Save". The view moved to a new tab: https://shop.test/details.',
+			}),
+			tab: { title: 'Details', url: 'https://shop.test/details' },
+		})
+		expect(recorder.steps()).toEqual([
+			{
+				id: 's1',
+				action: 'click',
+				arguments: {},
+				target: { role: 'button', name: 'Save', reference: 'e1' },
+			},
+		])
+		expect(
+			recorder.journey({ name: 'open-details', description: 'Open the details' }).steps,
+		).toHaveLength(1)
+		await recorder.destroy()
+		await toolset.destroy()
+	})
+
 	it('never records refused actions', async () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const recorder = new BrowserRecorder(toolset)

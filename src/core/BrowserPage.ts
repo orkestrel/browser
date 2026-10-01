@@ -24,6 +24,8 @@ import type {
 	BrowserPageInterface,
 	BrowserPageEventMap,
 	BrowserPageOptions,
+	BrowserPopupManagerInterface,
+	BrowserPopupRecordInterface,
 	BrowserReadingInterface,
 	BrowserRect,
 	BrowserRegistryInterface,
@@ -199,6 +201,23 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	// A popup target an attach is initializing, so the attach that arrives second, through discovery
 	// or through an attachment event, initializes nothing.
 	readonly #claimed: Set<string> = new Set()
+	// Each open popup record's observations since it opened, replaced on every change: the
+	// `Page.windowOpen` reports counted, the popup targets the page began to adopt, and each of those
+	// targets that concluded, mapped to its page when announced and to undefined when skipped.
+	readonly #records: Map<
+		symbol,
+		{
+			readonly opened: number
+			readonly targets: ReadonlySet<string>
+			readonly outcomes: ReadonlyMap<string, BrowserPage | undefined>
+		}
+	> = new Map()
+	// Wakes every pending popup settle after a record changes or ends.
+	readonly #wakes: Set<() => void> = new Set()
+	readonly #popupManager: BrowserPopupManagerInterface = {
+		record: this.#recordPopups.bind(this),
+	}
+	readonly #openHandler = this.#handleOpen.bind(this)
 	// A frame with no entry has not changed since the last page-frame document change, whose
 	// epoch `#floor` holds, so the map holds only the frames of the current document.
 	readonly #epochs: Map<string, number> = new Map()
@@ -342,6 +361,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.subscribe('Target.targetDestroyed', this.#destroyHandler)
 		this.#watchSession(this.#sessionId)
 		this.#client.subscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
+		this.#client.subscribe('Page.windowOpen', this.#openHandler, this.#sessionId)
 		this.#client.subscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
 		this.#client.subscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.subscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
@@ -471,6 +491,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	get navigation(): BrowserNavigationManagerInterface {
 		return this.#navigationManager
+	}
+
+	get popups(): BrowserPopupManagerInterface {
+		return this.#popupManager
 	}
 
 	get scripts(): BrowserScriptManagerInterface {
@@ -988,6 +1012,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#client.unsubscribe('Target.targetDestroyed', this.#destroyHandler)
 		this.#unwatchSession(this.#sessionId)
 		this.#client.unsubscribe('Page.javascriptDialogOpening', this.#dialogHandler, this.#sessionId)
+		this.#client.unsubscribe('Page.windowOpen', this.#openHandler, this.#sessionId)
+		this.#records.clear()
+		this.#wakePopups()
 		this.#client.unsubscribe('Page.fileChooserOpened', this.#chooserHandler, this.#sessionId)
 		this.#client.unsubscribe('Runtime.consoleAPICalled', this.#consoleHandler, this.#sessionId)
 		this.#client.unsubscribe('Runtime.exceptionThrown', this.#errorHandler, this.#sessionId)
@@ -1350,6 +1377,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			)
 			this.#claimed.delete(id)
 			if (ready && this.#holder(id) === held) this.#publish(held)
+			else this.#concludePopup(id)
 			return
 		}
 		const result: unknown = await this.#client
@@ -1358,6 +1386,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		// A popup can close before the attach reaches it.
 		if (!isRecord(result) || !isString(result['sessionId'])) {
 			this.#claimed.delete(id)
+			this.#concludePopup(id)
 			return
 		}
 		await this.#attachPopup(result['sessionId'], id, url, undefined)
@@ -1380,6 +1409,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			const result = await this.#client.send('Page.getFrameTree', undefined, { session })
 			const frame = readBrowserFrames(result)[0]
 			if (frame === undefined || this.#closed) {
+				this.#concludePopup(id)
 				await this.#detachChild(session, owner)
 				return
 			}
@@ -1391,6 +1421,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 					() => false,
 				)
 				if (ready && !this.#closed && this.#holder(id) === held) this.#publish(held)
+				else this.#concludePopup(id)
 				return
 			}
 			popup = new BrowserPage(
@@ -1420,6 +1451,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#publish(popup)
 		} catch (error) {
 			// A popup can close before its session initialization completes.
+			this.#concludePopup(id)
 			if (popup !== undefined) {
 				setup.reject(error)
 				await this.#releaseTarget(session)
@@ -1443,7 +1475,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	// released when this page closed first.
 	#emitPopup(popup: BrowserPage): void {
 		const id = popup.#targetId
-		if (popup.#closed || this.#popups.get(id) === popup) return
+		if (this.#popups.get(id) === popup) return
+		if (popup.#closed) {
+			this.#concludePopup(id)
+			return
+		}
 		if (this.#closed) {
 			if (popup.#opener === this) void popup.destroy().catch(() => undefined)
 			return
@@ -1455,6 +1491,102 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		})
 		this.#emitter.emit('popup', popup)
 		popup.#announcement.resolve()
+		this.#concludePopup(id, popup)
+	}
+
+	#recordPopups(): BrowserPopupRecordInterface {
+		this.assert()
+		const key = Symbol('popups')
+		this.#records.set(key, { opened: 0, targets: new Set(), outcomes: new Map() })
+		return {
+			settle: this.#settlePopups.bind(this, key),
+			destroy: this.#endPopups.bind(this, key),
+		}
+	}
+
+	// Parks until as many popup targets adopted since the record opened concluded as
+	// `Page.windowOpen` reports arrived, or until `timeout`, which ends the wait with the popups
+	// announced so far.
+	async #settlePopups(
+		key: symbol,
+		options?: BrowserCallOptions,
+	): Promise<readonly BrowserPageInterface[]> {
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		// The platform deadline takes whole milliseconds.
+		const deadline = AbortSignal.timeout(Math.ceil(timeout))
+		while (true) {
+			options?.signal?.throwIfAborted()
+			const record = this.#records.get(key)
+			if (record === undefined)
+				throw new BrowserError(
+					this.#closed
+						? 'Browser popup record ended because the page closed'
+						: 'Browser popup record ended',
+				)
+			if (record.opened === 0) return []
+			if (record.outcomes.size >= record.opened || deadline.aborted)
+				return [...record.outcomes.values()].filter(
+					(popup): popup is BrowserPage => popup !== undefined && popup.#opener === this,
+				)
+			await this.#parkPopups(deadline, options?.signal)
+		}
+	}
+
+	// Resolves on the next change to a popup record or when `deadline` aborts; rejects with the
+	// signal's reason on abort.
+	async #parkPopups(deadline: AbortSignal, signal: AbortSignal | undefined): Promise<void> {
+		const wake = Promise.withResolvers<void>()
+		const abort = this.#abandonPopups.bind(this, wake, signal)
+		this.#wakes.add(wake.resolve)
+		deadline.addEventListener('abort', abort, { once: true })
+		signal?.addEventListener('abort', abort, { once: true })
+		try {
+			await wake.promise
+		} finally {
+			this.#wakes.delete(wake.resolve)
+			deadline.removeEventListener('abort', abort)
+			signal?.removeEventListener('abort', abort)
+		}
+	}
+
+	// The caller's abort rejects a parked settle with its reason; the deadline's wakes it.
+	#abandonPopups(wake: PromiseWithResolvers<void>, signal: AbortSignal | undefined): void {
+		if (signal?.aborted === true) wake.reject(signal.reason)
+		else wake.resolve()
+	}
+
+	#endPopups(key: symbol): void {
+		if (this.#records.delete(key)) this.#wakePopups()
+	}
+
+	#wakePopups(): void {
+		for (const wake of [...this.#wakes]) wake()
+	}
+
+	// Chromium 141 reports a window this page's document opens on this page's session before it
+	// answers the input that opened it; a report names no target, so each one counts. Chromium 141
+	// announces such a window only to discovery, so a page that takes no part in it counts none.
+	#handleOpen(): void {
+		if (this.#holder(this.#targetId) !== this) return
+		for (const [key, record] of this.#records)
+			this.#records.set(key, { ...record, opened: record.opened + 1 })
+		this.#wakePopups()
+	}
+
+	// Names a popup target this page begins to adopt in every open popup record.
+	#expectPopup(id: string): void {
+		for (const [key, record] of this.#records)
+			this.#records.set(key, { ...record, targets: new Set([...record.targets, id]) })
+	}
+
+	// Concludes a popup target in every open record that expects it: announced with its page, or
+	// skipped without one when it closed or failed its setup first.
+	#concludePopup(id: string, popup?: BrowserPage): void {
+		for (const [key, record] of this.#records)
+			if (record.targets.has(id) && !record.outcomes.has(id))
+				this.#records.set(key, { ...record, outcomes: new Map([...record.outcomes, [id, popup]]) })
+		this.#wakePopups()
 	}
 
 	// Reads the live page that holds a target on this page's connection.
@@ -1853,6 +1985,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			return
 		if (this.#closed || this.#popups.has(id) || this.#claimed.has(id)) return
 		this.#claimed.add(id)
+		this.#expectPopup(id)
 		const url = target['url']
 		void this.#discoverPopup(id, isString(url) && url !== '' ? url : undefined)
 	}
@@ -1884,6 +2017,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				return
 			}
 			this.#claimed.add(id)
+			this.#expectPopup(id)
 			void this.#attachPopup(
 				session,
 				id,

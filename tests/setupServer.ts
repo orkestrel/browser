@@ -4,6 +4,8 @@ import type { AddressInfo, Server as NetServer, Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
+import type { BrowserContextInterface, BrowserPageInterface } from '@src/core'
+import { spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { existsSync, readFileSync } from 'node:fs'
@@ -11,6 +13,7 @@ import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
+	isArray,
 	isFunction,
 	isInteger,
 	isNumber,
@@ -1749,4 +1752,179 @@ process.send?.({ outcome: 'ready' })
 			}
 		})
 	})
+}
+
+// === Compiled journey modules
+
+// Imports the built package through the staged link, so the browser context it returns and every
+// page that context opens come from the same module instance a generated journey module imports.
+const BROWSER_JOURNEY_HARNESS = `import { BrowserContext, createCDPClient } from '@orkestrel/browser'
+import { createCDPTransport } from '@orkestrel/browser/server'
+
+export async function connect(url) {
+	const client = createCDPClient({ transport: createCDPTransport({ url }) })
+	await client.connect()
+	const context = new BrowserContext(client)
+	return {
+		context,
+		destroy: async () => {
+			await context.destroy()
+			await client.close()
+		},
+	}
+}
+`
+
+/** Describes a generated journey module that Node's own loader imported from a stage. */
+export interface BrowserJourneyModuleInterface {
+	/** Runs the module's `execute` over a page with the given inputs. */
+	execute(page: BrowserPageInterface, inputs: Readonly<Record<string, string>>): Promise<void>
+	/** Returns the receipt of each action in the module's exported `actions` array, in order. */
+	receipts(): readonly string[]
+}
+
+/** Describes a browser context the staged built package opened over a protocol connection. */
+export interface BrowserJourneyConnectionInterface {
+	readonly context: BrowserContextInterface
+	/** Destroys the context and closes its protocol connection. */
+	destroy(): Promise<void>
+}
+
+/**
+ * Stages a scratch directory whose `node_modules/@orkestrel/browser` links a built package, for
+ * generated journey modules that import only that package.
+ *
+ * @remarks
+ * - `path` — the staged directory, whose `package.json` declares `"type": "module"`
+ * - `load` — writes a JavaScript module and imports it through Node's own loader, so
+ *   `@orkestrel/browser` resolves through the link rather than through a workspace alias
+ * - `check` — writes TypeScript modules and returns every line the workspace's `tsc` reports
+ *   for them under `nodenext` resolution and strict options
+ * - `connect` — opens a browser context through the linked package over a debugger URL
+ * - `destroy` — removes the directory; the linked package stays
+ */
+export interface BrowserJourneyStageInterface {
+	readonly path: string
+	load(file: string, source: string): BrowserJourneyModuleInterface
+	check(sources: Readonly<Record<string, string>>): readonly string[]
+	connect(url: string): Promise<BrowserJourneyConnectionInterface>
+	destroy(): void
+}
+
+/**
+ * Creates a {@link BrowserJourneyStageInterface} over a built package.
+ *
+ * @param root - The package directory the stage links, whose `dist/` holds the build. Default:
+ * this workspace
+ * @returns The stage, registered for removal with the other temporary directories
+ */
+export function createBrowserJourneyStage(
+	root: string = FIXTURE_WORKSPACE,
+): BrowserJourneyStageInterface {
+	return new BrowserJourneyStage(createTempDirectory('journey-module-'), root)
+}
+
+/** Implements the journey-module stage over one scratch directory. */
+export class BrowserJourneyStage implements BrowserJourneyStageInterface {
+	readonly #scratch: ScratchInterface
+	readonly #require: NodeJS.Require
+
+	constructor(scratch: ScratchInterface, root: string) {
+		this.#scratch = scratch
+		scratch.link('node_modules/@orkestrel/browser', root)
+		scratch.write('package.json', '{ "private": true, "type": "module" }\n')
+		this.#require = createRequire(join(scratch.path, 'package.json'))
+	}
+
+	get path(): string {
+		return this.#scratch.path
+	}
+
+	load(file: string, source: string): BrowserJourneyModuleInterface {
+		// `require` of an ES module runs Node's own loader, which Vitest does not transform.
+		const loaded: unknown = this.#require(this.#scratch.write(file, source))
+		const execute = isObject(loaded) ? Reflect.get(loaded, 'execute') : undefined
+		if (!isObject(loaded) || !isFunction(execute))
+			throw new Error(`${file} exports no execute function`)
+		return {
+			execute: async (page, inputs) => {
+				await execute(page, inputs)
+			},
+			receipts: () => {
+				const actions = Reflect.get(loaded, 'actions')
+				if (!isArray(actions)) throw new Error(`${file} exports no actions array`)
+				return actions.map((action) => {
+					const receipt = isRecord(action) ? action['receipt'] : undefined
+					if (!isString(receipt)) throw new Error(`${file} recorded an action without a receipt`)
+					return receipt
+				})
+			},
+		}
+	}
+
+	check(sources: Readonly<Record<string, string>>): readonly string[] {
+		for (const [file, source] of Object.entries(sources)) this.#scratch.write(file, source)
+		const project = {
+			compilerOptions: {
+				module: 'nodenext',
+				moduleResolution: 'nodenext',
+				target: 'esnext',
+				strict: true,
+				exactOptionalPropertyTypes: true,
+				noUncheckedIndexedAccess: true,
+				noUnusedLocals: true,
+				noUnusedParameters: true,
+				noEmit: true,
+				skipLibCheck: true,
+				types: [],
+			},
+			files: Object.keys(sources),
+		}
+		const config = this.#scratch.write(
+			'tsconfig.json',
+			`${JSON.stringify(project, undefined, '\t')}\n`,
+		)
+		const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
+		const result = spawnSync(process.execPath, [compiler, '--pretty', 'false', '-p', config], {
+			cwd: this.path,
+			encoding: 'utf8',
+		})
+		if (result.error !== undefined) throw result.error
+		const lines = `${result.stdout}${result.stderr}`.split('\n').filter((line) => line !== '')
+		if (result.status !== 0 && lines.length === 0)
+			throw new Error(`tsc exited ${String(result.status)} without a diagnostic`)
+		return lines
+	}
+
+	async connect(url: string): Promise<BrowserJourneyConnectionInterface> {
+		const harness: unknown = this.#require(
+			this.#scratch.write('harness.js', BROWSER_JOURNEY_HARNESS),
+		)
+		const connect = isObject(harness) ? Reflect.get(harness, 'connect') : undefined
+		if (!isFunction(connect)) throw new Error('The journey harness exports no connect function')
+		const connection: unknown = await connect(url)
+		const context = isRecord(connection) ? connection['context'] : undefined
+		const destroy = isRecord(connection) ? connection['destroy'] : undefined
+		if (!isBrowserContextValue(context) || !isFunction(destroy))
+			throw new Error('The built package opened no browser context')
+		return {
+			context,
+			destroy: async () => {
+				await destroy()
+			},
+		}
+	}
+
+	destroy(): void {
+		this.#scratch.destroy()
+	}
+}
+
+function isBrowserContextValue(value: unknown): value is BrowserContextInterface {
+	return (
+		isObject(value) &&
+		isFunction(Reflect.get(value, 'create')) &&
+		isFunction(Reflect.get(value, 'pages')) &&
+		isFunction(Reflect.get(value, 'destroy'))
+	)
 }

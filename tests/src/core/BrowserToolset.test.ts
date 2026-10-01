@@ -69,6 +69,7 @@ import {
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
 	createConnectedCDPClient,
+	emitBrowserWindowOpen,
 	ignoreCall,
 	readCDPExpression,
 	readBrowserCompiledTimers,
@@ -3780,6 +3781,90 @@ describe('BrowserToolset', () => {
 				await client.close()
 			}
 		})
+
+		it.each(['tools.execute', 'perform'] as const)(
+			'settles a click that opens a popup on the popup through %s: the result carries the move and the popup view, and the action the popup as its tab',
+			async (path) => {
+				const fixture = await createBrowserElementFixture({
+					held: true,
+					title: (message) =>
+						fixture.transport.reply(message.id, {
+							result: { value: message.sessionId === 'popup-session' ? 'Details' : 'Cart' },
+						}),
+					// Chromium 141 reports the window on the opener's session before it answers the
+					// release; the popup's attach comes before the reply here too.
+					released: (message) => {
+						emitBrowserWindowOpen(fixture.transport, 'session-main', 'https://example.test/popup')
+						fixture.transport.event(
+							'Target.attachedToTarget',
+							{
+								sessionId: 'popup-session',
+								targetInfo: {
+									targetId: 'popup-1',
+									type: 'page',
+									url: 'https://example.test/popup',
+								},
+							},
+							'session-main',
+						)
+						fixture.transport.reply(message.id, {})
+					},
+				})
+				const { client, page, transport } = fixture
+				for (const method of [
+					'Page.setInterceptFileChooserDialog',
+					'Network.enable',
+					'Network.disable',
+					'Target.detachFromTarget',
+				])
+					replyOk(transport, method)
+				const toolset = createBrowserToolset(page)
+				try {
+					await toolset.start()
+					await page.elements.outline()
+					const selected = createRecorder<[view: BrowserViewInterface]>()
+					toolset.emitter.on('select', selected.handler)
+					const actions = createRecorder<[action: BrowserAction]>()
+					toolset.emitter.on('action', actions.handler)
+					const call = { id: 's1', name: 'click', arguments: { ref: 'e4' } }
+					const result =
+						path === 'perform'
+							? (await toolset.perform(call)).result
+							: await toolset.tools.execute(call)
+
+					const text = result.success ? String(result.value) : result.error
+					expect(
+						text.startsWith(
+							'The view moved to a new tab: https://example.test/popup.\n\nClicked e4 button "Place order".\n\npage "Details" https://example.test/popup',
+						),
+					).toBe(true)
+					expect(toolset.view).not.toBe(page)
+					expect(toolset.view.url).toBe('https://example.test/popup')
+					expect(actions.calls.map(([action]) => action)).toMatchObject([
+						{
+							action: 'click',
+							outcome: 'done',
+							receipt: 'Clicked e4 button "Place order".',
+							tab: { url: 'https://example.test/popup', title: 'Details' },
+						},
+					])
+					// The popup event reached the toolset during the click, which moved the view once.
+					expect(selected.calls.map(([view]) => view)).toStrictEqual([toolset.view])
+					const looked = await toolset.tools.execute({
+						id: 'look',
+						name: 'look',
+						arguments: { what: 'the details' },
+					})
+					expect(
+						looked.success &&
+							String(looked.value).startsWith('page "Details" https://example.test/popup'),
+					).toBe(true)
+				} finally {
+					await toolset.destroy()
+					await client.close()
+				}
+			},
+		)
 	})
 
 	describe('page tools', () => {

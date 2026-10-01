@@ -1385,6 +1385,54 @@ export async function createAttachedPage(session = 'session-1'): Promise<Attache
 }
 
 /**
+ * Creates a real {@link BrowserPage} that takes part in target discovery, as `BrowserContext`
+ * constructs every page, over a connected in-memory CDP client whose attach handshake answers
+ * every attach with `popup-session`.
+ *
+ * @param withheld - Reports a message the attach handshake leaves unanswered, for the test to answer
+ * @returns The page holding `target-1` on `session-1`, its client, and the scriptable transport
+ */
+export async function createDiscoveringPage(
+	withheld?: (message: CDPSentMessage) => boolean,
+): Promise<AttachedPageFixture> {
+	const { client, transport } = await createConnectedCDPClient()
+	scriptCDPAttach(transport, 'popup-session', undefined, withheld)
+	const page = new BrowserPage(
+		client,
+		'target-1',
+		'session-1',
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		createReferenceSequence(),
+	)
+	return { client, transport, page }
+}
+
+/**
+ * Reports a window a page's document opened as Chromium 141 reports it on the opener's session,
+ * through `Page.windowOpen`, which names the address and no target.
+ *
+ * @param transport - The fake transport the opener listens on
+ * @param session - The opener's session
+ * @param url - The address the window opens. Default: `https://example.com/popup`
+ */
+export function emitBrowserWindowOpen(
+	transport: CDPTestTransportInterface,
+	session: string,
+	url = 'https://example.com/popup',
+): void {
+	transport.event(
+		'Page.windowOpen',
+		{ url, windowName: '', windowFeatures: [], userGesture: true },
+		session,
+	)
+}
+
+/**
  * Creates a reference provider that numbers element references across every page it is passed to,
  * as a browser context numbers them for its pages.
  *
@@ -1733,6 +1781,7 @@ export const BROWSER_ELEMENT_WORLDS: Readonly<Record<string, number>> = Object.f
 /** Configures protocol responses for discriminating element action tests. */
 export interface BrowserElementFixtureOptions {
 	readonly local?: boolean
+	readonly held?: boolean
 	readonly nested?: boolean
 	readonly roots?: ReadonlyMap<string, Readonly<Record<string, unknown>>>
 	readonly tree?: CDPSentHandler
@@ -2126,7 +2175,9 @@ export interface BrowserElementFixture extends AttachedPageFixture {
  * Creates a page with a committed, DOM-ready document and scripted accessibility and DOM replies.
  * @remarks The `child` iframe attaches as its own target unless `local` is `true`, which keeps it
  * in the page's process on `session-main`. The page runs over the {@link RecordingCDPClient} the
- * fixture's `recording` holds, so a proof can count the registrations an operation leaves.
+ * fixture's `recording` holds, so a proof can count the registrations an operation leaves. With
+ * `held`, the page takes part in target discovery, as `BrowserContext` constructs every page, so it
+ * counts the `Page.windowOpen` reports its popup records follow.
  */
 export async function createBrowserElementFixture(
 	options?: BrowserElementFixtureOptions,
@@ -2135,12 +2186,18 @@ export async function createBrowserElementFixture(
 	const windows = options?.windows ?? new BrowserSubmitWindows()
 	scriptBrowserElements(transport, { ...options, windows })
 	const recording = new RecordingCDPClient(client)
+	if (options?.held === true) replyOk(transport, 'Target.setDiscoverTargets')
 	const page = new BrowserPage(
 		recording,
 		'main',
 		'session-main',
 		undefined,
 		'https://example.test/cart',
+		undefined,
+		undefined,
+		undefined,
+		undefined,
+		options?.held === true ? createReferenceSequence() : undefined,
 	)
 	if (options?.local !== true) await attachBrowserElementChild(transport, page)
 	if (options?.loaderless === true) return { client, transport, page, windows, recording }
@@ -2232,6 +2289,13 @@ export const BROWSER_JOURNEY_SERVICE_CASES = Object.freeze([
 /** Holds an editable combobox whose suggestion remains a text input. */
 export const BROWSER_JOURNEY_COMBOBOX_HTML =
 	'<label>Destination <input list="places"></label><datalist id="places"><option value="Harbor"></datalist>'
+
+/**
+ * Holds the `/popup` route's `main` with a link that opens `/popup/child` in a new tab through
+ * `target="_blank"`.
+ */
+export const BROWSER_JOURNEY_POPUP_LINK_HTML =
+	'<h1>Catalog</h1><a href="/popup/child" target="_blank">Open details</a>'
 
 /** Holds a same-origin child document whose button records its input. */
 export const BROWSER_JOURNEY_FRAME_HTML =
@@ -3653,4 +3717,220 @@ export function projectCodegenOracle(
 		}
 	}
 	return steps
+}
+
+// === Compiled journey modules
+
+/**
+ * Describes one journey the compiled-module proof runs as a generated module and as a replay.
+ *
+ * @remarks
+ * - `route` — the fixture path each run opens a fresh page on
+ * - `markup` — the HTML each run writes into the page's `main` before the journey starts
+ * - `inputs` — the inputs both the module and the replay receive
+ * - `state` — the page expression whose value is the fixture's own state
+ * - `outcome` — the state each run leaves on its page and on each popup the page opened, in that
+ *   order
+ */
+export interface BrowserJourneyModuleCase {
+	readonly name: string
+	readonly route: string
+	readonly markup?: string
+	readonly journey: BrowserJourney
+	readonly inputs: Readonly<Record<string, string>>
+	readonly state: string
+	readonly outcome: readonly unknown[]
+}
+
+/** Holds the journeys a generated module and a replay run to the same page outcome and receipts. */
+export const BROWSER_JOURNEY_MODULE_CASES: readonly BrowserJourneyModuleCase[] = Object.freeze([
+	{
+		name: 'delayed in-frame submission',
+		route: '/checkout',
+		journey: createBrowserJourneyFixture(
+			[
+				{
+					action: 'type',
+					arguments: { text: { parameter: 'name' }, submit: true },
+					target: { role: 'textbox', name: 'Name' },
+				},
+				{ action: 'wait', arguments: { text: 'placed for Grace.' } },
+			],
+			{
+				name: 'place-order',
+				description: 'Place an order under a name',
+				parameters: { name: { default: 'Ada' } },
+			},
+		),
+		inputs: { name: 'Grace' },
+		state:
+			"({ name: document.getElementById('name').value, lines: [...document.querySelectorAll('main > p')].map((line) => line.textContent) })",
+		outcome: [{ name: 'Grace', lines: ['Order A1042 placed for Grace.'] }],
+	},
+	{
+		name: 'editable combobox',
+		route: '/form',
+		markup: BROWSER_JOURNEY_COMBOBOX_HTML,
+		journey: createBrowserJourneyFixture(
+			[
+				{
+					action: 'type',
+					arguments: { text: { parameter: 'place' } },
+					target: { role: 'combobox', name: 'Destination' },
+				},
+			],
+			{
+				name: 'choose-destination',
+				description: 'Choose a destination',
+				parameters: { place: { default: 'Harbor' } },
+			},
+		),
+		inputs: {},
+		state:
+			"({ value: document.querySelector('main input').value, clicks: document.body.dataset.clicks ?? '' })",
+		outcome: [{ value: 'Harbor', clicks: '' }],
+	},
+	{
+		name: 'form whose submit navigates',
+		route: '/form',
+		journey: createBrowserJourneyFixture(
+			[
+				{
+					action: 'type',
+					arguments: { text: { parameter: 'name' }, submit: true },
+					target: { role: 'textbox', name: 'Name' },
+				},
+				{ action: 'wait', arguments: { text: 'Delivery booked for Grace Hopper' } },
+			],
+			{
+				name: 'book-delivery',
+				description: 'Book a delivery under a name',
+				parameters: { name: { default: 'Ada' } },
+			},
+		),
+		inputs: { name: 'Grace Hopper' },
+		state:
+			"({ path: location.pathname + location.search, summary: document.getElementById('summary')?.textContent ?? '' })",
+		outcome: [
+			{
+				path: '/form/placed?name=Grace+Hopper&notes=Leave+at+the+door&speed=Standard',
+				summary: 'Delivery booked for Grace Hopper at Standard speed.',
+			},
+		],
+	},
+	{
+		name: 'click that opens a dialog',
+		route: '/confirm',
+		journey: createBrowserJourneyFixture(
+			[
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Delete' } },
+				{ action: 'dialog', arguments: { accept: true } },
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Keep' } },
+			],
+			{ name: 'delete-draft', description: 'Delete the draft and keep the page' },
+		),
+		inputs: {},
+		state:
+			"({ answer: document.body.dataset.answer ?? '', kept: document.body.dataset.kept ?? '0' })",
+		outcome: [{ answer: 'true', kept: '1' }],
+	},
+	{
+		name: 'click that opens a popup',
+		route: '/popup',
+		journey: createBrowserJourneyFixture(
+			[
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Open details' } },
+				{ action: 'click', arguments: {}, target: { role: 'button', name: 'Like' } },
+			],
+			{ name: 'like-details', description: 'Like the details a popup shows' },
+		),
+		inputs: {},
+		state:
+			"({ path: location.pathname, stayed: document.body.dataset.stayed ?? 'no', liked: document.body.dataset.liked ?? 'no' })",
+		outcome: [
+			{ path: '/popup', stayed: 'no', liked: 'no' },
+			{ path: '/popup/child', stayed: 'no', liked: 'yes' },
+		],
+	},
+])
+
+/**
+ * Holds a journey whose gap follows a step without side effect: the module throws at the gap and
+ * the replay refuses at preparation, and both leave the form page's click log empty.
+ */
+export const BROWSER_JOURNEY_GAP_CASE: BrowserJourneyModuleCase = Object.freeze({
+	name: 'gap after a wait',
+	route: '/form',
+	journey: createBrowserJourneyFixture(
+		[
+			{ action: 'wait', arguments: { text: 'Delivery form' } },
+			{ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+			{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+		],
+		{ name: 'save-draft', description: 'Save the delivery draft' },
+	),
+	inputs: {},
+	state:
+		"({ clicks: (document.body.dataset.clicks ?? '').split(' ').filter(Boolean).length, saved: document.body.dataset.saved ?? 'no' })",
+	outcome: [{ clicks: 0, saved: 'no' }],
+})
+
+/**
+ * Rewrites a generated JavaScript module so the toolset it constructs records every action it
+ * performs into an exported `actions` array, leaving every step call as generated.
+ *
+ * @param source - The JavaScript source `compileBrowserJourney` returned
+ * @returns The source with `export const actions = []` before `execute` and an `action` hook on the
+ * toolset's construction
+ * @throws Thrown when the source declares no `execute` or constructs no toolset over its page.
+ */
+export function instrumentBrowserJourneyModule(source: string): string {
+	const declaration = 'export async function execute('
+	const construction = '\tconst toolset = createBrowserToolset(page)\n'
+	if (!source.includes(declaration) || !source.includes(construction))
+		throw new Error('The module declares no execute that constructs a toolset over its page')
+	return source
+		.replace(declaration, `export const actions = []\n\n${declaration}`)
+		.replace(
+			construction,
+			'\tconst toolset = createBrowserToolset(page, { on: { action: (action) => actions.push(action) } })\n',
+		)
+}
+
+/**
+ * Opens a fresh page on a fixture URL and writes a case's markup into its `main`.
+ *
+ * @param context - The context the page opens in
+ * @param url - The fixture URL
+ * @param markup - The HTML that replaces the children of `main`; the route's own markup stays when
+ * absent
+ * @returns The opened page
+ */
+export async function openBrowserJourneyPage<
+	P extends { evaluate(expression: string): Promise<unknown> },
+>(
+	context: { create(options: { readonly url: string }): Promise<P> },
+	url: string,
+	markup?: string,
+): Promise<P> {
+	const page = await context.create({ url })
+	if (markup !== undefined)
+		await page.evaluate(`document.querySelector('main').innerHTML = ${JSON.stringify(markup)}`)
+	return page
+}
+
+/**
+ * Reads a page's state and the state of each popup it opened.
+ *
+ * @param pages - Every page the context holds
+ * @param page - The page a run started on
+ * @param expression - The page expression whose value is the fixture's state
+ * @returns The value on `page`, then the value on each page whose `opener` is `page`, in context
+ * order
+ */
+export async function readBrowserJourneyOutcome<
+	P extends { readonly opener: unknown; evaluate(expression: string): Promise<unknown> },
+>(pages: readonly P[], page: P, expression: string): Promise<readonly unknown[]> {
+	const shown = [page, ...pages.filter((candidate) => candidate.opener === page)]
+	return Promise.all(shown.map((candidate) => candidate.evaluate(expression)))
 }
