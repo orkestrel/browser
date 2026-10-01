@@ -690,6 +690,36 @@ describe('readFixtureProcessId', () => {
 })
 
 describe('createFakeBrowserProcess', () => {
+	it('registers SIGTERM before publishing the browser pid', () => {
+		const fake = createFakeBrowserProcess({ ignoreSIGTERM: true })
+		const script = readFileSync(requireValue(fake.args[0]), 'utf8')
+		const handler = script.indexOf("process.on('SIGTERM', () => {})")
+
+		expect(handler).toBeGreaterThanOrEqual(0)
+		expect(script.indexOf("require('fs').writeFileSync(")).toBeGreaterThan(handler)
+	})
+
+	it('registers SIGTERM before the launcher or relaunched browser publishes its pid', () => {
+		const fake = createFakeBrowserProcess({ launcher: true, ignoreSIGTERM: true })
+		const script = readFileSync(requireValue(fake.args[0]), 'utf8')
+		const handler = script.indexOf("process.on('SIGTERM', () => {})")
+
+		expect(handler).toBeGreaterThanOrEqual(0)
+		expect(script.indexOf("if (process.argv.includes('--orkestrel-relaunched'))")).toBeGreaterThan(
+			handler,
+		)
+		expect(script.indexOf("require('fs').writeFileSync(")).toBeGreaterThan(handler)
+	})
+
+	it('registers SIGTERM before the descendant publishes its pid', () => {
+		const fake = createFakeBrowserProcess({ descendant: true, ignoreSIGTERM: true })
+		const script = readFileSync(requireValue(fake.args[0]), 'utf8')
+
+		expect(script).toContain(
+			`['-e', "process.on('SIGTERM', () => {})\\nrequire('fs').writeFileSync(`,
+		)
+	})
+
 	it('publishes the identifier and the argument vector of the process it is spawned as', async () => {
 		const fake = createFakeBrowserProcess()
 		const flag = '--remote-debugging-port=0'

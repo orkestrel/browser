@@ -708,6 +708,11 @@ export function createFakeBrowserProcess(
 		`process.on('uncaughtException', (e) => { try { require('fs').appendFileSync(${JSON.stringify(crashLogPath)}, String(e && e.stack)) } catch {} ; process.exit(1) })`,
 	]
 
+	// A published pid lets the test signal this process immediately.
+	if (options.ignoreSIGTERM === true) {
+		lines.push("process.on('SIGTERM', () => {})")
+	}
+
 	if (options.launcher === true) {
 		// The launcher records itself, re-executes this same script with the
 		// same CDP flags plus a marker, and exits 0 before the endpoint is up —
@@ -737,13 +742,10 @@ export function createFakeBrowserProcess(
 		)
 	}
 
-	if (options.ignoreSIGTERM === true) {
-		lines.push("process.on('SIGTERM', () => {})")
-	}
 	if (options.descendant === true) {
 		const descendantSource = [
-			`require('fs').writeFileSync(${JSON.stringify(descendantFile)}, String(process.pid))`,
 			...(options.ignoreSIGTERM === true ? ["process.on('SIGTERM', () => {})"] : []),
+			`require('fs').writeFileSync(${JSON.stringify(descendantFile)}, String(process.pid))`,
 			`const __runnerPid = ${process.pid}`,
 			'setInterval(() => {',
 			'\ttry { process.kill(__runnerPid, 0) } catch { process.exit(0) }',
