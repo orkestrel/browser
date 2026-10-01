@@ -22,7 +22,7 @@ import {
 export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 	readonly #runs = new Map<string, Map<string, BrowserRun>>()
 	readonly #slots = new Map<string, Set<string>>()
-	readonly #opened = new WeakSet<BrowserRunSlot>()
+	readonly #opened = new WeakMap<BrowserRunSlot, string>()
 
 	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
@@ -33,7 +33,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		slots.add(id)
 		this.#slots.set(name, slots)
 		const slot = { id }
-		this.#opened.add(slot)
+		this.#opened.set(slot, name)
 		return slot
 	}
 
@@ -64,7 +64,8 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		options?: BrowserStoreOptions,
 	): Promise<string | undefined> {
 		options?.signal?.throwIfAborted()
-		if (!this.#opened.has(slot))
+		const journey = this.#opened.get(slot)
+		if (journey === undefined || !this.#slots.get(journey)?.has(slot.id))
 			throw new BrowserError('The run slot was not opened by this store', 'BROWSER_JOURNEY_PATH')
 		// Memory stores own slots but have no directory in which to persist these bytes.
 		return undefined
@@ -75,6 +76,15 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		validateBrowserJourneyName(name)
 		this.#runs.get(name)?.delete(id)
 		this.#slots.get(name)?.delete(id)
+	}
+
+	async clear(name: string, options?: BrowserStoreOptions): Promise<number> {
+		options?.signal?.throwIfAborted()
+		validateBrowserJourneyName(name)
+		const count = this.#slots.get(name)?.size ?? 0
+		this.#runs.delete(name)
+		this.#slots.delete(name)
+		return count
 	}
 
 	async list(

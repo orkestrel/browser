@@ -5,7 +5,7 @@
 > and publishes them as agent tools, an in-page face that drives a DOM document with native APIs,
 > and a Node runtime that finds, launches, and connects to the browser itself.
 
-Connect to a running browser or launch one with the `createBrowser` function, open a page, and drive it through stable element references and trusted input. Read the page as Markdown in bounded slices, and hand the whole vocabulary to an agent as `@orkestrel/tool` tools with `createBrowserToolset`. Inside a page, `createDocumentToolset` drives a DOM document with native APIs, and `createSocketCDPTransport` carries the core client over the browser's own `WebSocket`. Record a journey, one user intent kept as JSON, from a model's tool calls or a person's gestures on a page, then list, edit, and replay it through the five journey tools, or compile it with `compileBrowserJourney` into a module a developer runs and customizes. Part of the `@orkestrel` line.
+Connect to a running browser or launch one with the `createBrowser` function, open a page, and drive it through stable element references and trusted input. Read the page as Markdown in bounded slices, and hand the whole vocabulary to an agent as `@orkestrel/tool` tools with `createBrowserToolset`. Inside a page, `createDocumentToolset` drives a DOM document with native APIs, and `createSocketCDPTransport` carries the core client over the browser's own `WebSocket`. Record a journey, one user intent kept as JSON, from a model's tool calls or a person's gestures on a page, then list, edit, replay, and forget it through the six journey tools, or compile it with `compileBrowserJourney` into a module a developer runs and customizes. Part of the `@orkestrel` line.
 
 ## Install
 

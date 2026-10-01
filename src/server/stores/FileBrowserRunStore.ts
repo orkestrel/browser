@@ -6,7 +6,7 @@ import type {
 	BrowserStorePage,
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
-import { lstat, rm } from 'node:fs/promises'
+import { lstat, readdir, rm } from 'node:fs/promises'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import {
 	BROWSER_JOURNEY_FORMAT_VERSION,
@@ -14,7 +14,11 @@ import {
 	generateBrowserRunId,
 	validateBrowserRun,
 } from '@src/core'
-import { BROWSER_RUN_FILE, BROWSER_RUN_DIRECTORY } from '../constants.js'
+import {
+	BROWSER_RUN_FILE,
+	BROWSER_RUN_DIRECTORY,
+	BROWSER_JOURNEY_LOCK_DIRECTORY,
+} from '../constants.js'
 import { FileBrowserStore } from './FileBrowserStore.js'
 
 /**
@@ -36,15 +40,21 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)
-		const directory = await this.#files.allocate(
-			this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY),
-			generateBrowserRunId,
+		return this.#files.lock(
+			this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_DIRECTORY),
+			async () => {
+				const directory = await this.#files.allocate(
+					this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY),
+					generateBrowserRunId,
+					options,
+				)
+				const slot = Object.freeze({ id: directory.id, directory: directory.path })
+				this.#directories.add(directory.path)
+				this.#slots.set(slot, directory.path)
+				return slot
+			},
 			options,
 		)
-		const slot = Object.freeze({ id: directory.id, directory: directory.path })
-		this.#directories.add(directory.path)
-		this.#slots.set(slot, directory.path)
-		return slot
 	}
 
 	async get(
@@ -121,6 +131,33 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 			options?.signal?.throwIfAborted()
 			throw this.#files.translateError(directory, error)
 		}
+	}
+
+	async clear(name: string, options?: BrowserStoreOptions): Promise<number> {
+		options?.signal?.throwIfAborted()
+		this.#files.validateName(name)
+		const parent = this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY)
+		if (!(await this.#files.check(parent, options))) return 0
+		return this.#files.lock(
+			this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_DIRECTORY),
+			async () => {
+				try {
+					options?.signal?.throwIfAborted()
+					const ids = await readdir(parent)
+					// Check the whole removal before deleting any run, including unsaved slots.
+					for (const id of ids) {
+						this.#files.validateId(id)
+						await this.#files.check(this.#files.resolvePath(parent, id, BROWSER_RUN_FILE), options)
+					}
+					for (const id of ids) await this.delete(name, id, options)
+					return ids.length
+				} catch (error) {
+					options?.signal?.throwIfAborted()
+					throw this.#files.translateError(parent, error)
+				}
+			},
+			options,
+		)
 	}
 
 	async list(
