@@ -1844,6 +1844,7 @@ export interface BrowserRecorderOptions {
  * - `arguments` — the call's arguments, without the text of a secret `type`
  * - `target` — the element the call's reference resolved to, captured before the input was
  *   dispatched: its role, exact accessible name, reference, and, in the page placement, frame
+ *   only when it differs from the dispatching page's main frame
  * - `tab` — the tab a `switch` moved to, or the popup a `click`, a `type` with `submit`, or a
  *   `press` of Enter opened and moved the view to
  * - `secret` — if `true`, the action was a secret `type`
