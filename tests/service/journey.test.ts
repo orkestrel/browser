@@ -62,12 +62,14 @@ import {
 	BROWSER_JOURNEY_PREPARED_JOURNEY,
 	BROWSER_JOURNEY_PRESS_JOURNEY,
 	BROWSER_JOURNEY_SECRET,
+	BROWSER_JOURNEY_SERVICE_CASES,
 	BROWSER_JOURNEY_SLOW_HTML,
 	BROWSER_JOURNEY_TARGET_HTML,
 	BROWSER_JOURNEY_TARGET_LOG,
 	BROWSER_JOURNEY_TIMEOUT_CONTROL,
 	BROWSER_JOURNEY_TIMEOUT_JOURNEY,
 	createBrowserJourneyFixture,
+	createBrowserJourneyServiceJourney,
 	instrumentBrowserJourneyModule,
 	openBrowserJourneyPage,
 	readBrowserJourneyOutcome,
@@ -980,4 +982,84 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				).toEqual([])
 		})
 	})
+})
+
+describe('claim 5: a one-step replay agrees with a direct call for every native action', () => {
+	const cleanup = createTeardown()
+	const pages: BrowserPageInterface[] = []
+	const toolsets: BrowserToolsetInterface[] = []
+	let fixtures: FixtureServerInterface
+	let browser: BrowserInterface
+
+	beforeAll(async () => {
+		fixtures = await createFixtureServer()
+		cleanup.add(() => fixtures.destroy())
+		const profile = createTempDirectory('journey-equality-service-')
+		cleanup.add(() => profile.destroy())
+		browser = createBrowser({
+			executable: requireSystemBrowser().executable,
+			headless: true,
+			profile: profile.path,
+			args: SERVICE_BROWSER_ARGS,
+			cdp: { port: await reservePort() },
+			timeout: 20_000,
+		})
+		cleanup.add(() => browser.destroy())
+		await browser.connect()
+	})
+	afterEach(async () => {
+		for (const toolset of toolsets.splice(0)) await toolset.destroy()
+		for (const page of pages.splice(0)) if (!page.closed) await page.close()
+	})
+	afterAll(async () => {
+		await cleanup.destroy()
+	})
+
+	it.each(BROWSER_JOURNEY_SERVICE_CASES)(
+		'replays $name to the outcome, stage, reason, and receipt of a direct tools.execute on a second fresh page',
+		async (scenario) => {
+			const journey = createBrowserJourneyServiceJourney(scenario, (path) => fixtures.url(path))
+			const step = requireValue(journey.steps[0])
+			const replayed = await browser.create({ url: fixtures.url(scenario.route) })
+			pages.push(replayed)
+			const replaying = createBrowserToolset(replayed)
+			toolsets.push(replaying)
+			await replaying.start()
+			const run = await createBrowserReplay(replaying, { journey }).execute()
+			const page = await browser.create({ url: fixtures.url(scenario.route) })
+			pages.push(page)
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			const actions: BrowserAction[] = []
+			toolset.emitter.on('action', (action) => actions.push(action))
+			await toolset.start()
+			const target =
+				'target' in scenario ? await locateBrowserTarget(page, scenario.target) : undefined
+			const text = requireToolText(
+				await toolset.tools.execute({
+					id: step.id,
+					name: step.action,
+					arguments:
+						target === undefined ? step.arguments : { ...step.arguments, ref: target.reference },
+				}),
+			)
+			const direct = requireValue(actions[0])
+
+			expect(actions).toHaveLength(1)
+			expect(run.outcome).toBe('complete')
+			expect(run.steps).toHaveLength(1)
+			expect({
+				outcome: run.steps[0]?.outcome,
+				stage: run.steps[0]?.stage,
+				reason: run.steps[0]?.reason,
+				result: maskBrowserReferences(run.steps[0]?.result ?? ''),
+			}).toStrictEqual({
+				outcome: 'done',
+				stage: direct.stage,
+				reason: direct.reason,
+				result: maskBrowserReferences(direct.receipt),
+			})
+			expect(maskBrowserReferences(text)).toContain(maskBrowserReferences(direct.receipt))
+		},
+	)
 })
