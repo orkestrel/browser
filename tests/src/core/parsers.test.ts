@@ -8,6 +8,7 @@ import {
 	parseBrowserJourneyEdit,
 	parseBrowserRun,
 	parseBrowserReference,
+	parseBrowserTabLine,
 	parseBrowserTool,
 	parseBrowserRemoval,
 	parseBrowserInvocation,
@@ -34,6 +35,46 @@ describe('element references', () => {
 			undefined,
 			undefined,
 		])
+	})
+})
+
+describe('parseBrowserTabLine', () => {
+	it('reads the id, the JSON-quoted title, the URL, and the current mark of a tabs line', () => {
+		expect(parseBrowserTabLine('t1 "Cart" about:blank (current)')).toStrictEqual({
+			id: 't1',
+			title: 'Cart',
+			url: 'about:blank',
+			current: true,
+		})
+		expect(
+			parseBrowserTabLine('t12 "Delete \\"draft\\" \\u00e9" https://shop.example.test/cart?q=a'),
+		).toStrictEqual({
+			id: 't12',
+			title: 'Delete "draft" \u00e9',
+			url: 'https://shop.example.test/cart?q=a',
+			current: false,
+		})
+		expect(parseBrowserTabLine('t2 "" https://shop.example.test/')).toStrictEqual({
+			id: 't2',
+			title: '',
+			url: 'https://shop.example.test/',
+			current: false,
+		})
+	})
+
+	it('refuses a line without the URL, the id, or a JSON title', () => {
+		expect(
+			[
+				't1 "Cart"',
+				't1 "Cart" ',
+				'"Cart" about:blank',
+				't0 "Cart" about:blank',
+				't1 Cart about:blank',
+				't1 "C\\q" about:blank',
+				't1 "Cart" about:blank (current) extra',
+				'',
+			].map((line) => parseBrowserTabLine(line)),
+		).toStrictEqual(Array.from({ length: 8 }, () => undefined))
 	})
 })
 

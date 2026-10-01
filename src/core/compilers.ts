@@ -471,9 +471,9 @@ export function compileBrowserJourneyValue(
 }
 
 /**
- * Compiles a journey into a standalone module that performs each step through
- * `performBrowserStep` over a toolset the module constructs on the page. The module checks its
- * inputs before any step.
+ * Compiles a journey into a standalone module that performs each step through the `follow`
+ * method of a toolset the module constructs on the page. The module checks its inputs before any
+ * step.
  *
  * @remarks
  * The module imports only `@orkestrel/browser` and exports `execute(page, inputs)`, which starts
@@ -586,11 +586,11 @@ export function compileBrowserJourney(
 			...(step.tab === undefined ? {} : { tab: { url: step.tab.url, title: step.tab.title } }),
 		}
 		const native = BROWSER_JOURNEY_ACTIONS.some((action) => action === step.action)
-		return `\t\tawait performBrowserStep(toolset, ${compileBrowserJourneyValue(step.id)}, ${compileBrowserJourneyValue(call, native ? bindings : undefined)}${secret ? ', { secret: true }' : ''})`
+		return `\t\tawait toolset.follow(${compileBrowserJourneyValue(step.id)}, ${compileBrowserJourneyValue(call, native ? bindings : undefined)}${secret ? ', { secret: true }' : ''})`
 	})
 	const source = [
 		...(typed ? [`import type { BrowserPageInterface } from '@orkestrel/browser'`] : []),
-		`import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'`,
+		`import { createBrowserToolset } from '@orkestrel/browser'`,
 		'',
 		`export async function execute(page${typed ? ': BrowserPageInterface' : ''}${inputs})${typed ? ': Promise<void>' : ''} {`,
 		...preflight,

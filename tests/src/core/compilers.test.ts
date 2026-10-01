@@ -207,7 +207,7 @@ describe('compileBrowserJourney', () => {
 		}
 		const typed = compileBrowserJourney(journey, { language: 'typescript' }).source.split('\n')
 		const plain = compileBrowserJourney(journey).source.split('\n')
-		const call = `\t\tawait performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.email, submit: true }, target: { role: 'textbox', name: 'Email' } }, { secret: true })`
+		const call = `\t\tawait toolset.follow('s4', { action: 'type', arguments: { text: inputs.email, submit: true }, target: { role: 'textbox', name: 'Email' } }, { secret: true })`
 		expect(typed[3]).toBe(
 			'export async function execute(page: BrowserPageInterface, inputs: { readonly email: string }): Promise<void> {',
 		)
@@ -330,16 +330,16 @@ describe('compileBrowserJourney', () => {
 		expect(script.source).toBe(
 			[
 				`import type { BrowserPageInterface } from '@orkestrel/browser'`,
-				`import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'`,
+				`import { createBrowserToolset } from '@orkestrel/browser'`,
 				'',
 				'export async function execute(page: BrowserPageInterface): Promise<void> {',
 				`\tthrow new Error('s2: the element is in a child frame; handle it here')`,
 				'\tconst toolset = createBrowserToolset(page)',
 				'\tawait toolset.start()',
 				'\ttry {',
-				`\t\tawait performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })`,
+				`\t\tawait toolset.follow('s1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })`,
 				'\t\t// s2: the element is in a child frame; handle it here',
-				`\t\tawait performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })`,
+				`\t\tawait toolset.follow('s3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })`,
 				"\t\t// s4: the option's value repeats; handle it here",
 				'\t} finally {',
 				'\t\tawait toolset.destroy()',
@@ -404,7 +404,7 @@ describe('compileBrowserJourney', () => {
 		const defaulted = `\tif (${read} !== undefined && typeof ${read} !== 'string') throw new Error('toString: the input is not a string')`
 		expect(lines[4]).toBe(defaulted)
 		expect(lines[8]).toBe(
-			`\t\tawait performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: ${expression}, submit: true }, target: { role: 'textbox', name: 'Email' } })`,
+			`\t\tawait toolset.follow('s4', { action: 'type', arguments: { text: ${expression}, submit: true }, target: { role: 'textbox', name: 'Email' } })`,
 		)
 		expect(evaluateJavaScript(`((inputs) => ${expression})({})`)).toBe('sam@example.test')
 		expect(

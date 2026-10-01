@@ -32,8 +32,6 @@ import {
 	BROWSER_TOOL_TIMEOUT_MS,
 	createBrowserToolset,
 	createCDPClient,
-	locateBrowserTarget,
-	performBrowserStep,
 } from '@src/core'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createToolManager } from '@orkestrel/tool'
@@ -67,6 +65,7 @@ import {
 	BROWSER_JOURNEY_COMBOBOX_HTML,
 	BROWSER_JOURNEY_FRAME_HTML,
 	BROWSER_JOURNEY_POPUP_LINK_HTML,
+	requireBrowserJourneyElement,
 } from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
@@ -127,7 +126,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await toolset.start()
 				const target = { role: 'combobox', name: 'Destination' }
 				if (direct) {
-					const element = await locateBrowserTarget(page, 's1', target)
+					const element = await requireBrowserJourneyElement(page, target)
 					receipts.push(
 						requireToolText(
 							await toolset.tools.execute({
@@ -140,7 +139,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				} else
 					receipts.push(
 						(
-							await performBrowserStep(toolset, 's1', {
+							await toolset.follow('s1', {
 								action: 'type',
 								target,
 								arguments: { text: 'Harbor' },
@@ -163,7 +162,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				`new Promise((resolve) => { const frame = document.createElement('iframe'); frame.onload = resolve; frame.srcdoc = ${JSON.stringify(BROWSER_JOURNEY_FRAME_HTML)}; document.body.append(frame) })`,
 			)
 			const action = await page.evaluate(
-				`import('/dist/src/core/index.js').then(({ performBrowserStep }) => performBrowserStep(documentToolset, 's1', { action: 'click', arguments: {}, target: { role: 'button', name: 'Save in frame' } }))`,
+				`documentToolset.follow('s1', { action: 'click', arguments: {}, target: { role: 'button', name: 'Save in frame' } })`,
 			)
 			expect(action).toMatchObject({
 				outcome: 'done',
@@ -193,7 +192,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 							: scenario.arguments
 					const target =
 						'target' in scenario
-							? await locateBrowserTarget(page, 's1', scenario.target)
+							? await requireBrowserJourneyElement(page, scenario.target)
 							: undefined
 					const call = {
 						id: 's1',
@@ -226,7 +225,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				const toolset = createBrowserToolset(page)
 				toolsets.push(toolset)
 				await toolset.start()
-				const target = await locateBrowserTarget(page, 's1', { role: 'button', name: 'Delete' })
+				const target = await requireBrowserJourneyElement(page, { role: 'button', name: 'Delete' })
 				const actions: BrowserAction[] = []
 				toolset.emitter.on('action', (action) => actions.push(action))
 				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
@@ -235,9 +234,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				expect(actions[0]?.outcome).toBe('interrupted')
 				if (direct)
 					await toolset.tools.execute({ id: 's2', name: 'dialog', arguments: { accept: true } })
-				else
-					await performBrowserStep(toolset, 's2', { action: 'dialog', arguments: { accept: true } })
-				await performBrowserStep(toolset, 's3', { action: 'press', arguments: { key: 'Escape' } })
+				else await toolset.follow('s2', { action: 'dialog', arguments: { accept: true } })
+				await toolset.follow('s3', { action: 'press', arguments: { key: 'Escape' } })
 				expect(actions.map((action) => action.outcome)).toEqual(['interrupted', 'done', 'done'])
 				observed.push(actions)
 			}
@@ -270,7 +268,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				if (direct)
 					await toolset.tools.execute({ id: 's1', name: 'switch', arguments: { tab: 't2' } })
 				else
-					await performBrowserStep(toolset, 's1', {
+					await toolset.follow('s1', {
 						action: 'switch',
 						arguments: {},
 						tab: { title: 'Details', url: fixtures.url('/popup/child') },
@@ -295,7 +293,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				const toolset = createBrowserToolset(page, { context })
 				toolsets.push(toolset)
 				await toolset.start()
-				const target = await locateBrowserTarget(page, 's1', { role: 'link', name: 'Open details' })
+				const target = await requireBrowserJourneyElement(page, {
+					role: 'link',
+					name: 'Open details',
+				})
 				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
 				if (direct) {
 					toolset.emitter.on('action', (action) => actions.push(action))

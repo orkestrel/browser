@@ -1674,7 +1674,7 @@ describe('instrumentBrowserJourneyModule', () => {
 		const lines = instrumentBrowserJourneyModule(BROWSER_JOURNEY_MODULE_JAVASCRIPT).split('\n')
 
 		expect(lines.slice(0, 8)).toStrictEqual([
-			"import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'",
+			"import { createBrowserToolset } from '@orkestrel/browser'",
 			'',
 			'export const actions = []',
 			'',

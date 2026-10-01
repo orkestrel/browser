@@ -24,7 +24,6 @@ import { BrowserError, isBrowserError, isBrowserStepError } from './errors.js'
 import {
 	deriveBrowserJourneyTrigger,
 	generateBrowserRunId,
-	performBrowserStep,
 	resolveBrowserJourneyBinding,
 	validateBrowserJourney,
 } from './helpers.js'
@@ -269,8 +268,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 					`Step ${step.id} answers no interrupted action.`,
 					'BROWSER_JOURNEY_DIALOG',
 				)
-			action = await performBrowserStep(
-				this.#toolset,
+			action = await this.#toolset.follow(
 				step.id,
 				{
 					action: step.action,
