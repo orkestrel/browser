@@ -412,6 +412,16 @@ export const BROWSER_TOOL_DEADLINE_NOTE =
 export const BROWSER_TOOL_HANDLED_STATUS =
 	'the page handled the submission without navigating; call wait for the text you expect'
 
+/** Holds the refusal for a hold requested while an earlier input remains pending. */
+export const BROWSER_TOOL_PENDING_NOTE = 'An earlier input is still pending; call look.'
+
+/** Names the tools that observe the view without recording an action. */
+export const BROWSER_OBSERVATION_TOOL_NAMES: readonly string[] = Object.freeze([
+	'look',
+	'read',
+	'tabs',
+])
+
 /**
  * Holds the note an action receipt carries in place of the view when the page changed under the
  * capture twice: once after the action, and again during the one retry that follows the page's
