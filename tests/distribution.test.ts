@@ -1,9 +1,9 @@
 // The artifact a consumer installs, measured rather than described. This workspace
 // is packed and installed into a throwaway consumer, and every following claim is read
 // off that installed tree: the exports map it publishes, the declarations it ships,
-// and the module objects a real runtime hands a consumer. Nothing here names this
-// package, one of its exports, or how many there are, so the proof stays true as
-// the published surface moves.
+// and the module objects a real runtime hands a consumer. Outside the generated
+// journey module, nothing here names this package, one of its exports, or how many
+// there are, so the proof stays true as the published surface moves.
 import type { PlaywrightProviderOptions } from '@vitest/browser-playwright'
 import type { Browser } from 'playwright'
 import type { SpawnSyncReturns } from 'node:child_process'
@@ -23,11 +23,13 @@ import { createServer } from 'node:http'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
 import { build } from 'vite'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
+import { compileBrowserJourney } from '@src/core'
+import { BROWSER_JOURNEY_ACTION_FIXTURE, BROWSER_JOURNEY_FIXTURE } from './setup.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
@@ -961,6 +963,61 @@ describe('installed package consumer', () => {
 		}
 		expect(reported).toStrictEqual([])
 		expect(silent).toStrictEqual([])
+	})
+})
+
+// A module `compileBrowserJourney` generates is a consumer of the installed package: it imports
+// that package and nothing else. It is checked against the installed declarations under every
+// module resolution, beside a control the declarations refuse, then emitted by the same compiler
+// and loaded by Node with its JavaScript twin.
+describe('generated journey module', () => {
+	it('type-checks against the installed declarations and loads under Node [requires the registry]', (context) => {
+		const stage = requireStage(context)
+		const kettle = compileBrowserJourney(BROWSER_JOURNEY_FIXTURE, { language: 'typescript' })
+		const checkout = compileBrowserJourney(BROWSER_JOURNEY_ACTION_FIXTURE, {
+			language: 'typescript',
+		})
+		const twin = compileBrowserJourney(BROWSER_JOURNEY_ACTION_FIXTURE)
+		const directory = join(stage.consumer, 'journeys')
+		writeFile(join(directory, 'kettle.ts'), kettle.source)
+		writeFile(join(directory, 'checkout.ts'), checkout.source)
+		writeFile(join(directory, 'control.ts'), kettle.source.replace('inputs.email', 'inputs.emial'))
+		writeFile(join(directory, 'twin.js'), twin.source)
+		const reported: string[] = []
+		const silent: string[] = []
+		for (const driver of RESOLUTIONS) {
+			const files = ['./journeys/kettle.ts', './journeys/checkout.ts']
+			const project = writeProject(stage, `journey.${driver.label}`, driver, files)
+			reported.push(...checkProject(stage, project).map((line) => `${driver.label}: ${line}`))
+			const refused = writeProject(stage, `journey.control.${driver.label}`, driver, [
+				'./journeys/control.ts',
+			])
+			if (checkProject(stage, refused).length === 0) silent.push(driver.label)
+		}
+		expect(reported).toStrictEqual([])
+		expect(silent).toStrictEqual([])
+		const emit = join(stage.consumer, 'tsconfig.journey.emit.json')
+		const project = {
+			compilerOptions: {
+				module: 'nodenext',
+				moduleResolution: 'nodenext',
+				outDir: './journeys/out',
+				rootDir: './journeys',
+				skipLibCheck: true,
+				strict: true,
+				target: 'esnext',
+				types: [],
+			},
+			files: ['./journeys/kettle.ts', './journeys/checkout.ts'],
+		}
+		writeFile(emit, `${JSON.stringify(project, undefined, '\t')}\n`)
+		const emitted = runNode([TSC, '--pretty', 'false', '-p', emit], stage.consumer)
+		expect(readOutput(emitted)).toBe('')
+		expect(emitted.status).toBe(0)
+		const loaded = ['out/kettle.js', 'out/checkout.js', 'twin.js'].map((file) =>
+			driveRuntime(stage, pathToFileURL(join(directory, file)).href, ESM_DRIVER),
+		)
+		expect(loaded).toStrictEqual([['execute'], ['execute'], ['execute']])
 	})
 })
 
