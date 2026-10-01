@@ -472,7 +472,8 @@ export function compileBrowserJourneyValue(
 
 /**
  * Compiles a journey into a standalone module that performs each step through
- * `performBrowserStep` over a toolset the module constructs on the page.
+ * `performBrowserStep` over a toolset the module constructs on the page. The module checks its
+ * inputs before any step.
  *
  * @remarks
  * The module imports only `@orkestrel/browser` and exports `execute(page, inputs)`, which starts
@@ -483,9 +484,17 @@ export function compileBrowserJourneyValue(
  * - A step passes its action, its arguments, and its target's role and name or its tab's URL and
  *   title as literals, with each native binding replaced by its input; a page tool's arguments
  *   stay literal. A `type` step whose text binds a secret passes `{ secret: true }`.
- * - A journey with a gap compiles to an unconditional throw naming the first gap before the toolset
- *   starts, as replay refuses a gap at preparation; each gap step compiles to a comment at its
- *   position, with its line terminators escaped, and is listed in `gaps`.
+ * - `execute` checks its inputs before the toolset starts, as replay refuses them at preparation:
+ *   an input that names no parameter throws `Error('NAME: no parameter has that name')`, then a
+ *   required parameter whose input is not a string throws `Error('NAME: the input is missing')`. A
+ *   journey without parameters compiles no check. A journey with a required parameter reads
+ *   `inputs ?? {}` and `inputs?.NAME` in its checks, so `execute(page)` without inputs reports the
+ *   first required parameter as missing; a journey whose parameters all have defaults reads
+ *   `inputs`, which defaults to `{}`.
+ * - A journey with a gap compiles to an unconditional throw naming the first gap after the input
+ *   checks and before the toolset starts, as replay refuses a gap at preparation; each gap step
+ *   compiles to a comment at its position, with its line terminators escaped, and is listed in
+ *   `gaps`.
  *
  * The JavaScript module is the TypeScript module without the type import and the annotations.
  * `options.language` selects `'javascript'` or `'typescript'`. Default: `'javascript'`.
@@ -525,11 +534,23 @@ export function compileBrowserJourney(
 				`readonly ${name}${parameter.default === undefined ? '' : '?'}: string`,
 		)
 		.join('; ')
-	const fallback = parameters.every(([, parameter]) => parameter.default !== undefined)
+	const required = parameters.filter(([, parameter]) => parameter.default === undefined)
 	const inputs =
 		parameters.length === 0
 			? ''
-			: `, inputs${typed ? `: { ${shape} }` : ''}${fallback ? ' = {}' : ''}`
+			: `, inputs${typed ? `: { ${shape} }` : ''}${required.length === 0 ? ' = {}' : ''}`
+	// A module with a required parameter declares no `inputs` default, so its checks tolerate an absent object.
+	const supplied = required.length === 0 ? 'inputs' : 'inputs ?? {}'
+	const preflight =
+		parameters.length === 0
+			? []
+			: [
+					`\tfor (const name of Object.keys(${supplied})) if (!${compileBrowserJourneyValue(parameters.map(([name]) => name))}.includes(name)) throw new Error(name + ': no parameter has that name')`,
+					...required.map(
+						([name]) =>
+							`\tif (typeof inputs?.${name} !== 'string') throw new Error(${compileBrowserJourneyValue(`${name}: the input is missing`)})`,
+					),
+				]
 	const gap = journey.steps.find((step) => step.action === 'unresolved')
 	const statements = journey.steps.map((step) => {
 		if (step.action === 'unresolved')
@@ -554,6 +575,7 @@ export function compileBrowserJourney(
 		`import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'`,
 		'',
 		`export async function execute(page${typed ? ': BrowserPageInterface' : ''}${inputs})${typed ? ': Promise<void>' : ''} {`,
+		...preflight,
 		...(gap === undefined
 			? []
 			: [

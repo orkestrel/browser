@@ -212,9 +212,68 @@ describe('compileBrowserJourney', () => {
 			'export async function execute(page: BrowserPageInterface, inputs: { readonly email: string }): Promise<void> {',
 		)
 		expect(plain[2]).toBe('export async function execute(page, inputs) {')
-		expect(typed[10]).toBe(call)
-		expect(plain[9]).toBe(call)
+		expect(typed.slice(4, 6)).toStrictEqual([
+			"\tfor (const name of Object.keys(inputs ?? {})) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')",
+			"\tif (typeof inputs?.email !== 'string') throw new Error('email: the input is missing')",
+		])
+		expect(plain.slice(3, 5)).toStrictEqual(typed.slice(4, 6))
+		expect(typed[12]).toBe(call)
+		expect(plain[11]).toBe(call)
 		expect(typed.filter((line) => line.includes('secret: true'))).toStrictEqual([call])
+	})
+
+	it('checks the inputs before a gap and before the toolset starts: a name no parameter carries, then each required input', () => {
+		const lines = compileBrowserJourney(BROWSER_JOURNEY_ACTION_FIXTURE).source.split('\n')
+		const preflight = lines.slice(3, 6).join('\n')
+		const cases: ReadonlyArray<readonly [inputs: string, expected: object]> = [
+			["{ customer: 'Ada', password: 'hunter2' }", { success: true, value: 'checked' }],
+			[
+				"{ customer: 'Ada', password: 'hunter2', store: 'https://shop.example.test/' }",
+				{ success: true, value: 'checked' },
+			],
+			['{}', { success: false, error: { message: 'customer: the input is missing' } }],
+			[
+				"{ customer: 'Ada' }",
+				{ success: false, error: { message: 'password: the input is missing' } },
+			],
+			[
+				"{ customer: undefined, password: 'hunter2' }",
+				{ success: false, error: { message: 'customer: the input is missing' } },
+			],
+			[
+				"{ customer: 'Ada', password: 'hunter2', coupon: 'SPRING' }",
+				{ success: false, error: { message: 'coupon: no parameter has that name' } },
+			],
+			[
+				"{ coupon: 'SPRING' }",
+				{ success: false, error: { message: 'coupon: no parameter has that name' } },
+			],
+		]
+		expect(lines.slice(2, 8)).toStrictEqual([
+			'export async function execute(page, inputs) {',
+			"\tfor (const name of Object.keys(inputs ?? {})) if (!['store', 'product', 'customer', 'password', 'key', 'reply'].includes(name)) throw new Error(name + ': no parameter has that name')",
+			"\tif (typeof inputs?.customer !== 'string') throw new Error('customer: the input is missing')",
+			"\tif (typeof inputs?.password !== 'string') throw new Error('password: the input is missing')",
+			"\tthrow new Error('s11: the element is in a child frame; handle it here')",
+			'\tconst toolset = createBrowserToolset(page)',
+		])
+		for (const [inputs, expected] of cases)
+			expect(
+				attempt(() =>
+					evaluateJavaScript(`((inputs) => { ${preflight}\nreturn 'checked' })(${inputs})`),
+				),
+			).toMatchObject(expected)
+	})
+
+	it('reports the first required input as missing when execute receives no inputs object', () => {
+		const lines = compileBrowserJourney(BROWSER_JOURNEY_ACTION_FIXTURE).source.split('\n')
+		const preflight = lines.slice(3, 6).join('\n')
+		expect(lines[2]).toBe('export async function execute(page, inputs) {')
+		expect(
+			attempt(() =>
+				evaluateJavaScript(`((inputs) => { ${preflight}\nreturn 'checked' })(undefined)`),
+			),
+		).toMatchObject({ success: false, error: { message: 'customer: the input is missing' } })
 	})
 
 	it('throws at the first gap before the toolset starts, comments every gap at its position, and lists every gap in order', () => {
@@ -289,9 +348,10 @@ describe('compileBrowserJourney', () => {
 		expect(compileBrowserJourney(journey, { language: 'typescript' }).source.split('\n')[3]).toBe(
 			'export async function execute(page: BrowserPageInterface): Promise<void> {',
 		)
-		expect(compileBrowserJourney(journey).source.split('\n')[2]).toBe(
+		expect(compileBrowserJourney(journey).source.split('\n').slice(2, 4)).toStrictEqual([
 			'export async function execute(page) {',
-		)
+			'\tconst toolset = createBrowserToolset(page)',
+		])
 	})
 
 	it('reads only an own input for a parameter that names an inherited member', () => {
@@ -304,13 +364,26 @@ describe('compileBrowserJourney', () => {
 		}
 		const expression = `(Object.hasOwn(inputs, 'toString') ? inputs.toString : undefined) ?? 'sam@example.test'`
 		const lines = compileBrowserJourney(journey).source.split('\n')
-		expect(lines[6]).toBe(
+		expect(lines[7]).toBe(
 			`\t\tawait performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: ${expression}, submit: true }, target: { role: 'textbox', name: 'Email' } })`,
 		)
 		expect(evaluateJavaScript(`((inputs) => ${expression})({})`)).toBe('sam@example.test')
 		expect(
 			evaluateJavaScript(`((inputs) => ${expression})({ toString: 'ada@example.test' })`),
 		).toBe('ada@example.test')
+		const required = compileBrowserJourney({
+			...journey,
+			parameters: { toString: {} },
+		}).source.split('\n')[4]
+		expect(required).toBe(
+			"\tif (typeof inputs?.toString !== 'string') throw new Error('toString: the input is missing')",
+		)
+		expect(
+			attempt(() => evaluateJavaScript(`((inputs) => { ${required}\nreturn 'checked' })({})`)),
+		).toMatchObject({ success: false, error: { message: 'toString: the input is missing' } })
+		expect(
+			evaluateJavaScript(`((inputs) => { ${required}\nreturn 'checked' })({ toString: 'Ada' })`),
+		).toBe('checked')
 	})
 
 	it('refuses an invalid journey with the validator code before compiling any source', () => {

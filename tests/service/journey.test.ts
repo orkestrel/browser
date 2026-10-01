@@ -55,6 +55,7 @@ import {
 	BROWSER_JOURNEY_EVENT_COUNTER,
 	BROWSER_JOURNEY_GAP_CASE,
 	BROWSER_JOURNEY_HOLD_JOURNEY,
+	BROWSER_JOURNEY_INPUT_CASES,
 	BROWSER_JOURNEY_MODULE_CASES,
 	BROWSER_JOURNEY_PASSWORD_HTML,
 	BROWSER_JOURNEY_PREFIX_JOURNEY,
@@ -62,6 +63,7 @@ import {
 	BROWSER_JOURNEY_PREPARED_JOURNEY,
 	BROWSER_JOURNEY_PRESS_JOURNEY,
 	BROWSER_JOURNEY_SECRET,
+	BROWSER_JOURNEY_SEQUENCE_CASES,
 	BROWSER_JOURNEY_SERVICE_CASES,
 	BROWSER_JOURNEY_SLOW_HTML,
 	BROWSER_JOURNEY_TARGET_HTML,
@@ -69,6 +71,7 @@ import {
 	BROWSER_JOURNEY_TIMEOUT_CONTROL,
 	BROWSER_JOURNEY_TIMEOUT_JOURNEY,
 	createBrowserJourneyFixture,
+	createBrowserJourneySequenceJourney,
 	createBrowserJourneyServiceJourney,
 	instrumentBrowserJourneyModule,
 	openBrowserJourneyPage,
@@ -368,9 +371,65 @@ describe('compiled module equality', () => {
 		).toStrictEqual([{ clicks: 'save:true submit:true', saved: 'yes' }])
 	})
 
+	it.each(BROWSER_JOURNEY_INPUT_CASES)(
+		'refuses a generated module given a $name before its first step, leaving the click log empty as the replay does at preparation',
+		async (scenario) => {
+			const script = compileBrowserJourney(scenario.journey)
+			const url = fixtures.url(scenario.route)
+			const file = scenario.name.replaceAll(' ', '-')
+			const module = stage.load(`${file}.js`, script.source)
+			const page = await openBrowserJourneyPage(built.context, url, scenario.markup)
+			const failure = await module.execute(page, scenario.inputs).then(
+				() => undefined,
+				(error: unknown) => error,
+			)
+			const executed = await readBrowserJourneyOutcome(built.context.pages(), page, scenario.state)
+			const fresh = await openBrowserJourneyPage(context, url, scenario.markup)
+			const toolset = createBrowserToolset(fresh)
+			await toolset.start()
+			const refusal = await createBrowserReplay(
+				toolset,
+				{ journey: scenario.journey },
+				{ inputs: scenario.inputs },
+			)
+				.execute()
+				.then(
+					() => undefined,
+					(error: unknown) => error,
+				)
+			const refused = await readBrowserJourneyOutcome(context.pages(), fresh, scenario.state)
+			await toolset.destroy()
+			const control = stage.load(
+				`${file}.control.js`,
+				script.source.replace(/^\t(?:for|if) .*\n/gmu, ''),
+			)
+			const clicked = await openBrowserJourneyPage(built.context, url, scenario.markup)
+			const unchecked = await control.execute(clicked, scenario.inputs).then(
+				() => undefined,
+				(error: unknown) => error,
+			)
+
+			expect(refused).toStrictEqual(scenario.outcome)
+			expect(executed).toStrictEqual(refused)
+			expect(failure).toBeInstanceOf(Error)
+			expect(failure).toMatchObject({ message: scenario.message })
+			expect(refusal).toMatchObject({ code: scenario.code })
+			expect(unchecked, 'the module without its input checks').not.toMatchObject({
+				message: scenario.message,
+			})
+			expect(
+				await readBrowserJourneyOutcome(built.context.pages(), clicked, scenario.state),
+			).toStrictEqual([{ clicks: 'save:true', saved: 'yes' }])
+		},
+	)
+
 	it('type-checks the TypeScript module of every journey against the built declarations and refuses a misspelled input', () => {
 		const sources = Object.fromEntries(
-			[...BROWSER_JOURNEY_MODULE_CASES, BROWSER_JOURNEY_GAP_CASE].map((scenario) => [
+			[
+				...BROWSER_JOURNEY_MODULE_CASES,
+				BROWSER_JOURNEY_GAP_CASE,
+				...BROWSER_JOURNEY_INPUT_CASES,
+			].map((scenario) => [
 				`${scenario.journey.name}.ts`,
 				compileBrowserJourney(scenario.journey, { language: 'typescript' }).source,
 			]),
@@ -384,6 +443,7 @@ describe('compiled module equality', () => {
 			'delete-draft.ts',
 			'like-details.ts',
 			'save-draft.ts',
+			'name-draft.ts',
 		])
 		expect(stage.check(sources)).toStrictEqual([])
 		expect(stage.check({ 'control.ts': misspelled })).toStrictEqual([
@@ -1002,6 +1062,7 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 	const cleanup = createTeardown()
 	const pages: BrowserPageInterface[] = []
 	const toolsets: BrowserToolsetInterface[] = []
+	const contexts: BrowserContextInterface[] = []
 	let fixtures: FixtureServerInterface
 	let browser: BrowserInterface
 
@@ -1024,6 +1085,7 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 	afterEach(async () => {
 		for (const toolset of toolsets.splice(0)) await toolset.destroy()
 		for (const page of pages.splice(0)) if (!page.closed) await page.close()
+		for (const context of contexts.splice(0)) await context.destroy()
 	})
 	afterAll(async () => {
 		await cleanup.destroy()
@@ -1076,6 +1138,61 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 				result: maskBrowserReferences(direct.receipt),
 			})
 			expect(maskBrowserReferences(text)).toContain(maskBrowserReferences(direct.receipt))
+		},
+	)
+
+	it.each(BROWSER_JOURNEY_SEQUENCE_CASES)(
+		'replays the $name step by step to the outcome, stage, reason, and receipt of direct tools.execute calls in a second fresh context',
+		async (scenario) => {
+			const journey = createBrowserJourneySequenceJourney(scenario, (path) => fixtures.url(path))
+			const opened: Array<{ page: BrowserPageInterface; toolset: BrowserToolsetInterface }> = []
+			for (let index = 0; index < 2; index += 1) {
+				const context = await browser.isolate()
+				contexts.push(context)
+				const page = await context.create({ url: fixtures.url(scenario.route) })
+				for (const tab of scenario.tabs) await context.create({ url: fixtures.url(tab) })
+				const toolset = createBrowserToolset(page, { context })
+				toolsets.push(toolset)
+				await toolset.start()
+				opened.push({ page, toolset })
+			}
+			const [replaying, direct] = opened
+			if (replaying === undefined || direct === undefined)
+				throw new Error('The proof opened no second context')
+			const run = await createBrowserReplay(replaying.toolset, { journey }).execute()
+			const actions: BrowserAction[] = []
+			direct.toolset.emitter.on('action', (action) => actions.push(action))
+			for (const [index, step] of journey.steps.entries()) {
+				const name = step.target?.name
+				const target =
+					step.target === undefined || !isString(name)
+						? undefined
+						: await locateBrowserTarget(direct.page, { role: step.target.role, name })
+				const call = requireValue(scenario.calls[index])
+				await direct.toolset.tools.execute({
+					id: step.id,
+					name: step.action,
+					arguments: target === undefined ? call : { ...call, ref: target.reference },
+				})
+			}
+
+			expect(run.outcome).toBe('complete')
+			expect(actions.map((action) => action.outcome)).toStrictEqual(scenario.outcomes)
+			expect(
+				run.steps.map((step) => ({
+					outcome: step.outcome,
+					stage: step.stage,
+					reason: step.reason,
+					result: maskBrowserReferences(step.result),
+				})),
+			).toStrictEqual(
+				actions.map((action) => ({
+					outcome: action.outcome,
+					stage: action.stage,
+					reason: action.reason,
+					result: maskBrowserReferences(action.receipt),
+				})),
+			)
 		},
 	)
 })
