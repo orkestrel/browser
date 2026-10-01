@@ -47,6 +47,9 @@ import {
 	isBrowserError,
 } from '@src/core'
 import {
+	BROWSER_SELECT_SECRET,
+	BROWSER_JOURNEY_SECRET,
+	createBrowserSecretSelectFixture,
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_APPLIED_FIXTURE,
 	BROWSER_ELEMENT_CHILD_FIXTURE,
@@ -95,6 +98,110 @@ describe('BrowserToolset', () => {
 		}
 	})
 	describe('journey actions', () => {
+		it('redacts a secret abort reason before admission and keeps ordinary refusal text', async () => {
+			const message = `Rejected ${JSON.stringify(BROWSER_SELECT_SECRET)}`
+			const fixture = await createBrowserSecretSelectFixture(message)
+			const toolset = createBrowserToolset(fixture.page)
+			try {
+				await toolset.start()
+				await fixture.page.elements.outline()
+				const call = {
+					id: 'aborted',
+					name: 'type',
+					arguments: { ref: 'e2', text: BROWSER_SELECT_SECRET, secret: true },
+				}
+				const signal = AbortSignal.abort(new Error(message))
+				const performed = await toolset.perform(call, { signal })
+				expect(performed.result.success).toBe(false)
+				expect(performed.action).toBeUndefined()
+				expect(JSON.stringify(performed)).not.toContain('Zq7#')
+				const error = await Promise.resolve(
+					requireValue(toolset.tools.tool('type')).execute(call.arguments, { signal }),
+				).catch((caught: unknown) => caught)
+				expect(String(error)).toContain('Rejected')
+				expect(String(error)).not.toContain('Zq7#')
+				const ordinary = await toolset.perform({
+					...call,
+					arguments: { ...call.arguments, secret: false },
+				})
+				expect(ordinary.result).toMatchObject({ success: false, error: message })
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		})
+
+		it('redacts raw and JSON-quoted secret refusals before clipping results, actions, and direct errors', async () => {
+			const message = `Rejected ${JSON.stringify(BROWSER_SELECT_SECRET)} and ${BROWSER_SELECT_SECRET}.`
+			const fixture = await createBrowserSecretSelectFixture(message)
+			try {
+				for (const limit of [48, 4096]) {
+					const toolset = createBrowserToolset(fixture.page, { limit })
+					const actions = createRecorder<readonly [BrowserAction]>()
+					toolset.emitter.on('action', actions.handler)
+					try {
+						await toolset.start()
+						await fixture.page.elements.outline()
+						const call = {
+							id: 'secret-select',
+							name: 'type',
+							arguments: { ref: 'e2', text: BROWSER_SELECT_SECRET, secret: true },
+						}
+						const performed = await toolset.perform(call)
+						expect(performed.result.success).toBe(false)
+						expect(performed.action).toMatchObject({ secret: true, outcome: 'refused' })
+						expect(performed.action?.arguments).not.toHaveProperty('text')
+						expect(performed.action?.receipt).toContain('Rejected')
+						expect(JSON.stringify(performed), 'perform must redact before clipping').not.toContain(
+							'Zq7#',
+						)
+						const managed = await toolset.tools.execute(call)
+						expect(managed.success).toBe(false)
+						expect(JSON.stringify(managed)).not.toContain('Zq7#')
+						const error = await Promise.resolve(
+							requireValue(toolset.tools.tool('type')).execute(call.arguments, {
+								signal: new AbortController().signal,
+							}),
+						).catch((caught: unknown) => caught)
+						expect(isBrowserError(error)).toBe(true)
+						expect(String(error)).not.toContain('Zq7#')
+						expect(actions.count).toBe(3)
+						expect(JSON.stringify(actions.calls)).not.toContain('Zq7#')
+					} finally {
+						await toolset.destroy()
+					}
+				}
+			} finally {
+				await fixture.client.close()
+			}
+		})
+
+		it('redacts secret text in successful selection receipts and emits Selected a secret', async () => {
+			const fixture = await createBrowserSecretSelectFixture(undefined, BROWSER_JOURNEY_SECRET)
+			const toolset = createBrowserToolset(fixture.page)
+			const actions = createRecorder<readonly [BrowserAction]>()
+			toolset.emitter.on('action', actions.handler)
+			try {
+				await toolset.start()
+				await fixture.page.elements.outline()
+				const result = await toolset.tools.execute({
+					id: 'select',
+					name: 'type',
+					arguments: { ref: 'e2', text: BROWSER_JOURNEY_SECRET, secret: true },
+				})
+				expect(result.success).toBe(true)
+				expect(result.success && result.value).toMatch(/^Selected a secret in/)
+				expect(actions.calls[0]?.[0].receipt).toMatch(/^Selected a secret in/)
+				expect(JSON.stringify(result)).not.toContain('Zq7#')
+				expect(JSON.stringify(actions.calls.map(([action]) => action.receipt))).not.toContain(
+					'Zq7#',
+				)
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		})
+
 		it('refuses a hold while an already admitted dialog answer is pending', async () => {
 			const fixture = await createBrowserElementFixture()
 			const toolset = createBrowserToolset(fixture.page)

@@ -6,6 +6,7 @@ import type {
 	BrowserJourneyStoreInterface,
 	BrowserJourneyStep,
 	BrowserRun,
+	BrowserStoreOptions,
 	BrowserCallOptions,
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
@@ -36,6 +37,7 @@ import {
 	BrowserError,
 	BrowserPage,
 	BrowserToolset,
+	MemoryBrowserRunStore,
 	compileSubmitObserverExpression,
 	compileSubmitReadExpression,
 	createBrowserReading,
@@ -4213,3 +4215,55 @@ export const BROWSER_STORE_INVALID_NAMES: readonly string[] = [
 	'lpt9',
 	'a'.repeat(65),
 ]
+
+/** Supplies a secret with characters whose JSON representation differs from its literal text. */
+export const BROWSER_SELECT_SECRET = 'Zq7#Marlin-"Velvet"\n\\trail'
+
+/** Supplies a select whose public option never contains the secret under test. */
+export const BROWSER_SECRET_SELECT_HTML =
+	'<select aria-label="Access level"><option value="public">Public</option></select>'
+
+/** Records every run sent to the real memory store, including writes before the final result. */
+export class RecordingBrowserRunStore extends MemoryBrowserRunStore {
+	readonly writes = createRecorder<readonly [BrowserRun]>()
+
+	override async set(run: BrowserRun, options?: BrowserStoreOptions): Promise<void> {
+		this.writes.handler(run)
+		await super.set(run, options)
+	}
+}
+
+/**
+ * Creates a select protocol fixture that can return an upstream refusal quoting a secret.
+ * @param message - Refusal text; omission selects the option successfully
+ * @param name - Accessible name published by the fixture
+ * @returns The real page and its recording protocol transport
+ */
+export async function createBrowserSecretSelectFixture(
+	message?: string,
+	name = 'Access level',
+): Promise<BrowserElementFixture> {
+	const fixture = await createBrowserElementFixture({
+		accessibility: (request) =>
+			fixture.transport.reply(
+				request.id,
+				request.params?.['frameId'] === 'child'
+					? BROWSER_ELEMENT_CHILD_FIXTURE
+					: {
+							nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) =>
+								node.nodeId === 'email'
+									? { ...node, role: { value: 'combobox' }, name: { value: name } }
+									: node,
+							),
+						},
+			),
+		select: (request) =>
+			fixture.transport.reply(
+				request.id,
+				message === undefined
+					? { result: { value: true } }
+					: { exceptionDetails: { exception: { description: message } } },
+			),
+	})
+	return fixture
+}

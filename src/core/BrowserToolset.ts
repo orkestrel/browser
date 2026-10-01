@@ -313,8 +313,23 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const entry =
 			(context === undefined ? undefined : this.#invocations.get(context)) ??
 			(tool === undefined ? undefined : this.#handlers.get(tool))
-		if (entry === undefined || context?.signal.aborted === true)
-			return { result: await this.#tools.execute(call, context) }
+		if (entry === undefined || context?.signal.aborted === true) {
+			const result = await this.#tools.execute(call, context)
+			const secret =
+				call.name === 'type' && call.arguments['secret'] === true
+					? call.arguments['text']
+					: undefined
+			return {
+				result: result.success
+					? {
+							...result,
+							value: isString(result.value)
+								? this.#boundReceipt(result.value, secret)
+								: result.value,
+						}
+					: { ...result, error: this.#boundReceipt(result.error, secret) },
+			}
+		}
 		const signal = AbortSignal.any([
 			context?.signal ?? new AbortController().signal,
 			this.#lifetime.signal,
@@ -435,7 +450,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		context: ToolContext,
 	): Promise<unknown> {
 		this.#live()
-		context.signal.throwIfAborted()
+		if (name !== 'type' || args['secret'] !== true) context.signal.throwIfAborted()
 		const invocation = { ...context }
 		this.#invocations.set(invocation, { handler, clause })
 		const performed = await this.perform({ id: '', name, arguments: args }, invocation)
@@ -531,6 +546,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	): Promise<string> {
 		if (this.#destroying !== undefined) throw this.#ended()
 		const signal = context.signal
+		const secret = name === 'type' && args['secret'] === true ? args['text'] : undefined
 		try {
 			signal.throwIfAborted()
 			this.#admit(
@@ -544,7 +560,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					'BROWSER_TOOLSET_DIALOG',
 				)
 			}
-			const [body, footer] = await handler(args, { ...context, signal })
+			const [content, suffix] = await handler(args, { ...context, signal })
+			const body = this.#boundReceipt(content, secret)
+			const footer = this.#boundReceipt(suffix, secret)
 			// A cancellation that lands while the handler finishes wins over its result.
 			signal.throwIfAborted()
 			const state = this.#actions.get(signal)
@@ -553,25 +571,33 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					...state,
 					receipt: boundBrowserText(body.split('\n\n')[0] ?? body, this.#limit, clause),
 				})
-			return `${boundBrowserText(`${this.#drain()}${body}`, this.#limit, clause)}${footer}`
+			return `${this.#boundReceipt(`${this.#drain()}${body}`, secret, clause)}${footer}`
 		} catch (error) {
-			if (context.signal.aborted && error === context.signal.reason) throw error
+			const original = isError(error) ? error.message : String(error)
+			const message = this.#boundReceipt(original, secret)
+			if (context.signal.aborted && error === context.signal.reason && message === original)
+				throw error
 			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
 				this.#actions.set(signal, { ...this.#actions.get(signal), outcome: 'interrupted' })
-				return boundBrowserText(
-					`${this.#drain()}${error.message}`,
-					this.#limit,
-					BROWSER_TOOL_CUT_FOOTER,
-				)
+				return this.#boundReceipt(`${this.#drain()}${message}`, secret, BROWSER_TOOL_CUT_FOOTER)
 			}
-			const message = isError(error) ? error.message : String(error)
-			if (message.length <= this.#limit) throw error
+			if (message === original && message.length <= this.#limit) throw error
 			throw new BrowserError(
 				boundBrowserText(message, this.#limit, BROWSER_TOOL_CUT_FOOTER),
 				isBrowserError(error) ? error.code : undefined,
 				isBrowserError(error) ? error.context : undefined,
 			)
 		}
+	}
+
+	// Redacts before splitting or clipping, which could otherwise retain only part of a secret.
+	#boundReceipt(message: string, secret: unknown, clause?: string): string {
+		if (isString(secret) && secret.length > 0) {
+			message = message
+				.replaceAll(JSON.stringify(secret), '[redacted]')
+				.replaceAll(secret, '[redacted]')
+		}
+		return clause === undefined ? message : boundBrowserText(message, this.#limit, clause)
 	}
 
 	async #look(

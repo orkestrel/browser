@@ -48,6 +48,9 @@ import {
 	BrowserSubmitWindow,
 	BrowserSubmitWindows,
 	RecordingCDPClient,
+	RecordingBrowserRunStore,
+	createBrowserJourneyFixture,
+	createBrowserSecretSelectFixture,
 	answerBrowserEvaluation,
 	attachBrowserElementChild,
 	buildBrowserElementTree,
@@ -94,6 +97,57 @@ import {
 } from './setup.js'
 
 describe('element protocol and compiler fixtures', () => {
+	it('records run writes while retaining the memory store validation and persistence', async () => {
+		const store = new RecordingBrowserRunStore()
+		const journey = createBrowserJourneyFixture([])
+		const slot = await store.open(journey.name)
+		await store.set({
+			format: 1,
+			id: slot.id,
+			journey,
+			inputs: {},
+			steps: [],
+			outcome: 'complete',
+			elapsed: 0,
+		})
+		expect(store.writes.count).toBe(1)
+		expect(await store.get(journey.name, slot.id)).toEqual(store.writes.calls[0]?.[0])
+		const unopened = await new RecordingBrowserRunStore().open(journey.name)
+		await expect(
+			store.set({
+				format: 1,
+				id: unopened.id,
+				journey,
+				inputs: {},
+				steps: [],
+				outcome: 'complete',
+				elapsed: 0,
+			}),
+		).rejects.toThrow('not opened')
+		expect(store.writes.count).toBe(2)
+		expect(await store.get(journey.name, unopened.id)).toBeUndefined()
+	})
+
+	it('scripts a unique select with successful and upstream refusal replies', async () => {
+		for (const message of [undefined, 'No such option']) {
+			const fixture = await createBrowserSecretSelectFixture(message)
+			try {
+				await fixture.page.elements.outline()
+				const elements = await fixture.page.elements.find({
+					role: 'combobox',
+					name: 'Access level',
+					exact: true,
+				})
+				expect(elements).toHaveLength(1)
+				const selecting = requireValue(elements[0]).select(['private'])
+				const refusal = await selecting.catch((error: unknown) => readProperty(error, 'message'))
+				expect(refusal).toBe(message)
+			} finally {
+				await fixture.client.close()
+			}
+		}
+	})
+
 	it('catches a timer instrument that ignores syntax errors, intervals, or the actual delay argument', () => {
 		expect(readBrowserCompiledTimers('setTimeout(() => undefined, 41)')).toEqual([
 			{ name: 'setTimeout', delay: '41' },
