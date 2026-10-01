@@ -4,9 +4,23 @@ import type { AddressInfo, Server as NetServer, Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
+import type { TeardownInterface } from '@orkestrel/test'
+import type { MCPTransportInterface } from '@orkestrel/mcp'
 import type { BrowserContextInterface, BrowserPageInterface } from '@src/core'
-import { spawnSync } from 'node:child_process'
+import type {
+	BrowserConnection,
+	BrowserDiscoveryResult,
+	BrowserEventMap,
+	BrowserInterface,
+	BrowserLaunchFunction,
+	BrowserOptions,
+	BrowserStatus,
+} from '@src/server'
+import type { BrowserElementFixture, CDPSentMessage, CDPTestTransportInterface } from './setup.js'
+import { spawn as spawnProcess, spawnSync } from 'node:child_process'
 import { createServer } from 'node:http'
+import { createInterface } from 'node:readline'
+import { PassThrough } from 'node:stream'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -39,7 +53,14 @@ import {
 	waitForEvent,
 } from '@orkestrel/test'
 import { describe, it, expect } from 'vitest'
-import { BROWSER_RUN_FIXTURE, createBrowserJourneyFixture } from './setup.js'
+import { Emitter } from '@orkestrel/emitter'
+import { BrowserContext, BrowserError } from '@src/core'
+import {
+	BROWSER_RUN_FIXTURE,
+	createBrowserElementFixture,
+	createBrowserJourneyFixture,
+	replyOk,
+} from './setup.js'
 
 /**
  * Reports whether this platform delivers `SIGTERM` as a catchable signal a
@@ -1752,6 +1773,527 @@ process.send?.({ outcome: 'ready' })
 			}
 		})
 	})
+}
+
+// === Browse server fixtures
+
+/**
+ * Configures a {@link BrowserLauncher}.
+ *
+ * @remarks
+ * - `failures` — how many launches, in order, reject at `connect()` with a `BrowserError`
+ * - `evaluation` — answers each `Runtime.evaluate` the element fixture leaves unanswered, so a
+ *   proof can withhold the text-wait evaluation
+ * - `released` — answers each `mouseReleased` dispatch, so a proof can withhold a click's release
+ * - `registry` — answers `WebMCP.enable`, so a page registry exists and its tools are adopted
+ */
+export interface BrowserLauncherOptions {
+	readonly failures?: number
+	readonly evaluation?: BrowserLaunchHandler
+	readonly released?: BrowserLaunchHandler
+	readonly registry?: BrowserLaunchHandler
+}
+
+/**
+ * Answers one CDP request the element fixture hands to a proof, over the transport of the launch
+ * that sent it.
+ */
+export type BrowserLaunchHandler = (
+	message: CDPSentMessage,
+	transport: CDPTestTransportInterface,
+) => void
+
+/**
+ * Stands in for a launched Chromium at the browse server's launch boundary: `connect()` opens the
+ * element fixture's in-memory CDP connection, and `isolate()` returns a real `BrowserContext` over
+ * it whose new page is the fixture's scripted `main` target.
+ *
+ * @remarks
+ * It records the options the server launched it with, each `connect()`, and `destroy()`. A
+ * `connect()` waits on the gate its launcher holds and rejects when the launcher scripted a
+ * failure for it.
+ */
+export class BrowserLaunchDouble implements BrowserInterface {
+	readonly #options: BrowserOptions
+	readonly #gate: Promise<void>
+	readonly #failure: BrowserError | undefined
+	readonly #handlers: BrowserLauncherOptions
+	readonly #emitter = new Emitter<BrowserEventMap>()
+	#fixture: BrowserElementFixture | undefined
+	#connects = 0
+	#destroyed = false
+
+	constructor(
+		options: BrowserOptions,
+		gate: Promise<void>,
+		failure: BrowserError | undefined,
+		handlers: BrowserLauncherOptions,
+	) {
+		this.#options = options
+		this.#gate = gate
+		this.#failure = failure
+		this.#handlers = handlers
+	}
+
+	get emitter(): Emitter<BrowserEventMap> {
+		return this.#emitter
+	}
+
+	get engine(): 'chromium' {
+		return 'chromium'
+	}
+
+	get status(): BrowserStatus {
+		return this.#fixture === undefined ? 'idle' : 'connected'
+	}
+
+	get connection(): BrowserConnection | undefined {
+		return this.#fixture === undefined ? undefined : 'persistent'
+	}
+
+	get owned(): boolean | undefined {
+		return this.#fixture === undefined ? undefined : true
+	}
+
+	get pid(): number | undefined {
+		return undefined
+	}
+
+	/** Holds the options the server launched this browser with. */
+	get options(): BrowserOptions {
+		return this.#options
+	}
+
+	/** Counts the `connect()` calls the server made. */
+	get connects(): number {
+		return this.#connects
+	}
+
+	/** Reports whether the server destroyed this browser. */
+	get destroyed(): boolean {
+		return this.#destroyed
+	}
+
+	/** Holds the in-memory CDP fixture a connect opened. */
+	get fixture(): BrowserElementFixture | undefined {
+		return this.#fixture
+	}
+
+	async discover(): Promise<BrowserDiscoveryResult> {
+		return { endpoint: undefined, browser: undefined }
+	}
+
+	async connect(): Promise<void> {
+		this.#connects += 1
+		await this.#gate
+		if (this.#failure !== undefined) throw this.#failure
+		const { evaluation, released, registry } = this.#handlers
+		// The fixture scripts its transport before it returns it, so each answer reads the transport
+		// off the fixture this connect stores.
+		const fixture = await createBrowserElementFixture({
+			...(evaluation === undefined
+				? {}
+				: { evaluation: (message) => this.#answer(evaluation, message) }),
+			...(released === undefined ? {} : { released: (message) => this.#answer(released, message) }),
+			...(registry === undefined ? {} : { registry: (message) => this.#answer(registry, message) }),
+		})
+		const { transport } = fixture
+		transport.onSend('Target.createTarget', (message) =>
+			transport.reply(message.id, { targetId: 'main' }),
+		)
+		transport.onSend('Target.attachToTarget', (message) =>
+			transport.reply(message.id, { sessionId: 'session-main' }),
+		)
+		for (const method of [
+			'Page.setInterceptFileChooserDialog',
+			'Browser.setDownloadBehavior',
+			'Network.enable',
+			'Page.bringToFront',
+		])
+			replyOk(transport, method)
+		this.#fixture = fixture
+	}
+
+	adopt(): void {}
+
+	async disconnect(): Promise<void> {}
+
+	context(): BrowserContextInterface | undefined {
+		return undefined
+	}
+
+	contexts(): readonly BrowserContextInterface[] {
+		return []
+	}
+
+	async isolate(): Promise<BrowserContextInterface> {
+		const fixture = this.#fixture
+		if (fixture === undefined) throw new BrowserError('The double is not connected')
+		return new BrowserContext(fixture.client)
+	}
+
+	async create(): Promise<BrowserPageInterface> {
+		const context = await this.isolate()
+		return context.create()
+	}
+
+	async destroy(): Promise<void> {
+		this.#destroyed = true
+		await this.#fixture?.client.close()
+	}
+
+	async close(): Promise<void> {
+		await this.destroy()
+	}
+
+	// Hands a request to a proof's handler with the transport of this connect.
+	#answer(handler: BrowserLaunchHandler, message: CDPSentMessage): void {
+		const transport = this.#fixture?.transport
+		if (transport !== undefined) handler(message, transport)
+	}
+}
+
+/**
+ * Records every browser a browse server launches as a {@link BrowserLaunchDouble}, and holds or
+ * fails their connects on request.
+ */
+export class BrowserLauncher {
+	readonly #browsers: BrowserLaunchDouble[] = []
+	readonly #handlers: BrowserLauncherOptions
+	#failures: number
+	#gate = Promise.withResolvers<void>()
+
+	constructor(options?: BrowserLauncherOptions) {
+		this.#failures = options?.failures ?? 0
+		this.#handlers = { ...options }
+		this.#gate.resolve()
+	}
+
+	/** Lists the launched browsers in launch order. */
+	get browsers(): readonly BrowserLaunchDouble[] {
+		return this.#browsers
+	}
+
+	/** Creates the double the server connects, as the server's `launch` option. */
+	get launch(): BrowserLaunchFunction {
+		return (options) => {
+			const failure =
+				this.#failures > 0
+					? new BrowserError('The fixture refused the launch', 'BROWSER_FIXTURE_LAUNCH')
+					: undefined
+			if (this.#failures > 0) this.#failures -= 1
+			const browser = new BrowserLaunchDouble(options, this.#gate.promise, failure, this.#handlers)
+			this.#browsers.push(browser)
+			return browser
+		}
+	}
+
+	/** Parks every later `connect()` until `release()`. */
+	hold(): void {
+		this.#gate = Promise.withResolvers<void>()
+	}
+
+	/** Lets every parked and later `connect()` continue. */
+	release(): void {
+		this.#gate.resolve()
+	}
+}
+
+/**
+ * Drives a browse server over an in-memory stdio pair with newline-delimited JSON-RPC: `input` is
+ * the stream the server reads and `output` the stream it writes.
+ */
+export class MCPStdioPair {
+	readonly #input = new PassThrough()
+	readonly #output = new PassThrough()
+	readonly #answers = new Map<number, Readonly<Record<string, unknown>>>()
+	readonly #transport: MCPTransportInterface
+	#listener: ((message: string) => void) | undefined
+
+	constructor() {
+		createInterface({ input: this.#output }).on('line', (line) => this.#receive(line))
+		this.#transport = {
+			send: this.#deliver.bind(this),
+			listen: this.#listen.bind(this),
+			closed: this.#closed.bind(this),
+			close: this.#close.bind(this),
+		}
+	}
+
+	/**
+	 * Holds the pair as the duplex message channel an `@orkestrel/mcp` client binds to, beside the
+	 * line driver: each message it sends is one input line, and each output line reaches its
+	 * listener.
+	 */
+	get transport(): MCPTransportInterface {
+		return this.#transport
+	}
+
+	/** Holds the stream the server reads requests from. */
+	get input(): PassThrough {
+		return this.#input
+	}
+
+	/** Holds the stream the server writes answers to. */
+	get output(): PassThrough {
+		return this.#output
+	}
+
+	/** Lists the ids the server answered, in arrival order. */
+	get answered(): readonly number[] {
+		return [...this.#answers.keys()]
+	}
+
+	/** Writes each message as one line, all in one chunk. */
+	send(...messages: ReadonlyArray<Readonly<Record<string, unknown>>>): void {
+		this.#input.write(messages.map((message) => `${JSON.stringify(message)}\n`).join(''))
+	}
+
+	/**
+	 * Sends one request and waits for its answer.
+	 *
+	 * @param id - The request id the answer carries
+	 * @param method - The JSON-RPC method
+	 * @param params - The request parameters
+	 * @returns The answer's `result`, or its `error` record
+	 */
+	async request(
+		id: number,
+		method: string,
+		params: Readonly<Record<string, unknown>> = {},
+	): Promise<Readonly<Record<string, unknown>>> {
+		this.send({ jsonrpc: '2.0', id, method, params })
+		return this.answer(id)
+	}
+
+	/**
+	 * Waits for the answer to one request.
+	 *
+	 * @param id - The request id
+	 * @returns The answer's `result`, or its `error` record
+	 */
+	async answer(id: number): Promise<Readonly<Record<string, unknown>>> {
+		await waitForCondition(`the answer to request ${id}`, () => this.#answers.has(id), {
+			budget: 10_000,
+			interval: 10,
+		})
+		return requireValue(this.#answers.get(id), `request ${id} has no answer`)
+	}
+
+	/** Sends the legacy handshake a dated client opens with and waits for its answer. */
+	async initialize(): Promise<Readonly<Record<string, unknown>>> {
+		return this.request(1, 'initialize', {
+			protocolVersion: '2025-06-18',
+			capabilities: {},
+			clientInfo: { name: 'browse-test', version: '1.0.0' },
+		})
+	}
+
+	/**
+	 * Calls one tool and reads its answer as text.
+	 *
+	 * @param id - The request id
+	 * @param name - The tool name
+	 * @param args - The tool arguments
+	 * @returns The answer's first text block and whether the server flagged it an error
+	 */
+	async call(
+		id: number,
+		name: string,
+		args: Readonly<Record<string, unknown>>,
+	): Promise<{ readonly text: string; readonly error: boolean }> {
+		const answer = await this.request(id, 'tools/call', { name, arguments: args })
+		const content = answer['content']
+		const first: unknown = Array.isArray(content) ? content[0] : undefined
+		const text = isRecord(first) ? first['text'] : undefined
+		if (!isString(text))
+			throw new Error(`request ${id} answered no text: ${JSON.stringify(answer)}`)
+		return { text, error: answer['isError'] === true }
+	}
+
+	// Keeps each answer's result, or its error record, by id, and hands the line to a bound client.
+	#receive(line: string): void {
+		this.#listener?.(line)
+		const message = parseJSON(line)
+		if (!isRecord(message) || !isInteger(message['id'])) return
+		const body = message['result'] ?? message['error']
+		if (isRecord(body)) this.#answers.set(message['id'], body)
+	}
+
+	#deliver(message: string): void {
+		this.#input.write(`${message}\n`)
+	}
+
+	#listen(handler: (message: string) => void): void {
+		this.#listener = handler
+	}
+
+	// The server never ends its output, so the channel reports no close.
+	#closed(_handler: () => void): void {}
+
+	#close(): void {
+		this.#listener = undefined
+	}
+}
+
+/**
+ * Names the browse server's vocabulary in the order the design lists it: the toolset's tools,
+ * `dialog` included, then the journey tools.
+ */
+export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
+	'look',
+	'read',
+	'click',
+	'type',
+	'press',
+	'navigate',
+	'wait',
+	'dialog',
+	'tabs',
+	'switch',
+	'record',
+	'save',
+	'journeys',
+	'edit',
+	'replay',
+])
+
+/** Describes how a spawned browse child ended. */
+export interface BrowseChildEnding {
+	readonly code: number | null
+	readonly signal: NodeJS.Signals | null
+}
+
+/**
+ * Spawns a built browse entry as `node ENTRY` in a working directory, with every inherited
+ * `BROWSE_` variable dropped by case-folded name before the given ones are added, and reads its
+ * standard output as lines.
+ */
+export class BrowseChild {
+	readonly #child: ChildProcess
+	readonly #lines: string[] = []
+	readonly #errors: Buffer[] = []
+	readonly #ending: Promise<BrowseChildEnding>
+
+	/**
+	 * Spawns the entry.
+	 *
+	 * @param entry - The built entry's path
+	 * @param cwd - The working directory the child runs in
+	 * @param environment - The `BROWSE_` variables the child receives
+	 */
+	constructor(entry: string, cwd: string, environment: Readonly<Record<string, string>>) {
+		const inherited = Object.entries(process.env).filter(
+			([name]) => !name.toLowerCase().startsWith('browse_'),
+		)
+		this.#child = spawnProcess(process.execPath, [entry], {
+			cwd,
+			env: { ...Object.fromEntries(inherited), ...environment },
+			stdio: ['pipe', 'pipe', 'pipe'],
+			windowsHide: true,
+		})
+		this.#ending = new Promise((resolve) => {
+			this.#child.once('exit', (code, signal) => resolve({ code, signal }))
+		})
+		this.#child.stderr?.on('data', (chunk: Buffer) => this.#errors.push(chunk))
+		const output = this.#child.stdout
+		if (output !== null)
+			createInterface({ input: output }).on('line', (line) => this.#lines.push(line))
+	}
+
+	/** Lists the lines the child wrote to standard output. */
+	get lines(): readonly string[] {
+		return this.#lines
+	}
+
+	/** Holds what the child wrote to standard error. */
+	get stderr(): string {
+		return Buffer.concat(this.#errors).toString('utf8')
+	}
+
+	/** Resolves with the child's exit code and signal. */
+	get ending(): Promise<BrowseChildEnding> {
+		return this.#ending
+	}
+
+	/** Writes each message as one line. */
+	send(...messages: ReadonlyArray<Readonly<Record<string, unknown>>>): void {
+		this.#child.stdin?.write(messages.map((message) => `${JSON.stringify(message)}\n`).join(''))
+	}
+
+	/** Ends the child's standard input. */
+	end(): void {
+		this.#child.stdin?.end()
+	}
+
+	/**
+	 * Sends a signal to the child.
+	 *
+	 * @param signal - The signal to send
+	 */
+	kill(signal: NodeJS.Signals): void {
+		this.#child.kill(signal)
+	}
+
+	/** Kills a child still running, the teardown for a proof that failed before it ended. */
+	async destroy(): Promise<void> {
+		if (this.#child.exitCode === null && this.#child.signalCode === null)
+			this.#child.kill('SIGKILL')
+		await this.#ending
+	}
+}
+
+/**
+ * Holds a browse server launched over a {@link BrowserLauncher} and an {@link MCPStdioPair}.
+ *
+ * @remarks
+ * - `browser` — the one launch its first `look` made
+ * - `profile` — the profile directory that launch was given, which exists
+ * - `listeners` — the `SIGTERM` and `SIGINT` listener counts from before `start()`
+ * - `teardown` — removes the scratch root and destroys the server
+ */
+export interface BrowseSession {
+	readonly pair: MCPStdioPair
+	readonly launcher: BrowserLauncher
+	readonly browser: BrowserLaunchDouble
+	readonly profile: string
+	readonly listeners: { readonly SIGTERM: number; readonly SIGINT: number }
+	readonly teardown: TeardownInterface
+}
+
+/**
+ * Starts a browse server under a scratch root and launches it with one `look`.
+ *
+ * @returns The started session
+ * @throws Thrown when the `look` fails or the launch made no profile
+ */
+export async function openBrowseSession(): Promise<BrowseSession> {
+	// The server entry loads on demand, as the store proofs load it, so the global setup that
+	// imports this module never loads it.
+	const { createBrowserMCPServer } = await import('../src/server/index.js')
+	const scratch = createScratch()
+	const launcher = new BrowserLauncher()
+	const pair = new MCPStdioPair()
+	const server = createBrowserMCPServer({
+		root: join(scratch.path, 'tmp/browsers'),
+		launch: launcher.launch,
+		stdio: pair,
+	})
+	const listeners = {
+		SIGTERM: process.listenerCount('SIGTERM'),
+		SIGINT: process.listenerCount('SIGINT'),
+	}
+	const teardown = createTeardown()
+	teardown.add(() => scratch.destroy())
+	teardown.add(() => server.destroy())
+	await server.start()
+	await pair.initialize()
+	const looked = await pair.call(2, 'look', { what: 'the cart' })
+	if (looked.error) throw new Error(looked.text)
+	const browser = requireValue(launcher.browsers[0], 'no launch was recorded')
+	const profile = requireValue(browser.options.profile, 'the launch named no profile')
+	if (!existsSync(profile)) throw new Error(`the launch made no profile at ${profile}`)
+	return { pair, launcher, browser, profile, listeners, teardown }
 }
 
 // === Compiled journey modules
