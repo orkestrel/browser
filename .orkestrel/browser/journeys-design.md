@@ -120,7 +120,7 @@ tmp/browsers/
     journey.json                     { "revision": 3, "journey": { … } }
     journey.lock                     present only during a set or a delete
     runs/
-      2026-09-30T14-03-12-481Z-7f3a/
+      2026-09-30T14-03-12.481Z-7f3a/
         run.json                     the BrowserRun
         s2.png s3.png …              one capture per acting step in the page placement
 ```
