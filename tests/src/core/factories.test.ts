@@ -6,13 +6,30 @@
  * behavior of the client itself is covered by `CDPClient.test.ts`.
  */
 
+import type { CDPClientInterface } from '@src/core'
+import type { CDPTestTransportInterface } from '../../setup.js'
+import {
+	BrowserRecorder,
+	BrowserReplay,
+	MemoryBrowserJourneyStore,
+	MemoryBrowserRunStore,
+	createBrowserRecorder,
+	createBrowserReplay,
+	createMemoryBrowserJourneyStore,
+	createMemoryBrowserRunStore,
+	BrowserToolset,
+	createBrowserToolset,
+	createCDPClient,
+} from '@src/core'
+import {
+	createBrowserViewDouble,
+	createBrowserJourneyFixture,
+	createBrowserElementFixture,
+	createCDPTestTransport,
+	replyOk,
+} from '../../setup.js'
 import { describe, it, expect } from 'vitest'
 import { createToolManager } from '@orkestrel/tool'
-import { BrowserToolset, createBrowserToolset, createCDPClient } from '@src/core'
-import type { CDPClientInterface } from '@src/core'
-import { createBrowserElementFixture, createCDPTestTransport, replyOk } from '../../setup.js'
-import type { CDPTestTransportInterface } from '../../setup.js'
-
 describe('createCDPClient', () => {
 	it('returns a CDPClientInterface shape', () => {
 		const transport = createCDPTestTransport()
@@ -77,6 +94,36 @@ describe('createBrowserToolset', () => {
 			expect(tools.count).toBe(0)
 		} finally {
 			await client.close()
+		}
+	})
+})
+
+describe('journey factories', () => {
+	it('constructs recorders, replays, and memory stores with their supplied options', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		await toolset.start()
+		const recorder = createBrowserRecorder(toolset)
+		const store = createMemoryBrowserJourneyStore()
+		const runs = createMemoryBrowserRunStore()
+		try {
+			expect(recorder).toBeInstanceOf(BrowserRecorder)
+			expect(store).toBeInstanceOf(MemoryBrowserJourneyStore)
+			expect(runs).toBeInstanceOf(MemoryBrowserRunStore)
+			await recorder.start()
+			const journey = createBrowserJourneyFixture(
+				[{ action: 'wait', arguments: { text: { parameter: 'status' } } }],
+				{ parameters: { status: {} } },
+			)
+			const revision = await store.set(journey)
+			const replay = createBrowserReplay(toolset, revision, { inputs: { status: 'Ready' }, runs })
+			expect(replay).toBeInstanceOf(BrowserReplay)
+			const run = await replay.execute()
+			expect(run.outcome).toBe('complete')
+			expect(await runs.get(journey.name, run.id)).toEqual(run)
+			expect((await recorder.stop())[0]?.gap).toBe('replayed check-ready')
+		} finally {
+			await recorder.destroy()
+			await toolset.destroy()
 		}
 	})
 })

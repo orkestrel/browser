@@ -37,3 +37,8 @@ export * from './factories.js'
 export * from './elements/BrowserPageElement.js'
 export * from './elements/BrowserElementManager.js'
 export * from './validators.js'
+
+export * from './recorders/BrowserRecorder.js'
+export * from './BrowserReplay.js'
+export * from './stores/MemoryBrowserJourneyStore.js'
+export * from './stores/MemoryBrowserRunStore.js'
