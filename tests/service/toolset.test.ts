@@ -842,6 +842,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			).toBe(
 				`t1 "Catalog" ${fixtures.url('/popup')} (current)\nt2 "Details" ${fixtures.url('/popup/child')}`,
 			)
+			expect(await toolset.tabs()).toStrictEqual([
+				{ id: 't1', title: 'Catalog', url: fixtures.url('/popup'), current: true },
+				{ id: 't2', title: 'Details', url: fixtures.url('/popup/child'), current: false },
+			])
 
 			const moved = requireToolText(
 				await tools.execute({ id: 'switch', name: 'switch', arguments: { tab: 't2' } }),

@@ -2843,14 +2843,15 @@ export interface BrowserFollowOptions extends BrowserCallOptions {
 }
 
 /**
- * Describes one line of the `tabs` tool's listing.
+ * Describes one open tab of a toolset's context, which the `tabs` tool lists one per line.
  *
  * @remarks
- * - `id` — the tab's id, `t` followed by its one-based position, which `switch` takes
- * - `title` and `url` — the tab's document title and address
- * - `current` — if `true`, the line names the toolset's current tab; if `false`, another tab
+ * - `id` — `t` followed by the tab's one-based position in the context, which `switch` takes
+ * - `title` and `url` — the tab's document title, empty when the title does not answer, and its
+ *   address
+ * - `current` — if `true`, the tab holds the toolset's view; if `false`, another tab
  */
-export interface BrowserTabLine extends BrowserJourneyTab {
+export interface BrowserTab extends BrowserJourneyTab {
 	readonly id: string
 	readonly current: boolean
 }
@@ -2884,21 +2885,31 @@ export interface BrowserToolsetInterface {
 	 * @remarks
 	 * A `click` or `type` step with a target resolves the one element of the current view that
 	 * carries the target's role and exact accessible name, and sends its reference as `ref`; a stored
-	 * `reference` and `css` are evidence only. A `switch` step resolves its tab from the `tabs`
-	 * listing by URL and title, and sends the tab's id as `tab`. Every other step sends its
-	 * arguments unchanged, a page tool's included. A missing target or tab refuses with
-	 * `BROWSER_JOURNEY_TARGET`, several refuse with `BROWSER_JOURNEY_AMBIGUOUS`, and a target name
-	 * that binds a parameter refuses with `BROWSER_JOURNEY_INPUT`, each naming the step before any
-	 * input. An action that is `done`, or `interrupted` by a dialog a following `dialog` step
-	 * answers, returns; any other outcome, and a navigation that stopped at `requested` or
-	 * `committed`, throws a `BrowserStepError` whose `action` is the performed action. A call the
-	 * manager refuses before any handler throws a `BrowserError` with no action.
+	 * `reference` and `css` are evidence only. A `switch` step on a toolset with `context` resolves
+	 * the one tab `tabs()` lists with the step's URL and title, and sends the tab's id as `tab`.
+	 * Every other step sends its arguments unchanged, a page tool's included. A missing target or
+	 * tab refuses with `BROWSER_JOURNEY_TARGET`, several refuse with `BROWSER_JOURNEY_AMBIGUOUS`, and
+	 * a target name that binds a parameter refuses with `BROWSER_JOURNEY_INPUT`, each naming the
+	 * step before any input. An action that is `done`, or `interrupted` by a dialog a following
+	 * `dialog` step answers, returns; any other outcome, and a navigation that stopped at
+	 * `requested` or `committed`, throws a `BrowserStepError` whose `action` is the performed
+	 * action. A call the manager refuses before any handler throws a `BrowserError` with no action.
 	 */
 	follow(
 		id: string,
 		step: BrowserJourneyStepInput,
 		options?: BrowserFollowOptions,
 	): Promise<BrowserAction>
+	/**
+	 * Lists the open tabs of the toolset's context in the order the `tabs` tool lists them.
+	 *
+	 * @remarks
+	 * A tab whose title does not answer within `BROWSER_TOOL_TIMEOUT_MS` lists an empty title, and a
+	 * toolset without `context` lists none. Rejects with `the browser session ended` after
+	 * `destroy()`, with the signal's reason when `options.signal` aborts, and with
+	 * `BROWSER_TOOLSET_DIALOG` while a dialog is open on the current tab.
+	 */
+	tabs(options?: BrowserCallOptions): Promise<readonly BrowserTab[]>
 	/**
 	 * Takes a queue turn and reserves action admission from the call for the returned caller token.
 	 *

@@ -5993,11 +5993,12 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('resolves a switch tab by URL and title from the tabs listing and refuses a missing or ambiguous tab before switching', async () => {
+		it('lists the context tabs as data, resolves a switch tab from that data where the cut tabs listing omits it, and refuses a missing or ambiguous tab before switching', async () => {
 			const titles: Readonly<Record<string, string>> = {
 				'session-tab-1': 'Cart',
 				'session-tab-2': 'Orders',
 				'session-tab-3': 'Cart',
+				'session-tab-4': 'Returns',
 			}
 			const fixture = await createBrowserElementFixture({
 				title: (message) =>
@@ -6028,8 +6029,26 @@ describe('BrowserToolset', () => {
 				const first = await context.create()
 				const second = await context.create()
 				await context.create()
-				const toolset = createBrowserToolset(first, { context })
+				const fourth = await context.create()
+				// The limit cuts the tabs tool's text inside the second line, so a resolution that read
+				// the text back would find only the first tab.
+				const toolset = createBrowserToolset(first, { context, limit: 40 })
 				await toolset.start()
+				expect(await toolset.tabs()).toStrictEqual([
+					{ id: 't1', title: 'Cart', url: 'about:blank', current: true },
+					{ id: 't2', title: 'Orders', url: 'about:blank', current: false },
+					{ id: 't3', title: 'Cart', url: 'about:blank', current: false },
+					{ id: 't4', title: 'Returns', url: 'about:blank', current: false },
+				])
+				const listing = String(
+					await requireValue(toolset.tools.tool('tabs')).execute(
+						{ what: 'tabs' },
+						{ signal: new AbortController().signal },
+					),
+				)
+				expect(listing).toBe(
+					't1 "Cart" about:blank (current)\nt2 "Orde\n[characters 0–40 of 102; the rest was cut]',
+				)
 				const fronted = (): number =>
 					transport.sent.filter((message) => message.method === 'Page.bringToFront').length
 				await expect(
@@ -6066,16 +6085,48 @@ describe('BrowserToolset', () => {
 				})
 				expect(toolset.view).toBe(second)
 				expect(fronted()).toBe(1)
-				await toolset.destroy()
-				const viewless = createBrowserToolset(first)
-				await viewless.start()
+				expect(
+					await toolset.follow('s6', {
+						action: 'switch',
+						arguments: {},
+						tab: { title: 'Returns', url: 'about:blank' },
+					}),
+				).toMatchObject({ arguments: { tab: 't4' }, outcome: 'done' })
+				expect(toolset.view).toBe(fourth)
+				expect((await toolset.tabs()).map((tab) => tab.current)).toEqual([
+					false,
+					false,
+					false,
+					true,
+				])
+				const reason = new Error('the caller left')
+				await expect(toolset.tabs({ signal: AbortSignal.abort(reason) })).rejects.toBe(reason)
+				transport.event(
+					'Page.javascriptDialogOpening',
+					{ type: 'alert', message: 'Saved' },
+					'session-tab-4',
+				)
+				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_DIALOG' })
 				await expect(
-					viewless.follow('s6', {
+					toolset.follow('s7', {
 						action: 'switch',
 						arguments: {},
 						tab: { title: 'Orders', url: 'about:blank' },
 					}),
-				).rejects.toMatchObject({ message: 's6: tool not found: tabs' })
+				).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_DIALOG' })
+				expect(fronted()).toBe(2)
+				await toolset.destroy()
+				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ENDED' })
+				const viewless = createBrowserToolset(first)
+				await viewless.start()
+				expect(await viewless.tabs()).toStrictEqual([])
+				await expect(
+					viewless.follow('s8', {
+						action: 'switch',
+						arguments: {},
+						tab: { title: 'Orders', url: 'about:blank' },
+					}),
+				).rejects.toMatchObject({ message: 's8: tool not found: switch' })
 				await viewless.destroy()
 			} finally {
 				await client.close()
