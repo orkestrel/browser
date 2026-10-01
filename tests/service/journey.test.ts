@@ -1167,7 +1167,11 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 				const target =
 					step.target === undefined || !isString(name)
 						? undefined
-						: await locateBrowserTarget(direct.page, { role: step.target.role, name })
+						: await locateBrowserTarget(
+								direct.page,
+								{ role: step.target.role, name },
+								{ id: step.id },
+							)
 				const call = requireValue(scenario.calls[index])
 				await direct.toolset.tools.execute({
 					id: step.id,
