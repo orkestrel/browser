@@ -39,6 +39,7 @@ import {
 	SERVICE_BROWSER_ARGS,
 	SERVICE_EDITABLE_HTML,
 } from '../setupService.js'
+import { BROWSER_JOURNEY_FRAME_HTML, BROWSER_JOURNEY_FRAME_JOURNEY } from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 
@@ -183,6 +184,37 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 				},
 			])
 			expect(await page.evaluate("document.querySelector('[role=textbox]').textContent")).toBe('')
+		})
+
+		it('replays a one-step click journey naming a same-origin child-frame button to complete, setting the frame marker and not the page marker', async () => {
+			await page.evaluate(
+				`new Promise((resolve) => { const frame = document.createElement('iframe'); frame.onload = resolve; frame.srcdoc = ${JSON.stringify(BROWSER_JOURNEY_FRAME_HTML)}; document.body.append(frame) })`,
+			)
+			const run = await page.evaluate(
+				`import('/dist/src/core/index.js').then(async ({ createBrowserReplay }) => {
+					const run = await createBrowserReplay(documentToolset, { journey: ${JSON.stringify(BROWSER_JOURNEY_FRAME_JOURNEY)} }).execute()
+					return { outcome: run.outcome, steps: run.steps.map((step) => [step.id, step.outcome, step.result]) }
+				})`,
+			)
+
+			expect(run).toEqual({
+				outcome: 'complete',
+				steps: [
+					[
+						's1',
+						'done',
+						expect.stringMatching(
+							/^Clicked e[1-9]\d* button "Save in frame"\. \(untrusted event\)$/u,
+						),
+					],
+				],
+			})
+			expect(
+				await page.evaluate(
+					'document.querySelector("iframe").contentDocument.body.dataset.clicked',
+				),
+			).toBe('yes')
+			expect(await page.evaluate('document.body.dataset.clicked ?? "none"')).toBe('none')
 		})
 
 		it('refuses a workspace without the built bundle before any page loads, naming npm run build', () => {
