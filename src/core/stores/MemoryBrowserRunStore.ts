@@ -44,6 +44,8 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 	async set(run: BrowserRun, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
 		validateBrowserRun(run)
+		if (!this.#slots.get(run.journey.name)?.has(run.id))
+			throw new BrowserError('The run was not opened by this store', 'BROWSER_JOURNEY_PATH')
 		const runs = this.#runs.get(run.journey.name) ?? new Map<string, BrowserRun>()
 		runs.set(run.id, structuredClone(run))
 		this.#runs.set(run.journey.name, runs)
@@ -65,6 +67,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 	async delete(name: string, id: string, options?: BrowserStoreOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
 		this.#runs.get(name)?.delete(id)
+		this.#slots.get(name)?.delete(id)
 	}
 
 	async list(
@@ -77,6 +80,8 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		)
 		const offset = options?.offset ?? 0
 		const limit = options?.limit ?? entries.length
+		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0)
+			throw new BrowserError('Paging requires nonnegative integers', 'BROWSER_JOURNEY_PATH')
 		return {
 			entries: structuredClone(entries.slice(offset, offset + limit)),
 			truncated: offset + limit < entries.length,
