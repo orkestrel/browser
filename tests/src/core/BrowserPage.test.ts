@@ -36,7 +36,10 @@ import {
 	waitForDelay,
 } from '@orkestrel/test'
 import {
+	createAttachedPage,
 	createBrowserElementFixture,
+	createDiscoveringPage,
+	emitBrowserWindowOpen,
 	emitDocumentReady,
 	createCDPTestTransport,
 	createConnectedCDPClient,
@@ -2473,6 +2476,162 @@ describe('BrowserPage events', () => {
 			id: 'socket-1',
 			url: 'wss://example.com/socket',
 		})
+	})
+})
+
+describe('BrowserPage popup records', () => {
+	it('settles at once with no popup when no Page.windowOpen arrived after the record opened', async () => {
+		const { client, transport, page } = await createDiscoveringPage()
+		try {
+			emitBrowserWindowOpen(transport, 'session-1')
+			const record = page.popups.record()
+			const started = performance.now()
+
+			await expect(record.settle({ timeout: 5_000 })).resolves.toStrictEqual([])
+			expect(performance.now() - started).toBeLessThan(1_000)
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('awaits the announcement of the popup a Page.windowOpen report names and resolves with it after the popup event', async () => {
+		const { client, transport, page } = await createDiscoveringPage()
+		try {
+			const order: string[] = []
+			page.emitter.on('popup', () => order.push('popup'))
+			const record = page.popups.record()
+			emitBrowserWindowOpen(transport, 'session-1')
+			transport.event('Target.targetCreated', {
+				targetInfo: {
+					targetId: 'popup-1',
+					type: 'page',
+					url: '',
+					attached: false,
+					openerId: 'target-1',
+					browserContextId: 'default',
+				},
+			})
+
+			const settled = await record.settle({ timeout: 5_000 }).then((pages) => {
+				order.push('settle')
+				return pages
+			})
+
+			expect(settled.map((popup) => popup.target)).toStrictEqual(['popup-1'])
+			expect(settled[0]?.opener).toBe(page)
+			expect(order).toStrictEqual(['popup', 'settle'])
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it.each([
+		['its attach is refused', 'Target.attachToTarget'],
+		['its target is destroyed during its setup', 'Page.setInterceptFileChooserDialog'],
+	])('skips a popup that closes before its announcement: %s', async (_title, method) => {
+		const withheld: CDPSentMessage[] = []
+		const { client, transport, page } = await createDiscoveringPage((message) => {
+			if (message.method !== method) return false
+			withheld.push(message)
+			return true
+		})
+		try {
+			const popups = createRecorder<[page: BrowserPageInterface]>()
+			page.emitter.on('popup', popups.handler)
+			const record = page.popups.record()
+			emitBrowserWindowOpen(transport, 'session-1')
+			transport.event('Target.targetCreated', {
+				targetInfo: {
+					targetId: 'popup-1',
+					type: 'page',
+					url: '',
+					attached: false,
+					openerId: 'target-1',
+					browserContextId: 'default',
+				},
+			})
+			const started = performance.now()
+			const settled = record.settle({ timeout: 5_000 })
+			await waitForCondition(`precondition: ${method} is withheld`, () => withheld.length === 1)
+			const message = requireValue(withheld[0])
+			if (method === 'Target.attachToTarget')
+				transport.fail(message.id, 'No target with given id found')
+			else {
+				transport.event('Target.targetDestroyed', { targetId: 'popup-1' })
+				transport.reply(message.id, {})
+			}
+
+			await expect(settled).resolves.toStrictEqual([])
+			expect(performance.now() - started).toBeLessThan(1_000)
+			expect(popups.count).toBe(0)
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('resolves with no popup at its timeout when no reported popup is announced', async () => {
+		const { client, transport, page } = await createDiscoveringPage()
+		try {
+			const record = page.popups.record()
+			emitBrowserWindowOpen(transport, 'session-1')
+			const started = performance.now()
+
+			await expect(record.settle({ timeout: 50 })).resolves.toStrictEqual([])
+			const elapsed = performance.now() - started
+			expect(elapsed).toBeGreaterThanOrEqual(45)
+			expect(elapsed).toBeLessThan(1_000)
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('counts no report on a page that takes no part in discovery (control: the discovering page waits)', async () => {
+		const { client, transport, page } = await createAttachedPage()
+		try {
+			const record = page.popups.record()
+			emitBrowserWindowOpen(transport, 'session-1')
+			const started = performance.now()
+
+			await expect(record.settle({ timeout: 5_000 })).resolves.toStrictEqual([])
+			expect(performance.now() - started).toBeLessThan(1_000)
+			record.destroy()
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('rejects a pending settle on abort, when the record ends, and when the page closes, and refuses a record on a closed page', async () => {
+		const { client, transport, page } = await createDiscoveringPage()
+		try {
+			const aborted = page.popups.record()
+			const ended = page.popups.record()
+			const closed = page.popups.record()
+			emitBrowserWindowOpen(transport, 'session-1')
+			const controller = new AbortController()
+			const reason = new Error('the caller left')
+			const waits = [
+				aborted.settle({ timeout: 5_000, signal: controller.signal }),
+				ended.settle({ timeout: 5_000 }),
+				closed.settle({ timeout: 5_000 }),
+			]
+			for (const wait of waits) void wait.catch(() => undefined)
+
+			controller.abort(reason)
+			ended.destroy()
+			await expect(waits[0]).rejects.toBe(reason)
+			await expect(waits[1]).rejects.toThrow('Browser popup record ended')
+			transport.event('Target.targetDestroyed', { targetId: 'target-1' })
+			await expect(waits[2]).rejects.toThrow('Browser popup record ended because the page closed')
+			expect(captureError(() => page.popups.record())).toMatchObject({
+				message: 'Browser page is closed',
+			})
+		} finally {
+			await client.close()
+		}
 	})
 })
 

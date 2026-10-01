@@ -2,7 +2,8 @@
  * Proof for `tests/setup.ts`.
  *
  * The subject is the exported test infrastructure the workspace's suites drive: the in-memory CDP
- * transport, the scripting helpers layered on it, the protocol fixtures, and the encoded constants.
+ * transport, the scripting helpers layered on it, the protocol fixtures, the encoded constants,
+ * and the rewrite that records a generated journey module's actions.
  * Production behavior is not re-proven here — where a case sends a real frame through
  * `createCDPClient`, the client is the driver and the assertion is on what the fixture answered.
  *
@@ -12,9 +13,11 @@
  * that collects this file does the same.
  *
  * Every expected value is derived by a route the module does not share: hand-written protocol
- * literals, a parent-index walk over the raw snapshot columns, and `atob` over the base64 constants.
+ * literals, a parent-index walk over the raw snapshot columns, `atob` over the base64 constants, and
+ * hand-written module lines.
  */
 
+import type { BrowserPageInterface } from '@src/core'
 import type { CDPSentMessage } from './setup.js'
 import { describe, expect, it } from 'vitest'
 import {
@@ -23,7 +26,13 @@ import {
 	compileSubmitObserverExpression,
 	compileSubmitReadExpression,
 } from '@src/core'
-import { createRecorder, readProperty, requireValue, waitForCondition } from '@orkestrel/test'
+import {
+	captureError,
+	createRecorder,
+	readProperty,
+	requireValue,
+	waitForCondition,
+} from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_FRAMED_FIXTURE,
@@ -53,6 +62,8 @@ import {
 	createBrowserElementFixture,
 	createBrowserViewDouble,
 	createAttachedPage,
+	createDiscoveringPage,
+	emitBrowserWindowOpen,
 	createCDPTestTransport,
 	createCodegenBindingPayload,
 	createConnectedCDPClient,
@@ -78,6 +89,8 @@ import {
 	BROWSER_HISTORY_DIRECTIONS,
 	BROWSER_HISTORY_RESTORE_CASES,
 	throwListenerError,
+	BROWSER_JOURNEY_MODULE_JAVASCRIPT,
+	instrumentBrowserJourneyModule,
 } from './setup.js'
 
 describe('element protocol and compiler fixtures', () => {
@@ -92,6 +105,36 @@ describe('element protocol and compiler fixtures', () => {
 			{ name: 'setTimeout', delay: undefined },
 		])
 		expect(() => readBrowserCompiledTimers('(')).toThrow('Unexpected')
+	})
+
+	it('holds the page target with held, so a second holder is refused, and holds none without it', async () => {
+		const held = await createBrowserElementFixture({ held: true })
+		const free = await createBrowserElementFixture()
+		try {
+			const refusals = [held, free].map((fixture) =>
+				captureError(
+					() =>
+						new BrowserPage(
+							fixture.recording,
+							'main',
+							'session-other',
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							undefined,
+							createReferenceSequence(),
+						),
+				),
+			)
+
+			expect(refusals[0]).toMatchObject({ code: 'BROWSER_TARGET_HELD' })
+			expect(refusals[1]).toBeUndefined()
+		} finally {
+			await held.client.close()
+			await free.client.close()
+		}
 	})
 
 	it('catches losing the scripted iframe, overlapping backend, or frame-local quad', async () => {
@@ -426,6 +469,88 @@ describe('createAttachedPage', () => {
 			defaulted.transport.sent.filter((message) => message.method === 'Runtime.evaluate')[0]
 				?.sessionId,
 		).toBe('session-1')
+	})
+})
+
+describe('createDiscoveringPage', () => {
+	it('returns a page that attaches a popup discovery names it the opener of on popup-session, unlike a page constructed without a reference', async () => {
+		const report = {
+			targetInfo: {
+				targetId: 'popup-1',
+				type: 'page',
+				url: '',
+				attached: false,
+				openerId: 'target-1',
+				browserContextId: 'default',
+			},
+		}
+		const discovering = await createDiscoveringPage()
+		const direct = await createAttachedPage()
+		try {
+			const popups = createRecorder<[page: BrowserPageInterface]>()
+			discovering.page.emitter.on('popup', popups.handler)
+			discovering.transport.event('Target.targetCreated', report)
+			direct.transport.event('Target.targetCreated', report)
+			await waitForCondition('the discovering page emits its popup', () => popups.count === 1)
+
+			expect(popups.calls[0]?.[0]).toMatchObject({ target: 'popup-1', opener: discovering.page })
+			expect(
+				discovering.transport.sent
+					.filter((message) => message.method === 'Page.enable')
+					.map((message) => message.sessionId),
+			).toStrictEqual(['popup-session'])
+			expect(direct.transport.sent.map((message) => message.method)).not.toContain(
+				'Target.attachToTarget',
+			)
+		} finally {
+			await discovering.client.close()
+			await direct.client.close()
+		}
+	})
+
+	it('leaves a message the withheld predicate names unanswered', async () => {
+		const { client, transport } = await createDiscoveringPage(
+			(message) => message.method === 'Target.attachToTarget',
+		)
+		try {
+			let answered = false
+			void client.send('Target.attachToTarget', { targetId: 'popup-1', flatten: true }).then(
+				() => (answered = true),
+				() => undefined,
+			)
+			const enabled = client.send('Page.enable', undefined, { session: 'session-1' })
+
+			await expect(enabled).resolves.toStrictEqual({})
+			expect(transport.sent.map((message) => message.method)).toContain('Target.attachToTarget')
+			expect(answered).toBe(false)
+		} finally {
+			await client.close()
+		}
+	})
+})
+
+describe('emitBrowserWindowOpen', () => {
+	it('reports Page.windowOpen on the named session with the address, defaulting it', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		try {
+			const opened = createRecorder<[params: Readonly<Record<string, unknown>>]>()
+			client.subscribe('Page.windowOpen', opened.handler, 'session-7')
+			emitBrowserWindowOpen(transport, 'session-7', 'https://example.test/details')
+			emitBrowserWindowOpen(transport, 'session-7')
+			emitBrowserWindowOpen(transport, 'session-8')
+
+			expect(opened.calls.map(([params]) => params)).toStrictEqual([
+				{
+					url: 'https://example.test/details',
+					windowName: '',
+					windowFeatures: [],
+					userGesture: true,
+				},
+				{ url: 'https://example.com/popup', windowName: '', windowFeatures: [], userGesture: true },
+			])
+		} finally {
+			await client.close()
+		}
 	})
 })
 
@@ -1429,5 +1554,34 @@ describe('RecordingCDPClient', () => {
 			await recording.close()
 		}
 		expect(client.connected).toBe(false)
+	})
+})
+
+// === Compiled journey modules
+
+describe('instrumentBrowserJourneyModule', () => {
+	it('exports an actions array before execute and hooks the toolset the module constructs, leaving every step call as written', () => {
+		const lines = instrumentBrowserJourneyModule(BROWSER_JOURNEY_MODULE_JAVASCRIPT).split('\n')
+
+		expect(lines.slice(0, 6)).toStrictEqual([
+			"import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'",
+			'',
+			'export const actions = []',
+			'',
+			'export async function execute(page, inputs = {}) {',
+			'\tconst toolset = createBrowserToolset(page, { on: { action: (action) => actions.push(action) } })',
+		])
+		expect(lines.slice(6)).toStrictEqual(BROWSER_JOURNEY_MODULE_JAVASCRIPT.split('\n').slice(4))
+	})
+
+	it('refuses a module that constructs no toolset over its page', () => {
+		expect(() =>
+			instrumentBrowserJourneyModule(
+				BROWSER_JOURNEY_MODULE_JAVASCRIPT.replace(
+					'createBrowserToolset(page)',
+					'createBrowserToolset(view)',
+				),
+			),
+		).toThrow('The module declares no execute that constructs a toolset over its page')
 	})
 })

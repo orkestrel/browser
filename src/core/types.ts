@@ -326,6 +326,42 @@ export interface BrowserNavigationRecordInterface {
 	destroy(): void
 }
 
+/** Opens the records that settle the popups an input into a page opens. */
+export interface BrowserPopupManagerInterface {
+	/**
+	 * Opens a record of the popups the page opens from this call on, for an input dispatched next.
+	 * Thrown when the page is closed: the page's closed error.
+	 */
+	record(): BrowserPopupRecordInterface
+}
+
+/**
+ * Settles the popups an input opened, from the `Page.windowOpen` reports the page's own session
+ * sends after the record opened.
+ *
+ * @remarks
+ * Chromium 141 reports `Page.windowOpen` on the opener's session before it answers the input that
+ * opened the window, and reports none for a `window.open` that names a window already open. Each
+ * report names one popup: the record counts the reports, and a popup target the page begins to
+ * adopt after the record opened concludes either announced, when the page emits it through
+ * `popup`, or skipped, when it closes or fails its setup first. The record selects by arrival, not
+ * by cause, so a popup another script opens while the record is open counts too. Chromium 141
+ * reports such a popup only to target discovery, so a page constructed without a `reference`
+ * function, which takes no part in discovery, counts no report.
+ */
+export interface BrowserPopupRecordInterface {
+	/**
+	 * Resolves at once with an empty list when no report arrived after the record opened; otherwise
+	 * waits within `timeout` until as many adopted popups concluded as reports arrived, and resolves
+	 * with the announced popups whose `opener` is this page, in announcement order, at that point or
+	 * at `timeout`. Rejects with `signal.reason` on abort, and when the record ends or the page
+	 * closes.
+	 */
+	settle(options?: BrowserCallOptions): Promise<readonly BrowserPageInterface[]>
+	/** Ends the record and rejects a pending `settle`. */
+	destroy(): void
+}
+
 /**
  * Names the frame a submission targets relative to the frame whose document submitted, mirroring
  * the HTML `_self`, `_parent`, and `_top` keywords.
@@ -1808,7 +1844,8 @@ export interface BrowserRecorderOptions {
  * - `arguments` — the call's arguments, without the text of a secret `type`
  * - `target` — the element the call's reference resolved to, captured before the input was
  *   dispatched: its role, exact accessible name, reference, and, in the page placement, frame
- * - `tab` — the tab a `switch` moved to
+ * - `tab` — the tab a `switch` moved to, or the popup a `click`, a `type` with `submit`, or a
+ *   `press` of Enter opened and moved the view to
  * - `secret` — if `true`, the action was a secret `type`
  * - `outcome` — how the action ended
  * - `stage` and `reason` — the stage and reason of the navigation the action settled, when one
@@ -3098,6 +3135,7 @@ export interface BrowserNodeQuery {
  * main frame.
  *
  * - `closed` — true after `close()` is called
+ * - `popups` — opens the record that settles the popups an input opens
  * - `navigate` — go to a URL and wait for the specified load condition
  * - `screenshot` — capture a PNG or JPEG image of the page
  * - `frame` — look up a frame by name or URL in the page's flattened frame tree
@@ -3120,6 +3158,7 @@ export interface BrowserPageInterface
 	readonly registry: BrowserRegistryInterface
 	readonly network: BrowserNetworkManagerInterface
 	readonly navigation: BrowserNavigationManagerInterface
+	readonly popups: BrowserPopupManagerInterface
 	readonly scripts: BrowserScriptManagerInterface
 	readonly accessibility: BrowserAccessibilityInterface
 	readonly diagnostics: BrowserDiagnosticsInterface
