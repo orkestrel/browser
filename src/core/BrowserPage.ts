@@ -5,7 +5,7 @@ import type {
 	BrowserReferenceFunction,
 	BrowserCallOptions,
 	BrowserCodegenInterface,
-	BrowserCodegenOptions,
+	BrowserRecorderOptions,
 	BrowserClockInterface,
 	BrowserDiagnosticsInterface,
 	BrowserFrameInfo,
@@ -42,7 +42,7 @@ import type {
 	BrowserWriterInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
-import { BrowserCodegen } from './BrowserCodegen.js'
+import { BrowserCodegen } from './recorders/BrowserCodegen.js'
 import { BrowserElementManager } from './elements/BrowserElementManager.js'
 import { BrowserRegistry } from './BrowserRegistry.js'
 import { BrowserTransition } from './BrowserTransition.js'
@@ -685,11 +685,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		)
 	}
 
-	async codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface> {
+	async codegen(options?: BrowserRecorderOptions): Promise<BrowserCodegenInterface> {
 		this.assert()
-		if (this.#codegen !== undefined) return this.#codegen
 		const active = this.#codegenStart.pending
 		if (active !== undefined) return await active
+		if (this.#codegen !== undefined) return this.#codegen
 
 		return await this.#codegenStart.execute(() => this.#startCodegen(options))
 	}
@@ -901,9 +901,18 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 	}
 
-	async #startCodegen(options?: BrowserCodegenOptions): Promise<BrowserCodegen> {
-		const codegen = new BrowserCodegen(this.#client, this.#sessionId, options)
-		await codegen.start()
+	async #startCodegen(options?: BrowserRecorderOptions): Promise<BrowserCodegen> {
+		const codegen = new BrowserCodegen(this.#client, this.#sessionId, options, () =>
+			[...this.#frameSessions.values()].map(({ session }) => session),
+		)
+		this.#codegen = codegen
+		try {
+			await codegen.start()
+		} catch (error) {
+			this.#codegen = undefined
+			await codegen.destroy()
+			throw error
+		}
 		if (this.#closed) {
 			await codegen.destroy()
 			throw new BrowserError('Browser page is closed')
@@ -1252,6 +1261,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	// the load of the document it holds arrive on this session after the resume.
 	async #enableFrameSession(session: string): Promise<string> {
 		await this.#client.send('Page.enable', undefined, { session })
+		await this.#codegen?.attach(session)
 		await this.#client.send('Runtime.enable', undefined, { session })
 		await this.#client.send('Page.setLifecycleEventsEnabled', { enabled: true }, { session })
 		await this.#client.send(

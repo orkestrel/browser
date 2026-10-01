@@ -7,7 +7,7 @@ import type {
 	BrowserInvocation,
 	BrowserInvocationResult,
 	BrowserBindingCall,
-	BrowserCodegenAction,
+	BrowserCodegenGesture,
 	BrowserConsoleMessage,
 	BrowserCookiePartition,
 	BrowserDownloadProgress,
@@ -552,62 +552,112 @@ export function parseBrowserDownloadProgress(
 }
 
 /**
- * Coerces a codegen binding payload string to a `BrowserCodegenAction`, or
- * `undefined` off-shape.
- *
- * @remarks
- * The in-page recorder script calls the CDP binding with a JSON string
- * payload shaped like a {@link BrowserCodegenAction}. Returns `undefined`
- * when the payload is not valid JSON or does not match a known action shape.
- *
- * @param payload - Raw binding call payload (the CDP `payload` param)
- * @returns The parsed action, or `undefined` when the payload is malformed
+ * Parses a sanitized document gesture, refusing malformed or secret-bearing payloads.
+ * @param payload - The runtime binding's JSON string
+ * @returns The gesture, or undefined for an invalid payload
+ * @example
+ * parseCodegenActionPayload('invalid') // undefined
  */
-export function parseCodegenActionPayload(payload: unknown): BrowserCodegenAction | undefined {
+export function parseCodegenActionPayload(payload: unknown): BrowserCodegenGesture | undefined {
 	if (!isString(payload)) return undefined
-	const parsed = parseJSONAs(payload, isRecord)
-	if (parsed === undefined) return undefined
-
-	const action = parseEnum(parsed['action'], ['click', 'fill', 'select'])
-	const selector = parsed['selector']
-
-	if (action === 'click' && isString(selector)) {
-		return { action: 'click', selector }
+	const value = parseJSONAs(payload, isRecord)
+	if (value === undefined) return undefined
+	const event = parseEnum(value['event'], [
+		'click',
+		'input',
+		'change',
+		'keydown',
+		'focusout',
+		'submit',
+		'unsupported',
+	])
+	const control = parseEnum(value['control'], [
+		'text',
+		'password',
+		'select',
+		'multiple',
+		'option',
+		'other',
+	])
+	const index = value['index']
+	const top = value['top']
+	const form = value['form']
+	if (
+		event === undefined ||
+		control === undefined ||
+		!isInteger(index) ||
+		index < 0 ||
+		!Number.isSafeInteger(index) ||
+		!isBoolean(top) ||
+		!isBoolean(form)
+	)
+		return undefined
+	if (
+		Object.keys(value).some(
+			(key) =>
+				![
+					'event',
+					'control',
+					'index',
+					'top',
+					'form',
+					'detail',
+					'key',
+					'value',
+					'secret',
+					'roundtrip',
+					'gap',
+				].includes(key),
+		)
+	)
+		return undefined
+	if ('key' in value && (event !== 'keydown' || value['key'] !== 'Enter')) return undefined
+	if (event === 'keydown' && value['key'] !== 'Enter') return undefined
+	if (
+		'detail' in value &&
+		(!isInteger(value['detail']) || value['detail'] < 0 || event !== 'click')
+	)
+		return undefined
+	if (event === 'click' && !isInteger(value['detail'])) return undefined
+	if (
+		'value' in value &&
+		(!isString(value['value']) ||
+			!((event === 'input' && control === 'text') || (event === 'change' && control === 'select')))
+	)
+		return undefined
+	if (
+		'secret' in value &&
+		(value['secret'] !== true || control !== 'password' || event !== 'input')
+	)
+		return undefined
+	if (event === 'input' && control === 'password' && value['secret'] !== true) return undefined
+	if (event === 'input' && control === 'text' && !isString(value['value'])) return undefined
+	if (
+		'roundtrip' in value &&
+		(event !== 'change' || control !== 'select' || !isBoolean(value['roundtrip']))
+	)
+		return undefined
+	if (
+		event === 'change' &&
+		control === 'select' &&
+		(!isString(value['value']) || !isBoolean(value['roundtrip']))
+	)
+		return undefined
+	if ('gap' in value && (event !== 'unsupported' || !isString(value['gap']))) return undefined
+	if (event === 'unsupported' && !isString(value['gap'])) return undefined
+	return {
+		event,
+		control,
+		index,
+		top,
+		form,
+		...(isInteger(value['detail']) ? { detail: value['detail'] } : {}),
+		...(value['key'] === 'Enter' ? { key: 'Enter' } : {}),
+		...(isString(value['value']) ? { value: value['value'] } : {}),
+		...(value['secret'] === true ? { secret: true } : {}),
+		...(isBoolean(value['roundtrip']) ? { roundtrip: value['roundtrip'] } : {}),
+		...(isString(value['gap']) ? { gap: value['gap'] } : {}),
 	}
-
-	if (action === 'fill' && isString(selector) && isString(parsed['value'])) {
-		return { action: 'fill', selector, value: parsed['value'] }
-	}
-
-	if (action === 'select' && isString(selector)) {
-		const values = parseArray(parsed['values'], isString)
-		if (values !== undefined) return { action: 'select', selector, values }
-	}
-
-	return undefined
-}
-
-/**
- * Coerces a `Page.frameNavigated` CDP event to a `navigate` codegen action, or `undefined`
- * off-shape and for every frame but the top-level one.
- *
- * @remarks
- * Only the top-level (main) frame's navigation is recorded — a frame
- * carrying a `parentId` is a sub-frame and is ignored.
- *
- * @param params - The CDP `Page.frameNavigated` event params
- * @returns A `navigate` action, or `undefined` when the event is not a
- *   top-level navigation with a resolvable URL
- */
-export function parseCodegenNavigateAction(
-	params: Readonly<Record<string, unknown>>,
-): BrowserCodegenAction | undefined {
-	const frame = params['frame']
-	if (!isRecord(frame)) return undefined
-	if ('parentId' in frame) return undefined
-	if (!isString(frame['url'])) return undefined
-
-	return { action: 'navigate', url: frame['url'] }
 }
 
 /**

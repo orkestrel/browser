@@ -2128,41 +2128,6 @@ export interface BrowserJourneyToolsetInterface {
 
 // === Browser codegen
 
-/** Represents one recorded browser action captured during a codegen session. */
-export type BrowserCodegenAction =
-	| { readonly action: 'navigate'; readonly url: string }
-	| { readonly action: 'click'; readonly selector: string }
-	| { readonly action: 'fill'; readonly selector: string; readonly value: string }
-	| { readonly action: 'select'; readonly selector: string; readonly values: readonly string[] }
-
-/**
- * Maps the events a {@link BrowserCodegenInterface} emits.
- *
- * @remarks
- * - `start` — recording started
- * - `stop` — recording stopped, carrying the final action list
- * - `action` — one new action was captured
- * - `clear` — recorded actions were reset
- */
-export type BrowserCodegenEventMap = {
-	readonly start: readonly []
-	readonly stop: readonly [actions: readonly BrowserCodegenAction[]]
-	readonly action: readonly [action: BrowserCodegenAction]
-	readonly clear: readonly []
-}
-
-/**
- * Describes the options for creating a `BrowserCodegen` recorder.
- *
- * @remarks
- * - `on` — initial event listeners wired at construction
- * - `error` — observer error handler forwarded to the emitter
- */
-export interface BrowserCodegenOptions {
-	readonly on?: EmitterHooks<BrowserCodegenEventMap>
-	readonly error?: EmitterErrorHandler
-}
-
 /** Names the target language for a compiled codegen script. */
 export type BrowserCodegenLanguage = 'javascript' | 'typescript'
 
@@ -2178,48 +2143,29 @@ export interface BrowserCodegenScript {
 	readonly gaps: readonly string[]
 }
 
-/**
- * Describes the options for compiling recorded actions into a script.
- *
- * @remarks
- * - `language` — target output language (default `'javascript'`)
- */
-export interface BrowserCodegenScriptOptions {
-	readonly language?: BrowserCodegenLanguage
+/** Records semantic page gestures and compiles the resulting journey. */
+export interface BrowserCodegenInterface extends BrowserRecorderInterface {
+	/** Compiles the recorded journey into a standalone module and lists its gaps. */
+	script(options: {
+		readonly name: string
+		readonly description: string
+		readonly language?: BrowserCodegenLanguage
+	}): BrowserCodegenScript
 }
 
-/**
- * Records page interactions (navigation, click, fill, select) as a session
- * runs, for later compilation into a replayable script.
- *
- * @remarks
- * - `emitter` — subscribe to recording lifecycle and capture events
- * - `started` — true while actively recording
- * - `start` — begin recording on the page's session
- * - `stop` — stop recording and return the captured actions
- * - `actions` — current normalized action list
- * - `script` — compile the captured actions into a script
- * - `clear` — reset the captured action list
- * - `destroy` — tear down the recorder and detach CDP listeners
- */
-export interface BrowserCodegenInterface {
-	readonly emitter: EmitterInterface<BrowserCodegenEventMap>
-	readonly started: boolean
-	/**
-	 * Begins recording on the page's session. A call after teardown is a silent no-op, because
-	 * a torn-down recorder cannot be restarted and a fresh one is obtained through the page.
-	 */
-	start(): Promise<void>
-	/** Stops recording, waits for the session to acknowledge before it detaches so a report already emitted by the page is kept, and returns the captured actions. */
-	stop(): Promise<readonly BrowserCodegenAction[]>
-	/** Returns the current normalized action list. */
-	actions(): readonly BrowserCodegenAction[]
-	/** Compiles the captured actions into a script. */
-	script(options?: BrowserCodegenScriptOptions): string
-	/** Resets the captured action list. */
-	clear(): void
-	/** Tears down the recorder and detaches its CDP listeners. */
-	destroy(): Promise<void>
+/** Carries a sanitized gesture from the page listener without password values. */
+export interface BrowserCodegenGesture {
+	readonly event: 'click' | 'input' | 'change' | 'keydown' | 'focusout' | 'submit' | 'unsupported'
+	readonly index: number
+	readonly top: boolean
+	readonly control: 'text' | 'password' | 'select' | 'multiple' | 'option' | 'other'
+	readonly form: boolean
+	readonly detail?: number
+	readonly key?: 'Enter'
+	readonly value?: string
+	readonly secret?: true
+	readonly roundtrip?: boolean
+	readonly gap?: string
 }
 
 // === Browser reading
@@ -3213,7 +3159,7 @@ export interface BrowserPageInterface
 	 */
 	snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface>
 	/** Starts the action recorder, or returns the running one. */
-	codegen(options?: BrowserCodegenOptions): Promise<BrowserCodegenInterface>
+	codegen(options?: BrowserRecorderOptions): Promise<BrowserCodegenInterface>
 	/** Releases local resources and detaches without closing the remote target. */
 	destroy(): Promise<void>
 	/** Closes the remote target and releases its resources. */

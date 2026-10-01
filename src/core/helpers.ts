@@ -11,7 +11,6 @@ import type {
 	BrowserElementQuery,
 	BrowserOutline,
 	BrowserOutlineNode,
-	BrowserCodegenAction,
 	BrowserChord,
 	BrowserCookie,
 	BrowserCookieInput,
@@ -1810,39 +1809,6 @@ export function extractBrowserSlice(text: string, offset = 0, limit?: number): B
 	const next = text.charCodeAt(offset + limit)
 	const split = last >= 0xd800 && last <= 0xdbff && next >= 0xdc00 && next <= 0xdfff
 	return { text: split ? window.slice(0, -1) : window, offset, total }
-}
-
-/**
- * Normalizes recorded codegen actions, collapsing consecutive `fill` actions on the same
- * selector into the latest value.
- *
- * @remarks
- * A text input fires one `input` event per keystroke, so the compiled script reflects
- * the final typed value rather than every intermediate keystroke.
- *
- * @param actions - Raw recorded actions, in capture order
- * @returns Normalized actions, in the same order
- */
-export function normalizeCodegenActions(
-	actions: readonly BrowserCodegenAction[],
-): readonly BrowserCodegenAction[] {
-	const result: BrowserCodegenAction[] = []
-
-	for (const action of actions) {
-		const previous = result[result.length - 1]
-		if (
-			previous !== undefined &&
-			previous.action === 'fill' &&
-			action.action === 'fill' &&
-			previous.selector === action.selector
-		) {
-			result[result.length - 1] = action
-			continue
-		}
-		result.push(action)
-	}
-
-	return result
 }
 
 /**
