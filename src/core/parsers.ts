@@ -18,7 +18,6 @@ import type {
 	BrowserRequestFailure,
 	BrowserResponse,
 	BrowserSecurity,
-	BrowserTabLine,
 	BrowserTiming,
 	BrowserTimingRange,
 	BrowserWebSocketFrame,
@@ -713,25 +712,6 @@ export function parseBrowserReference(value: string): string | undefined {
 		/^(?:e([1-9]\d*)|([1-9]\d*)|\[e([1-9]\d*)\]|ref=e([1-9]\d*)|\[ref=e([1-9]\d*)\])$/i.exec(value)
 	const number = match?.slice(1).find((part) => part !== undefined)
 	return number === undefined ? undefined : `e${number}`
-}
-
-/**
- * Parses one line of the `tabs` tool's listing into the tab it names.
- * @param line - One listing line: the id, the JSON-quoted title, the URL, and ` (current)` on the
- * current tab
- * @returns The tab's id, title, URL, and current mark, or undefined for a line of another shape
- * @example
- * ```ts
- * parseBrowserTabLine('t2 "Cart" https://shop.example.test/cart (current)')
- * // { id: 't2', title: 'Cart', url: 'https://shop.example.test/cart', current: true }
- * ```
- */
-export function parseBrowserTabLine(line: string): BrowserTabLine | undefined {
-	const [, id, quoted, url, current] =
-		/^(t[1-9]\d*) ("(?:[^"\\]|\\.)*") (\S+?)( \(current\))?$/.exec(line) ?? []
-	const title = quoted === undefined ? undefined : parseJSONAs(quoted, isString)
-	if (id === undefined || title === undefined || url === undefined) return undefined
-	return { id, title, url, current: current !== undefined }
 }
 
 /**

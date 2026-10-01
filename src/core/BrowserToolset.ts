@@ -18,6 +18,7 @@ import type {
 	BrowserPageInterface,
 	BrowserPopupRecordInterface,
 	BrowserReadingInterface,
+	BrowserTab,
 	BrowserTool,
 	BrowserToolName,
 	BrowserToolSourceInterface,
@@ -89,7 +90,6 @@ import {
 	requireBrowserReference,
 	validateBrowserToolArguments,
 } from './helpers.js'
-import { parseBrowserTabLine } from './parsers.js'
 
 /**
  * Publishes the browser vocabulary as `@orkestrel/tool` tools over one view and adopts the
@@ -462,8 +462,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		if ((step.action === 'click' || step.action === 'type') && step.target !== undefined)
 			args = { ...args, ref: await this.#resolveTarget(id, step.target, options) }
 		if (step.action === 'type' && options?.secret === true) args = { ...args, secret: true }
-		if (step.action === 'switch' && step.tab !== undefined)
-			args = { ...args, tab: await this.#resolveTab(id, step.tab, context) }
+		// Without a context the manager refuses `switch` itself, as it refuses any unadvertised step.
+		if (step.action === 'switch' && step.tab !== undefined && this.#context !== undefined)
+			args = { ...args, tab: await this.#resolveTab(id, step.tab, options) }
 		const performed = await this.perform({ id, name: step.action, arguments: args }, context)
 		const action = performed.action
 		if (action === undefined)
@@ -477,6 +478,19 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		)
 			throw new BrowserStepError(id, action)
 		return action
+	}
+
+	async tabs(options?: BrowserCallOptions): Promise<readonly BrowserTab[]> {
+		this.#live()
+		const signal = AbortSignal.any([
+			options?.signal ?? new AbortController().signal,
+			this.#lifetime.signal,
+		])
+		signal.throwIfAborted()
+		this.#refuseDialog()
+		// A dialog that opens while the titles are read never interrupts the listing, because the
+		// interruption is a receipt and this result is data.
+		return this.#list(signal, false)
 	}
 
 	start(options?: BrowserCallOptions): Promise<void> {
@@ -625,13 +639,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				BROWSER_OBSERVATION_TOOL_NAMES.includes(name) || name === 'wait' ? 'observation' : 'action',
 				context.caller,
 			)
-			const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
-			if (dialog !== undefined && name !== 'dialog') {
-				throw new BrowserError(
-					renderBrowserReceipt({ action: '', dialog }),
-					'BROWSER_TOOLSET_DIALOG',
-				)
-			}
+			if (name !== 'dialog') this.#refuseDialog()
 			const [content, suffix] = await handler(args, { ...context, signal })
 			const body = this.#boundReceipt(content, secret)
 			const footer = this.#boundReceipt(suffix, secret)
@@ -1091,13 +1099,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		_args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
-		const pages = this.#context?.pages() ?? []
-		const lines = await this.#race(
-			Promise.all(pages.map((page, index) => this.#tab(page, index, context.signal))),
+		const tabs = await this.#list(context.signal, true)
+		return [
+			tabs
+				.map(
+					(tab) =>
+						`${tab.id} ${JSON.stringify(tab.title)} ${tab.url}${tab.current ? ' (current)' : ''}`,
+				)
+				.join('\n'),
 			'',
-			context.signal,
-		)
-		return [lines.join('\n'), '']
+		]
 	}
 
 	async #switch(
@@ -1153,15 +1164,34 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		}
 	}
 
-	async #tab(page: BrowserPageInterface, index: number, signal: AbortSignal): Promise<string> {
+	// Lists the context's tabs; `interruptible` lets a dialog that opens meanwhile end the `tabs`
+	// tool with its receipt.
+	#list(signal: AbortSignal, interruptible: boolean): Promise<readonly BrowserTab[]> {
+		const pages = this.#context?.pages() ?? []
+		return this.#race(
+			Promise.all(pages.map((page, index) => this.#tab(page, index, signal))),
+			'',
+			signal,
+			interruptible,
+		)
+	}
+
+	async #tab(page: BrowserPageInterface, index: number, signal: AbortSignal): Promise<BrowserTab> {
 		const title = await page
 			.title({ signal, timeout: BROWSER_TOOL_TIMEOUT_MS })
 			.catch((error: unknown) => {
-				// A tab that does not answer its title keeps a line naming it.
+				// A tab that does not answer its title is still listed.
 				if (signal.aborted) throw error
 				return ''
 			})
-		return `t${index + 1} ${JSON.stringify(title)} ${page.url}${page === this.#page ? ' (current)' : ''}`
+		return { id: `t${index + 1}`, title, url: page.url, current: page === this.#page }
+	}
+
+	// Refuses while a dialog is open on the current page, naming the dialog.
+	#refuseDialog(): void {
+		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
+		if (dialog !== undefined)
+			throw new BrowserError(renderBrowserReceipt({ action: '', dialog }), 'BROWSER_TOOLSET_DIALOG')
 	}
 
 	async #choose(
@@ -1439,21 +1469,17 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		)
 	}
 
-	// Returns the id of the one tab the `tabs` listing names by the tab's URL and title.
-	async #resolveTab(id: string, tab: BrowserJourneyTab, context: ToolContext): Promise<string> {
-		const listed = await this.perform(
-			{ id, name: 'tabs', arguments: { what: 'journey target' } },
-			context,
+	// Returns the id of the one open tab that carries the step's URL and title.
+	async #resolveTab(
+		id: string,
+		tab: BrowserJourneyTab,
+		options?: BrowserCallOptions,
+	): Promise<string> {
+		const matches = (await this.tabs(options)).filter(
+			(candidate) => candidate.title === tab.title && candidate.url === tab.url,
 		)
-		if (!listed.result.success) throw new BrowserError(`${id}: ${listed.result.error}`)
-		const matches = String(listed.result.value)
-			.split('\n')
-			.flatMap((line) => {
-				const parsed = parseBrowserTabLine(line)
-				return parsed?.title === tab.title && parsed.url === tab.url ? [parsed.id] : []
-			})
 		const [match] = matches
-		if (matches.length === 1 && match !== undefined) return match
+		if (matches.length === 1 && match !== undefined) return match.id
 		throw new BrowserError(
 			`${id}: The tab ${JSON.stringify(tab.title)} at ${tab.url} ${matches.length === 0 ? 'is not open' : 'is ambiguous'}; call tabs.`,
 			matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
