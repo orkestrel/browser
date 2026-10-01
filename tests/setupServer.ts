@@ -1822,6 +1822,7 @@ export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
 	'journeys',
 	'edit',
 	'replay',
+	'forget',
 ])
 
 /** Describes how a spawned browse child ended. */

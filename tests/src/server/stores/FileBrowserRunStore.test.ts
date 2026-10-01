@@ -4,6 +4,7 @@ import { createScratch } from '@orkestrel/test/server'
 import { lstat, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { FileBrowserRunStore } from '@src/server'
+import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 import { describeBrowserRunStore } from '../../core/stores/suite.js'
 
@@ -78,6 +79,69 @@ describe('FileBrowserRunStore captures', () => {
 })
 
 describe('FileBrowserRunStore persisted files', () => {
+	it('clear removes unsaved and malformed runs from a reopened store beyond its listing limit', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const store = new FileBrowserRunStore({ root: scratch.path, limit: 1 })
+		const name = BROWSER_RUN_FIXTURE.journey.name
+		const saved = await store.open(name)
+		await store.set({ ...BROWSER_RUN_FIXTURE, id: saved.id })
+		const broken = await store.open(name)
+		if (broken.directory === undefined) throw new Error('Missing directory')
+		await writeFile(join(broken.directory, 'run.json'), '{')
+		const unsaved = await store.open(name)
+		await store.capture(unsaved, 's1.png', new Uint8Array([1]))
+		const reopened = new FileBrowserRunStore({ root: scratch.path, limit: 1 })
+		expect(await reopened.clear(name)).toBe(3)
+		expect(await readdir(join(scratch.path, name, 'runs'))).toEqual([])
+		await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: unsaved.id })).rejects.toMatchObject({
+			code: 'BROWSER_JOURNEY_PATH',
+		})
+		await expect(store.capture(unsaved, 's1.png', new Uint8Array([2]))).rejects.toMatchObject({
+			code: 'BROWSER_JOURNEY_PATH',
+		})
+	})
+	it('open and clear both refuse the same held lock', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const store = new FileBrowserRunStore({ root: scratch.path })
+		const files = new FileBrowserStore({ root: scratch.path })
+		const slot = await store.open('add-kettle')
+		await files.lock(join(scratch.path, 'add-kettle', 'journey.lock'), async () => {
+			await expect(store.open('add-kettle')).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_LOCKED',
+			})
+			await expect(store.clear('add-kettle')).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_LOCKED',
+			})
+		})
+		await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+		expect(await store.clear('add-kettle')).toBe(1)
+	})
+	it('clear refuses linked run components before deleting siblings', async () => {
+		for (const component of ['journey', 'runs', 'slot']) {
+			const scratch = createScratch()
+			scratches.push(scratch)
+			const store = new FileBrowserRunStore({ root: scratch.path })
+			const slot = await store.open('check-ready')
+			if (slot.directory === undefined) throw new Error('Missing directory')
+			await store.capture(slot, 's1.png', new Uint8Array([1]))
+			const path =
+				component === 'journey'
+					? join(scratch.path, 'check-ready')
+					: component === 'runs'
+						? join(scratch.path, 'check-ready', 'runs')
+						: slot.directory
+			await rename(path, path + '-moved')
+			await symlink(path + '-moved', path, 'dir')
+			await expect(store.clear('check-ready')).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+			})
+			expect(new Uint8Array(await readFile(join(slot.directory, 's1.png')))).toEqual(
+				new Uint8Array([1]),
+			)
+		}
+	})
 	it('deletes the whole run directory and its captures while preserving sibling runs', async () => {
 		const scratch = createScratch()
 		scratches.push(scratch)

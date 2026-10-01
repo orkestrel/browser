@@ -162,10 +162,35 @@ export function describeBrowserRunStore(
 				code: 'BROWSER_JOURNEY_ARGUMENT',
 			})
 		})
+		it('clears saved runs and unsaved slots without touching another journey', async () => {
+			const store = await factory()
+			const journey = BROWSER_RUN_FIXTURE.journey.name
+			const first = await store.open(journey)
+			await store.set({ ...BROWSER_RUN_FIXTURE, id: first.id })
+			const unsaved = await store.open(journey)
+			const sibling = await store.open('other-journey')
+			expect(await store.clear(journey)).toBe(2)
+			expect(await store.list(journey)).toEqual({ entries: [], truncated: false, faults: [] })
+			for (const slot of [first, unsaved]) {
+				await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
+					code: 'BROWSER_JOURNEY_PATH',
+				})
+				await expect(store.capture(slot, 's1.png', new Uint8Array([1]))).rejects.toMatchObject({
+					code: 'BROWSER_JOURNEY_PATH',
+				})
+			}
+			await store.capture(sibling, 's1.png', new Uint8Array([2]))
+			expect(await store.clear(journey)).toBe(0)
+			expect(await store.clear('missing')).toBe(0)
+			const recreated = await store.open(journey)
+			await store.set({ ...BROWSER_RUN_FIXTURE, id: recreated.id })
+			expect((await store.list(journey)).entries.map((run) => run.id)).toEqual([recreated.id])
+		})
 		it('refuses invalid journey names in run operations', async () => {
 			const store = await factory()
 			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
 				await expect(store.open(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+				await expect(store.clear(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
 				await expect(store.get(invalid, BROWSER_RUN_FIXTURE.id)).rejects.toMatchObject({
 					code: 'BROWSER_JOURNEY_PATH',
 				})
@@ -284,6 +309,7 @@ export function describeBrowserRunStore(
 			const store = await factory()
 			const options = { signal: AbortSignal.abort(new Error('store aborted')) }
 			await expect(store.open('add-kettle', options)).rejects.toThrow('store aborted')
+			await expect(store.clear('add-kettle', options)).rejects.toThrow('store aborted')
 			await expect(store.get('add-kettle', BROWSER_RUN_FIXTURE.id, options)).rejects.toThrow(
 				'store aborted',
 			)

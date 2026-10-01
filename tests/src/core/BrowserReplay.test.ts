@@ -503,6 +503,7 @@ describe('BrowserReplay', () => {
 						set: memory.set.bind(memory),
 						list: memory.list.bind(memory),
 						delete: memory.delete.bind(memory),
+						clear: memory.clear.bind(memory),
 					},
 					on: {
 						step: (step) => {
@@ -699,6 +700,7 @@ describe('BrowserReplay', () => {
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
 						set: async (value, options) => {
 							saved.handler(value, options?.signal?.aborted ?? true)
 							expect(releases.count).toBe(1)
@@ -773,6 +775,7 @@ describe('BrowserReplay', () => {
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
 						set: (_value, options) => {
 							signal = options?.signal
 							return pending.promise
@@ -817,6 +820,7 @@ describe('BrowserReplay', () => {
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
 						set: runs.set.bind(runs),
 					},
 				},
@@ -884,6 +888,7 @@ describe('BrowserReplay', () => {
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
 						set: runs.set.bind(runs),
 					},
 				},
@@ -922,6 +927,7 @@ describe('BrowserReplay', () => {
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
 						set: runs.set.bind(runs),
 					},
 				},
@@ -1027,6 +1033,7 @@ describe('BrowserReplay', () => {
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
 						set: runs.set.bind(runs),
 					},
 					on: {

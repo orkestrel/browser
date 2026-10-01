@@ -262,6 +262,7 @@ describe('createDocumentToolset', () => {
 			'journeys',
 			'edit',
 			'replay',
+			'forget',
 		])
 		await toolset.start()
 		try {

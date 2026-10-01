@@ -39,18 +39,18 @@ import {
 } from './helpers.js'
 
 /**
- * Registers the journey tools `record`, `save`, `journeys`, `edit`, and `replay` over a toolset
+ * Registers the journey tools `record`, `save`, `journeys`, `edit`, `replay`, and `forget` over a toolset
  * and owns the recording and the active replay.
  *
  * @remarks
  * The journey toolset composes the toolset's public members: `perform` reads the view a receipt
  * carries through `look`, `hold` and `emitter` drive the recorder and the replay, `view` converts
- * an edit's `ref` to a target, and `tools` receives the five tools at construction, which refuses
+ * an edit's `ref` to a target, and `tools` receives the six tools at construction, which refuses
  * with `BROWSER_TOOLSET_RESERVED` when the manager already holds one of the names. Every refusal
  * is a sentence that names the next call, and a reason inside it is a clause without a directive
  * or a final period.
  *
- * `readonly` refuses `record`, `save`, and `edit` before any store access; `replay` still writes
+ * `readonly` refuses `record`, `save`, `edit`, and `forget` before any store access; `replay` still writes
  * its run. The call's signal reaches every store call and every replayed step, and `destroy()`
  * aborts it as well. `save` writes a snapshot before it ends the recording, so a failed or
  * locked write keeps the recorder recording with its steps for the next
@@ -61,7 +61,7 @@ import {
  * by the view after the run.
  *
  * `destroy()` aborts the active replay and waits for it to finish, stops a recording without
- * saving it, and removes the five tools the manager still holds under the instances it added.
+ * saving it, and removes the six tools the manager still holds under the instances it added.
  *
  * @example
  * ```ts
@@ -117,6 +117,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			this.#create('journeys', this.#journeys.bind(this)),
 			this.#create('edit', this.#edit.bind(this)),
 			this.#create('replay', this.#replayJourney.bind(this)),
+			this.#create('forget', this.#forget.bind(this)),
 		])
 		toolset.tools.add(this.#tools)
 	}
@@ -354,6 +355,39 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		}
 		return `Edited ${name}.\n\n${renderBrowserJourney(saved.journey)}`
+	}
+
+	async #forget(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
+		if (this.#readonly)
+			throw new BrowserError(BROWSER_JOURNEY_READONLY_REFUSAL, 'BROWSER_JOURNEY_READONLY')
+		this.#idleReplay()
+		const name = readBrowserToolString(args, 'journey')
+		if (this.#recording === name)
+			throw new BrowserError(
+				`Journey ${JSON.stringify(name)} is recording; call save first, or record another name.`,
+				'BROWSER_JOURNEY_RECORDING',
+				{ name },
+			)
+		await this.#find(name, signal)
+		this.#idleReplay()
+		let count: number
+		try {
+			// Remove runs first so a failed removal leaves the saved name available for a retry.
+			count = (await this.#runs?.clear(name, { signal })) ?? 0
+			await this.#store.delete(name, { signal })
+		} catch (error) {
+			if (signal.aborted) throw error
+			const code = isBrowserError(error) ? error.code : 'BROWSER_JOURNEY_FILE'
+			if (code === 'BROWSER_JOURNEY_LOCKED')
+				throw new BrowserError(`Journey ${name} is locked; call forget again.`, code, { name })
+			throw new BrowserError(
+				`Forgetting ${name} failed: ${normalizeBrowserJourneyReason(error)}; call forget again.`,
+				code,
+				{ name },
+			)
+		}
+		if (this.#saved === name) this.#saved = undefined
+		return `Forgot ${name} and its ${count} ${count === 1 ? 'run' : 'runs'}; the name is free to record again.`
 	}
 
 	async #replayJourney(

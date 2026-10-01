@@ -3,10 +3,21 @@ import { afterEach, describe, it, expect } from 'vitest'
 import { watch } from 'node:fs'
 import { mkdir, rename, symlink, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
-import { createBrowserJourneyFixture, createBrowserViewDouble } from '../../../setup.js'
+import {
+	BROWSER_JOURNEY_FIXTURE,
+	BROWSER_RUN_FIXTURE,
+	createBrowserJourneyFixture,
+	createBrowserViewDouble,
+} from '../../../setup.js'
+import { requireValue } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { BrowserJourneyToolset, BrowserToolset } from '@src/core'
-import { createFileBrowserJourneyStore, FileBrowserJourneyStore } from '@src/server'
+import {
+	createFileBrowserJourneyStore,
+	FileBrowserJourneyStore,
+	FileBrowserRunStore,
+} from '@src/server'
+import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { describeBrowserJourneyStore } from '../../core/stores/suite.js'
 import { describeFileBrowserStores } from './suite.js'
 
@@ -22,6 +33,97 @@ describeBrowserJourneyStore('FileBrowserJourneyStore', () => {
 describeFileBrowserStores()
 
 describe('BrowserJourneyToolset file listing', () => {
+	it('forget removes file runs and captures, frees the name, and retains its revision', async () => {
+		const scratch = createScratch()
+		const store = new FileBrowserJourneyStore({ root: scratch.path })
+		const runs = new FileBrowserRunStore({ root: scratch.path, limit: 1 })
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store, runs })
+		await toolset.start()
+		try {
+			await store.set(BROWSER_JOURNEY_FIXTURE)
+			const slot = await runs.open('add-kettle')
+			await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+			await runs.capture(slot, 's1.png', new Uint8Array([137, 80]))
+			expect(
+				await toolset.tools.execute({
+					id: 'forget',
+					name: 'forget',
+					arguments: { journey: 'add-kettle' },
+				}),
+			).toMatchObject({
+				success: true,
+				value: 'Forgot add-kettle and its 1 run; the name is free to record again.',
+			})
+			expect(await store.get('add-kettle')).toBeUndefined()
+			expect((await runs.list('add-kettle')).entries).toEqual([])
+			await expect(readFile(join(requireValue(slot.directory), 's1.png'))).rejects.toMatchObject({
+				code: 'ENOENT',
+			})
+			expect(
+				await toolset.tools.execute({
+					id: 'record',
+					name: 'record',
+					arguments: { journey: 'add-kettle' },
+				}),
+			).toMatchObject({ success: true })
+			await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
+			await toolset.tools.execute({
+				id: 'save',
+				name: 'save',
+				arguments: { description: 'Check again' },
+			})
+			expect((await store.get('add-kettle'))?.revision).toBe(2)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+			scratch.destroy()
+		}
+	})
+	it('forget renders a held lock refusal without removing the journey or runs', async () => {
+		const scratch = createScratch()
+		const store = new FileBrowserJourneyStore({ root: scratch.path })
+		const runs = new FileBrowserRunStore({ root: scratch.path })
+		const files = new FileBrowserStore({ root: scratch.path })
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store, runs })
+		try {
+			const saved = await store.set(BROWSER_JOURNEY_FIXTURE)
+			const slot = await runs.open('add-kettle')
+			await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+			await files.lock(join(scratch.path, 'add-kettle', 'journey.lock'), async () => {
+				await expect(
+					requireValue(toolset.tools.tool('forget')).execute(
+						{ journey: 'add-kettle' },
+						{ signal: new AbortController().signal },
+					),
+				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_LOCKED' })
+				expect(
+					await toolset.tools.execute({
+						id: 'forget',
+						name: 'forget',
+						arguments: { journey: 'add-kettle' },
+					}),
+				).toMatchObject({
+					success: false,
+					error: 'Journey add-kettle is locked; call forget again.',
+				})
+			})
+			expect(await store.get('add-kettle')).toEqual(saved)
+			expect((await runs.list('add-kettle')).entries.map((run) => run.id)).toEqual([slot.id])
+			expect(
+				await toolset.tools.execute({
+					id: 'retry',
+					name: 'forget',
+					arguments: { journey: 'add-kettle' },
+				}),
+			).toMatchObject({ success: true })
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+			scratch.destroy()
+		}
+	})
 	it('lists every readable journey exactly once across store pages and reports a repeated fault once', async () => {
 		const scratch = createScratch()
 		const toolset = new BrowserToolset(createBrowserViewDouble())

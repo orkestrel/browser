@@ -789,6 +789,20 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 			required: Object.freeze(['journey']),
 		}),
 	}),
+	forget: Object.freeze({
+		name: 'forget',
+		description: 'Removes a saved journey and all its runs; the name is free to record again.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				journey: Object.freeze({
+					type: 'string',
+					description: 'The journey name, such as add-kettle.',
+				}),
+			}),
+			required: Object.freeze(['journey']),
+		}),
+	}),
 })
 
 // === Browser journeys
@@ -857,7 +871,7 @@ export const BROWSER_JOURNEY_EMPTY_LISTING = 'No journeys are saved; call record
 
 /**
  * Names the journey tools a toolset constructed with `journeys` registers and reserves: `record`,
- * `save`, `journeys`, `edit`, and `replay`.
+ * `save`, `journeys`, `edit`, `replay`, and `forget`.
  */
 export const BROWSER_JOURNEY_TOOL_NAMES: readonly BrowserToolName[] = Object.freeze([
 	'record',
@@ -865,6 +879,7 @@ export const BROWSER_JOURNEY_TOOL_NAMES: readonly BrowserToolName[] = Object.fre
 	'journeys',
 	'edit',
 	'replay',
+	'forget',
 ])
 
 /** Names observation and journey tools that cannot become journey steps. */
@@ -876,7 +891,7 @@ export const BROWSER_JOURNEY_NON_STEP_TOOLS: readonly string[] = Object.freeze([
 /** Names native tool arguments represented by journey targets, tabs, or secret bindings. */
 export const BROWSER_JOURNEY_STEP_KEYS: readonly string[] = Object.freeze(['ref', 'tab', 'secret'])
 
-/** Holds the refusal `record`, `save`, and `edit` return when the journeys are read-only. */
+/** Holds the refusal `record`, `save`, `edit`, and `forget` return when the journeys are read-only. */
 export const BROWSER_JOURNEY_READONLY_REFUSAL = 'The journeys are read-only; call replay.'
 
 /** Holds the refusal `record` returns while another journey is recording. */

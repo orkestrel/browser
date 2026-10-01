@@ -29,6 +29,7 @@ import {
 	BROWSER_STORE_FAULT_FIXTURE,
 	BROWSER_PREPARATION_CASES,
 	BROWSER_JOURNEY_LISTING,
+	BROWSER_RUN_FIXTURE,
 	createBrowserActionFixture,
 	createBrowserElementFixture,
 	createBrowserFailingJourneyStore,
@@ -39,6 +40,190 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('l2a refuses forget on read-only journeys before touching the saved journey or runs', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const runs = new MemoryBrowserRunStore()
+		const saved = await store.set(BROWSER_JOURNEY_FIXTURE)
+		const slot = await runs.open(saved.journey.name)
+		await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store, runs, readonly: true })
+		try {
+			expect(
+				await toolset.tools.execute({
+					id: 'forget',
+					name: 'forget',
+					arguments: { journey: saved.journey.name },
+				}),
+				'l2a: read-only forget is refused',
+			).toMatchObject({ success: false, error: 'The journeys are read-only; call replay.' })
+			await expect(
+				requireValue(toolset.tools.tool('forget')).execute(
+					{ journey: saved.journey.name },
+					{ signal: new AbortController().signal },
+				),
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_READONLY' })
+			expect(await store.get(saved.journey.name)).toEqual(saved)
+			expect((await runs.list(saved.journey.name)).entries.map((run) => run.id)).toEqual([slot.id])
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('l2b forget removes every run and preserves other journeys', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const runs = new MemoryBrowserRunStore()
+		await store.set(BROWSER_JOURNEY_FIXTURE)
+		const sibling = await store.set(createBrowserJourneyFixture())
+		const first = await runs.open('add-kettle')
+		await runs.set({ ...BROWSER_RUN_FIXTURE, id: first.id })
+		const unsaved = await runs.open('add-kettle')
+		const other = await runs.open('check-ready')
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store, runs })
+		try {
+			const result = await toolset.tools.execute({
+				id: 'forget',
+				name: 'forget',
+				arguments: { journey: 'add-kettle' },
+			})
+			expect((await runs.list('add-kettle')).entries, 'l2b: forget leaves no runs').toEqual([])
+			expect(result).toMatchObject({
+				success: true,
+				value: 'Forgot add-kettle and its 2 runs; the name is free to record again.',
+			})
+			expect(await store.get('add-kettle')).toBeUndefined()
+			await expect(runs.set({ ...BROWSER_RUN_FIXTURE, id: unsaved.id })).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_PATH',
+			})
+			expect(await store.get('check-ready')).toEqual(sibling)
+			await expect(runs.capture(other, 's1.png', new Uint8Array())).resolves.toBeUndefined()
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('l2c record succeeds after forget and save continues the revision counter', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(createBrowserJourneyFixture())
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		try {
+			expect(
+				await toolset.tools.execute({
+					id: 'forget',
+					name: 'forget',
+					arguments: { journey: 'check-ready' },
+				}),
+			).toMatchObject({
+				success: true,
+				value: 'Forgot check-ready and its 0 runs; the name is free to record again.',
+			})
+			expect(
+				await toolset.tools.execute({
+					id: 'record',
+					name: 'record',
+					arguments: { journey: 'check-ready' },
+				}),
+				'l2c: record after forget starts a recording',
+			).toMatchObject({ success: true, value: expect.stringContaining('Recording check-ready;') })
+			expect(journeys.recording).toBe('check-ready')
+			await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
+			await toolset.tools.execute({
+				id: 'save',
+				name: 'save',
+				arguments: { description: 'Check again' },
+			})
+			expect((await store.get('check-ready'))?.revision).toBe(2)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('forget refuses missing and recording names with coded errors and rendered sentences', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		try {
+			const forget = requireValue(toolset.tools.tool('forget'))
+			await expect(
+				forget.execute({ journey: 'check-ready' }, { signal: new AbortController().signal }),
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_MISSING' })
+			expect(
+				await toolset.tools.execute({
+					id: 'missing',
+					name: 'forget',
+					arguments: { journey: 'check-ready' },
+				}),
+			).toMatchObject({
+				success: false,
+				error: 'No journey is named "check-ready"; call journeys.',
+			})
+			await toolset.tools.execute({
+				id: 'record',
+				name: 'record',
+				arguments: { journey: 'check-ready' },
+			})
+			await expect(
+				forget.execute({ journey: 'check-ready' }, { signal: new AbortController().signal }),
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_RECORDING' })
+			expect(
+				await toolset.tools.execute({
+					id: 'recording',
+					name: 'forget',
+					arguments: { journey: 'check-ready' },
+				}),
+			).toMatchObject({
+				success: false,
+				error: 'Journey "check-ready" is recording; call save first, or record another name.',
+			})
+			expect(journeys.recording).toBe('check-ready')
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('forget refuses while a replay holds the toolset', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const saved = await store.set(
+			createBrowserJourneyFixture([{ action: 'checkout', arguments: {} }]),
+		)
+		const { toolset, pending } = createBrowserPendingToolsetFixture()
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		const replay = toolset.tools.execute({
+			id: 'replay',
+			name: 'replay',
+			arguments: { journey: 'check-ready' },
+		})
+		try {
+			await waitForCondition('replay holds the toolset', () => toolset.held === 'check-ready')
+			await expect(
+				requireValue(toolset.tools.tool('forget')).execute(
+					{ journey: 'check-ready' },
+					{ signal: new AbortController().signal },
+				),
+			).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_BUSY' })
+			expect(
+				await toolset.tools.execute({
+					id: 'forget',
+					name: 'forget',
+					arguments: { journey: 'check-ready' },
+				}),
+			).toMatchObject({
+				success: false,
+				error: 'The toolset is replaying check-ready until it finishes; call look.',
+			})
+			expect(await store.get('check-ready')).toEqual(saved)
+		} finally {
+			pending.resolve('Checked out.')
+			await replay
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
 	it('k3b advertises edits as an array with an item schema or a JSON string', async () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const journeys = new BrowserJourneyToolset(toolset, {
@@ -525,7 +710,7 @@ describe('BrowserJourneyToolset', () => {
 		}
 	})
 	describe('tools', () => {
-		it('registers the five tools with their copy, a required parameter each, and journeys pure and untrusted', async () => {
+		it('registers the six tools with their copy, a required parameter each, and journeys pure and untrusted', async () => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, {
 				store: createMemoryBrowserJourneyStore(),
@@ -536,6 +721,7 @@ describe('BrowserJourneyToolset', () => {
 				'journeys',
 				'edit',
 				'replay',
+				'forget',
 			])
 			expect(
 				Object.fromEntries(
@@ -550,6 +736,7 @@ describe('BrowserJourneyToolset', () => {
 				save: 'Stops recording and saves the journey; describe what it achieves in one sentence.',
 				journeys: 'Lists the saved journeys with their steps and the parameters each one takes.',
 				edit: 'Changes a saved journey: add, remove, or update steps by their ids from journeys, or declare a parameter.',
+				forget: 'Removes a saved journey and all its runs; the name is free to record again.',
 				replay: "Replays a saved journey step by step; give each parameter's value under inputs.",
 			})
 			expect(
@@ -568,6 +755,7 @@ describe('BrowserJourneyToolset', () => {
 				journeys: ['what'],
 				edit: ['journey', 'edits'],
 				replay: ['journey'],
+				forget: ['journey'],
 			})
 			for (const name of BROWSER_JOURNEY_TOOL_NAMES)
 				expect(requireValue(toolset.tools.tool(name)).parameters).toEqual(
@@ -586,6 +774,7 @@ describe('BrowserJourneyToolset', () => {
 				journeys: { pure: true, untrusted: true },
 				edit: undefined,
 				replay: undefined,
+				forget: undefined,
 			})
 			const refused = await toolset.tools.execute({
 				id: '1',
@@ -1507,7 +1696,7 @@ e3 combobox "Size"
 	})
 
 	describe('destroy', () => {
-		it('aborts the active replay, waits for it, and removes the five tools', async () => {
+		it('aborts the active replay, waits for it, and removes the six tools', async () => {
 			const withheld: CDPSentMessage[] = []
 			const fixture = await createBrowserElementFixture({
 				insert: (message) => withheld.push(message),
