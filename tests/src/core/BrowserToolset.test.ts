@@ -31,6 +31,7 @@ import {
 	waitForEvent,
 } from '@orkestrel/test'
 import {
+	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
 	BROWSER_TOOL_HANDLED_STATUS,
 	BROWSER_TOOL_NAMES,
@@ -39,6 +40,8 @@ import {
 	BrowserToolset,
 	createBrowserReading,
 	createBrowserToolset,
+	createMemoryBrowserJourneyStore,
+	createMemoryBrowserRunStore,
 	performBrowserStep,
 	isBrowserElementError,
 	isBrowserError,
@@ -63,6 +66,7 @@ import {
 	BROWSER_SUBMIT_NEGATIVE_CASES,
 	BROWSER_SUBMIT_UNREAD_CASES,
 	createBrowserElementFixture,
+	createBrowserJourneyFixture,
 	createBrowserViewDouble,
 	createConnectedCDPClient,
 	ignoreCall,
@@ -5246,6 +5250,115 @@ describe('BrowserToolset', () => {
 				expect(toolset.tools.tool('roundtrip')).toBeUndefined()
 			} finally {
 				await client.close()
+			}
+		})
+	})
+
+	describe('journeys', () => {
+		it('constructs the journey tools with journeys, reserves their names from page tools, and destroys them first', async () => {
+			const record = createTool({ name: 'record', description: 'Page record', execute: ignoreCall })
+			const extra = createTool({ name: 'extra', description: 'Page extra', execute: ignoreCall })
+			const source: BrowserToolSourceInterface = {
+				emitter: new Emitter<BrowserToolSourceEventMap>(),
+				adopt: () => Promise.resolve([record, extra]),
+			}
+			const plain = new BrowserToolset(createBrowserViewDouble(), { source })
+			await plain.start()
+			expect(plain.tools.tool('record')?.description).toBe('Page record')
+			await plain.destroy()
+			const tools = createToolManager()
+			const removed = createRecorder<readonly [ToolInterface]>()
+			tools.emitter.on('remove', removed.handler)
+			const store = createMemoryBrowserJourneyStore()
+			const toolset = new BrowserToolset(createBrowserViewDouble(), {
+				tools,
+				source,
+				journeys: { store },
+			})
+			expect(tools.tools().map((tool) => tool.name)).toEqual([...BROWSER_JOURNEY_TOOL_NAMES])
+			const skips = createRecorder<readonly [string, BrowserToolsetReason]>()
+			toolset.emitter.on('skip', skips.handler)
+			await toolset.start()
+			expect(skips.calls).toEqual([['record', 'reserved']])
+			expect(tools.tool('extra')?.description).toBe('Page extra')
+			expect(tools.tool('record')?.description).toBe(BROWSER_TOOL_COPY.record.description)
+			await tools.execute({ id: '1', name: 'record', arguments: { journey: 'brew-tea' } })
+			await tools.execute({ id: '2', name: 'wait', arguments: { text: 'Ready' } })
+			await toolset.destroy()
+			expect(removed.calls.map(([tool]) => tool.name)).toEqual([
+				...BROWSER_JOURNEY_TOOL_NAMES,
+				'look',
+				'read',
+				'click',
+				'type',
+				'wait',
+				'extra',
+			])
+			expect((await store.list()).entries).toEqual([])
+		})
+
+		it('refuses a manager that holds a journey tool name and adds nothing', () => {
+			const tools = createToolManager()
+			const held = createTool({ name: 'replay', execute: ignoreCall })
+			tools.add(held)
+			const refusal = captureError(
+				() =>
+					new BrowserToolset(createBrowserViewDouble(), {
+						tools,
+						journeys: { store: createMemoryBrowserJourneyStore() },
+					}),
+			)
+			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_TOOLSET_RESERVED')
+			expect(readProperty(refusal, 'context')).toEqual({ name: 'replay' })
+			expect(tools.tools()).toEqual([held])
+		})
+
+		it('ends an active replay with an aborted run before its own teardown', async () => {
+			const withheld: CDPSentMessage[] = []
+			const fixture = await createBrowserElementFixture({
+				insert: (message) => withheld.push(message),
+			})
+			const store = createMemoryBrowserJourneyStore()
+			const runs = createMemoryBrowserRunStore()
+			await store.set(
+				createBrowserJourneyFixture([
+					{
+						action: 'type',
+						arguments: { text: 'Harbor' },
+						target: { role: 'textbox', name: 'Email' },
+					},
+					{ action: 'press', arguments: { key: 'Escape' } },
+				]),
+			)
+			const toolset = createBrowserToolset(fixture.page, { journeys: { store, runs } })
+			const released = createRecorder<readonly [string]>()
+			toolset.emitter.on('release', released.handler)
+			await toolset.start()
+			try {
+				const replayed = toolset.tools.execute({
+					id: '1',
+					name: 'replay',
+					arguments: { journey: 'check-ready' },
+				})
+				await waitForCondition(
+					'the replayed input reaches the protocol',
+					() => withheld.length === 1,
+				)
+				await toolset.destroy()
+				expect(released.calls).toEqual([['check-ready']])
+				expect((await runs.list('check-ready')).entries.map((run) => run.outcome)).toEqual([
+					'aborted',
+				])
+				expect(readProperty<string>(await replayed, 'value')).toMatch(
+					/^Replay of check-ready aborted at s1 of 2\./,
+				)
+				expect(
+					fixture.transport.sent.filter((message) => message.method === 'Input.dispatchKeyEvent'),
+				).toEqual([])
+				expect(toolset.tools.tools()).toEqual([])
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
 			}
 		})
 	})

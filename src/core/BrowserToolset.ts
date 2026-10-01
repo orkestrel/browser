@@ -1,6 +1,7 @@
 import type {
 	BrowserAction,
 	BrowserHoldInterface,
+	BrowserJourneyToolsetInterface,
 	BrowserToolsetResult,
 	BrowserCallOptions,
 	BrowserContextInterface,
@@ -43,8 +44,10 @@ import {
 } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserHold } from './BrowserHold.js'
+import { BrowserJourneyToolset } from './BrowserJourneyToolset.js'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
+	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_SCHEMES,
 	BROWSER_TOOL_CAPTURE_MS,
 	BROWSER_TOOL_CHANGED_NOTE,
@@ -89,7 +92,9 @@ import {
  * and `navigate`, stages the `dialog` tool while a dialog is open on the current page, follows a
  * popup the current page opens and returns to the opener when the popup closes, and adopts
  * `page.registry` by default; with `options.context` as well it advertises `tabs` and `switch`.
- * The next result names each move of the view.
+ * With `options.journeys` the constructor constructs a `BrowserJourneyToolset`, which adds
+ * `record`, `save`, `journeys`, `edit`, and `replay` to the manager and reserves those names, and
+ * `destroy()` destroys it first. The next result names each move of the view.
  *
  * Every tool, the page tools included, runs through one boundary. The boundary refuses with
  * `the browser session ended` after `destroy()`, refuses an aborted signal before the tool runs,
@@ -171,6 +176,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #native: readonly ToolInterface[]
 	readonly #dialogTool: ToolInterface | undefined
 	readonly #contextTools: readonly ToolInterface[]
+	readonly #journeys: BrowserJourneyToolsetInterface | undefined
 	readonly #added = new Set<ToolInterface>()
 	readonly #adopted = new Map<string, ToolInterface>()
 	readonly #watches = new Map<BrowserPageInterface, BrowserToolsetWatch>()
@@ -259,6 +265,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 						this.#create('switch', this.#switch.bind(this), BROWSER_TOOL_VIEW_FOOTER),
 					],
 		)
+		this.#journeys =
+			options?.journeys === undefined
+				? undefined
+				: new BrowserJourneyToolset(this, options.journeys, limit)
 	}
 
 	get emitter(): EmitterInterface<BrowserToolsetEventMap> {
@@ -1624,7 +1634,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		name: string,
 		census: readonly BrowserTool[] | undefined,
 	): BrowserToolsetReason | undefined {
-		if (BROWSER_TOOL_NAMES.some((reserved) => reserved === name)) return 'reserved'
+		if (
+			BROWSER_TOOL_NAMES.some((reserved) => reserved === name) ||
+			(this.#journeys !== undefined &&
+				BROWSER_JOURNEY_TOOL_NAMES.some((reserved) => reserved === name))
+		)
+			return 'reserved'
 		const held = this.#tools.tool(name)
 		if (held !== undefined && !this.#added.has(held)) return 'held'
 		if (!BROWSER_TOOL_NAME_PATTERN.test(name)) return 'pattern'
@@ -1668,6 +1683,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	async #teardown(): Promise<void> {
+		// The journey toolset goes first, so its replay releases its hold and writes its run while
+		// the emitter and the manager still stand.
+		await this.#journeys?.destroy()
 		this.#reservation?.destroy()
 		this.#generation += 1
 		this.#lifetime.abort(this.#ended())

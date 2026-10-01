@@ -42,9 +42,11 @@ export function createBrowserDOMView(options: BrowserDOMViewOptions): BrowserDOM
  * registry leaves that registry's own tools alone. The view belongs to the toolset: `destroy()`
  * removes the toolset's tools, then destroys the view, which releases its listeners and fails
  * its pending waits, and a construction that throws destroys the view before it rethrows.
+ * `journeys` adds `record`, `save`, `journeys`, `edit`, and `replay` at construction; a replay
+ * runs the steps the document placement executes.
  *
- * @param options - The driven document, `own`, the page-tool source, the manager, the bound, and
- * the emitter hooks
+ * @param options - The driven document, `own`, the page-tool source, the manager, the bound, the
+ * journey stores, and the emitter hooks
  * @returns A {@link BrowserToolsetInterface} whose `view` drives the document
  * @throws Thrown when `document` is not a document attached to a window, with the code
  * `BROWSER_DOCUMENT`, when it is `globalThis.document` without `own: true`, with the code
@@ -71,6 +73,7 @@ export function createDocumentToolset(
 			...(options.tools === undefined ? {} : { tools: options.tools }),
 			...(options.source === undefined ? {} : { source: options.source }),
 			...(options.limit === undefined ? {} : { limit: options.limit }),
+			...(options.journeys === undefined ? {} : { journeys: options.journeys }),
 			release: view.destroy.bind(view),
 		})
 	} catch (error) {

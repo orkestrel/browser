@@ -1,7 +1,7 @@
 import type { BrowserViewInterface } from '@src/core'
 import type { ToolInterface } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
-import { isBrowserElementError, isBrowserError } from '@src/core'
+import { createMemoryBrowserJourneyStore, isBrowserElementError, isBrowserError } from '@src/core'
 import {
 	BrowserDOMView,
 	createBrowserDOMView,
@@ -9,9 +9,15 @@ import {
 	createSocketCDPTransport,
 	SocketCDPTransport,
 } from '@src/browser'
-import { createToolManager } from '@orkestrel/tool'
+import { createTool, createToolManager } from '@orkestrel/tool'
 import { createModelContext, isWebMCPDocument } from '@orkestrel/mcp/browser'
-import { captureError, createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
+import {
+	captureError,
+	createRecorder,
+	readProperty,
+	requireValue,
+	waitForCondition,
+} from '@orkestrel/test'
 import {
 	createProbeBridge,
 	createProbeDocument,
@@ -242,6 +248,61 @@ describe('createDocumentToolset', () => {
 		bridge.destroy()
 		await toolset.destroy()
 		expect(registry.registrations()).toEqual(own)
+	})
+
+	it('constructs the journey tools with journeys, replays a recorded click untrusted, and destroys the view when they cannot be added', async () => {
+		const probe = await createProbeElements()
+		const clicks = createRecorder<[boolean]>()
+		probe.save.addEventListener('click', (event) => clicks.handler(event.isTrusted))
+		const store = createMemoryBrowserJourneyStore()
+		const toolset = createDocumentToolset({ document: probe.document, journeys: { store } })
+		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
+			'record',
+			'save',
+			'journeys',
+			'edit',
+			'replay',
+		])
+		await toolset.start()
+		try {
+			await toolset.tools.execute({ id: '1', name: 'record', arguments: { journey: 'save-draft' } })
+			const [save] = await toolset.view.elements.find({ role: 'button', name: 'Save' })
+			const reference = requireValue(save, 'save button').reference
+			await toolset.tools.execute({ id: '2', name: 'click', arguments: { ref: reference } })
+			expect(
+				await toolset.tools.execute({
+					id: '3',
+					name: 'save',
+					arguments: { description: 'Save the draft' },
+				}),
+			).toMatchObject({
+				success: true,
+				value:
+					'Saved save-draft with 1 step.\n\nsave-draft "Save the draft"\ns1 click button "Save"',
+			})
+			const replayed = await toolset.tools.execute({
+				id: '4',
+				name: 'replay',
+				arguments: { journey: 'save-draft' },
+			})
+			expect(readProperty<string>(replayed, 'value').split('\n\n')[0]).toBe(
+				`Replayed save-draft: 1 of 1 steps.\ns1 Clicked ${reference} button "Save". (untrusted event)`,
+			)
+			expect(clicks.calls).toEqual([[false], [false]])
+		} finally {
+			await toolset.destroy()
+		}
+		const window = requireValue(probe.document.defaultView, 'probe window')
+		const subscriptions = recordProbeSubscriptions(window, 'pagehide')
+		const tools = createToolManager()
+		const held = createTool({ name: 'journeys', execute: () => 'held' })
+		tools.add(held)
+		const refusal = captureError(() =>
+			createDocumentToolset({ document: probe.document, tools, journeys: { store } }),
+		)
+		expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_TOOLSET_RESERVED')
+		expect(tools.tools()).toEqual([held])
+		expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([true])
 	})
 })
 
