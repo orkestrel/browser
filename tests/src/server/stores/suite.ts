@@ -592,9 +592,7 @@ console.log(JSON.stringify({
 				const first = await store.list({ limit: 999 })
 				expect(first.entries.map((entry) => entry.journey.name)).toEqual(['alpine'])
 				expect(first.truncated).toBe(true)
-				expect(first.faults).toEqual([
-					{ path: join(scratch.path, 'broken'), message: expect.stringContaining('journey.json') },
-				])
+				expect(first.faults).toEqual([{ name: 'broken', reason: 'Malformed journey revision' }])
 				const next = await store.list({ offset: 1 })
 				expect(next.entries.map((entry) => entry.journey.name)).toEqual(['harbor'])
 				expect(next.truncated).toBe(true)

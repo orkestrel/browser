@@ -37,6 +37,10 @@ export function describeBrowserJourneyStore(
 			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
 				await expect(store.get(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
 				await expect(store.delete(invalid)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+				const journey = createBrowserJourneyFixture([], { name: invalid })
+				await expect(store.set(journey)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+				Reflect.set(journey, 'format', 9)
+				await expect(store.set(journey)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
 			}
 		})
 		it('owns input, returned values, and listings', async () => {

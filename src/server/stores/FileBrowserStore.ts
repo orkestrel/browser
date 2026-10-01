@@ -4,7 +4,12 @@ import { realpathSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { BrowserError, BROWSER_JOURNEY_NAME_PATTERN, BROWSER_RUN_ID_PATTERN } from '@src/core'
+import {
+	BrowserError,
+	BROWSER_JOURNEY_NAME_PATTERN,
+	BROWSER_RUN_ID_PATTERN,
+	validateBrowserStorePage,
+} from '@src/core'
 import {
 	BROWSER_FILE_STORE_LIMIT,
 	BROWSER_FILE_STORE_RESERVED,
@@ -248,16 +253,7 @@ export class FileBrowserStore {
 	): Promise<BrowserStorePage<T>> {
 		const offset = options?.offset ?? 0
 		const requested = options?.limit ?? this.#limit
-		if (
-			!Number.isSafeInteger(offset) ||
-			offset < 0 ||
-			!Number.isSafeInteger(requested) ||
-			requested < 1
-		)
-			throw new BrowserError(
-				'Paging requires a nonnegative integer offset and a positive integer limit',
-				'BROWSER_JOURNEY_ARGUMENT',
-			)
+		validateBrowserStorePage(offset, requested)
 		const limit = Math.min(requested, this.#limit)
 		const entries: T[] = []
 		const faults: BrowserStoreFault[] = []
@@ -281,9 +277,19 @@ export class FileBrowserStore {
 				entries.push(entry)
 			} catch (error) {
 				options?.signal?.throwIfAborted()
+				const reason = error instanceof BrowserError ? error.context?.['reason'] : undefined
 				faults.push({
-					path: this.resolvePath(path, name),
-					message: error instanceof Error ? error.message : String(error),
+					name,
+					reason:
+						typeof reason === 'string'
+							? reason
+							: error instanceof BrowserError && error.code === 'BROWSER_JOURNEY_PATH'
+								? 'The entry path is refused'
+								: error instanceof BrowserError && error.code === 'BROWSER_JOURNEY_ACCESS'
+									? 'Permission denied'
+									: error instanceof BrowserError && error.code === 'BROWSER_JOURNEY_FORMAT'
+										? 'Unknown file format'
+										: 'The stored entry is malformed or unreadable',
 				})
 			}
 		}

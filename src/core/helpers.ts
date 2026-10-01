@@ -4,6 +4,7 @@ import type {
 	BrowserTargetOptions,
 	BrowserElementManagerInterface,
 	BrowserJourney,
+	BrowserStoreFault,
 	BrowserJourneyEdit,
 	BrowserJourneyParameter,
 	BrowserJourneyStep,
@@ -80,6 +81,7 @@ import {
 	BROWSER_TOOL_COPY,
 	BROWSER_JOURNEY_ACTIONS,
 	BROWSER_JOURNEY_NON_STEP_TOOLS,
+	BROWSER_JOURNEY_STEP_KEYS,
 	BROWSER_RUN_ID_PATTERN,
 	BROWSER_JOURNEY_FORMAT_VERSION,
 	BROWSER_JOURNEY_NAME_PATTERN,
@@ -96,6 +98,7 @@ import {
 } from './constants.js'
 import {
 	isBrowserJourneyBinding,
+	isBrowserJourneyValidationContext,
 	isBrowserJourneyTarget,
 	isBrowserJourneyTab,
 	isBrowserSecretBinding,
@@ -2580,44 +2583,72 @@ export function editBrowserJourney(
 		try {
 			validateBrowserJourney(candidate)
 		} catch (error) {
-			const parameter = isBrowserError(error) ? error.context?.['parameter'] : undefined
-			if (isString(parameter)) {
-				for (const step of steps) {
-					if (!BROWSER_JOURNEY_ACTIONS.some((action) => action === step.action)) continue
-					const fields = [
-						...Object.entries(step.arguments),
-						...(step.target === undefined ? [] : [['target.name', step.target.name]]),
-					]
-					const invalid = fields.find(
-						([field, value]) =>
-							!isString(value) &&
-							isBrowserJourneyBinding(value) &&
-							value.parameter === parameter &&
-							(!Object.hasOwn(parameters, parameter) ||
-								(parameters[parameter]?.secret === true &&
-									(step.action !== 'type' || field !== 'text'))),
-					)
-					if (invalid !== undefined) {
-						index = Math.max(
-							origins.get(step.id + '.' + invalid[0]) ?? 0,
-							secrets.get(parameter) ?? 0,
-						)
-						break
-					}
-				}
+			if (isBrowserError(error) && isBrowserJourneyValidationContext(error.context)) {
+				const { parameter, step, field } = error.context
+				index = Math.max(origins.get(step + '.' + field) ?? 0, secrets.get(parameter) ?? 0)
 			}
 			throw error
 		}
 		return structuredClone(candidate)
 	} catch (error) {
-		const reason = (error instanceof Error ? error.message : 'has an invalid edit')
-			.replace(/^Invariant \d+ \([^)]*\): /, '')
-			.replace(/\.+$/, '')
+		const reason = normalizeBrowserJourneyReason(error)
 		throw new BrowserError(`Edit ${index} is refused: it ${reason}`, 'BROWSER_JOURNEY_EDIT', {
 			index,
 			reason,
 		})
 	}
+}
+
+/**
+ * Checks a journey name before store access.
+ * @param name - Journey name
+ * @throws BrowserError - Thrown with BROWSER_JOURNEY_PATH when the name is invalid
+ * @example
+ * validateBrowserJourneyName('add-kettle')
+ */
+export function validateBrowserJourneyName(name: string): void {
+	if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
+		throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+}
+
+/**
+ * Checks the offset and limit of a store page.
+ * @param offset - Nonnegative safe integer offset
+ * @param limit - Positive safe integer limit
+ * @throws BrowserError - Thrown with BROWSER_JOURNEY_ARGUMENT when either bound is invalid
+ * @example
+ * validateBrowserStorePage(0, 10)
+ */
+export function validateBrowserStorePage(offset: number, limit: number): void {
+	if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
+		throw new BrowserError(
+			'Paging requires a nonnegative integer offset and a positive integer limit',
+			'BROWSER_JOURNEY_ARGUMENT',
+		)
+}
+
+/**
+ * Normalizes a failure to its first paragraph without an invariant label, directive, or final period.
+ * @param error - Failure or reason text
+ * @returns Reason clause
+ * @example
+ * normalizeBrowserJourneyReason(new Error('Invariant 4 (bindings): has an invalid binding.'))
+ */
+export function normalizeBrowserJourneyReason(error: unknown): string {
+	return renderBrowserRunResult(error instanceof Error ? error.message : String(error))
+		.replace(/^Invariant \d+ \([^)]*\): /, '')
+		.replace(/\.+$/, '')
+}
+
+/**
+ * Renders an unreadable journey from its name and path-free reason.
+ * @param fault - Structured store fault
+ * @returns Listing fault line
+ * @example
+ * renderBrowserJourneyFault({ name: 'add-kettle', reason: 'Malformed journey revision' })
+ */
+export function renderBrowserJourneyFault(fault: BrowserStoreFault): string {
+	return `${fault.name} cannot be read: ${fault.reason}`
 }
 
 /**
@@ -2914,9 +2945,7 @@ export function validateBrowserJourneyStep(
 	const properties = schema?.['properties']
 	const required = schema?.['required']
 	const fields = isRecord(properties)
-		? Object.entries(properties).filter(
-				([key]) => key !== 'ref' && key !== 'tab' && key !== 'secret',
-			)
+		? Object.entries(properties).filter(([key]) => !BROWSER_JOURNEY_STEP_KEYS.includes(key))
 		: []
 	if (
 		Object.keys(args).some((key) => !fields.some(([field]) => field === key)) ||
@@ -2973,7 +3002,7 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 			'BROWSER_JOURNEY_INVALID',
 		)
 	const ids = new Set<string>()
-	const steps: BrowserJourneyStepInput[] = []
+	const steps: BrowserJourneyStep[] = []
 	for (const step of value['steps']) {
 		validateBrowserJourneyStep(step)
 		if (
@@ -2989,7 +3018,7 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 				'BROWSER_JOURNEY_INVALID',
 			)
 		ids.add(step.id)
-		steps.push(step)
+		steps.push({ ...step, id: step.id })
 	}
 	const bindings = collectBrowserJourneyBindings(steps)
 	for (const [name, parameter] of Object.entries(value['parameters'])) {
@@ -3006,30 +3035,32 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 			)
 	}
 	for (const name of bindings.keys()) {
-		if (!Object.hasOwn(value['parameters'], name))
-			throw new BrowserError(
-				`Invariant 4 (bindings): binds undeclared parameter "${name}"`,
-				'BROWSER_JOURNEY_INVALID',
-				{ parameter: name },
-			)
+		const declared = Object.hasOwn(value['parameters'], name)
 		const parameter = value['parameters'][name]
-		validateBrowserJourneyParameter(parameter)
-		if (
-			parameter.secret === true &&
-			steps.some((step) => {
-				const fields = collectBrowserJourneyBindings([step]).get(name)
-				return (
-					fields !== undefined &&
-					(fields.some((field) => field !== `${step.action}.text`) ||
-						!isBrowserSecretBinding(step, value['parameters']))
+		if (declared) validateBrowserJourneyParameter(parameter)
+		for (const step of steps) {
+			const fields = collectBrowserJourneyBindings([step]).get(name) ?? []
+			for (const binding of fields) {
+				const field = binding.slice(step.action.length + 1)
+				const context = { parameter: name, step: step.id, field }
+				if (!declared)
+					throw new BrowserError(
+						`Invariant 4 (bindings): binds undeclared parameter "${name}"`,
+						'BROWSER_JOURNEY_INVALID',
+						context,
+					)
+				if (
+					isRecord(parameter) &&
+					parameter['secret'] === true &&
+					(step.action !== 'type' || field !== 'text')
 				)
-			})
-		)
-			throw new BrowserError(
-				`Invariant 5 (secrets): binds secret "${name}" outside type.text`,
-				'BROWSER_JOURNEY_INVALID',
-				{ parameter: name },
-			)
+					throw new BrowserError(
+						`Invariant 5 (secrets): binds secret "${name}" outside type.text`,
+						'BROWSER_JOURNEY_INVALID',
+						context,
+					)
+			}
+		}
 	}
 }
 

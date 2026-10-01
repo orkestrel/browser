@@ -2036,12 +2036,19 @@ export interface BrowserStoreOptions {
  * Names one entry a listing could not read.
  *
  * @remarks
- * - `path` — the entry's path
- * - `message` — why the entry could not be read
+ * - `name` — the entry's name, without its directory
+ * - `reason` — a path-free reason clause composed by the store
  */
 export interface BrowserStoreFault {
-	readonly path: string
-	readonly message: string
+	readonly name: string
+	readonly reason: string
+}
+
+/** Identifies the parameter binding that failed journey validation. */
+export interface BrowserJourneyValidationContext {
+	readonly parameter: string
+	readonly step: string
+	readonly field: string
 }
 
 /**
@@ -2149,7 +2156,7 @@ export interface BrowserRunStoreInterface {
  * @remarks
  * - `store` — keeps the journeys the tools record, list, edit, and replay
  * - `runs` — keeps each replay's run; omitting it writes no run
- * - `limit` — positive integer listing cap in characters; defaults to the enclosing toolset's limit
+ * - `limit` — positive integer listing cap in characters; Default: the owner's `limit`, including direct construction
  * - `readonly` — if `true`, refuses `record`, `save`, and `edit` before any store access, and
  *   `replay` still writes runs; if `false` or omitted, every tool runs
  */

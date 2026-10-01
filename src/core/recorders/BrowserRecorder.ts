@@ -10,7 +10,11 @@ import type {
 } from '../types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { Emitter } from '@orkestrel/emitter'
-import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_NON_STEP_TOOLS } from '../constants.js'
+import {
+	BROWSER_JOURNEY_ACTIONS,
+	BROWSER_JOURNEY_NON_STEP_TOOLS,
+	BROWSER_JOURNEY_STEP_KEYS,
+} from '../constants.js'
 import { BrowserError } from '../errors.js'
 import {
 	buildBrowserJourney,
@@ -135,9 +139,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 		}
 		const args = { ...action.arguments }
 		if (BROWSER_JOURNEY_ACTIONS.some((name) => name === action.action)) {
-			delete args['ref']
-			delete args['tab']
-			delete args['secret']
+			for (const key of BROWSER_JOURNEY_STEP_KEYS) delete args[key]
 		}
 		if (action.action === 'type' && action.secret === true) {
 			const taken = collectBrowserJourneySecrets(this.#steps)

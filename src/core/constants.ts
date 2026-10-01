@@ -803,18 +803,6 @@ export const BROWSER_JOURNEY_PARAMETER_PATTERN = /^[a-z][a-zA-Z0-9]*$/
 /** Matches a run id containing an ISO timestamp with hyphenated time and a hexadecimal suffix. */
 export const BROWSER_RUN_ID_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-f0-9]{4}$/
 
-/** Names observation and journey tools that cannot become journey steps. */
-export const BROWSER_JOURNEY_NON_STEP_TOOLS: readonly string[] = Object.freeze([
-	'look',
-	'read',
-	'tabs',
-	'record',
-	'save',
-	'journeys',
-	'edit',
-	'replay',
-])
-
 /** Holds the journey and run file format this package writes and reads, `1`. */
 export const BROWSER_JOURNEY_FORMAT_VERSION: BrowserJourney['format'] = 1
 
@@ -849,6 +837,15 @@ export const BROWSER_JOURNEY_TOOL_NAMES: readonly BrowserToolName[] = Object.fre
 	'edit',
 	'replay',
 ])
+
+/** Names observation and journey tools that cannot become journey steps. */
+export const BROWSER_JOURNEY_NON_STEP_TOOLS: readonly string[] = Object.freeze([
+	...BROWSER_OBSERVATION_TOOL_NAMES,
+	...BROWSER_JOURNEY_TOOL_NAMES,
+])
+
+/** Names native tool arguments represented by journey targets, tabs, or secret bindings. */
+export const BROWSER_JOURNEY_STEP_KEYS: readonly string[] = Object.freeze(['ref', 'tab', 'secret'])
 
 /** Holds the refusal `record`, `save`, and `edit` return when the journeys are read-only. */
 export const BROWSER_JOURNEY_READONLY_REFUSAL = 'The journeys are read-only; call replay.'

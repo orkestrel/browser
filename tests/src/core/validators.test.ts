@@ -5,6 +5,7 @@ import {
 	isBrowserJourneyBinding,
 	isBrowserJourneyTab,
 	isBrowserJourneyTarget,
+	isBrowserJourneyValidationContext,
 	validateBrowserJourney,
 	validateBrowserJourneyEdit,
 	validateBrowserJourneyParameter,
@@ -19,6 +20,41 @@ import {
 } from '../../setup.js'
 
 describe('journey validators', () => {
+	it('recognizes binding coordinates and contains hostile context reads', () => {
+		expect(
+			isBrowserJourneyValidationContext({ parameter: 'email', step: 's4', field: 'text' }),
+		).toBe(true)
+		expect(isBrowserJourneyValidationContext({ parameter: 'email', step: 's4' })).toBe(false)
+		expect(isBrowserJourneyValidationContext({ parameter: 'email', step: 4, field: 'text' })).toBe(
+			false,
+		)
+		expect(isBrowserJourneyValidationContext(undefined)).toBe(false)
+		expect(
+			isBrowserJourneyValidationContext(
+				new Proxy(
+					{},
+					{
+						get: () => {
+							throw new Error('hostile context')
+						},
+					},
+				),
+			),
+		).toBe(false)
+	})
+	it('names the undeclared binding coordinates in the validation context', () => {
+		expect(
+			attempt(() =>
+				validateBrowserJourney({
+					...BROWSER_JOURNEY_FIXTURE,
+					parameters: {},
+				}),
+			),
+		).toMatchObject({
+			success: false,
+			error: { context: { parameter: 'email', step: 's4', field: 'text' } },
+		})
+	})
 	it('recognizes only declared secret type.text bindings and contains hostile reads', () => {
 		const step = { action: 'type', arguments: { text: { parameter: 'password' } } }
 		const parameters = { password: { secret: true } }
@@ -88,6 +124,7 @@ describe('journey validators', () => {
 			error: {
 				code: 'BROWSER_JOURNEY_INVALID',
 				message: 'Invariant 5 (secrets): binds secret "password" outside type.text',
+				context: { parameter: 'password', step: 's1', field: 'text' },
 			},
 		})
 	})

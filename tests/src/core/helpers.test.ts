@@ -17,6 +17,10 @@ import {
 	editBrowserJourney,
 	validateBrowserJourneyStep,
 	renderBrowserJourney,
+	renderBrowserJourneyFault,
+	normalizeBrowserJourneyReason,
+	validateBrowserJourneyName,
+	validateBrowserStorePage,
 	deriveBrowserJourneyTrigger,
 	deriveBrowserJourneySecret,
 	generateBrowserRunId,
@@ -70,6 +74,8 @@ import {
 	BROWSER_RUN_LISTING,
 	BROWSER_RUN_VIEW,
 	BROWSER_JOURNEY_FIXTURE,
+	BROWSER_STORE_FAULT_FIXTURE,
+	BROWSER_STORE_INVALID_NAMES,
 	BROWSER_JOURNEY_LISTING,
 	BROWSER_JOURNEY_TEMPLATE_CASES,
 	BROWSER_JOURNEY_EDIT_REFUSALS,
@@ -1184,6 +1190,52 @@ describe('settleBrowserTeardown', () => {
 })
 
 describe('journey editing and rendering', () => {
+	it('renders a structured journey fault without parsing its reason', () => {
+		expect(renderBrowserJourneyFault(BROWSER_STORE_FAULT_FIXTURE)).toBe(
+			'broken-journey cannot be read: The read/write mode is unsupported',
+		)
+	})
+	it('normalizes error and string reasons to a clause', () => {
+		expect(
+			normalizeBrowserJourneyReason(
+				new Error(
+					'Invariant 4 (bindings): binds an undeclared parameter; call journeys.\n\nDetails',
+				),
+			),
+		).toBe('binds an undeclared parameter')
+		expect(normalizeBrowserJourneyReason('The write failed...')).toBe('The write failed')
+		expect(normalizeBrowserJourneyReason(undefined)).toBe('undefined')
+	})
+	it('checks names before store access with the path code', () => {
+		expect(() => validateBrowserJourneyName('add-kettle')).not.toThrow()
+		expect(() => validateBrowserJourneyName('a'.repeat(64))).not.toThrow()
+		for (const name of [...BROWSER_STORE_INVALID_NAMES, 'a'.repeat(65)])
+			expect(() => validateBrowserJourneyName(name)).toThrow(
+				expect.objectContaining({ code: 'BROWSER_JOURNEY_PATH' }),
+			)
+	})
+	it('checks safe integer paging boundaries with the argument code', () => {
+		expect(() => validateBrowserStorePage(0, 1)).not.toThrow()
+		expect(() => validateBrowserStorePage(-0, Number.MAX_SAFE_INTEGER)).not.toThrow()
+		for (const invalid of [
+			-1,
+			0.5,
+			Number.NaN,
+			Number.POSITIVE_INFINITY,
+			Number.MAX_SAFE_INTEGER + 1,
+		]) {
+			expect(() => validateBrowserStorePage(invalid, 1)).toThrow(
+				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+			)
+			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
+				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+			)
+		}
+		for (const invalid of [0, -0])
+			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
+				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+			)
+	})
 	it('attributes an exhausted id counter to the add before later edits', () => {
 		expect(
 			attempt(() =>

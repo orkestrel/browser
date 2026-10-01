@@ -191,7 +191,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 		for (const [name, value] of Object.entries(this.#options?.inputs ?? {})) {
 			if (!Object.hasOwn(journey.parameters, name) || !isString(value))
 				throw new BrowserError(
-					`Journey ${journey.name} has no input named ${JSON.stringify(name)}.`,
+					`Journey ${journey.name} has no parameter named ${JSON.stringify(name)}.`,
 					'BROWSER_JOURNEY_INPUT',
 					{ parameter: name },
 				)

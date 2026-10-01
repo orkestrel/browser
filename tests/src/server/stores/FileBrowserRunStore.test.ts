@@ -184,7 +184,10 @@ describe('FileBrowserRunStore persisted files', () => {
 		const page = await store.list(BROWSER_RUN_FIXTURE.journey.name, { limit: 100 })
 		expect(page.entries.map((run) => run.id)).toEqual([readable.id])
 		expect(page.truncated).toBe(true)
-		expect(page.faults.map((fault) => fault.path)).toEqual([broken.directory, linked.directory])
+		expect(page.faults).toEqual([
+			{ name: broken.id, reason: 'The stored entry is malformed or unreadable' },
+			{ name: linked.id, reason: 'The entry path is refused' },
+		])
 		const next = await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 1 })
 		expect(next.entries.map((run) => run.id)).toEqual([last.id])
 		expect(next.truncated).toBe(false)
