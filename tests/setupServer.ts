@@ -7,7 +7,7 @@ import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { RetryOptions, TeardownInterface } from '@orkestrel/test'
 import type { MCPTransportInterface } from '@orkestrel/mcp'
-import type { BrowserContextInterface, BrowserPageInterface, BrowserStoreOptions } from '@src/core'
+import type { BrowserContextInterface, BrowserPageInterface } from '@src/core'
 import type {
 	BrowserConnection,
 	BrowserDiscoveryResult,
@@ -16,7 +16,6 @@ import type {
 	BrowserLaunchFunction,
 	BrowserOptions,
 	BrowserStatus,
-	FileBrowserStoreOptions,
 } from '@src/server'
 import type { BrowserElementFixture, CDPSentMessage, CDPTestTransportInterface } from './setup.js'
 import { spawn as spawnProcess, spawnSync } from 'node:child_process'
@@ -57,7 +56,6 @@ import {
 } from '@orkestrel/test'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
-import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
 import { createBrowserElementFixture, replyOk } from './setup.js'
 
 /**
@@ -2459,20 +2457,4 @@ export async function stopBrowserChild(child: ChildProcess): Promise<void> {
 	)
 	child.kill('SIGKILL')
 	await ending
-}
-
-/** Runs an external filesystem interleaving after each real component check. */
-export class BrowserLockObserver extends FileBrowserStore {
-	readonly #observe: (path: string) => Promise<void>
-
-	constructor(options: FileBrowserStoreOptions, observe: (path: string) => Promise<void>) {
-		super(options)
-		this.#observe = observe
-	}
-
-	override async check(path: string, options?: BrowserStoreOptions): Promise<boolean> {
-		const present = await super.check(path, options)
-		await this.#observe(path)
-		return present
-	}
 }

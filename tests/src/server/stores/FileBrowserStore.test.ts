@@ -15,7 +15,7 @@ import { validateBrowserRun } from '@src/core'
 import { BROWSER_JOURNEY_LOCK_ATTEMPTS } from '@src/server'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
-import { BrowserLockObserver } from '../../../setupServer.js'
+import { BrowserLockObserver } from './suite.js'
 
 describe('FileBrowserStore', () => {
 	it('refuses a replaced empty directory whose published entry belongs to another holder', async () => {

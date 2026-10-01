@@ -1,4 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
+import type { BrowserStoreOptions } from '@src/core'
+import type { FileBrowserStoreOptions } from '@src/server'
 import { spawn as spawnProcess, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -6,6 +8,7 @@ import { describe, it, expect } from 'vitest'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import { createScratch } from '@orkestrel/test/server'
 import { waitForEvent } from '@orkestrel/test'
+import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import {
 	SOURCE_HOOK,
 	BROWSER_LOCK_RECOVERER,
@@ -18,6 +21,22 @@ import {
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
 } from '../../../setup.js'
+
+/** Runs an external filesystem interleaving after each real component check. */
+export class BrowserLockObserver extends FileBrowserStore {
+	readonly #observe: (path: string) => Promise<void>
+
+	constructor(options: FileBrowserStoreOptions, observe: (path: string) => Promise<void>) {
+		super(options)
+		this.#observe = observe
+	}
+
+	override async check(path: string, options?: BrowserStoreOptions): Promise<boolean> {
+		const present = await super.check(path, options)
+		await this.#observe(path)
+		return present
+	}
+}
 
 /**
  * Registers filesystem-only proofs for the durable journey and run stores.
