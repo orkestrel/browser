@@ -22,7 +22,7 @@ import type {
 import { isObject, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_FORMAT_VERSION } from './constants.js'
-import { BrowserError } from './errors.js'
+import { BrowserError, isBrowserError } from './errors.js'
 import {
 	deriveBrowserJourneyTrigger,
 	generateBrowserRunId,
@@ -106,7 +106,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 				)
 				steps.push(recorded)
 				try {
-					if (!secret && !options?.signal?.aborted) {
+					if (!secret && !options?.signal?.aborted && recorded.outcome !== 'interrupted') {
 						const capture = await this.#capture(slot, step.id, options)
 						if (capture !== undefined) {
 							recorded = { ...recorded, capture }
@@ -166,7 +166,17 @@ export class BrowserReplay implements BrowserReplayInterface {
 
 	#prepare(): Readonly<Record<string, string>> {
 		const journey = this.#revision.journey
-		validateBrowserJourney(journey)
+		const placement = this.#toolset.native.some((tool) => tool.name === 'navigate') ? 'page' : 'dom'
+		try {
+			validateBrowserJourney(journey)
+		} catch (error) {
+			if (!isBrowserError(error)) throw error
+			throw new BrowserError(
+				error.message,
+				error.code,
+				error.context ?? { action: 'replay', placement },
+			)
+		}
 		const inputs: Record<string, string> = {}
 		for (const [name, parameter] of Object.entries(journey.parameters)) {
 			if (parameter.default !== undefined) inputs[name] = parameter.default
@@ -176,6 +186,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 				throw new BrowserError(
 					`Journey ${journey.name} has no input named ${JSON.stringify(name)}.`,
 					'BROWSER_JOURNEY_INPUT',
+					{ parameter: name },
 				)
 			inputs[name] = value
 		}
@@ -184,11 +195,16 @@ export class BrowserReplay implements BrowserReplayInterface {
 				throw new BrowserError(
 					`Journey ${journey.name} needs input ${JSON.stringify(name)}.`,
 					'BROWSER_JOURNEY_INPUT',
+					{ parameter: name },
 				)
 		}
 		for (const step of journey.steps) {
 			if (step.action === 'unresolved')
-				throw new BrowserError(`Step ${step.id} is unresolved: ${step.gap}.`, 'BROWSER_JOURNEY_GAP')
+				throw new BrowserError(
+					`Step ${step.id} is unresolved: ${step.gap}.`,
+					'BROWSER_JOURNEY_GAP',
+					{ step: step.id },
+				)
 			if (BROWSER_JOURNEY_ACTIONS.some((name) => name === step.action)) {
 				const supported =
 					['click', 'type', 'wait'].includes(step.action) ||
@@ -201,6 +217,11 @@ export class BrowserReplay implements BrowserReplayInterface {
 					throw new BrowserError(
 						`Step ${step.id} cannot execute ${step.action} in this placement.`,
 						'BROWSER_JOURNEY_PLACEMENT',
+						{
+							step: step.id,
+							action: step.action,
+							placement,
+						},
 					)
 			}
 		}

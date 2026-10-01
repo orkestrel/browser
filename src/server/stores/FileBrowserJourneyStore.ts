@@ -11,7 +11,7 @@ import { BrowserError } from '../../core/errors.js'
 import { BROWSER_JOURNEY_NAME_PATTERN } from '../../core/constants.js'
 import { validateBrowserJourney } from '../../core/validators.js'
 import {
-	BROWSER_JOURNEY_FILE,
+	BROWSER_JOURNEY_SNAPSHOT_FILE,
 	BROWSER_JOURNEY_REVISION_FILE,
 	BROWSER_JOURNEY_LOCK_FILE,
 } from '../constants.js'
@@ -37,7 +37,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 	): Promise<BrowserJourneyRevision | undefined> {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)
-		const path = this.#files.resolvePath(name, BROWSER_JOURNEY_FILE)
+		const path = this.#files.resolvePath(name, BROWSER_JOURNEY_SNAPSHOT_FILE)
 		const source = await this.#files.read(path, options)
 		if (source === undefined) return undefined
 		try {
@@ -69,7 +69,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		this.#files.validateName(journey.name)
 		validateBrowserJourney(journey)
 		const owned = structuredClone(journey)
-		const path = this.#files.resolvePath(owned.name, BROWSER_JOURNEY_FILE)
+		const path = this.#files.resolvePath(owned.name, BROWSER_JOURNEY_SNAPSHOT_FILE)
 		const counter = this.#files.resolvePath(owned.name, BROWSER_JOURNEY_REVISION_FILE)
 		return this.#files.lock(
 			this.#files.resolvePath(owned.name, BROWSER_JOURNEY_LOCK_FILE),
@@ -118,7 +118,10 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 					throw new BrowserError(`Malformed revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
 				// Preserve the committed revision even if a process exited before updating its counter.
 				await this.#files.write(counter, String(Math.max(previous, current.revision ?? 0)), options)
-				await this.#files.remove(this.#files.resolvePath(name, BROWSER_JOURNEY_FILE), options)
+				await this.#files.remove(
+					this.#files.resolvePath(name, BROWSER_JOURNEY_SNAPSHOT_FILE),
+					options,
+				)
 			},
 			options,
 		)

@@ -40,7 +40,10 @@ describe('BrowserReplay', () => {
 		try {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs }).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_FORMAT' })
+			).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_FORMAT',
+				context: { action: 'replay', placement: 'dom' },
+			})
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			expect((await runs.list(journey.name)).entries).toEqual([])
@@ -63,7 +66,7 @@ describe('BrowserReplay', () => {
 		try {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs }).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT' })
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'status' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			await expect(
@@ -72,7 +75,7 @@ describe('BrowserReplay', () => {
 					{ journey },
 					{ runs, inputs: { status: 'Ready', extra: 'unknown' } },
 				).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT' })
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'extra' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			const gap = createBrowserJourneyFixture([
@@ -81,7 +84,7 @@ describe('BrowserReplay', () => {
 			])
 			await expect(
 				new BrowserReplay(toolset, { journey: gap }, { runs }).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_GAP' })
+			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_GAP', context: { step: 's2' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			expect((await runs.list(journey.name)).entries).toEqual([])
@@ -113,6 +116,7 @@ describe('BrowserReplay', () => {
 			try {
 				await expect(new BrowserReplay(toolset, { journey }).execute()).rejects.toMatchObject({
 					code: 'BROWSER_JOURNEY_PLACEMENT',
+					context: { step: 's2', action, placement: 'dom' },
 				})
 				expect(holds.count).toBe(0)
 				expect(view.calls).toEqual([])
@@ -318,6 +322,84 @@ describe('BrowserReplay', () => {
 		}
 	})
 
+	it('skips capture after an interrupted step and reaches its dialog', async () => {
+		const withheld: CDPSentMessage[] = []
+		const fixture = await createBrowserElementFixture({
+			released: (message) => withheld.push(message),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		const memory = new MemoryBrowserRunStore()
+		const captures = createRecorder<readonly [string]>()
+		const screenshots = createRecorder<readonly [boolean]>()
+		let dialog = false
+		fixture.transport.onSend('Page.handleJavaScriptDialog', (message) => {
+			dialog = false
+			fixture.transport.reply(message.id, {})
+		})
+		fixture.transport.onSend('Page.captureScreenshot', () => {
+			screenshots.handler(dialog)
+		})
+		await toolset.start()
+		try {
+			const pending = new BrowserReplay(
+				toolset,
+				{
+					journey: createBrowserJourneyFixture([
+						{ action: 'click', arguments: {}, target: { role: 'button', name: 'Place order' } },
+						{ action: 'dialog', arguments: { accept: true } },
+						{ action: 'press', arguments: { key: 'Escape' } },
+					]),
+				},
+				{
+					runs: {
+						open: async (name, options) => ({
+							...(await memory.open(name, options)),
+							directory: '/opened-run',
+						}),
+						capture: async (_slot, name) => {
+							captures.handler(name)
+							if (dialog) throw new Error('Dialog blocks capture')
+							return name
+						},
+						get: memory.get.bind(memory),
+						set: memory.set.bind(memory),
+						list: memory.list.bind(memory),
+						delete: memory.delete.bind(memory),
+					},
+					on: {
+						step: (step) => {
+							if (step.action === 'dialog')
+								fixture.transport.reply(requireValue(withheld[0]).id, {})
+						},
+					},
+				},
+			).execute()
+			await waitForCondition('click awaits release before dialog', () => withheld.length === 1)
+			dialog = true
+			fixture.transport.event(
+				'Page.javascriptDialogOpening',
+				{ type: 'confirm', message: 'Continue?' },
+				'session-main',
+			)
+			const run = await pending
+			expect(run.outcome).toBe('complete')
+			expect(run.fault).toBeUndefined()
+			expect(run.steps.map((step) => step.outcome)).toEqual(['interrupted', 'done', 'done'])
+			expect(run.steps[0]).not.toHaveProperty('capture')
+			expect(captures.calls).toEqual([['s2.png'], ['s3.png']])
+			expect(screenshots.calls).toEqual([[false], [false]])
+			expect(
+				fixture.transport.sent.filter(
+					(message) => message.method === 'Page.handleJavaScriptDialog',
+				),
+			).toHaveLength(1)
+		} finally {
+			for (const message of withheld) fixture.transport.reply(message.id, {})
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
 	it('stops an interruption when the next step is not a dialog', async () => {
 		const withheld: CDPSentMessage[] = []
 		const fixture = await createBrowserElementFixture({
@@ -379,19 +461,39 @@ describe('BrowserReplay', () => {
 		}
 	})
 
-	it('refuses an unprompted dialog when reached', async () => {
+	it('refuses a dialog opened between steps without answering it', async () => {
 		const fixture = await createBrowserElementFixture()
 		const toolset = createBrowserToolset(fixture.page)
+		replyOk(fixture.transport, 'Page.handleJavaScriptDialog')
 		await toolset.start()
 		try {
-			const run = await new BrowserReplay(toolset, {
-				journey: createBrowserJourneyFixture([
-					{ action: 'press', arguments: { key: 'Escape' } },
-					{ action: 'dialog', arguments: { accept: true } },
-				]),
-			}).execute()
+			const run = await new BrowserReplay(
+				toolset,
+				{
+					journey: createBrowserJourneyFixture([
+						{ action: 'press', arguments: { key: 'Escape' } },
+						{ action: 'dialog', arguments: { accept: true } },
+					]),
+				},
+				{
+					on: {
+						step: (step) => {
+							if (step.id === 's1')
+								fixture.transport.event(
+									'Page.javascriptDialogOpening',
+									{
+										type: 'confirm',
+										message: 'Between steps',
+									},
+									'session-main',
+								)
+						},
+					},
+				},
+			).execute()
 			expect(run.outcome).toBe('stopped')
 			expect(run.steps.map((step) => step.outcome)).toEqual(['done', 'refused'])
+			expect(run.steps[1]?.result).toBe('Step s2 answers no interrupted action.')
 			expect(
 				fixture.transport.sent.filter(
 					(message) => message.method === 'Page.handleJavaScriptDialog',

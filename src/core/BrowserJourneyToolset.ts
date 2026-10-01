@@ -353,7 +353,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 					...(this.#runs === undefined ? {} : { runs: this.#runs }),
 				}).execute({ signal })
 			} catch (error) {
-				throw this.#prepared(error, revision.journey, inputs)
+				throw this.#prepared(error, revision.journey)
 			}
 			return renderBrowserRun(run, signal.aborted ? undefined : await this.#view(signal))
 		} finally {
@@ -364,53 +364,45 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	}
 
 	// Maps a preparation refusal to its sentence; any other failure keeps its own message.
-	#prepared(
-		error: unknown,
-		journey: BrowserJourney,
-		inputs: Readonly<Record<string, string>>,
-	): unknown {
+	#prepared(error: unknown, journey: BrowserJourney): unknown {
 		if (!isBrowserError(error)) return error
 		const name = journey.name
 		switch (error.code) {
 			case 'BROWSER_JOURNEY_INPUT': {
-				// Preparation refuses an unknown input before a missing one.
-				const unknown = Object.keys(inputs).find((key) => !Object.hasOwn(journey.parameters, key))
-				if (unknown !== undefined)
+				const parameter = error.context?.['parameter']
+				if (!isString(parameter)) return error
+				if (!Object.hasOwn(journey.parameters, parameter))
 					return new BrowserError(
-						`Journey ${name} has no parameter ${JSON.stringify(unknown)}; call journeys.`,
+						`Journey ${name} has no parameter ${JSON.stringify(parameter)}; call journeys.`,
 						error.code,
-						{ parameter: unknown },
+						error.context,
 					)
-				const missing = Object.entries(journey.parameters).find(
-					([key, parameter]) => parameter.default === undefined && !Object.hasOwn(inputs, key),
-				)?.[0]
 				return new BrowserError(
-					`Journey ${name} needs the input ${JSON.stringify(missing)}; call replay with inputs.`,
+					`Journey ${name} needs the input ${JSON.stringify(parameter)}; call replay with inputs.`,
 					error.code,
-					{ parameter: missing },
+					error.context,
 				)
 			}
 			case 'BROWSER_JOURNEY_GAP': {
-				// Preparation refuses the first gap in step order.
-				const step = journey.steps.find((candidate) => candidate.action === 'unresolved')
+				const step = journey.steps.find((candidate) => candidate.id === error.context?.['step'])
 				if (step === undefined) return error
 				return new BrowserError(
 					`Journey ${name} has a gap at ${step.id} (${step.gap}); call edit to remove or replace ${step.id}.`,
 					error.code,
-					{ step: step.id },
+					error.context,
 				)
 			}
 			case 'BROWSER_JOURNEY_PLACEMENT': {
-				// The replay names the refused step first in its message and carries no context.
-				const id = /^Step (s[1-9]\d*) /.exec(error.message)?.[1]
-				const step = journey.steps.find((candidate) => candidate.id === id)
-				if (step === undefined) return error
+				const id = error.context?.['step']
+				const action = error.context?.['action']
+				const placement = error.context?.['placement']
+				if (!isString(id) || !isString(action) || !isString(placement)) return error
 				return new BrowserError(
-					step.action === 'switch'
-						? `Journey ${name} cannot run here: ${step.id} switch needs a browser context; call journeys.`
-						: `Journey ${name} cannot run here: ${step.id} ${step.action} is not available in a page toolset; call journeys.`,
+					action === 'switch'
+						? `Journey ${name} cannot run here: ${id} switch needs a browser context; call journeys.`
+						: `Journey ${name} cannot run here: ${id} ${action} is not available in a ${placement === 'dom' ? 'page' : 'browser'} toolset; call journeys.`,
 					error.code,
-					{ step: step.id },
+					error.context,
 				)
 			}
 			case 'BROWSER_JOURNEY_FORMAT':
@@ -418,6 +410,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				return new BrowserError(
 					`Journey ${name} cannot be read: ${this.#describe(error)}; call journeys.`,
 					error.code,
+					error.context,
 				)
 			default:
 				return error

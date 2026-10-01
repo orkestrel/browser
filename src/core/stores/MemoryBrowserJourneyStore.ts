@@ -60,6 +60,8 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			.map(([, revision]) => revision)
 		const offset = options?.offset ?? 0
 		const limit = options?.limit ?? entries.length
+		if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 0)
+			throw new BrowserError('Paging requires nonnegative integers', 'BROWSER_JOURNEY_PATH')
 		return {
 			entries: structuredClone(entries.slice(offset, offset + limit)),
 			truncated: offset + limit < entries.length,
