@@ -1227,11 +1227,10 @@ The following table lists the server constants.
 | `BROWSER_JOURNEY_SNAPSHOT_FILE`   | const | Names the persisted journey snapshot.                                                                                                                                                                                         |
 | `BROWSER_JOURNEY_REVISION_FILE`   | const | Names the retained journey revision counter.                                                                                                                                                                                  |
 | `BROWSER_JOURNEY_LOCK_ATTEMPTS`   | const | Bounds attempts to acquire a journey lock after concurrent recovery.                                                                                                                                                          |
-| `BROWSER_JOURNEY_LOCK_FILE`       | const | Names the exclusive journey write lock.                                                                                                                                                                                       |
+| `BROWSER_JOURNEY_LOCK_DIRECTORY`  | const | Names the exclusive journey write lock directory.                                                                                                                                                                             |
 | `BROWSER_RUN_FILE`                | const | Names the persisted run snapshot.                                                                                                                                                                                             |
 | `BROWSER_RUN_DIRECTORY`           | const | Names the journey directory holding its runs.                                                                                                                                                                                 |
 | `BROWSER_FILE_STORE_LIMIT`        | const | Bounds a file-store listing page by default.                                                                                                                                                                                  |
-| `BROWSER_FILE_STORE_RESERVED`     | const | Lists reserved filesystem names refused as journey names on every host.                                                                                                                                                       |
 
 #### Errors
 
@@ -1267,6 +1266,8 @@ The following table lists the server helpers.
 | ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `findSystemBrowsers`      | function | Enumerates every Chrome/Chromium/Edge executable discoverable on this machine, deduplicated by normalized absolute path.                                   |
 | `findSystemBrowser`       | function | Locates a Chrome/Chromium/Edge executable on this machine — the first entry of `findSystemBrowsers`.                                                       |
+| `formatBrowserLockEntry`  | function | Formats a process identifier and UUID token as a lock entry name.                                                                                          |
+| `parseBrowserLockEntry`   | function | Parses the holder process identifier from a lock entry name.                                                                                               |
 | `parseBrowserEngine`      | function | Classifies an executable path/name into a `BrowserEngine` by case-insensitive hint, checked in the order edge → chromium → chrome.                         |
 | `normalizeExecutablePath` | function | Normalizes an executable path for cross-source deduplication (case-insensitive on Windows).                                                                |
 | `browserToEngine`         | function | Classifies a `/json/version` `Browser` string into a `BrowserEngine` (`Edg/` → edge, `Chrome/` → chrome, else chromium).                                   |

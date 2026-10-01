@@ -11,7 +11,7 @@ import { BROWSER_JOURNEY_NAME_PATTERN, BrowserError, validateBrowserJourney } fr
 import {
 	BROWSER_JOURNEY_SNAPSHOT_FILE,
 	BROWSER_JOURNEY_REVISION_FILE,
-	BROWSER_JOURNEY_LOCK_FILE,
+	BROWSER_JOURNEY_LOCK_DIRECTORY,
 } from '../constants.js'
 import { FileBrowserStore } from './FileBrowserStore.js'
 
@@ -70,7 +70,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		const path = this.#files.resolvePath(owned.name, BROWSER_JOURNEY_SNAPSHOT_FILE)
 		const counter = this.#files.resolvePath(owned.name, BROWSER_JOURNEY_REVISION_FILE)
 		return this.#files.lock(
-			this.#files.resolvePath(owned.name, BROWSER_JOURNEY_LOCK_FILE),
+			this.#files.resolvePath(owned.name, BROWSER_JOURNEY_LOCK_DIRECTORY),
 			async () => {
 				const current = await this.get(owned.name, options)
 				if (expected !== undefined && expected !== (current?.revision ?? 0))
@@ -105,7 +105,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)
 		await this.#files.lock(
-			this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_FILE),
+			this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_DIRECTORY),
 			async () => {
 				const current = await this.get(name, options)
 				if (current === undefined) return

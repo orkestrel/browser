@@ -39,9 +39,10 @@ import {
 	waitForCondition,
 	waitForEvent,
 } from '@orkestrel/test'
-import { isRunning } from '@orkestrel/test/server'
+import { createScratch, isRunning } from '@orkestrel/test/server'
 import {
 	BrowseChild,
+	BrowserLockObserver,
 	COOPERATIVE_SIGTERM,
 	PROCESS_TABLE,
 	createBrowserJourneyStage,
@@ -89,6 +90,36 @@ afterAll(async () => {
 })
 
 // === Ports
+
+describe('BrowserLockObserver', () => {
+	it('observes completed filesystem checks and preserves presence and refusals', async () => {
+		const scratch = createScratch()
+		try {
+			const observed = createRecorder<[string, string | undefined]>()
+			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
+				observed.handler(path, scratch.read('entry'))
+				scratch.write('entry', 'observed')
+			})
+			const entry = join(scratch.path, 'entry')
+			await expect(files.check(entry)).resolves.toBe(false)
+			await expect(files.check(entry)).resolves.toBe(true)
+			expect(observed.calls).toEqual([
+				[entry, undefined],
+				[entry, 'observed'],
+			])
+			await expect(files.check(join(scratch.path, '..', 'escape'))).rejects.toThrow('Refused path')
+			expect(observed.count).toBe(2)
+			const controller = new AbortController()
+			controller.abort(new Error('aborted check'))
+			await expect(files.check(entry, { signal: controller.signal })).rejects.toThrow(
+				'aborted check',
+			)
+			expect(observed.count).toBe(2)
+		} finally {
+			scratch.destroy()
+		}
+	})
+})
 
 describe('reservePort', () => {
 	it('reserves a loopback port that a server can then bind and read back', async () => {

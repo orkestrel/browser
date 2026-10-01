@@ -12,17 +12,47 @@ import {
 } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import { validateBrowserRun } from '@src/core'
-import { BROWSER_JOURNEY_LOCK_ATTEMPTS } from '@src/server'
+import { BROWSER_JOURNEY_LOCK_ATTEMPTS, formatBrowserLockEntry } from '@src/server'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
-import { BrowserLockObserver } from './suite.js'
+import { BrowserLockObserver } from '../../../setupServer.js'
 
 describe('FileBrowserStore', () => {
+	it('names the directory with ACCESS when release cannot rmdir it', async () => {
+		const scratch = createScratch()
+		try {
+			const lock = join(scratch.path, 'journey.lock')
+			let releasing = false
+			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
+				if (path !== lock || !releasing) return
+				// Replace the emptied directory after its real check so rmdir reaches ENOTDIR.
+				expect(await readdir(lock), 'release has unlinked its entry').toEqual([])
+				await rmdir(lock)
+				await writeFile(lock, 'replacement')
+			})
+			await expect(
+				files.lock(lock, async () => {
+					releasing = true
+				}),
+				'rmdir failure names the denied directory',
+			).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_ACCESS',
+				message: `Cannot remove lock directory: ${lock}`,
+				context: { path: lock },
+			})
+			expect(await readFile(lock, 'utf8')).toBe('replacement')
+		} finally {
+			scratch.destroy()
+		}
+	})
 	it('refuses a replaced empty directory whose published entry belongs to another holder', async () => {
 		const scratch = createScratch()
 		try {
 			const lock = join(scratch.path, 'journey.lock')
-			const replacement = `${process.pid}-22222222-2222-4222-8222-222222222222`
+			const replacement = formatBrowserLockEntry(
+				process.pid,
+				'22222222-2222-4222-8222-222222222222',
+			)
 			let replaced = false
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
 				if (dirname(path) !== lock || replaced) return
@@ -85,7 +115,10 @@ describe('FileBrowserStore', () => {
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
 			const lock = files.resolvePath('journey.lock')
-			const entry = '9007199254740991-11111111-1111-4111-8111-111111111111'
+			const entry = formatBrowserLockEntry(
+				Number.MAX_SAFE_INTEGER,
+				'11111111-1111-4111-8111-111111111111',
+			)
 			await mkdir(lock)
 			await writeFile(join(lock, entry), '')
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
@@ -140,7 +173,7 @@ describe('FileBrowserStore', () => {
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
 			const path = files.resolvePath('journey.lock')
-			const entry = `${process.pid}-11111111-1111-4111-8111-111111111111`
+			const entry = formatBrowserLockEntry(process.pid, '11111111-1111-4111-8111-111111111111')
 			await mkdir(path)
 			await writeFile(join(path, entry), '')
 			await expect(files.lock(path, async () => 'entered')).rejects.toMatchObject({
@@ -156,7 +189,10 @@ describe('FileBrowserStore', () => {
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
 			const path = files.resolvePath('journey.lock')
-			const replacement = `${process.pid}-22222222-2222-4222-8222-222222222222`
+			const replacement = formatBrowserLockEntry(
+				process.pid,
+				'22222222-2222-4222-8222-222222222222',
+			)
 			await files.lock(path, async () => {
 				const entries = await readdir(path)
 				expect(entries).toHaveLength(1)

@@ -1,6 +1,4 @@
 import type { ChildProcess } from 'node:child_process'
-import type { BrowserStoreOptions } from '@src/core'
-import type { FileBrowserStoreOptions } from '@src/server'
 import { spawn as spawnProcess, spawnSync } from 'node:child_process'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -8,8 +6,9 @@ import { describe, it, expect } from 'vitest'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import { createScratch } from '@orkestrel/test/server'
 import { waitForEvent } from '@orkestrel/test'
-import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
+import { formatBrowserLockEntry, parseBrowserLockEntry } from '@src/server'
 import {
+	BrowserLockObserver,
 	SOURCE_HOOK,
 	BROWSER_LOCK_RECOVERER,
 	readExitedProcessId,
@@ -22,28 +21,38 @@ import {
 	createBrowserViewDouble,
 } from '../../../setup.js'
 
-/** Runs an external filesystem interleaving after each real component check. */
-export class BrowserLockObserver extends FileBrowserStore {
-	readonly #observe: (path: string) => Promise<void>
-
-	constructor(options: FileBrowserStoreOptions, observe: (path: string) => Promise<void>) {
-		super(options)
-		this.#observe = observe
-	}
-
-	override async check(path: string, options?: BrowserStoreOptions): Promise<boolean> {
-		const present = await super.check(path, options)
-		await this.#observe(path)
-		return present
-	}
-}
-
 /**
  * Registers filesystem-only proofs for the durable journey and run stores.
  * @remarks Browser projects load the host-independent setup module, so these proofs stay server-side.
  */
 export function describeFileBrowserStores(): void {
 	describe('file store filesystem contracts', () => {
+		it('retries a lock directory that vanishes after EEXIST and before readdir', async () => {
+			const { mkdir, readdir, rmdir } = await import('node:fs/promises')
+			const scratch = createScratch()
+			try {
+				const lock = join(scratch.path, 'journey.lock')
+				await mkdir(lock)
+				let checks = 0
+				let vanished = false
+				const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
+					if (path !== lock) return
+					checks += 1
+					// The second check follows mkdir's EEXIST, immediately before reading the directory.
+					if (checks !== 2) return
+					await rmdir(lock)
+					vanished = true
+				})
+				await expect(
+					files.lock(lock, async () => 'entered'),
+					'vanished directory retries acquisition',
+				).resolves.toBe('entered')
+				expect(vanished).toBe(true)
+				expect(await readdir(scratch.path)).toEqual([])
+			} finally {
+				scratch.destroy()
+			}
+		})
 		it('refuses save when a second store saved the name between record and save', async () => {
 			const { FileBrowserJourneyStore } = await import('@src/server')
 			const { BrowserJourneyToolset, BrowserToolset } = await import('@src/core')
@@ -149,7 +158,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 					code: 'BROWSER_JOURNEY_LOCKED',
 					message: `Journey is locked: ${lock}`,
 				})
-				expect(await readdir(lock)).toEqual([expect.stringMatching(new RegExp(`^${child.pid}-`))])
+				expect((await readdir(lock)).map(parseBrowserLockEntry)).toEqual([child.pid])
 				const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
 					(listener) => {
 						child.once('exit', listener)
@@ -189,7 +198,10 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 			const children: ChildProcess[] = []
 			try {
 				const lock = join(scratch.path, 'journey.lock')
-				const dead = `${readExitedProcessId()}-11111111-1111-4111-8111-111111111111`
+				const dead = formatBrowserLockEntry(
+					readExitedProcessId(),
+					'11111111-1111-4111-8111-111111111111',
+				)
 				await mkdir(lock)
 				await writeFile(join(lock, dead), '')
 				const script = scratch.write('recover.ts', BROWSER_LOCK_RECOVERER)
@@ -209,7 +221,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 				first.send('reclaim')
 				expect(await entered).toBe('entered')
 				const held = await readdir(lock)
-				expect(held).toEqual([expect.stringMatching(new RegExp(`^${first.pid}-`))])
+				expect(held.map(parseBrowserLockEntry)).toEqual([first.pid])
 				const refused = waitForBrowserChild(second)
 				second.send('reclaim')
 				expect(await refused, 'the second recoverer cannot enter while the first holds').toBe(
@@ -539,7 +551,10 @@ console.log(JSON.stringify({
 				await store.set(journey)
 				const lock = join(scratch.path, journey.name, 'journey.lock')
 				await mkdir(lock)
-				const entry = join(lock, `${process.pid}-11111111-1111-4111-8111-111111111111`)
+				const entry = join(
+					lock,
+					formatBrowserLockEntry(process.pid, '11111111-1111-4111-8111-111111111111'),
+				)
 				await writeFile(entry, '')
 				await expect(store.set(journey, 0)).rejects.toMatchObject({
 					code: 'BROWSER_JOURNEY_LOCKED',

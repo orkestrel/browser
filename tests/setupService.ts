@@ -17,6 +17,7 @@ import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE } from '@src/core
 import { findSystemBrowser } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { waitForCondition } from '@orkestrel/test'
+export { reservePort } from './setupServer.js'
 
 /**
  * Lists the container-safe launch flags every live-browser proof shares.

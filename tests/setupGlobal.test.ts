@@ -5,6 +5,7 @@ import { isString } from '@orkestrel/contract'
 import { createRecorder } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { ignoreCall } from './setup.js'
+import { reservePort } from './setupServer.js'
 import type { BrowserLauncherInterface } from './setupGlobal.js'
 import {
 	closeFixtureServer,
@@ -163,6 +164,7 @@ describe('launchBrowserEndpoint', () => {
 			{ createBrowser: () => createFailingBrowser(new Error('unused'), undefined) },
 			{
 				SERVICE_BROWSER_ARGS: [],
+				reservePort,
 				requireSystemBrowser: () => {
 					throw new Error('no browser on this host')
 				},
@@ -182,6 +184,7 @@ describe('launchBrowserEndpoint', () => {
 			{ createBrowser: () => createFailingBrowser(connect, destroy) },
 			{
 				SERVICE_BROWSER_ARGS: [],
+				reservePort,
 				requireSystemBrowser: () => ({ executable: '/bin/true', engine: 'chromium' }),
 			},
 			[],
@@ -202,12 +205,20 @@ describe('isBrowserServerModule', () => {
 })
 
 describe('isBrowserServiceModule', () => {
+	it('requires a callable reservePort export', () => {
+		const service = { requireSystemBrowser: ignoreCall, SERVICE_BROWSER_ARGS: [] }
+		expect(isBrowserServiceModule(service), 'missing reservePort is refused').toBe(false)
+		expect(isBrowserServiceModule({ ...service, reservePort: 42 })).toBe(false)
+		expect(isBrowserServiceModule({ ...service, reservePort: ignoreCall })).toBe(true)
+	})
 	it('admits the service exports and refuses a non-string flag', () => {
 		const requireSystemBrowser = ignoreCall
-		expect(isBrowserServiceModule({ requireSystemBrowser, SERVICE_BROWSER_ARGS: ['--a'] })).toBe(
-			true,
-		)
-		expect(isBrowserServiceModule({ requireSystemBrowser, SERVICE_BROWSER_ARGS: [1] })).toBe(false)
+		expect(
+			isBrowserServiceModule({ requireSystemBrowser, reservePort, SERVICE_BROWSER_ARGS: ['--a'] }),
+		).toBe(true)
+		expect(
+			isBrowserServiceModule({ requireSystemBrowser, reservePort, SERVICE_BROWSER_ARGS: [1] }),
+		).toBe(false)
 		expect(isBrowserServiceModule({ SERVICE_BROWSER_ARGS: [] })).toBe(false)
 	})
 })
