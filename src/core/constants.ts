@@ -812,3 +812,24 @@ export const BROWSER_JOURNEY_ACTIONS: readonly BrowserToolName[] = Object.freeze
 
 /** Holds the result the `journeys` tool returns when no journey is saved. */
 export const BROWSER_JOURNEY_EMPTY_LISTING = 'No journeys are saved; call record to start one.'
+
+/**
+ * Names the journey tools a toolset constructed with `journeys` registers and reserves: `record`,
+ * `save`, `journeys`, `edit`, and `replay`.
+ */
+export const BROWSER_JOURNEY_TOOL_NAMES: readonly BrowserToolName[] = Object.freeze([
+	'record',
+	'save',
+	'journeys',
+	'edit',
+	'replay',
+])
+
+/** Holds the refusal `record`, `save`, and `edit` return when the journeys are read-only. */
+export const BROWSER_JOURNEY_READONLY_REFUSAL = 'The journeys are read-only; call replay.'
+
+/** Holds the refusal `record` returns while another journey is recording. */
+export const BROWSER_JOURNEY_RECORDING_REFUSAL = 'A journey is recording; call save first.'
+
+/** Holds the refusal `save` returns when no journey is recording. */
+export const BROWSER_JOURNEY_IDLE_REFUSAL = 'No journey is recording; call record first.'

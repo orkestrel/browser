@@ -40,5 +40,6 @@ export * from './validators.js'
 
 export * from './recorders/BrowserRecorder.js'
 export * from './BrowserReplay.js'
+export * from './BrowserJourneyToolset.js'
 export * from './stores/MemoryBrowserJourneyStore.js'
 export * from './stores/MemoryBrowserRunStore.js'
