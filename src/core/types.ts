@@ -2184,6 +2184,8 @@ export interface BrowserCodegenScript {
 
 /** Records semantic page gestures and compiles the resulting journey. */
 export interface BrowserCodegenInterface extends BrowserRecorderInterface {
+	/** Installs recording on an attached frame before its owner resumes it. */
+	attach(session: string): Promise<void>
 	/** Compiles the recorded journey into a standalone module and lists its gaps. */
 	script(options: {
 		readonly name: string
@@ -2801,7 +2803,12 @@ export interface BrowserToolsetInterface {
 	readonly view: BrowserViewInterface
 	/** Performs a tool call and returns its structured action when a handler ran. */
 	perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
-	/** Takes a queue turn and reserves action admission for the returned caller token. */
+	/**
+	 * Reserves action admission immediately and returns its caller token after earlier admitted
+	 * actions finish. Refuses later foreign actions with `BROWSER_TOOLSET_BUSY` and
+	 * `The toolset is replaying NAME until it finishes; call look.` while waiting or held.
+	 * Releases the pending reservation if the wait aborts or fails.
+	 */
 	hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface>
 	/**
 	 * Adds the tools, follows the view, and adopts the page's tools; concurrent calls share one

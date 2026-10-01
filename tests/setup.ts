@@ -17,6 +17,8 @@ import type {
 	BrowserReadingInterface,
 	BrowserReferenceFunction,
 	BrowserViewInterface,
+	BrowserToolsetInterface,
+	BrowserToolSourceEventMap,
 	CDPClientInterface,
 	CDPTarget,
 	CDPTransportEventMap,
@@ -27,12 +29,14 @@ import type {
 	CDPSendOptions,
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import type { RecorderInterface } from '@orkestrel/test'
 import { describe, it, expect } from 'vitest'
 import {
 	BrowserCodegen,
 	BROWSER_CODEGEN_SOURCE,
 	BrowserError,
 	BrowserPage,
+	BrowserToolset,
 	compileSubmitObserverExpression,
 	compileSubmitReadExpression,
 	createBrowserReading,
@@ -41,7 +45,8 @@ import {
 import { BrowserNavigationRecord } from '../src/core/BrowserNavigationRecord.js'
 import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { waitForEvent } from '@orkestrel/test'
+import { createTool, createToolManager } from '@orkestrel/tool'
+import { createRecorder, waitForEvent } from '@orkestrel/test'
 /** Describes a timer call observed while evaluating a natively parsed expression. */
 export interface BrowserCompiledTimer {
 	readonly name: string
@@ -2521,6 +2526,41 @@ export class BrowserViewDouble implements BrowserViewInterface {
  */
 export function createBrowserViewDouble(options?: BrowserViewDoubleOptions): BrowserViewDouble {
 	return new BrowserViewDouble(options)
+}
+
+/** Describes an adopted action whose completion the caller controls. */
+export interface BrowserPendingToolsetFixture {
+	readonly toolset: BrowserToolsetInterface
+	readonly view: BrowserViewDouble
+	readonly pending: PromiseWithResolvers<string>
+	readonly invoked: RecorderInterface<[]>
+}
+
+/**
+ * Creates a toolset with an adopted checkout action waiting for an explicit completion.
+ * @returns The unstarted toolset, its view, the completion, and the invocation recorder
+ */
+export function createBrowserPendingToolsetFixture(): BrowserPendingToolsetFixture {
+	const pending = Promise.withResolvers<string>()
+	const invoked = createRecorder<[]>()
+	const source = createToolManager()
+	source.add(
+		createTool({
+			name: 'checkout',
+			execute: () => {
+				invoked.handler()
+				return pending.promise
+			},
+		}),
+	)
+	const view = createBrowserViewDouble()
+	const toolset = new BrowserToolset(view, {
+		source: {
+			adopt: async () => source.tools(),
+			emitter: new Emitter<BrowserToolSourceEventMap>(),
+		},
+	})
+	return { toolset, view, pending, invoked }
 }
 
 /**
