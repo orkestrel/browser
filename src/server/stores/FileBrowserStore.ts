@@ -30,6 +30,10 @@ export class FileBrowserStore {
 		try {
 			this.#root = realpathSync(options.root)
 		} catch (error) {
+			if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+				throw new BrowserError(`Missing root: ${options.root}`, 'BROWSER_JOURNEY_PATH', {
+					path: options.root,
+				})
 			throw this.error(options.root, error)
 		}
 	}

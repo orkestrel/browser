@@ -211,7 +211,7 @@ export const BROWSER_STORE_GLOBS: Readonly<Record<string, string>> = Object.free
 })
 
 /** Names the persisted journey snapshot. */
-export const BROWSER_JOURNEY_FILE = 'journey.json'
+export const BROWSER_JOURNEY_SNAPSHOT_FILE = 'journey.json'
 /** Names the retained journey revision counter. */
 export const BROWSER_JOURNEY_REVISION_FILE = 'revision'
 /** Names the exclusive journey write lock. */
