@@ -3590,6 +3590,7 @@ import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
 
 export async function execute(page: BrowserPageInterface, inputs: { readonly email?: string } = {}): Promise<void> {
 	for (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')
+	if (inputs.email !== undefined && typeof inputs.email !== 'string') throw new Error('email: the input is not a string')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
@@ -3609,6 +3610,7 @@ export const BROWSER_JOURNEY_MODULE_JAVASCRIPT = `import { createBrowserToolset,
 
 export async function execute(page, inputs = {}) {
 	for (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')
+	if (inputs.email !== undefined && typeof inputs.email !== 'string') throw new Error('email: the input is not a string')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
@@ -3704,6 +3706,10 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly sto
 	for (const name of Object.keys(inputs ?? {})) if (!['store', 'product', 'customer', 'password', 'key', 'reply'].includes(name)) throw new Error(name + ': no parameter has that name')
 	if (typeof inputs?.customer !== 'string') throw new Error('customer: the input is missing')
 	if (typeof inputs?.password !== 'string') throw new Error('password: the input is missing')
+	if (inputs.store !== undefined && typeof inputs.store !== 'string') throw new Error('store: the input is not a string')
+	if (inputs.product !== undefined && typeof inputs.product !== 'string') throw new Error('product: the input is not a string')
+	if (inputs.key !== undefined && typeof inputs.key !== 'string') throw new Error('key: the input is not a string')
+	if (inputs.reply !== undefined && typeof inputs.reply !== 'string') throw new Error('reply: the input is not a string')
 	throw new Error('s11: the element is in a child frame; handle it here')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
@@ -4259,9 +4265,60 @@ export interface BrowserJourneyRefusalCase extends BrowserJourneyModuleCase {
 }
 
 /**
- * Holds the inputs on which the generated module of {@link BROWSER_JOURNEY_PREPARED_JOURNEY} and its
- * replay both refuse before the `Save draft` click, so the `/form` route's click log stays empty:
- * no value for the required `name`, and a `nmae` that names no parameter.
+ * Finds the one element that carries a role and an exact accessible name through the view's own
+ * element manager, so a proof's direct side resolves its element without `locateBrowserTarget`.
+ *
+ * @param view - The view whose `elements.find` answers the query
+ * @param target - The role and the exact accessible name
+ * @returns The single element `find` returns with `exact: true`
+ * @throws Error - Thrown when `find` returns no element or several
+ */
+export async function requireBrowserJourneyElement<E extends BrowserElementInterface>(
+	view: { readonly elements: BrowserElementManagerInterface<E> },
+	target: { readonly role: string; readonly name: string },
+): Promise<E> {
+	const matches = await view.elements.find({ role: target.role, name: target.name, exact: true })
+	const [element] = matches
+	if (matches.length !== 1 || element === undefined)
+		throw new Error(
+			`${matches.length} elements carry ${target.role} ${JSON.stringify(target.name)}, not one`,
+		)
+	return element
+}
+
+/**
+ * Creates an inputs record whose one member holds a value of any type, as a JavaScript caller can
+ * pass to a generated module or a replay.
+ *
+ * @param name - The input's name
+ * @param value - The value the member holds; `undefined` makes an own member with no value
+ * @returns A record typed as string inputs that holds `value` under `name`
+ */
+export function createBrowserJourneyMalformedInputs(
+	name: string,
+	value: unknown,
+): Readonly<Record<string, string>> {
+	const inputs: Record<string, string> = {}
+	Reflect.set(inputs, name, value)
+	return inputs
+}
+
+/**
+ * Holds {@link BROWSER_JOURNEY_PREPARED_JOURNEY} with a default for its `name` parameter, so the
+ * `type` into `Name` falls back to `Ada` when the input is omitted.
+ */
+export const BROWSER_JOURNEY_DEFAULTED_JOURNEY: BrowserJourney = {
+	...BROWSER_JOURNEY_PREPARED_JOURNEY,
+	name: 'retitle-draft',
+	description: 'Name the saved draft, Ada by default',
+	parameters: { name: { default: 'Ada' } },
+}
+
+/**
+ * Holds the inputs on which a generated module and its replay both refuse before the `Save draft`
+ * click, so the `/form` route's click log stays empty: no value for the required `name` of
+ * {@link BROWSER_JOURNEY_PREPARED_JOURNEY}, a `nmae` that names no parameter, and a number for the
+ * defaulted `name` of {@link BROWSER_JOURNEY_DEFAULTED_JOURNEY}.
  */
 export const BROWSER_JOURNEY_INPUT_CASES: readonly BrowserJourneyRefusalCase[] = Object.freeze([
 	{
@@ -4282,6 +4339,16 @@ export const BROWSER_JOURNEY_INPUT_CASES: readonly BrowserJourneyRefusalCase[] =
 		state: BROWSER_JOURNEY_DRAFT_STATE,
 		outcome: [{ clicks: '', saved: 'no' }],
 		message: 'nmae: no parameter has that name',
+		code: 'BROWSER_JOURNEY_INPUT',
+	},
+	{
+		name: 'a defaulted input that is not a string',
+		route: '/form',
+		journey: BROWSER_JOURNEY_DEFAULTED_JOURNEY,
+		inputs: createBrowserJourneyMalformedInputs('name', 42),
+		state: BROWSER_JOURNEY_DRAFT_STATE,
+		outcome: [{ clicks: '', saved: 'no' }],
+		message: 'name: the input is not a string',
 		code: 'BROWSER_JOURNEY_INPUT',
 	},
 ])

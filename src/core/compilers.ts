@@ -486,11 +486,13 @@ export function compileBrowserJourneyValue(
  *   stay literal. A `type` step whose text binds a secret passes `{ secret: true }`.
  * - `execute` checks its inputs before the toolset starts, as replay refuses them at preparation:
  *   an input that names no parameter throws `Error('NAME: no parameter has that name')`, then a
- *   required parameter whose input is not a string throws `Error('NAME: the input is missing')`. A
- *   journey without parameters compiles no check. A journey with a required parameter reads
- *   `inputs ?? {}` and `inputs?.NAME` in its checks, so `execute(page)` without inputs reports the
- *   first required parameter as missing; a journey whose parameters all have defaults reads
- *   `inputs`, which defaults to `{}`.
+ *   required parameter whose input is not a string throws `Error('NAME: the input is missing')`,
+ *   then a defaulted parameter whose input is neither `undefined` nor a string throws
+ *   `Error('NAME: the input is not a string')`. A journey without parameters compiles no check. A
+ *   journey with a required parameter reads `inputs ?? {}` and `inputs?.NAME` in its required
+ *   checks, so `execute(page)` without inputs reports the first required parameter as missing
+ *   before a defaulted check reads `inputs.NAME`; a journey whose parameters all have defaults
+ *   reads `inputs`, which defaults to `{}`.
  * - A journey with a gap compiles to an unconditional throw naming the first gap after the input
  *   checks and before the toolset starts, as replay refuses a gap at preparation; each gap step
  *   compiles to a comment at its position, with its line terminators escaped, and is listed in
@@ -517,17 +519,28 @@ export function compileBrowserJourney(
 	validateBrowserJourney(journey)
 	const typed = options?.language === 'typescript'
 	const parameters = Object.entries(journey.parameters)
-	const bindings = new Map(
-		parameters.map(([name, parameter]): [string, string] => {
-			if (parameter.default === undefined) return [name, `inputs.${name}`]
-			// An inherited member such as `toString` is not an input, so only an own property counts.
-			const input =
-				name in Object.prototype
-					? `(Object.hasOwn(inputs, '${name}') ? inputs.${name} : undefined)`
-					: `inputs.${name}`
-			return [name, `${input} ?? ${compileBrowserJourneyValue(parameter.default)}`]
-		}),
+	const defaulted = parameters.flatMap(([name, parameter]) =>
+		parameter.default === undefined
+			? []
+			: [
+					{
+						name,
+						fallback: parameter.default,
+						// An inherited member such as `toString` is not an input, so only an own property counts.
+						read:
+							name in Object.prototype
+								? `(Object.hasOwn(inputs, '${name}') ? inputs.${name} : undefined)`
+								: `inputs.${name}`,
+					},
+				],
 	)
+	const bindings = new Map([
+		...parameters.map(([name]): [string, string] => [name, `inputs.${name}`]),
+		...defaulted.map(({ name, fallback, read }): [string, string] => [
+			name,
+			`${read} ?? ${compileBrowserJourneyValue(fallback)}`,
+		]),
+	])
 	const shape = parameters
 		.map(
 			([name, parameter]) =>
@@ -549,6 +562,11 @@ export function compileBrowserJourney(
 					...required.map(
 						([name]) =>
 							`\tif (typeof inputs?.${name} !== 'string') throw new Error(${compileBrowserJourneyValue(`${name}: the input is missing`)})`,
+					),
+					// The required checks run first, so `inputs` is an object by the time a defaulted check reads it.
+					...defaulted.map(
+						({ name, read }) =>
+							`\tif (${read} !== undefined && typeof ${read} !== 'string') throw new Error(${compileBrowserJourneyValue(`${name}: the input is not a string`)})`,
 					),
 				]
 	const gap = journey.steps.find((step) => step.action === 'unresolved')

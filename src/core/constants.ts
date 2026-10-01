@@ -4,6 +4,8 @@ import type {
 	BrowserJourney,
 	BrowserMouseButton,
 	BrowserNavigationReason,
+	BrowserNavigationStage,
+	BrowserStepOutcome,
 	BrowserToolName,
 } from './types.js'
 
@@ -823,6 +825,27 @@ export const BROWSER_JOURNEY_ACTIONS: readonly BrowserToolName[] = Object.freeze
 	'wait',
 	'dialog',
 	'switch',
+])
+
+/**
+ * Lists every outcome a `BrowserAction` and a run step carry: `done`, `refused`, `timeout`, and
+ * `interrupted`.
+ */
+export const BROWSER_ACTION_OUTCOMES: readonly BrowserStepOutcome[] = Object.freeze([
+	'done',
+	'refused',
+	'timeout',
+	'interrupted',
+])
+
+/**
+ * Lists every navigation stage a `BrowserAction` and a run step carry: `requested`, `committed`,
+ * and `loaded`.
+ */
+export const BROWSER_ACTION_STAGES: readonly BrowserNavigationStage[] = Object.freeze([
+	'requested',
+	'committed',
+	'loaded',
 ])
 
 /** Holds the result the `journeys` tool returns when no journey is saved. */

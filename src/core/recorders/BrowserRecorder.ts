@@ -14,7 +14,7 @@ import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_NON_STEP_TOOLS } from '../cons
 import { BrowserError } from '../errors.js'
 import {
 	buildBrowserJourney,
-	collectBrowserJourneySecrets,
+	collectBrowserJourneyTextBindings,
 	deriveBrowserJourneySecret,
 } from '../helpers.js'
 
@@ -140,7 +140,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 			delete args['secret']
 		}
 		if (action.action === 'type' && action.secret === true) {
-			const taken = collectBrowserJourneySecrets(this.#steps)
+			const taken = collectBrowserJourneyTextBindings(this.#steps)
 			args['text'] = { parameter: deriveBrowserJourneySecret(action.target?.name ?? '', taken) }
 		}
 		this.#append({

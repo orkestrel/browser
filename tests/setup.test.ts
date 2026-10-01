@@ -93,7 +93,9 @@ import {
 	BROWSER_HISTORY_RESTORE_CASES,
 	throwListenerError,
 	BROWSER_JOURNEY_MODULE_JAVASCRIPT,
+	createBrowserJourneyMalformedInputs,
 	instrumentBrowserJourneyModule,
+	requireBrowserJourneyElement,
 } from './setup.js'
 
 describe('element protocol and compiler fixtures', () => {
@@ -1611,22 +1613,77 @@ describe('RecordingCDPClient', () => {
 	})
 })
 
+// === Journey proof inputs and direct targets
+
+describe('createBrowserJourneyMalformedInputs', () => {
+	it('holds the given value under its own name, an own undefined included', () => {
+		const numeric = createBrowserJourneyMalformedInputs('email', 42)
+		const omitted = createBrowserJourneyMalformedInputs('email', undefined)
+
+		expect(Object.entries(numeric)).toStrictEqual([['email', 42]])
+		expect(Object.keys(omitted)).toStrictEqual(['email'])
+		expect(Object.hasOwn(omitted, 'email')).toBe(true)
+		expect(readProperty(omitted, 'email')).toBeUndefined()
+	})
+})
+
+describe('requireBrowserJourneyElement', () => {
+	it('returns the one element with the role and the exact name, and refuses none or several', async () => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			const email = await requireBrowserJourneyElement(fixture.page, {
+				role: 'textbox',
+				name: 'Email',
+			})
+
+			expect({ role: email.role, name: email.name }).toStrictEqual({
+				role: 'textbox',
+				name: 'Email',
+			})
+			await expect(
+				requireBrowserJourneyElement(fixture.page, { role: 'textbox', name: 'Emai' }),
+			).rejects.toThrow('0 elements carry textbox "Emai", not one')
+			expect(await fixture.page.elements.find({ role: 'textbox', name: 'Emai' })).toHaveLength(1)
+		} finally {
+			await fixture.client.close()
+		}
+		const duplicated = await createBrowserElementFixture({
+			accessibility: (message) =>
+				duplicated.transport.reply(message.id, {
+					nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) =>
+						node.nodeId === 'link' || node.nodeId === 'button'
+							? { ...node, role: { value: 'button' }, name: { value: 'Delete' } }
+							: node,
+					),
+				}),
+		})
+		try {
+			await expect(
+				requireBrowserJourneyElement(duplicated.page, { role: 'button', name: 'Delete' }),
+			).rejects.toThrow('2 elements carry button "Delete", not one')
+		} finally {
+			await duplicated.client.close()
+		}
+	})
+})
+
 // === Compiled journey modules
 
 describe('instrumentBrowserJourneyModule', () => {
 	it('exports an actions array before execute and hooks the toolset the module constructs, leaving every step call as written', () => {
 		const lines = instrumentBrowserJourneyModule(BROWSER_JOURNEY_MODULE_JAVASCRIPT).split('\n')
 
-		expect(lines.slice(0, 7)).toStrictEqual([
+		expect(lines.slice(0, 8)).toStrictEqual([
 			"import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'",
 			'',
 			'export const actions = []',
 			'',
 			'export async function execute(page, inputs = {}) {',
 			"\tfor (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')",
+			"\tif (inputs.email !== undefined && typeof inputs.email !== 'string') throw new Error('email: the input is not a string')",
 			'\tconst toolset = createBrowserToolset(page, { on: { action: (action) => actions.push(action) } })',
 		])
-		expect(lines.slice(7)).toStrictEqual(BROWSER_JOURNEY_MODULE_JAVASCRIPT.split('\n').slice(5))
+		expect(lines.slice(8)).toStrictEqual(BROWSER_JOURNEY_MODULE_JAVASCRIPT.split('\n').slice(6))
 	})
 
 	it('refuses a module that constructs no toolset over its page', () => {

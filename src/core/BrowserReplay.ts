@@ -1,6 +1,7 @@
 import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
+	BrowserAction,
 	BrowserJourney,
 	BrowserCallOptions,
 	BrowserHoldInterface,
@@ -16,21 +17,10 @@ import type {
 	BrowserScreenshotResult,
 	BrowserToolsetInterface,
 } from './types.js'
-import {
-	isObject,
-	isString,
-	isRecord,
-	isJSONValue,
-	isFiniteNumber,
-	parseEnum,
-} from '@orkestrel/contract'
+import { isObject, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import {
-	BROWSER_JOURNEY_ACTIONS,
-	BROWSER_JOURNEY_FORMAT_VERSION,
-	BROWSER_NAVIGATION_REASONS,
-} from './constants.js'
-import { BrowserError, isBrowserError } from './errors.js'
+import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_FORMAT_VERSION } from './constants.js'
+import { BrowserError, isBrowserError, isBrowserStepError } from './errors.js'
 import {
 	deriveBrowserJourneyTrigger,
 	generateBrowserRunId,
@@ -184,26 +174,44 @@ export class BrowserReplay implements BrowserReplayInterface {
 				error.context ?? { action: 'replay', placement },
 			)
 		}
-		const inputs: Record<string, string> = {}
-		for (const [name, parameter] of Object.entries(journey.parameters)) {
-			if (parameter.default !== undefined) inputs[name] = parameter.default
-		}
-		for (const [name, value] of Object.entries(this.#options?.inputs ?? {})) {
-			if (!Object.hasOwn(journey.parameters, name) || !isString(value))
+		const supplied = this.#options?.inputs ?? {}
+		for (const name of Object.keys(supplied)) {
+			if (!Object.hasOwn(journey.parameters, name))
 				throw new BrowserError(
 					`Journey ${journey.name} has no input named ${JSON.stringify(name)}.`,
 					'BROWSER_JOURNEY_INPUT',
 					{ parameter: name },
 				)
-			inputs[name] = value
 		}
-		for (const name of Object.keys(journey.parameters)) {
-			if (!Object.hasOwn(inputs, name))
+		// The generated module reads `inputs.NAME`, and only an own member for a name
+		// `Object.prototype` carries; an own `undefined` is an omitted input there too.
+		const values = new Map(
+			Object.keys(journey.parameters).map((name): [string, unknown] => [
+				name,
+				name in Object.prototype && !Object.hasOwn(supplied, name) ? undefined : supplied[name],
+			]),
+		)
+		const parameters = Object.entries(journey.parameters)
+		// The module checks every required input before any defaulted one, so the refusals agree.
+		for (const [name, parameter] of parameters) {
+			if (parameter.default === undefined && !isString(values.get(name)))
 				throw new BrowserError(
 					`Journey ${journey.name} needs input ${JSON.stringify(name)}.`,
 					'BROWSER_JOURNEY_INPUT',
 					{ parameter: name },
 				)
+		}
+		const inputs: Record<string, string> = {}
+		for (const [name, parameter] of parameters) {
+			const value = values.get(name)
+			if (isString(value)) inputs[name] = value
+			else if (value !== undefined)
+				throw new BrowserError(
+					`Journey ${journey.name} input ${JSON.stringify(name)} is not a string.`,
+					'BROWSER_JOURNEY_INPUT',
+					{ parameter: name },
+				)
+			else if (parameter.default !== undefined) inputs[name] = parameter.default
 		}
 		for (const step of journey.steps) {
 			if (step.action === 'unresolved')
@@ -253,7 +261,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 					: value
 		}
 		const secret = isBrowserSecretBinding(step, parameters)
-		let action: unknown
+		let action: BrowserAction | undefined
 		let refusal: string | undefined
 		try {
 			if (step.action === 'dialog' && !interrupted)
@@ -281,30 +289,20 @@ export class BrowserReplay implements BrowserReplayInterface {
 			)
 		} catch (error) {
 			refusal = error instanceof Error ? error.message : String(error)
-			if (isBrowserError(error)) action = error.context?.['action']
+			if (isBrowserStepError(error)) action = error.action
 		}
-		const result = isRecord(action) ? action : undefined
-		const argumentsValue = result?.['arguments']
-		const recorded = {
-			...(isRecord(argumentsValue) && isJSONValue(argumentsValue) ? argumentsValue : args),
-		}
-		const outcome =
-			parseEnum(result?.['outcome'], ['done', 'refused', 'timeout', 'interrupted']) ?? 'refused'
-		const stage = parseEnum(result?.['stage'], ['requested', 'committed', 'loaded'])
-		const reason = parseEnum(result?.['reason'], BROWSER_NAVIGATION_REASONS)
-		const receipt = result?.['receipt']
-		const elapsed = result?.['elapsed']
+		const recorded: Record<string, JSONValue> = { ...(action?.arguments ?? args) }
 		if (secret) delete recorded['text']
 		return {
 			id: step.id,
 			action: step.action,
 			trigger: deriveBrowserJourneyTrigger(step, inputs),
 			arguments: recorded,
-			outcome,
-			...(stage === undefined ? {} : { stage }),
-			...(reason === undefined ? {} : { reason }),
-			result: isString(receipt) ? receipt : (refusal ?? ''),
-			elapsed: isFiniteNumber(elapsed) ? elapsed : performance.now() - started,
+			outcome: action?.outcome ?? 'refused',
+			...(action?.stage === undefined ? {} : { stage: action.stage }),
+			...(action?.reason === undefined ? {} : { reason: action.reason }),
+			result: action?.receipt ?? refusal ?? '',
+			elapsed: action?.elapsed ?? performance.now() - started,
 		}
 	}
 
