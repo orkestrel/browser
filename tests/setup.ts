@@ -3934,3 +3934,188 @@ export async function readBrowserJourneyOutcome<
 	const shown = [page, ...pages.filter((candidate) => candidate.opener === page)]
 	return Promise.all(shown.map((candidate) => candidate.evaluate(expression)))
 }
+
+/**
+ * Holds a `Slow` button for the `/confirm` route whose click handler occupies the page for 1 500 ms
+ * before it sets `document.body.dataset.slow`, so the protocol reply of the input stays pending
+ * while the handler runs.
+ */
+export const BROWSER_JOURNEY_SLOW_HTML =
+	'<button id="slow" type="button" onclick="const end = performance.now() + 1500; while (performance.now() < end); document.body.dataset.slow = \'done\'">Slow</button>'
+
+/**
+ * Holds the journey whose replay holds a toolset over the `/confirm` route: a click that opens the
+ * confirm dialog, the dialog step that accepts it, and a wait for `Draft deleted`, which the proof
+ * adds to the page after its foreign calls.
+ */
+export const BROWSER_JOURNEY_HOLD_JOURNEY: BrowserJourney = createBrowserJourneyFixture(
+	[
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Delete' } },
+		{ action: 'dialog', arguments: { accept: true } },
+		{ action: 'wait', arguments: { text: 'Draft deleted' } },
+	],
+	{ name: 'delete-draft', description: 'Delete the draft' },
+)
+
+/**
+ * Holds the journey whose first input the proof aborts while it is held: a click on the
+ * {@link BROWSER_JOURNEY_SLOW_HTML} button, then a click on the `/confirm` route's `Keep` button.
+ */
+export const BROWSER_JOURNEY_ABORT_JOURNEY: BrowserJourney = createBrowserJourneyFixture(
+	[
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Slow' } },
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Keep' } },
+	],
+	{ name: 'keep-draft', description: 'Keep the draft after a slow click' },
+)
+
+/**
+ * Holds the `/form` journey whose wait never succeeds: `Save draft`, a wait for `Order shipped`,
+ * which the route never shows, and `Review`, whose click the page's click log would record.
+ */
+export const BROWSER_JOURNEY_TIMEOUT_JOURNEY: BrowserJourney = createBrowserJourneyFixture(
+	[
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+		{ action: 'wait', arguments: { text: 'Order shipped' } },
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Review' } },
+	],
+	{ name: 'review-draft', description: 'Review the saved draft' },
+)
+
+/**
+ * Holds {@link BROWSER_JOURNEY_TIMEOUT_JOURNEY} with a wait for the route's heading, so every step
+ * runs and the click log records the `Review` click.
+ */
+export const BROWSER_JOURNEY_TIMEOUT_CONTROL: BrowserJourney = createBrowserJourneyFixture(
+	[
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+		{ action: 'wait', arguments: { text: 'Delivery form' } },
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Review' } },
+	],
+	{ name: 'review-draft', description: 'Review the saved draft' },
+)
+
+/**
+ * Counts the pointer, mouse, keyboard, and input events a document receives on
+ * `document.body.dataset.events`, from zero, in the capture phase.
+ */
+export const BROWSER_JOURNEY_EVENT_COUNTER =
+	"(() => { document.body.dataset.events = '0'; for (const type of ['pointerdown', 'pointerup', 'mousedown', 'mouseup', 'click', 'keydown', 'keyup', 'beforeinput', 'input', 'change']) document.addEventListener(type, () => { document.body.dataset.events = String(Number(document.body.dataset.events) + 1) }, true) })()"
+
+/**
+ * Describes one journey a replay must refuse at preparation.
+ *
+ * @remarks
+ * - `inputs` — the inputs the replay receives
+ * - `code` — the `BrowserError` code the refusal carries
+ */
+export interface BrowserJourneyPreparationCase {
+	readonly name: string
+	readonly journey: BrowserJourney
+	readonly inputs: Readonly<Record<string, string>>
+	readonly code: string
+}
+
+/**
+ * Holds the `/form` journey the page-placement refusals start from: `Save draft`, then a `type`
+ * into `Name` bound to the `name` parameter, which has no default.
+ */
+export const BROWSER_JOURNEY_PREPARED_JOURNEY: BrowserJourney = createBrowserJourneyFixture(
+	[
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+		{
+			action: 'type',
+			arguments: { text: { parameter: 'name' } },
+			target: { role: 'textbox', name: 'Name' },
+		},
+	],
+	{ name: 'name-draft', description: 'Name the saved draft', parameters: { name: {} } },
+)
+
+/**
+ * Holds the page-placement journeys a replay refuses at preparation, each after a first step that
+ * would click `Save draft` on the `/form` route.
+ */
+export const BROWSER_JOURNEY_PREPARATION_CASES: readonly BrowserJourneyPreparationCase[] =
+	Object.freeze([
+		{
+			name: 'a missing input',
+			journey: BROWSER_JOURNEY_PREPARED_JOURNEY,
+			inputs: {},
+			code: 'BROWSER_JOURNEY_INPUT',
+		},
+		{
+			name: 'an unknown input',
+			journey: BROWSER_JOURNEY_PREPARED_JOURNEY,
+			inputs: { name: 'Grace', nmae: 'Grace' },
+			code: 'BROWSER_JOURNEY_INPUT',
+		},
+		{
+			name: 'a gap',
+			journey: createBrowserJourneyFixture(
+				[
+					{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+					{ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+				],
+				{ name: 'gap-draft', description: 'Save the draft across a gap' },
+			),
+			inputs: {},
+			code: 'BROWSER_JOURNEY_GAP',
+		},
+		{
+			name: 'a switch without a context',
+			journey: createBrowserJourneyFixture(
+				[
+					{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+					{
+						action: 'switch',
+						arguments: {},
+						tab: { url: 'http://127.0.0.1/popup/child', title: 'Details' },
+					},
+				],
+				{ name: 'switch-draft', description: 'Save the draft and switch tabs' },
+			),
+			inputs: {},
+			code: 'BROWSER_JOURNEY_PLACEMENT',
+		},
+	])
+
+/**
+ * Holds the `/document` journey the DOM placement refuses at preparation: a click on the
+ * `Gift wrap` checkbox, then a `press`, which the DOM placement does not execute.
+ */
+export const BROWSER_JOURNEY_PRESS_JOURNEY: BrowserJourney = createBrowserJourneyFixture(
+	[
+		{ action: 'click', arguments: {}, target: { role: 'checkbox', name: 'Gift wrap' } },
+		{ action: 'press', arguments: { key: 'Enter' } },
+	],
+	{ name: 'wrap-press', description: 'Wrap the gift and press Enter' },
+)
+
+/**
+ * Holds the `/document` journey the DOM placement refuses live at `s3`: a click on the `Gift wrap`
+ * checkbox, a `type` of `Ribbon` into `Message`, and a click on `Wrap all`, which no element
+ * carries.
+ */
+export const BROWSER_JOURNEY_PREFIX_JOURNEY: BrowserJourney = createBrowserJourneyFixture(
+	[
+		{ action: 'click', arguments: {}, target: { role: 'checkbox', name: 'Gift wrap' } },
+		{
+			action: 'type',
+			arguments: { text: 'Ribbon' },
+			target: { role: 'textbox', name: 'Message' },
+		},
+		{ action: 'click', arguments: {}, target: { role: 'button', name: 'Wrap all' } },
+	],
+	{ name: 'wrap-gift', description: 'Wrap the gift with a message' },
+)
+
+/**
+ * Holds a sign-in form for the `/form` route's `main`: a `Password` field and a `Sign in` button
+ * that sets `document.body.dataset.signed` to the length of the field's value, never the value.
+ */
+export const BROWSER_JOURNEY_PASSWORD_HTML =
+	'<h1>Sign in</h1><label>Password <input id="password" type="password"></label><button id="sign" type="button" onclick="document.body.dataset.signed = String(document.getElementById(\'password\').value.length)">Sign in</button>'
+
+/** Holds the secret the secrecy proof types; no fixture page or journey name carries its first four characters. */
+export const BROWSER_JOURNEY_SECRET = 'Zq7#Marlin-Velvet'
