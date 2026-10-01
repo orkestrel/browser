@@ -34,17 +34,23 @@ import { createTeardown, requireValue } from '@orkestrel/test'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { BROWSER_TOOL_TIMEOUT_MS, compileBrowserJourney } from '@src/core'
+import { BROWSER_JOURNEY_LOCK_FILE, createFileBrowserJourneyStore } from '@src/server'
 import { BROWSER_JOURNEY_ACTION_FIXTURE, BROWSER_JOURNEY_FIXTURE } from './setup.js'
 import {
 	BROWSE_ENDINGS,
 	BROWSE_VOCABULARY,
 	BrowseChild,
+	FIFO_PATHS,
 	FIXTURE_LATE_TEXT,
 	PROCESS_TABLE,
+	createFifo,
 	createFixtureServer,
 	destroyChromiumProcesses,
 	endBrowseChild,
+	openFifoWriter,
+	readBundleImports,
 	readChromiumProcesses,
+	readExitedProcessId,
 	readProfiles,
 	startBrowseChild,
 } from './setupServer.js'
@@ -1165,6 +1171,16 @@ function requireProcessTable(context: TestContext): void {
 	context.skip(`No Chromium process to count: ${cause}`)
 }
 
+// A FIFO standing at a journey's lock parks the server's read of the lock holder until the test
+// writes one. A host that creates no FIFO at a path has no such pause, so the release gate fails
+// there and every other run skips.
+function requireFifo(context: TestContext): void {
+	if (FIFO_PATHS) return
+	const cause = 'this host creates no FIFO at a filesystem path'
+	if (RELEASE) throw new Error(`The release gate requires a FIFO, and ${cause}`)
+	context.skip(`No lock read to park: ${cause}`)
+}
+
 // The directory the packed binary's default root keeps its profiles in, resolved the way the
 // binary's working directory resolves it, so a path the table reads compares equal.
 function resolveProfiles(stage: Stage): string {
@@ -1402,4 +1418,78 @@ describe('packed browse binary', () => {
 			}
 		},
 	)
+
+	// The edit reads revision 1, then its write parks on a FIFO standing at the journey's lock while
+	// the server reads the holder's identifier. A direct store moves the journey to revision 2 inside
+	// that pause, and an exited process's identifier lets the server reclaim the lock, so its write
+	// meets the moved revision. The store raises the staleness and the core toolset words it, so the
+	// sentence survives only when both halves of the packed binary share one `BrowserError` class.
+	it(
+		'refuses an edit whose journey moved after the tool read it with the stale sentence [requires the registry and a browser]',
+		{ timeout: 120_000 },
+		async (context) => {
+			const stage = requireStage(context)
+			const executable = requireBrowseExecutable(context)
+			requireFifo(context)
+			const root = join(stage.consumer, 'tmp/browsers')
+			const name = 'stale-edit'
+			const lock = join(root, name, BROWSER_JOURNEY_LOCK_FILE)
+			const teardown = createTeardown()
+			try {
+				const fixtures = await createFixtureServer()
+				teardown.add(() => fixtures.destroy())
+				const client = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
+				teardown.add(() => client.disconnect())
+				const url = fixtures.url('/late')
+				expect(await callBrowse(client, 'record', { journey: name })).toMatch(
+					/^Recording stale-edit; /u,
+				)
+				expect(await callBrowse(client, 'navigate', { url })).toMatch(/^Navigated to /u)
+				expect(await callBrowse(client, 'save', { description: 'Opens the late page' })).toMatch(
+					/^Saved stale-edit with 1 step\./u,
+				)
+				createFifo(lock)
+				teardown.add(() => rmSync(lock, { force: true }))
+				const edit = {
+					journey: name,
+					edits: [
+						{ operation: 'add', step: { action: 'navigate', arguments: { url } }, before: 's1' },
+					],
+				}
+				const refusal = client.call('edit', edit).then(
+					() => undefined,
+					(error: unknown) => error,
+				)
+				const writer = await openFifoWriter(lock, { budget: 30_000 })
+				teardown.add(() => writer.close())
+				rmSync(lock)
+				const store = createFileBrowserJourneyStore({ root })
+				const read = requireValue(await store.get(name), `no ${name} under ${root}`)
+				expect(read.revision).toBe(1)
+				expect((await store.set(read.journey, read.revision)).revision).toBe(2)
+				await writer.writeFile(String(readExitedProcessId()))
+				await writer.close()
+				expect(await refusal).toHaveProperty(
+					'message',
+					`Journey ${name} changed since you read it; call journeys, then edit again.`,
+				)
+				expect((await store.get(name))?.revision).toBe(2)
+			} finally {
+				await teardown.destroy()
+			}
+		},
+	)
+})
+
+// The server bundle reaches core through the specifier the build maps `@src/core` to. A server
+// file that reaches core by a relative path inlines that module instead, and the bundle then holds
+// a second copy of each binding it imports, so an `instanceof` check across the two copies fails.
+describe('packed server bundle', () => {
+	it('imports BrowserError from the core bundle and declares no core binding of its own [requires the registry]', (context) => {
+		const stage = requireStage(context)
+		const bundle = readFileSync(join(stage.installed, 'dist/src/server/index.js'), 'utf8')
+		const core = readBundleImports(bundle, '../core/index.js')
+		expect(core.imported).toContain('BrowserError')
+		expect(core.redeclared).toStrictEqual([])
+	})
 })

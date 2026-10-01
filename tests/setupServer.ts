@@ -2,9 +2,10 @@ import type { ChildProcess } from 'node:child_process'
 import type { IncomingMessage, Server as HTTPServer, ServerResponse } from 'node:http'
 import type { AddressInfo, Server as NetServer, Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
+import type { FileHandle } from 'node:fs/promises'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
-import type { TeardownInterface } from '@orkestrel/test'
+import type { RetryOptions, TeardownInterface } from '@orkestrel/test'
 import type { MCPTransportInterface } from '@orkestrel/mcp'
 import type { BrowserContextInterface, BrowserPageInterface } from '@src/core'
 import type {
@@ -22,7 +23,8 @@ import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { createConnection, createServer as createNetServer } from 'node:net'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { open } from 'node:fs/promises'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -1424,6 +1426,27 @@ async function serveFixtureRequest(
 }
 
 /**
+ * Holds the module hook a child script registers to load this workspace's TypeScript source under
+ * Node: `@src/core` resolves to the core barrel's source, and a relative `.js` specifier that
+ * resolves nothing falls back to its `.ts` source.
+ *
+ * @remarks
+ * The script imports `registerHooks` from `node:module`, `pathToFileURL` from `node:url`, and
+ * `resolve` from `node:path`, and runs from the workspace root, against which `resolve` reads.
+ */
+export const SOURCE_HOOK = `registerHooks({
+	resolve(specifier, context, next) {
+		if (specifier === '@src/core') return next(pathToFileURL(resolve('src/core/index.ts')).href, context)
+		try { return next(specifier, context) }
+		catch (error) {
+			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
+				return next(specifier.slice(0, -3) + '.ts', context)
+			throw error
+		}
+	}
+})`
+
+/**
  * Registers filesystem-only proofs for the durable journey and run stores.
  * @remarks Browser projects load the host-independent setup module, so these proofs stay server-side.
  */
@@ -1501,16 +1524,7 @@ import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
 import { once } from 'node:events'
-registerHooks({
-	resolve(specifier, context, next) {
-		try { return next(specifier, context) }
-		catch (error) {
-			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
-				return next(specifier.slice(0, -3) + '.ts', context)
-			throw error
-		}
-	}
-})
+${SOURCE_HOOK}
 const { FileBrowserStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserStore.ts')).href)
 const files = new FileBrowserStore({ root: process.argv[2] })
 await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async () => {
@@ -1592,16 +1606,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 import { registerHooks } from 'node:module'
 import { pathToFileURL } from 'node:url'
 import { resolve } from 'node:path'
-registerHooks({
-	resolve(specifier, context, next) {
-		try { return next(specifier, context) }
-		catch (error) {
-			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
-				return next(specifier.slice(0, -3) + '.ts', context)
-			throw error
-		}
-	}
-})
+${SOURCE_HOOK}
 const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
 const store = new FileBrowserJourneyStore({ root: process.argv[2] })
 process.once('message', async (journey) => {
@@ -1818,16 +1823,7 @@ import { readFile, stat } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
-registerHooks({
-	resolve(specifier, context, next) {
-		try { return next(specifier, context) }
-		catch (error) {
-			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
-				return next(specifier.slice(0, -3) + '.ts', context)
-			throw error
-		}
-	}
-})
+${SOURCE_HOOK}
 assert.notEqual(process.getuid?.(), 0)
 const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
 const { FileBrowserRunStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserRunStore.ts')).href)
@@ -2616,6 +2612,104 @@ export function readProfiles(profiles: string): readonly string[] {
 	return readdirSync(profiles)
 		.sort()
 		.map((name) => join(profiles, name))
+}
+
+/**
+ * Reports whether this host can create a FIFO at a filesystem path.
+ *
+ * @remarks
+ * A POSIX host creates one with `mkfifo`. Windows names its pipes under `\\.\pipe\` only, so no
+ * path a store opens can be one, and a case that parks a reader on a FIFO gates on this reading.
+ */
+export const FIFO_PATHS = process.platform !== 'win32'
+
+/**
+ * Creates a FIFO at a path with the host's `mkfifo` command.
+ *
+ * @param path - The path the FIFO takes; its parent exists and the path does not
+ * @throws Error when `mkfifo` refuses the path or cannot start
+ */
+export function createFifo(path: string): void {
+	const result = spawnSync('mkfifo', [path], { encoding: 'utf8' })
+	if (result.status !== 0)
+		throw new Error(`mkfifo refused ${path}: ${result.error?.message ?? result.stderr}`)
+}
+
+/**
+ * Opens the writing end of a FIFO after a process opens its reading end.
+ *
+ * @remarks
+ * Each attempt opens without blocking, so no worker thread waits on a reader that never arrives:
+ * an attempt before a reader exists fails with `ENXIO` and is retried within the budget. The
+ * reader's read ends when the caller closes the writer.
+ *
+ * @param path - The FIFO
+ * @param options - The retry bounds
+ * @returns The writer
+ */
+export function openFifoWriter(path: string, options?: RetryOptions): Promise<FileHandle> {
+	return retryUntil(
+		`a reader opens the FIFO at ${path}`,
+		() => open(path, constants.O_WRONLY | constants.O_NONBLOCK),
+		() => true,
+		options,
+	)
+}
+
+/**
+ * Returns the identifier of a Node process that has exited.
+ *
+ * @remarks
+ * The process is spawned and reaped before this returns, so the identifier names no live process
+ * until the host reuses it.
+ *
+ * @returns The exited process's identifier
+ */
+export function readExitedProcessId(): number {
+	const result = spawnSync(process.execPath, ['--version'])
+	if (result.status !== 0) throw new Error(`node --version exited ${String(result.status)}`)
+	return result.pid
+}
+
+/** Names the bindings a bundle imports from one specifier and the ones it declares again. */
+export interface BundleImports {
+	readonly imported: readonly string[]
+	readonly redeclared: readonly string[]
+}
+
+/**
+ * Reads the named imports a built bundle takes from one specifier, and the ones among them that
+ * the bundle also declares, under the same name or a bundler's `NAME$N` rename.
+ *
+ * @remarks
+ * A bundle that inlines a module it also imports holds two bindings for one export, so an
+ * `instanceof` check across them fails. An import alias does not change the imported name.
+ *
+ * @param bundle - The bundle's text
+ * @param specifier - The import specifier as the bundle writes it
+ * @returns The imported names in import order, and the redeclared ones in that order
+ */
+export function readBundleImports(bundle: string, specifier: string): BundleImports {
+	const imported: string[] = []
+	for (const match of bundle.matchAll(/\bimport\s*\{([^}]*)\}\s*from\s*(["'])(.*?)\2/gu)) {
+		if (match[3] !== specifier) continue
+		for (const entry of (match[1] ?? '').split(',')) {
+			const name = entry.trim().split(/\s+as\s+/u)[0]
+			if (name !== undefined && name !== '') imported.push(name)
+		}
+	}
+	const declared = Array.from(
+		bundle.matchAll(/\b(?:class|const|let|var|function\*?)\s+([A-Za-z_$][\w$]*)/gu),
+		(match) => match[1] ?? '',
+	)
+	const redeclared = imported.filter((name) =>
+		declared.some(
+			(binding) =>
+				binding === name ||
+				(binding.startsWith(`${name}$`) && /^\$\d+$/u.test(binding.slice(name.length))),
+		),
+	)
+	return { imported, redeclared }
 }
 
 /**

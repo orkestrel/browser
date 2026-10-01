@@ -6,8 +6,9 @@
  * first call and ending, the Chromium process table reader and its teardown, the raw TCP
  * fixtures, the in-process CDP server and the frames of each socket write it performs, the spawned
  * fake browser, the fixture page and module server, the built-bundle precondition of the
- * document page, and the stage that imports a generated journey module through a link to this
- * package. Every case uses the real resource the fixture exists to provide — real loopback
+ * document page, the stage that imports a generated journey module through a link to this
+ * package, the FIFO a lock read parks on, the exited process identifier, and the bundle import
+ * reader. Every case uses the real resource the fixture exists to provide — real loopback
  * sockets on ephemeral ports, real files, and real child processes.
  *
  * `tests/setupServer.ts` declares no DOM-driving export, so this file defers nothing to a browser
@@ -24,7 +25,8 @@ import type { CDPTestServerInterface } from './setupServer.js'
 import { createAttachedPage } from './setup.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import { createConnection, createServer } from 'node:net'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,6 +47,7 @@ import {
 	createBrowserJourneyStage,
 	createCDPTestServer,
 	createFakeBrowserProcess,
+	createFifo,
 	createFixtureServer,
 	createStallServer,
 	createTCPProxy,
@@ -53,6 +56,7 @@ import {
 	destroyFakeBrowsers,
 	destroyTempDirectories,
 	endBrowseChild,
+	FIFO_PATHS,
 	FIXTURE_CHECKOUT_CODE,
 	FIXTURE_CHECKOUT_DELAY,
 	FIXTURE_DOCUMENT_BUNDLE,
@@ -61,7 +65,10 @@ import {
 	FIXTURE_LATE_TEXT,
 	FIXTURE_REGISTRY_MODULE,
 	loadFixtureModule,
+	openFifoWriter,
+	readBundleImports,
 	readChromiumProcesses,
+	readExitedProcessId,
 	readFixtureProcessId,
 	readProfiles,
 	readServerPort,
@@ -164,6 +171,68 @@ describe('readProfiles', () => {
 			join(profiles, 'kettle'),
 			join(profiles, 'teapot'),
 		])
+	})
+})
+
+// A host that names no FIFO at a path is the one `FIFO_PATHS` reports false for.
+describe('createFifo', () => {
+	it.runIf(FIFO_PATHS)(
+		'creates a FIFO the host reports as one, and openFifoWriter waits for a reader, then ends its read',
+		async () => {
+			const scratch = createTempDirectory()
+			const fifo = join(scratch.path, 'journey.lock')
+			createFifo(fifo)
+			expect(lstatSync(fifo).isFIFO()).toBe(true)
+			expect(() => createFifo(fifo)).toThrow(`mkfifo refused ${fifo}`)
+			await expect(openFifoWriter(fifo, { budget: 50 })).rejects.toThrow(
+				`Retry "a reader opens the FIFO at ${fifo}" did not succeed within 50ms`,
+			)
+			const read = readFile(fifo, 'utf8')
+			const writer = await openFifoWriter(fifo, { budget: 5000 })
+			try {
+				await writer.writeFile('4417')
+			} finally {
+				await writer.close()
+			}
+			expect(await read).toBe('4417')
+		},
+	)
+})
+
+describe('readExitedProcessId', () => {
+	it('returns the identifier of a process the host no longer runs', () => {
+		const pid = readExitedProcessId()
+		expect(Number.isSafeInteger(pid)).toBe(true)
+		expect(pid).not.toBe(process.pid)
+		expect(() => process.kill(pid, 0)).toThrow(expect.objectContaining({ code: 'ESRCH' }))
+	})
+})
+
+describe('readBundleImports', () => {
+	it('reads the names one specifier gives a bundle and the ones the bundle declares again', () => {
+		const bundle = [
+			'import { BrowserError, BrowserContext as Context, isBrowserError } from "../core/index.js";',
+			"import { isRecord } from '@orkestrel/contract';",
+			'var BrowserError$1 = class extends Error {};',
+			'function isBrowserErrorLike(value) { return value instanceof BrowserError$1 }',
+			'const BrowserErrorCode = "BROWSER_JOURNEY_FILE";',
+			'class isRecord {}',
+		].join('\n')
+		expect(readBundleImports(bundle, '../core/index.js')).toStrictEqual({
+			imported: ['BrowserError', 'BrowserContext', 'isBrowserError'],
+			redeclared: ['BrowserError'],
+		})
+		expect(readBundleImports(bundle, '@orkestrel/contract')).toStrictEqual({
+			imported: ['isRecord'],
+			redeclared: ['isRecord'],
+		})
+		expect(readBundleImports(bundle, '../browser/index.js')).toStrictEqual({
+			imported: [],
+			redeclared: [],
+		})
+		expect(
+			readBundleImports('import { BrowserError } from "../core/index.js";', '../core/index.js'),
+		).toStrictEqual({ imported: ['BrowserError'], redeclared: [] })
 	})
 })
 

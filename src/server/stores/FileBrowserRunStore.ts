@@ -4,14 +4,16 @@ import type {
 	BrowserRunStoreInterface,
 	BrowserStoreOptions,
 	BrowserStorePage,
-} from '../../core/types.js'
+} from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
 import { lstat, rm } from 'node:fs/promises'
 import { isRecord, parseJSON } from '@orkestrel/contract'
-import { BROWSER_JOURNEY_FORMAT_VERSION } from '../../core/constants.js'
-import { BrowserError } from '../../core/errors.js'
-import { generateBrowserRunId } from '../../core/helpers.js'
-import { validateBrowserRun } from '../../core/validators.js'
+import {
+	BROWSER_JOURNEY_FORMAT_VERSION,
+	BrowserError,
+	generateBrowserRunId,
+	validateBrowserRun,
+} from '@src/core'
 import { BROWSER_RUN_FILE, BROWSER_RUN_DIRECTORY } from '../constants.js'
 import { FileBrowserStore } from './FileBrowserStore.js'
 
