@@ -2804,10 +2804,13 @@ export interface BrowserToolsetInterface {
 	/** Performs a tool call and returns its structured action when a handler ran. */
 	perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
 	/**
-	 * Reserves action admission immediately and returns its caller token after earlier admitted
-	 * actions finish. Refuses later foreign actions with `BROWSER_TOOLSET_BUSY` and
-	 * `The toolset is replaying NAME until it finishes; call look.` while waiting or held.
-	 * Releases the pending reservation if the wait aborts or fails.
+	 * Takes a queue turn and reserves action admission from the call for the returned caller token.
+	 *
+	 * @remarks
+	 * An action without the token that arrives after the call is refused with `BROWSER_TOOLSET_BUSY`
+	 * and `The toolset is replaying NAME until it finishes; call look.`, while waiting and while held;
+	 * the actions admitted before the call complete first; a wait that aborts or fails releases the
+	 * pending reservation.
 	 */
 	hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface>
 	/**
