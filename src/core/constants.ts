@@ -247,105 +247,51 @@ export const BROWSER_DEFAULT_VIEWPORT_HEIGHT = 720
 export const BROWSER_CODEGEN_BINDING_NAME = '__orkestrelBrowserCodegen'
 
 /**
- * Holds the in-page recorder script injected through `Page.addScriptToEvaluateOnNewDocument`
- * and `Runtime.evaluate`.
- *
- * @remarks
- * Attaches capturing-phase listeners for `click`, `input` (fill), and `change` (select) on
- * `document`, builds a stable CSS selector for the target element, and forwards each action
- * to the CDP binding ({@link BROWSER_CODEGEN_BINDING_NAME}) as a JSON string payload. A
- * `contenteditable` fill is captured through `input` events, the same way an input or a
- * textarea is. Guarded to install exactly once per document (`window[name]` sentinel) so
- * repeated injection on every new document is idempotent.
+ * Holds the self-contained document listener installed before a frame resumes.
+ * Password input carries a marker; only Enter carries a key. Node indices are local to a document.
  */
 export const BROWSER_CODEGEN_SOURCE = `(() => {
-	const bindingName = ${JSON.stringify(BROWSER_CODEGEN_BINDING_NAME)}
-	if (window[bindingName + '__installed']) return
-	window[bindingName + '__installed'] = true
-
-	const selectorFor = (el) => {
-		if (el.id) return '#' + CSS.escape(el.id)
-		const parts = []
-		let node = el
-		while (node && node.nodeType === 1 && parts.length < 8) {
-			let part = node.tagName.toLowerCase()
-			if (node.classList && node.classList.length > 0) {
-				part += '.' + Array.from(node.classList).map((cls) => CSS.escape(cls)).join('.')
+	const binding = '__orkestrelBrowserCodegen'
+	window[binding + '__state']?.controller.abort()
+	const state = { controller: new AbortController(), nodes: [], indices: new WeakMap() }
+	window[binding + '__state'] = state
+	for (const event of ['click', 'input', 'change', 'keydown', 'focusout', 'submit', 'contextmenu', 'drop']) {
+		document.addEventListener(event, (event) => {
+			if (!event.isTrusted || typeof window[binding] !== 'function') return
+			if (event.type === 'keydown' && event.key !== 'Enter') return
+			const element = event.composedPath()[0]
+			if (!(element instanceof Element)) return
+			let index = state.indices.get(element)
+			if (index === undefined) {
+				index = state.nodes.push(element) - 1
+				state.indices.set(element, index)
 			}
-			const parent = node.parentElement
-			if (parent) {
-				const siblings = Array.from(parent.children).filter((c) => c.tagName === node.tagName)
-				if (siblings.length > 1) {
-					part += ':nth-of-type(' + (siblings.indexOf(node) + 1) + ')'
-				}
+			const control = element.tagName === 'SELECT' ? (element.multiple ? 'multiple' : 'select')
+				: element.tagName === 'OPTION' ? 'option'
+				: element.tagName === 'INPUT' && element.type === 'password' ? 'password'
+				: element.tagName === 'TEXTAREA' || element.isContentEditable ||
+					(element.tagName === 'INPUT' && ['text', 'search', 'url', 'tel', 'email', 'number'].includes(element.type)) ? 'text' : 'other'
+			const payload = { event: event.type, index, top: window === window.top && element.ownerDocument === document, control, form: !!element.form }
+			if (event.type === 'click') payload.detail = event.detail
+			if (event.type === 'keydown') payload.key = 'Enter'
+			if (event.type === 'input' && control === 'password') payload.secret = true
+			if (event.type === 'input' && control === 'text') payload.value = element.isContentEditable ? element.textContent || '' : element.value
+			if (event.type === 'change' && control === 'select') {
+				payload.value = element.value
+				payload.roundtrip = Array.from(element.options).find(option => option.value === element.value) === element.selectedOptions[0]
 			}
-			parts.unshift(part)
-			node = parent
-		}
-		return parts.join(' > ')
+			if (element.getRootNode() !== document) {
+				payload.event = 'unsupported'
+				payload.gap = 'the element is in a shadow root'
+			} else if (event.type === 'contextmenu' || event.type === 'drop' || (event.type === 'click' && (event.ctrlKey || event.metaKey || event.altKey || event.shiftKey) && !['select', 'multiple', 'option'].includes(control))) {
+				payload.event = 'unsupported'
+				payload.gap = 'an unsupported gesture'
+			}
+			window[binding](JSON.stringify(payload.event === 'unsupported' ? { event: payload.event, index, top: payload.top, control, form: payload.form, gap: payload.gap } : payload))
+		}, { capture: true, signal: state.controller.signal })
 	}
-
-	const send = (payload) => {
-		if (typeof window[bindingName] === 'function') {
-			window[bindingName](JSON.stringify(payload))
-		}
-	}
-
-	document.addEventListener(
-		'click',
-		(event) => {
-			const target = event.target
-			if (!target || target.nodeType !== 1) return
-			send({ action: 'click', selector: selectorFor(target) })
-		},
-		true,
-	)
-
-	const fillableTypes = new Set([
-		'text',
-		'search',
-		'url',
-		'tel',
-		'email',
-		'password',
-		'number',
-	])
-
-	document.addEventListener(
-		'input',
-		(event) => {
-			const target = event.target
-			if (!target || target.nodeType !== 1) return
-
-			if (target.isContentEditable) {
-				send({ action: 'fill', selector: selectorFor(target), value: target.textContent || '' })
-				return
-			}
-
-			if (typeof target.value !== 'string') return
-			const tag = target.tagName
-			if (tag === 'TEXTAREA') {
-				send({ action: 'fill', selector: selectorFor(target), value: target.value })
-				return
-			}
-			if (tag === 'INPUT' && fillableTypes.has((target.type || 'text').toLowerCase())) {
-				send({ action: 'fill', selector: selectorFor(target), value: target.value })
-			}
-		},
-		true,
-	)
-
-	document.addEventListener(
-		'change',
-		(event) => {
-			const target = event.target
-			if (!target || target.tagName !== 'SELECT') return
-			const values = Array.from(target.selectedOptions || []).map((option) => option.value)
-			send({ action: 'select', selector: selectorFor(target), values })
-		},
-		true,
-	)
 })()`
+
 /** Identifies the CDP method-not-found response when WebMCP is absent. */
 export const BROWSER_REGISTRY_ABSENT_CODE = -32601
 
@@ -866,3 +812,24 @@ export const BROWSER_JOURNEY_ACTIONS: readonly BrowserToolName[] = Object.freeze
 
 /** Holds the result the `journeys` tool returns when no journey is saved. */
 export const BROWSER_JOURNEY_EMPTY_LISTING = 'No journeys are saved; call record to start one.'
+
+/**
+ * Names the journey tools a toolset constructed with `journeys` registers and reserves: `record`,
+ * `save`, `journeys`, `edit`, and `replay`.
+ */
+export const BROWSER_JOURNEY_TOOL_NAMES: readonly BrowserToolName[] = Object.freeze([
+	'record',
+	'save',
+	'journeys',
+	'edit',
+	'replay',
+])
+
+/** Holds the refusal `record`, `save`, and `edit` return when the journeys are read-only. */
+export const BROWSER_JOURNEY_READONLY_REFUSAL = 'The journeys are read-only; call replay.'
+
+/** Holds the refusal `record` returns while another journey is recording. */
+export const BROWSER_JOURNEY_RECORDING_REFUSAL = 'A journey is recording; call save first.'
+
+/** Holds the refusal `save` returns when no journey is recording. */
+export const BROWSER_JOURNEY_IDLE_REFUSAL = 'No journey is recording; call record first.'

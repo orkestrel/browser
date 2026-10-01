@@ -18,7 +18,6 @@ import {
 	parseBrowserTiming,
 	parseBrowserTimingRange,
 	parseCodegenActionPayload,
-	parseCodegenNavigateAction,
 	parseNumberArray,
 	parseSnapshotString,
 } from '@src/core'
@@ -208,108 +207,6 @@ describe('network timing parsers', () => {
 	})
 })
 
-describe('parseCodegenActionPayload', () => {
-	it('parses a valid click payload', () => {
-		const payload = JSON.stringify({ action: 'click', selector: '#a' })
-		expect(parseCodegenActionPayload(payload)).toEqual({ action: 'click', selector: '#a' })
-	})
-
-	it('parses a valid fill payload', () => {
-		const payload = JSON.stringify({ action: 'fill', selector: '#a', value: 'text' })
-		expect(parseCodegenActionPayload(payload)).toEqual({
-			action: 'fill',
-			selector: '#a',
-			value: 'text',
-		})
-	})
-
-	it('parses a valid select payload', () => {
-		const payload = JSON.stringify({ action: 'select', selector: '#a', values: ['x', 'y'] })
-		expect(parseCodegenActionPayload(payload)).toEqual({
-			action: 'select',
-			selector: '#a',
-			values: ['x', 'y'],
-		})
-	})
-
-	it('returns undefined for invalid JSON', () => {
-		expect(parseCodegenActionPayload('{not json')).toBeUndefined()
-	})
-
-	it('returns undefined for a non-string payload', () => {
-		expect(parseCodegenActionPayload(42)).toBeUndefined()
-	})
-
-	it('returns undefined when the parsed JSON is not a record', () => {
-		expect(parseCodegenActionPayload(JSON.stringify(['a', 'b']))).toBeUndefined()
-		expect(parseCodegenActionPayload(JSON.stringify('a string'))).toBeUndefined()
-		expect(parseCodegenActionPayload(JSON.stringify(null))).toBeUndefined()
-	})
-
-	it('returns undefined for an unknown action name', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'scroll', selector: '#a' })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for click missing selector', () => {
-		expect(parseCodegenActionPayload(JSON.stringify({ action: 'click' }))).toBeUndefined()
-	})
-
-	it('returns undefined for click with a non-string selector', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'click', selector: 1 })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for fill missing value', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'fill', selector: '#a' })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for select with a non-array values field', () => {
-		expect(
-			parseCodegenActionPayload(JSON.stringify({ action: 'select', selector: '#a', values: 'x' })),
-		).toBeUndefined()
-	})
-
-	it('returns undefined for select whose values contain a non-string element', () => {
-		expect(
-			parseCodegenActionPayload(
-				JSON.stringify({ action: 'select', selector: '#a', values: ['x', 1] }),
-			),
-		).toBeUndefined()
-	})
-})
-
-describe('parseCodegenNavigateAction', () => {
-	it('derives a navigate action from a top-level frame', () => {
-		const params = { frame: { url: 'https://example.com' } }
-		expect(parseCodegenNavigateAction(params)).toEqual({
-			action: 'navigate',
-			url: 'https://example.com',
-		})
-	})
-
-	it('returns undefined for a sub-frame (has parentId)', () => {
-		const params = { frame: { url: 'https://example.com', parentId: 'p1' } }
-		expect(parseCodegenNavigateAction(params)).toBeUndefined()
-	})
-
-	it('returns undefined when frame is missing', () => {
-		expect(parseCodegenNavigateAction({})).toBeUndefined()
-	})
-
-	it('returns undefined when frame is not a record', () => {
-		expect(parseCodegenNavigateAction({ frame: 'not-a-record' })).toBeUndefined()
-	})
-
-	it('returns undefined when the frame url is not a string', () => {
-		expect(parseCodegenNavigateAction({ frame: { url: 42 } })).toBeUndefined()
-	})
-})
-
 describe('parseBrowserConsoleMessage', () => {
 	it('contains cyclic console serialization without dropping the event', () => {
 		const cyclic: Record<string, unknown> = {}
@@ -385,5 +282,203 @@ describe('journey parsers', () => {
 		expect(parseBrowserJourney(value)).toBeUndefined()
 		expect(parseBrowserJourneyEdit(value)).toBeUndefined()
 		expect(parseBrowserRun(value)).toBeUndefined()
+	})
+})
+
+describe('parseCodegenActionPayload', () => {
+	it('accepts complete click, text, password, Enter, and select gestures', () => {
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'click',
+					control: 'other',
+					index: 0,
+					top: true,
+					form: false,
+					detail: 1,
+				}),
+			),
+		).toEqual({ event: 'click', control: 'other', index: 0, top: true, form: false, detail: 1 })
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'input',
+					control: 'text',
+					index: 1,
+					top: true,
+					form: true,
+					value: '',
+				}),
+			)?.value,
+		).toBe('')
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'input',
+					control: 'password',
+					index: 1,
+					top: true,
+					form: true,
+					secret: true,
+				}),
+			)?.secret,
+		).toBe(true)
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'keydown',
+					control: 'text',
+					index: 1,
+					top: true,
+					form: true,
+					key: 'Enter',
+				}),
+			)?.key,
+		).toBe('Enter')
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'change',
+					control: 'select',
+					index: 1,
+					top: true,
+					form: true,
+					value: 'm',
+					roundtrip: false,
+				}),
+			)?.roundtrip,
+		).toBe(false)
+	})
+	it('contains malformed JSON, unknown fields, invalid coordinates, and retired actions', () => {
+		expect(parseCodegenActionPayload('{')).toBeUndefined()
+		expect(parseCodegenActionPayload(42)).toBeUndefined()
+		expect(parseCodegenActionPayload('null')).toBeUndefined()
+		expect(parseCodegenActionPayload('[]')).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(JSON.stringify({ action: 'click', selector: '#save' })),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'click',
+					control: 'other',
+					index: -1,
+					top: true,
+					form: false,
+					detail: 1,
+				}),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'click',
+					control: 'other',
+					index: 0.5,
+					top: true,
+					form: false,
+					detail: 1,
+				}),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'click',
+					control: 'other',
+					index: 0,
+					top: true,
+					form: false,
+					detail: 1,
+					answer: 'private',
+				}),
+			),
+		).toBeUndefined()
+	})
+	it('refuses password values and keys other than Enter', () => {
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'input',
+					control: 'password',
+					index: 0,
+					top: true,
+					form: true,
+					value: 'teal-Heron-42',
+					secret: true,
+				}),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({ event: 'input', control: 'password', index: 0, top: true, form: true }),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'keydown',
+					control: 'password',
+					index: 0,
+					top: true,
+					form: true,
+					key: 't',
+				}),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({ event: 'keydown', control: 'text', index: 0, top: true, form: true }),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'click',
+					control: 'text',
+					index: 0,
+					top: true,
+					form: true,
+					detail: 1,
+					key: 'Enter',
+				}),
+			),
+		).toBeUndefined()
+	})
+	it('refuses missing text, click detail, select roundtrip, and malformed gaps', () => {
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({ event: 'input', control: 'text', index: 0, top: true, form: false }),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({ event: 'click', control: 'other', index: 0, top: true, form: false }),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'change',
+					control: 'select',
+					index: 0,
+					top: true,
+					form: false,
+					value: 'm',
+				}),
+			),
+		).toBeUndefined()
+		expect(
+			parseCodegenActionPayload(
+				JSON.stringify({
+					event: 'unsupported',
+					control: 'other',
+					index: 0,
+					top: true,
+					form: false,
+					gap: 1,
+				}),
+			),
+		).toBeUndefined()
 	})
 })

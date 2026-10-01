@@ -31,6 +31,7 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import { describe, it, expect } from 'vitest'
 import {
 	BrowserCodegen,
+	BROWSER_CODEGEN_SOURCE,
 	BrowserError,
 	BrowserPage,
 	compileSubmitObserverExpression,
@@ -2564,12 +2565,20 @@ export interface StartedCodegenFixture extends ConnectedCDPFixture {
 }
 
 /** Creates a connected client with a started codegen recorder. */
-export async function createStartedCodegen(session = 'session-1'): Promise<StartedCodegenFixture> {
+export async function createStartedCodegen(
+	session = 'session-1',
+	target = { role: 'textbox', name: 'Title' },
+): Promise<StartedCodegenFixture> {
 	const { client, transport } = await createConnectedCDPClient()
+	replyOk(transport, 'Page.enable')
+	replyOk(transport, 'Runtime.releaseObject')
+	replyOk(transport, 'Accessibility.getPartialAXTree', {
+		nodes: [{ role: { value: target.role }, name: { value: target.name } }],
+	})
 	replyOk(transport, 'Runtime.enable')
 	replyOk(transport, 'Runtime.addBinding')
 	replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')
-	replyOk(transport, 'Runtime.evaluate')
+	replyOk(transport, 'Runtime.evaluate', { result: { objectId: 'target' } })
 	replyOk(transport, 'Runtime.removeBinding')
 
 	const codegen = new BrowserCodegen(client, session)
@@ -2581,7 +2590,11 @@ export async function createStartedCodegen(session = 'session-1'): Promise<Start
 export function createCodegenBindingPayload(
 	payload: Readonly<Record<string, unknown>>,
 ): Readonly<Record<string, unknown>> {
-	return { name: '__orkestrelBrowserCodegen', payload: JSON.stringify(payload) }
+	return {
+		name: '__orkestrelBrowserCodegen',
+		executionContextId: 1,
+		payload: JSON.stringify(payload),
+	}
 }
 
 /**
@@ -3854,4 +3867,159 @@ process.send?.({ outcome: 'ready' })
 			}
 		})
 	})
+}
+
+/** Creates a complete listener payload with configurable gesture fields. */
+export function createCodegenGesture(
+	fields: Readonly<Record<string, unknown>> = {},
+): Readonly<Record<string, unknown>> {
+	return {
+		event: 'input',
+		control: 'text',
+		index: 0,
+		top: true,
+		form: true,
+		value: 'Title text',
+		...fields,
+	}
+}
+
+/** Drives the shipped listener with inert DOM boundary data and returns its raw binding strings. */
+export function captureCodegenSource(
+	events: ReadonlyArray<Readonly<Record<string, unknown>>>,
+): readonly string[] {
+	const listeners = new Map<string, (event: Readonly<Record<string, unknown>>) => void>()
+	const payloads: string[] = []
+	const window: Record<string, unknown> = {
+		__orkestrelBrowserCodegen: payloads.push.bind(payloads),
+	}
+	window['top'] = window
+	const document = { addEventListener: listeners.set.bind(listeners) }
+	new Function('window', 'document', 'Element', 'AbortController', BROWSER_CODEGEN_SOURCE)(
+		window,
+		document,
+		Object,
+		AbortController,
+	)
+	for (const event of events) {
+		const element = {
+			tagName: 'INPUT',
+			type: 'password',
+			value: 'teal-Heron-42',
+			form: {},
+			ownerDocument: document,
+			getRootNode: () => document,
+			...(isRecord(event['element']) ? event['element'] : {}),
+		}
+		const name = event['type']
+		if (isString(name))
+			listeners.get(name)?.({ isTrusted: true, ...event, composedPath: () => [element] })
+	}
+	return payloads
+}
+
+/** Holds the independent fixture event log, using only fixture-declared semantic names. */
+export const BROWSER_CODEGEN_ORACLE = `
+document.body.dataset.codegenLog = "[]";
+window.addEventListener("message", event => { if (event.data?.codegen) document.body.dataset.codegenLog = JSON.stringify([...JSON.parse(document.body.dataset.codegenLog), event.data.codegen]); });
+for (const name of ["click", "input", "change", "keydown", "focusout", "submit"]) document.addEventListener(name, event => {
+ if (!event.isTrusted || (name === "keydown" && event.key !== "Enter")) return;
+ const node = event.target;
+ const entry = { event: name, id: node.id, main: window === top, role: node.dataset.role, name: node.dataset.name, form: !!node.form, detail: event.detail, control: node.dataset.control || "other" };
+ if (name === "input" && node.dataset.control === "text") entry.text = node.isContentEditable ? node.textContent : node.value;
+ if (name === "input" && node.type === "password") entry.secret = true;
+ if (name === "change" && node.tagName === "SELECT" && !node.multiple) { entry.text = node.value; entry.valid = [...node.options].find(option => option.value === node.value) === node.selectedOptions[0]; }
+ if (window === top) document.body.dataset.codegenLog = JSON.stringify([...JSON.parse(document.body.dataset.codegenLog), entry]); else parent.postMessage({ codegen: entry }, "*");
+}, true);
+`
+
+/** Holds the controls for the host recorder proof; remote URL substitution belongs to its server. */
+export const BROWSER_CODEGEN_FIXTURE = `<!doctype html><meta charset="utf-8"><title>Recorder gestures</title>
+<style>body{font:16px sans-serif;margin:12px}input,select{display:block;margin:6px}iframe{width:240px;height:70px}#sink{display:none}</style>
+<button id="add" data-role="button" data-name="Add note">Add note</button>
+<form target="sink" action="/sink"><label>Title<input id="title" name="title" data-role="textbox" data-name="Title" data-control="text"></label><button id="save" data-role="button" data-name="Save note">Save note</button></form>
+<form target="sink" action="/sink"><label>Search<input id="search" name="search" value="kettle" data-role="textbox" data-name="Search" data-control="text"></label></form>
+<label>Speed<select id="speed" data-role="combobox" data-name="Speed" data-control="select"><option value="standard">Standard</option><option value="express">Express</option></select></label>
+<label>Size<select id="size" data-role="combobox" data-name="Size" data-control="select"><option value="m">Medium</option><option value="m">Medium tall</option></select></label>
+<label>Toppings<select id="toppings" multiple size="3" data-role="listbox" data-name="Toppings" data-control="multiple"><option id="olives" data-control="option" value="olives">Olives</option><option value="onion">Onion</option></select></label>
+<button id="discard" data-role="button" data-name="Discard draft" onclick="document.body.dataset.codegenLog = JSON.stringify([...JSON.parse(document.body.dataset.codegenLog), { event: 'dialog', answer: confirm('Discard the draft?') }])">Discard draft</button>
+<label>Password<input id="password" type="password" data-role="textbox" data-name="Password" data-control="password"></label>
+<div id="editor" role="textbox" aria-label="Notes" contenteditable="true" data-role="textbox" data-name="Notes" data-control="text">Draft</div>
+<a id="next" href="#next" data-role="link" data-name="Next">Next</a>
+<iframe id="child" src="/child"></iframe><iframe id="remote" src="REMOTE_URL"></iframe><iframe id="sink" name="sink"></iframe>
+<script>${BROWSER_CODEGEN_ORACLE}</script>`
+
+/** Projects the fixture's own event log using the declared gesture boundaries, without recorder data. */
+export function projectCodegenOracle(
+	log: ReadonlyArray<Readonly<Record<string, unknown>>>,
+): readonly BrowserJourneyStepInput[] {
+	const steps: BrowserJourneyStepInput[] = []
+	let edit: { readonly id: unknown; readonly position: number } | undefined
+	let entered = false
+	for (const event of log) {
+		const action = event['event']
+		const control = event['control']
+		const target = { role: String(event['role']), name: String(event['name']) }
+		if (action === 'focusout' || action === 'submit' || action === 'navigation') {
+			edit = undefined
+			entered = false
+			continue
+		}
+		if (action === 'input' && (control === 'text' || control === 'password')) {
+			const step = {
+				action: 'type',
+				target,
+				arguments: {
+					text: event['secret'] === true ? { parameter: 'password' } : String(event['text']),
+				},
+			}
+			if (edit !== undefined && edit.id === event['id']) steps[edit.position] = step
+			else {
+				steps.push(step)
+				edit = { id: event['id'], position: steps.length - 1 }
+			}
+			continue
+		}
+		if (action === 'keydown') {
+			const previous =
+				edit !== undefined && edit.id === event['id'] ? steps[edit.position] : undefined
+			if (previous?.action === 'type' && event['form'] === true && edit !== undefined)
+				steps[edit.position] = { ...previous, arguments: { ...previous.arguments, submit: true } }
+			else steps.push({ action: 'press', arguments: { key: 'Enter' } })
+			edit = undefined
+			entered = event['form'] === true
+			continue
+		}
+		if (action === 'click') {
+			if (
+				['select', 'multiple', 'option'].includes(String(control)) ||
+				(event['detail'] === 0 && entered)
+			)
+				continue
+			edit = undefined
+			entered = false
+			if (event['main'] === false)
+				steps.push({ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' })
+			else {
+				steps.push({ action: 'click', arguments: {}, target })
+				if (control === 'text' || control === 'password')
+					edit = { id: event['id'], position: steps.length - 1 }
+			}
+		}
+		if (action === 'change' && (control === 'select' || control === 'multiple')) {
+			edit = undefined
+			if (control === 'multiple' || event['valid'] !== true)
+				steps.push({
+					action: 'unresolved',
+					arguments: {},
+					gap: control === 'multiple' ? 'a multiple selection' : 'the option does not round-trip',
+				})
+			else steps.push({ action: 'type', arguments: { text: String(event['text']) }, target })
+		}
+		if (action === 'dialog') {
+			edit = undefined
+			steps.push({ action: 'unresolved', arguments: {}, gap: 'a native dialog answer' })
+		}
+	}
+	return steps
 }

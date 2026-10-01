@@ -24,7 +24,6 @@ import { join } from 'node:path'
 import { createBrowser, createCDPTransport } from '@src/server'
 import {
 	BROWSER_RESULT_LIMIT,
-	compileCodegenScript,
 	createCDPClient,
 	isBrowserError,
 	isBrowserResultLimitError,
@@ -577,56 +576,6 @@ describe('Browser real launch', () => {
 			// subsequent call on the same page must still complete.
 			expect(browser.status).toBe('connected')
 			expect(await page.evaluate('1 + 1')).toBe(2)
-		} finally {
-			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
-		}
-	})
-
-	it('records and replays a contenteditable fill through codegen on a real DOM', async () => {
-		const httpServer = createServer((_req, res) => {
-			res.writeHead(200, { 'content-type': 'text/html' })
-			res.end('<html><body><div id="editable" contenteditable="true"></div></body></html>')
-		})
-		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
-		const url = `http://127.0.0.1:${readServerPort(httpServer)}/`
-
-		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
-				headless: true,
-				profile: createTempDirectory('orkestrel-browser-profile-').path,
-				args: REAL_BROWSER_ARGS,
-				cdp: { port: await reservePort() },
-				timeout: 20_000,
-			})
-
-			await browser.connect()
-			const page = await browser.create({ url })
-
-			const codegen = await page.codegen()
-			const editable = await page.elements.find({ css: '#editable' })
-			await editable[0]?.fill('hello world')
-			const actions = await codegen.stop()
-
-			const fillAction = actions.find(
-				(action) => action.action === 'fill' && action.selector === '#editable',
-			)
-			expect(fillAction).toBeDefined()
-			expect(fillAction && fillAction.action === 'fill' ? fillAction.value : undefined).toBe(
-				'hello world',
-			)
-
-			const script = compileCodegenScript(actions, { language: 'javascript' })
-
-			const freshPage = await browser.create({ url })
-			const factory = new Function(`return ${script}`)
-			const run = factory()
-			await run(freshPage)
-
-			const replayedText = await freshPage.evaluate(
-				"document.querySelector('#editable').textContent",
-			)
-			expect(replayedText).toBe('hello world')
 		} finally {
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
 		}
@@ -1205,31 +1154,5 @@ describe('Browser proofs against the fixture pages', () => {
 			description: 'Echoes the text it receives',
 			frame: page.id,
 		})
-	})
-
-	it('replays a recorded #save click through its retargeted script (control: a script compiled from an empty recording changes nothing)', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
-		opened.push(page)
-		const codegen = await page.codegen()
-		const [save] = await page.elements.find({ css: '#save' })
-		await requireValue(save).click()
-		const actions = await codegen.stop()
-
-		expect(actions).toContainEqual(expect.objectContaining({ action: 'click', selector: '#save' }))
-		const script = compileCodegenScript(actions, { language: 'javascript' })
-		expect(script).toContain('elements.find({ css: "#save" })')
-		expect(script).toContain('.click()')
-
-		const fresh = await browser.create({ url: fixtures.url('/form') })
-		opened.push(fresh)
-		await new Function(`return ${script}`)()(fresh)
-		expect(await fresh.evaluate('document.body.dataset.saved')).toBe('yes')
-
-		const untouched = await browser.create({ url: fixtures.url('/form') })
-		opened.push(untouched)
-		await new Function(`return ${compileCodegenScript([], { language: 'javascript' })}`)()(
-			untouched,
-		)
-		expect(await untouched.evaluate('document.body.dataset.saved')).toBeUndefined()
 	})
 })
