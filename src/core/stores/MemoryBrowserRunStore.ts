@@ -5,6 +5,7 @@ import type {
 	BrowserStoreOptions,
 	BrowserStorePage,
 } from '../types.js'
+import { BrowserError } from '../errors.js'
 import { generateBrowserRunId } from '../helpers.js'
 import { validateBrowserRun } from '../validators.js'
 
@@ -17,6 +18,7 @@ import { validateBrowserRun } from '../validators.js'
 export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 	readonly #runs = new Map<string, Map<string, BrowserRun>>()
 	readonly #slots = new Map<string, Set<string>>()
+	readonly #opened = new WeakSet<BrowserRunSlot>()
 
 	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
@@ -25,7 +27,9 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		while (slots.has(id) || this.#runs.get(name)?.has(id)) id = generateBrowserRunId()
 		slots.add(id)
 		this.#slots.set(name, slots)
-		return { id }
+		const slot = { id }
+		this.#opened.add(slot)
+		return slot
 	}
 
 	async get(
@@ -43,6 +47,19 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		const runs = this.#runs.get(run.journey.name) ?? new Map<string, BrowserRun>()
 		runs.set(run.id, structuredClone(run))
 		this.#runs.set(run.journey.name, runs)
+	}
+
+	async capture(
+		slot: BrowserRunSlot,
+		_name: string,
+		_bytes: Uint8Array,
+		options?: BrowserStoreOptions,
+	): Promise<string | undefined> {
+		options?.signal?.throwIfAborted()
+		if (!this.#opened.has(slot))
+			throw new BrowserError('The run slot was not opened by this store', 'BROWSER_JOURNEY_PATH')
+		// Memory stores own slots but have no directory in which to persist these bytes.
+		return undefined
 	}
 
 	async delete(name: string, id: string, options?: BrowserStoreOptions): Promise<void> {

@@ -1,4 +1,10 @@
-import type { BrowserRun, BrowserRunStep, BrowserToolSourceEventMap } from '@src/core'
+import type {
+	BrowserRun,
+	BrowserRunSlot,
+	BrowserRunStep,
+	BrowserStoreOptions,
+	BrowserToolSourceEventMap,
+} from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import { Emitter } from '@orkestrel/emitter'
@@ -449,6 +455,7 @@ describe('BrowserReplay', () => {
 				{
 					runs: {
 						open: runs.open.bind(runs),
+						capture: runs.capture.bind(runs),
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
@@ -522,6 +529,7 @@ describe('BrowserReplay', () => {
 				{
 					runs: {
 						open: runs.open.bind(runs),
+						capture: runs.capture.bind(runs),
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
@@ -541,15 +549,18 @@ describe('BrowserReplay', () => {
 		}
 	})
 
-	it('captures through the page writer into the opened directory', async () => {
-		const writes = createRecorder<readonly [string, Uint8Array]>()
-		const fixture = await createBrowserElementFixture({
-			writer: { write: async (path, bytes) => writes.handler(path, bytes) },
-		})
+	it('captures bytes through the opened store slot without passing a path to the page', async () => {
+		const captures =
+			createRecorder<
+				readonly [BrowserRunSlot, string, Uint8Array, BrowserStoreOptions | undefined]
+			>()
+		const fixture = await createBrowserElementFixture()
 		const toolset = createBrowserToolset(fixture.page)
 		await toolset.start()
 		replyOk(fixture.transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 		const runs = new MemoryBrowserRunStore()
+		const slot = { ...(await runs.open('check-ready')), directory: '/opened-run' }
+		const signal = new AbortController().signal
 		try {
 			const run = await new BrowserReplay(
 				toolset,
@@ -558,10 +569,78 @@ describe('BrowserReplay', () => {
 				},
 				{
 					runs: {
+						open: async () => slot,
+						capture: async (opened, name, bytes, options) => {
+							captures.handler(opened, name, bytes, options)
+							return 'stored.png'
+						},
+						get: runs.get.bind(runs),
+						list: runs.list.bind(runs),
+						delete: runs.delete.bind(runs),
+						set: runs.set.bind(runs),
+					},
+				},
+			).execute({ signal, timeout: 500 })
+			expect(run.fault, 'the page receives no path requiring a file writer').toBeUndefined()
+			expect(run.outcome).toBe('complete')
+			expect(run.steps[0]?.capture).toBe('stored.png')
+			expect(captures.calls).toEqual([
+				[slot, 's1.png', new Uint8Array([137, 80, 78, 71, 13]), { signal }],
+			])
+			expect(captures.calls[0]?.[0]).toBe(slot)
+			expect(await runs.get(run.journey.name, slot.id)).toEqual(run)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
+	it('omits capture names with a memory store and takes no screenshot without a run store', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		await toolset.start()
+		const journey = createBrowserJourneyFixture([{ action: 'press', arguments: { key: 'Escape' } }])
+		try {
+			const unstored = await new BrowserReplay(toolset, { journey }).execute()
+			expect(unstored.outcome).toBe('complete')
+			expect(unstored.steps[0]).not.toHaveProperty('capture')
+			expect(
+				fixture.transport.sent.filter((message) => message.method === 'Page.captureScreenshot'),
+			).toEqual([])
+			const runs = new MemoryBrowserRunStore()
+			const stored = await new BrowserReplay(toolset, { journey }, { runs }).execute()
+			expect(stored.outcome).toBe('complete')
+			expect(stored.fault).toBeUndefined()
+			expect(stored.steps[0]).not.toHaveProperty('capture')
+			expect(
+				fixture.transport.sent.filter((message) => message.method === 'Page.captureScreenshot'),
+			).toHaveLength(1)
+			expect(await runs.get(journey.name, stored.id)).toEqual(stored)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
+	it('omits captures for an untrusted view even when a store supplies a directory', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		await toolset.start()
+		const runs = new MemoryBrowserRunStore()
+		const captures = createRecorder<readonly [BrowserRunSlot, string, Uint8Array]>()
+		try {
+			const run = await new BrowserReplay(
+				toolset,
+				{ journey: createBrowserJourneyFixture() },
+				{
+					runs: {
 						open: async (name, options) => ({
 							...(await runs.open(name, options)),
 							directory: '/opened-run',
 						}),
+						capture: async (slot, name, bytes) => {
+							captures.handler(slot, name, bytes)
+							return name
+						},
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
@@ -570,23 +649,15 @@ describe('BrowserReplay', () => {
 				},
 			).execute()
 			expect(run.outcome).toBe('complete')
-			expect(run.steps[0]?.capture).toBe('s1.png')
-			expect(writes.calls.map(([path]) => path)).toEqual(['/opened-run/s1.png'])
-			expect(writes.calls[0]?.[1]).toEqual(new Uint8Array([137, 80, 78, 71, 13]))
+			expect(run.steps[0]).not.toHaveProperty('capture')
+			expect(captures.count).toBe(0)
 		} finally {
 			await toolset.destroy()
-			await fixture.client.close()
 		}
 	})
 
 	it('retains the executed step and releases the hold when capture fails', async () => {
-		const fixture = await createBrowserElementFixture({
-			writer: {
-				write: async () => {
-					throw new Error('capture refused')
-				},
-			},
-		})
+		const fixture = await createBrowserElementFixture()
 		const toolset = createBrowserToolset(fixture.page)
 		await toolset.start()
 		replyOk(fixture.transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
@@ -604,10 +675,10 @@ describe('BrowserReplay', () => {
 				{
 					on: { step: emitted.handler },
 					runs: {
-						open: async (name, options) => ({
-							...(await runs.open(name, options)),
-							directory: '/opened-run',
-						}),
+						open: runs.open.bind(runs),
+						capture: async () => {
+							throw new Error('capture refused')
+						},
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
@@ -618,8 +689,11 @@ describe('BrowserReplay', () => {
 			expect(run.outcome).toBe('stopped')
 			expect(run.steps).toHaveLength(1)
 			expect(run.steps[0]?.outcome).toBe('done')
+			expect(run.steps[0]).not.toHaveProperty('capture')
 			expect(run.fault).toContain('capture refused')
 			expect(emitted.count).toBe(1)
+			expect(emitted.calls[0]?.[0]).toEqual(run.steps[0])
+			expect(await runs.get(run.journey.name, run.id)).toEqual(run)
 			const hold = await toolset.hold('after-capture')
 			hold.destroy()
 		} finally {
@@ -709,6 +783,7 @@ describe('BrowserReplay', () => {
 							...(await runs.open(name, options)),
 							directory: '/secret-run',
 						}),
+						capture: runs.capture.bind(runs),
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
 						delete: runs.delete.bind(runs),
