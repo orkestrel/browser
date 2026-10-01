@@ -1,6 +1,10 @@
 import type {
 	BrowserAction,
+	BrowserFollowOptions,
 	BrowserHoldInterface,
+	BrowserJourneyStepInput,
+	BrowserJourneyTab,
+	BrowserJourneyTarget,
 	BrowserJourneyToolsetInterface,
 	BrowserToolsetResult,
 	BrowserCallOptions,
@@ -69,6 +73,7 @@ import {
 import {
 	BrowserElementError,
 	BrowserError,
+	BrowserStepError,
 	isBrowserElementError,
 	isBrowserError,
 } from './errors.js'
@@ -84,6 +89,7 @@ import {
 	requireBrowserReference,
 	validateBrowserToolArguments,
 } from './helpers.js'
+import { parseBrowserTabLine } from './parsers.js'
 
 /**
  * Publishes the browser vocabulary as `@orkestrel/tool` tools over one view and adopts the
@@ -441,6 +447,36 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			hold.destroy()
 			throw error
 		}
+	}
+
+	async follow(
+		id: string,
+		step: BrowserJourneyStepInput,
+		options?: BrowserFollowOptions,
+	): Promise<BrowserAction> {
+		const context: ToolContext = {
+			signal: options?.signal ?? new AbortController().signal,
+			...(options?.caller === undefined ? {} : { caller: options.caller }),
+		}
+		let args: Readonly<Record<string, unknown>> = step.arguments
+		if ((step.action === 'click' || step.action === 'type') && step.target !== undefined)
+			args = { ...args, ref: await this.#resolveTarget(id, step.target, options) }
+		if (step.action === 'type' && options?.secret === true) args = { ...args, secret: true }
+		if (step.action === 'switch' && step.tab !== undefined)
+			args = { ...args, tab: await this.#resolveTab(id, step.tab, context) }
+		const performed = await this.perform({ id, name: step.action, arguments: args }, context)
+		const action = performed.action
+		if (action === undefined)
+			throw new BrowserError(
+				`${id}: ${performed.result.success ? String(performed.result.value) : performed.result.error}`,
+			)
+		if (
+			(action.outcome !== 'done' && action.outcome !== 'interrupted') ||
+			action.stage === 'requested' ||
+			action.stage === 'committed'
+		)
+			throw new BrowserStepError(id, action)
+		return action
 	}
 
 	start(options?: BrowserCallOptions): Promise<void> {
@@ -1377,6 +1413,53 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	// Returns the frame whose document receives an input on the referenced element: the frame the
 	// element manager recorded for it, or the main frame.
+	// Returns the reference of the one element of the current view that carries the target's role
+	// and exact name; the stored reference and selector are evidence a developer reads, never a lookup.
+	async #resolveTarget(
+		id: string,
+		target: BrowserJourneyTarget,
+		options?: BrowserCallOptions,
+	): Promise<string> {
+		const name = target.name
+		if (!isString(name))
+			throw new BrowserError(
+				`Step ${id} binds its target name to parameter ${JSON.stringify(name.parameter)}; pass the name itself.`,
+				'BROWSER_JOURNEY_INPUT',
+				{ step: id, parameter: name.parameter },
+			)
+		const matches = await this.#cursor.elements.find(
+			{ role: target.role, name, exact: true },
+			options,
+		)
+		const [element] = matches
+		if (matches.length === 1 && element !== undefined) return element.reference
+		throw new BrowserError(
+			`Step ${id} names ${target.role} ${JSON.stringify(name)}, which ${matches.length === 0 ? 'no element carries' : `${matches.length} elements carry`}; call edit to remove or replace ${id}.`,
+			matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
+		)
+	}
+
+	// Returns the id of the one tab the `tabs` listing names by the tab's URL and title.
+	async #resolveTab(id: string, tab: BrowserJourneyTab, context: ToolContext): Promise<string> {
+		const listed = await this.perform(
+			{ id, name: 'tabs', arguments: { what: 'journey target' } },
+			context,
+		)
+		if (!listed.result.success) throw new BrowserError(`${id}: ${listed.result.error}`)
+		const matches = String(listed.result.value)
+			.split('\n')
+			.flatMap((line) => {
+				const parsed = parseBrowserTabLine(line)
+				return parsed?.title === tab.title && parsed.url === tab.url ? [parsed.id] : []
+			})
+		const [match] = matches
+		if (matches.length === 1 && match !== undefined) return match
+		throw new BrowserError(
+			`${id}: The tab ${JSON.stringify(tab.title)} at ${tab.url} ${matches.length === 0 ? 'is not open' : 'is ambiguous'}; call tabs.`,
+			matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
+		)
+	}
+
 	#resolveFrame(page: BrowserPageInterface, reference: string): string {
 		return page.elements.element(reference)?.frame ?? page.id
 	}

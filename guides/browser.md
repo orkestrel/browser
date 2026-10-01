@@ -280,7 +280,7 @@ An error names its refusal in `code`. The following table lists every code that 
 | `BROWSER_NOT_CONNECTED_ERROR`  | `BrowserNotConnectedError` | `Browser`                                                                                                                                                              | An operation that needs a connection runs while the browser is disconnected.                                                                                                                                                           |
 | `BROWSER_DESTROYED_ERROR`      | `BrowserDestroyedError`    | `Browser`                                                                                                                                                              | An operation runs after `destroy()` or `close()`.                                                                                                                                                                                      |
 | `BROWSER_ELEMENT_ERROR`        | `BrowserElementError`      | the element actions of both placements, `requireBrowserReference`, and the toolset                                                                                     | An element action is refused, with `context.reason` naming why, or a reference is malformed or absent from the current view.                                                                                                           |
-| `BROWSER_STEP_ERROR`           | `BrowserStepError`         | `performBrowserStep`; a replay records the error's `action` as the step                                                                                                | A step's action was refused or timed out, or its navigation stopped at `requested` or `committed`.                                                                                                                                     |
+| `BROWSER_STEP_ERROR`           | `BrowserStepError`         | `follow`; a replay records the error's `action` as the step                                                                                                            | A step's action was refused or timed out, or its navigation stopped at `requested` or `committed`.                                                                                                                                     |
 | `BROWSER_CONTEXT_CLOSED`       | `BrowserError`             | `BrowserContext.create()` and `BrowserContext.sync()`                                                                                                                  | The context is closed, or it closed while `create()` was building the page.                                                                                                                                                            |
 | `BROWSER_PAGE_CLOSED`          | `BrowserError`             | `BrowserContext.create()`                                                                                                                                              | The page it created or joined closed before it could return that page.                                                                                                                                                                 |
 | `BROWSER_TARGET_HELD`          | `BrowserError`             | a page constructed through a context                                                                                                                                   | Another live page holds the page's target.                                                                                                                                                                                             |
@@ -308,11 +308,11 @@ An error names its refusal in `code`. The following table lists every code that 
 | `BROWSER_JOURNEY_INVALID`      | `BrowserError`             | `validateBrowserJourney`, the step, parameter, and run validators, `compileBrowserJourney`, `recorder.journey()`, a replay's preparation, and the memory stores' `set` | A journey breaks an invariant that the message names, or a run's fields are malformed; see [Journeys](#journeys) for the invariants.                                                                                                   |
 | `BROWSER_JOURNEY_EMPTY`        | `BrowserError`             | `save`                                                                                                                                                                 | The recording has no step; the recorder keeps recording so an action can precede the next save.                                                                                                                                        |
 | `BROWSER_JOURNEY_EDIT`         | `BrowserError`             | `editBrowserJourney`, `validateBrowserJourneyEdit`, and `edit`                                                                                                         | An edit is malformed or the batch's final journey breaks an invariant; `context.index` names the edit from 1 and `context.reason` the clause.                                                                                          |
-| `BROWSER_JOURNEY_INPUT`        | `BrowserError`             | a replay's preparation and `resolveBrowserJourneyBinding`                                                                                                              | An input names no parameter, or a parameter without a default has no input.                                                                                                                                                            |
+| `BROWSER_JOURNEY_INPUT`        | `BrowserError`             | a replay's preparation, `resolveBrowserJourneyBinding`, and `follow`                                                                                                   | An input names no parameter, a parameter without a default has no input, or a step `follow` receives binds its target name to a parameter.                                                                                             |
 | `BROWSER_JOURNEY_GAP`          | `BrowserError`             | a replay's preparation                                                                                                                                                 | A step is `unresolved`.                                                                                                                                                                                                                |
 | `BROWSER_JOURNEY_PLACEMENT`    | `BrowserError`             | a replay's preparation                                                                                                                                                 | A native step's action is one the toolset cannot execute, such as `press` in the DOM placement or `switch` without `context`.                                                                                                          |
-| `BROWSER_JOURNEY_TARGET`       | `BrowserError`             | `locateBrowserTarget` and `performBrowserStep`; a replay stops at the step                                                                                             | No element carries the target's role and exact name, or no open tab matches a `switch` step's URL and title.                                                                                                                           |
-| `BROWSER_JOURNEY_AMBIGUOUS`    | `BrowserError`             | `locateBrowserTarget` and `performBrowserStep`; a replay stops at the step                                                                                             | Several elements carry the target's role and exact name, or several tabs match a `switch` step's URL and title.                                                                                                                        |
+| `BROWSER_JOURNEY_TARGET`       | `BrowserError`             | `follow`; a replay stops at the step                                                                                                                                   | No element carries the target's role and exact name, or no open tab matches a `switch` step's URL and title.                                                                                                                           |
+| `BROWSER_JOURNEY_AMBIGUOUS`    | `BrowserError`             | `follow`; a replay stops at the step                                                                                                                                   | Several elements carry the target's role and exact name, or several tabs match a `switch` step's URL and title.                                                                                                                        |
 | `BROWSER_JOURNEY_STALE`        | `BrowserError`             | the journey stores' `set`, and `edit`                                                                                                                                  | `expected` differs from the stored revision.                                                                                                                                                                                           |
 | `BROWSER_JOURNEY_LOCKED`       | `BrowserError`             | the file journey store's `set` and `delete`, `save`, and `edit`                                                                                                        | Another write holds the journey's `journey.lock`; the store refuses at once and never waits.                                                                                                                                           |
 | `BROWSER_JOURNEY_FILE`         | `BrowserError`             | the file stores' `get` and `list`, `save` and `edit` for a store failure with no code, and a replay's run write                                                        | A stored file is empty, truncated, malformed, or names another journey or run, or the run write passed its bound.                                                                                                                      |
@@ -474,6 +474,7 @@ The helpers are pure: they decode protocol payloads, validate options, compile i
 | `parseSnapshotString`                    | function | Coerces one CDP snapshot string-table index to its string, or `undefined` off-shape.                                                                                                                |
 | `parseBrowserRect`                       | function | Coerces a four-number CSS-pixel rectangle to a `BrowserRect`, or `undefined` off-shape.                                                                                                             |
 | `parseBrowserReference`                  | function | Parses the supported element-reference spellings into their canonical form.                                                                                                                         |
+| `parseBrowserTabLine`                    | function | Parses one line of the `tabs` tool's listing into the tab it names.                                                                                                                                 |
 | `validateBrowserJourney`                 | function | Validates the journey format and its name, nonempty steps, ids, bindings, secrets, JSON, and actions.                                                                                               |
 | `validateBrowserJourneyStep`             | function | Validates one step independently of ids and parameter declarations.                                                                                                                                 |
 | `validateBrowserJourneyParameter`        | function | Validates a parameter declaration, including the secret-default exclusion.                                                                                                                          |
@@ -502,9 +503,7 @@ The helpers are pure: they decode protocol payloads, validate options, compile i
 | `deriveBrowserJourneySecret`             | function | Derives an unused lower camel case secret parameter name from an accessible name.                                                                                                                   |
 | `collectBrowserJourneyTextBindings`      | function | Collects the parameter names a native `type` step's `text` binds.                                                                                                                                   |
 | `generateBrowserRunId`                   | function | Generates a run id from an ISO timestamp and a cryptographic hexadecimal suffix.                                                                                                                    |
-| `locateBrowserTarget`                    | function | Resolves one exact semantic target and names the caller's step in missing or ambiguous refusals.                                                                                                    |
-| `performBrowserStep`                     | function | Performs a resolved journey step through the toolset's action boundary.                                                                                                                             |
-| `compileBrowserJourney`                  | function | Compiles a journey into a standalone module that performs each step through `performBrowserStep` over a toolset the module constructs on the page. The module checks its inputs before any step.    |
+| `compileBrowserJourney`                  | function | Compiles a journey into a standalone module that performs each step through the `follow` method of a toolset the module constructs on the page. The module checks its inputs before any step.       |
 | `compileBrowserJourneyValue`             | function | Compiles a JSON value into the JavaScript literal a generated journey module carries.                                                                                                               |
 
 The following fence composes the snapshot, page recorder, and evaluation helpers around captured CDP payloads.
@@ -552,7 +551,7 @@ const rendered = isBrowserNodeVisible(node)
 
 Navigating decoded data is the `BrowserSnapshot` entity's job, not a helper family's; see [`BrowserSnapshotInterface`](#browsersnapshotinterface) later.
 
-The following fence validates, edits, renders, and compiles the `add-kettle` journey, and resolves one of its targets on a live view; see [Journeys](#journeys) for the journey itself. Each helper is pure except `locateBrowserTarget` and `performBrowserStep`, which act through a view and a toolset.
+The following fence validates, edits, renders, and compiles the `add-kettle` journey; see [Journeys](#journeys) for the journey itself. Each helper is pure; a step runs on a live view through the toolset's `follow`, which [`BrowserToolsetInterface`](#browsertoolsetinterface) shows.
 
 ```ts
 import type { BrowserJourney } from '@orkestrel/browser'
@@ -570,12 +569,9 @@ import {
 	isBrowserJourneyBinding,
 	isBrowserJourneyTab,
 	isBrowserJourneyTarget,
-	isBrowserStepError,
-	locateBrowserTarget,
 	parseBrowserJourney,
 	parseBrowserJourneyEdit,
 	parseBrowserRun,
-	performBrowserStep,
 	renderBrowserJourney,
 	renderBrowserRun,
 	renderBrowserRunResult,
@@ -644,17 +640,6 @@ compileBrowserJourneyValue(
 	new Map([['email', 'inputs.email']]),
 ) // '{ text: inputs.email, submit: true }'
 compileBrowserJourney(journey, { language: 'typescript' }) // { source, gaps: [] }
-const email = await locateBrowserTarget(page, 's4', { role: 'textbox', name: 'Email' }) // the one element with that role and exact name
-const action = await performBrowserStep(toolset, 's2', {
-	action: 'click',
-	arguments: {},
-	target: { role: 'link', name: 'Alpine Kettle' },
-}) // BrowserAction { action: 'click', outcome: 'done', receipt: 'Clicked e12 link "Alpine Kettle".', … }
-try {
-	await performBrowserStep(toolset, 's5', { action: 'wait', arguments: { text: 'Added to cart' } })
-} catch (error) {
-	if (isBrowserStepError(error)) log(error.action.outcome, error.message) // 'timeout', 's5: "Added to cart" did not appear within 5 s.'
-}
 ```
 
 The following fence composes the element, reading, and tool helpers the element managers and the toolset are built from.
@@ -681,6 +666,7 @@ import {
 	parseBrowserInvocationResult,
 	parseBrowserReference,
 	parseBrowserRemoval,
+	parseBrowserTabLine,
 	parseBrowserTool,
 	readBrowserToolString,
 	readBrowserWorld,
@@ -694,6 +680,8 @@ import {
 
 parseBrowserReference('[ref=e12]') // 'e12'
 parseBrowserReference('x12') // undefined
+parseBrowserTabLine('t2 "Cart" https://shop.example.test/cart (current)') // { id: 't2', title: 'Cart', url: 'https://shop.example.test/cart', current: true }
+parseBrowserTabLine('t2 "Cart"') // undefined
 requireBrowserReference('12') // 'e12'; throws a coded BrowserElementError naming look for 'x12'
 normalizeBrowserKey('ctrl+a') // 'Control+a'
 normalizeBrowserName('  Place   order ') // 'Place order'
@@ -1139,6 +1127,8 @@ The following table lists the core types.
 | `BrowserToolSourceInterface`        | interface | Supplies page-registered tools to a toolset through a contract free of protocol types.                                                                                                                                                                   |
 | `BrowserToolsetEventMap`            | type      | Maps the events a toolset emits.                                                                                                                                                                                                                         |
 | `BrowserToolsetOptions`             | interface | Configures a browser toolset.                                                                                                                                                                                                                            |
+| `BrowserFollowOptions`              | interface | Configures one step a toolset follows.                                                                                                                                                                                                                   |
+| `BrowserTabLine`                    | interface | Describes one line of the `tabs` tool's listing.                                                                                                                                                                                                         |
 | `BrowserToolsetInterface`           | interface | Publishes the browser vocabulary as tools over one current view and adopts the page's own tools beside them.                                                                                                                                             |
 | `BrowserToolsetHandler`             | type      | Runs one toolset tool inside the toolset's boundary.                                                                                                                                                                                                     |
 | `BrowserToolsetWatch`               | interface | Holds the listeners a toolset attaches to one followed page.                                                                                                                                                                                             |
@@ -1924,11 +1914,14 @@ A `click`, a `type` with `submit`, or a `press` of Enter also opens `page.popups
 
 `held` names the acquired hold, or returns `undefined` while no hold owns the toolset. `limit` reports the character limit before a result or error footer. A second `hold` waits for earlier holds to release and honours its signal while waiting.
 
+`follow` performs one recorded step on the current view through `perform`. A `click` or `type` step with a target resolves the one element that carries the target's role and exact accessible name and sends its reference as `ref`, and a stored `reference` or `css` is never read; a `switch` step resolves its tab from the `tabs` listing by URL and title and sends the tab's id as `tab`; every other step sends its arguments unchanged, a page tool's included. Before any input, a missing target or tab refuses with `BROWSER_JOURNEY_TARGET`, several refuse with `BROWSER_JOURNEY_AMBIGUOUS`, and a target name that binds a parameter refuses with `BROWSER_JOURNEY_INPUT`, each naming the step. `follow` returns the `BrowserAction` of a `done` action and of an `interrupted` one, whose dialog a following `dialog` step answers, and throws a `BrowserStepError` whose `action` is the performed action for any other outcome and for a navigation that stopped at `requested` or `committed`. Its `caller` option carries a hold's token, and its `secret` option withholds a `type` step's text. A replay and the module `compileBrowserJourney` emits run every step through it.
+
 `perform` runs the handler a manager call runs and returns the `BrowserAction` beside the tool result, and the toolset emits the same action as `action`; `tools.execute` and `perform` share one path, so a receipt is the same through either, including a secret call whose signal was aborted before the handler ran. `hold` takes a queue turn for a replay: until the hold is destroyed, an action whose `context.caller` is not the hold's `token` is refused at admission with `BROWSER_TOOLSET_BUSY`, `dialog` and adopted page tools included, while `look`, `read`, `tabs`, and `wait` pass; the toolset emits `hold` and `release` with the journey's name. With the `journeys` option, the toolset constructs a `BrowserJourneyToolset` that adds the five journey tools to the same manager, and destroys it first; see [Journeys](#journeys).
 
 | Method    | Returns                         | Summary                                                                                                                                                                                                                                                                                                                          |
 | --------- | ------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `perform` | `Promise<BrowserToolsetResult>` | Performs a tool call and returns its structured action when a handler ran.                                                                                                                                                                                                                                                       |
+| `follow`  | `Promise<BrowserAction>`        | Performs one recorded step on the current view through `perform` and returns its action.                                                                                                                                                                                                                                         |
 | `hold`    | `Promise<BrowserHoldInterface>` | Takes a queue turn and reserves action admission from the call for the returned caller token.                                                                                                                                                                                                                                    |
 | `start`   | `Promise<void>`                 | Adds the tools, follows the view, and adopts the page's tools; concurrent calls share one startup. Rejects with a coded `BrowserError` and adds nothing when the manager holds a reserved name under a tool the toolset did not add, and rejects with `the browser session ended` when `destroy()` runs before startup finishes. |
 | `destroy` | `Promise<void>`                 | Stops following the view, rejects queued actions, and removes every tool the toolset added that the manager still holds, then calls the `release` option one time; a second call returns the first call's promise.                                                                                                               |
@@ -1956,6 +1949,16 @@ await toolset.perform(
 	{ signal, caller: hold.token },
 ) // admitted
 hold.destroy() // emits release
+const action = await toolset.follow('s2', {
+	action: 'click',
+	arguments: {},
+	target: { role: 'link', name: 'Alpine Kettle' },
+}) // BrowserAction { action: 'click', outcome: 'done', receipt: 'Clicked e12 link "Alpine Kettle".', … }
+try {
+	await toolset.follow('s5', { action: 'wait', arguments: { text: 'Added to cart' } })
+} catch (error) {
+	if (isBrowserStepError(error)) log(error.action.outcome, error.message) // 'timeout', 's5: "Added to cart" did not appear within 5 s.'
+}
 await toolset.destroy() // removes the tools it added; the page stays open
 ```
 
@@ -2081,7 +2084,7 @@ Replays one journey over a toolset. `execute` runs four stages:
 
 1. Preparation, before any side effect: the journey is validated, the inputs are merged over the parameters' defaults, and a missing or unknown input, a gap step, or a native action the placement cannot execute rejects `execute` with `BROWSER_JOURNEY_INPUT`, `BROWSER_JOURNEY_GAP`, `BROWSER_JOURNEY_PLACEMENT`, or the validator's code before any run exists. A page-backed toolset executes `click`, `type`, `press`, `navigate`, `wait`, `dialog`, and, with `context`, `switch`; the DOM placement executes `click`, `type`, `wait`, and its adopted page tools.
 2. Hold: `toolset.hold(name)` takes a queue turn under the call's signal, and the replay destroys the hold in `finally`, abort included.
-3. Steps, in order: each target resolves on the live view by role and exact name through `locateBrowserTarget`, each call carries the hold's token, and the replay judges the `BrowserAction` the toolset returns, never the receipt's text. The run stops after the first step whose outcome is not `done`, and after a navigation that stopped at `requested` or `committed`; an `interrupted` action admits only an immediately following `dialog` step.
+3. Steps, in order: each step runs through the toolset's `follow`, which resolves its target on the live view by role and exact name, each call carries the hold's token, and the replay judges the `BrowserAction` the toolset returns, never the receipt's text. The run stops after the first step whose outcome is not `done`, and after a navigation that stopped at `requested` or `committed`; an `interrupted` action admits only an immediately following `dialog` step.
 4. Finalization: with `runs`, the replay opens a run slot before the first step, writes each capture through `runs.capture` in the page placement, and writes the run with a bounded write of its own signal, so an aborted run is still written; a failed write is recorded in `fault`.
 
 See [Parameters and secrets](#parameters-and-secrets) for the run of a journey with a secret parameter.
@@ -3014,7 +3017,7 @@ renderBrowserRun(run, view)
 
 ### Two artifacts
 
-The same steps reach two artifacts, and each one is usable without the other. The journey file is the model's artifact: `journeys` lists it, `edit` changes it, and `replay` runs it. The module is the developer's artifact: `compileBrowserJourney` emits a standalone module that imports only `@orkestrel/browser` and runs one `performBrowserStep` call per step over a toolset the module constructs, so each step runs with the toolset's observers, settlement, dialogs, popups, and receipts, and reaches the page outcome a replay of the same journey reaches. A developer customizes the module by editing a step's target or arguments, inserting page calls between steps, or replacing a step. See [Generate a module from a journey](#generate-a-module-from-a-journey) for the module.
+The same steps reach two artifacts, and each one is usable without the other. The journey file is the model's artifact: `journeys` lists it, `edit` changes it, and `replay` runs it. The module is the developer's artifact: `compileBrowserJourney` emits a standalone module that imports only `@orkestrel/browser` and runs one `follow` call per step on a toolset the module constructs, so each step runs with the toolset's observers, settlement, dialogs, popups, and receipts, and reaches the page outcome a replay of the same journey reaches. A developer customizes the module by editing a step's target or arguments, inserting page calls between steps, or replacing a step. See [Generate a module from a journey](#generate-a-module-from-a-journey) for the module.
 
 ### Where journeys live
 
@@ -3092,7 +3095,7 @@ These invariants hold across the four faces (`src/core`, `src/browser`, `src/ser
 6. **Lifecycle events are observable, never polled.** `BrowserInterface.emitter` fires `idle`, `discover`, `connect`, `disconnect`, `launch`, `page`, `context`, `error`, and `destroy`; `CDPClientInterface.emitter` fires `connect`, `close`, `drop`, and `error`; a recorder, `page.codegen()` included, fires `start`, `step`, `stop`, and `clear`, and a replay fires `step`. A page fires `navigate` with `[url, same]` for both a cross-document and a same-document navigation, `session` when an out-of-process frame's session attaches, `popup` for each page it opens, and `dialog`, `close`, and the network and worker events; a context fires `page` for each page it publishes, popups included. A page a context constructs holds its target on the client's connection, and the first such page on a connection enables `Target.setDiscoverTargets` for it; a second live page for a held target is refused with `BROWSER_TARGET_HELD`, and a `create()` that meets a page another path published for its target joins that page, or rejects with `BROWSER_PAGE_CLOSED` when that page closed. A page constructed directly holds no target, enables no discovery, and counts as published when its setup completes. A discovered popup is published one time, after its opener, through the opener's `popup`, the context's `page`, and `pages()`. Limit: when the page holding a popup's target fails its setup, discovery publishes nothing, and a later `sync()` adds the target without a `popup` from its opener. Limit: when `Target.setDiscoverTargets` fails, or the connection ends and another opens, the next page a context constructs on that connection sends it again, and nothing sends it before then; `sync()` is the recovery for a popup that discovery missed meanwhile. The registry fires `change`, `invoke`, and `respond`, and the toolset `adopt`, `skip`, `select`, `action`, `hold`, and `release`. A journey store never polls: a held `journey.lock` refuses at once with `BROWSER_JOURNEY_LOCKED`, and the tool tells the model to call again. Every wait parks on a protocol event, a DOM observer, or an abort signal, and a `setTimeout` survives only as a deadline; the one liveness probe with no event source is the bounded drain of a terminated process group, at `BROWSER_DRAIN_INTERVAL_MS` in `src/server`. An external disconnect emits a coded `error` before `disconnect`; transport loss with the process alive is resumable, and a process exit is terminal. [`tests/src/core/BrowserPage.test.ts`](../tests/src/core/BrowserPage.test.ts), [`tests/src/core/recorders/BrowserCodegen.test.ts`](../tests/src/core/recorders/BrowserCodegen.test.ts), [`tests/src/core/recorders/BrowserRecorder.test.ts`](../tests/src/core/recorders/BrowserRecorder.test.ts), and [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts) pin the page, recorder, and toolset events, [`tests/src/server/stores/FileBrowserJourneyStore.test.ts`](../tests/src/server/stores/FileBrowserJourneyStore.test.ts) pins the lock refused at once, and [`tests/src/core/BrowserContext.test.ts`](../tests/src/core/BrowserContext.test.ts) pins target ownership, the joined creation, and popup publication.
 7. **Errors carry a machine-readable `code` and an optional `context`.** `BrowserError` is the base; `CDPError`, `CDPConnectionError`, `CDPTimeoutError`, `BrowserResultLimitError`, `BrowserConnectionError`, `BrowserElementError`, and `BrowserStepError` (core) narrow protocol, connectivity, timeout, oversized-result, connection, element, and journey step faults; `BrowserNotConnectedError` and `BrowserDestroyedError` (server) narrow the lifecycle. `BrowserConnectionError` lives in the core because the in-page `SocketCDPTransport` throws it too. A `BrowserElementError` carries `context.reason`, one of `GONE`, `HIDDEN`, `OCCLUDED`, `DISABLED`, `UNTRUSTED`, and `UNKNOWN`, and a one-line message that ends `; call look for fresh refs.` for `GONE` alone. A `BrowserStepError` carries the performed `BrowserAction` in `action`, and a replay records a step that did not complete from it. Each class ships an `is*` guard, and the code table under [Errors](#errors) names every code that reaches a caller, the `BROWSER_JOURNEY_*` codes, `BROWSER_TOOLSET_BUSY`, and `BROWSER_SERVER_ENVIRONMENT` included. [`tests/src/core/errors.test.ts`](../tests/src/core/errors.test.ts) and [`tests/src/server/errors.test.ts`](../tests/src/server/errors.test.ts) pin the guards; [`tests/src/core/validators.test.ts`](../tests/src/core/validators.test.ts), [`tests/src/core/BrowserReplay.test.ts`](../tests/src/core/BrowserReplay.test.ts), [`tests/src/core/BrowserJourneyToolset.test.ts`](../tests/src/core/BrowserJourneyToolset.test.ts), the store suites, and [`tests/src/bin/main.test.ts`](../tests/src/bin/main.test.ts) pin the journey, busy, and environment codes.
 8. **Oversized results fail clean.** `evaluate()` and `read()` wrap their in-page result with `compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT)`, which throws the `BROWSER_RESULT_LIMIT_SENTINEL_PREFIX` sentinel before an oversized result could overflow the transport frame; the frame recognizes it through `BROWSER_RESULT_LIMIT_PATTERN` and rejects with a coded `BrowserResultLimitError`, and the connection and the browser process are unaffected. [`tests/service/browser.test.ts`](../tests/service/browser.test.ts) pins both against a real browser.
-9. **The page recorder records semantic steps, and a journey compiles to a module that runs as a replay does.** `page.codegen()` records each gesture by role and exact accessible name, collapses consecutive edits on one field while the edit is open, and never across a submission, a focus departure, a navigation, or `stop`. `compileBrowserJourney` emits one `performBrowserStep` call per step over a toolset the module constructs, as `'javascript'` or `'typescript'`, and throws at a gap step. [`tests/src/core/recorders/BrowserCodegen.test.ts`](../tests/src/core/recorders/BrowserCodegen.test.ts) pins the recorder, [`tests/service/codegen.test.ts`](../tests/service/codegen.test.ts) pins its gestures on Chromium against the fixture's own event log, [`tests/src/core/compilers.test.ts`](../tests/src/core/compilers.test.ts) pins the module byte for byte, and the `compiled module equality` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) runs each generated module and its replay to one page outcome with the same receipts.
+9. **The page recorder records semantic steps, and a journey compiles to a module that runs as a replay does.** `page.codegen()` records each gesture by role and exact accessible name, collapses consecutive edits on one field while the edit is open, and never across a submission, a focus departure, a navigation, or `stop`. `compileBrowserJourney` emits one `follow` call per step on a toolset the module constructs, as `'javascript'` or `'typescript'`, and throws at a gap step. [`tests/src/core/recorders/BrowserCodegen.test.ts`](../tests/src/core/recorders/BrowserCodegen.test.ts) pins the recorder, [`tests/service/codegen.test.ts`](../tests/service/codegen.test.ts) pins its gestures on Chromium against the fixture's own event log, [`tests/src/core/compilers.test.ts`](../tests/src/core/compilers.test.ts) pins the module byte for byte, and the `compiled module equality` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) runs each generated module and its replay to one page outcome with the same receipts.
 10. **Doc ↔ source method bijection.** Each `## Methods` table lists exactly the call-signature members of its interface, inherited members included, and each implementing class named for its interface exposes no public method its table omits: `BrowserCodegen`, `BrowserRecorder`, `BrowserReplay`, `BrowserHold`, `BrowserJourneyToolset`, `BrowserMCPServer`, the two memory stores, and the two file stores pair with their interfaces as every earlier class does. Every other export is a function or a data bag. [`tests/guides.test.ts`](../tests/guides.test.ts) pins it.
 11. **The WebSocket transports are thin bridges.** `WebSocketCDPTransport` (server) and `SocketCDPTransport` (in-page) connect a `WebSocket` to the CDP debugger URL, race the opening against `timeout` (default `BROWSER_DEFAULT_TIMEOUT_MS`), and bridge the socket's `message`, `close`, and `error` events onto their emitter unchanged. `start()` rejects with a `BrowserConnectionError` carrying the URL on a socket error, a non-open close, or the timeout, and `send` before `start` throws the same coded error. A browser launched without `--remote-allow-origins` naming the caller's origin refuses the in-page handshake. [`tests/src/server/transports/WebSocketCDPTransport.test.ts`](../tests/src/server/transports/WebSocketCDPTransport.test.ts) and [`tests/src/browser/transports/SocketCDPTransport.test.ts`](../tests/src/browser/transports/SocketCDPTransport.test.ts) pin them.
 12. **`Browser.destroy()` escalates SIGTERM to SIGKILL; `close()` is graceful.** On POSIX each launch owns an isolated process group, and `destroy()` signals that group, waiting `BROWSER_KILL_GRACE_MS` before `SIGKILL` and the same bounded window after it; on Windows a launch owns no group, so each step signals one process by identifier, and terminating a Chromium browser process takes its subprocesses with it. `close()` sends CDP `Browser.close` first and escalates to the same sequence only when an owned process fails to exit within the grace period. `owned` is `true` for a launched or adopted session, `false` for an active attachment, and `undefined` when no session is represented; `pid` names the process serving the endpoint and stays readable across a `'persistent'` session's `disconnect()`. [`tests/src/server/Browser.test.ts`](../tests/src/server/Browser.test.ts) pins the sequence against a spawned stand-in process.
@@ -3236,7 +3239,7 @@ An added or updated step can name `ref` from the current view in place of a targ
 
 ```ts
 import type { BrowserPageInterface } from '@orkestrel/browser'
-import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
+import { createBrowserToolset } from '@orkestrel/browser'
 
 export async function execute(
 	page: BrowserPageInterface,
@@ -3249,36 +3252,33 @@ export async function execute(
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
-		await performBrowserStep(toolset, 's1', {
+		await toolset.follow('s1', {
 			action: 'navigate',
 			arguments: { url: 'https://shop.example.test/' },
 		})
-		await performBrowserStep(toolset, 's2', {
+		await toolset.follow('s2', {
 			action: 'click',
 			arguments: {},
 			target: { role: 'link', name: 'Alpine Kettle' },
 		})
-		await performBrowserStep(toolset, 's3', {
+		await toolset.follow('s3', {
 			action: 'click',
 			arguments: {},
 			target: { role: 'button', name: 'Add to cart' },
 		})
-		await performBrowserStep(toolset, 's4', {
+		await toolset.follow('s4', {
 			action: 'type',
 			arguments: { text: inputs.email ?? 'sam@example.test', submit: true },
 			target: { role: 'textbox', name: 'Email' },
 		})
-		await performBrowserStep(toolset, 's5', {
-			action: 'wait',
-			arguments: { text: 'Added to cart' },
-		})
+		await toolset.follow('s5', { action: 'wait', arguments: { text: 'Added to cart' } })
 	} finally {
 		await toolset.destroy()
 	}
 }
 ```
 
-A secret parameter compiles to a required input and passes `{ secret: true }` to its `type` step, and a parameter without a default compiles to a required input. The module checks its inputs before its toolset starts, as replay refuses them at preparation with `BROWSER_JOURNEY_INPUT`: an input that names no parameter throws `NAME: no parameter has that name`, then a required input without a string value throws `NAME: the input is missing`, then a defaulted input that is neither `undefined` nor a string throws `NAME: the input is not a string`, where `NAME` is the input's name. Replay reads an own `undefined` input as omitted, so the module and replay refuse the same inputs. A module with a required parameter reports the first one as missing when `execute` receives no inputs. A journey without parameters compiles no check. A gap step compiles to `throw new Error('s6: the element is in a child frame; handle it here')` at its position, and `gaps` lists it. `performBrowserStep` throws a `BrowserStepError` whose message is `sN: RECEIPT` and whose `action` is the performed `BrowserAction` when a step did not complete, and returns the `BrowserAction` of an `interrupted` action, so a `dialog` step that follows it answers the pending input.
+A secret parameter compiles to a required input and passes `{ secret: true }` to its `type` step, and a parameter without a default compiles to a required input. The module checks its inputs before its toolset starts, as replay refuses them at preparation with `BROWSER_JOURNEY_INPUT`: an input that names no parameter throws `NAME: no parameter has that name`, then a required input without a string value throws `NAME: the input is missing`, then a defaulted input that is neither `undefined` nor a string throws `NAME: the input is not a string`, where `NAME` is the input's name. Replay reads an own `undefined` input as omitted, so the module and replay refuse the same inputs. A module with a required parameter reports the first one as missing when `execute` receives no inputs. A journey without parameters compiles no check. A gap step compiles to `throw new Error('s6: the element is in a child frame; handle it here')` at its position, and `gaps` lists it. `follow` throws a `BrowserStepError` whose message is `sN: RECEIPT` and whose `action` is the performed `BrowserAction` when a step did not complete, and returns the `BrowserAction` of an `interrupted` action, so a `dialog` step that follows it answers the pending input.
 
 ### Reattach to a running session
 
@@ -3555,7 +3555,7 @@ The following list names each test file and what it proves.
 - [`tests/src/core/BrowserTransition.test.ts`](../tests/src/core/BrowserTransition.test.ts): the shared in-flight transition every joining caller awaits.
 - [`tests/src/core/BrowserReading.test.ts`](../tests/src/core/BrowserReading.test.ts): distilled and whole Markdown and text, line-break slicing with a constant total, and derived staleness.
 - [`tests/src/core/BrowserRegistry.test.ts`](../tests/src/core/BrowserRegistry.test.ts): detection, the mirror, invocation settlement, cancellation, adoption, and destroy over the `WebMCP` domain.
-- [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts): the vocabulary, reserved names, dialogs, the action queue, the submit observers and the navigation settlement of each action, views and tabs, page-tool adoption, bounds, destroy, the trust marker, `perform` and its actions, the hold, the secret receipt, the popup a click settles on, and the construction under `journeys`.
+- [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts): the vocabulary, reserved names, dialogs, the action queue, the submit observers and the navigation settlement of each action, views and tabs, page-tool adoption, bounds, destroy, the trust marker, `perform` and its actions, the hold, the secret receipt, the popup a click settles on, `follow` and its target and tab resolution, and the construction under `journeys`.
 - [`tests/src/core/elements/BrowserPageElement.test.ts`](../tests/src/core/elements/BrowserPageElement.test.ts): the ordered trusted click, its refusals, key and pointer releases after an abort, and the remaining element actions.
 - [`tests/src/core/elements/BrowserElementManager.test.ts`](../tests/src/core/elements/BrowserElementManager.test.ts): the outline, session-qualified references, invalidation, queries, waits, and the one isolated world per document.
 - [`tests/src/core/BrowserHandle.test.ts`](../tests/src/core/BrowserHandle.test.ts): remote-handle retention and disposal.
@@ -3570,7 +3570,7 @@ The following list names each test file and what it proves.
 - [`tests/src/core/BrowserDownload.test.ts`](../tests/src/core/BrowserDownload.test.ts): download progress and `abort`.
 - [`tests/src/core/BrowserSnapshot.test.ts`](../tests/src/core/BrowserSnapshot.test.ts): snapshot walking, structural relationships, search, paths, and the serializable form.
 - [`tests/src/core/BrowserAccessibility.test.ts`](../tests/src/core/BrowserAccessibility.test.ts): accessibility-tree capture.
-- [`tests/src/core/parsers.test.ts`](../tests/src/core/parsers.test.ts): the coercions every protocol parser applies to off-shape input, the reference spellings `parseBrowserReference` accepts, the page recorder's gesture payloads, and the journey, edit, and run parsers.
+- [`tests/src/core/parsers.test.ts`](../tests/src/core/parsers.test.ts): the coercions every protocol parser applies to off-shape input, the reference spellings `parseBrowserReference` accepts, the `tabs` lines `parseBrowserTabLine` reads, the page recorder's gesture payloads, and the journey, edit, and run parsers.
 - [`tests/src/core/BrowserClock.test.ts`](../tests/src/core/BrowserClock.test.ts): the virtual clock.
 - [`tests/src/core/BrowserCoverage.test.ts`](../tests/src/core/BrowserCoverage.test.ts): JavaScript and CSS coverage.
 - [`tests/src/core/BrowserProfiler.test.ts`](../tests/src/core/BrowserProfiler.test.ts): the sampled CPU profile.
@@ -3594,7 +3594,7 @@ The following list names each test file and what it proves.
 - [`tests/src/core/BrowserWorker.test.ts`](../tests/src/core/BrowserWorker.test.ts): attached workers.
 - [`tests/src/core/BrowserNavigationManager.test.ts`](../tests/src/core/BrowserNavigationManager.test.ts): URL waits across both navigation kinds, network idle, abort, and the records the manager opens.
 - [`tests/src/core/BrowserNavigationRecord.test.ts`](../tests/src/core/BrowserNavigationRecord.test.ts): the record's destinations, supersession, loader matching, same-document completion, bounds, abort, and close.
-- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts): the pure decoders, validators, and renderers of `src/core`, the receipt and outline formats included, the exact-name filter, the journey edits, listing, triggers, secret names, run ids, and run render, and `locateBrowserTarget` and `performBrowserStep`.
+- [`tests/src/core/helpers.test.ts`](../tests/src/core/helpers.test.ts): the pure decoders, validators, and renderers of `src/core`, the receipt and outline formats included, the exact-name filter, the journey edits, listing, triggers, secret names, run ids, and run render.
 - [`tests/src/core/errors.test.ts`](../tests/src/core/errors.test.ts): the guard that narrows a caught value to each core error.
 - [`tests/src/browser/BrowserDOMView.test.ts`](../tests/src/browser/BrowserDOMView.test.ts): reading, staleness on the Navigation API, following the window, text waits, and destroy.
 - [`tests/src/browser/BrowserDOMWait.test.ts`](../tests/src/browser/BrowserDOMWait.test.ts): the mutation-parked wait across frames and shadow roots, its deadline, abort, and `pagehide`.

@@ -2802,6 +2802,33 @@ export interface BrowserToolsetOptions {
 }
 
 /**
+ * Configures one step a toolset follows.
+ *
+ * @remarks
+ * - `caller` — the hold token the step's calls carry as `context.caller`, so the step runs under
+ *   a replay's hold
+ * - `secret` — if `true`, a `type` step's text is a secret its action and receipt withhold; if
+ *   `false` or omitted, the text is plain
+ */
+export interface BrowserFollowOptions extends BrowserCallOptions {
+	readonly caller?: string
+	readonly secret?: boolean
+}
+
+/**
+ * Describes one line of the `tabs` tool's listing.
+ *
+ * @remarks
+ * - `id` — the tab's id, `t` followed by its one-based position, which `switch` takes
+ * - `title` and `url` — the tab's document title and address
+ * - `current` — if `true`, the line names the toolset's current tab; if `false`, another tab
+ */
+export interface BrowserTabLine extends BrowserJourneyTab {
+	readonly id: string
+	readonly current: boolean
+}
+
+/**
  * Publishes the browser vocabulary as tools over one current view and adopts the page's own
  * tools beside them.
  *
@@ -2824,6 +2851,27 @@ export interface BrowserToolsetInterface {
 	readonly held: string | undefined
 	/** Performs a tool call and returns its structured action when a handler ran. */
 	perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
+	/**
+	 * Performs one recorded step on the current view through `perform` and returns its action.
+	 *
+	 * @remarks
+	 * A `click` or `type` step with a target resolves the one element of the current view that
+	 * carries the target's role and exact accessible name, and sends its reference as `ref`; a stored
+	 * `reference` and `css` are evidence only. A `switch` step resolves its tab from the `tabs`
+	 * listing by URL and title, and sends the tab's id as `tab`. Every other step sends its
+	 * arguments unchanged, a page tool's included. A missing target or tab refuses with
+	 * `BROWSER_JOURNEY_TARGET`, several refuse with `BROWSER_JOURNEY_AMBIGUOUS`, and a target name
+	 * that binds a parameter refuses with `BROWSER_JOURNEY_INPUT`, each naming the step before any
+	 * input. An action that is `done`, or `interrupted` by a dialog a following `dialog` step
+	 * answers, returns; any other outcome, and a navigation that stopped at `requested` or
+	 * `committed`, throws a `BrowserStepError` whose `action` is the performed action. A call the
+	 * manager refuses before any handler throws a `BrowserError` with no action.
+	 */
+	follow(
+		id: string,
+		step: BrowserJourneyStepInput,
+		options?: BrowserFollowOptions,
+	): Promise<BrowserAction>
 	/**
 	 * Takes a queue turn and reserves action admission from the call for the returned caller token.
 	 *

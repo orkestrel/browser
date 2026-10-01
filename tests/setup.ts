@@ -3660,7 +3660,7 @@ export const BROWSER_JOURNEY_TARGET_LOG =
 
 /** Supplies the design's `add-kettle` module fence, which the TypeScript compilation equals byte for byte. */
 export const BROWSER_JOURNEY_MODULE = `import type { BrowserPageInterface } from '@orkestrel/browser'
-import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
+import { createBrowserToolset } from '@orkestrel/browser'
 
 export async function execute(page: BrowserPageInterface, inputs: { readonly email?: string } = {}): Promise<void> {
 	for (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')
@@ -3668,11 +3668,11 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly ema
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
-		await performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })
-		await performBrowserStep(toolset, 's2', { action: 'click', arguments: {}, target: { role: 'link', name: 'Alpine Kettle' } })
-		await performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })
-		await performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.email ?? 'sam@example.test', submit: true }, target: { role: 'textbox', name: 'Email' } })
-		await performBrowserStep(toolset, 's5', { action: 'wait', arguments: { text: 'Added to cart' } })
+		await toolset.follow('s1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })
+		await toolset.follow('s2', { action: 'click', arguments: {}, target: { role: 'link', name: 'Alpine Kettle' } })
+		await toolset.follow('s3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })
+		await toolset.follow('s4', { action: 'type', arguments: { text: inputs.email ?? 'sam@example.test', submit: true }, target: { role: 'textbox', name: 'Email' } })
+		await toolset.follow('s5', { action: 'wait', arguments: { text: 'Added to cart' } })
 	} finally {
 		await toolset.destroy()
 	}
@@ -3680,7 +3680,7 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly ema
 `
 
 /** Supplies the JavaScript twin of the `add-kettle` module: no type import and no annotations. */
-export const BROWSER_JOURNEY_MODULE_JAVASCRIPT = `import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
+export const BROWSER_JOURNEY_MODULE_JAVASCRIPT = `import { createBrowserToolset } from '@orkestrel/browser'
 
 export async function execute(page, inputs = {}) {
 	for (const name of Object.keys(inputs)) if (!['email'].includes(name)) throw new Error(name + ': no parameter has that name')
@@ -3688,11 +3688,11 @@ export async function execute(page, inputs = {}) {
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
-		await performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })
-		await performBrowserStep(toolset, 's2', { action: 'click', arguments: {}, target: { role: 'link', name: 'Alpine Kettle' } })
-		await performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })
-		await performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.email ?? 'sam@example.test', submit: true }, target: { role: 'textbox', name: 'Email' } })
-		await performBrowserStep(toolset, 's5', { action: 'wait', arguments: { text: 'Added to cart' } })
+		await toolset.follow('s1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })
+		await toolset.follow('s2', { action: 'click', arguments: {}, target: { role: 'link', name: 'Alpine Kettle' } })
+		await toolset.follow('s3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })
+		await toolset.follow('s4', { action: 'type', arguments: { text: inputs.email ?? 'sam@example.test', submit: true }, target: { role: 'textbox', name: 'Email' } })
+		await toolset.follow('s5', { action: 'wait', arguments: { text: 'Added to cart' } })
 	} finally {
 		await toolset.destroy()
 	}
@@ -3774,7 +3774,7 @@ export const BROWSER_JOURNEY_ACTION_FIXTURE: BrowserJourney = {
 
 /** Supplies the TypeScript module the action journey compiles to, transcribed by hand. */
 export const BROWSER_JOURNEY_ACTION_MODULE = String.raw`import type { BrowserPageInterface } from '@orkestrel/browser'
-import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
+import { createBrowserToolset } from '@orkestrel/browser'
 
 export async function execute(page: BrowserPageInterface, inputs: { readonly store?: string; readonly product?: string; readonly customer: string; readonly password: string; readonly key?: string; readonly reply?: string }): Promise<void> {
 	for (const name of Object.keys(inputs ?? {})) if (!['store', 'product', 'customer', 'password', 'key', 'reply'].includes(name)) throw new Error(name + ': no parameter has that name')
@@ -3788,18 +3788,18 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly sto
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
-		await performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: inputs.store ?? 'https://shop.example.test/' } })
-		await performBrowserStep(toolset, 's2', { action: 'click', arguments: {}, target: { role: 'link', name: inputs.product ?? 'Alpine Kettle' } })
-		await performBrowserStep(toolset, 's3', { action: 'type', arguments: { text: inputs.customer }, target: { role: 'textbox', name: 'Name' } })
-		await performBrowserStep(toolset, 's4', { action: 'type', arguments: { text: inputs.password, submit: true }, target: { role: 'textbox', name: 'Password' } }, { secret: true })
-		await performBrowserStep(toolset, 's5', { action: 'press', arguments: { key: inputs.key ?? 'Enter' } })
-		await performBrowserStep(toolset, 's6', { action: 'wait', arguments: { text: 'Paid' } })
-		await performBrowserStep(toolset, 's7', { action: 'click', arguments: {}, target: { role: 'button', name: 'Delete "draft"' } })
-		await performBrowserStep(toolset, 's8', { action: 'dialog', arguments: { accept: false, text: inputs.reply ?? 'It\'s "fine"' } })
-		await performBrowserStep(toolset, 's9', { action: 'dialog', arguments: { accept: true } })
-		await performBrowserStep(toolset, 's10', { action: 'switch', arguments: {}, tab: { url: 'https://shop.example.test/cart', title: 'Cart' } })
+		await toolset.follow('s1', { action: 'navigate', arguments: { url: inputs.store ?? 'https://shop.example.test/' } })
+		await toolset.follow('s2', { action: 'click', arguments: {}, target: { role: 'link', name: inputs.product ?? 'Alpine Kettle' } })
+		await toolset.follow('s3', { action: 'type', arguments: { text: inputs.customer }, target: { role: 'textbox', name: 'Name' } })
+		await toolset.follow('s4', { action: 'type', arguments: { text: inputs.password, submit: true }, target: { role: 'textbox', name: 'Password' } }, { secret: true })
+		await toolset.follow('s5', { action: 'press', arguments: { key: inputs.key ?? 'Enter' } })
+		await toolset.follow('s6', { action: 'wait', arguments: { text: 'Paid' } })
+		await toolset.follow('s7', { action: 'click', arguments: {}, target: { role: 'button', name: 'Delete "draft"' } })
+		await toolset.follow('s8', { action: 'dialog', arguments: { accept: false, text: inputs.reply ?? 'It\'s "fine"' } })
+		await toolset.follow('s9', { action: 'dialog', arguments: { accept: true } })
+		await toolset.follow('s10', { action: 'switch', arguments: {}, tab: { url: 'https://shop.example.test/cart', title: 'Cart' } })
 		// s11: the element is in a child frame; handle it here
-		await performBrowserStep(toolset, 's12', { action: 'reserve', arguments: { ref: 'sku7', tab: 'stock', value: { parameter: 'customer' }, count: 2, gift: null, tags: ['a\\b', 'it\'s'], 'line\nbreak': '', 'gift-wrap': true, nested: {}, list: [] } })
+		await toolset.follow('s12', { action: 'reserve', arguments: { ref: 'sku7', tab: 'stock', value: { parameter: 'customer' }, count: 2, gift: null, tags: ['a\\b', 'it\'s'], 'line\nbreak': '', 'gift-wrap': true, nested: {}, list: [] } })
 	} finally {
 		await toolset.destroy()
 	}
@@ -4340,7 +4340,7 @@ export interface BrowserJourneyRefusalCase extends BrowserJourneyModuleCase {
 
 /**
  * Finds the one element that carries a role and an exact accessible name through the view's own
- * element manager, so a proof's direct side resolves its element without `locateBrowserTarget`.
+ * element manager, so a proof's direct side resolves its element without the toolset's `follow`.
  *
  * @param view - The view whose `elements.find` answers the query
  * @param target - The role and the exact accessible name
