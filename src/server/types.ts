@@ -1,4 +1,5 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
+import type { StdioServerOptions } from '@orkestrel/mcp/server'
 import type {
 	BrowserContextInterface,
 	BrowserContextOptions,
@@ -339,21 +340,37 @@ export interface FileBrowserStoreOptions {
 // === Browser MCP server
 
 /**
+ * Creates the browser a browse server connects on its first tool call.
+ *
+ * @param options - The launch the server composes: `headless`, `executable`, the profile it
+ *   owns, `cdp.discover` set to `false`, and the signal its `destroy()` aborts
+ * @returns A browser whose `connect()` launches it
+ */
+export type BrowserLaunchFunction = (options: BrowserOptions) => BrowserInterface
+
+/**
  * Configures the browse server.
  *
  * @remarks
- * - `root` — the directory the journeys, the runs, and the browser profiles live under, such as
- *   `tmp/browsers`
- * - `headless` — if `true`, launches Chromium without a window; if `false`, with one
- * - `executable` — the path of the Chromium executable the server launches
+ * - `root` — the directory the journeys, the runs, and the browser profiles live under, resolved
+ *   against the working directory at construction. Default: `tmp/browsers`
+ * - `headless` — if `true`, launches Chromium without a window; if `false`, with one. Default:
+ *   `true`
+ * - `executable` — the path of the Chromium executable the server launches. Default: the browser
+ *   `findSystemBrowser` finds
  * - `readonly` — if `true`, refuses `record`, `save`, and `edit`, and `replay` still writes runs;
  *   if `false` or omitted, every tool runs
+ * - `launch` — creates the browser the first tool call connects. Default: `createBrowser`
+ * - `stdio` — the streams the server reads requests from and writes answers to; the end of
+ *   `input` destroys the server. Default: `process.stdin` and `process.stdout`
  */
 export interface BrowserMCPServerOptions {
 	readonly root?: string
 	readonly headless?: boolean
 	readonly executable?: string
 	readonly readonly?: boolean
+	readonly launch?: BrowserLaunchFunction
+	readonly stdio?: StdioServerOptions
 }
 
 /** Serves the browser vocabulary and the journey tools over MCP on stdio. */

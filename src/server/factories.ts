@@ -7,9 +7,12 @@ import type {
 import type {
 	FileBrowserStoreOptions,
 	BrowserInterface,
+	BrowserMCPServerInterface,
+	BrowserMCPServerOptions,
 	BrowserOptions,
 	WebSocketCDPTransportOptions,
 } from './types.js'
+import { BrowserMCPServer } from './BrowserMCPServer.js'
 import { FileBrowserJourneyStore } from './stores/FileBrowserJourneyStore.js'
 import { FileBrowserRunStore } from './stores/FileBrowserRunStore.js'
 import { Browser } from './Browser.js'
@@ -83,4 +86,26 @@ export function createFileBrowserRunStore(
 	options: FileBrowserStoreOptions,
 ): BrowserRunStoreInterface {
 	return new FileBrowserRunStore(options)
+}
+
+/**
+ * Creates the browse server, which serves the browser vocabulary and the journey tools over the
+ * Model Context Protocol on stdio and launches Chromium on the first tool call.
+ *
+ * @param options - The root, the launch, the journeys' read-only switch, and the streams
+ * @returns A {@link BrowserMCPServerInterface} that reads nothing until `start()`
+ *
+ * @example
+ * ```ts
+ * import { createBrowserMCPServer } from '@orkestrel/browser/server'
+ *
+ * const server = createBrowserMCPServer({ root: 'tmp/browsers', headless: true })
+ * await server.start() // answers tools/list before Chromium starts
+ * await server.destroy()
+ * ```
+ */
+export function createBrowserMCPServer(
+	options?: BrowserMCPServerOptions,
+): BrowserMCPServerInterface {
+	return new BrowserMCPServer(options)
 }

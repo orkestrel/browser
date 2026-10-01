@@ -8,6 +8,7 @@ import type { PlaywrightProviderOptions } from '@vitest/browser-playwright'
 import type { Browser } from 'playwright'
 import type { SpawnSyncReturns } from 'node:child_process'
 import type { TestContext } from 'vitest'
+import type { MCPClientInterface } from '@orkestrel/mcp'
 import { spawnSync } from 'node:child_process'
 import {
 	existsSync,
@@ -26,10 +27,14 @@ import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
 import { chromium } from 'playwright'
 import { build } from 'vite'
+import { createMCPClient } from '@orkestrel/mcp'
+import { createStdioClientTransport } from '@orkestrel/mcp/server'
+import { createTeardown, requireValue } from '@orkestrel/test'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { compileBrowserJourney } from '@src/core'
 import { BROWSER_JOURNEY_ACTION_FIXTURE, BROWSER_JOURNEY_FIXTURE } from './setup.js'
+import { BROWSE_VOCABULARY, FIXTURE_LATE_TEXT, createFixtureServer } from './setupServer.js'
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
@@ -65,7 +70,7 @@ const DIAGNOSTIC_PATTERN = /^(.+?)\(\d+,\d+\): error TS\d+: /u
 const PING = ['ping', '--fetch-retries=0', '--fetch-timeout=5000', '--loglevel=silent']
 const ESM_DRIVER = 'drive.mjs'
 const CJS_DRIVER = 'drive.cjs'
-const CONSUMER_MANIFEST = `{ "name": "distribution-consumer", "private": true, "type": "module" }\n`
+const CONSUMER_MANIFEST = { name: 'distribution-consumer', private: true, type: 'module' }
 const ESM_DRIVER_SOURCE = `const entry = await import(process.argv[2])
 process.stdout.write(JSON.stringify(Object.keys(entry).sort()))
 `
@@ -694,6 +699,22 @@ async function readBrowserExports(browser: Browser, bundle: string): Promise<rea
 	}
 }
 
+// A runtime dependency this workspace declares by a `file:` path, such as a development tarball,
+// resolves against the installed package's own directory in a consumer, where no such file exists.
+// The consumer overrides each one with the same file resolved against this workspace, and a
+// dependency declared by a registry range is left to the registry.
+function readLocalDependencies(): Readonly<Record<string, string>> {
+	const manifest = readJson(join(ROOT, 'package.json'))
+	const dependencies = isRecord(manifest) ? manifest['dependencies'] : undefined
+	if (!isRecord(dependencies)) return {}
+	const local: Record<string, string> = {}
+	for (const [name, range] of Object.entries(dependencies)) {
+		if (typeof range === 'string' && range.startsWith('file:'))
+			local[name] = `file:${resolve(ROOT, range.slice('file:'.length))}`
+	}
+	return local
+}
+
 // Pack this workspace, install the archive into an isolated consumer, and read the
 // published surface back off the installed tree. Every later claim reads this
 // result, so a failure here is raised where it happens rather than once per entry.
@@ -708,7 +729,10 @@ function buildStage(): Stage {
 	if (archives.length !== 1 || archive === undefined) {
 		throw new Error(`npm pack wrote no single archive: ${archives.join(', ')}`)
 	}
-	writeFile(join(consumer, 'package.json'), CONSUMER_MANIFEST)
+	writeFile(
+		join(consumer, 'package.json'),
+		`${JSON.stringify({ ...CONSUMER_MANIFEST, overrides: readLocalDependencies() })}\n`,
+	)
 	writeFile(join(consumer, ESM_DRIVER), ESM_DRIVER_SOURCE)
 	writeFile(join(consumer, CJS_DRIVER), CJS_DRIVER_SOURCE)
 	const install = runNpm(
@@ -1096,3 +1120,129 @@ for (const entry of STAGE?.entries ?? []) {
 		)
 	})
 }
+
+// Connects a client to the packed `browse` binary the way an MCP host registers it:
+// `node <installed entry>` from the consumer's own directory. The stdio client spawns its child in
+// this process's working directory and takes no other, so the consumer is that directory until
+// the connect settles. Every `BROWSE_` variable is set, because the client merges its environment
+// over this process's own, and an empty value counts as unset.
+async function connectBrowse(
+	stage: Stage,
+	environment: Readonly<Record<string, string>>,
+): Promise<MCPClientInterface> {
+	const manifest = readJson(join(stage.installed, 'package.json'))
+	const bin = isRecord(manifest) ? manifest['bin'] : undefined
+	const entry = isRecord(bin) ? bin['browse'] : undefined
+	if (typeof entry !== 'string') throw new Error('The installed manifest names no browse binary')
+	const client = createMCPClient({
+		transport: createStdioClientTransport({
+			command: process.execPath,
+			args: [join(stage.installed.slice(stage.consumer.length + 1), entry)],
+			env: { BROWSE_ROOT: '', BROWSE_HEADLESS: 'true', BROWSE_READONLY: '', ...environment },
+		}),
+		identity: { name: 'distribution-consumer', version: '1.0.0' },
+		timeout: 60_000,
+	})
+	const previous = process.cwd()
+	process.chdir(stage.consumer)
+	try {
+		await client.connect()
+	} finally {
+		process.chdir(previous)
+	}
+	return client
+}
+
+// Calls one tool on the packed binary and reads its text, failing on any other answer.
+async function callBrowse(
+	client: MCPClientInterface,
+	name: string,
+	args: Readonly<Record<string, unknown>>,
+): Promise<string> {
+	const outcome = await client.call(name, args)
+	if (outcome.resultType !== 'complete' || typeof outcome.value !== 'string')
+		throw new Error(`${name} answered ${JSON.stringify(outcome)}`)
+	return outcome.value
+}
+
+// The `browse` binary as a consumer installs it: spawned from the installed tree through the mcp
+// package's stdio client, it lists its vocabulary without Chromium, then drives the pinned
+// Chromium through one journey whose files land under the consumer's own `tmp/browsers`.
+describe('packed browse binary', () => {
+	it(
+		'lists the vocabulary without Chromium, then records, saves, lists, edits, and replays a journey [requires the registry and a browser]',
+		{ timeout: 240_000 },
+		async (context) => {
+			const stage = requireStage(context)
+			const root = join(stage.consumer, 'tmp/browsers')
+			const teardown = createTeardown()
+			try {
+				const absent = await connectBrowse(stage, {
+					BROWSE_EXECUTABLE: join(stage.consumer, 'missing/chrome'),
+				})
+				teardown.add(() => absent.disconnect())
+				expect((await absent.tools()).map((tool) => tool.name)).toStrictEqual(BROWSE_VOCABULARY)
+				await absent.disconnect()
+				expect(existsSync(root)).toBe(false)
+
+				const options = resolveBrowser(resolvePinnedBrowser(), process.platform, process.env)
+				const executable = options.launchOptions?.executablePath ?? resolvePinnedBrowser()
+				if (executable === undefined || !existsSync(executable)) {
+					const cause = `${describeBrowser(options)} names no executable file`
+					if (RELEASE) throw new Error(`The release gate requires a browser, and ${cause}`)
+					return context.skip(`No browser to launch. ${cause}`)
+				}
+				const fixtures = await createFixtureServer()
+				teardown.add(() => fixtures.destroy())
+				const client = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
+				teardown.add(() => client.disconnect())
+				const url = fixtures.url('/late')
+				expect(await callBrowse(client, 'navigate', { url })).toMatch(/^Navigated to /u)
+				expect(await callBrowse(client, 'record', { journey: 'reveal-code' })).toMatch(
+					/^Recording reveal-code; /u,
+				)
+				const view = await callBrowse(client, 'look', { what: 'the reveal button' })
+				const ref = requireValue(
+					/\b(e\d+) button "Reveal"/u.exec(view)?.[1],
+					`no Reveal in ${view}`,
+				)
+				expect(await callBrowse(client, 'click', { ref })).toContain(
+					`Clicked ${ref} button "Reveal"`,
+				)
+				expect(await callBrowse(client, 'wait', { text: FIXTURE_LATE_TEXT })).toContain(
+					`"${FIXTURE_LATE_TEXT}" is on the page.`,
+				)
+				expect(
+					await callBrowse(client, 'save', { description: 'Reveals the confirmation code' }),
+				).toMatch(/^Saved reveal-code with 2 steps\./u)
+				const listing = await callBrowse(client, 'journeys', { what: 'the saved journeys' })
+				expect(listing.split(/\r\n|\n/u)).toStrictEqual([
+					'reveal-code "Reveals the confirmation code"',
+					's1 click button "Reveal"',
+					`s2 wait "${FIXTURE_LATE_TEXT}"`,
+				])
+				const edited = await callBrowse(client, 'edit', {
+					journey: 'reveal-code',
+					edits: [
+						{ operation: 'add', step: { action: 'navigate', arguments: { url } }, before: 's1' },
+					],
+				})
+				expect(edited).toMatch(/^Edited reveal-code\./u)
+				expect(edited).toContain(`s3 navigate ${url}\ns1 click button "Reveal"`)
+				const replayed = await callBrowse(client, 'replay', { journey: 'reveal-code' })
+				expect(replayed.split(/\r\n|\n/u)[0]).toBe('Replayed reveal-code: 3 of 3 steps.')
+				const runs = readdirSync(join(root, 'reveal-code/runs'))
+				expect(runs).toHaveLength(1)
+				expect(
+					existsSync(join(root, 'reveal-code/runs', requireValue(runs[0], 'no run'), 'run.json')),
+				).toBe(true)
+				expect(readdirSync(join(root, '.profiles'))).toHaveLength(1)
+				// Closing the client ends the child with `SIGTERM`, whose handler removes the profile.
+				await client.disconnect()
+				expect(readdirSync(join(root, '.profiles'))).toStrictEqual([])
+			} finally {
+				await teardown.destroy()
+			}
+		},
+	)
+})
