@@ -14,6 +14,7 @@ import {
 	renderBrowserRunResult,
 	collectBrowserJourneyBindings,
 	editBrowserJourney,
+	validateBrowserJourneyStep,
 	renderBrowserJourney,
 	deriveBrowserJourneyTrigger,
 	deriveBrowserJourneySecret,
@@ -71,6 +72,7 @@ import {
 	BROWSER_JOURNEY_LISTING,
 	BROWSER_JOURNEY_TEMPLATE_CASES,
 	BROWSER_JOURNEY_EDIT_REFUSALS,
+	BROWSER_JOURNEY_EDIT_ORIGINS,
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_NAME_CASES,
 	BROWSER_ELEMENT_NAME_AX_FIXTURE,
@@ -83,6 +85,44 @@ import {
 } from '../../setup.js'
 
 describe('journey step helpers', () => {
+	it('admits the advertised wait timeout in a journey step', () => {
+		expect(() =>
+			validateBrowserJourneyStep({ action: 'wait', arguments: { text: 'Ready', timeout: 2 } }),
+		).not.toThrow()
+		expect(() =>
+			validateBrowserJourneyStep({ action: 'wait', arguments: { text: 'Ready', timeout: '2' } }),
+		).toThrow('malformed native arguments')
+		expect(() =>
+			validateBrowserJourneyStep({
+				action: 'wait',
+				arguments: { text: 'Ready', timeout: { parameter: 'seconds' } },
+			}),
+		).toThrow('malformed native arguments')
+	})
+	it('carries a timed out action in the step error context', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble({ waited: false }))
+		await toolset.start()
+		try {
+			await expect(
+				performBrowserStep(toolset, 's1', {
+					action: 'wait',
+					arguments: { text: 'Saved', timeout: 0.01 },
+				}),
+			).rejects.toMatchObject({
+				name: 'BrowserError',
+				context: {
+					action: {
+						action: 'wait',
+						arguments: { text: 'Saved', timeout: 0.01 },
+						outcome: 'timeout',
+						receipt: '"Saved" did not appear within 0.01 s.',
+					},
+				},
+			})
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	it('passes a page tool its literal arguments unchanged without resolving an element target', async () => {
 		const invoked = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
 		const tool = createTool({
@@ -1121,6 +1161,57 @@ describe('settleBrowserTeardown', () => {
 })
 
 describe('journey editing and rendering', () => {
+	it('attributes an exhausted id counter to the add before later edits', () => {
+		expect(
+			attempt(() =>
+				editBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, next: Number.MAX_SAFE_INTEGER }, [
+					{ operation: 'add', step: { action: 'wait', arguments: { text: 'Ready' } } },
+					{ operation: 'remove', id: 's5' },
+				]),
+			),
+		).toMatchObject({
+			success: false,
+			error: {
+				context: { index: 1 },
+				message: 'Edit 1 is refused: it has an invalid next counter',
+			},
+		})
+	})
+	it.each(BROWSER_JOURNEY_EDIT_ORIGINS)('attributes $name atomically', ({ edits, index }) => {
+		const before = structuredClone(BROWSER_JOURNEY_FIXTURE)
+		expect(attempt(() => editBrowserJourney(BROWSER_JOURNEY_FIXTURE, edits))).toMatchObject({
+			success: false,
+			error: { code: 'BROWSER_JOURNEY_EDIT', context: { index } },
+		})
+		expect(BROWSER_JOURNEY_FIXTURE).toEqual(before)
+	})
+	it('accepts a repaired binding and a forward secret declaration on the final candidate', () => {
+		const result = editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+			{ operation: 'update', id: 's5', arguments: { text: { parameter: 'missing' } } },
+			{ operation: 'update', id: 's4', arguments: { text: { parameter: 'password' } } },
+			{ operation: 'declare', name: 'password', parameter: { secret: true } },
+			{ operation: 'update', id: 's5', arguments: { text: 'Saved' } },
+		])
+		expect(result.parameters).toEqual({ password: { secret: true } })
+	})
+	it('names the edit that introduced an undeclared binding despite later edits', () => {
+		expect(
+			attempt(() =>
+				editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+					{ operation: 'update', id: 's4', arguments: { text: { parameter: 'missing' } } },
+					{ operation: 'update', id: 's4', arguments: { submit: false } },
+					{ operation: 'remove', id: 's5' },
+				]),
+			),
+		).toMatchObject({
+			success: false,
+			error: {
+				code: 'BROWSER_JOURNEY_EDIT',
+				context: { index: 1 },
+				message: 'Edit 1 is refused: it binds undeclared parameter "missing"',
+			},
+		})
+	})
 	it('never reuses an id after removal', () => {
 		const removed = editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [{ operation: 'remove', id: 's5' }])
 		const added = editBrowserJourney(removed, [

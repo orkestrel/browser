@@ -1,8 +1,6 @@
-import type { ToolCall, ToolContext } from '@orkestrel/tool'
 import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
-	BrowserAction,
 	BrowserJourney,
 	BrowserCallOptions,
 	BrowserHoldInterface,
@@ -16,12 +14,22 @@ import type {
 	BrowserRunSlot,
 	BrowserRunStep,
 	BrowserScreenshotResult,
-	BrowserToolsetResult,
 	BrowserToolsetInterface,
 } from './types.js'
-import { isObject, isString } from '@orkestrel/contract'
+import {
+	isObject,
+	isString,
+	isRecord,
+	isJSONValue,
+	isFiniteNumber,
+	parseEnum,
+} from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_FORMAT_VERSION } from './constants.js'
+import {
+	BROWSER_JOURNEY_ACTIONS,
+	BROWSER_JOURNEY_FORMAT_VERSION,
+	BROWSER_NAVIGATION_REASONS,
+} from './constants.js'
 import { BrowserError, isBrowserError } from './errors.js'
 import {
 	deriveBrowserJourneyTrigger,
@@ -39,8 +47,6 @@ import { isBrowserJourneyBinding, isBrowserSecretBinding } from './validators.js
  */
 export class BrowserReplay implements BrowserReplayInterface {
 	readonly #toolset: BrowserToolsetInterface
-	readonly #perform = this.#performCall.bind(this)
-	#action: BrowserAction | undefined
 	readonly #revision: BrowserJourneyRevision
 	readonly #options: BrowserReplayOptions | undefined
 	readonly #emitter: Emitter<BrowserReplayEventMap>
@@ -247,7 +253,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 					: value
 		}
 		const secret = isBrowserSecretBinding(step, parameters)
-		this.#action = undefined
+		let action: unknown
 		let refusal: string | undefined
 		try {
 			if (step.action === 'dialog' && !interrupted)
@@ -255,11 +261,8 @@ export class BrowserReplay implements BrowserReplayInterface {
 					`Step ${step.id} answers no interrupted action.`,
 					'BROWSER_JOURNEY_DIALOG',
 				)
-			this.#action = await performBrowserStep(
-				{
-					view: this.#toolset.view,
-					perform: this.#perform,
-				},
+			action = await performBrowserStep(
+				this.#toolset,
 				step.id,
 				{
 					action: step.action,
@@ -278,27 +281,31 @@ export class BrowserReplay implements BrowserReplayInterface {
 			)
 		} catch (error) {
 			refusal = error instanceof Error ? error.message : String(error)
+			if (isBrowserError(error)) action = error.context?.['action']
 		}
-		const action = this.#action
-		const recorded = { ...(action?.arguments ?? args) }
+		const result = isRecord(action) ? action : undefined
+		const argumentsValue = result?.['arguments']
+		const recorded = {
+			...(isRecord(argumentsValue) && isJSONValue(argumentsValue) ? argumentsValue : args),
+		}
+		const outcome =
+			parseEnum(result?.['outcome'], ['done', 'refused', 'timeout', 'interrupted']) ?? 'refused'
+		const stage = parseEnum(result?.['stage'], ['requested', 'committed', 'loaded'])
+		const reason = parseEnum(result?.['reason'], BROWSER_NAVIGATION_REASONS)
+		const receipt = result?.['receipt']
+		const elapsed = result?.['elapsed']
 		if (secret) delete recorded['text']
 		return {
 			id: step.id,
 			action: step.action,
 			trigger: deriveBrowserJourneyTrigger(step, inputs),
 			arguments: recorded,
-			outcome: action?.outcome ?? 'refused',
-			...(action?.stage === undefined ? {} : { stage: action.stage }),
-			...(action?.reason === undefined ? {} : { reason: action.reason }),
-			result: action?.receipt ?? refusal ?? '',
-			elapsed: action?.elapsed ?? performance.now() - started,
+			outcome,
+			...(stage === undefined ? {} : { stage }),
+			...(reason === undefined ? {} : { reason }),
+			result: isString(receipt) ? receipt : (refusal ?? ''),
+			elapsed: isFiniteNumber(elapsed) ? elapsed : performance.now() - started,
 		}
-	}
-
-	async #performCall(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
-		const performed = await this.#toolset.perform(call, context)
-		if (call.name !== 'tabs') this.#action = performed.action
-		return performed
 	}
 
 	#observe(output: string[], cleanup: Array<() => void>, observed: Set<object>): void {

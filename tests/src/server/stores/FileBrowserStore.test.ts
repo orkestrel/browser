@@ -169,6 +169,16 @@ describe('FileBrowserStore', () => {
 			scratch.destroy()
 		}
 	})
+	it('refuses a zero listing cap with the argument code', () => {
+		const scratch = createScratch()
+		try {
+			expect(() => new FileBrowserStore({ root: scratch.path, limit: 0 })).toThrow(
+				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+			)
+		} finally {
+			scratch.destroy()
+		}
+	})
 	it('refuses a missing root with BROWSER_JOURNEY_PATH naming the root', () => {
 		const scratch = createScratch()
 		try {
