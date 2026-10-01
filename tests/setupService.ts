@@ -267,6 +267,16 @@ export function requireOutlineReference(text: string, role: string, name: string
 }
 
 /**
+ * Masks element references so two receipts for the same gesture compare by wording.
+ *
+ * @param text - A receipt or a view
+ * @returns The text with every `eN` reference replaced by `e#`
+ */
+export function maskBrowserReferences(text: string): string {
+	return text.replace(/\be[1-9]\d*\b/gu, 'e#')
+}
+
+/**
  * Reads the text a successful tool result carries, or throws with the failure it reports.
  *
  * @param result - A `ToolResult` from `ToolManagerInterface.execute`, or its JSON copy read back

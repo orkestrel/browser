@@ -19,6 +19,7 @@
 
 import type { BrowserInterface } from '@src/server'
 import type {
+	BrowserAction,
 	BrowserContextInterface,
 	BrowserPageInterface,
 	BrowserToolsetInterface,
@@ -33,6 +34,8 @@ import {
 	BROWSER_TOOL_TIMEOUT_MS,
 	createBrowserToolset,
 	createCDPClient,
+	locateBrowserTarget,
+	performBrowserStep,
 } from '@src/core'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createToolManager } from '@orkestrel/tool'
@@ -45,6 +48,7 @@ import {
 } from '@orkestrel/test'
 import {
 	createFixtureServer,
+	requireDocumentBundle,
 	createTempDirectory,
 	FIXTURE_CHECKOUT_CODE,
 	reservePort,
@@ -54,10 +58,17 @@ import {
 	matchesToolReceipt,
 	requireOutlineReference,
 	requireSystemBrowser,
+	requireDocumentToolset,
+	maskBrowserReferences,
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
 	SERVICE_EDITABLE_HTML,
 } from '../setupService.js'
+import {
+	BROWSER_JOURNEY_SERVICE_CASES,
+	BROWSER_JOURNEY_COMBOBOX_HTML,
+	BROWSER_JOURNEY_FRAME_HTML,
+} from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 
@@ -101,6 +112,167 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 
 	afterAll(async () => {
 		await teardown.destroy()
+	})
+
+	describe('journey perform equality', () => {
+		it('matches the direct editable-combobox receipt and its filled value', async () => {
+			const receipts: string[] = []
+			for (const direct of [true, false]) {
+				const page = await browser.create({ url: fixtures.url('/form') })
+				opened.push(page)
+				await page.evaluate(
+					`document.querySelector('main').innerHTML = ${JSON.stringify(BROWSER_JOURNEY_COMBOBOX_HTML)}`,
+				)
+				const toolset = createBrowserToolset(page)
+				toolsets.push(toolset)
+				await toolset.start()
+				const target = { role: 'combobox', name: 'Destination' }
+				if (direct) {
+					const element = await locateBrowserTarget(page, target)
+					receipts.push(
+						requireToolText(
+							await toolset.tools.execute({
+								id: 's1',
+								name: 'type',
+								arguments: { ref: element.reference, text: 'Harbor' },
+							}),
+						).split('\n\n')[0] ?? '',
+					)
+				} else
+					receipts.push(
+						(
+							await performBrowserStep(toolset, 's1', {
+								action: 'type',
+								target,
+								arguments: { text: 'Harbor' },
+							})
+						).receipt,
+					)
+				expect(await page.evaluate('document.querySelector("input").value')).toBe('Harbor')
+			}
+			expect(maskBrowserReferences(receipts[1] ?? '')).toBe(
+				maskBrowserReferences(receipts[0] ?? ''),
+			)
+		})
+
+		it('performs a semantic click in a same-origin child frame through the DOM placement', async () => {
+			requireDocumentBundle()
+			const page = await browser.create({ url: fixtures.url('/document') })
+			opened.push(page)
+			await requireDocumentToolset(page)
+			await page.evaluate(
+				`new Promise((resolve) => { const frame = document.createElement('iframe'); frame.onload = resolve; frame.srcdoc = ${JSON.stringify(BROWSER_JOURNEY_FRAME_HTML)}; document.body.append(frame) })`,
+			)
+			const action = await page.evaluate(
+				`import('/dist/src/core/index.js').then(({ performBrowserStep }) => performBrowserStep(documentToolset, 's1', { action: 'click', arguments: {}, target: { role: 'button', name: 'Save in frame' } }))`,
+			)
+			expect(action).toMatchObject({
+				outcome: 'done',
+				target: { role: 'button', name: 'Save in frame' },
+			})
+			expect(
+				await page.evaluate(
+					'document.querySelector("iframe").contentDocument.body.dataset.clicked',
+				),
+			).toBe('yes')
+		})
+		it.each(BROWSER_JOURNEY_SERVICE_CASES)(
+			'matches the direct receipt, stage, and reason for $name',
+			async (scenario) => {
+				const observed: BrowserAction[] = []
+				const receipts: string[] = []
+				for (const direct of [true, false]) {
+					const page = await browser.create({ url: fixtures.url(scenario.route) })
+					opened.push(page)
+					const toolset = createBrowserToolset(page)
+					toolsets.push(toolset)
+					await toolset.start()
+					await page.elements.outline()
+					const args =
+						scenario.action === 'navigate'
+							? { url: fixtures.url(scenario.arguments.url) }
+							: scenario.arguments
+					const target =
+						'target' in scenario ? await locateBrowserTarget(page, scenario.target) : undefined
+					const call = {
+						id: 's1',
+						name: scenario.action,
+						arguments: target === undefined ? args : { ...args, ref: target.reference },
+					}
+					if (direct) {
+						toolset.emitter.on('action', (action) => observed.push(action))
+						receipts.push(requireToolText(await toolset.tools.execute(call)))
+					} else {
+						const performed = await toolset.perform(call)
+						observed.push(requireValue(performed.action))
+						receipts.push(requireToolText(performed.result))
+					}
+				}
+				expect(maskBrowserReferences(receipts[1] ?? '')).toBe(
+					maskBrowserReferences(receipts[0] ?? ''),
+				)
+				expect(observed[1]?.stage).toBe(observed[0]?.stage)
+				expect(observed[1]?.reason).toBe(observed[0]?.reason)
+				expect(observed.map((action) => action.outcome)).toEqual(['done', 'done'])
+			},
+		)
+
+		it('matches the interrupted click and its dialog continuation without waiting for the blocked input', async () => {
+			const observed: BrowserAction[][] = []
+			for (const direct of [true, false]) {
+				const page = await browser.create({ url: fixtures.url('/confirm') })
+				opened.push(page)
+				const toolset = createBrowserToolset(page)
+				toolsets.push(toolset)
+				await toolset.start()
+				const target = await locateBrowserTarget(page, { role: 'button', name: 'Delete' })
+				const actions: BrowserAction[] = []
+				toolset.emitter.on('action', (action) => actions.push(action))
+				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
+				if (direct) await toolset.tools.execute(call)
+				else await toolset.perform(call)
+				expect(actions[0]?.outcome).toBe('interrupted')
+				if (direct)
+					await toolset.tools.execute({ id: 's2', name: 'dialog', arguments: { accept: true } })
+				else
+					await performBrowserStep(toolset, 's2', { action: 'dialog', arguments: { accept: true } })
+				await performBrowserStep(toolset, 's3', { action: 'press', arguments: { key: 'Escape' } })
+				expect(actions.map((action) => action.outcome)).toEqual(['interrupted', 'done', 'done'])
+				observed.push(actions)
+			}
+			const wording = (actions: readonly BrowserAction[] | undefined) =>
+				actions?.map((action) => [
+					maskBrowserReferences(action.receipt),
+					action.stage,
+					action.reason,
+				])
+			expect(wording(observed[1])).toEqual(wording(observed[0]))
+		})
+
+		it('resolves a switch by URL and title and matches the direct tab receipt', async () => {
+			const actions: BrowserAction[] = []
+			for (const direct of [true, false]) {
+				const context = await browser.isolate()
+				contexts.push(context)
+				const first = await context.create({ url: fixtures.url('/popup') })
+				await context.create({ url: fixtures.url('/popup/child') })
+				const toolset = createBrowserToolset(first, { context })
+				toolsets.push(toolset)
+				await toolset.start()
+				toolset.emitter.on('action', (action) => actions.push(action))
+				if (direct)
+					await toolset.tools.execute({ id: 's1', name: 'switch', arguments: { tab: 't2' } })
+				else
+					await performBrowserStep(toolset, 's1', {
+						action: 'switch',
+						arguments: {},
+						tab: { title: 'Details', url: fixtures.url('/popup/child') },
+					})
+			}
+			expect(actions[1]?.receipt).toBe(actions[0]?.receipt)
+			expect(actions[1]?.arguments).toEqual({ tab: 't2' })
+			expect(actions[1]?.tab).toEqual({ title: 'Details', url: fixtures.url('/popup/child') })
+		})
 	})
 
 	it('runs one task end to end: look, click the text field by reference, type with submit, and read the result page, each receipt whole and under BROWSER_TOOL_LIMIT', async () => {

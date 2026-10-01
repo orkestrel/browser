@@ -2,9 +2,12 @@
  * src/core/helpers.ts tests.
  */
 
-import type { BrowserCodegenAction } from '@src/core'
+import type { BrowserCodegenAction, BrowserToolSourceEventMap } from '@src/core'
+import type { CDPSentMessage } from '../../setup.js'
 import { describe, it, expect } from 'vitest'
 import { attempt } from '@orkestrel/contract'
+import { Emitter } from '@orkestrel/emitter'
+import { createTool } from '@orkestrel/tool'
 import {
 	renderBrowserRun,
 	renderBrowserRunResult,
@@ -16,6 +19,10 @@ import {
 	generateBrowserRunId,
 	resolveBrowserJourneyBinding,
 	composeBrowserPoint,
+	locateBrowserTarget,
+	performBrowserStep,
+	createBrowserToolset,
+	BrowserToolset,
 	filterBrowserOutline,
 	normalizeBrowserKey,
 	normalizeBrowserName,
@@ -57,7 +64,7 @@ import {
 	renderBrowserReceipt,
 	isBrowserElementError,
 } from '@src/core'
-import { readProperty, requireValue } from '@orkestrel/test'
+import { createRecorder, readProperty, requireValue, waitForCondition } from '@orkestrel/test'
 import {
 	BROWSER_RUN_FIXTURE,
 	BROWSER_RUN_LISTING,
@@ -70,10 +77,248 @@ import {
 	BROWSER_ELEMENT_NAME_CASES,
 	BROWSER_ELEMENT_NAME_AX_FIXTURE,
 	createBrowserElementFixture,
+	createBrowserViewDouble,
+	replyOk,
 	createDOMSnapshotResult,
 	JPEG_BASE64,
 	PNG_BASE64,
 } from '../../setup.js'
+
+describe('journey step helpers', () => {
+	it('passes a page tool its literal arguments unchanged without resolving an element target', async () => {
+		const invoked = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
+		const tool = createTool({
+			name: 'checkout',
+			parameters: {
+				type: 'object',
+				properties: { basket: { type: 'object' } },
+				required: ['basket'],
+			},
+			execute: invoked.handler,
+		})
+		const toolset = new BrowserToolset(createBrowserViewDouble(), {
+			source: { adopt: async () => [tool], emitter: new Emitter<BrowserToolSourceEventMap>() },
+		})
+		await toolset.start()
+		try {
+			const args = { basket: { items: ['kettle'], quantity: 1 } }
+			const action = await performBrowserStep(toolset, 's1', {
+				action: 'checkout',
+				arguments: args,
+				target: { role: 'button', name: 'irrelevant' },
+			})
+			expect(invoked.calls.map(([input]) => input)).toEqual([args])
+			expect(action.arguments).toEqual(args)
+			expect(action.outcome).toBe('done')
+		} finally {
+			await toolset.destroy()
+		}
+	})
+
+	it('returns an interrupted action, answers the dialog, and continues the pending input', async () => {
+		const withheld: CDPSentMessage[] = []
+		const fixture = await createBrowserElementFixture({
+			released: (message) => withheld.push(message),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			replyOk(fixture.transport, 'Page.handleJavaScriptDialog')
+			await toolset.start()
+			const clicking = performBrowserStep(toolset, 's1', {
+				action: 'click',
+				arguments: {},
+				target: { role: 'button', name: 'Place order' },
+			})
+			await waitForCondition('the helper input is pending', () => withheld.length === 1)
+			fixture.transport.event(
+				'Page.javascriptDialogOpening',
+				{ type: 'confirm', message: 'Continue?' },
+				'session-main',
+			)
+			expect(await clicking).toMatchObject({
+				outcome: 'interrupted',
+				receipt:
+					'Clicked e4 button "Place order". A confirm dialog is open: "Continue?"; call dialog.',
+			})
+			const answered = await performBrowserStep(toolset, 's2', {
+				action: 'dialog',
+				arguments: { accept: true },
+				target: { role: 'button', name: 'irrelevant' },
+			})
+			expect(answered.arguments).toEqual({ accept: true })
+			expect(answered.outcome).toBe('done')
+			fixture.transport.reply(requireValue(withheld[0]).id, {})
+			expect(
+				(await performBrowserStep(toolset, 's3', { action: 'press', arguments: { key: 'Escape' } }))
+					.outcome,
+			).toBe('done')
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
+	it('releases a hold after aborting its input and sends no suffix action', async () => {
+		const withheld: CDPSentMessage[] = []
+		const fixture = await createBrowserElementFixture({
+			insert: (message) => withheld.push(message),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			const controller = new AbortController()
+			const hold = await toolset.hold('add-kettle')
+			const released = createRecorder<readonly [string]>()
+			toolset.emitter.on('release', released.handler)
+			const typing = performBrowserStep(
+				toolset,
+				's1',
+				{
+					action: 'type',
+					arguments: { text: 'Harbor' },
+					target: { role: 'textbox', name: 'Email' },
+				},
+				{ signal: controller.signal, caller: hold.token },
+			)
+				.then(() =>
+					performBrowserStep(toolset, 's2', { action: 'press', arguments: { key: 'Escape' } }),
+				)
+				.finally(() => hold.destroy())
+				.catch((error: unknown) => error)
+			await waitForCondition('the held input is pending', () => withheld.length === 1)
+			controller.abort(new Error('caller left'))
+			expect(await typing).toMatchObject({ message: 's1: caller left' })
+			expect(released.calls).toEqual([['add-kettle']])
+			expect(
+				fixture.transport.sent.some(
+					(message) =>
+						message.method === 'Input.dispatchKeyEvent' && message.params?.['key'] === 'Escape',
+				),
+			).toBe(false)
+			expect(
+				(await toolset.perform({ id: 'after', name: 'press', arguments: { key: 'Escape' } })).action
+					?.outcome,
+			).toBe('done')
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('resolves a unique semantic target and refuses a missing target without sending input', async () => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			const target = await locateBrowserTarget(fixture.page, { role: 'textbox', name: 'Email' })
+			expect(target.name).toBe('Email')
+			expect(target.frame).toBe('main')
+			await expect(
+				locateBrowserTarget(fixture.page, { role: 'button', name: 'Add to cart' }, { id: 's3' }),
+			).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_TARGET',
+				message:
+					'Step s3 names button "Add to cart", which no element carries; call edit to remove or replace s3.',
+			})
+			expect(
+				fixture.transport.sent.filter((message) => message.method.startsWith('Input.')),
+			).toEqual([])
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('refuses ambiguity without trusting a stored reference or selector', async () => {
+		const fixture = await createBrowserElementFixture({
+			accessibility: (message) =>
+				fixture.transport.reply(message.id, {
+					nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) =>
+						node.nodeId === 'link' || node.nodeId === 'button'
+							? { ...node, role: { value: 'button' }, name: { value: 'Delete' } }
+							: node,
+					),
+				}),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			const target = { role: 'button', name: 'Delete', reference: 'e1', css: '#delete' }
+			await expect(
+				performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target }),
+			).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_AMBIGUOUS',
+				message:
+					'Step s3 names button "Delete", which 2 elements carry; call edit to remove or replace s3.',
+			})
+			expect(
+				fixture.transport.sent.filter((message) => message.method.startsWith('Input.')),
+			).toEqual([])
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
+	it('builds ref only for element actions and forwards a secret through the action boundary', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			const typed = await performBrowserStep(
+				toolset,
+				's1',
+				{
+					action: 'type',
+					target: { role: 'textbox', name: 'Email' },
+					arguments: { text: 'private-value' },
+				},
+				{ secret: true },
+			)
+			expect(typed).toMatchObject({
+				secret: true,
+				arguments: { ref: 'e2', secret: true },
+				outcome: 'done',
+			})
+			expect(typed.arguments).not.toHaveProperty('text')
+			expect(typed.receipt).toContain('Typed a secret into')
+			const pressed = await performBrowserStep(toolset, 's2', {
+				action: 'press',
+				target: { role: 'textbox', name: 'Email' },
+				arguments: { key: 'Escape' },
+			})
+			expect(pressed.arguments).toEqual({ key: 'Escape' })
+			const clicked = await performBrowserStep(toolset, 's3', {
+				action: 'click',
+				target: { role: 'button', name: 'Place order' },
+				arguments: {},
+			})
+			expect(clicked.arguments).toEqual({ ref: 'e4' })
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
+	it('builds no ref for wait and stops a sequence at its unchanged timeout receipt', async () => {
+		const view = createBrowserViewDouble({ waited: false })
+		const toolset = new BrowserToolset(view)
+		await toolset.start()
+		try {
+			await expect(
+				performBrowserStep(toolset, 's3', {
+					action: 'wait',
+					target: { role: 'textbox', name: 'Email' },
+					arguments: { text: 'Added to cart', timeout: 0.01 },
+				}).then(() =>
+					performBrowserStep(toolset, 's4', { action: 'click', arguments: { ref: 'e1' } }),
+				),
+			).rejects.toThrow('s3: "Added to cart" did not appear within 0.01 s.')
+			expect(view.calls).toEqual(['wait Added to cart'])
+			await expect(
+				performBrowserStep(toolset, 's5', { action: 'missing', arguments: {} }),
+			).rejects.toThrow('s5: tool not found: missing')
+		} finally {
+			await toolset.destroy()
+		}
+	})
+})
 
 describe('element helpers', () => {
 	it.each(BROWSER_ELEMENT_NAME_CASES)('$title', ({ query, expected }) => {

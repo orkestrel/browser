@@ -1,8 +1,13 @@
 import type {
+	BrowserAction,
+	BrowserCallOptions,
+	BrowserElementManagerInterface,
 	BrowserJourney,
 	BrowserJourneyEdit,
 	BrowserJourneyStepInput,
+	BrowserJourneyTab,
 	BrowserRun,
+	BrowserToolsetInterface,
 	BrowserElementQuery,
 	BrowserOutline,
 	BrowserOutlineNode,
@@ -54,7 +59,8 @@ import type {
 	BrowserTeardownFunction,
 	BrowserViewport,
 } from './types.js'
-import type { ToolDefinition } from '@orkestrel/tool'
+import type { ToolContext, ToolDefinition } from '@orkestrel/tool'
+import type { JSONValue } from '@orkestrel/contract'
 import {
 	attempt,
 	isArray,
@@ -2381,6 +2387,103 @@ export async function settleBrowserTeardown(
 		}
 	}
 	return failure
+}
+
+/**
+ * Resolves one exact semantic target and refuses missing or ambiguous matches.
+ *
+ * @param view - The live element manager
+ * @param target - The role and exact accessible name; stored references and selectors are evidence only
+ * @param options - The call signal and timeout, with the step id for a refusal sentence
+ * @returns The unique matching element
+ * @throws Thrown when no element or several elements carry the target
+ */
+export async function locateBrowserTarget<E extends BrowserElementInterface>(
+	view: { readonly elements: BrowserElementManagerInterface<E> },
+	target: { readonly role: string; readonly name: string },
+	options?: BrowserCallOptions & { readonly id?: string },
+): Promise<E> {
+	const matches = await view.elements.find(
+		{ role: target.role, name: target.name, exact: true },
+		options,
+	)
+	const element = matches[0]
+	if (matches.length === 1 && element !== undefined) return element
+	const id = options?.id ?? 's1'
+	throw new BrowserError(
+		`Step ${id} names ${target.role} ${JSON.stringify(target.name)}, which ${matches.length === 0 ? 'no element carries' : `${matches.length} elements carry`}; call edit to remove or replace ${id}.`,
+		matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
+	)
+}
+
+/**
+ * Performs a resolved journey step through the toolset's action boundary.
+ *
+ * @remarks
+ * `options.secret` marks a substituted secret text. `options.caller` carries a hold token.
+ * An interrupted action returns with its outcome; the following dialog call answers the pending input.
+ *
+ * @param toolset - The toolset and its structurally typed live view
+ * @param id - The step identity used in a refusal
+ * @param step - The action, literal arguments, and optional semantic element or tab target
+ * @param options - The call signal, caller identity, and secret flag
+ * @returns The completed structured action
+ * @throws Thrown when resolution fails, the action is refused or times out, or its navigation is still pending
+ */
+export async function performBrowserStep<E extends BrowserElementInterface>(
+	toolset: Pick<BrowserToolsetInterface, 'perform'> & {
+		readonly view: { readonly elements: BrowserElementManagerInterface<E> }
+	},
+	id: string,
+	step: {
+		readonly action: string
+		readonly arguments: Readonly<Record<string, JSONValue>>
+		readonly target?: { readonly role: string; readonly name: string }
+		readonly tab?: BrowserJourneyTab
+	},
+	options?: BrowserCallOptions & Pick<ToolContext, 'caller'> & { readonly secret?: boolean },
+): Promise<BrowserAction> {
+	const context: ToolContext = {
+		signal: options?.signal ?? new AbortController().signal,
+		...(options?.caller === undefined ? {} : { caller: options.caller }),
+	}
+	let args = step.arguments
+	if ((step.action === 'click' || step.action === 'type') && step.target !== undefined) {
+		const element = await locateBrowserTarget(toolset.view, step.target, { ...options, id })
+		args = { ...args, ref: element.reference }
+	}
+	if (step.action === 'type' && options?.secret === true) args = { ...args, secret: true }
+	if (step.action === 'switch' && step.tab !== undefined) {
+		const listed = await toolset.perform(
+			{ id, name: 'tabs', arguments: { what: 'journey target' } },
+			context,
+		)
+		if (!listed.result.success) throw new Error(`${id}: ${listed.result.error}`)
+		const matches = String(listed.result.value)
+			.split('\n')
+			.filter((line) => {
+				const match = /^t[1-9]\d* ("(?:[^"\\]|\\.)*") (\S+?)(?: \(current\))?$/.exec(line)
+				return match?.[1] === JSON.stringify(step.tab?.title) && match[2] === step.tab?.url
+			})
+		if (matches.length !== 1)
+			throw new BrowserError(
+				`${id}: The tab ${JSON.stringify(step.tab.title)} at ${step.tab.url} ${matches.length === 0 ? 'is not open' : 'is ambiguous'}; call tabs.`,
+				matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
+			)
+		args = { ...args, tab: matches[0]?.split(' ')[0] ?? '' }
+	}
+	const performed = await toolset.perform({ id, name: step.action, arguments: args }, context)
+	const action = performed.action
+	if (
+		action === undefined ||
+		(action.outcome !== 'done' && action.outcome !== 'interrupted') ||
+		action.stage === 'requested' ||
+		action.stage === 'committed'
+	)
+		throw new Error(
+			`${id}: ${action?.receipt ?? (performed.result.success ? String(performed.result.value) : performed.result.error)}`,
+		)
+	return action
 }
 
 /**
