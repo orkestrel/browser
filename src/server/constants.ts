@@ -216,6 +216,8 @@ export const BROWSER_JOURNEY_SNAPSHOT_FILE = 'journey.json'
 export const BROWSER_JOURNEY_REVISION_FILE = 'revision'
 /** Names the exclusive journey write lock. */
 export const BROWSER_JOURNEY_LOCK_FILE = 'journey.lock'
+/** Bounds attempts to acquire a journey lock after concurrent recovery. */
+export const BROWSER_JOURNEY_LOCK_ATTEMPTS = 8
 /** Names the persisted run snapshot. */
 export const BROWSER_RUN_FILE = 'run.json'
 /** Names the journey directory holding its runs. */

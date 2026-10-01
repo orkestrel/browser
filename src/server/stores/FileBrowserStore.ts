@@ -1,12 +1,15 @@
 import type { BrowserStoreOptions, BrowserStorePage, BrowserStoreFault } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
-import type { FileHandle } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
-import { lstat, mkdir, open, readFile, readdir, rename, unlink } from 'node:fs/promises'
+import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { BrowserError, BROWSER_JOURNEY_NAME_PATTERN } from '@src/core'
-import { BROWSER_FILE_STORE_LIMIT, BROWSER_FILE_STORE_RESERVED } from '../constants.js'
+import {
+	BROWSER_FILE_STORE_LIMIT,
+	BROWSER_FILE_STORE_RESERVED,
+	BROWSER_JOURNEY_LOCK_ATTEMPTS,
+} from '../constants.js'
 
 /**
  * Shares confined filesystem operations between the journey and run stores.
@@ -168,58 +171,67 @@ export class FileBrowserStore {
 	}
 
 	/**
-	 * Holds an exclusive journey lock through a mutation and releases it on every outcome.
-	 * Reclaims a dead process's lock and retries acquisition once; a live or unknown holder refuses.
-	 * @param path - Lock file
+	 * Holds a directory lock through a mutation and releases only its named entry.
+	 * Reclaims dead or empty locks within a bounded attempt count; a live or unknown holder refuses.
+	 * @param path - Lock directory
 	 * @param action - Mutation inside the lock
 	 * @param options - Cancellation options
 	 * @returns The mutation result
 	 */
 	async lock<T>(path: string, action: () => Promise<T>, options?: BrowserStoreOptions): Promise<T> {
 		await this.createDirectory(dirname(path), options)
-		await this.check(path, options)
-		options?.signal?.throwIfAborted()
-		let file: FileHandle | undefined
-		for (let attempt = 0; attempt < 2; attempt += 1) {
+		const name = `${process.pid}-${randomUUID()}`
+		const entry = this.resolvePath(path, name)
+		for (let attempt = 0; attempt < BROWSER_JOURNEY_LOCK_ATTEMPTS; attempt += 1) {
+			await this.check(path, options)
 			options?.signal?.throwIfAborted()
 			try {
-				file = await open(path, 'wx')
-				break
+				await mkdir(path)
 			} catch (error) {
 				if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST'))
 					throw this.translateError(path, error)
-				if (attempt !== 0) break
-				const source = await this.read(path, options)
-				// A holder can release its lock between exclusive create and the read.
-				if (source === undefined) continue
-				const pid = Number(source)
-				if (!Number.isSafeInteger(pid) || pid <= 0) break
-				try {
-					process.kill(pid, 0)
-					break
-				} catch (cause) {
-					// Permission denial and other failures do not establish that the holder died.
-					if (!(cause instanceof Error && 'code' in cause && cause.code === 'ESRCH')) break
+				const entries = await this.#readLock(path, options)
+				if (entries === undefined) continue
+				if (entries.length > 1) break
+				const holder = entries[0]
+				if (holder !== undefined) {
+					const match =
+						/^([1-9]\d*)-[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.exec(holder)
+					const pid = Number(match?.[1])
+					if (!Number.isSafeInteger(pid) || pid <= 0) break
+					try {
+						process.kill(pid, 0)
+						break
+					} catch (cause) {
+						if (!(cause instanceof Error && 'code' in cause && cause.code === 'ESRCH')) break
+					}
+					if (!(await this.#unlinkLock(this.resolvePath(path, holder)))) continue
 				}
-				await this.remove(path, options)
+				await this.#removeLock(path)
+				continue
+			}
+			let owned = false
+			try {
+				await this.check(entry, options)
+				try {
+					const file = await open(entry, 'wx')
+					owned = true
+					await file.close()
+				} catch (error) {
+					if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue
+					throw this.translateError(entry, error)
+				}
+				// An empty directory can be replaced between mkdir and entry creation.
+				const entries = await this.#readLock(path, options)
+				if (entries?.length !== 1 || entries[0] !== name) break
+				options?.signal?.throwIfAborted()
+				return await action()
+			} finally {
+				if (owned) await this.#unlinkLock(entry)
+				await this.#removeLock(path)
 			}
 		}
-		if (file === undefined)
-			throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
-		try {
-			options?.signal?.throwIfAborted()
-			await file
-				.writeFile(String(process.pid), { signal: options?.signal })
-				.catch((error: unknown) => {
-					options?.signal?.throwIfAborted()
-					throw this.translateError(path, error)
-				})
-			options?.signal?.throwIfAborted()
-			return await action()
-		} finally {
-			await file.close()
-			await this.remove(path)
-		}
+		throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
 	}
 
 	/**
@@ -319,5 +331,62 @@ export class FileBrowserStore {
 					: 'BROWSER_JOURNEY_FILE',
 			{ path },
 		)
+	}
+	async #readLock(
+		path: string,
+		options?: BrowserStoreOptions,
+	): Promise<readonly string[] | undefined> {
+		await this.check(path, options)
+		try {
+			const entries = await readdir(path, { withFileTypes: true })
+			for (const entry of entries) {
+				await this.check(this.resolvePath(path, entry.name), options)
+				if (!entry.isFile())
+					throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
+			}
+			return entries.map((entry) => entry.name)
+		} catch (error) {
+			if (error instanceof Error && 'code' in error) {
+				if (error.code === 'ENOENT') return undefined
+				if (error.code === 'ENOTDIR')
+					throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
+			}
+			throw this.translateError(path, error)
+		}
+	}
+
+	async #unlinkLock(path: string): Promise<boolean> {
+		await this.check(path)
+		try {
+			await unlink(path)
+			return true
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				'code' in error &&
+				(error.code === 'ENOENT' || error.code === 'ENOTEMPTY')
+			)
+				return false
+			throw new BrowserError(`Cannot remove lock entry: ${path}`, 'BROWSER_JOURNEY_ACCESS', {
+				path,
+			})
+		}
+	}
+
+	async #removeLock(path: string): Promise<void> {
+		await this.check(path)
+		try {
+			await rmdir(path)
+		} catch (error) {
+			if (
+				error instanceof Error &&
+				'code' in error &&
+				(error.code === 'ENOENT' || error.code === 'ENOTEMPTY')
+			)
+				return
+			throw new BrowserError(`Cannot remove lock directory: ${path}`, 'BROWSER_JOURNEY_ACCESS', {
+				path,
+			})
+		}
 	}
 }

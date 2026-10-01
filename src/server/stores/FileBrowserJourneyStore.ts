@@ -17,7 +17,7 @@ import { FileBrowserStore } from './FileBrowserStore.js'
 
 /**
  * Persists journeys with exclusive writes and revision counters retained across deletion.
- * @remarks Requires an existing root. A live holder refuses immediately; a dead holder's lock is reclaimed once.
+ * @remarks Requires an existing root. A live holder refuses immediately; dead or empty locks are reclaimed within a bounded attempt count.
  * @example
  * const store = new FileBrowserJourneyStore({ root: directory })
  * await store.set(journey)

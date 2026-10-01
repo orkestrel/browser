@@ -6,7 +6,13 @@ import { describe, it, expect } from 'vitest'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import { createScratch } from '@orkestrel/test/server'
 import { waitForEvent } from '@orkestrel/test'
-import { SOURCE_HOOK } from '../../../setupServer.js'
+import {
+	SOURCE_HOOK,
+	BROWSER_LOCK_RECOVERER,
+	readExitedProcessId,
+	waitForBrowserChild,
+	stopBrowserChild,
+} from '../../../setupServer.js'
 import {
 	BROWSER_RUN_FIXTURE,
 	createBrowserJourneyFixture,
@@ -81,7 +87,7 @@ export function describeFileBrowserStores(): void {
 		})
 
 		it('recovers a dead holder lock after refusing the live child', async () => {
-			const { readFile } = await import('node:fs/promises')
+			const { readdir } = await import('node:fs/promises')
 			const { FileBrowserJourneyStore } = await import('@src/server')
 			const scratch = createScratch()
 			scratch.write(
@@ -124,7 +130,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 					code: 'BROWSER_JOURNEY_LOCKED',
 					message: `Journey is locked: ${lock}`,
 				})
-				expect(await readFile(lock, 'utf8')).toBe(String(child.pid))
+				expect(await readdir(lock)).toEqual([expect.stringMatching(new RegExp(`^${child.pid}-`))])
 				const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
 					(listener) => {
 						child.once('exit', listener)
@@ -139,7 +145,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 				await exit
 				expect((await store.set(journey)).revision).toBe(1)
 				expect(await store.get(journey.name)).toMatchObject({ journey, revision: 1 })
-				await expect(readFile(lock, 'utf8')).rejects.toMatchObject({ code: 'ENOENT' })
+				await expect(readdir(lock)).rejects.toMatchObject({ code: 'ENOENT' })
 			} finally {
 				if (child.exitCode === null && child.signalCode === null) {
 					const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
@@ -158,6 +164,49 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 				scratch.destroy()
 			}
 		}, 15000)
+		it('admits exactly one of two processes that observed the same dead holder', async () => {
+			const { mkdir, writeFile, readdir } = await import('node:fs/promises')
+			const scratch = createScratch()
+			const children: ChildProcess[] = []
+			try {
+				const lock = join(scratch.path, 'journey.lock')
+				const dead = `${readExitedProcessId()}-11111111-1111-4111-8111-111111111111`
+				await mkdir(lock)
+				await writeFile(join(lock, dead), '')
+				const script = scratch.write('recover.ts', BROWSER_LOCK_RECOVERER)
+				for (let index = 0; index < 2; index += 1)
+					children.push(
+						spawnProcess(process.execPath, [script, scratch.path, dead], {
+							stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+						}),
+					)
+				expect(await Promise.all(children.map((child) => waitForBrowserChild(child)))).toEqual([
+					'observed',
+					'observed',
+				])
+				const [first, second] = children
+				if (first === undefined || second === undefined) throw new Error('Missing recoverers')
+				const entered = waitForBrowserChild(first)
+				first.send('reclaim')
+				expect(await entered).toBe('entered')
+				const held = await readdir(lock)
+				expect(held).toEqual([expect.stringMatching(new RegExp(`^${first.pid}-`))])
+				const refused = waitForBrowserChild(second)
+				second.send('reclaim')
+				expect(await refused, 'the second recoverer cannot enter while the first holds').toBe(
+					'BROWSER_JOURNEY_LOCKED',
+				)
+				expect(await readdir(lock), 'reclaim preserves the live winner').toEqual(held)
+				const released = waitForBrowserChild(first)
+				first.send('release')
+				expect(await released).toBe('released')
+				await expect(readdir(lock)).rejects.toMatchObject({ code: 'ENOENT' })
+			} finally {
+				await Promise.all(children.map((child) => stopBrowserChild(child)))
+				scratch.destroy()
+			}
+		}, 15000)
+
 		it('allows exactly one competing process to save the same expected revision', async () => {
 			const { spawn } = await import('node:child_process')
 			const { FileBrowserJourneyStore } = await import('@src/server')
@@ -462,7 +511,7 @@ console.log(JSON.stringify({
 		})
 
 		it('refuses a held lock before reading the expected revision', async () => {
-			const { writeFile, unlink } = await import('node:fs/promises')
+			const { mkdir, writeFile, unlink, rmdir } = await import('node:fs/promises')
 			const { FileBrowserJourneyStore } = await import('@src/server')
 			const scratch = createScratch()
 			try {
@@ -470,14 +519,17 @@ console.log(JSON.stringify({
 				const journey = createBrowserJourneyFixture()
 				await store.set(journey)
 				const lock = join(scratch.path, journey.name, 'journey.lock')
-				await writeFile(lock, '')
+				await mkdir(lock)
+				const entry = join(lock, `${process.pid}-11111111-1111-4111-8111-111111111111`)
+				await writeFile(entry, '')
 				await expect(store.set(journey, 0)).rejects.toMatchObject({
 					code: 'BROWSER_JOURNEY_LOCKED',
 				})
 				await expect(store.delete(journey.name)).rejects.toMatchObject({
 					code: 'BROWSER_JOURNEY_LOCKED',
 				})
-				await unlink(lock)
+				await unlink(entry)
+				await rmdir(lock)
 				expect((await store.set(journey, 1)).revision).toBe(2)
 			} finally {
 				scratch.destroy()
