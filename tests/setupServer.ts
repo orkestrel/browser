@@ -5,6 +5,7 @@ import type { Duplex } from 'node:stream'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { TeardownInterface } from '@orkestrel/test'
+import type { MCPTransportInterface } from '@orkestrel/mcp'
 import type { BrowserContextInterface, BrowserPageInterface } from '@src/core'
 import type {
 	BrowserConnection,
@@ -1782,17 +1783,21 @@ process.send?.({ outcome: 'ready' })
  * - `failures` — how many launches, in order, reject at `connect()` with a `BrowserError`
  * - `evaluation` — answers each `Runtime.evaluate` the element fixture leaves unanswered, so a
  *   proof can withhold the text-wait evaluation
+ * - `released` — answers each `mouseReleased` dispatch, so a proof can withhold a click's release
+ * - `registry` — answers `WebMCP.enable`, so a page registry exists and its tools are adopted
  */
 export interface BrowserLauncherOptions {
 	readonly failures?: number
-	readonly evaluation?: BrowserLaunchEvaluation
+	readonly evaluation?: BrowserLaunchHandler
+	readonly released?: BrowserLaunchHandler
+	readonly registry?: BrowserLaunchHandler
 }
 
 /**
- * Answers one `Runtime.evaluate` the element fixture leaves unanswered, over the transport of the
- * launch that sent it.
+ * Answers one CDP request the element fixture hands to a proof, over the transport of the launch
+ * that sent it.
  */
-export type BrowserLaunchEvaluation = (
+export type BrowserLaunchHandler = (
 	message: CDPSentMessage,
 	transport: CDPTestTransportInterface,
 ) => void
@@ -1811,7 +1816,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	readonly #options: BrowserOptions
 	readonly #gate: Promise<void>
 	readonly #failure: BrowserError | undefined
-	readonly #evaluation: BrowserLaunchEvaluation | undefined
+	readonly #handlers: BrowserLauncherOptions
 	readonly #emitter = new Emitter<BrowserEventMap>()
 	#fixture: BrowserElementFixture | undefined
 	#connects = 0
@@ -1821,12 +1826,12 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		options: BrowserOptions,
 		gate: Promise<void>,
 		failure: BrowserError | undefined,
-		evaluation: BrowserLaunchEvaluation | undefined,
+		handlers: BrowserLauncherOptions,
 	) {
 		this.#options = options
 		this.#gate = gate
 		this.#failure = failure
-		this.#evaluation = evaluation
+		this.#handlers = handlers
 	}
 
 	get emitter(): Emitter<BrowserEventMap> {
@@ -1881,19 +1886,16 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		this.#connects += 1
 		await this.#gate
 		if (this.#failure !== undefined) throw this.#failure
-		const evaluation = this.#evaluation
-		// The fixture scripts its transport before it returns it, so the answer reads the transport
+		const { evaluation, released, registry } = this.#handlers
+		// The fixture scripts its transport before it returns it, so each answer reads the transport
 		// off the fixture this connect stores.
-		const fixture = await createBrowserElementFixture(
-			evaluation === undefined
+		const fixture = await createBrowserElementFixture({
+			...(evaluation === undefined
 				? {}
-				: {
-						evaluation: (message) => {
-							const transport = this.#fixture?.transport
-							if (transport !== undefined) evaluation(message, transport)
-						},
-					},
-		)
+				: { evaluation: (message) => this.#answer(evaluation, message) }),
+			...(released === undefined ? {} : { released: (message) => this.#answer(released, message) }),
+			...(registry === undefined ? {} : { registry: (message) => this.#answer(registry, message) }),
+		})
 		const { transport } = fixture
 		transport.onSend('Target.createTarget', (message) =>
 			transport.reply(message.id, { targetId: 'main' }),
@@ -1942,6 +1944,12 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	async close(): Promise<void> {
 		await this.destroy()
 	}
+
+	// Hands a request to a proof's handler with the transport of this connect.
+	#answer(handler: BrowserLaunchHandler, message: CDPSentMessage): void {
+		const transport = this.#fixture?.transport
+		if (transport !== undefined) handler(message, transport)
+	}
 }
 
 /**
@@ -1950,13 +1958,13 @@ export class BrowserLaunchDouble implements BrowserInterface {
  */
 export class BrowserLauncher {
 	readonly #browsers: BrowserLaunchDouble[] = []
-	readonly #evaluation: BrowserLaunchEvaluation | undefined
+	readonly #handlers: BrowserLauncherOptions
 	#failures: number
 	#gate = Promise.withResolvers<void>()
 
 	constructor(options?: BrowserLauncherOptions) {
 		this.#failures = options?.failures ?? 0
-		this.#evaluation = options?.evaluation
+		this.#handlers = { ...options }
 		this.#gate.resolve()
 	}
 
@@ -1973,12 +1981,7 @@ export class BrowserLauncher {
 					? new BrowserError('The fixture refused the launch', 'BROWSER_FIXTURE_LAUNCH')
 					: undefined
 			if (this.#failures > 0) this.#failures -= 1
-			const browser = new BrowserLaunchDouble(
-				options,
-				this.#gate.promise,
-				failure,
-				this.#evaluation,
-			)
+			const browser = new BrowserLaunchDouble(options, this.#gate.promise, failure, this.#handlers)
 			this.#browsers.push(browser)
 			return browser
 		}
@@ -2003,9 +2006,26 @@ export class MCPStdioPair {
 	readonly #input = new PassThrough()
 	readonly #output = new PassThrough()
 	readonly #answers = new Map<number, Readonly<Record<string, unknown>>>()
+	readonly #transport: MCPTransportInterface
+	#listener: ((message: string) => void) | undefined
 
 	constructor() {
 		createInterface({ input: this.#output }).on('line', (line) => this.#receive(line))
+		this.#transport = {
+			send: this.#deliver.bind(this),
+			listen: this.#listen.bind(this),
+			closed: this.#closed.bind(this),
+			close: this.#close.bind(this),
+		}
+	}
+
+	/**
+	 * Holds the pair as the duplex message channel an `@orkestrel/mcp` client binds to, beside the
+	 * line driver: each message it sends is one input line, and each output line reaches its
+	 * listener.
+	 */
+	get transport(): MCPTransportInterface {
+		return this.#transport
 	}
 
 	/** Holds the stream the server reads requests from. */
@@ -2090,18 +2110,34 @@ export class MCPStdioPair {
 		return { text, error: answer['isError'] === true }
 	}
 
-	// Keeps each answer's result, or its error record, by id.
+	// Keeps each answer's result, or its error record, by id, and hands the line to a bound client.
 	#receive(line: string): void {
+		this.#listener?.(line)
 		const message = parseJSON(line)
 		if (!isRecord(message) || !isInteger(message['id'])) return
 		const body = message['result'] ?? message['error']
 		if (isRecord(body)) this.#answers.set(message['id'], body)
 	}
+
+	#deliver(message: string): void {
+		this.#input.write(`${message}\n`)
+	}
+
+	#listen(handler: (message: string) => void): void {
+		this.#listener = handler
+	}
+
+	// The server never ends its output, so the channel reports no close.
+	#closed(_handler: () => void): void {}
+
+	#close(): void {
+		this.#listener = undefined
+	}
 }
 
 /**
- * Names the browse server's vocabulary in the order the design lists it: the toolset's tools
- * without the staged `dialog`, then the journey tools.
+ * Names the browse server's vocabulary in the order the design lists it: the toolset's tools,
+ * `dialog` included, then the journey tools.
  */
 export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
 	'look',
@@ -2111,6 +2147,7 @@ export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
 	'press',
 	'navigate',
 	'wait',
+	'dialog',
 	'tabs',
 	'switch',
 	'record',

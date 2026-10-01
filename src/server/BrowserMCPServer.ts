@@ -1,7 +1,7 @@
 import type { BrowserToolsetInterface } from '@src/core'
 import type { MCPCallResult, MCPExecutionContext } from '@orkestrel/mcp'
 import type { StdioServerInterface } from '@orkestrel/mcp/server'
-import type { ToolContext, ToolManagerInterface, ToolResult } from '@orkestrel/tool'
+import type { ToolContext, ToolInterface, ToolManagerInterface, ToolResult } from '@orkestrel/tool'
 import type {
 	BrowserInterface,
 	BrowserLaunchFunction,
@@ -13,7 +13,7 @@ import { mkdir, rm } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { createMCPLegacy, createMCPServer } from '@orkestrel/mcp'
 import { createStdioServer } from '@orkestrel/mcp/server'
-import { createTool, createToolManager } from '@orkestrel/tool'
+import { createTool, createToolManager, toolToDefinition } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
@@ -34,10 +34,13 @@ import {
  *
  * @remarks
  * The server's own manager holds one dispatcher per name of the vocabulary — `look`, `read`,
- * `click`, `type`, `press`, `navigate`, `wait`, `tabs`, `switch`, `record`, `save`, `journeys`,
- * `edit`, and `replay` — each carrying the description, parameters, and annotations
+ * `click`, `type`, `press`, `navigate`, `wait`, `dialog`, `tabs`, `switch`, `record`, `save`,
+ * `journeys`, `edit`, and `replay` — each carrying the description, parameters, and annotations
  * `BROWSER_TOOL_COPY` gives, so `tools/list` answers before Chromium starts and with Chromium
- * absent. The first call of any dispatcher launches Chromium one time: concurrent callers await
+ * absent. After the launch, a tool the toolset's manager adds under another name, such as a page
+ * tool it adopts, is mirrored as a dispatcher with that tool's definition, and the mirror is
+ * removed when the toolset withdraws the tool, so the server's tool list changes and a subscribed
+ * client is notified. The first call of any dispatcher launches Chromium one time: concurrent callers await
  * the same launch, a failed launch rejects every one of them, and the next call launches again.
  * A launch creates `ROOT/.profiles/ID/` exclusively, connects a browser that never attaches to an
  * existing endpoint, opens one page in an isolated context, and constructs the page toolset with
@@ -74,6 +77,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #transport: StdioServerInterface
 	readonly #abort = new AbortController()
 	readonly #signal: () => void
+	readonly #vocabulary: ReadonlySet<string>
+	readonly #added: (tool: ToolInterface) => void
+	readonly #removed: (tool: ToolInterface) => void
+	readonly #cleared: (tools: readonly ToolInterface[]) => void
+	#mirrored: ToolManagerInterface | undefined
 	#session: Promise<BrowserToolsetInterface> | undefined
 	#browser: BrowserInterface | undefined
 	#profile: string | undefined
@@ -93,9 +101,9 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#launcher = options?.launch ?? createBrowser
 		this.#input = options?.stdio?.input ?? process.stdin
 		this.#tools = createToolManager()
-		// `dialog` is staged by the toolset only while a dialog is open, so it has no dispatcher.
-		for (const name of [...BROWSER_TOOL_NAMES, ...BROWSER_JOURNEY_TOOL_NAMES]) {
-			if (name === 'dialog') continue
+		const names = [...BROWSER_TOOL_NAMES, ...BROWSER_JOURNEY_TOOL_NAMES]
+		this.#vocabulary = new Set(names)
+		for (const name of names) {
 			this.#tools.add(
 				createTool({
 					...BROWSER_TOOL_COPY[name],
@@ -115,6 +123,9 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		// One reference serves the end of input and both signals, because a listener is removed by
 		// identity.
 		this.#signal = this.#end.bind(this)
+		this.#added = this.#mirror.bind(this)
+		this.#removed = this.#withdraw.bind(this)
+		this.#cleared = this.#clear.bind(this)
 	}
 
 	async start(): Promise<void> {
@@ -139,6 +150,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#input.removeListener('end', this.#signal)
 		this.#transport.stop()
 		for (const tool of this.#tools.tools()) this.#tools.remove(tool.name)
+		this.#unmirror()
 		// Aborting the launch signal ends a connect in flight, so its launch cleans up after itself.
 		this.#abort.abort()
 		// Each step runs whether or not an earlier one failed, so the profile is always removed.
@@ -182,6 +194,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	// Returns the launch every caller shares; a rejected launch is forgotten so the next call retries.
+	// Stopping the transport aborts a call in flight and `destroy()` removes the dispatchers, so the
+	// refusal here is the last of three layers that keep a call from launching after `destroy()`.
 	#open(): Promise<BrowserToolsetInterface> {
 		if (this.#closing !== undefined) return Promise.reject(this.#ended())
 		const current = this.#session
@@ -227,9 +241,15 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 					readonly: this.#readonly,
 				},
 			})
+			// The toolset adopts page tools during `start()`, so the mirror follows it from before.
+			this.#mirrored = toolset.tools
+			toolset.tools.emitter.on('add', this.#added)
+			toolset.tools.emitter.on('remove', this.#removed)
+			toolset.tools.emitter.on('clear', this.#cleared)
 			await toolset.start()
 			return toolset
 		} catch (error) {
+			this.#unmirror()
 			if (this.#browser === browser) this.#browser = undefined
 			if (this.#profile === profile) this.#profile = undefined
 			await toolset?.destroy().catch(() => undefined)
@@ -237,6 +257,36 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			await rm(profile, { recursive: true, force: true, maxRetries: 5 })
 			throw error
 		}
+	}
+
+	// Adds a dispatcher for a tool the toolset's manager added under a name outside the vocabulary.
+	#mirror(tool: ToolInterface): void {
+		if (this.#vocabulary.has(tool.name)) return
+		this.#tools.add(
+			createTool({ ...toolToDefinition(tool), execute: this.#forward.bind(this, tool.name) }),
+		)
+	}
+
+	// Removes the dispatcher of a withdrawn tool; a replacement publishes `remove` while it is
+	// installed, so the mirror follows the manager's current tool rather than the event.
+	#withdraw(tool: ToolInterface): void {
+		if (this.#vocabulary.has(tool.name)) return
+		const current = this.#mirrored?.tool(tool.name)
+		if (current === undefined) this.#tools.remove(tool.name)
+		else this.#mirror(current)
+	}
+
+	#clear(tools: readonly ToolInterface[]): void {
+		for (const tool of tools) this.#withdraw(tool)
+	}
+
+	#unmirror(): void {
+		const mirrored = this.#mirrored
+		if (mirrored === undefined) return
+		this.#mirrored = undefined
+		mirrored.emitter.off('add', this.#added)
+		mirrored.emitter.off('remove', this.#removed)
+		mirrored.emitter.off('clear', this.#cleared)
 	}
 
 	#ended(): BrowserError {

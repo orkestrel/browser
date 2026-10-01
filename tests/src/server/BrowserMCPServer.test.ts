@@ -3,10 +3,16 @@ import { existsSync, readdirSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
 import { isRecord, isString } from '@orkestrel/contract'
-import { toolAnnotationsToMCP } from '@orkestrel/mcp'
+import {
+	bindClient,
+	createDuplexClientTransport,
+	createMCPClient,
+	toolAnnotationsToMCP,
+} from '@orkestrel/mcp'
 import { createTeardown, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
+import { replyOk } from '../../setup.js'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
 	BROWSER_JOURNEY_READONLY_REFUSAL,
@@ -306,6 +312,152 @@ describe('BrowserMCPServer', () => {
 		}
 	})
 
+	it('answers a click that opens a dialog, then the dialog, through the server', async () => {
+		const scratch = createScratch()
+		const withheld: CDPSentMessage[] = []
+		const launcher = new BrowserLauncher({
+			released: (message, transport) => {
+				if (withheld.length === 0) withheld.push(message)
+				else transport.reply(message.id, {})
+			},
+		})
+		const pair = new MCPStdioPair()
+		const server = createBrowserMCPServer({
+			root: join(scratch.path, 'tmp/browsers'),
+			launch: launcher.launch,
+			stdio: pair,
+		})
+		const teardown = createTeardown()
+		teardown.add(() => scratch.destroy())
+		teardown.add(() => server.destroy())
+		try {
+			await server.start()
+			await pair.initialize()
+			expect((await pair.call(2, 'look', { what: 'the order' })).error).toBe(false)
+			const transport = requireValue(
+				launcher.browsers[0]?.fixture?.transport,
+				'no launch connected',
+			)
+			replyOk(transport, 'Page.handleJavaScriptDialog')
+			pair.send({
+				jsonrpc: '2.0',
+				id: 3,
+				method: 'tools/call',
+				params: { name: 'click', arguments: { ref: 'e4' } },
+			})
+			await waitForCondition('the click release to be withheld', () => withheld.length === 1, {
+				budget: 3000,
+				interval: 10,
+			})
+			transport.event(
+				'Page.javascriptDialogOpening',
+				{ type: 'confirm', message: 'Delete the draft?' },
+				'session-main',
+			)
+			expect(await pair.answer(3)).toStrictEqual({
+				content: [
+					{
+						type: 'text',
+						text: 'Clicked e4 button "Place order". A confirm dialog is open: "Delete the draft?"; call dialog.',
+					},
+				],
+			})
+			const answered = await pair.call(4, 'dialog', { accept: true })
+			expect(answered.error).toBe(false)
+			expect(answered.text).toMatch(
+				/^Accepted the confirm dialog "Delete the draft\?"\.\n\npage "Cart"/u,
+			)
+			expect(
+				transport.sent.filter((message) => message.method === 'Page.handleJavaScriptDialog'),
+			).toHaveLength(1)
+			transport.reply(requireValue(withheld[0], 'no release was withheld').id, {})
+		} finally {
+			await teardown.destroy()
+		}
+	})
+
+	it('mirrors an adopted page tool, notifies a subscribed client, and removes it on withdrawal', async () => {
+		const scratch = createScratch()
+		const launcher = new BrowserLauncher({
+			registry: (message, transport) => transport.reply(message.id, {}),
+		})
+		const pair = new MCPStdioPair()
+		const server = createBrowserMCPServer({
+			root: join(scratch.path, 'tmp/browsers'),
+			launch: launcher.launch,
+			stdio: pair,
+		})
+		const client = createMCPClient({
+			transport: createDuplexClientTransport(pair.transport),
+			identity: { name: 'browse-test', version: '1.0.0' },
+		})
+		const subscription = new AbortController()
+		const teardown = createTeardown()
+		teardown.add(() => scratch.destroy())
+		teardown.add(() => server.destroy())
+		teardown.add(bindClient(client, pair.transport))
+		teardown.add(() => subscription.abort())
+		try {
+			await server.start()
+			await client.connect()
+			const stream = client.listen({ toolsListChanged: true }, { signal: subscription.signal })
+			const acknowledged = await stream.next()
+			expect(acknowledged.done === false ? acknowledged.value.method : undefined).toBe(
+				'notifications/subscriptions/acknowledged',
+			)
+			await client.call('look', { what: 'the cart' })
+			const transport = requireValue(
+				launcher.browsers[0]?.fixture?.transport,
+				'no launch connected',
+			)
+			replyOk(transport, 'WebMCP.disable')
+			transport.onSend('WebMCP.invokeTool', (message) => {
+				transport.reply(message.id, { invocationId: 'search-1' })
+				transport.event(
+					'WebMCP.toolResponded',
+					{ invocationId: 'search-1', status: 'Completed', output: 'Two kettles match.' },
+					'session-main',
+				)
+			})
+			const adding = stream.next()
+			transport.event(
+				'WebMCP.toolsAdded',
+				{ tools: [{ name: 'search', description: 'Search the catalog', frameId: 'main' }] },
+				'session-main',
+			)
+			const added = await adding
+			expect(added.done === false ? added.value.method : undefined).toBe(
+				'notifications/tools/list_changed',
+			)
+			const listed = await client.tools()
+			expect(listed.map((tool) => tool.name)).toStrictEqual([...BROWSE_VOCABULARY, 'search'])
+			expect(listed.at(-1)?.description).toBe('Search the catalog')
+			const searched = await client.call('search', { query: 'kettle' })
+			expect(searched).toMatchObject({ resultType: 'complete' })
+			expect(
+				transport.sent.find((message) => message.method === 'WebMCP.invokeTool')?.params,
+			).toMatchObject({ toolName: 'search', input: { query: 'kettle' } })
+			const removing = stream.next()
+			transport.event(
+				'WebMCP.toolsRemoved',
+				{ tools: [{ name: 'search', frameId: 'main' }] },
+				'session-main',
+			)
+			await waitForCondition(
+				'the withdrawn page tool to leave tools/list',
+				async () => !(await client.tools()).some((tool) => tool.name === 'search'),
+				{ budget: 2000, interval: 20 },
+			)
+			const removed = await removing
+			expect(removed.done === false ? removed.value.method : undefined).toBe(
+				'notifications/tools/list_changed',
+			)
+			expect((await client.tools()).map((tool) => tool.name)).toStrictEqual(BROWSE_VOCABULARY)
+		} finally {
+			await teardown.destroy()
+		}
+	})
+
 	it('passes readonly through to the journey tools', async () => {
 		const scratch = createScratch()
 		const teardown = createTeardown()
@@ -388,6 +540,44 @@ describe('BrowserMCPServer', () => {
 				},
 			)
 		}
+
+		it('launches nothing for a call that reaches its dispatcher after destroy began', async () => {
+			const scratch = createScratch()
+			const root = join(scratch.path, 'tmp/browsers')
+			const launcher = new BrowserLauncher()
+			const pair = new MCPStdioPair()
+			const server = createBrowserMCPServer({ root, launch: launcher.launch, stdio: pair })
+			const teardown = createTeardown()
+			teardown.add(() => scratch.destroy())
+			teardown.add(() => server.destroy())
+			try {
+				await server.start()
+				await pair.initialize()
+				// This listener runs after the transport's own, so the transport has read the call and
+				// begun its dispatch when destroy begins.
+				let destroying: Promise<void> | undefined
+				pair.input.once('data', () => {
+					destroying = server.destroy()
+				})
+				pair.send({
+					jsonrpc: '2.0',
+					id: 2,
+					method: 'tools/call',
+					params: { name: 'look', arguments: { what: 'the cart' } },
+				})
+				await waitForCondition('destroy to begin', () => destroying !== undefined, {
+					budget: 3000,
+					interval: 10,
+				})
+				await destroying
+				await waitForDelay(50)
+				expect(launcher.browsers).toStrictEqual([])
+				expect(existsSync(root)).toBe(false)
+				expect(pair.answered).not.toContain(2)
+			} finally {
+				await teardown.destroy()
+			}
+		})
 
 		it('refuses to start again after destroy', async () => {
 			const pair = new MCPStdioPair()
