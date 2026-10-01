@@ -78,8 +78,24 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it('skips a page tool named unresolved as reserved', async () => {
+		const source: BrowserToolSourceInterface = {
+			emitter: new Emitter<BrowserToolSourceEventMap>(),
+			adopt: async () => [createTool({ name: 'unresolved', execute: ignoreCall })],
+		}
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { source })
+		const skips = createRecorder<readonly [string, BrowserToolsetReason]>()
+		toolset.emitter.on('skip', skips.handler)
+		try {
+			await toolset.start()
+			expect(skips.calls).toEqual([['unresolved', 'reserved']])
+			expect(toolset.tools.tool('unresolved')).toBeUndefined()
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	describe('journey actions', () => {
-		it('takes its hold after an already admitted dialog answer finishes', async () => {
+		it('refuses a hold while an already admitted dialog answer is pending', async () => {
 			const fixture = await createBrowserElementFixture()
 			const toolset = createBrowserToolset(fixture.page)
 			const answers: CDPSentMessage[] = []
@@ -100,14 +116,69 @@ describe('BrowserToolset', () => {
 					arguments: { accept: true },
 				})
 				await waitForCondition('the dialog answer is pending', () => answers.length === 1)
-				const holding = toolset.hold('add-kettle')
+				await expect(toolset.hold('add-kettle')).rejects.toMatchObject({
+					code: 'BROWSER_TOOLSET_DIALOG',
+				})
 				expect(order).toEqual([])
 				fixture.transport.reply(requireValue(answers[0]).id, {})
 				expect((await answering).action?.outcome).toBe('done')
-				const hold = await holding
+				const hold = await toolset.hold('add-kettle')
 				expect(order).toEqual(['answer', 'hold'])
 				hold.destroy()
 			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		})
+
+		it('refuses a hold after an interrupted click and leaves the dialog answer admissible', async () => {
+			const withheld: CDPSentMessage[] = []
+			const fixture = await createBrowserElementFixture({
+				released: (message) => withheld.push(message),
+			})
+			const toolset = createBrowserToolset(fixture.page)
+			const abort = new AbortController()
+			try {
+				replyOk(fixture.transport, 'Page.handleJavaScriptDialog')
+				await toolset.start()
+				await fixture.page.elements.outline()
+				const acting = toolset.perform({ id: 'click', name: 'click', arguments: { ref: 'e4' } })
+				await waitForCondition('input release withheld', () => withheld.length === 1)
+				fixture.transport.event(
+					'Page.javascriptDialogOpening',
+					{ type: 'confirm', message: 'Continue?' },
+					'session-main',
+				)
+				expect((await acting).action?.outcome).toBe('interrupted')
+				const holding = toolset
+					.hold('add-kettle', { signal: abort.signal })
+					.catch((error: unknown) => error)
+				// A turn of the host loop bounds the refusal without waiting on the blocked input.
+				const refusal = await Promise.race([holding, waitForDelay().then(() => undefined)])
+				expect(refusal, 'g5a1: hold refuses before waiting on the dialog input').toMatchObject({
+					code: 'BROWSER_TOOLSET_DIALOG',
+					message: 'A confirm dialog is open: "Continue?"; call dialog.',
+				})
+				const answered = await toolset.perform({
+					id: 'answer',
+					name: 'dialog',
+					arguments: { accept: true },
+				})
+				expect(answered.result.success, 'the refused hold leaves dialog admissible').toBe(true)
+				const pending = await Promise.race([
+					toolset.hold('still-pending', { signal: abort.signal }).catch((error: unknown) => error),
+					waitForDelay().then(() => undefined),
+				])
+				expect(pending, 'a closed dialog still leaves its input pending').toMatchObject({
+					code: 'BROWSER_TOOLSET_DIALOG',
+				})
+				fixture.transport.reply(requireValue(withheld[0]).id, {})
+				await waitForDelay()
+				const hold = await toolset.hold('after-input')
+				hold.destroy()
+			} finally {
+				abort.abort('cleanup')
+				for (const message of withheld) fixture.transport.reply(message.id, {})
 				await toolset.destroy()
 				await fixture.client.close()
 			}

@@ -52,8 +52,8 @@ import {
  *
  * `readonly` refuses `record`, `save`, and `edit` before any store access; `replay` still writes
  * its run. The call's signal reaches every store call and every replayed step, and `destroy()`
- * aborts it as well. `save` stops the recorder and writes the journey before it ends the
- * recording, so a failed or locked write keeps the recording open with its steps for the next
+ * aborts it as well. `save` writes a snapshot before it ends the recording, so a failed or
+ * locked write keeps the recorder recording with its steps for the next
  * `save`. `journeys` joins the listings with one blank line and cuts the result at `limit`
  * characters with a footer that names the next offset. `replay` returns the run's render followed
  * by the view after the run.
@@ -78,13 +78,10 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	readonly #limit: number
 	readonly #lifetime = new AbortController()
 	readonly #tools: readonly ToolInterface[]
-	readonly #holdHandler = this.#handleHold.bind(this)
-	readonly #releaseHandler = this.#handleRelease.bind(this)
 	#recorder: BrowserRecorderInterface | undefined
 	#recording: string | undefined
 	#replaying: string | undefined
 	#replay: Promise<void> | undefined
-	#held: string | undefined
 	#destroying: Promise<void> | undefined
 
 	constructor(toolset: BrowserToolsetInterface, options: BrowserJourneyOptions) {
@@ -118,8 +115,6 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			this.#create('edit', this.#edit.bind(this)),
 			this.#create('replay', this.#replayJourney.bind(this)),
 		])
-		toolset.emitter.on('hold', this.#holdHandler)
-		toolset.emitter.on('release', this.#releaseHandler)
 		toolset.tools.add(this.#tools)
 	}
 
@@ -164,6 +159,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	async #record(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
 		if (this.#readonly)
 			throw new BrowserError(BROWSER_JOURNEY_READONLY_REFUSAL, 'BROWSER_JOURNEY_READONLY')
+		this.#idleReplay()
 		const name = readBrowserToolString(args, 'journey')
 		if (this.#recording !== undefined)
 			throw new BrowserError(BROWSER_JOURNEY_RECORDING_REFUSAL, 'BROWSER_JOURNEY_RECORDING')
@@ -182,6 +178,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		}
 		// Another `record` can claim the recording while the store answers.
+		this.#idleReplay()
 		if (this.#recording !== undefined)
 			throw new BrowserError(BROWSER_JOURNEY_RECORDING_REFUSAL, 'BROWSER_JOURNEY_RECORDING')
 		if (this.#destroying !== undefined) throw this.#ended()
@@ -200,9 +197,6 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		const name = this.#recording
 		if (recorder === undefined || name === undefined)
 			throw new BrowserError(BROWSER_JOURNEY_IDLE_REFUSAL, 'BROWSER_JOURNEY_RECORDING')
-		// Stopping turns an interrupted action that no dialog answered into its gap step; the
-		// stopped recorder keeps its steps, so a refused write leaves them for the next `save`.
-		await recorder.stop()
 		let saved: BrowserJourneyRevision
 		try {
 			saved = await this.#store.set(recorder.journey({ name, description }), 0, { signal })
@@ -347,13 +341,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				{ name: this.#recording },
 			)
 		}
-		const active = this.#replaying ?? this.#held
-		if (active !== undefined) {
-			throw new BrowserError(
-				`The toolset is replaying ${active} until it finishes; call look.`,
-				'BROWSER_TOOLSET_BUSY',
-			)
-		}
+		this.#idleReplay()
 		// The replay claims the toolset before its first await, so a second `replay` is refused
 		// rather than queued behind it.
 		this.#replaying = name
@@ -520,8 +508,6 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		this.#lifetime.abort(this.#ended())
 		for (const tool of this.#tools)
 			if (this.#toolset.tools.tool(tool.name) === tool) this.#toolset.tools.remove(tool.name)
-		this.#toolset.emitter.off('hold', this.#holdHandler)
-		this.#toolset.emitter.off('release', this.#releaseHandler)
 		const recorder = this.#recorder
 		this.#recorder = undefined
 		this.#recording = undefined
@@ -529,11 +515,12 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		await this.#replay
 	}
 
-	#handleHold(name: string): void {
-		this.#held = name
-	}
-
-	#handleRelease(name: string): void {
-		if (this.#held === name) this.#held = undefined
+	#idleReplay(): void {
+		const active = this.#replaying ?? this.#toolset.held
+		if (active !== undefined)
+			throw new BrowserError(
+				`The toolset is replaying ${active} until it finishes; call look.`,
+				'BROWSER_TOOLSET_BUSY',
+			)
 	}
 }

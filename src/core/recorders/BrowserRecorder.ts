@@ -27,11 +27,9 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	readonly #emitter: Emitter<BrowserRecorderEventMap>
 	readonly #action = this.#recordAction.bind(this)
 	readonly #hold = this.#recordHold.bind(this)
-	readonly #release = this.#recordRelease.bind(this)
 	#started = false
 	#steps: readonly BrowserJourneyStep[] = []
 	#pending: BrowserAction | undefined
-	#held: string | undefined
 
 	constructor(toolset: BrowserToolsetInterface, options?: BrowserRecorderOptions) {
 		this.#toolset = toolset
@@ -41,7 +39,6 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 		})
 		toolset.emitter.on('action', this.#action)
 		toolset.emitter.on('hold', this.#hold)
-		toolset.emitter.on('release', this.#release)
 	}
 
 	get emitter(): EmitterInterface<BrowserRecorderEventMap> {
@@ -55,8 +52,9 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 		if (this.#emitter.destroyed) throw new BrowserError('The recorder was destroyed')
 		this.clear()
 		this.#started = true
-		if (this.#held !== undefined)
-			this.#append({ action: 'unresolved', arguments: {}, gap: `replayed ${this.#held}` })
+		const held = this.#toolset.held
+		if (held !== undefined)
+			this.#append({ action: 'unresolved', arguments: {}, gap: `replayed ${held}` })
 		this.#emitter.emit('start')
 	}
 
@@ -73,7 +71,19 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	journey(options: { readonly name: string; readonly description: string }): BrowserJourney {
-		return buildBrowserJourney(this.#steps, options)
+		const steps: readonly BrowserJourneyStep[] =
+			this.#pending === undefined
+				? this.#steps
+				: [
+						...this.#steps,
+						{
+							id: `s${this.#steps.length + 1}`,
+							action: 'unresolved',
+							arguments: {},
+							gap: `interrupted ${this.#pending.action}`,
+						},
+					]
+		return buildBrowserJourney(steps, options)
 	}
 
 	clear(): void {
@@ -87,12 +97,11 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 		this.#pending = undefined
 		this.#toolset.emitter.off('action', this.#action)
 		this.#toolset.emitter.off('hold', this.#hold)
-		this.#toolset.emitter.off('release', this.#release)
 		this.#emitter.destroy()
 	}
 
 	#recordAction(action: BrowserAction): void {
-		if (!this.#started || this.#held !== undefined) return
+		if (!this.#started || this.#toolset.held !== undefined) return
 		if (this.#pending !== undefined) {
 			const pending = this.#pending
 			this.#pending = undefined
@@ -175,13 +184,8 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	#recordHold(name: string): void {
-		this.#held = name
 		if (!this.#started) return
 		this.#flushPending()
 		this.#append({ action: 'unresolved', arguments: {}, gap: `replayed ${name}` })
-	}
-
-	#recordRelease(name: string): void {
-		if (this.#held === name) this.#held = undefined
 	}
 }
