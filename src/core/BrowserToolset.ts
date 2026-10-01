@@ -207,7 +207,6 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		ToolContext,
 		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
 	>()
-	readonly #faults = new WeakMap<BrowserToolsetResult, unknown>()
 	#reservation: BrowserHoldInterface | undefined
 	readonly #holds = new Map<PromiseWithResolvers<void>, BrowserHoldInterface>()
 	readonly #interrupts = new Map<PromiseWithResolvers<never>, string>()
@@ -413,10 +412,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 						receipt: result.success ? (state.receipt ?? String(result.value)) : result.error,
 						elapsed: performance.now() - started,
 					}
-		const performed = { result, ...(action === undefined ? {} : { action }) }
-		if (!result.success) this.#faults.set(performed, fault)
 		if (action !== undefined) this.#emitter.emit('action', action)
-		return performed
+		return {
+			result,
+			...(action === undefined ? {} : { action }),
+			...(result.success ? {} : { fault }),
+		}
 	}
 
 	async hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface> {
@@ -536,8 +537,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const invocation = { ...context }
 		this.#invocations.set(invocation, { handler, clause })
 		const performed = await this.perform({ id: '', name, arguments: args }, invocation)
-		if (!performed.result.success)
-			throw this.#faults.get(performed) ?? new BrowserError(performed.result.error)
+		if (!performed.result.success) throw performed.fault ?? new BrowserError(performed.result.error)
 		return performed.result.value
 	}
 

@@ -1311,6 +1311,39 @@ describe('BrowserToolset', () => {
 			}
 		})
 
+		it('catches a copied failed perform that drops its coded fault or a tool that rejects without the code', async () => {
+			const { client, page } = await createBrowserElementFixture()
+			try {
+				const toolset = createBrowserToolset(page)
+				await toolset.start()
+				const call = { id: 'refused', name: 'click', arguments: { ref: 'x12' } }
+				const performed = await toolset.perform(call)
+				const copy = { ...performed }
+				expect(copy.result).toMatchObject({
+					success: false,
+					error: 'Reference "x12" is not a reference such as e12; call look for fresh refs.',
+				})
+				expect(isBrowserElementError(copy.fault) && copy.fault.code).toBe('BROWSER_ELEMENT_ERROR')
+				expect(copy.fault).toBe(performed.fault)
+				expect(JSON.parse(JSON.stringify(copy))).toHaveProperty('fault', {
+					name: 'BrowserElementError',
+					code: 'BROWSER_ELEMENT_ERROR',
+					context: { subject: 'Reference "x12"', reason: 'UNKNOWN' },
+				})
+				const rejected = await Promise.resolve(
+					requireValue(toolset.tools.tool('click')).execute(call.arguments, {
+						signal: new AbortController().signal,
+					}),
+				).catch((error: unknown) => error)
+				expect(isBrowserElementError(rejected) && rejected.code).toBe('BROWSER_ELEMENT_ERROR')
+				const looked = await toolset.perform({ id: 'look', name: 'look', arguments: {} })
+				expect(looked.result.success).toBe(true)
+				expect(looked).not.toHaveProperty('fault')
+			} finally {
+				await client.close()
+			}
+		})
+
 		it('catches a type on a control that takes no text that dispatches the edit or names no next call', async () => {
 			const view = createBrowserViewDouble()
 			const toolset = new BrowserToolset(view)

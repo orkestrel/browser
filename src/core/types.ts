@@ -1899,15 +1899,20 @@ export type BrowserRunOutcome = 'complete' | 'stopped' | 'aborted'
 
 /**
  * Carries a performed call's tool result beside its structured action, present when the call
- * reached a handler.
+ * reached a handler, and the value a failed handler threw.
  *
  * @remarks
  * - `result` — the tool result `tools.execute` returns for the same call
  * - `action` — what became of the action; absent for a call the manager refused before any handler
+ * - `fault` — the value the handler threw, by identity, so a copy of the result keeps a coded
+ *   `BrowserError`; absent when `result.success` is `true` and for a call the manager settled
+ *   before any handler. `JSON.stringify` writes only its own enumerable properties, which for a
+ *   `BrowserError` are `name`, `code`, and `context`
  */
 export interface BrowserToolsetResult {
 	readonly result: ToolResult
 	readonly action?: BrowserAction
+	readonly fault?: unknown
 }
 
 /**
