@@ -1937,7 +1937,8 @@ export interface BrowserHoldInterface {
  * - `arguments` — the call's arguments with the bindings substituted, without a secret's value
  * - `outcome`, `stage`, and `reason` — as the step's `BrowserAction` reports them
  * - `result` — the step's receipt, or the refusal that stopped the run at the step
- * - `capture` — the file name of the step's capture in the page placement, such as `s2.png`
+ * - `capture` — the file name of the step's capture from a trusted view that declares
+ *   `screenshot`, such as `s2.png`
  * - `elapsed` — the milliseconds the step took
  */
 export interface BrowserRunStep {
@@ -1964,8 +1965,8 @@ export interface BrowserRunStep {
  * - `inputs` — the parameter values the run used, without a secret's value
  * - `steps` — the replayed steps in order
  * - `outcome` — how the run ended
- * - `output` — the page's `console` and `error` events during the run, in the page placement;
- *   absent for a journey with a secret parameter
+ * - `output` — the `console` and `error` events of a trusted view that declares `emitter`,
+ *   during the run; absent for an untrusted view and for a journey with a secret parameter
  * - `elapsed` — the milliseconds the run took
  * - `fault` — why writing the run file failed
  */
@@ -2577,11 +2578,27 @@ export interface BrowserElementManagerInterface<
 	clear(): void
 }
 
-/** Provides the document operations shared by remote and DOM-native views. */
+/** Maps the `console` and `error` events of a view that observes its document's output. */
+export type BrowserViewEventMap = {
+	readonly console: readonly [message: BrowserConsoleMessage]
+	readonly error: readonly [error: BrowserPageError]
+}
+
+/**
+ * Provides the document operations shared by remote and DOM-native views.
+ *
+ * @remarks
+ * - `emitter` — reports the document's `console` calls and uncaught `error` exceptions; a view
+ *   that cannot observe its document's output omits it
+ * - `screenshot` — captures the view's image bytes; a view that cannot capture omits it
+ */
 export interface BrowserViewInterface<E extends BrowserElementInterface = BrowserElementInterface> {
 	readonly url: string
 	readonly trusted: boolean
 	readonly elements: BrowserElementManagerInterface<E>
+	readonly emitter?: EmitterInterface<BrowserViewEventMap>
+	/** Captures PNG or JPEG bytes of the view. */
+	screenshot?(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult>
 	/** Resolves the document title. */
 	title(options?: BrowserCallOptions): Promise<string>
 	/**

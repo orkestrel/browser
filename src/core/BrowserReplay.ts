@@ -4,9 +4,11 @@ import type {
 	BrowserAction,
 	BrowserJourney,
 	BrowserCallOptions,
+	BrowserConsoleMessage,
 	BrowserHoldInterface,
 	BrowserJourneyRevision,
 	BrowserJourneyStep,
+	BrowserPageError,
 	BrowserReplayEventMap,
 	BrowserReplayInterface,
 	BrowserReplayOptions,
@@ -14,10 +16,10 @@ import type {
 	BrowserRunOutcome,
 	BrowserRunSlot,
 	BrowserRunStep,
-	BrowserScreenshotResult,
 	BrowserToolsetInterface,
+	BrowserViewEventMap,
 } from './types.js'
-import { isObject, isString } from '@orkestrel/contract'
+import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_FORMAT_VERSION } from './constants.js'
 import { BrowserError, isBrowserError, isBrowserStepError } from './errors.js'
@@ -72,7 +74,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 		const steps: BrowserRunStep[] = []
 		const output: string[] = []
 		const cleanup: Array<() => void> = []
-		const observed = new Set<object>()
+		const observed = new Set<EmitterInterface<BrowserViewEventMap>>()
 		let hold: BrowserHoldInterface | undefined
 		let slot: BrowserRunSlot = { id: generateBrowserRunId() }
 		let outcome: BrowserRunOutcome = 'complete'
@@ -304,29 +306,31 @@ export class BrowserReplay implements BrowserReplayInterface {
 		}
 	}
 
-	#observe(output: string[], cleanup: Array<() => void>, observed: Set<object>): void {
+	#observe(
+		output: string[],
+		cleanup: Array<() => void>,
+		observed: Set<EmitterInterface<BrowserViewEventMap>>,
+	): void {
 		const view = this.#toolset.view
-		if (!view.trusted || !('emitter' in view) || !isObject(view.emitter)) return
 		const emitter = view.emitter
-		if (observed.has(emitter)) return
+		if (!view.trusted || emitter === undefined || observed.has(emitter)) return
 		observed.add(emitter)
-		const on: unknown = Reflect.get(emitter, 'on')
-		const off: unknown = Reflect.get(emitter, 'off')
-		if (typeof on !== 'function' || typeof off !== 'function') return
-		const console = this.#collect.bind(this, output, 'text')
-		const error = this.#collect.bind(this, output, 'message')
-		on.call(emitter, 'console', console)
-		on.call(emitter, 'error', error)
+		const console = this.#collectConsole.bind(this, output)
+		const error = this.#collectError.bind(this, output)
+		emitter.on('console', console)
+		emitter.on('error', error)
 		cleanup.push(() => {
-			off.call(emitter, 'console', console)
-			off.call(emitter, 'error', error)
+			emitter.off('console', console)
+			emitter.off('error', error)
 		})
 	}
 
-	#collect(output: string[], field: string, event: unknown): void {
-		if (!isObject(event)) return
-		const value: unknown = Reflect.get(event, field)
-		if (isString(value)) output.push(value)
+	#collectConsole(output: string[], message: BrowserConsoleMessage): void {
+		output.push(message.text)
+	}
+
+	#collectError(output: string[], error: BrowserPageError): void {
+		output.push(error.message)
 	}
 
 	async #capture(
@@ -336,17 +340,8 @@ export class BrowserReplay implements BrowserReplayInterface {
 	): Promise<string | undefined> {
 		const view = this.#toolset.view
 		const runs = this.#options?.runs
-		if (
-			runs === undefined ||
-			!view.trusted ||
-			!('screenshot' in view) ||
-			typeof view.screenshot !== 'function'
-		)
-			return undefined
-		const screenshot: BrowserScreenshotResult = await view.screenshot({
-			signal: options?.signal,
-			timeout: options?.timeout,
-		})
+		if (runs === undefined || !view.trusted || view.screenshot === undefined) return undefined
+		const screenshot = await view.screenshot()
 		return runs.capture(slot, `${id}.png`, screenshot.bytes, {
 			...(options?.signal === undefined ? {} : { signal: options.signal }),
 		})

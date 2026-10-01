@@ -3,8 +3,10 @@ import type {
 	BrowserRun,
 	BrowserRunSlot,
 	BrowserRunStep,
+	BrowserScreenshotOptions,
 	BrowserStoreOptions,
 	BrowserToolSourceEventMap,
+	BrowserViewEventMap,
 } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
@@ -894,6 +896,146 @@ describe('BrowserReplay', () => {
 				},
 			).execute()
 			expect(run.outcome).toBe('complete')
+			expect(run.steps[0]).not.toHaveProperty('capture')
+			expect(captures.count).toBe(0)
+		} finally {
+			await toolset.destroy()
+		}
+	})
+
+	it('reads output and captures through a trusted view that declares the capture capability', async () => {
+		const base = createBrowserViewDouble()
+		const emitter = new Emitter<BrowserViewEventMap>()
+		const screenshots = createRecorder<readonly [BrowserScreenshotOptions | undefined]>()
+		const captures = createRecorder<readonly [string, Uint8Array]>()
+		const runs = new MemoryBrowserRunStore()
+		const toolset = new BrowserToolset({
+			url: base.url,
+			trusted: true,
+			elements: base.elements,
+			emitter,
+			title: () => base.title(),
+			read: (options) => base.read(options),
+			wait: (text, options) => base.wait(text, options),
+			screenshot: async (options) => {
+				screenshots.handler(options)
+				return { bytes: new Uint8Array([137, 80, 78, 71]), path: undefined }
+			},
+		})
+		await toolset.start()
+		try {
+			const run = await new BrowserReplay(
+				toolset,
+				{ journey: createBrowserJourneyFixture() },
+				{
+					on: {
+						step: () => {
+							emitter.emit('console', {
+								level: 'log',
+								text: 'Ready shown',
+								values: [],
+								timestamp: 1,
+								stack: [],
+							})
+							emitter.emit('error', { message: 'View warning', timestamp: 2, stack: [] })
+						},
+					},
+					runs: {
+						open: runs.open.bind(runs),
+						capture: async (_slot, name, bytes) => {
+							captures.handler(name, bytes)
+							return name
+						},
+						get: runs.get.bind(runs),
+						list: runs.list.bind(runs),
+						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
+						set: runs.set.bind(runs),
+					},
+				},
+			).execute()
+			expect(run.outcome).toBe('complete')
+			expect(run.output).toEqual(['Ready shown', 'View warning'])
+			expect(run.steps[0]?.capture).toBe('s1.png')
+			expect(screenshots.calls).toEqual([[undefined]])
+			expect(captures.calls).toEqual([['s1.png', new Uint8Array([137, 80, 78, 71])]])
+			expect(emitter.count('console')).toBe(0)
+			expect(emitter.count('error')).toBe(0)
+		} finally {
+			await toolset.destroy()
+		}
+	})
+
+	it('neither observes nor captures an untrusted view that declares the capture capability', async () => {
+		const base = createBrowserViewDouble()
+		const emitter = new Emitter<BrowserViewEventMap>()
+		const screenshots = createRecorder<readonly [BrowserScreenshotOptions | undefined]>()
+		const listeners = createRecorder<readonly [number]>()
+		const runs = new MemoryBrowserRunStore()
+		const toolset = new BrowserToolset({
+			url: base.url,
+			trusted: false,
+			elements: base.elements,
+			emitter,
+			title: () => base.title(),
+			read: (options) => base.read(options),
+			wait: (text, options) => base.wait(text, options),
+			screenshot: async (options) => {
+				screenshots.handler(options)
+				return { bytes: new Uint8Array([137, 80, 78, 71]), path: undefined }
+			},
+		})
+		await toolset.start()
+		try {
+			const run = await new BrowserReplay(
+				toolset,
+				{ journey: createBrowserJourneyFixture() },
+				{ on: { step: () => listeners.handler(emitter.count()) }, runs },
+			).execute()
+			expect(run.outcome).toBe('complete')
+			expect(run).not.toHaveProperty('output')
+			expect(run.steps[0]).not.toHaveProperty('capture')
+			expect(listeners.calls).toEqual([[0]])
+			expect(screenshots.count).toBe(0)
+		} finally {
+			await toolset.destroy()
+		}
+	})
+
+	it('completes a trusted run with empty output and no capture when the view omits the capability', async () => {
+		const base = createBrowserViewDouble()
+		const captures = createRecorder<readonly [string]>()
+		const runs = new MemoryBrowserRunStore()
+		const toolset = new BrowserToolset({
+			url: base.url,
+			trusted: true,
+			elements: base.elements,
+			title: () => base.title(),
+			read: (options) => base.read(options),
+			wait: (text, options) => base.wait(text, options),
+		})
+		await toolset.start()
+		try {
+			const run = await new BrowserReplay(
+				toolset,
+				{ journey: createBrowserJourneyFixture() },
+				{
+					runs: {
+						open: runs.open.bind(runs),
+						capture: async (_slot, name) => {
+							captures.handler(name)
+							return name
+						},
+						get: runs.get.bind(runs),
+						list: runs.list.bind(runs),
+						delete: runs.delete.bind(runs),
+						clear: runs.clear.bind(runs),
+						set: runs.set.bind(runs),
+					},
+				},
+			).execute()
+			expect(run.outcome).toBe('complete')
+			expect(run.output).toEqual([])
 			expect(run.steps[0]).not.toHaveProperty('capture')
 			expect(captures.count).toBe(0)
 		} finally {
