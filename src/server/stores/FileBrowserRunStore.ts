@@ -10,10 +10,9 @@ import { lstat, rm } from 'node:fs/promises'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import { BROWSER_JOURNEY_FORMAT_VERSION } from '../../core/constants.js'
 import { BrowserError } from '../../core/errors.js'
-import { generateBrowserRunId } from '../../core/helpers.js'
-import { validateBrowserRun } from '../../core/validators.js'
 import { BROWSER_RUN_FILE, BROWSER_RUN_DIRECTORY } from '../constants.js'
 import { FileBrowserStore } from './FileBrowserStore.js'
+import { generateBrowserRunId, validateBrowserRun } from '../../core/helpers.js'
 
 /**
  * Persists runs and captures only in directories allocated by this instance.

@@ -38,8 +38,6 @@ import {
 	validateBrowserJourney,
 	validateBrowserJourneyEdit,
 	validateBrowserRun,
-} from './validators.js'
-import {
 	readBrowserAXValue,
 	readBrowserHeaders,
 	readBrowserRemoteValue,

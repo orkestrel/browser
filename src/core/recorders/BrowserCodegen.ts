@@ -4,7 +4,6 @@ import type {
 	BrowserCodegenLanguage,
 	BrowserCodegenScript,
 	BrowserJourney,
-	BrowserJourneyParameter,
 	BrowserJourneyStep,
 	BrowserJourneyStepInput,
 	BrowserJourneyTarget,
@@ -21,13 +20,11 @@ import {
 	BROWSER_CODEGEN_BINDING_NAME,
 	BROWSER_CODEGEN_SOURCE,
 	BROWSER_INTERACTIVE_ROLES,
-	BROWSER_JOURNEY_FORMAT_VERSION,
 } from '../constants.js'
 import { compileBrowserJourney } from '../compilers.js'
 import { BrowserError } from '../errors.js'
-import { deriveBrowserJourneySecret, readBrowserAXValue } from '../helpers.js'
+import { buildBrowserJourney, deriveBrowserJourneySecret, readBrowserAXValue } from '../helpers.js'
 import { parseCodegenActionPayload } from '../parsers.js'
-import { validateBrowserJourney } from '../validators.js'
 
 /**
  * Records semantic page gestures and compiles them into a journey module.
@@ -133,22 +130,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		return structuredClone(this.#steps)
 	}
 	journey(options: { readonly name: string; readonly description: string }): BrowserJourney {
-		const steps = this.steps()
-		const parameters: Record<string, BrowserJourneyParameter> = {}
-		for (const step of steps) {
-			const value = step.arguments['text']
-			if (step.action === 'type' && isRecord(value) && isString(value['parameter']))
-				parameters[value['parameter']] = { secret: true }
-		}
-		const journey: BrowserJourney = {
-			format: BROWSER_JOURNEY_FORMAT_VERSION,
-			...options,
-			parameters,
-			next: steps.length + 1,
-			steps,
-		}
-		validateBrowserJourney(journey)
-		return journey
+		return buildBrowserJourney(this.#steps, options)
 	}
 	script(options: {
 		readonly name: string

@@ -1,7 +1,6 @@
 import type {
 	BrowserAction,
 	BrowserJourney,
-	BrowserJourneyParameter,
 	BrowserJourneyStep,
 	BrowserJourneyStepInput,
 	BrowserRecorderEventMap,
@@ -11,10 +10,9 @@ import type {
 } from '../types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { Emitter } from '@orkestrel/emitter'
-import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_FORMAT_VERSION } from '../constants.js'
+import { BROWSER_JOURNEY_ACTIONS } from '../constants.js'
 import { BrowserError } from '../errors.js'
-import { deriveBrowserJourneySecret } from '../helpers.js'
-import { validateBrowserJourney } from '../validators.js'
+import { buildBrowserJourney, deriveBrowserJourneySecret } from '../helpers.js'
 
 /**
  * Records semantic steps from completed toolset actions and marks replay boundaries as gaps.
@@ -75,28 +73,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	journey(options: { readonly name: string; readonly description: string }): BrowserJourney {
-		const steps = this.steps()
-		const parameters: Record<string, BrowserJourneyParameter> = {}
-		for (const step of steps) {
-			const text = step.arguments['text']
-			if (
-				step.action === 'type' &&
-				typeof text === 'object' &&
-				text !== null &&
-				'parameter' in text &&
-				typeof text.parameter === 'string'
-			)
-				parameters[text.parameter] = { secret: true }
-		}
-		const journey: BrowserJourney = {
-			format: BROWSER_JOURNEY_FORMAT_VERSION,
-			...options,
-			parameters,
-			next: steps.length + 1,
-			steps,
-		}
-		validateBrowserJourney(journey)
-		return journey
+		return buildBrowserJourney(this.#steps, options)
 	}
 
 	clear(): void {

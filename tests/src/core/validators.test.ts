@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
+	isBrowserSecretBinding,
 	isBrowserJourneyBinding,
 	isBrowserJourneyTab,
 	isBrowserJourneyTarget,
@@ -18,6 +19,39 @@ import {
 } from '../../setup.js'
 
 describe('journey validators', () => {
+	it('recognizes only declared secret type.text bindings and contains hostile reads', () => {
+		const step = { action: 'type', arguments: { text: { parameter: 'password' } } }
+		const parameters = { password: { secret: true } }
+		expect(isBrowserSecretBinding(step, parameters)).toBe(true)
+		expect(isBrowserSecretBinding({ ...step, action: 'wait' }, parameters)).toBe(false)
+		expect(isBrowserSecretBinding(step, {})).toBe(false)
+		expect(isBrowserSecretBinding(step, { password: { secret: false } })).toBe(false)
+		expect(
+			isBrowserSecretBinding({ action: 'type', arguments: { text: 'literal' } }, parameters),
+		).toBe(false)
+		expect(isBrowserSecretBinding(undefined, parameters)).toBe(false)
+		expect(isBrowserSecretBinding(step, null)).toBe(false)
+		expect(
+			isBrowserSecretBinding(
+				new Proxy(step, {
+					get: () => {
+						throw new Error('hostile step')
+					},
+				}),
+				parameters,
+			),
+		).toBe(false)
+		expect(
+			isBrowserSecretBinding(
+				step,
+				new Proxy(parameters, {
+					get: () => {
+						throw new Error('hostile parameters')
+					},
+				}),
+			),
+		).toBe(false)
+	})
 	it.each(BROWSER_JOURNEY_INVALID_CASES)(
 		'refuses invariant $invariant: $name',
 		({ value, invariant }) => {

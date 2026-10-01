@@ -16,7 +16,8 @@ import {
 	BROWSER_STABLE_FRAME_COUNT,
 	BROWSER_SUBMIT_KEY,
 } from './constants.js'
-import { validateBrowserJourney } from './validators.js'
+import { validateBrowserJourney } from './helpers.js'
+import { isBrowserSecretBinding } from './validators.js'
 
 /**
  * Compiles a mutation-driven wait with one deadline and explicit disconnect ownership.
@@ -536,12 +537,7 @@ export function compileBrowserJourney(
 				/[\n\r\u2028\u2029]/gu,
 				(terminator) => `\\u${terminator.charCodeAt(0).toString(16).padStart(4, '0')}`,
 			)
-		const text = step.arguments['text']
-		const secret =
-			step.action === 'type' &&
-			isRecord(text) &&
-			isString(text['parameter']) &&
-			journey.parameters[text['parameter']]?.secret === true
+		const secret = isBrowserSecretBinding(step, journey.parameters)
 		const call: JSONValue = {
 			action: step.action,
 			arguments: step.arguments,
