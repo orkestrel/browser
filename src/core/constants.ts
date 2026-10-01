@@ -790,6 +790,21 @@ export const BROWSER_JOURNEY_NAME_PATTERN =
 /** Matches a journey parameter name: a lowercase letter followed by letters and digits. */
 export const BROWSER_JOURNEY_PARAMETER_PATTERN = /^[a-z][a-zA-Z0-9]*$/
 
+/** Matches a run id containing an ISO timestamp with hyphenated time and a hexadecimal suffix. */
+export const BROWSER_RUN_ID_PATTERN = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-f0-9]{4}$/
+
+/** Names observation and journey tools that cannot become journey steps. */
+export const BROWSER_JOURNEY_NON_STEP_TOOLS: readonly string[] = Object.freeze([
+	'look',
+	'read',
+	'tabs',
+	'record',
+	'save',
+	'journeys',
+	'edit',
+	'replay',
+])
+
 /** Holds the journey and run file format this package writes and reads, `1`. */
 export const BROWSER_JOURNEY_FORMAT_VERSION: BrowserJourney['format'] = 1
 

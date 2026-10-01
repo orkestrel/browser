@@ -127,7 +127,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await toolset.start()
 				const target = { role: 'combobox', name: 'Destination' }
 				if (direct) {
-					const element = await locateBrowserTarget(page, target)
+					const element = await locateBrowserTarget(page, target, { id: 's1' })
 					receipts.push(
 						requireToolText(
 							await toolset.tools.execute({
@@ -192,7 +192,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 							? { url: fixtures.url(scenario.arguments.url) }
 							: scenario.arguments
 					const target =
-						'target' in scenario ? await locateBrowserTarget(page, scenario.target) : undefined
+						'target' in scenario
+							? await locateBrowserTarget(page, scenario.target, { id: 's1' })
+							: undefined
 					const call = {
 						id: 's1',
 						name: scenario.action,
@@ -224,7 +226,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				const toolset = createBrowserToolset(page)
 				toolsets.push(toolset)
 				await toolset.start()
-				const target = await locateBrowserTarget(page, { role: 'button', name: 'Delete' })
+				const target = await locateBrowserTarget(
+					page,
+					{ role: 'button', name: 'Delete' },
+					{ id: 's1' },
+				)
 				const actions: BrowserAction[] = []
 				toolset.emitter.on('action', (action) => actions.push(action))
 				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
@@ -293,7 +299,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				const toolset = createBrowserToolset(page, { context })
 				toolsets.push(toolset)
 				await toolset.start()
-				const target = await locateBrowserTarget(page, { role: 'link', name: 'Open details' })
+				const target = await locateBrowserTarget(
+					page,
+					{ role: 'link', name: 'Open details' },
+					{ id: 's1' },
+				)
 				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
 				if (direct) {
 					toolset.emitter.on('action', (action) => actions.push(action))

@@ -1,6 +1,7 @@
 import type {
 	BrowserAction,
 	BrowserCallOptions,
+	BrowserTargetOptions,
 	BrowserElementManagerInterface,
 	BrowserJourney,
 	BrowserJourneyEdit,
@@ -78,6 +79,8 @@ import {
 import {
 	BROWSER_TOOL_COPY,
 	BROWSER_JOURNEY_ACTIONS,
+	BROWSER_JOURNEY_NON_STEP_TOOLS,
+	BROWSER_RUN_ID_PATTERN,
 	BROWSER_JOURNEY_FORMAT_VERSION,
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BROWSER_JOURNEY_PARAMETER_PATTERN,
@@ -2367,7 +2370,7 @@ export async function settleBrowserTeardown(
 }
 
 /**
- * Resolves one exact semantic target and refuses missing or ambiguous matches.
+ * Resolves one exact semantic target and names the caller's step in missing or ambiguous refusals.
  *
  * @param view - The live element manager
  * @param target - The role and exact accessible name; stored references and selectors are evidence only
@@ -2378,7 +2381,7 @@ export async function settleBrowserTeardown(
 export async function locateBrowserTarget<E extends BrowserElementInterface>(
 	view: { readonly elements: BrowserElementManagerInterface<E> },
 	target: { readonly role: string; readonly name: string },
-	options?: BrowserCallOptions & { readonly id?: string },
+	options: BrowserTargetOptions,
 ): Promise<E> {
 	const matches = await view.elements.find(
 		{ role: target.role, name: target.name, exact: true },
@@ -2386,7 +2389,7 @@ export async function locateBrowserTarget<E extends BrowserElementInterface>(
 	)
 	const element = matches[0]
 	if (matches.length === 1 && element !== undefined) return element
-	const id = options?.id ?? 's1'
+	const id = options.id
 	throw new BrowserError(
 		`Step ${id} names ${target.role} ${JSON.stringify(target.name)}, which ${matches.length === 0 ? 'no element carries' : `${matches.length} elements carry`}; call edit to remove or replace ${id}.`,
 		matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
@@ -2720,6 +2723,20 @@ export function deriveBrowserJourneyTrigger(
 }
 
 /**
+ * Collects parameter names already bound to recorded text arguments.
+ * @param steps - Previously recorded steps
+ * @returns Bound names in recording order
+ */
+export function collectBrowserJourneySecrets(
+	steps: readonly BrowserJourneyStep[],
+): readonly string[] {
+	return steps.flatMap((step) => {
+		const value = step.arguments['text']
+		return isRecord(value) && isString(value['parameter']) ? [value['parameter']] : []
+	})
+}
+
+/**
  * Derives an unused lower camel case secret parameter name from an accessible name.
  * @param name - Accessible name of the control
  * @param taken - Already declared names; default: an empty collection
@@ -2860,10 +2877,7 @@ export function validateBrowserJourneyStep(
 			'BROWSER_JOURNEY_INVALID',
 		)
 	const action = value['action']
-	if (
-		action.length === 0 ||
-		['look', 'read', 'tabs', 'record', 'save', 'journeys', 'edit', 'replay'].includes(action)
-	)
+	if (action.length === 0 || BROWSER_JOURNEY_NON_STEP_TOOLS.includes(action))
 		throw new BrowserError(
 			'Invariant 7 (actions): uses an observation or journey tool as a step',
 			'BROWSER_JOURNEY_INVALID',
@@ -3085,7 +3099,7 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 	const journey = value['journey']
 	if (
 		!isString(value['id']) ||
-		!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-f0-9]{4}$/.test(value['id']) ||
+		!BROWSER_RUN_ID_PATTERN.test(value['id']) ||
 		!isRecord(value['inputs']) ||
 		!Object.values(value['inputs']).every(isString) ||
 		!isArray(value['steps']) ||

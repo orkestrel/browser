@@ -23,7 +23,13 @@ import {
 } from '../constants.js'
 import { compileBrowserJourney } from '../compilers.js'
 import { BrowserError } from '../errors.js'
-import { buildBrowserJourney, deriveBrowserJourneySecret, readBrowserAXValue } from '../helpers.js'
+import {
+	buildBrowserJourney,
+	collectBrowserJourneySecrets,
+	deriveBrowserJourneySecret,
+	readBrowserAXValue,
+	readBrowserFrames,
+} from '../helpers.js'
 import { parseCodegenActionPayload } from '../parsers.js'
 
 /**
@@ -56,6 +62,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	#pending: { readonly key: string; readonly step: BrowserJourneyStepInput } | undefined
 	#enter: string | undefined
 	#epoch = 0
+	#frame: string | undefined
 
 	constructor(
 		client: CDPClientInterface,
@@ -164,8 +171,8 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		if (active !== undefined) return await active.attempt
 		const handlers: ReadonlyArray<readonly [string, CDPHandler]> = [
 			['Runtime.bindingCalled', this.#binding.bind(this, session)],
-			['Page.frameNavigated', this.#navigation.bind(this)],
-			['Page.navigatedWithinDocument', this.#navigation.bind(this)],
+			['Page.frameNavigated', this.#navigation.bind(this, session)],
+			['Page.navigatedWithinDocument', this.#navigation.bind(this, session)],
 			['Page.javascriptDialogClosed', this.#dialog.bind(this)],
 		]
 		for (const [method, handler] of handlers) this.#client.subscribe(method, handler, session)
@@ -175,6 +182,11 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	}
 	async #inject(session: string): Promise<void> {
 		await this.#client.send('Page.enable', undefined, { session })
+		if (session === this.#session) {
+			const tree = await this.#client.send('Page.getFrameTree', undefined, { session })
+			this.#frame = readBrowserFrames(tree).find((frame) => frame.parent === undefined)?.id
+			if (this.#frame === undefined) throw new BrowserError('The recorder requires a main frame')
+		}
 		await this.#client.send('Runtime.enable', undefined, { session })
 		await this.#client.send(
 			'Runtime.addBinding',
@@ -365,10 +377,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 			if (this.#pending?.key !== key) this.#flush()
 			let text = gesture.secret ? this.#pending?.step.arguments['text'] : gesture.value
 			if (gesture.secret && !isRecord(text)) {
-				const taken = this.#steps.flatMap((step) => {
-					const value = step.arguments['text']
-					return isRecord(value) && isString(value['parameter']) ? [value['parameter']] : []
-				})
+				const taken = collectBrowserJourneySecrets(this.#steps)
 				text = {
 					parameter: deriveBrowserJourneySecret(isString(target.name) ? target.name : '', taken),
 				}
@@ -398,9 +407,13 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		this.#flush()
 		this.#append({ action: 'unresolved', arguments: {}, gap })
 	}
-	#navigation(params: Readonly<Record<string, unknown>>): void {
+	#navigation(session: string, params: Readonly<Record<string, unknown>>): void {
+		if (session !== this.#session) return
+		const id = params['frameId']
+		if (isString(id) && id !== this.#frame) return
 		const frame = params['frame']
 		if (isRecord(frame) && 'parentId' in frame) return
+		if (isRecord(frame) && isString(frame['id'])) this.#frame = frame['id']
 		const epoch = this.#epoch
 		this.#queue = this.#queue.then(() => {
 			if (epoch === this.#epoch) {

@@ -11,6 +11,7 @@ import {
 	writeFile,
 } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
+import { validateBrowserRun } from '@src/core'
 import { BROWSER_JOURNEY_LOCK_ATTEMPTS } from '@src/server'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
@@ -175,6 +176,24 @@ describe('FileBrowserStore', () => {
 			expect(() => new FileBrowserStore({ root: scratch.path, limit: 0 })).toThrow(
 				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
 			)
+		} finally {
+			scratch.destroy()
+		}
+	})
+	it('shares the run id pattern between run validation and filesystem admission', () => {
+		const scratch = createScratch()
+		try {
+			const files = new FileBrowserStore({ root: scratch.path })
+			expect
+				.soft(() => validateBrowserRun(BROWSER_RUN_FIXTURE), 'run validator reads the id home')
+				.not.toThrow()
+			expect
+				.soft(() => files.validateId(BROWSER_RUN_FIXTURE.id), 'file store reads the id home')
+				.not.toThrow()
+			expect(() => validateBrowserRun({ ...BROWSER_RUN_FIXTURE, id: '../escape' })).toThrow(
+				'malformed fields',
+			)
+			expect(() => files.validateId('../escape')).toThrow('Refused run id')
 		} finally {
 			scratch.destroy()
 		}

@@ -11,6 +11,43 @@ import {
 } from '../../../setup.js'
 
 describe('BrowserCodegen', () => {
+	it('keeps an edit open across child same-document navigation and closes it on main navigation', async () => {
+		const { transport, client, codegen } = await createStartedCodegen()
+		try {
+			transport.event(
+				'Runtime.bindingCalled',
+				createCodegenBindingPayload(createCodegenGesture({ value: 'first' })),
+				'session-1',
+			)
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'child', url: 'https://example.test/child#changed', navigationType: 'fragment' },
+				'session-1',
+			)
+			transport.event(
+				'Runtime.bindingCalled',
+				createCodegenBindingPayload(createCodegenGesture({ value: 'second' })),
+				'session-1',
+			)
+			transport.event(
+				'Page.navigatedWithinDocument',
+				{ frameId: 'main', url: 'https://example.test/#changed', navigationType: 'fragment' },
+				'session-1',
+			)
+			transport.event(
+				'Runtime.bindingCalled',
+				createCodegenBindingPayload(createCodegenGesture({ value: 'third' })),
+				'session-1',
+			)
+			expect(
+				(await codegen.stop()).map((step) => step.arguments),
+				'child navigation preserves the edit; main navigation closes it',
+			).toEqual([{ text: 'second' }, { text: 'third' }])
+		} finally {
+			await codegen.destroy()
+			await client.close()
+		}
+	})
 	it('records exact accessible targets and ignores malformed binding payloads', async () => {
 		const { transport, codegen } = await createStartedCodegen('session-1', {
 			role: 'button',
@@ -610,6 +647,9 @@ describe('BrowserCodegen', () => {
 		const codegen = new BrowserCodegen(client, 'session-1')
 		await expect(codegen.start()).rejects.toThrow('installation failed')
 		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Page.getFrameTree', {
+			frameTree: { frame: { id: 'main', url: 'https://example.test/' } },
+		})
 		replyOk(transport, 'Runtime.enable')
 		replyOk(transport, 'Runtime.addBinding')
 		replyOk(transport, 'Page.addScriptToEvaluateOnNewDocument')

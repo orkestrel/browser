@@ -6,6 +6,7 @@ import {
 	BrowserToolset,
 	createBrowserToolset,
 	validateBrowserJourney,
+	validateBrowserJourneyStep,
 } from '@src/core'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
@@ -14,6 +15,9 @@ import {
 	createBrowserElementFixture,
 	createBrowserPopupFixture,
 	createBrowserViewDouble,
+	createCodegenBindingPayload,
+	createCodegenGesture,
+	createStartedCodegen,
 } from '../../../setup.js'
 
 describe('BrowserRecorder', () => {
@@ -41,6 +45,86 @@ describe('BrowserRecorder', () => {
 			hold.destroy()
 			await recorder.destroy()
 			await toolset.destroy()
+		}
+	})
+	it('shares non-step membership between recording and step validation', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const recorder = new BrowserRecorder(toolset)
+		try {
+			await recorder.start()
+			toolset.emitter.emit('action', createBrowserActionFixture({ action: 'look' }))
+			expect.soft(recorder.steps(), 'recorder reads the non-step home').toEqual([])
+			expect
+				.soft(
+					() => validateBrowserJourneyStep({ id: 's1', action: 'look', arguments: {} }),
+					'validator reads the non-step home',
+				)
+				.toThrow('uses an observation or journey tool as a step')
+			toolset.emitter.emit('action', createBrowserActionFixture())
+			expect(recorder.steps().some((step) => step.action === 'click')).toBe(true)
+			expect(() =>
+				validateBrowserJourneyStep({
+					id: 's1',
+					action: 'click',
+					arguments: {},
+					target: { role: 'button', name: 'Save' },
+				}),
+			).not.toThrow()
+		} finally {
+			await recorder.destroy()
+			await toolset.destroy()
+		}
+	})
+
+	it('shares taken secret names between toolset and page recording', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const recorder = new BrowserRecorder(toolset)
+		const { transport, client, codegen } = await createStartedCodegen('session-1', {
+			role: 'textbox',
+			name: 'Confirm Password',
+		})
+		try {
+			await recorder.start()
+			for (const index of [0, 1]) {
+				toolset.emitter.emit(
+					'action',
+					createBrowserActionFixture({
+						action: 'type',
+						arguments: {},
+						secret: true,
+						target: { role: 'textbox', name: 'Confirm Password', reference: `e${index + 1}` },
+					}),
+				)
+				transport.event(
+					'Runtime.bindingCalled',
+					createCodegenBindingPayload(
+						createCodegenGesture({
+							index,
+							control: 'password',
+							secret: true,
+							value: undefined,
+						}),
+					),
+					'session-1',
+				)
+			}
+			expect
+				.soft(
+					recorder.steps().map((step) => step.arguments['text']),
+					'toolset recorder reads taken names',
+				)
+				.toEqual([{ parameter: 'confirmPassword' }, { parameter: 'secret1' }])
+			expect
+				.soft(
+					(await codegen.stop()).map((step) => step.arguments['text']),
+					'page recorder reads taken names',
+				)
+				.toEqual([{ parameter: 'confirmPassword' }, { parameter: 'secret1' }])
+		} finally {
+			await recorder.destroy()
+			await toolset.destroy()
+			await codegen.destroy()
+			await client.close()
 		}
 	})
 	it('records completed actions with semantic targets and portable tab evidence', async () => {

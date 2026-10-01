@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { BrowserError, BROWSER_JOURNEY_NAME_PATTERN } from '@src/core'
+import { BrowserError, BROWSER_JOURNEY_NAME_PATTERN, BROWSER_RUN_ID_PATTERN } from '@src/core'
 import {
 	BROWSER_FILE_STORE_LIMIT,
 	BROWSER_FILE_STORE_RESERVED,
@@ -49,7 +49,7 @@ export class FileBrowserStore {
 
 	/** Checks a run id before filesystem access. @param id - Producer id */
 	validateId(id: string): void {
-		if (!/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-f0-9]{4}$/.test(id))
+		if (!BROWSER_RUN_ID_PATTERN.test(id))
 			throw new BrowserError(`Refused run id: ${id}`, 'BROWSER_JOURNEY_PATH')
 	}
 
