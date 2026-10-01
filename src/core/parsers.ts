@@ -1,4 +1,7 @@
 import type {
+	BrowserJourney,
+	BrowserJourneyEdit,
+	BrowserRun,
 	BrowserTool,
 	BrowserToolRemoval,
 	BrowserInvocation,
@@ -31,6 +34,11 @@ import {
 	parseEnum,
 	parseJSONAs,
 } from '@orkestrel/contract'
+import {
+	validateBrowserJourney,
+	validateBrowserJourneyEdit,
+	validateBrowserRun,
+} from './validators.js'
 import {
 	readBrowserAXValue,
 	readBrowserHeaders,
@@ -656,4 +664,43 @@ export function parseBrowserReference(value: string): string | undefined {
 		/^(?:e([1-9]\d*)|([1-9]\d*)|\[e([1-9]\d*)\]|ref=e([1-9]\d*)|\[ref=e([1-9]\d*)\])$/i.exec(value)
 	const number = match?.slice(1).find((part) => part !== undefined)
 	return number === undefined ? undefined : `e${number}`
+}
+
+/**
+ * Parses a journey without throwing when validation fails.
+ * @param value - Candidate journey
+ * @returns The validated value, or undefined
+ */
+export function parseBrowserJourney(value: unknown): BrowserJourney | undefined {
+	const result = attempt(() => {
+		validateBrowserJourney(value)
+		return value
+	})
+	return result.success ? result.value : undefined
+}
+
+/**
+ * Parses an edit without throwing when its structure fails validation.
+ * @param value - Candidate edit
+ * @returns The validated value, or undefined
+ */
+export function parseBrowserJourneyEdit(value: unknown): BrowserJourneyEdit | undefined {
+	const result = attempt(() => {
+		validateBrowserJourneyEdit(value)
+		return value
+	})
+	return result.success ? result.value : undefined
+}
+
+/**
+ * Parses a run without throwing when validation fails.
+ * @param value - Candidate run
+ * @returns The validated value, or undefined
+ */
+export function parseBrowserRun(value: unknown): BrowserRun | undefined {
+	const result = attempt(() => {
+		validateBrowserRun(value)
+		return value
+	})
+	return result.success ? result.value : undefined
 }
