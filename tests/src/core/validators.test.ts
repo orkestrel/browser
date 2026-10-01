@@ -15,6 +15,7 @@ import {
 import {
 	BROWSER_JOURNEY_FIXTURE,
 	BROWSER_JOURNEY_INVALID_CASES,
+	BROWSER_JOURNEY_EDIT_SHAPES,
 	BROWSER_JOURNEY_TEMPLATE_CASES,
 	BROWSER_RUN_FIXTURE,
 } from '../../setup.js'
@@ -87,6 +88,20 @@ describe('journey validators', () => {
 				}),
 			),
 		).toBe(false)
+	})
+	it.each(BROWSER_JOURNEY_EDIT_SHAPES)('names the operation and field for %j', (value, message) => {
+		expect(attempt(() => validateBrowserJourneyEdit(value))).toMatchObject({
+			success: false,
+			error: { code: 'BROWSER_JOURNEY_EDIT', message },
+		})
+	})
+	it('refuses an empty journey with the invalid code', () => {
+		expect(
+			attempt(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, steps: [] })),
+		).toMatchObject({
+			success: false,
+			error: { code: 'BROWSER_JOURNEY_INVALID', message: 'Invariant 2 (ids): has no steps' },
+		})
 	})
 	it.each(BROWSER_JOURNEY_INVALID_CASES)(
 		'refuses invariant $invariant: $name',

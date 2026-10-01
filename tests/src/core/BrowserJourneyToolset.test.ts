@@ -24,6 +24,7 @@ import {
 } from '@src/core'
 import {
 	BROWSER_JOURNEY_FIXTURE,
+	BROWSER_JOURNEY_EDIT_SHAPES,
 	BROWSER_STORE_FAULT_FIXTURE,
 	BROWSER_PREPARATION_CASES,
 	BROWSER_JOURNEY_LISTING,
@@ -37,6 +38,154 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it.each(BROWSER_JOURNEY_EDIT_SHAPES)(
+		'names the malformed edit field for %j',
+		async (edit, reason) => {
+			const store = createMemoryBrowserJourneyStore()
+			await store.set(createBrowserJourneyFixture())
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const journeys = new BrowserJourneyToolset(toolset, { store })
+			try {
+				expect(
+					await toolset.tools.execute({
+						id: 'edit',
+						name: 'edit',
+						arguments: { journey: 'check-ready', edits: [edit] },
+					}),
+				).toMatchObject({
+					success: false,
+					error: `Edit 1 is refused: ${reason.startsWith('its ') ? reason : `it ${reason}`}; call journeys.`,
+				})
+				expect((await store.get('check-ready'))?.revision).toBe(1)
+			} finally {
+				await journeys.destroy()
+				await toolset.destroy()
+			}
+		},
+	)
+	it('k1a refuses an empty save, keeps recording, and directs calls after saving', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		try {
+			await toolset.tools.execute({
+				id: 'record',
+				name: 'record',
+				arguments: { journey: 'check-ready' },
+			})
+			await expect(
+				requireValue(toolset.tools.tool('save')).execute(
+					{ description: 'Check readiness' },
+					{ signal: new AbortController().signal },
+				),
+				'k1a: empty recordings are refused before a store write',
+			).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_EMPTY',
+				message: 'Nothing is recorded for check-ready; perform an action, then call save.',
+			})
+			expect(journeys.recording).toBe('check-ready')
+			expect(await store.get('check-ready')).toBeUndefined()
+			await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
+			expect(
+				await toolset.tools.execute({
+					id: 'save',
+					name: 'save',
+					arguments: { description: 'Check readiness' },
+				}),
+			).toMatchObject({
+				success: true,
+				value: expect.stringContaining('Saved check-ready with 1 step.'),
+			})
+			const results = await toolset.tools.execute([
+				{ id: 'record', name: 'record', arguments: { journey: 'check-ready' } },
+				{ id: 'save', name: 'save', arguments: { description: 'Check readiness' } },
+			])
+			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
+				'Journey "check-ready" is saved already and nothing is recording; call journeys to list it, edit to change it, or replay to run it.',
+				'Nothing is recording; "check-ready" was saved. Call journeys, edit, or replay.',
+			])
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('k1b omits a timed-out wait so the saved journey replays', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const { toolset, pending } = createBrowserPendingToolsetFixture({ waited: false })
+		pending.resolve('Checked out.')
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		try {
+			await toolset.tools.execute({
+				id: 'record',
+				name: 'record',
+				arguments: { journey: 'check-form' },
+			})
+			const waited = await toolset.perform({
+				id: 'wait',
+				name: 'wait',
+				arguments: { text: 'Never appears', timeout: 1 },
+			})
+			expect(waited.action?.outcome).toBe('timeout')
+			await toolset.tools.execute({ id: 'checkout', name: 'checkout', arguments: {} })
+			expect(
+				await toolset.tools.execute({
+					id: 'save',
+					name: 'save',
+					arguments: { description: 'Check the form' },
+				}),
+			).toMatchObject({ success: true })
+			expect(
+				(await store.get('check-form'))?.journey.steps.map((step) => step.action),
+				'k1b: a timeout contributes no step',
+			).toEqual(['checkout'])
+			expect(
+				await toolset.tools.execute({
+					id: 'replay',
+					name: 'replay',
+					arguments: { journey: 'check-form' },
+				}),
+			).toMatchObject({
+				success: true,
+				value: expect.stringContaining('Replayed check-form: 1 of 1 steps.'),
+			})
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('k1c parses a JSON edits string and names a JSON parse error', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(createBrowserJourneyFixture())
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		try {
+			expect(
+				await toolset.tools.execute({
+					id: 'edit',
+					name: 'edit',
+					arguments: {
+						journey: 'check-ready',
+						edits: '[{"operation":"update","id":"s1","arguments":{"text":"Saved"}}]',
+					},
+				}),
+				'k1c: edits accepts a JSON string of the array',
+			).toMatchObject({ success: true, value: expect.stringContaining('s1 wait "Saved"') })
+			const refused = await toolset.tools.execute({
+				id: 'edit',
+				name: 'edit',
+				arguments: { journey: 'check-ready', edits: '[' },
+			})
+			expect(readProperty(refused, 'error')).toBe(
+				'The edits parameter is not valid JSON: Unexpected end of JSON input; pass an array or a JSON string of the array.',
+			)
+			expect((await store.get('check-ready'))?.revision).toBe(2)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
 	it('h2c renders structured faults without scraping the reason and deduplicates names', async () => {
 		const memory = createMemoryBrowserJourneyStore()
 		const store: BrowserJourneyStoreInterface = {
@@ -425,6 +574,7 @@ describe('BrowserJourneyToolset', () => {
 					}),
 				).toMatchObject({ success: true })
 				const saved = await store.set(createBrowserJourneyFixture())
+				await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
 				expect(
 					await toolset.tools.execute({
 						id: '2',
@@ -510,7 +660,7 @@ s2 click button "Save"`,
 				expect(results.map((result) => readProperty(result, 'error'))).toEqual([
 					'No journey is recording; call record first.',
 					'"Add kettle" is not a journey name; use lowercase words joined by hyphens, such as add-kettle.',
-					'A journey named "add-kettle" is saved; call journeys, or record another name.',
+					'Journey "add-kettle" is saved already and nothing is recording; call journeys to list it, edit to change it, or replay to run it.',
 				])
 				await toolset.tools.execute({ id: '4', name: 'record', arguments: { journey: 'brew-tea' } })
 				const again = await toolset.tools.execute({
@@ -854,7 +1004,7 @@ s2 click combobox "Size"`,
 					'Element e9 is not in the current view; call look for fresh refs.',
 					'Edit 2 is refused: it names unknown step "s9"; call journeys.',
 					'Edit 1 is refused: it declares "email" but no step binds it; call journeys.',
-					'Edit 1 is refused: it has a malformed edit or duplicate anchors; call journeys.',
+					'Edit 1 is refused: its "remove" names no step in "id"; call journeys.',
 				])
 				expect((await memory.get('check-ready'))?.revision).toBe(1)
 				scripted.push('stale')
@@ -1086,6 +1236,7 @@ e3 combobox "Size"
 				expect(readProperty(await toolset.tools.execute(replay), 'error')).toBe(
 					'Journey brew-tea is recording; call save before you replay another.',
 				)
+				await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
 				await toolset.tools.execute({ id: '2', name: 'save', arguments: { description: 'Brew' } })
 				const hold = await toolset.hold('add-kettle')
 				expect(readProperty(await toolset.tools.execute(replay), 'error')).toBe(
@@ -1257,6 +1408,7 @@ e3 combobox "Size"
 			try {
 				await toolset.tools.execute({ id: '1', name: 'record', arguments: { journey: 'brew-tea' } })
 				const saving = new AbortController()
+				await toolset.tools.execute({ id: 'press', name: 'press', arguments: { key: 'Escape' } })
 				const saved = toolset.tools.execute(
 					{ id: '2', name: 'save', arguments: { description: 'Brew' } },
 					{ signal: saving.signal },
@@ -1268,6 +1420,9 @@ e3 combobox "Size"
 				expect(journeys.recording).toBe('brew-tea')
 				await journeys.destroy()
 				const replaying = new BrowserJourneyToolset(toolset, { store: memory, runs })
+				const inputs = fixture.transport.sent.filter(
+					(message) => message.method === 'Input.dispatchKeyEvent',
+				)
 				const controller = new AbortController()
 				const replayed = toolset.tools.execute(
 					{ id: '3', name: 'replay', arguments: { journey: 'check-ready' } },
@@ -1287,7 +1442,7 @@ e3 combobox "Size"
 				])
 				expect(
 					fixture.transport.sent.filter((message) => message.method === 'Input.dispatchKeyEvent'),
-				).toEqual([])
+				).toEqual(inputs)
 				await replaying.destroy()
 			} finally {
 				await journeys.destroy()

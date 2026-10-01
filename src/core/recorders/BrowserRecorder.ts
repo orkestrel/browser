@@ -23,7 +23,9 @@ import {
 } from '../helpers.js'
 
 /**
- * Records semantic steps from completed toolset actions and marks replay boundaries as gaps.
+ * Records semantic steps from completed toolset actions and omits refused or timed-out actions.
+ * @remarks
+ * Gaps mark a child frame, a held replay, or an unanswered interruption.
  * @example
  * const recorder = new BrowserRecorder(toolset)
  * await recorder.start()
@@ -117,19 +119,17 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 			else
 				this.#append({ action: 'unresolved', arguments: {}, gap: `interrupted ${pending.action}` })
 		}
-		if (BROWSER_JOURNEY_NON_STEP_TOOLS.includes(action.action) || action.outcome === 'refused')
+		if (
+			BROWSER_JOURNEY_NON_STEP_TOOLS.includes(action.action) ||
+			action.outcome === 'refused' ||
+			action.outcome === 'timeout'
+		)
 			return
 		if (action.outcome === 'interrupted') {
 			this.#pending = structuredClone(action)
 			return
 		}
-		if (action.outcome === 'done') this.#appendAction(action)
-		else
-			this.#append({
-				action: 'unresolved',
-				arguments: {},
-				gap: `${action.outcome} ${action.action}`,
-			})
+		this.#appendAction(action)
 	}
 
 	#appendAction(action: BrowserAction): void {

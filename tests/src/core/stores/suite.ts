@@ -108,7 +108,7 @@ export function describeBrowserJourneyStore(
 		it('sorts by name and pages with truthful truncation and empty faults', async () => {
 			const store = await factory()
 			for (const journeyName of ['zebra', 'alpine', 'harbor'])
-				await store.set(createBrowserJourneyFixture([], { name: journeyName }))
+				await store.set(createBrowserJourneyFixture(undefined, { name: journeyName }))
 			expect((await store.list()).entries.map((entry) => entry.journey.name)).toEqual([
 				'alpine',
 				'harbor',

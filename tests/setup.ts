@@ -2670,9 +2670,12 @@ export interface BrowserPendingToolsetFixture {
 
 /**
  * Creates a toolset with an adopted checkout action waiting for an explicit completion.
+ * @param options - The document view and wait result
  * @returns The unstarted toolset, its view, the completion, and the invocation recorder
  */
-export function createBrowserPendingToolsetFixture(): BrowserPendingToolsetFixture {
+export function createBrowserPendingToolsetFixture(
+	options?: BrowserViewDoubleOptions,
+): BrowserPendingToolsetFixture {
 	const pending = Promise.withResolvers<string>()
 	const invoked = createRecorder<[]>()
 	const source = createToolManager()
@@ -2685,7 +2688,7 @@ export function createBrowserPendingToolsetFixture(): BrowserPendingToolsetFixtu
 			},
 		}),
 	)
-	const view = createBrowserViewDouble()
+	const view = createBrowserViewDouble(options)
 	const toolset = new BrowserToolset(view, {
 		source: {
 			adopt: async () => source.tools(),
@@ -3311,6 +3314,70 @@ export const BROWSER_JOURNEY_INVALID_CASES: ReadonlyArray<{
 		invariant: 7,
 	},
 ]
+
+/** Supplies edit grammar refusals with their operation and field clauses. */
+export const BROWSER_JOURNEY_EDIT_SHAPES: ReadonlyArray<readonly [unknown, string]> = Object.freeze(
+	[
+		[null, 'has no edit object with an "operation" field'],
+		[[], 'has no edit object with an "operation" field'],
+		[{}, 'names no operation among add, update, remove, and declare'],
+		[{ operation: 'move' }, 'names no operation among add, update, remove, and declare'],
+		[{ operation: 'remove' }, 'its "remove" names no step in "id"'],
+		[{ operation: 'remove', id: 1 }, 'its "remove" names no step in "id"'],
+		[{ operation: 'remove', id: '' }, 'its "remove" names no step in "id"'],
+		[
+			{ operation: 'remove', id: 's1', before: 's2' },
+			'its "remove" carries an unknown field "before"',
+		],
+		[{ operation: 'remove', id: undefined }, 'its "remove" has non-JSON content in "id"'],
+		[
+			{ operation: 'add', before: 's1', after: 's2' },
+			'its "add" carries both "before" and "after"',
+		],
+		[{ operation: 'add', before: 1 }, 'its "add" has no step id in "before"'],
+		[{ operation: 'add', after: '' }, 'its "add" has no step id in "after"'],
+		[{ operation: 'add' }, 'its "add" has an invalid "step": has a malformed step'],
+		[
+			{ operation: 'add', step: { action: 'wait', arguments: { text: 'Ready' }, id: 's1' } },
+			'its "add" supplies "step.id", which is assigned automatically',
+		],
+		[
+			{ operation: 'add', step: { action: 'click', arguments: {} } },
+			'its "add" has an invalid "step": has an incompatible target or tab',
+		],
+		[
+			{ operation: 'add', step: { action: 'wait', arguments: {} } },
+			'its "add" has an invalid "step": has malformed native arguments',
+		],
+		[{ operation: 'add', id: 's1' }, 'its "add" carries an unknown field "id"'],
+		[{ operation: 'update' }, 'its "update" names no step in "id"'],
+		[{ operation: 'update', id: 's1', arguments: [] }, 'its "update" has no object in "arguments"'],
+		[{ operation: 'update', id: 's1', target: null }, 'its "update" has an invalid "target"'],
+		[{ operation: 'update', id: 's1', tab: {} }, 'its "update" has an invalid "tab"'],
+		[
+			{ operation: 'update', id: 's1', after: 's2' },
+			'its "update" carries an unknown field "after"',
+		],
+		[
+			{ operation: 'update', id: 's1', arguments: { text: NaN } },
+			'its "update" has non-JSON content in "arguments"',
+		],
+		[{ operation: 'declare' }, 'its "declare" has no "name"'],
+		[{ operation: 'declare', name: 'Bad Name' }, 'its "declare" has an invalid "name"'],
+		[
+			{ operation: 'declare', name: 'email' },
+			'its "declare" has an invalid "parameter": has a malformed parameter declaration',
+		],
+		[
+			{ operation: 'declare', name: 'email', parameter: { secret: true, default: 'hidden' } },
+			'its "declare" has an invalid "parameter": declares a secret with a default',
+		],
+		[
+			{ operation: 'declare', name: 'email', arguments: {} },
+			'its "declare" carries an unknown field "arguments"',
+		],
+	],
+)
 
 /** Supplies malformed edits and the application failures the editor refuses. */
 export const BROWSER_JOURNEY_EDIT_REFUSALS: ReadonlyArray<{

@@ -353,7 +353,7 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it('preserves literal adopted-tool arguments and turns timeout into a gap', async () => {
+	it('preserves literal adopted-tool arguments and omits timeout actions', async () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const recorder = new BrowserRecorder(toolset)
 		await recorder.start()
@@ -375,7 +375,7 @@ describe('BrowserRecorder', () => {
 			ref: 'literal',
 			value: { parameter: 'literal' },
 		})
-		expect(recorder.steps()[1]?.gap).toBe('timeout wait')
+		expect(recorder.steps()).toHaveLength(1)
 		await recorder.destroy()
 		await toolset.destroy()
 	})

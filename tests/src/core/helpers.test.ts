@@ -1227,6 +1227,35 @@ describe('settleBrowserTeardown', () => {
 })
 
 describe('journey editing and rendering', () => {
+	it('attributes an empty result to the removal even before a later declaration', () => {
+		const journey = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [{ id: 's1', action: 'wait', arguments: { text: 'Ready' } }],
+		}
+		expect(
+			attempt(() =>
+				editBrowserJourney(journey, [
+					{ operation: 'remove', id: 's1' },
+					{ operation: 'declare', name: 'email', parameter: {} },
+				]),
+			),
+		).toMatchObject({
+			success: false,
+			error: {
+				code: 'BROWSER_JOURNEY_EDIT',
+				message: 'Edit 1 is refused: it removes the last step',
+				context: { index: 1 },
+			},
+		})
+		expect(journey.steps).toHaveLength(1)
+		expect(
+			editBrowserJourney(journey, [
+				{ operation: 'remove', id: 's1' },
+				{ operation: 'add', step: { action: 'wait', arguments: { text: 'Saved' } } },
+			]).steps,
+		).toEqual([{ id: 's6', action: 'wait', arguments: { text: 'Saved' } }])
+	})
 	it('renders a structured journey fault without parsing its reason', () => {
 		expect(renderBrowserJourneyFault(BROWSER_STORE_FAULT_FIXTURE)).toBe(
 			'broken-journey cannot be read: The read/write mode is unsupported',
@@ -1404,7 +1433,7 @@ describe('journey editing and rendering', () => {
 			success: false,
 			error: {
 				code: 'BROWSER_JOURNEY_EDIT',
-				message: expect.stringMatching(/^Edit 2 is refused: it [^\n]+[^.]$/),
+				message: expect.stringMatching(/^Edit 2 is refused: its? [^\n]+[^.]$/),
 			},
 		})
 		expect(JSON.stringify(BROWSER_JOURNEY_FIXTURE)).toBe(before)
@@ -1550,15 +1579,10 @@ describe('buildBrowserJourney', () => {
 		Reflect.set(steps[0]?.arguments ?? {}, 'text', 'changed')
 		expect(journey.steps[0]?.arguments['text']).toEqual({ parameter: 'password' })
 	})
-	it('builds an empty journey and refuses invalid names and ids', () => {
-		expect(buildBrowserJourney([], { name: 'empty', description: '' })).toEqual({
-			format: 1,
-			name: 'empty',
-			description: '',
-			parameters: {},
-			next: 1,
-			steps: [],
-		})
+	it('refuses empty journeys and invalid names and ids', () => {
+		expect(() => buildBrowserJourney([], { name: 'empty', description: '' })).toThrow(
+			'Invariant 2 (ids): has no steps',
+		)
 		expect(() => buildBrowserJourney([], { name: 'Bad name', description: '' })).toThrow(
 			'Invariant 1',
 		)
