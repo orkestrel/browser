@@ -314,7 +314,7 @@ describe('compiled module equality', () => {
 		},
 	)
 
-	it('throws at the gap of a generated module with the page untouched, as the replay refuses the journey at preparation', async () => {
+	it('refuses a generated module with a gap before its first step, leaving the click log empty as the replay does at preparation', async () => {
 		const scenario = BROWSER_JOURNEY_GAP_CASE
 		const script = compileBrowserJourney(scenario.journey)
 		const url = fixtures.url(scenario.route)
@@ -342,11 +342,12 @@ describe('compiled module equality', () => {
 		await toolset.destroy()
 		const control = stage.load(
 			`${scenario.journey.name}.control.js`,
-			script.source.replace(/^\t\tthrow .*\n/mu, ''),
+			instrumentBrowserJourneyModule(script.source.replace(/^\t+throw .*\n/mu, '')),
 		)
 		const clicked = await openBrowserJourneyPage(built.context, url, scenario.markup)
 		await control.execute(clicked, scenario.inputs)
 
+		expect(control.receipts(), 'the step calls the module emits around its gap').toHaveLength(2)
 		expect(refused).toStrictEqual(scenario.outcome)
 		expect(executed).toStrictEqual(refused)
 		expect(script.gaps).toStrictEqual(['s2'])
@@ -356,7 +357,7 @@ describe('compiled module equality', () => {
 		expect(refusal).toMatchObject({ code: 'BROWSER_JOURNEY_GAP' })
 		expect(
 			await readBrowserJourneyOutcome(built.context.pages(), clicked, scenario.state),
-		).toStrictEqual([{ clicks: 1, saved: 'yes' }])
+		).toStrictEqual([{ clicks: 'save:true submit:true', saved: 'yes' }])
 	})
 
 	it('type-checks the TypeScript module of every journey against the built declarations and refuses a misspelled input', () => {

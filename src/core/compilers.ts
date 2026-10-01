@@ -482,7 +482,9 @@ export function compileBrowserJourneyValue(
  * - A step passes its action, its arguments, and its target's role and name or its tab's URL and
  *   title as literals, with each native binding replaced by its input; a page tool's arguments
  *   stay literal. A `type` step whose text binds a secret passes `{ secret: true }`.
- * - A gap step compiles to an unconditional throw at its position and is listed in `gaps`.
+ * - A journey with a gap compiles to an unconditional throw naming the first gap before the toolset
+ *   starts, as replay refuses a gap at preparation; each gap step compiles to a comment at its
+ *   position, with its line terminators escaped, and is listed in `gaps`.
  *
  * The JavaScript module is the TypeScript module without the type import and the annotations.
  * `options.language` selects `'javascript'` or `'typescript'`. Default: `'javascript'`.
@@ -527,9 +529,13 @@ export function compileBrowserJourney(
 		parameters.length === 0
 			? ''
 			: `, inputs${typed ? `: { ${shape} }` : ''}${fallback ? ' = {}' : ''}`
+	const gap = journey.steps.find((step) => step.action === 'unresolved')
 	const statements = journey.steps.map((step) => {
 		if (step.action === 'unresolved')
-			return `\t\tthrow new Error(${compileBrowserJourneyValue(`${step.id}: ${step.gap ?? ''}; handle it here`)})`
+			return `\t\t// ${step.id}: ${step.gap ?? ''}; handle it here`.replace(
+				/[\n\r\u2028\u2029]/gu,
+				(terminator) => `\\u${terminator.charCodeAt(0).toString(16).padStart(4, '0')}`,
+			)
 		const text = step.arguments['text']
 		const secret =
 			step.action === 'type' &&
@@ -552,6 +558,11 @@ export function compileBrowserJourney(
 		`import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'`,
 		'',
 		`export async function execute(page${typed ? ': BrowserPageInterface' : ''}${inputs})${typed ? ': Promise<void>' : ''} {`,
+		...(gap === undefined
+			? []
+			: [
+					`\tthrow new Error(${compileBrowserJourneyValue(`${gap.id}: ${gap.gap ?? ''}; handle it here`)})`,
+				]),
 		'\tconst toolset = createBrowserToolset(page)',
 		'\tawait toolset.start()',
 		'\ttry {',

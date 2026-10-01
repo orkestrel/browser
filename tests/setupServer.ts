@@ -1622,43 +1622,111 @@ process.send?.({ outcome: 'ready' })
 			}
 		})
 
-		it.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
-			'reports chmod 000 permission errors (root bypasses mode bits)',
-			async () => {
-				const { chmod, copyFile, rename } = await import('node:fs/promises')
-				const { FileBrowserJourneyStore, FileBrowserRunStore } =
-					await import('../src/server/index.js')
-				const scratch = createScratch()
-				try {
-					const journeys = new FileBrowserJourneyStore({ root: scratch.path })
-					const runs = new FileBrowserRunStore({ root: scratch.path })
-					const saved = await journeys.set(createBrowserJourneyFixture())
-					const slot = await runs.open(BROWSER_RUN_FIXTURE.journey.name)
-					await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
-					const paths = [
-						join(scratch.path, saved.journey.name, 'journey.json'),
-						join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs', slot.id, 'run.json'),
-					]
-					for (const path of paths) {
-						await copyFile(path, path + '.copy')
-						await chmod(path + '.copy', 0)
-						await rename(path + '.copy', path)
-					}
-					try {
-						await expect(journeys.get(saved.journey.name)).rejects.toMatchObject({
-							code: 'BROWSER_JOURNEY_ACCESS',
-						})
-						await expect(runs.get(BROWSER_RUN_FIXTURE.journey.name, slot.id)).rejects.toMatchObject(
-							{ code: 'BROWSER_JOURNEY_ACCESS' },
-						)
-					} finally {
-						for (const path of paths) await chmod(path, 0o600)
-					}
-				} finally {
-					scratch.destroy()
+		it('reports chmod 000 permission errors from a non-root child with the denied path', async (context) => {
+			const { chmod } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore, FileBrowserRunStore } =
+				await import('../src/server/index.js')
+			const root = process.getuid?.() === 0
+			const account = root
+				? readFileSync('/etc/passwd', 'utf8')
+						.split(/\r\n|\n/)
+						.find((line) => line.startsWith('nobody:'))
+						?.split(':')
+				: undefined
+			if (root && account === undefined) {
+				context.skip('The nobody account is absent; root bypasses chmod 000 mode bits')
+				return
+			}
+			const uid = account === undefined ? undefined : Number(account[2])
+			const gid = account === undefined ? undefined : Number(account[3])
+			if (
+				root &&
+				(uid === undefined || uid <= 0 || !Number.isSafeInteger(uid) || !Number.isSafeInteger(gid))
+			)
+				throw new Error('The nobody account must have a non-root uid and an integer gid')
+			const scratch = createScratch()
+			try {
+				const journeys = new FileBrowserJourneyStore({ root: scratch.path })
+				const runs = new FileBrowserRunStore({ root: scratch.path })
+				const saved = await journeys.set(createBrowserJourneyFixture())
+				const slot = await runs.open(BROWSER_RUN_FIXTURE.journey.name)
+				await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+				const paths = [
+					join(scratch.path, saved.journey.name, 'journey.json'),
+					join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs', slot.id, 'run.json'),
+				]
+				// The child must reach the files so denial measures file reads, not directory traversal.
+				await chmod(scratch.path, 0o755)
+				await chmod(join(scratch.path, saved.journey.name), 0o755)
+				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name), 0o755)
+				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs'), 0o755)
+				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs', slot.id), 0o755)
+				const script = scratch.write(
+					'access.ts',
+					`
+import { strict as assert } from 'node:assert'
+import { readFile, stat } from 'node:fs/promises'
+import { registerHooks } from 'node:module'
+import { resolve, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+registerHooks({
+	resolve(specifier, context, next) {
+		try { return next(specifier, context) }
+		catch (error) {
+			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
+				return next(specifier.slice(0, -3) + '.ts', context)
+			throw error
+		}
+	}
+})
+assert.notEqual(process.getuid?.(), 0)
+const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
+const { FileBrowserRunStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserRunStore.ts')).href)
+const [root, journey, run, id] = process.argv.slice(2)
+const journeys = new FileBrowserJourneyStore({ root })
+const runs = new FileBrowserRunStore({ root })
+for (const path of [join(root, journey, 'journey.json'), join(root, run, 'runs', id, 'run.json')]) {
+	assert.equal((await stat(path)).mode & 0o777, 0)
+	await assert.rejects(readFile(path), { code: 'EACCES' })
+}
+const outcomes = await Promise.allSettled([journeys.get(journey), runs.get(run, id)])
+console.log(JSON.stringify({
+	uid: process.getuid?.(), gid: process.getgid?.(),
+	outcomes: outcomes.map((outcome) => outcome.status === 'rejected'
+		? { status: outcome.status, code: outcome.reason.code, message: outcome.reason.message }
+		: { status: outcome.status })
+}))
+`,
+				)
+				await chmod(script, 0o644)
+				for (const path of paths) {
+					expect(parseJSON(readFileSync(path, 'utf8'))).toBeDefined()
+					await chmod(path, 0)
 				}
-			},
-		)
+				try {
+					const child = spawnSync(
+						process.execPath,
+						[script, scratch.path, saved.journey.name, BROWSER_RUN_FIXTURE.journey.name, slot.id],
+						{ uid, gid, encoding: 'utf8', timeout: 10000 },
+					)
+					expect(child.error).toBeUndefined()
+					expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' })
+					expect(parseJSON(child.stdout)).toEqual({
+						uid: uid ?? process.getuid?.(),
+						gid: gid ?? process.getgid?.(),
+						outcomes: paths.map((path) => ({
+							status: 'rejected',
+							code: 'BROWSER_JOURNEY_ACCESS',
+							message: expect.stringContaining(path),
+						})),
+					})
+				} finally {
+					for (const path of paths) await chmod(path, 0o600)
+				}
+			} finally {
+				scratch.destroy()
+			}
+		})
 
 		it('refuses a lost update across instances and preserves revisions after deletion', async () => {
 			const { FileBrowserJourneyStore } = await import('../src/server/index.js')
