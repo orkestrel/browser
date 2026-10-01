@@ -1,6 +1,20 @@
+import type { BrowserViewInterface } from '@src/core'
+import { createRecorder, requireValue } from '@orkestrel/test'
 import { describe, expect, it } from 'vitest'
-import { BrowserRecorder, BrowserToolset, validateBrowserJourney } from '@src/core'
-import { createBrowserActionFixture, createBrowserViewDouble } from '../../../setup.js'
+import {
+	BrowserRecorder,
+	BrowserToolset,
+	createBrowserToolset,
+	validateBrowserJourney,
+} from '@src/core'
+import {
+	BROWSER_ELEMENT_AX_FIXTURE,
+	BROWSER_ELEMENT_FRAMED_FIXTURE,
+	createBrowserActionFixture,
+	createBrowserElementFixture,
+	createBrowserPopupFixture,
+	createBrowserViewDouble,
+} from '../../../setup.js'
 
 describe('BrowserRecorder', () => {
 	it('records completed actions with semantic targets and portable tab evidence', async () => {
@@ -34,30 +48,55 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it('records a click that opened a popup as a click without the popup tab', async () => {
-		const toolset = new BrowserToolset(createBrowserViewDouble())
+	it('records the opener click after settlement moves the view to the popup', async () => {
+		const fixture = await createBrowserPopupFixture()
+		const toolset = createBrowserToolset(fixture.page)
 		const recorder = new BrowserRecorder(toolset)
-		await recorder.start()
-		toolset.emitter.emit('action', {
-			...createBrowserActionFixture({
-				receipt:
-					'Clicked e1 button "Save". The view moved to a new tab: https://shop.test/details.',
-			}),
-			tab: { title: 'Details', url: 'https://shop.test/details' },
-		})
-		expect(recorder.steps()).toEqual([
-			{
+		const views = createRecorder<readonly [BrowserViewInterface]>()
+		toolset.emitter.on('action', () => views.handler(toolset.view))
+		try {
+			await toolset.start()
+			await fixture.page.elements.outline()
+			await recorder.start()
+			const performed = await toolset.perform({
 				id: 's1',
-				action: 'click',
+				name: 'click',
+				arguments: { ref: 'e4' },
+			})
+			expect(performed.action?.outcome).toBe('done')
+			expect(performed.action?.tab).toEqual({ title: 'Details', url: 'https://example.test/popup' })
+			expect(views.calls[0]?.[0]).toBe(toolset.view)
+			expect(views.calls[0]?.[0]).not.toBe(fixture.page)
+			expect(toolset.view.url).toBe('https://example.test/popup')
+			expect(recorder.steps(), 'popup settlement preserves the opener click').toEqual([
+				{
+					id: 's1',
+					action: 'click',
+					arguments: {},
+					target: { role: 'button', name: 'Place order', reference: 'e4' },
+				},
+			])
+			expect(
+				recorder.journey({ name: 'open-details', description: 'Open the details' }).steps,
+			).toHaveLength(1)
+			// The marker describes the dispatch, even when its id matches the later view.
+			toolset.emitter.emit(
+				'action',
+				createBrowserActionFixture({
+					target: { role: 'button', name: 'Save', reference: 'e1', frame: 'popup-1' },
+				}),
+			)
+			expect(recorder.steps()[1], 'a present frame remains a gap after the popup move').toEqual({
+				id: 's2',
+				action: 'unresolved',
 				arguments: {},
-				target: { role: 'button', name: 'Save', reference: 'e1' },
-			},
-		])
-		expect(
-			recorder.journey({ name: 'open-details', description: 'Open the details' }).steps,
-		).toHaveLength(1)
-		await recorder.destroy()
-		await toolset.destroy()
+				gap: 'the element is in a child frame',
+			})
+		} finally {
+			await recorder.destroy()
+			await toolset.destroy()
+			await fixture.client.close()
+		}
 	})
 
 	it('never records refused actions', async () => {
@@ -126,28 +165,46 @@ describe('BrowserRecorder', () => {
 		},
 	)
 
-	it('marks child frames and preserves main-frame targets', async () => {
-		const view = createBrowserViewDouble()
-		Reflect.set(view, 'id', 'main')
-		const toolset = new BrowserToolset(view)
-		const recorder = new BrowserRecorder(toolset)
-		await recorder.start()
-		for (const frame of ['main', 'child'])
-			toolset.emitter.emit(
-				'action',
-				createBrowserActionFixture({
-					target: { role: 'button', name: 'Save', reference: 'e1', frame },
-				}),
-			)
-		expect(recorder.steps()[0]?.target).toEqual({ role: 'button', name: 'Save', reference: 'e1' })
-		expect(recorder.steps()[1]).toEqual({
-			id: 's2',
-			action: 'unresolved',
-			arguments: {},
-			gap: 'the element is in a child frame',
+	it('records a same-origin child-frame click as a gap', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					message.params?.['frameId'] === 'child'
+						? BROWSER_ELEMENT_FRAMED_FIXTURE
+						: BROWSER_ELEMENT_AX_FIXTURE,
+				),
 		})
-		await recorder.destroy()
-		await toolset.destroy()
+		const toolset = createBrowserToolset(fixture.page)
+		const recorder = new BrowserRecorder(toolset)
+		try {
+			await toolset.start()
+			await fixture.page.elements.outline()
+			const element = requireValue(
+				(await fixture.page.elements.find({ role: 'button', name: 'Save' }))[0],
+			)
+			await recorder.start()
+			const performed = await toolset.perform({
+				id: 's1',
+				name: 'click',
+				arguments: { ref: element.reference },
+			})
+			expect(performed.action?.outcome).toBe('done')
+			expect(performed.action?.target?.frame).toBe('child')
+			expect(recorder.steps()).toEqual([
+				{
+					id: 's1',
+					action: 'unresolved',
+					arguments: {},
+					gap: 'the element is in a child frame',
+				},
+			])
+		} finally {
+			await recorder.destroy()
+			await toolset.destroy()
+			await fixture.client.close()
+		}
 	})
 
 	it('derives secret bindings without copying values and uses collision and invalid-name fallbacks', async () => {

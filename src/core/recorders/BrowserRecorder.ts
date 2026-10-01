@@ -144,11 +144,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	#appendAction(action: BrowserAction): void {
-		const view = this.#toolset.view
-		if (
-			action.target?.frame !== undefined &&
-			(!('id' in view) || action.target.frame !== view.id)
-		) {
+		if (action.target?.frame !== undefined) {
 			this.#append({ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' })
 			return
 		}

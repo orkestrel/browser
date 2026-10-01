@@ -1844,6 +1844,7 @@ export interface BrowserRecorderOptions {
  * - `arguments` — the call's arguments, without the text of a secret `type`
  * - `target` — the element the call's reference resolved to, captured before the input was
  *   dispatched: its role, exact accessible name, reference, and, in the page placement, frame
+ *   only when it differs from the dispatching page's main frame
  * - `tab` — the tab a `switch` moved to, or the popup a `click`, a `type` with `submit`, or a
  *   `press` of Enter opened and moved the view to
  * - `secret` — if `true`, the action was a secret `type`
@@ -2171,11 +2172,12 @@ export interface BrowserJourneyToolsetInterface {
 export type BrowserCodegenLanguage = 'javascript' | 'typescript'
 
 /**
- * Carries the module `compileBrowserJourney` emits with the gap steps it throws at.
+ * Carries the module `compileBrowserJourney` emits with the gap steps that refuse it.
  *
  * @remarks
  * - `source` — the standalone module, which imports only `@orkestrel/browser`
- * - `gaps` — one entry per gap step, in step order; the module throws at each
+ * - `gaps` — one entry per gap step, in step order; the module throws at the first before any
+ *   step and marks each with a comment at its position
  */
 export interface BrowserCodegenScript {
 	readonly source: string

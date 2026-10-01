@@ -217,7 +217,7 @@ describe('compileBrowserJourney', () => {
 		expect(typed.filter((line) => line.includes('secret: true'))).toStrictEqual([call])
 	})
 
-	it('compiles each gap to a throw at its position and lists every gap in order', () => {
+	it('throws at the first gap before the toolset starts, comments every gap at its position, and lists every gap in order', () => {
 		const [navigate, , click] = BROWSER_JOURNEY_FIXTURE.steps
 		if (navigate === undefined || click === undefined) throw new Error('The fixture lost a step')
 		const journey: BrowserJourney = {
@@ -232,11 +232,49 @@ describe('compileBrowserJourney', () => {
 		}
 		const script = compileBrowserJourney(journey, { language: 'typescript' })
 		expect(script.gaps).toStrictEqual(['s2', 's4'])
-		expect(script.source.split('\n').slice(7, 11)).toStrictEqual([
-			`\t\tawait performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })`,
-			`\t\tthrow new Error('s2: the element is in a child frame; handle it here')`,
-			`\t\tawait performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })`,
-			`\t\tthrow new Error('s4: the option\\'s value repeats; handle it here')`,
+		expect(script.source).toBe(
+			[
+				`import type { BrowserPageInterface } from '@orkestrel/browser'`,
+				`import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'`,
+				'',
+				'export async function execute(page: BrowserPageInterface): Promise<void> {',
+				`\tthrow new Error('s2: the element is in a child frame; handle it here')`,
+				'\tconst toolset = createBrowserToolset(page)',
+				'\tawait toolset.start()',
+				'\ttry {',
+				`\t\tawait performBrowserStep(toolset, 's1', { action: 'navigate', arguments: { url: 'https://shop.example.test/' } })`,
+				'\t\t// s2: the element is in a child frame; handle it here',
+				`\t\tawait performBrowserStep(toolset, 's3', { action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } })`,
+				"\t\t// s4: the option's value repeats; handle it here",
+				'\t} finally {',
+				'\t\tawait toolset.destroy()',
+				'\t}',
+				'}',
+				'',
+			].join('\n'),
+		)
+	})
+
+	it('escapes every line terminator of a gap so its comment stays one line', () => {
+		const journey: BrowserJourney = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [
+				{
+					id: 's1',
+					action: 'unresolved',
+					arguments: {},
+					gap: 'split\nby\rfour\u2028line\u2029terminators',
+				},
+			],
+		}
+		const lines = compileBrowserJourney(journey).source.split('\n')
+		expect(lines.slice(3, 8)).toStrictEqual([
+			`\tthrow new Error('s1: split\\nby\\rfour\u2028line\u2029terminators; handle it here')`,
+			'\tconst toolset = createBrowserToolset(page)',
+			'\tawait toolset.start()',
+			'\ttry {',
+			'\t\t// s1: split\\u000aby\\u000dfour\\u2028line\\u2029terminators; handle it here',
 		])
 	})
 
