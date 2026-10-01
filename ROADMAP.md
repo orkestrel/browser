@@ -3,4 +3,3 @@ Each item is a chunk that reaches green before the next. An item keeps its numbe
 - **1.** Declare an optional capture capability on `BrowserViewInterface` so a replay reads the view's `emitter` and `screenshot` through the contract rather than through structural checks (`src/core/BrowserReplay.ts`).
 - **2.** Publish a structured tabs listing from the toolset so `follow` resolves a `switch` step's tab from data rather than from the `tabs` tool's text through `parseBrowserTabLine`.
 - **3.** Carry the coded fault of a `perform` on the result itself rather than in a `WeakMap` keyed by the result object, which loses the code on a copy; the result's shape is `@orkestrel/tool`'s, so this is a cross-package change with that package.
-- **4.** Bound the advertised copy's cost with a test: the journey tools and `type`'s `secret` measured 798 prompt tokens per turn on `qwen3.5:2b-q4_K_M` on 2026-10-01 (`guides/browser.md` § Journeys), and the full list 1 651.
