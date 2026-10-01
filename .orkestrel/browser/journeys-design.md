@@ -270,7 +270,7 @@ A run id is minted by the producer as `<ISO time with - for :>-<4 hex>` and its 
 
 `editBrowserJourney(journey, edits)` is pure and atomic: it applies the batch to a copy, in order, checking each edit's own structure as applied (an unknown id, a duplicate anchor, an `update` that removes the target of a `ref`-taking action, a `declare` of a secret with a default) and the cross-step invariants on the final candidate; a parameter this batch unbound is dropped, and a `declare` whose parameter no step binds at the end of the batch is refused; any failure refuses the whole batch with `BROWSER_JOURNEY_EDIT` naming the edit's index and a reason clause (no directive, no final period, such as `declares "email" but no step binds it`). `update.arguments` merges by key. The `edit` tool converts a `ref` in an added or updated step to a target from the current view before the pure editor runs.
 
-The store's `set(journey, expected)` refuses a mismatch between `expected` and the stored revision with `BROWSER_JOURNEY_REVISION`, inside the per-name lock (§ 7); `delete` takes the same lock and keeps the `revision` counter, so a recreated journey continues the count and a stale writer is refused.
+The store's `set(journey, expected)` refuses a mismatch between `expected` and the stored revision with `BROWSER_JOURNEY_STALE`, inside the per-name lock (§ 7); `delete` takes the same lock and keeps the `revision` counter, so a recreated journey continues the count and a stale writer is refused.
 
 ## 6. Codegen
 
