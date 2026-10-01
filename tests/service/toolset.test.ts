@@ -239,13 +239,19 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				expect(actions.map((action) => action.outcome)).toEqual(['interrupted', 'done', 'done'])
 				observed.push(actions)
 			}
-			const wording = (actions: readonly BrowserAction[] | undefined) =>
-				actions?.map((action) => [
+			expect(
+				observed[1]?.map((action) => [
 					maskBrowserReferences(action.receipt),
 					action.stage,
 					action.reason,
-				])
-			expect(wording(observed[1])).toEqual(wording(observed[0]))
+				]),
+			).toEqual(
+				observed[0]?.map((action) => [
+					maskBrowserReferences(action.receipt),
+					action.stage,
+					action.reason,
+				]),
+			)
 		})
 
 		it('resolves a switch by URL and title and matches the direct tab receipt', async () => {
