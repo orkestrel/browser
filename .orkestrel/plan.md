@@ -1,26 +1,46 @@
-# Fleet campaign plan: publish the journeys surface and propagate the browse server
+# Fleet campaign plan: the contract wave, the journeys release, and the browse server
 
-Opened 2026-10-01 when the journeys campaign in `@orkestrel/browser` closed on branch `ccr-d15a48b1-yyyll6` (`d221d4b` retired its campaign folder). This plan carries the work that remains across packages; each package's units sit under its own directory, and the release wave sits in `release.md`. Read the registry, then the package plan the unit belongs to, then `.agents/orchestration.md` for the dispatch form.
+Opened 2026-10-01 after the journeys campaign in `@orkestrel/browser` closed (`d221d4b`) and the units that needed no publish landed (browser `ROADMAP.md` items 5, 4, 1, and 2 at `5363263`; scaffold item 39 at `dc1c96e`). Read the registry, then the wave, then the unit you run; `.agents/orchestration.md` gives the dispatch form and the `orkestrel-publish` skill the release procedure.
 
 ## Registry
 
 | Row | Value |
 | --- | --- |
-| Goal | `@orkestrel/mcp` 0.0.34 and `@orkestrel/browser` 0.0.19 on the registry; the `browse` MCP server propagated by scaffold; the ollama store proof re-pinned and pushed with its journey task; the contract reader ruled |
-| Exit criterion | the registry serves both versions; scaffold's roadmap items 37, 38, and 39 are closed and its catalog row reads browser 0.0.19 at layer 5; `orkestrel/ollama` main carries the store proof against the published browser; the browser `ROADMAP.md` items that need no publish are closed; `.orkestrel/` in every repository is empty |
-| Packages | `@orkestrel/mcp` (layer 4), `@orkestrel/browser` (layer 5), `@orkestrel/ollama` (consumer), `@orkestrel/scaffold` (host), `@orkestrel/contract` (layer 0), `@orkestrel/tool` (layer 2, one item) |
-| Layer order | mcp, then browser, then ollama and the scaffold catalog; contract and tool on their own |
-| Authority | the owner publishes and merges; a session runs each package's units from its plan; every lane is `astra` (Codex) or `opus`, never the session model |
-| Branches | browser `ccr-d15a48b1-yyyll6` (`5363263`, `ROADMAP.md` items 1, 2, 4, and 5 landed); mcp `ccr-d15a48b1-yyyll6` (`619699b`, 0.0.34); scaffold `ccr-d15a48b1-yyyll6` (`dc1c96e`, main `7bc3142` merged, item 39 closed); ollama `ccr-d15a48b1-yyyll6` (`f97df76`) and the local `ccr-d15a48b1-yyyll6-journeys` (`6d61a5a`) |
+| Goal | `@orkestrel/contract` 0.0.19 reads a JSON Schema `type` array, and the session's packages that depend on it re-pin and republish; `@orkestrel/browser` 0.0.19 ships the journeys with its `ROADMAP.md` empty; scaffold 0.0.83 gives every workspace with a browser, Vue, or styles surface the `browse` server; the ollama store proof runs against the published browser |
+| Exit criterion | the registry serves contract 0.0.19, html 0.0.12, tool 0.0.18, markdown 0.0.17, mcp 0.0.34, browser 0.0.19, ollama 0.0.20, and scaffold 0.0.83; each session repository's branch `ccr-d15a48b1-yyyll6` carries its release commit; the out-of-session obligations are recorded where the next visit reads them; `.orkestrel/` in every repository is empty |
+| Owner rulings, 2026-10-01 | the contract fix publishes now and cascades only to the session's packages; `browse` reaches every workspace with a browser, Vue, or styles surface (veneer first); browser item 3 rides `BrowserToolsetResult`, so `@orkestrel/tool` moves only for the contract re-pin; the ollama turn lever lands after the wave |
+| Session repositories | contract, html, tool, markdown, mcp, browser, ollama, scaffold, and veneer (the propagation proof), all on `ccr-d15a48b1-yyyll6`; the owner merges to `main` |
+| Authority | the owner publishes: every window needs the owner's npm approval at the keyboard; lanes are `astra` (Codex) or `opus`, never the session model; one writer per checkout |
 
-## The order, easiest first
+## The wave
 
-The units that needed no publish are landed: browser `ROADMAP.md` items 5 and 4 (`3ac285e`), 1 (`ae81af5`), and 2 (`5363263`), and scaffold item 39 (`dc1c96e`). What remains, in order:
+Each window publishes one layer after every package in it visited green, bumped from the registry, re-pinned to the previous window, passed its `prepublishOnly`, and pushed its release commit. A caret on a 0.0.x range pins one release, so a package re-pins only after its dependency is on the registry.
 
-1. **The publish wave** (`release.md`): the owner's credential; mcp first, then browser.
-2. **After the wave**: ollama (`ollama/plan.md`), scaffold item 38 and the catalog verb (`scaffold/plan.md`), browser item 3 with `@orkestrel/tool`.
-3. **Separate sessions**: contract (`contract/plan.md`, the repository is not attached here) and scaffold item 38 (a design decision over the generator).
+| Window | Packages | Waits on |
+| --- | --- | --- |
+| W1 | contract 0.0.19 | unit C1 landed |
+| W2 | html 0.0.12, tool 0.0.18 | W1 |
+| W3 | markdown 0.0.17, mcp 0.0.34 | W2 |
+| W4 | browser 0.0.19 | W3, unit B3 landed |
+| W5 | ollama 0.0.20 | W4, unit O1 landed |
+| W6 | scaffold 0.0.83 | W5, unit S38 landed, the catalog verb run |
 
-## Landing a browser unit
+## Status, 2026-10-01
 
-A worktree per lane under `tmp/worktrees/<unit>` from the branch head, `npm ci` with `tmp/tarballs/orkestrel-mcp-0.0.34.tgz` copied in; the lane commits nothing. To land: host gates in the worktree (the projects the unit touches, the service suites when the toolset or the replay changed), `git add` and commit in the worktree with the unit's message, `git merge --no-ff` into the branch, `npm run check`, the full gate set (`oxfmt --check`, `oxlint --deny-warnings`, `npm run check`, `npm run build`, `npm test`, `npm run test:distribution`, `npm run test:service`), then push. A merge conflict where two lanes appended at one seam is resolved by keeping both sides.
+W1 to W4 are on the registry, each confirmed by `npm view`: contract 0.0.19, html 0.0.12, tool 0.0.18, markdown 0.0.17, mcp 0.0.34, browser 0.0.19. W5 (ollama) and W6 (scaffold) remain; their visits run first.
+
+## Units
+
+| Unit | Repository | Engine | Status |
+| --- | --- | --- | --- |
+| C1: `schemaToShape` converts a `type` array to the union of its members | contract | astra | landed `704e5d4`, published 0.0.19 |
+| B3: the coded fault of a `perform` rides `BrowserToolsetResult`; browser `ROADMAP.md` item 3 | browser | opus | landed `188a2d7`, published in 0.0.19 |
+| S38: `@orkestrel/browser` joins the development dependencies of a browser, Vue, or styles blueprint; the `browse` registration has one home | scaffold | opus | landed `438e808`; scaffold item 40 (lockfile install and catalog) rides W6 |
+| M0: markdown proves `tests/setupGuides.ts` in its sibling test, as the scaffold 0.0.82 policy requires | markdown | opus | landed `f106c4f`, published in 0.0.17 |
+| O1: retire `normalizeSchemaTypes`, the turn lever in the store proof's turn handling, three live runs (`ollama/plan.md`) | ollama | opus | the journeys history is rebased onto `f97df76` at `df7ecd6`; the visit re-pins it; the lane follows |
+| V1: veneer's visit proves scaffold 0.0.83 delivers `@orkestrel/browser` and the `browse` rule; register `browse` and record a journey against veneer's app | veneer | host and opus | after W6 |
+| Close: re-pin `@orkestrel/scaffold` `^0.0.83` and `repair` in each session repository; empty `.orkestrel/` | all | host | after W6 |
+
+## Out-of-session obligations
+
+The owner limited the cascade to the session's packages. These consumers re-pin at their next visit: `@orkestrel/probe` (mcp `^0.0.34`, tool `^0.0.18`), `@orkestrel/agent` and `@orkestrel/toolbox` (tool `^0.0.18`), `@orkestrel/guide` (markdown `^0.0.17`), and the 41 other catalog packages that pin contract `^0.0.18`. Until they do, an install that combines them with a session package carries two copies of the moved dependency.

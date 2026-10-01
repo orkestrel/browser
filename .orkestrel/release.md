@@ -1,20 +1,23 @@
-# Release wave: mcp 0.0.34, browser 0.0.19
+# Release wave: the contract cascade and the journeys release
 
-Standing readings, taken 2026-10-01: the registry's `latest` is `@orkestrel/mcp` 0.0.33 and `@orkestrel/browser` 0.0.18; scaffold's catalog carries those rows; `@orkestrel/router` 0.0.16 and `@orkestrel/server` 0.0.21 are published. Run the wave with the `orkestrel-publish` skill: the per-repository visit, the bump ruling, the layer preparation, the login approval, and the five-minute upload window.
+Run the wave with the `orkestrel-publish` skill: the visit (`wave.ts --visit`), the bump ruling, the layer preparation, then `window.ts --publish DIRS --otp CODE` with a code the owner sends at the moment the layer is ready. The account answers with an authenticator code; a code that arrives near the end of its 30 seconds is refused `EOTP`, so ask for one just after it rolls over and never retry on a refused code.
 
-## Layer 4: `@orkestrel/mcp` 0.0.34
+## Published
 
-- Repository `orkestrel/mcp`, branch `ccr-d15a48b1-yyyll6` at `619699b` ("Bump @orkestrel/mcp to 0.0.34"); the manifest reads 0.0.34; the checkout at `/home/user/mcp` is clean.
-- Bump ruling: 0.0.34 for the WebMCP bridge on the 2026-09-29 draft (`debugging` annotations, `toolactivated` and `toolcancel` listeners republished as `activate` and `abort`), the conformance count, and the guide drift; the M3 verifier run is recorded in that repository's history.
-- Peers `@orkestrel/router ^0.0.16` and `@orkestrel/server ^0.0.21` are already published, so nothing precedes it.
+| Window | Package | Version | Release commit | Bump ruling |
+| --- | --- | --- | --- | --- |
+| W1 | `@orkestrel/contract` | 0.0.19 | `8bd3382` | dist moved (`schemaToShape` reads a type array) |
+| W2 | `@orkestrel/html` | 0.0.12 | `f3dfc68` | contract range moved |
+| W2 | `@orkestrel/tool` | 0.0.18 | `a212f30` | contract range moved |
+| W3 | `@orkestrel/markdown` | 0.0.17 | `5a61e00` | contract and html ranges moved |
+| W3 | `@orkestrel/mcp` | 0.0.34 | `528d466` | dist moved and contract and tool ranges moved; the distribution proof's overrides moved with them |
+| W4 | `@orkestrel/browser` | 0.0.19 | `cd153f0` | dist moved and every runtime range moved; the manifest carried 0.0.19 from the campaign |
 
-## Layer 5: `@orkestrel/browser` 0.0.19
+## Remaining
 
-- Repository `orkestrel/browser`, branch `ccr-d15a48b1-yyyll6`; the manifest reads 0.0.19 and the bump ruling keeps it: nothing between 0.0.18 and this tree is published, so the toolset, the journeys (`record`, `save`, `journeys`, `edit`, `replay`, `forget`), the `browse` binary, `BrowserToolsetInterface.follow` and `tabs` with `BrowserTab` (`BrowserTabLine` and `parseBrowserTabLine` never shipped), the optional `emitter` and `screenshot` on `BrowserViewInterface` with `BrowserViewEventMap`, the renamed `BROWSER_JOURNEY_LOCK_DIRECTORY`, and the removed `BrowserTargetOptions` ride one version. Evidence: `compare.js` against the published 0.0.18 exits 3 (3 files added, 8 changed, read at `baf2898`); the J15 and J15b bare runs green; the last integrated gate set on `5363263` green (src 1 666 + 1 skipped, setup 168, service 98 + 1, guides 248, policy 114 + 1, conformance 69, distribution 19 + 4).
-- Before publishing, in this order: (1) mcp 0.0.34 is on the registry; (2) replace the dependency `"@orkestrel/mcp": "file:tmp/tarballs/orkestrel-mcp-0.0.34.tgz"` with `"^0.0.34"` (the replaced range is recorded in `tmp/tarballs/mcp-replaced-range.txt`: it was absent before the campaign); (3) `npm install` so the lockfile follows, and delete `node_modules/.vite`; (4) `npm test`, `npm run test:service`, `npm run test:distribution`; (5) `ROADMAP.md` items 1, 2, 4, and 5 are in (landed 2026-10-01), and item 3 waits on `@orkestrel/tool`; (6) publish.
-- After publishing: run scaffold's `catalog` verb so the browser row reads 0.0.19 at layer 5 with `html`, `tool`, `emitter`, `contract`, `markdown`, `websocket`, `mcp`, `router`, and `server`.
+- W5 `@orkestrel/ollama` 0.0.20: the visit re-pins contract `^0.0.19`, tool `^0.0.18`, and browser `^0.0.19` (development); unit O1 lands; bump from 0.0.19; `prepublishOnly`; release commit; upload.
+- W6 `@orkestrel/scaffold` 0.0.83: the visit, scaffold item 40 (`npm install` for the `@orkestrel/browser` `^0.0.19` development range, then the `catalog` verb after W5 so the table reads every wave release), bump from 0.0.82, `prepublishOnly`, release commit, upload.
 
-## After the wave
+## Readings
 
-- `orkestrel/ollama`: re-pin `@orkestrel/browser` to `^0.0.19`, drop the mcp override, and land the journey history (`ollama/plan.md`).
-- `orkestrel/scaffold`: item 38, then the catalog verb (`scaffold/plan.md`).
+- The registry lists a version in the packument at once and serves its tarball minutes later: contract 0.0.19 published at 16:45:24Z and its tarball answered 200 at 16:50:48Z. Before a dependent's install, poll the tarball URL until it answers 200; a distribution proof that installs the packed archive earlier fails `E404`.
