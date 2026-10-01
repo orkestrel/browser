@@ -2215,6 +2215,45 @@ export async function createBrowserElementFixture(
 }
 
 /**
+ * Creates a protocol fixture whose main-frame click opens a popup before the input reply.
+ * @returns The opener, transport, and client driving the popup's attachment and settlement
+ */
+export async function createBrowserPopupFixture(): Promise<BrowserElementFixture> {
+	const fixture = await createBrowserElementFixture({
+		held: true,
+		roots: new Map([['popup-session', { id: 'popup-1', url: 'https://example.test/popup' }]]),
+		title: (message) =>
+			fixture.transport.reply(message.id, {
+				result: { value: message.sessionId === 'popup-session' ? 'Details' : 'Cart' },
+			}),
+		released: (message) => {
+			emitBrowserWindowOpen(fixture.transport, 'session-main', 'https://example.test/popup')
+			fixture.transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'popup-session',
+					targetInfo: {
+						targetId: 'popup-1',
+						type: 'page',
+						url: 'https://example.test/popup',
+					},
+				},
+				'session-main',
+			)
+			fixture.transport.reply(message.id, {})
+		},
+	})
+	for (const method of [
+		'Page.setInterceptFileChooserDialog',
+		'Network.enable',
+		'Network.disable',
+		'Target.detachFromTarget',
+	])
+		replyOk(fixture.transport, method)
+	return fixture
+}
+
+/**
  * Emits a committed main-frame document and its `DOMContentLoaded`, so a page's readiness wait
  * resolves without the `document.readyState` seed.
  * @param transport - The fake transport the page listens on
@@ -3652,6 +3691,7 @@ export const BROWSER_JOURNEY_ACTION_MODULE = String.raw`import type { BrowserPag
 import { createBrowserToolset, performBrowserStep } from '@orkestrel/browser'
 
 export async function execute(page: BrowserPageInterface, inputs: { readonly store?: string; readonly product?: string; readonly customer: string; readonly password: string; readonly key?: string; readonly reply?: string }): Promise<void> {
+	throw new Error('s11: the element is in a child frame; handle it here')
 	const toolset = createBrowserToolset(page)
 	await toolset.start()
 	try {
@@ -3665,7 +3705,7 @@ export async function execute(page: BrowserPageInterface, inputs: { readonly sto
 		await performBrowserStep(toolset, 's8', { action: 'dialog', arguments: { accept: false, text: inputs.reply ?? 'It\'s "fine"' } })
 		await performBrowserStep(toolset, 's9', { action: 'dialog', arguments: { accept: true } })
 		await performBrowserStep(toolset, 's10', { action: 'switch', arguments: {}, tab: { url: 'https://shop.example.test/cart', title: 'Cart' } })
-		throw new Error('s11: the element is in a child frame; handle it here')
+		// s11: the element is in a child frame; handle it here
 		await performBrowserStep(toolset, 's12', { action: 'reserve', arguments: { ref: 'sku7', tab: 'stock', value: { parameter: 'customer' }, count: 2, gift: null, tags: ['a\\b', 'it\'s'], 'line\nbreak': '', 'gift-wrap': true, nested: {}, list: [] } })
 	} finally {
 		await toolset.destroy()
@@ -3964,24 +4004,24 @@ export const BROWSER_JOURNEY_MODULE_CASES: readonly BrowserJourneyModuleCase[] =
 ])
 
 /**
- * Holds a journey whose gap follows a step without side effect: the module throws at the gap and
- * the replay refuses at preparation, and both leave the form page's click log empty.
+ * Holds a journey whose gap follows a click that saves the form page's draft: the module and the
+ * replay both refuse it before that click, so the page's click log stays empty.
  */
 export const BROWSER_JOURNEY_GAP_CASE: BrowserJourneyModuleCase = Object.freeze({
-	name: 'gap after a wait',
+	name: 'gap after a click',
 	route: '/form',
 	journey: createBrowserJourneyFixture(
 		[
-			{ action: 'wait', arguments: { text: 'Delivery form' } },
-			{ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
 			{ action: 'click', arguments: {}, target: { role: 'button', name: 'Save draft' } },
+			{ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+			{ action: 'click', arguments: {}, target: { role: 'button', name: 'Submit' } },
 		],
-		{ name: 'save-draft', description: 'Save the delivery draft' },
+		{ name: 'save-draft', description: 'Save the delivery draft and submit it' },
 	),
 	inputs: {},
 	state:
-		"({ clicks: (document.body.dataset.clicks ?? '').split(' ').filter(Boolean).length, saved: document.body.dataset.saved ?? 'no' })",
-	outcome: [{ clicks: 0, saved: 'no' }],
+		"({ clicks: document.body.dataset.clicks ?? '', saved: document.body.dataset.saved ?? 'no' })",
+	outcome: [{ clicks: '', saved: 'no' }],
 })
 
 /**

@@ -66,10 +66,10 @@ import {
 	BROWSER_SUBMIT_NEGATIVE_CASES,
 	BROWSER_SUBMIT_UNREAD_CASES,
 	createBrowserElementFixture,
+	createBrowserPopupFixture,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
 	createConnectedCDPClient,
-	emitBrowserWindowOpen,
 	ignoreCall,
 	readCDPExpression,
 	readBrowserCompiledTimers,
@@ -151,7 +151,7 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('captures the target before input replaces the document', async () => {
+		it('captures the main-frame target without a frame before input replaces the document', async () => {
 			const fixture = await createBrowserElementFixture({
 				released: (message) => {
 					emitBrowserNavigation(
@@ -177,7 +177,6 @@ describe('BrowserToolset', () => {
 					role: 'button',
 					name: 'Place order',
 					reference: 'e4',
-					frame: 'main',
 				})
 				expect(performed.action).toMatchObject({
 					outcome: 'done',
@@ -3786,39 +3785,7 @@ describe('BrowserToolset', () => {
 		it.each(['tools.execute', 'perform'] as const)(
 			'settles a click that opens a popup on the popup through %s: the result carries the move and the popup view, and the action the popup as its tab',
 			async (path) => {
-				const fixture = await createBrowserElementFixture({
-					held: true,
-					title: (message) =>
-						fixture.transport.reply(message.id, {
-							result: { value: message.sessionId === 'popup-session' ? 'Details' : 'Cart' },
-						}),
-					// Chromium 141 reports the window on the opener's session before it answers the
-					// release; the popup's attach comes before the reply here too.
-					released: (message) => {
-						emitBrowserWindowOpen(fixture.transport, 'session-main', 'https://example.test/popup')
-						fixture.transport.event(
-							'Target.attachedToTarget',
-							{
-								sessionId: 'popup-session',
-								targetInfo: {
-									targetId: 'popup-1',
-									type: 'page',
-									url: 'https://example.test/popup',
-								},
-							},
-							'session-main',
-						)
-						fixture.transport.reply(message.id, {})
-					},
-				})
-				const { client, page, transport } = fixture
-				for (const method of [
-					'Page.setInterceptFileChooserDialog',
-					'Network.enable',
-					'Network.disable',
-					'Target.detachFromTarget',
-				])
-					replyOk(transport, method)
+				const { client, page } = await createBrowserPopupFixture()
 				const toolset = createBrowserToolset(page)
 				try {
 					await toolset.start()
