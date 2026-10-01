@@ -2,7 +2,8 @@
  * Proof for `tests/setupServer.ts`.
  *
  * The subject is the Node-only test infrastructure `tests/src/server/**` and `tests/service/**`
- * drive: the port reservation helpers, the process wait, the scratch registry, the raw TCP
+ * drive: the port reservation helpers, the process wait, the scratch registry, the browse child's
+ * first call and ending, the Chromium process table reader and its teardown, the raw TCP
  * fixtures, the in-process CDP server and the frames of each socket write it performs, the spawned
  * fake browser, the fixture page and module server, the built-bundle precondition of the
  * document page, and the stage that imports a generated journey module through a link to this
@@ -23,7 +24,7 @@ import type { CDPTestServerInterface } from './setupServer.js'
 import { createAttachedPage } from './setup.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, readFileSync, realpathSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { createConnection, createServer } from 'node:net'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -38,7 +39,9 @@ import {
 } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
+	BrowseChild,
 	COOPERATIVE_SIGTERM,
+	PROCESS_TABLE,
 	createBrowserJourneyStage,
 	createCDPTestServer,
 	createFakeBrowserProcess,
@@ -46,8 +49,10 @@ import {
 	createStallServer,
 	createTCPProxy,
 	createTempDirectory,
+	destroyChromiumProcesses,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
+	endBrowseChild,
 	FIXTURE_CHECKOUT_CODE,
 	FIXTURE_CHECKOUT_DELAY,
 	FIXTURE_DOCUMENT_BUNDLE,
@@ -56,13 +61,16 @@ import {
 	FIXTURE_LATE_TEXT,
 	FIXTURE_REGISTRY_MODULE,
 	loadFixtureModule,
+	readChromiumProcesses,
 	readFixtureProcessId,
+	readProfiles,
 	readServerPort,
 	readWebSocketFrames,
 	renderFixturePage,
 	requireDocumentBundle,
 	reservePort,
 	StallServer,
+	startBrowseChild,
 	waitForProcessExit,
 } from './setupServer.js'
 
@@ -127,6 +135,88 @@ describe('waitForProcessExit', () => {
 			`Condition "process ${process.pid} has exited" did not hold within 200ms`,
 		)
 	})
+})
+
+describe('startBrowseChild', () => {
+	it('refuses a first look that answers an error, and the child exits 0 at the end of its input', async () => {
+		const scratch = createTempDirectory()
+		const child = new BrowseChild(join(WORKSPACE, 'dist/bin/main.js'), scratch.path, {
+			BROWSE_EXECUTABLE: join(scratch.path, 'missing/chrome'),
+		})
+		try {
+			await expect(startBrowseChild(child)).rejects.toThrow(/^the first look answered .*ENOENT/u)
+			endBrowseChild(child, 'EOF')
+			expect(await child.ending).toStrictEqual({ code: 0, signal: null })
+		} finally {
+			await child.destroy()
+		}
+	})
+})
+
+describe('readProfiles', () => {
+	it('lists nothing for an absent directory and every entry by path in name order', () => {
+		const scratch = createTempDirectory()
+		const profiles = join(scratch.path, '.profiles')
+		expect(readProfiles(profiles)).toStrictEqual([])
+		mkdirSync(join(profiles, 'teapot'), { recursive: true })
+		mkdirSync(join(profiles, 'kettle'))
+		expect(readProfiles(profiles)).toStrictEqual([
+			join(profiles, 'kettle'),
+			join(profiles, 'teapot'),
+		])
+	})
+})
+
+// The processes are Node children carrying Chromium's switches as arguments, so the table reads
+// the same command-line shape a browser and its renderer leave, with a control outside the
+// directory that neither the listing nor the teardown may reach.
+describe('readChromiumProcesses', () => {
+	it.runIf(PROCESS_TABLE)(
+		'lists the processes whose profile sits in a directory, and destroyChromiumProcesses ends only those',
+		async () => {
+			const scratch = createTempDirectory()
+			const profiles = join(realpathSync(scratch.path), '.profiles')
+			const kettle = join(profiles, 'kettle')
+			const idle = 'setInterval(() => {}, 1000)'
+			const browser = spawn(process.execPath, ['-e', idle, '--', `--user-data-dir=${kettle}`], {
+				stdio: 'ignore',
+			})
+			const renderer = spawn(
+				process.execPath,
+				['-e', idle, '--', '--type=renderer', `--user-data-dir=${kettle}`],
+				{ stdio: 'ignore' },
+			)
+			const outside = spawn(
+				process.execPath,
+				['-e', idle, '--', `--user-data-dir=${join(scratch.path, 'elsewhere', 'kettle')}`],
+				{ stdio: 'ignore' },
+			)
+			const pids = [browser, renderer, outside].map((child) =>
+				requireValue(child.pid, 'a spawned process reported no identifier'),
+			)
+			try {
+				await waitForCondition(
+					'both processes in the directory are listed',
+					() => readChromiumProcesses(profiles).length === 2,
+					{ budget: 5000, interval: 10 },
+				)
+				expect(readChromiumProcesses(profiles)).toHaveLength(2)
+				expect(readChromiumProcesses(profiles)).toStrictEqual(
+					expect.arrayContaining([
+						{ pid: pids[0], profile: kettle, browser: true },
+						{ pid: pids[1], profile: kettle, browser: false },
+					]),
+				)
+				await destroyChromiumProcesses(profiles)
+				await waitForProcessExit(requireValue(pids[0], 'no browser process'))
+				await waitForProcessExit(requireValue(pids[1], 'no renderer process'))
+				expect(isRunning(requireValue(pids[2], 'no control process'))).toBe(true)
+				expect(readChromiumProcesses(profiles)).toStrictEqual([])
+			} finally {
+				for (const child of [browser, renderer, outside]) child.kill('SIGKILL')
+			}
+		},
+	)
 })
 
 describe('createTempDirectory', () => {
