@@ -5,6 +5,8 @@ import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@o
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_CHILD_FIXTURE,
+	BROWSER_ELEMENT_NAME_CASES,
+	BROWSER_ELEMENT_NAME_AX_FIXTURE,
 	RecordingCDPClient,
 	attachBrowserElementChild,
 	createBrowserElementFixture,
@@ -14,6 +16,20 @@ import {
 } from '../../../setup.js'
 
 describe('element manager', () => {
+	it.each(BROWSER_ELEMENT_NAME_CASES)('$title', async ({ query, expected }) => {
+		const fixture = await createBrowserElementFixture({
+			accessibility: (message) =>
+				fixture.transport.reply(message.id, BROWSER_ELEMENT_NAME_AX_FIXTURE),
+		})
+		try {
+			expect((await fixture.page.elements.find(query)).map((element) => element.name)).toEqual(
+				expected,
+			)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
 	it('drops references on the page steps and subscribes to no frame commit or detach of its own', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		scriptBrowserElements(transport)

@@ -9,6 +9,15 @@ import { attempt } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool } from '@orkestrel/tool'
 import {
+	renderBrowserRun,
+	renderBrowserRunResult,
+	collectBrowserJourneyBindings,
+	editBrowserJourney,
+	renderBrowserJourney,
+	deriveBrowserJourneyTrigger,
+	deriveBrowserJourneySecret,
+	generateBrowserRunId,
+	resolveBrowserJourneyBinding,
 	composeBrowserPoint,
 	locateBrowserTarget,
 	performBrowserStep,
@@ -57,7 +66,16 @@ import {
 } from '@src/core'
 import { createRecorder, readProperty, requireValue, waitForCondition } from '@orkestrel/test'
 import {
+	BROWSER_RUN_FIXTURE,
+	BROWSER_RUN_LISTING,
+	BROWSER_RUN_VIEW,
+	BROWSER_JOURNEY_FIXTURE,
+	BROWSER_JOURNEY_LISTING,
+	BROWSER_JOURNEY_TEMPLATE_CASES,
+	BROWSER_JOURNEY_EDIT_REFUSALS,
 	BROWSER_ELEMENT_AX_FIXTURE,
+	BROWSER_ELEMENT_NAME_CASES,
+	BROWSER_ELEMENT_NAME_AX_FIXTURE,
 	createBrowserElementFixture,
 	createBrowserViewDouble,
 	replyOk,
@@ -302,6 +320,17 @@ describe('journey step helpers', () => {
 })
 
 describe('element helpers', () => {
+	it.each(BROWSER_ELEMENT_NAME_CASES)('$title', ({ query, expected }) => {
+		const rows = readBrowserAccessibility(BROWSER_ELEMENT_NAME_AX_FIXTURE).nodes.map((node) => ({
+			...node,
+			session: 'main',
+			reference: undefined,
+		}))
+		expect(
+			filterBrowserOutline(rows, query).map((node) => normalizeBrowserName(node.name ?? '')),
+		).toEqual(expected)
+	})
+
 	it('catches helper alias, normalization, scope, and point composition errors', () => {
 		expect(['enter', 'Return', 'ENTER', 'esc', 'ctrl+a'].map(normalizeBrowserKey)).toEqual([
 			'Enter',
@@ -1172,5 +1201,210 @@ describe('settleBrowserTeardown', () => {
 
 		expect(ran).toEqual(['first', 'second'])
 		expect(failure).toBeNull()
+	})
+})
+
+describe('journey editing and rendering', () => {
+	it('never reuses an id after removal', () => {
+		const removed = editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [{ operation: 'remove', id: 's5' }])
+		const added = editBrowserJourney(removed, [
+			{ operation: 'add', step: { action: 'wait', arguments: { text: 'Saved' } } },
+		])
+		expect(added.steps.at(-1)?.id).toBe('s6')
+		expect(added.next).toBe(7)
+	})
+	it('refuses a lone unbound declare', () => {
+		expect(
+			attempt(() =>
+				editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+					{ operation: 'declare', name: 'unused', parameter: {} },
+				]),
+			),
+		).toMatchObject({
+			success: false,
+			error: {
+				code: 'BROWSER_JOURNEY_EDIT',
+				message: 'Edit 1 is refused: it declares "unused" but no step binds it',
+				context: { index: 1, reason: 'declares "unused" but no step binds it' },
+			},
+		})
+	})
+	it('applies anchors in order and merges argument updates', () => {
+		const journey = editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+			{ operation: 'add', before: 's2', step: { action: 'wait', arguments: { text: 'Ready' } } },
+			{ operation: 'add', after: 's6', step: { action: 'press', arguments: { key: 'Enter' } } },
+			{
+				operation: 'update',
+				id: 's4',
+				arguments: { text: 'Ada' },
+				target: { role: 'textbox', name: 'Name' },
+			},
+		])
+		expect(journey.steps.map((step) => step.id)).toEqual(['s1', 's6', 's7', 's2', 's3', 's4', 's5'])
+		expect(journey.steps.find((step) => step.id === 's4')).toMatchObject({
+			arguments: { text: 'Ada', submit: true },
+			target: { role: 'textbox', name: 'Name' },
+		})
+		expect(journey.parameters).toEqual({})
+	})
+	it('checks cross-step bindings only after the batch', () => {
+		const journey = editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+			{ operation: 'update', id: 's4', arguments: { text: { parameter: 'name' } } },
+			{ operation: 'declare', name: 'name', parameter: { default: 'Ada' } },
+		])
+		expect(journey.parameters).toEqual({ name: { default: 'Ada' } })
+		expect(BROWSER_JOURNEY_FIXTURE.parameters).toEqual({ email: { default: 'sam@example.test' } })
+	})
+	it('updates portable tabs', () => {
+		const journey = editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+			{
+				operation: 'add',
+				step: {
+					action: 'switch',
+					arguments: {},
+					tab: { title: 'Cart', url: 'https://example.test/cart' },
+				},
+			},
+			{
+				operation: 'update',
+				id: 's6',
+				tab: { title: 'Checkout', url: 'https://example.test/checkout' },
+			},
+		])
+		expect(journey.steps.at(-1)?.tab?.title).toBe('Checkout')
+	})
+	it.each(BROWSER_JOURNEY_EDIT_REFUSALS)('refuses $name atomically', ({ edit }) => {
+		const before = JSON.stringify(BROWSER_JOURNEY_FIXTURE)
+		const result = attempt(() =>
+			Reflect.apply(editBrowserJourney, undefined, [
+				BROWSER_JOURNEY_FIXTURE,
+				[{ operation: 'remove', id: 's1' }, edit],
+			]),
+		)
+		expect(result).toMatchObject({
+			success: false,
+			error: {
+				code: 'BROWSER_JOURNEY_EDIT',
+				message: expect.stringMatching(/^Edit 2 is refused: it [^\n]+[^.]$/),
+			},
+		})
+		expect(JSON.stringify(BROWSER_JOURNEY_FIXTURE)).toBe(before)
+	})
+	it('renders the listing fence byte for byte', () => {
+		expect(renderBrowserJourney(BROWSER_JOURNEY_FIXTURE)).toBe(BROWSER_JOURNEY_LISTING)
+	})
+	it.each(BROWSER_JOURNEY_TEMPLATE_CASES)(
+		'renders $line and its trigger',
+		({ step, line, trigger }) => {
+			const journey = { ...BROWSER_JOURNEY_FIXTURE, parameters: {}, steps: [step] }
+			expect(renderBrowserJourney(journey)).toBe(
+				`add-kettle "Add the Alpine Kettle to the cart"\n${line}`,
+			)
+			expect(deriveBrowserJourneyTrigger(step)).toBe(trigger)
+		},
+	)
+	it('renders secret marks and bound target names', () => {
+		const journey = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: { password: { secret: true }, field: { default: 'Password' } },
+			steps: [
+				{
+					id: 's1',
+					action: 'type',
+					arguments: { text: { parameter: 'password' } },
+					target: { role: 'textbox', name: { parameter: 'field' } },
+				},
+			],
+		}
+		expect(renderBrowserJourney(journey)).toBe(
+			'add-kettle "Add the Alpine Kettle to the cart" (parameters: password (secret), field)\ns1 type (secret) as password into textbox "Password" as field',
+		)
+		expect(collectBrowserJourneyBindings(journey.steps)).toEqual(
+			new Map([
+				['password', ['type.text']],
+				['field', ['type.target.name']],
+			]),
+		)
+		expect(
+			deriveBrowserJourneyTrigger(
+				journey.steps[0] ?? BROWSER_JOURNEY_FIXTURE.steps[0] ?? { action: 'type', arguments: {} },
+				{ field: 'PIN' },
+			),
+		).toBe('PIN')
+	})
+	it('resolves bindings and refuses missing inputs', () => {
+		expect(resolveBrowserJourneyBinding('literal', {})).toBe('literal')
+		expect(resolveBrowserJourneyBinding({ parameter: 'email' }, { email: 'Ada' })).toBe('Ada')
+		expect(() => resolveBrowserJourneyBinding({ parameter: 'email' }, {})).toThrow(Error)
+	})
+	it('derives secret names and unused fallbacks', () => {
+		expect(deriveBrowserJourneySecret('Confirm Password')).toBe('confirmPassword')
+		expect(deriveBrowserJourneySecret('confirmPassword')).toBe('confirmPassword')
+		expect(deriveBrowserJourneySecret('PIN code')).toBe('pinCode')
+		expect(deriveBrowserJourneySecret('123')).toBe('secret1')
+		expect(deriveBrowserJourneySecret('Pässword')).toBe('secret1')
+		expect(deriveBrowserJourneySecret('', ['secret1', 'secret2'])).toBe('secret3')
+		expect(deriveBrowserJourneySecret('Password', ['password'])).toBe('secret1')
+	})
+	it('generates a timestamped run id with four hexadecimal digits', () => {
+		const before = Date.now()
+		const id = generateBrowserRunId()
+		expect(id).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[a-f0-9]{4}$/)
+		const timestamp = Date.parse(id.slice(0, -5).replace(/T(\d{2})-(\d{2})-(\d{2})/, 'T$1:$2:$3'))
+		expect(timestamp).toBeGreaterThanOrEqual(before)
+		expect(timestamp).toBeLessThanOrEqual(Date.now())
+	})
+})
+
+describe('run rendering', () => {
+	it('renders the run fence byte for byte with a blank line before the view', () => {
+		expect(renderBrowserRun(BROWSER_RUN_FIXTURE, BROWSER_RUN_VIEW)).toBe(BROWSER_RUN_LISTING)
+	})
+	it('strips a directive from a run step line', () => {
+		const run = {
+			...BROWSER_RUN_FIXTURE,
+			outcome: 'stopped' as const,
+			steps: [
+				...BROWSER_RUN_FIXTURE.steps.slice(0, 2),
+				{
+					...BROWSER_RUN_FIXTURE.steps[2],
+					id: 's3',
+					action: 'click',
+					arguments: {},
+					trigger: 'Add to cart',
+					elapsed: 0,
+					outcome: 'refused' as const,
+					result:
+						'Step s3 names button "Add to cart", which no element carries; call edit to remove or replace s3.',
+				},
+			],
+		}
+		expect(renderBrowserRun(run))
+			.toBe(`Replay of add-kettle stopped at s3 of 5: Step s3 names button "Add to cart", which no element carries.
+s1 Navigated to https://shop.example.test/.
+s2 Clicked e12 link "Alpine Kettle".
+s3 Step s3 names button "Add to cart", which no element carries.`)
+	})
+	it('keeps directive-like quoted text and strips appended receipt views', () => {
+		expect(
+			renderBrowserRunResult(
+				'Typed "text; call save" into e1 textbox "Note"; call look.\n\npage "Notes"',
+			),
+		).toBe('Typed "text; call save" into e1 textbox "Note".')
+		expect(renderBrowserRunResult('Clicked button "Say \\"hi; call save\\""; call look.')).toBe(
+			'Clicked button "Say \\"hi; call save\\"".',
+		)
+	})
+	it('renders aborts at the pending step and before any step', () => {
+		expect(
+			renderBrowserRun({
+				...BROWSER_RUN_FIXTURE,
+				outcome: 'aborted',
+				steps: BROWSER_RUN_FIXTURE.steps.slice(0, 2),
+			}).split('\n')[0],
+		).toBe('Replay of add-kettle aborted at s3 of 5.')
+		expect(renderBrowserRun({ ...BROWSER_RUN_FIXTURE, outcome: 'aborted', steps: [] })).toBe(
+			'Replay of add-kettle aborted at s1 of 5.',
+		)
 	})
 })

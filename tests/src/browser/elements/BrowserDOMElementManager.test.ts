@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { isBrowserElementError, isBrowserError } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
 import { requireValue, waitForDelay, waitForEvent } from '@orkestrel/test'
+import { BROWSER_ELEMENT_NAME_CASES, BROWSER_ELEMENT_NAME_FIXTURE } from '../../../setup.js'
 import {
 	createProbeElements,
 	loadProbeDocument,
@@ -377,6 +378,18 @@ describe('BrowserDOMElementManager', () => {
 	})
 
 	describe('find', () => {
+		it.each(BROWSER_ELEMENT_NAME_CASES)('$title', async ({ query, expected }) => {
+			const document = await loadProbeDocument(
+				BROWSER_ELEMENT_NAME_FIXTURE.map((name) => `<button>${name}</button>`).join(''),
+			)
+			const view = createBrowserDOMView({ document })
+			try {
+				expect((await view.elements.find(query)).map((element) => element.name)).toEqual(expected)
+			} finally {
+				view.destroy()
+			}
+		})
+
 		it('matches by role and case-insensitive name, and by CSS alone or combined', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })

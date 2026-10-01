@@ -1665,7 +1665,7 @@ export interface BrowserJourneyStep extends BrowserJourneyStepInput {
  * Describes one user intent as data; `next` is the number the next added step takes.
  *
  * @remarks
- * - `format` — the file format, `BROWSER_JOURNEY_FORMAT`
+ * - `format` — the file format, `BROWSER_JOURNEY_FORMAT_VERSION`
  * - `name` — the journey's name, matching `BROWSER_JOURNEY_NAME_PATTERN`
  * - `description` — what the journey achieves, in one sentence
  * - `parameters` — the declared parameters by name
@@ -1916,7 +1916,7 @@ export interface BrowserRunStep {
  * write failure.
  *
  * @remarks
- * - `format` — the file format, `BROWSER_JOURNEY_FORMAT`
+ * - `format` — the file format, `BROWSER_JOURNEY_FORMAT_VERSION`
  * - `id` — the run id, the ISO time with `-` for `:` followed by `-` and 4 hexadecimal digits
  * - `journey` and `revision` — the journey replayed and the revision the store held it at
  * - `inputs` — the parameter values the run used, without a secret's value
@@ -2550,10 +2550,10 @@ export interface BrowserElementManagerInterface<
 }
 
 /** Provides the document operations shared by remote and DOM-native views. */
-export interface BrowserViewInterface {
+export interface BrowserViewInterface<E extends BrowserElementInterface = BrowserElementInterface> {
 	readonly url: string
 	readonly trusted: boolean
-	readonly elements: BrowserElementManagerInterface
+	readonly elements: BrowserElementManagerInterface<E>
 	/** Resolves the document title. */
 	title(options?: BrowserCallOptions): Promise<string>
 	/**
@@ -3146,7 +3146,8 @@ export interface BrowserNodeQuery {
  * - `destroy` — release local resources and detach from the target
  * - `close` — close the remote target and release local resources
  */
-export interface BrowserPageInterface extends BrowserFrameInterface, BrowserViewInterface {
+export interface BrowserPageInterface
+	extends BrowserFrameInterface, BrowserViewInterface<BrowserPageElementInterface> {
 	readonly elements: BrowserElementManagerInterface<BrowserPageElementInterface>
 	readonly trusted: true
 	readonly keyboard: BrowserKeyboardInterface

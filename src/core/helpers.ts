@@ -2,7 +2,11 @@ import type {
 	BrowserAction,
 	BrowserCallOptions,
 	BrowserElementManagerInterface,
+	BrowserJourney,
+	BrowserJourneyEdit,
+	BrowserJourneyStepInput,
 	BrowserJourneyTab,
+	BrowserRun,
 	BrowserToolsetInterface,
 	BrowserElementQuery,
 	BrowserOutline,
@@ -70,6 +74,8 @@ import {
 	parseEnum,
 } from '@orkestrel/contract'
 import {
+	BROWSER_JOURNEY_ACTIONS,
+	BROWSER_JOURNEY_PARAMETER_PATTERN,
 	BASE64_CHARS,
 	BROWSER_OUTLINE_OMITTED_ROLES,
 	BASE64_LOOKUP,
@@ -80,6 +86,12 @@ import {
 	BROWSER_KEY_MODIFIERS,
 	BROWSER_MOUSE_BUTTON_MASKS,
 } from './constants.js'
+import {
+	isBrowserJourneyBinding,
+	validateBrowserJourney,
+	validateBrowserJourneyEdit,
+	validateBrowserJourneyStep,
+} from './validators.js'
 import { BrowserElementError, BrowserError, BrowserResultLimitError } from './errors.js'
 import {
 	parseBrowserAXString,
@@ -102,7 +114,7 @@ export function normalizeBrowserName(value: string): string {
 /**
  * Filters document-order outline rows by accessibility role and name.
  * @param nodes - Captured rows
- * @param query - Role and case-insensitive name constraints
+ * @param query - Role and name constraints, with whole, case-sensitive matching when exact is true
  * @returns Matching rows in their original order
  */
 export function filterBrowserOutline(
@@ -115,9 +127,11 @@ export function filterBrowserOutline(
 			!BROWSER_OUTLINE_OMITTED_ROLES.has(node.role ?? '') &&
 			(query.role === undefined || node.role === query.role) &&
 			(query.name === undefined ||
-				normalizeBrowserName(node.name ?? '')
-					.toLowerCase()
-					.includes(normalizeBrowserName(query.name).toLowerCase())),
+				(query.exact === true
+					? normalizeBrowserName(node.name ?? '') === normalizeBrowserName(query.name)
+					: normalizeBrowserName(node.name ?? '')
+							.toLowerCase()
+							.includes(normalizeBrowserName(query.name).toLowerCase()))),
 	)
 }
 
@@ -2470,4 +2484,308 @@ export async function performBrowserStep<E extends BrowserElementInterface>(
 			`${id}: ${action?.receipt ?? (performed.result.success ? String(performed.result.value) : performed.result.error)}`,
 		)
 	return action
+}
+
+/**
+ * Collects parameter uses from native arguments and target names, keeping page arguments literal.
+ * @param steps - Validated steps
+ * @returns Parameter names mapped to their action and field paths
+ */
+export function collectBrowserJourneyBindings(
+	steps: readonly BrowserJourneyStepInput[],
+): ReadonlyMap<string, readonly string[]> {
+	const bindings = new Map<string, string[]>()
+	for (const step of steps) {
+		if (!BROWSER_JOURNEY_ACTIONS.some((action) => action === step.action)) continue
+		const fields = Object.entries(step.arguments)
+		if (step.target !== undefined) fields.push(['target.name', step.target.name])
+		for (const [field, value] of fields) {
+			if (!isString(value) && isBrowserJourneyBinding(value)) {
+				bindings.set(value.parameter, [
+					...(bindings.get(value.parameter) ?? []),
+					`${step.action}.${field}`,
+				])
+			}
+		}
+	}
+	return bindings
+}
+
+/**
+ * Applies an ordered edit batch to a copy and validates its final bindings.
+ * @param journey - Valid journey to edit
+ * @param edits - Edits in application order
+ * @returns The edited journey, with unbound parameters removed
+ * @throws BrowserError - Thrown with BROWSER_JOURNEY_EDIT, a one-based index, and a reason clause when the batch fails
+ */
+export function editBrowserJourney(
+	journey: BrowserJourney,
+	edits: readonly BrowserJourneyEdit[],
+): BrowserJourney {
+	validateBrowserJourney(journey)
+	const steps = [...journey.steps]
+	let parameters = { ...journey.parameters }
+	let next = journey.next
+	let index = 0
+	const declarations = new Map<string, number>()
+	try {
+		for (const edit of edits) {
+			index += 1
+			validateBrowserJourneyEdit(edit)
+			switch (edit.operation) {
+				case 'add': {
+					const anchor = edit.before ?? edit.after
+					const position =
+						anchor === undefined ? steps.length : steps.findIndex((step) => step.id === anchor)
+					if (position < 0) throw new BrowserError(`names unknown anchor "${anchor}"`)
+					const step = { ...edit.step, id: `s${next}` }
+					next += 1
+					steps.splice(position + (edit.after === undefined ? 0 : 1), 0, step)
+					break
+				}
+				case 'remove':
+				case 'update': {
+					const position = steps.findIndex((step) => step.id === edit.id)
+					const step = steps[position]
+					if (step === undefined) throw new BrowserError(`names unknown step "${edit.id}"`)
+					if (edit.operation === 'remove') steps.splice(position, 1)
+					else {
+						const updated = {
+							...step,
+							arguments: { ...step.arguments, ...edit.arguments },
+							...(edit.target === undefined ? {} : { target: edit.target }),
+							...(edit.tab === undefined ? {} : { tab: edit.tab }),
+						}
+						validateBrowserJourneyStep(updated)
+						steps[position] = updated
+					}
+					break
+				}
+				case 'declare':
+					parameters = { ...parameters, [edit.name]: edit.parameter }
+					declarations.set(edit.name, index)
+			}
+		}
+		const bindings = collectBrowserJourneyBindings(steps)
+		for (const [name, declaration] of declarations) {
+			if (!bindings.has(name)) {
+				index = declaration
+				throw new BrowserError(`declares "${name}" but no step binds it`)
+			}
+		}
+		parameters = Object.fromEntries(
+			Object.entries(parameters).filter(([name]) => bindings.has(name)),
+		)
+		const candidate = { ...journey, steps, parameters, next }
+		validateBrowserJourney(candidate)
+		return structuredClone(candidate)
+	} catch (error) {
+		const reason = (error instanceof Error ? error.message : 'has an invalid edit')
+			.replace(/^Invariant \d+ \([^)]*\): /, '')
+			.replace(/\.+$/, '')
+		throw new BrowserError(`Edit ${index} is refused: it ${reason}`, 'BROWSER_JOURNEY_EDIT', {
+			index,
+			reason,
+		})
+	}
+}
+
+/**
+ * Resolves a native string binding from supplied inputs.
+ * @param value - Literal or parameter binding
+ * @param inputs - Parameter values
+ * @returns Literal text or the bound value
+ * @throws BrowserError - Thrown when a binding has no input or the argument is malformed
+ */
+export function resolveBrowserJourneyBinding(
+	value: unknown,
+	inputs: Readonly<Record<string, string>>,
+): string {
+	if (isString(value)) return value
+	if (
+		isBrowserJourneyBinding(value) &&
+		!isString(value) &&
+		Object.hasOwn(inputs, value.parameter)
+	) {
+		const input = inputs[value.parameter]
+		if (input !== undefined) return input
+	}
+	throw new BrowserError('A journey binding has no value', 'BROWSER_JOURNEY_INPUT')
+}
+
+/**
+ * Renders a journey with its parameter declarations and stable step ids.
+ * @param journey - Valid journey
+ * @returns The listing text without a trailing newline
+ */
+export function renderBrowserJourney(journey: BrowserJourney): string {
+	validateBrowserJourney(journey)
+	const parameters = Object.entries(journey.parameters)
+	const defaults = Object.fromEntries(
+		parameters.map(([name, parameter]) => [name, parameter.default ?? name]),
+	)
+	const heading = `${journey.name} ${JSON.stringify(journey.description)}${parameters.length === 0 ? '' : ` (parameters: ${parameters.map(([name, parameter]) => `${name}${parameter.secret === true ? ' (secret)' : ''}`).join(', ')})`}`
+	const lines = journey.steps.map((step) => {
+		const name =
+			step.target === undefined
+				? ''
+				: `${step.target.role} ${JSON.stringify(resolveBrowserJourneyBinding(step.target.name, defaults))}${isString(step.target.name) ? '' : ` as ${step.target.name.parameter}`}`
+		const field = step.action === 'navigate' ? 'url' : step.action === 'press' ? 'key' : 'text'
+		const binding = step.arguments[field]
+		const text = isBrowserJourneyBinding(binding)
+			? resolveBrowserJourneyBinding(binding, defaults)
+			: ''
+		const suffix =
+			!isString(binding) && isBrowserJourneyBinding(binding) ? ` as ${binding.parameter}` : ''
+		switch (step.action) {
+			case 'navigate':
+				return `${step.id} navigate ${text}${suffix}`
+			case 'click':
+				return `${step.id} click ${name}`
+			case 'type': {
+				const secret =
+					!isString(binding) &&
+					isBrowserJourneyBinding(binding) &&
+					journey.parameters[binding.parameter]?.secret === true
+				return `${step.id} type ${secret ? '(secret)' : JSON.stringify(text)}${suffix} into ${name}${step.arguments['submit'] === true ? ', submit' : ''}`
+			}
+			case 'press':
+				return `${step.id} press ${text}${suffix}`
+			case 'wait':
+				return `${step.id} wait ${JSON.stringify(text)}${suffix}`
+			case 'dialog':
+				return `${step.id} dialog ${step.arguments['accept'] === true ? 'accept' : 'dismiss'}${binding === undefined ? '' : ` ${JSON.stringify(text)}${suffix}`}`
+			case 'switch':
+				return `${step.id} switch ${JSON.stringify(step.tab?.title)} ${step.tab?.url}`
+			case 'unresolved':
+				return `${step.id} unresolved: ${step.gap}`
+			default:
+				return `${step.id} ${step.action} ${JSON.stringify(step.arguments)}`
+		}
+	})
+	return [heading, ...lines].join('\n')
+}
+
+/**
+ * Derives the trigger text a run records for an action.
+ * @param step - Valid step
+ * @param inputs - Resolved parameter values; default: an empty record
+ * @returns The action's trigger in the journey vocabulary
+ */
+export function deriveBrowserJourneyTrigger(
+	step: BrowserJourneyStepInput,
+	inputs: Readonly<Record<string, string>> = {},
+): string {
+	switch (step.action) {
+		case 'click':
+		case 'type':
+			return resolveBrowserJourneyBinding(step.target?.name, inputs)
+		case 'press':
+			return resolveBrowserJourneyBinding(step.arguments['key'], inputs)
+		case 'navigate':
+			return resolveBrowserJourneyBinding(step.arguments['url'], inputs)
+		case 'wait':
+			return resolveBrowserJourneyBinding(step.arguments['text'], inputs)
+		case 'switch':
+			return step.tab?.title ?? ''
+		case 'dialog':
+			return step.arguments['accept'] === true ? 'accept' : 'dismiss'
+		default:
+			return step.action
+	}
+}
+
+/**
+ * Derives an unused lower camel case secret parameter name from an accessible name.
+ * @param name - Accessible name of the control
+ * @param taken - Already declared names; default: an empty collection
+ * @returns The derived name, or the first unused secretN fallback
+ */
+export function deriveBrowserJourneySecret(name: string, taken: readonly string[] = []): string {
+	const words = name
+		.replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+		.replace(/([A-Z])([A-Z][a-z])/g, '$1 $2')
+		.split(/[^\p{L}\p{N}]+/u)
+		.filter((word) => word.length > 0)
+	const candidate = words
+		.map((word, index) =>
+			index === 0
+				? word.toLowerCase()
+				: `${word.charAt(0).toUpperCase()}${word.slice(1).toLowerCase()}`,
+		)
+		.join('')
+	if (BROWSER_JOURNEY_PARAMETER_PATTERN.test(candidate) && !taken.includes(candidate))
+		return candidate
+	let count = 1
+	while (taken.includes(`secret${count}`)) count += 1
+	return `secret${count}`
+}
+
+/**
+ * Generates a run id from an ISO timestamp and a cryptographic hexadecimal suffix.
+ * @returns An ISO timestamp with hyphens replacing colons, followed by four hexadecimal digits
+ */
+export function generateBrowserRunId(): string {
+	const suffix = Array.from(crypto.getRandomValues(new Uint8Array(2)), (byte) =>
+		byte.toString(16).padStart(2, '0'),
+	).join('')
+	return `${new Date().toISOString().replace(/:/g, '-')}-${suffix}`
+}
+
+/**
+ * Renders a step receipt without its tool directive or appended view.
+ * @param result - Step receipt or refusal
+ * @returns A receipt line with directives outside quoted text removed
+ */
+export function renderBrowserRunResult(result: string): string {
+	const receipt = result.split('\n\n')[0] ?? ''
+	return receipt
+		.split('\n')
+		.map((line) => {
+			let quoted = false
+			let escaped = false
+			for (let index = 0; index < line.length; index += 1) {
+				const character = line[index]
+				if (escaped) {
+					escaped = false
+					continue
+				}
+				if (character === '\\' && quoted) {
+					escaped = true
+					continue
+				}
+				if (character === '"') quoted = !quoted
+				if (!quoted && line.startsWith('; call ', index))
+					return `${line.slice(0, index).replace(/\.+$/, '')}.`
+			}
+			return line
+		})
+		.join(' ')
+}
+
+/**
+ * Renders a run heading and its receipts, followed by the supplied final view.
+ * @param run - Run to render
+ * @param view - Final view from the caller; omitted when unavailable
+ * @returns The replay result without a trailing newline
+ */
+export function renderBrowserRun(run: BrowserRun, view?: string): string {
+	const last = run.steps.at(-1)
+	const next = run.journey.steps[run.steps.length]
+	const at =
+		run.outcome === 'aborted' && last?.outcome === 'done'
+			? (next?.id ?? last.id)
+			: (last?.id ?? next?.id ?? 's1')
+	const reason = renderBrowserRunResult(last?.result ?? 'no step completed').replace(/\.+$/, '')
+	const heading =
+		run.outcome === 'complete'
+			? `Replayed ${run.journey.name}: ${run.steps.length} of ${run.journey.steps.length} steps.`
+			: run.outcome === 'stopped'
+				? `Replay of ${run.journey.name} stopped at ${at} of ${run.journey.steps.length}: ${reason}.`
+				: `Replay of ${run.journey.name} aborted at ${at} of ${run.journey.steps.length}.`
+	const lines = [
+		heading,
+		...run.steps.map((step) => `${step.id} ${renderBrowserRunResult(step.result)}`),
+	].join('\n')
+	return view === undefined || view === '' ? lines : `${lines}\n\n${view}`
 }

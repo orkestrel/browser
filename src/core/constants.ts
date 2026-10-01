@@ -845,7 +845,7 @@ export const BROWSER_JOURNEY_NAME_PATTERN =
 export const BROWSER_JOURNEY_PARAMETER_PATTERN = /^[a-z][a-zA-Z0-9]*$/
 
 /** Holds the journey and run file format this package writes and reads, `1`. */
-export const BROWSER_JOURNEY_FORMAT: BrowserJourney['format'] = 1
+export const BROWSER_JOURNEY_FORMAT_VERSION: BrowserJourney['format'] = 1
 
 /**
  * Names the native actions a journey step can hold: `click`, `type`, `press`, `navigate`, `wait`,

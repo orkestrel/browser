@@ -1,7 +1,11 @@
 import type {
+	BrowserJourney,
+	BrowserJourneyStep,
+	BrowserRun,
 	BrowserCallOptions,
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
+	BrowserElementQuery,
 	BrowserFrameInterface,
 	BrowserNavigationEventMap,
 	BrowserOutline,
@@ -1592,6 +1596,67 @@ export const BROWSER_ELEMENT_AX_FIXTURE = Object.freeze({
 	],
 })
 
+/** Lists accessible names that distinguish exact matching from substring and folded matching. */
+export const BROWSER_ELEMENT_NAME_FIXTURE = Object.freeze([
+	'Save',
+	'save',
+	'Save draft',
+	'Save   draft',
+])
+
+/** Holds the protocol names used to prove exact accessibility queries. */
+export const BROWSER_ELEMENT_NAME_AX_FIXTURE = Object.freeze({
+	nodes: BROWSER_ELEMENT_NAME_FIXTURE.map((name, index) => ({
+		nodeId: String(index),
+		backendDOMNodeId: index + 100,
+		role: { value: 'button' },
+		name: { value: name },
+	})),
+})
+
+/** Holds query expectations shared by the remote and DOM element managers. */
+export const BROWSER_ELEMENT_NAME_CASES: ReadonlyArray<{
+	readonly title: string
+	readonly query: BrowserElementQuery
+	readonly expected: readonly string[]
+}> = Object.freeze([
+	{
+		title: 'exact names reject substrings',
+		query: { role: 'button', name: 'Save', exact: true },
+		expected: ['Save'],
+	},
+	{
+		title: 'exact names preserve case',
+		query: { role: 'button', name: 'save', exact: true },
+		expected: ['save'],
+	},
+	{
+		title: 'normalizes whitespace on both sides when exact is true',
+		query: { role: 'button', name: '  Save\n draft  ', exact: true },
+		expected: ['Save draft', 'Save draft'],
+	},
+	{
+		title: 'rejects a partial name when exact is true',
+		query: { role: 'button', name: 'Sav', exact: true },
+		expected: [],
+	},
+	{
+		title: 'keeps case-insensitive substring matching by default',
+		query: { role: 'button', name: 'Save' },
+		expected: ['Save', 'save', 'Save draft', 'Save draft'],
+	},
+	{
+		title: 'keeps case-insensitive substring matching when exact is false',
+		query: { role: 'button', name: 'Save', exact: false },
+		expected: ['Save', 'save', 'Save draft', 'Save draft'],
+	},
+	{
+		title: 'keeps role matching without a name when exact is true',
+		query: { role: 'button', exact: true },
+		expected: ['Save', 'save', 'Save draft', 'Save draft'],
+	},
+])
+
 /** Holds the iframe tree whose backend overlaps the parent renderer's link. */
 export const BROWSER_ELEMENT_CHILD_FIXTURE = Object.freeze({
 	nodes: [
@@ -2698,3 +2763,300 @@ export const PNG_BASE64 = 'iVBORw0='
 
 /** Encodes bytes `[255, 216, 255, 224]` as base64 (JPEG-signature-prefixed). */
 export const JPEG_BASE64 = '/9j/4A=='
+
+/** Supplies the journey printed in the design listing. */
+export const BROWSER_JOURNEY_FIXTURE: BrowserJourney = {
+	format: 1,
+	name: 'add-kettle',
+	description: 'Add the Alpine Kettle to the cart',
+	parameters: { email: { default: 'sam@example.test' } },
+	next: 6,
+	steps: [
+		{ id: 's1', action: 'navigate', arguments: { url: 'https://shop.example.test/' } },
+		{ id: 's2', action: 'click', arguments: {}, target: { role: 'link', name: 'Alpine Kettle' } },
+		{ id: 's3', action: 'click', arguments: {}, target: { role: 'button', name: 'Add to cart' } },
+		{
+			id: 's4',
+			action: 'type',
+			arguments: { text: { parameter: 'email' }, submit: true },
+			target: { role: 'textbox', name: 'Email' },
+		},
+		{ id: 's5', action: 'wait', arguments: { text: 'Added to cart' } },
+	],
+}
+
+/** Supplies the exact listing fence from the design. */
+export const BROWSER_JOURNEY_LISTING = `add-kettle "Add the Alpine Kettle to the cart" (parameters: email)
+s1 navigate https://shop.example.test/
+s2 click link "Alpine Kettle"
+s3 click button "Add to cart"
+s4 type "sam@example.test" as email into textbox "Email", submit
+s5 wait "Added to cart"`
+
+/** Supplies the view fence appended to a rendered run. */
+export const BROWSER_RUN_VIEW = `page "Cart" https://shop.example.test/cart
+e40 link "Catalogue"
+e41 link "Cart"
+e42 link "Checkout"
+# Your cart
+Alpine Kettle
+(3 of 3 elements)`
+
+/** Supplies the completed run printed in the design. */
+export const BROWSER_RUN_FIXTURE: BrowserRun = {
+	format: 1,
+	id: '2026-09-30T14-03-12.481Z-7f3a',
+	journey: BROWSER_JOURNEY_FIXTURE,
+	inputs: { email: 'ada@example.test' },
+	outcome: 'complete',
+	elapsed: 25,
+	steps: [
+		{
+			id: 's1',
+			action: 'navigate',
+			trigger: 'https://shop.example.test/',
+			arguments: { url: 'https://shop.example.test/' },
+			outcome: 'done',
+			result: 'Navigated to https://shop.example.test/.',
+			elapsed: 5,
+		},
+		{
+			id: 's2',
+			action: 'click',
+			trigger: 'Alpine Kettle',
+			arguments: { ref: 'e12' },
+			outcome: 'done',
+			result: 'Clicked e12 link "Alpine Kettle".',
+			elapsed: 5,
+		},
+		{
+			id: 's3',
+			action: 'click',
+			trigger: 'Add to cart',
+			arguments: { ref: 'e31' },
+			outcome: 'done',
+			result: 'Clicked e31 button "Add to cart".',
+			elapsed: 5,
+		},
+		{
+			id: 's4',
+			action: 'type',
+			trigger: 'Email',
+			arguments: { ref: 'e33', text: 'ada@example.test', submit: true },
+			outcome: 'done',
+			result: 'Typed "ada@example.test" into e33 textbox "Email" and submitted the form.',
+			elapsed: 5,
+		},
+		{
+			id: 's5',
+			action: 'wait',
+			trigger: 'Added to cart',
+			arguments: { text: 'Added to cart' },
+			outcome: 'done',
+			result: '"Added to cart" is on the page.',
+			elapsed: 5,
+		},
+	],
+}
+
+/** Supplies the exact run fence from the design. */
+export const BROWSER_RUN_LISTING = `Replayed add-kettle: 5 of 5 steps.
+s1 Navigated to https://shop.example.test/.
+s2 Clicked e12 link "Alpine Kettle".
+s3 Clicked e31 button "Add to cart".
+s4 Typed "ada@example.test" into e33 textbox "Email" and submitted the form.
+s5 "Added to cart" is on the page.
+
+page "Cart" https://shop.example.test/cart
+e40 link "Catalogue"
+e41 link "Cart"
+e42 link "Checkout"
+# Your cart
+Alpine Kettle
+(3 of 3 elements)`
+
+/** Supplies native and page step renderings, including every template. */
+export const BROWSER_JOURNEY_TEMPLATE_CASES: ReadonlyArray<{
+	readonly step: BrowserJourneyStep
+	readonly line: string
+	readonly trigger: string
+}> = [
+	{
+		step: {
+			id: 's1',
+			action: 'click',
+			arguments: {},
+			target: { role: 'button', name: 'Save', reference: 'e7', css: '#save' },
+		},
+		line: 's1 click button "Save"',
+		trigger: 'Save',
+	},
+	{
+		step: {
+			id: 's1',
+			action: 'type',
+			arguments: { text: 'Ada' },
+			target: { role: 'textbox', name: 'Name' },
+		},
+		line: 's1 type "Ada" into textbox "Name"',
+		trigger: 'Name',
+	},
+	{
+		step: { id: 's1', action: 'press', arguments: { key: 'Enter' } },
+		line: 's1 press Enter',
+		trigger: 'Enter',
+	},
+	{
+		step: { id: 's1', action: 'navigate', arguments: { url: 'https://example.test/' } },
+		line: 's1 navigate https://example.test/',
+		trigger: 'https://example.test/',
+	},
+	{
+		step: { id: 's1', action: 'wait', arguments: { text: 'Saved' } },
+		line: 's1 wait "Saved"',
+		trigger: 'Saved',
+	},
+	{
+		step: { id: 's1', action: 'dialog', arguments: { accept: true } },
+		line: 's1 dialog accept',
+		trigger: 'accept',
+	},
+	{
+		step: { id: 's1', action: 'dialog', arguments: { accept: false, text: 'No' } },
+		line: 's1 dialog dismiss "No"',
+		trigger: 'dismiss',
+	},
+	{
+		step: {
+			id: 's1',
+			action: 'switch',
+			arguments: {},
+			tab: { title: 'Cart', url: 'https://example.test/cart' },
+		},
+		line: 's1 switch "Cart" https://example.test/cart',
+		trigger: 'Cart',
+	},
+	{
+		step: {
+			id: 's1',
+			action: 'reserve',
+			arguments: { ref: 'sku7', tab: 'stock', value: { parameter: 'literal' } },
+		},
+		line: 's1 reserve {"ref":"sku7","tab":"stock","value":{"parameter":"literal"}}',
+		trigger: 'reserve',
+	},
+	{
+		step: { id: 's1', action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' },
+		line: 's1 unresolved: the element is in a child frame',
+		trigger: 'unresolved',
+	},
+]
+
+/** Supplies invalid journeys and the invariants each violates. */
+export const BROWSER_JOURNEY_INVALID_CASES: ReadonlyArray<{
+	readonly name: string
+	readonly value: unknown
+	readonly invariant: number
+}> = [
+	{ name: 'reserved name', value: { ...BROWSER_JOURNEY_FIXTURE, name: 'con' }, invariant: 1 },
+	{ name: 'long name', value: { ...BROWSER_JOURNEY_FIXTURE, name: 'a'.repeat(65) }, invariant: 1 },
+	{
+		name: 'duplicate ids',
+		value: {
+			...BROWSER_JOURNEY_FIXTURE,
+			steps: [...BROWSER_JOURNEY_FIXTURE.steps, BROWSER_JOURNEY_FIXTURE.steps[0]],
+		},
+		invariant: 2,
+	},
+	{ name: 'counter bounds', value: { ...BROWSER_JOURNEY_FIXTURE, next: 5 }, invariant: 2 },
+	{
+		name: 'missing target',
+		value: {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [{ id: 's1', action: 'click', arguments: {} }],
+		},
+		invariant: 3,
+	},
+	{
+		name: 'native ref',
+		value: {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [{ id: 's1', action: 'wait', arguments: { text: 'saved', ref: 'e1' } }],
+		},
+		invariant: 3,
+	},
+	{
+		name: 'undeclared binding',
+		value: { ...BROWSER_JOURNEY_FIXTURE, parameters: {} },
+		invariant: 4,
+	},
+	{
+		name: 'unused declaration',
+		value: { ...BROWSER_JOURNEY_FIXTURE, parameters: { email: {}, unused: {} } },
+		invariant: 4,
+	},
+	{
+		name: 'secret default',
+		value: {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: { email: { secret: true, default: 'hidden' } },
+		},
+		invariant: 5,
+	},
+	{ name: 'non JSON argument', value: { ...BROWSER_JOURNEY_FIXTURE, extra: NaN }, invariant: 6 },
+	{
+		name: 'observation action',
+		value: {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [{ id: 's1', action: 'look', arguments: {} }],
+		},
+		invariant: 7,
+	},
+]
+
+/** Supplies malformed edits and the application failures the editor refuses. */
+export const BROWSER_JOURNEY_EDIT_REFUSALS: ReadonlyArray<{
+	readonly name: string
+	readonly edit: unknown
+}> = [
+	{ name: 'unknown operation', edit: { operation: 'move', id: 's1' } },
+	{ name: 'unknown remove id', edit: { operation: 'remove', id: 's99' } },
+	{ name: 'unknown update id', edit: { operation: 'update', id: 's99', arguments: {} } },
+	{
+		name: 'unknown anchor',
+		edit: {
+			operation: 'add',
+			before: 's99',
+			step: { action: 'wait', arguments: { text: 'done' } },
+		},
+	},
+	{
+		name: 'duplicate anchors',
+		edit: {
+			operation: 'add',
+			before: 's1',
+			after: 's2',
+			step: { action: 'wait', arguments: { text: 'done' } },
+		},
+	},
+	{
+		name: 'supplied id',
+		edit: { operation: 'add', step: { id: 's1', action: 'wait', arguments: { text: 'done' } } },
+	},
+	{ name: 'removed target', edit: { operation: 'update', id: 's2', target: null } },
+	{
+		name: 'incompatible tab',
+		edit: { operation: 'update', id: 's2', tab: { url: 'https://example.test/', title: 'Cart' } },
+	},
+	{
+		name: 'secret default',
+		edit: { operation: 'declare', name: 'email', parameter: { secret: true, default: 'hidden' } },
+	},
+	{
+		name: 'undeclared binding',
+		edit: { operation: 'update', id: 's4', arguments: { text: { parameter: 'missing' } } },
+	},
+]

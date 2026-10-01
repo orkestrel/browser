@@ -4,6 +4,9 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+	parseBrowserJourney,
+	parseBrowserJourneyEdit,
+	parseBrowserRun,
 	parseBrowserReference,
 	parseBrowserTool,
 	parseBrowserRemoval,
@@ -19,6 +22,7 @@ import {
 	parseNumberArray,
 	parseSnapshotString,
 } from '@src/core'
+import { BROWSER_JOURNEY_FIXTURE, BROWSER_RUN_FIXTURE } from '../../setup.js'
 
 describe('element references', () => {
 	it('catches accepting invalid references or losing any of the six spellings', () => {
@@ -335,5 +339,51 @@ describe('snapshot value parsers', () => {
 		expect(parseSnapshotString(['zero'], 99)).toBeUndefined()
 		expect(parseBrowserRect([1, 2, 3, 4])).toEqual([1, 2, 3, 4])
 		expect(parseBrowserRect([1, 2, 3])).toBeUndefined()
+	})
+})
+
+describe('journey parsers', () => {
+	it('round trips the journey and run through JSON', () => {
+		expect(parseBrowserJourney(JSON.parse(JSON.stringify(BROWSER_JOURNEY_FIXTURE)))).toEqual(
+			BROWSER_JOURNEY_FIXTURE,
+		)
+		expect(parseBrowserRun(JSON.parse(JSON.stringify(BROWSER_RUN_FIXTURE)))).toEqual(
+			BROWSER_RUN_FIXTURE,
+		)
+		expect(parseBrowserJourney(BROWSER_JOURNEY_FIXTURE)).toBe(BROWSER_JOURNEY_FIXTURE)
+	})
+	it('returns undefined on invalid journeys, edits, and runs', () => {
+		expect(parseBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, format: 2 })).toBeUndefined()
+		expect(parseBrowserJourneyEdit({ operation: 'remove', id: 4 })).toBeUndefined()
+		expect(parseBrowserJourneyEdit({ operation: 'remove', id: 's1' })).toEqual({
+			operation: 'remove',
+			id: 's1',
+		})
+		expect(parseBrowserRun({ ...BROWSER_RUN_FIXTURE, elapsed: NaN })).toBeUndefined()
+	})
+	it('preserves page-tool ref and tab keys as literal JSON', () => {
+		const journey = {
+			...BROWSER_JOURNEY_FIXTURE,
+			parameters: {},
+			steps: [
+				{
+					id: 's1',
+					action: 'reserve',
+					arguments: { ref: 'stock', tab: 'warehouse', nested: { parameter: 'literal' } },
+				},
+			],
+		}
+		expect(parseBrowserJourney(journey)).toEqual(journey)
+	})
+	it('contains hostile property reads', () => {
+		const value = Object.defineProperty({}, 'format', {
+			enumerable: true,
+			get: () => {
+				throw new Error('hostile')
+			},
+		})
+		expect(parseBrowserJourney(value)).toBeUndefined()
+		expect(parseBrowserJourneyEdit(value)).toBeUndefined()
+		expect(parseBrowserRun(value)).toBeUndefined()
 	})
 })
