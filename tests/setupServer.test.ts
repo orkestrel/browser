@@ -2,23 +2,25 @@
  * Proof for `tests/setupServer.ts`.
  *
  * The subject is the Node-only test infrastructure `tests/src/server/**` and `tests/service/**`
- * drive: the port reservation helpers, the process wait, the scratch registry, the browse child's
- * first call and ending, the Chromium process table reader and its teardown, the raw TCP
- * fixtures, the in-process CDP server and the frames of each socket write it performs, the spawned
- * fake browser, the fixture page and module server, the built-bundle precondition of the
- * document page, the stage that imports a generated journey module through a link to this
- * package, the FIFO a lock read parks on, the exited process identifier, and the bundle import
- * reader. Every case uses the real resource the fixture exists to provide — real loopback
- * sockets on ephemeral ports, real files, and real child processes.
+ * drive: the loop-clock reader and its aligner, the port reservation helpers, the process wait,
+ * the scratch registry, the browse child's first call and ending, the Chromium process table
+ * reader and its teardown, the raw TCP fixtures, the in-process CDP server and the frames of each
+ * socket write it performs, the spawned fake browser, the fixture page and module server, the
+ * built-bundle precondition of the document page, the stage that imports a generated journey
+ * module through a link to this package, the FIFO a lock read parks on, the exited process
+ * identifier, and the bundle import reader. Every case uses the real resource the fixture exists
+ * to provide — real host timers, real loopback sockets on ephemeral ports, real files, and real
+ * child processes.
  *
  * `tests/setupServer.ts` declares no DOM-driving export, so this file defers nothing to a browser
  * suite. This package registers no browser project.
  *
- * Expected values are derived by a route the module does not share: a second socket connecting to
- * the port `readServerPort` reports, the platform `WebSocket` client driving the CDP fixture, the
- * child's own `spawn` handle carrying the identifier the fixture publishes, `existsSync` reading
- * the directories the scratch registry removes, Node's own module resolution for the entries
- * the document page's import map names, and `realpathSync` reading the stage's link.
+ * Expected values are derived by a route the module does not share: `performance.now()` timing the
+ * loop clock's readings, a second socket connecting to the port `readServerPort` reports, the
+ * platform `WebSocket` client driving the CDP fixture, the child's own `spawn` handle carrying the
+ * identifier the fixture publishes, `existsSync` reading the directories the scratch registry
+ * removes, Node's own module resolution for the entries the document page's import map names, and
+ * `realpathSync` reading the stage's link.
  */
 
 import type { CDPTestServerInterface } from './setupServer.js'
@@ -41,6 +43,7 @@ import {
 } from '@orkestrel/test'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import {
+	alignLoopClock,
 	BrowseChild,
 	BrowserLockObserver,
 	COOPERATIVE_SIGTERM,
@@ -71,6 +74,7 @@ import {
 	readChromiumProcesses,
 	readExitedProcessId,
 	readFixtureProcessId,
+	readLoopClock,
 	readProfiles,
 	readServerPort,
 	readWebSocketFrames,
@@ -87,6 +91,36 @@ const WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
 afterAll(async () => {
 	await destroyFakeBrowsers()
 	await destroyTempDirectories()
+})
+
+// === Loop clock
+
+describe('readLoopClock', () => {
+	it('advances in whole milliseconds by the time performance.now() measures between readings', () => {
+		const opened = performance.now()
+		const before = readLoopClock()
+		const inner = performance.now()
+		alignLoopClock(5)
+		const outer = performance.now()
+		const after = readLoopClock()
+		const closed = performance.now()
+		expect(Number.isInteger(before)).toBe(true)
+		expect(Number.isInteger(after)).toBe(true)
+		// Each reading truncates by under 1 ms and a coarse clock trails by under 1 ms more.
+		expect(after - before).toBeGreaterThan(outer - inner - 2)
+		expect(after - before).toBeLessThan(closed - opened + 2)
+	})
+})
+
+describe('alignLoopClock', () => {
+	it('returns after the loop clock ticks and the offset elapses on performance.now()', () => {
+		const before = readLoopClock()
+		const opened = performance.now()
+		alignLoopClock(0.5)
+		const closed = performance.now()
+		expect(readLoopClock()).toBeGreaterThan(before)
+		expect(closed - opened).toBeGreaterThanOrEqual(0.5)
+	})
 })
 
 // === Ports

@@ -63,6 +63,7 @@ import {
 	JPEG_BASE64,
 	PNG_BASE64,
 	throwListenerError,
+	TIMER_LEAD,
 } from '../../setup.js'
 
 // === BrowserPage
@@ -276,7 +277,7 @@ describe('BrowserPage', () => {
 				'session-main',
 			)
 			expect((await pending).text().text).toBe('Loaded')
-			expect(performance.now() - started).toBeGreaterThanOrEqual(20)
+			expect(performance.now() - started).toBeGreaterThanOrEqual(20 - TIMER_LEAD)
 			transport.event(
 				'Page.frameNavigated',
 				{

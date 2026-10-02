@@ -3,7 +3,7 @@
  *
  * The subject is the exported test infrastructure the workspace's suites drive: the in-memory CDP
  * transport, the scripting helpers layered on it, the protocol fixtures, the encoded constants,
- * and the rewrite that records a generated journey module's actions.
+ * the timer lead, and the rewrite that records a generated journey module's actions.
  * Production behavior is not re-proven here — where a case sends a real frame through
  * `createCDPClient`, the client is the driver and the assertion is on what the fixture answered.
  *
@@ -13,8 +13,8 @@
  * that collects this file does the same.
  *
  * Every expected value is derived by a route the module does not share: hand-written protocol
- * literals, a parent-index walk over the raw snapshot columns, `atob` over the base64 constants, and
- * hand-written module lines.
+ * literals, a parent-index walk over the raw snapshot columns, `atob` over the base64 constants,
+ * hand-written module lines, and real host timers measured on `performance.now()`.
  */
 
 import type { BrowserPageInterface } from '@src/core'
@@ -31,7 +31,9 @@ import {
 	createRecorder,
 	readProperty,
 	requireValue,
+	retryUntil,
 	waitForCondition,
+	waitForDelay,
 } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
@@ -96,7 +98,9 @@ import {
 	createBrowserJourneyMalformedInputs,
 	instrumentBrowserJourneyModule,
 	requireBrowserJourneyElement,
+	TIMER_LEAD,
 } from './setup.js'
+import { alignLoopClock } from './setupServer.js'
 
 describe('element protocol and compiler fixtures', () => {
 	it('records run writes while retaining the memory store validation and persistence', async () => {
@@ -1140,6 +1144,31 @@ describe('image constants', () => {
 		expect(Array.from(atob(JPEG_BASE64), (character) => character.charCodeAt(0))).toStrictEqual([
 			255, 216, 255, 224,
 		])
+	})
+})
+
+// === Timer lead
+
+describe('TIMER_LEAD', () => {
+	it('covers a real timer that ends short of its duration when armed late in a loop-clock millisecond', async () => {
+		const spans: number[] = []
+		// The control: the full duration fails as a lower bound on at least one aligned span.
+		await retryUntil(
+			'a 10 ms timer armed late in a loop-clock millisecond ending short of 10 ms',
+			async () => {
+				alignLoopClock(0.9)
+				const started = performance.now()
+				const delayed = waitForDelay(10)
+				alignLoopClock()
+				await delayed
+				const span = performance.now() - started
+				spans.push(span)
+				return span
+			},
+			(span) => span < 10,
+			{ attempts: 50, budget: 5_000 },
+		)
+		for (const span of spans) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
 	})
 })
 

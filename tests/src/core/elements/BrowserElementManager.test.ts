@@ -13,6 +13,7 @@ import {
 	createConnectedCDPClient,
 	scriptBrowserElements,
 	scriptCDPAttach,
+	TIMER_LEAD,
 } from '../../../setup.js'
 
 describe('element manager', () => {
@@ -648,7 +649,7 @@ describe('element manager', () => {
 				'session-main',
 			)
 			expect((await pending).count).toBe(6)
-			expect(performance.now() - started).toBeGreaterThanOrEqual(20)
+			expect(performance.now() - started).toBeGreaterThanOrEqual(20 - TIMER_LEAD)
 		} finally {
 			await client.close()
 		}
