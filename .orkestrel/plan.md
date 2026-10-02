@@ -16,5 +16,5 @@ The wave is on the registry: contract 0.0.19, html 0.0.12, tool 0.0.18, markdown
 | Unit | Repository | Status |
 | --- | --- | --- |
 | VS: the veneer showcase, every Bootstrap class alone and beside Tailwind, with journeys, statecharts, and browse checks; its units in order live in the handoff record | veneer | `J0c` journey cost unit running |
-| Browse lane: `BR1` (`360e27e`, the outline parent index and no outline per replayed step) in adversarial review, then `main`, then release 0.0.21 with the owner's code and the re-pins of scaffold, ollama, and veneer; `ROADMAP.md` items 6 to 12 | browser | scaffold main `.orkestrel/veneer/showcase/browse.md` holds the units in order |
+| Browse lane: `BR1` landed on `main` (`360e27e`, corrected by `97fd5f7`: the outline parent index, each replayed step keeping its receipt capture); release 0.0.21 with the owner's code, then the re-pins of scaffold, ollama, and veneer; `ROADMAP.md` items 6 to 12 | browser | scaffold main `.orkestrel/veneer/showcase/browse.md` holds the units in order |
 | Close: delete this file and report | browser | last |
