@@ -5699,6 +5699,34 @@ describe('BrowserToolset', () => {
 	})
 
 	describe('follow', () => {
+		it('keeps the followed action line without building its receipt outline', async () => {
+			const view = createBrowserViewDouble()
+			const toolset = new BrowserToolset(view)
+			const signal = new AbortController().signal
+			await toolset.start()
+			try {
+				const action = await toolset.follow(
+					's1',
+					{ action: 'click', arguments: { ref: 'e1' } },
+					{ signal },
+				)
+				expect(action).toMatchObject({
+					outcome: 'done',
+					receipt: 'Clicked e1 button "Save". (untrusted event)',
+				})
+				expect(view.calls).toEqual(['click e1'])
+				const live = await toolset.perform(
+					{ id: 'live', name: 'click', arguments: { ref: 'e1' } },
+					{ signal },
+				)
+				expect(live.result).toMatchObject({ success: true })
+				expect(view.calls).toEqual(['click e1', 'click e1', 'outline'])
+				expect(live.result.success && String(live.result.value)).toContain('\n\npage ')
+			} finally {
+				await toolset.destroy()
+			}
+		})
+
 		it('throws a BrowserStepError that carries the performed action when a step times out', async () => {
 			const toolset = new BrowserToolset(createBrowserViewDouble({ waited: false }))
 			const performed = createRecorder<readonly [BrowserAction]>()

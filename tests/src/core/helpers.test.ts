@@ -118,6 +118,38 @@ describe('journey step helpers', () => {
 })
 
 describe('element helpers', () => {
+	it('renders identical node ids in separate sessions with each session own parent', () => {
+		const nodes = readBrowserAccessibility(BROWSER_ELEMENT_AX_FIXTURE).nodes.filter(
+			(node) => node.id === 'link' || node.id === 'duplicate',
+		)
+		const rows = [
+			...nodes.map((node) => ({
+				...node,
+				session: 'main',
+				reference: node.id === 'link' ? 'e1' : undefined,
+			})),
+			...nodes.map((node) => ({
+				...node,
+				session: 'child',
+				name: node.id === 'link' ? 'Child' : node.name,
+				reference: node.id === 'link' ? 'e2' : undefined,
+			})),
+			...nodes.map((node) => ({
+				...node,
+				session: 'other',
+				name: ' Other home ',
+				reference: node.id === 'link' ? 'e3' : undefined,
+			})),
+		]
+		expect(renderBrowserOutline('url', 'title', rows, 150)).toEqual({
+			url: 'url',
+			title: 'title',
+			text: 'page "title" url\ne1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\n(3 of 3 elements)',
+			count: 3,
+			total: 3,
+		})
+	})
+
 	it.each(BROWSER_ELEMENT_NAME_CASES)('$title', ({ query, expected }) => {
 		const rows = readBrowserAccessibility(BROWSER_ELEMENT_NAME_AX_FIXTURE).nodes.map((node) => ({
 			...node,

@@ -203,6 +203,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
 	>()
 	readonly #actions = new WeakMap<AbortSignal, Partial<BrowserAction>>()
+	readonly #uncaptured = new WeakSet<AbortSignal>()
 	readonly #invocations = new WeakMap<
 		ToolContext,
 		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
@@ -369,6 +370,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			this.#lifetime.signal,
 		])
 		const started = performance.now()
+		if (context !== undefined && this.#uncaptured.has(context.signal)) this.#uncaptured.add(signal)
 		const acting = !BROWSER_OBSERVATION_TOOL_NAMES.includes(call.name)
 		let result: ToolResult
 		let fault: unknown
@@ -456,7 +458,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		options?: BrowserFollowOptions,
 	): Promise<BrowserAction> {
 		const context: ToolContext = {
-			signal: options?.signal ?? new AbortController().signal,
+			signal: AbortSignal.any(options?.signal === undefined ? [] : [options.signal]),
 			...(options?.caller === undefined ? {} : { caller: options.caller }),
 		}
 		let args: Readonly<Record<string, unknown>> = step.arguments
@@ -466,6 +468,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		// Without a context the manager refuses `switch` itself, as it refuses any unadvertised step.
 		if (step.action === 'switch' && step.tab !== undefined && this.#context !== undefined)
 			args = { ...args, tab: await this.#resolveTab(id, step.tab, options) }
+		// A followed step keeps only its action line; its caller renders the final view.
+		this.#uncaptured.add(context.signal)
 		const performed = await this.perform({ id, name: step.action, arguments: args }, context)
 		const action = performed.action
 		if (action === undefined)
@@ -1722,6 +1726,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		signal: AbortSignal,
 		deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS,
 	): Promise<string> {
+		if (this.#uncaptured.has(signal)) return ''
 		if (deadline - performance.now() < 1) return BROWSER_TOOL_DEADLINE_NOTE
 		// The capture belongs to the receipt: settling the receipt aborts it, so no readiness wait
 		// or protocol call outlives the receipt. The deadline alone ends the capture; the outline's

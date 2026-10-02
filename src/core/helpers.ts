@@ -162,6 +162,15 @@ export function renderBrowserOutline(
 	limit: number,
 ): BrowserOutline {
 	const rows = [`page ${JSON.stringify(title)} ${url}`]
+	const sessions = new Map<string, Map<string, BrowserOutlineNode>>()
+	for (const node of nodes) {
+		let parents = sessions.get(node.session)
+		if (parents === undefined) {
+			parents = new Map<string, BrowserOutlineNode>()
+			sessions.set(node.session, parents)
+		}
+		if (!parents.has(node.id)) parents.set(node.id, node)
+	}
 	let count = 0
 	let total = 0
 	for (const node of nodes) {
@@ -172,9 +181,8 @@ export function renderBrowserOutline(
 			continue
 		}
 		if (node.role === 'StaticText') {
-			const parent = nodes.find(
-				(candidate) => candidate.session === node.session && candidate.id === node.parent,
-			)
+			const parent =
+				node.parent === undefined ? undefined : sessions.get(node.session)?.get(node.parent)
 			if (name !== '' && name !== normalizeBrowserName(parent?.name ?? '')) rows.push(name)
 			continue
 		}
