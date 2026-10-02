@@ -118,7 +118,7 @@ describe('journey step helpers', () => {
 })
 
 describe('element helpers', () => {
-	it('renders identical node ids in separate sessions with each session own parent', () => {
+	it('reads each text node parent from its own session, by first match, before or after the text', () => {
 		const nodes = readBrowserAccessibility(BROWSER_ELEMENT_AX_FIXTURE).nodes.filter(
 			(node) => node.id === 'link' || node.id === 'duplicate',
 		)
@@ -140,13 +140,24 @@ describe('element helpers', () => {
 				name: ' Other home ',
 				reference: node.id === 'link' ? 'e3' : undefined,
 			})),
+			// A later row reusing the link's id must not replace the first match.
+			...nodes
+				.filter((node) => node.id === 'link')
+				.map((node) => ({ ...node, session: 'main', name: 'Elsewhere', reference: undefined })),
+			// The text comes before its parent here, so the lookup must reach forward.
+			...[...nodes].reverse().map((node) => ({
+				...node,
+				session: 'later',
+				name: ' Later ',
+				reference: node.id === 'link' ? 'e4' : undefined,
+			})),
 		]
 		expect(renderBrowserOutline('url', 'title', rows, 150)).toEqual({
 			url: 'url',
 			title: 'title',
-			text: 'page "title" url\ne1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\n(3 of 3 elements)',
-			count: 3,
-			total: 3,
+			text: 'page "title" url\ne1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\ne4 link "Later"\n(4 of 4 elements)',
+			count: 4,
+			total: 4,
 		})
 	})
 
