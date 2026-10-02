@@ -224,7 +224,6 @@ describe('pinned WebMCP conformance', () => {
 
 	it('follows star-export chains to forbidden clauses and comment-separated declarations', () => {
 		const scratch = createScratch({
-			parent: 'tmp',
 			prefix: 'u17-exports-',
 			files: WEBMCP_EXPORT_CONTROL,
 		})

@@ -38,7 +38,7 @@ import { parseBrowserTool } from '@src/core'
 
 describe('conformance infrastructure', () => {
 	it('returns the pinned bytes and rejects a scratch mirror with one changed byte', () => {
-		const scratch = createScratch({ parent: 'tmp', prefix: 'u17-mirror-' })
+		const scratch = createScratch({ prefix: 'u17-mirror-' })
 		try {
 			for (const [path, digest, bytes] of [
 				[WEBMCP_INDEX_PATH, WEBMCP_INDEX_DIGEST, WEBMCP_INDEX],
@@ -98,7 +98,7 @@ describe('conformance infrastructure', () => {
 	})
 
 	it('enumerates type aliases and star exports and refuses a missing source entry', () => {
-		const scratch = createScratch({ parent: 'tmp', prefix: 'u17-export-reader-' })
+		const scratch = createScratch({ prefix: 'u17-export-reader-' })
 		try {
 			scratch.write(
 				'definitions.ts',
@@ -118,7 +118,7 @@ describe('conformance infrastructure', () => {
 	})
 
 	it('reads declaration forms and defaults, strips comments, and terminates star cycles', () => {
-		const scratch = createScratch({ parent: 'tmp', prefix: 'u17-export-forms-' })
+		const scratch = createScratch({ prefix: 'u17-export-forms-' })
 		try {
 			const path = scratch.write(
 				'index.ts',
