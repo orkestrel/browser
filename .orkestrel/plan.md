@@ -1,49 +1,20 @@
-# Fleet campaign plan: the contract wave, the journeys release, and the browse server
+# Fleet campaign plan: close the 2026-10-01 wave
 
-Opened 2026-10-01 after the journeys campaign in `@orkestrel/browser` closed (`d221d4b`) and the units that needed no publish landed (browser `ROADMAP.md` items 5, 4, 1, and 2 at `5363263`; scaffold item 39 at `dc1c96e`). Read the registry, then the wave, then the unit you run; `.agents/orchestration.md` gives the dispatch form and the `orkestrel-publish` skill the release procedure.
+The wave is on the registry: contract 0.0.19, html 0.0.12, tool 0.0.18, markdown 0.0.17, server 0.0.22, mcp 0.0.35, browser 0.0.20, ollama 0.0.20, and scaffold 0.0.84, each confirmed by `npm view`. Scaffold 0.0.84 is overwritten into contract, html, tool, markdown, server, mcp, browser, and ollama on `ccr-d15a48b1-yyyll6`. The out-of-session obligations are scaffold `ROADMAP.md` items 43 and 44. Delete this file in the commit that closes the last unit.
 
 ## Registry
 
 | Row | Value |
 | --- | --- |
-| Goal | `@orkestrel/contract` 0.0.19 reads a JSON Schema `type` array, and the session's packages that depend on it re-pin and republish; `@orkestrel/browser` 0.0.19 ships the journeys with its `ROADMAP.md` empty; scaffold 0.0.83 gives every workspace with a browser, Vue, or styles surface the `browse` server; the ollama store proof runs against the published browser |
-| Exit criterion | the registry serves contract 0.0.19, html 0.0.12, tool 0.0.18, markdown 0.0.17, mcp 0.0.34, browser 0.0.19, ollama 0.0.20, and scaffold 0.0.83; each session repository's branch `ccr-d15a48b1-yyyll6` carries its release commit; the out-of-session obligations are recorded where the next visit reads them; `.orkestrel/` in every repository is empty |
-| Owner rulings, 2026-10-01 | the contract fix publishes now and cascades only to the session's packages; `browse` reaches every workspace with a browser, Vue, or styles surface (veneer first); browser item 3 rides `BrowserToolsetResult`, so `@orkestrel/tool` moves only for the contract re-pin; the ollama turn lever lands after the wave |
-| Session repositories | contract, html, tool, markdown, mcp, browser, ollama, scaffold, and veneer (the propagation proof), all on `ccr-d15a48b1-yyyll6`; the owner merges to `main` |
-| Authority | the owner publishes: every window needs the owner's npm approval at the keyboard; lanes are `astra` (Codex) or `opus`, never the session model; one writer per checkout |
+| Exit criterion | the open units below are landed and pushed; veneer's visit is green on the scaffold release that carries scaffold's `main`; `.orkestrel/` holds no file of this campaign |
+| Session repositories | contract, html, tool, markdown, server, mcp, browser, ollama, scaffold, and veneer, all on `ccr-d15a48b1-yyyll6`; the owner merges to `main` |
+| Authority | the owner publishes with an authenticator code per window; lanes are `opus`, `reviewer`, `verifier`, `checker`, `builder`, or `astra`; one writer per checkout |
 
-## The wave
+## Open units
 
-Each window publishes one layer after every package in it visited green, bumped from the registry, re-pinned to the previous window, passed its `prepublishOnly`, and pushed its release commit. A caret on a 0.0.x range pins one release, so a package re-pins only after its dependency is on the registry.
-
-| Window | Packages | Waits on |
+| Unit | Repository | Status |
 | --- | --- | --- |
-| W1 | contract 0.0.19 | unit C1 landed |
-| W2 | html 0.0.12, tool 0.0.18 | W1 |
-| W3 | markdown 0.0.17, mcp 0.0.34 | W2 |
-| W4 | browser 0.0.19 | W3, unit B3 landed |
-| W5 | ollama 0.0.20 | W4, unit O1 landed |
-| W6 | scaffold 0.0.83 | W5, unit S38 landed, the catalog verb run |
-
-## Status, 2026-10-01
-
-Every window is on the registry, each confirmed by `npm view`: contract 0.0.19, html 0.0.12, tool 0.0.18, markdown 0.0.17, mcp 0.0.34 then 0.0.35, browser 0.0.19 then 0.0.20, server 0.0.22, ollama 0.0.20, and scaffold 0.0.83. Server 0.0.22 ends a connection that never carried an exchange when `stop()` runs (the ollama relay cancellation hang); mcp 0.0.35 and browser 0.0.20 re-pinned it.
-
-Scaffold 0.0.83 propagated to contract, html, tool, markdown, server, browser, and ollama with no bump. Its overwrite refuses mcp: mcp has a `src/browser` environment, so the S38 condition plans `@orkestrel/browser`, which depends on mcp at runtime. Unit S43 omits `@orkestrel/browser` from every workspace in the browser package's runtime dependency closure; it ships as scaffold 0.0.84, then mcp's visit reruns and the other session repositories re-pin `^0.0.84`.
-
-## Units
-
-| Unit | Repository | Engine | Status |
-| --- | --- | --- | --- |
-| C1: `schemaToShape` converts a `type` array to the union of its members | contract | astra | landed `704e5d4`, published 0.0.19 |
-| B3: the coded fault of a `perform` rides `BrowserToolsetResult`; browser `ROADMAP.md` item 3 | browser | opus | landed `188a2d7`, published in 0.0.19 |
-| S38: `@orkestrel/browser` joins the development dependencies of a browser, Vue, or styles blueprint; the `browse` registration has one home | scaffold | opus | landed `438e808`; published in 0.0.83 |
-| M0: markdown proves `tests/setupGuides.ts` in its sibling test, as the scaffold 0.0.82 policy requires | markdown | opus | landed `f106c4f`, published in 0.0.17 |
-| O1: retire `normalizeSchemaTypes`, the turn lever in the store proof's turn handling, three live runs | ollama | opus | landed; published in 0.0.20 |
-| S43: omit `@orkestrel/browser` from a workspace in its own runtime dependency closure | scaffold | opus | running; ships as 0.0.84 |
-| V1: veneer's visit proves scaffold 0.0.84 delivers `@orkestrel/browser` and the `browse` rule; register `browse` and record a journey against veneer's app | veneer | host and opus | after W6 |
-| Close: re-pin `@orkestrel/scaffold` `^0.0.84` and overwrite in each session repository; empty `.orkestrel/` | all | host | after S43 |
-
-## Out-of-session obligations
-
-The owner limited the cascade to the session's packages. These consumers re-pin at their next visit: `@orkestrel/probe` (mcp `^0.0.34`, tool `^0.0.18`), `@orkestrel/agent` and `@orkestrel/toolbox` (tool `^0.0.18`), `@orkestrel/guide` (markdown `^0.0.17`), and the 41 other catalog packages that pin contract `^0.0.18`. Until they do, an install that combines them with a session package carries two copies of the moved dependency.
+| T1b: the `TIMER_LEAD` control in ollama and mcp, mirroring browser `64accbd`; the ollama `SCHEDULE_SLACK` TSDoc speaks only of late firing | ollama, mcp | running |
+| S44: merge scaffold's `main` (the veneer campaign's rules and `.prettierignore`) into the branch, promote the wave's registry readings into `orkestrel-publish` `references/wave.md`, and release scaffold 0.0.85 | scaffold | merge gates running; needs one code |
+| V1: veneer's visit on scaffold 0.0.85 declares `@orkestrel/browser` `^0.0.20` and keeps `main`'s `.prettierignore`; gates; serve the showcase with `vite preview`; record, list, and replay a journey through the `browse` binary; register `browse` in local scope | veneer | after S44 |
+| Close: overwrite scaffold 0.0.85 into the session repositories, delete mcp's `.orkestrel/mcp/`, and delete this file | all | after V1 |
