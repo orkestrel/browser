@@ -15,6 +15,6 @@ The wave is on the registry: contract 0.0.19, html 0.0.12, tool 0.0.18, markdown
 
 | Unit | Repository | Status |
 | --- | --- | --- |
-| VS: the veneer showcase, every Bootstrap class alone and beside Tailwind, with journeys, statecharts, and browse checks; its units in order live in the handoff record | veneer | landed on veneer `main` (`43ca8a0`); in flight: the scaffold 0.0.88 publish; planned: docs, then a falsify round |
+| VS: the veneer showcase, every Bootstrap class alone and beside Tailwind, with journeys, statecharts, and browse checks; its units in order live in the handoff record | veneer | landed on veneer `main` (`43ca8a0`); scaffold 0.0.88 published 2026-10-03 with browser `^0.0.21`; in flight: the showcase docs; planned: a falsify round |
 | Browse lane: browser 0.0.21 released (`6f5544e`, the outline parent index), ollama re-pinned (`f9cb40a`), veneer re-pinned in `43ca8a0`, scaffold's range in 0.0.88; `ROADMAP.md` items 6 to 12 open | browser | scaffold main `.orkestrel/veneer/showcase/browse.md` holds the units in order |
 | Close: delete this file and report | browser | last |
