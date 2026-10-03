@@ -18,6 +18,22 @@ import { RENDERED_PAGE } from '../../setup.js'
 
 describe('BrowserDOMView', () => {
 	describe('read', () => {
+		it('drops captured navigation only when distillation is requested', async () => {
+			const view = createBrowserDOMView({
+				document: createProbeDocument(
+					'<nav>Navigation words</nav><main><p>Main article words</p></main>',
+				),
+			})
+			try {
+				const reading = await view.read()
+				for (const project of [reading.markdown.bind(reading), reading.text.bind(reading)]) {
+					expect(project().text).toContain('Navigation words')
+					expect(project({ distill: true }).text).toBe('Main article words')
+				}
+			} finally {
+				view.destroy()
+			}
+		})
 		it('reads live fields and a direct lowered element without outside prose', async () => {
 			const document = createProbeDocument(
 				'<p>Outside prose</p><form><input value="Stale default"></form><button>Inside button</button>',
@@ -51,7 +67,7 @@ describe('BrowserDOMView', () => {
 			const reading = await view.read()
 			expect(reading).toMatchObject({ url: 'about:srcdoc', title: 'Probe', stale: false })
 			expect(reading.text().text).toContain('A paragraph the reader wants.')
-			expect(reading.text().text).not.toContain('Footer chrome')
+			expect(reading.text({ distill: true }).text).not.toContain('Footer chrome')
 			expect(reading.text({ distill: false }).text).toContain('Footer chrome nobody reads')
 		})
 

@@ -43,29 +43,29 @@ describe('BrowserReading', () => {
 	it('renders distilled Markdown that keeps the main paragraph and drops nav and footer', () => {
 		const reading = createBrowserReading({ url, title: 'Field notes', html })
 
-		expect(reading.markdown()).toEqual({
+		expect(reading.markdown({ distill: true })).toEqual({
 			text: '# Field notes\n\nThe paragraph the reader wants, with a [relative link](https://example.com/next).',
 			offset: 0,
 			total: 96,
 		})
 	})
 
-	it('renders the whole document as Markdown with distill false', () => {
+	it('renders the whole document as Markdown by default', () => {
 		const reading = createBrowserReading({ url, title: 'Field notes', html })
-		const whole = reading.markdown({ distill: false }).text
+		const whole = reading.markdown().text
 
 		expect(whole).toContain('The paragraph the reader wants')
-		expect(whole).toContain('[Section navigation](/home)')
+		expect(whole).toContain('[Section navigation](https://example.com/home)')
 		expect(whole).toContain('Footer links')
 	})
 
 	it('renders distilled plain text and the whole document as plain text with distill false', () => {
 		const reading = createBrowserReading({ url, title: 'Field notes', html })
 
-		expect(reading.text().text).toBe(
+		expect(reading.text({ distill: true }).text).toBe(
 			'Field notes\nThe paragraph the reader wants, with a relative link.',
 		)
-		expect(reading.text({ distill: false }).text).toBe(
+		expect(reading.text().text).toBe(
 			'Field notes\nSection navigation\nField notes\nThe paragraph the reader wants, with a relative link.\nFooter links',
 		)
 	})
@@ -114,11 +114,12 @@ describe('BrowserReading', () => {
 		})
 	})
 
-	it('resolves relative links against the captured url only in the distilled projection', () => {
+	it('resolves relative links against the captured url in both projections', () => {
 		const reading = createBrowserReading({ url: 'https://example.org/deep/page', title: '', html })
 
-		expect(reading.markdown().text).toContain('(https://example.org/next)')
-		expect(reading.markdown({ distill: false }).text).toContain('(/next)')
+		for (const distill of [true, false]) {
+			expect(reading.markdown({ distill }).text).toContain('(https://example.org/next)')
+		}
 	})
 
 	it('refuses an invalid slice bound with a browser error', () => {

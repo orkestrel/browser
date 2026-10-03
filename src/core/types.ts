@@ -2248,7 +2248,7 @@ export interface BrowserCodegenGesture {
  *
  * @remarks
  * - `distill` — if `true`, projects the distilled document; if `false`, projects the whole
- *   document. Default: `true`
+ *   document. Default: `false`
  * - `offset` — the character index the slice starts at, a non-negative integer. Default: `0`
  * - `limit` — the most characters the slice holds, a positive integer. Default: unbounded
  *
@@ -2278,6 +2278,17 @@ export interface BrowserReadResult {
 }
 
 /**
+ * Describes a matching line and its character offset in a reading's projection.
+ *
+ * @remarks
+ * Offsets count UTF-16 code units in the original text, including preceding line breaks.
+ */
+export interface BrowserReadMatch {
+	readonly offset: number
+	readonly text: string
+}
+
+/**
  * Reads the navigation epoch of the frame a reading was captured from.
  *
  * @returns The frame's current navigation epoch
@@ -2288,7 +2299,7 @@ export type BrowserEpochFunction = () => number
  * Describes the captured document a reading is built from.
  *
  * @remarks
- * - `url` — the document URL, which distillation resolves relative links against
+ * - `url` — the document URL, which each projection resolves relative links against
  * - `title` — the document title
  * - `html` — the serialized document HTML
  * - `epoch` — the navigation epoch recorded when the capture was issued. Default: the value
@@ -2346,8 +2357,8 @@ export interface BrowserReadingInput {
  * - `stale` — true when the source frame has navigated or detached since the capture; false
  *   otherwise
  *
- * Each projection runs over `html.distill({ base: url })` by default and over the whole document
- * with `distill: false`. A reading computes each projection one time and cuts every slice from
+ * Each projection runs over the whole document by default and over
+ * `html.distill({ base: url })` with `distill: true`. A reading computes each projection one time and cuts every slice from
  * it, so successive slices of one reading and mode share one `total`.
  */
 export interface BrowserReadingInterface {

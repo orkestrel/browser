@@ -867,7 +867,7 @@ describe('Browser proofs against the fixture pages', () => {
 		const page = await browser.create({ url: fixtures.url('/article') })
 		opened.push(page)
 		const reading = await page.read()
-		const distilled = reading.text()
+		const distilled = reading.text({ distill: true })
 		const whole = reading.text({ distill: false })
 
 		expect(distilled.text).toContain('Field note 40 records the river gauge')
@@ -884,13 +884,13 @@ describe('Browser proofs against the fixture pages', () => {
 			offset < distilled.total && slices.length < 100;
 			offset += slices.at(-1)?.text.length ?? distilled.total
 		)
-			slices.push(reading.text({ offset, limit: 500 }))
+			slices.push(reading.text({ distill: true, offset, limit: 500 }))
 		expect(slices.length).toBeGreaterThan(1)
 		expect(slices.filter((slice) => slice.text.length > 500)).toStrictEqual([])
 		expect(slices.filter((slice) => slice.total !== distilled.total)).toStrictEqual([])
 		expect(slices.map((slice) => slice.text).join('')).toBe(distilled.text)
 
-		expect(reading.text({ limit: distilled.total + 1 })).toStrictEqual({
+		expect(reading.text({ distill: true, limit: distilled.total + 1 })).toStrictEqual({
 			text: distilled.text,
 			offset: 0,
 			total: distilled.total,

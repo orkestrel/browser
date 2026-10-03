@@ -24,6 +24,8 @@ import {
 	composeBrowserPoint,
 	filterBrowserOutline,
 	matchBrowserOutline,
+	collectBrowserWords,
+	matchBrowserText,
 	normalizeBrowserKey,
 	normalizeBrowserName,
 	readBrowserAccessibility,
@@ -83,6 +85,27 @@ import {
 	PNG_BASE64,
 	createBrowserOutlineNodes,
 } from '../../setup.js'
+
+describe('reading matches', () => {
+	it('collects distinct whole Unicode words and digits of at least three characters', () => {
+		expect([...collectBrowserWords('Cart CART cartwheel a to 12 123 café 中文字')]).toEqual([
+			'cart',
+			'cartwheel',
+			'123',
+			'café',
+			'中文字',
+		])
+	})
+	it('keeps only the top-scoring lines and preserves duplicate offsets', () => {
+		expect(matchBrowserText('cart\nBlue cart\ncartwheel\r\nBlue cart', 'BLUE cart blue')).toEqual([
+			{ offset: 5, text: 'Blue cart' },
+			{ offset: 26, text: 'Blue cart' },
+		])
+		expect(matchBrowserText('cart', 'a to 12')).toEqual([])
+		expect(matchBrowserText('cartwheel', 'cart')).toEqual([])
+		expect(matchBrowserText('', 'cart')).toEqual([])
+	})
+})
 
 describe('journey step helpers', () => {
 	it('admits the advertised wait timeout in a journey step', () => {

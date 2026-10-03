@@ -7,7 +7,7 @@ import type {
 } from './types.js'
 import type { HTMLInterface } from '@orkestrel/html'
 import { extractBrowserSlice } from './helpers.js'
-import { createHTML, renderText } from '@orkestrel/html'
+import { createHTML, renderText, resolveAttributes } from '@orkestrel/html'
 import { htmlToMarkdown, renderMarkdown } from '@orkestrel/markdown'
 
 /**
@@ -23,7 +23,7 @@ import { htmlToMarkdown, renderMarkdown } from '@orkestrel/markdown'
  * 	title: 'Example',
  * 	html: '<nav>Menu</nav><main><p>Body</p></main>',
  * })
- * reading.markdown() // { text: 'Body', offset: 0, total: 4 }
+ * reading.markdown({ distill: true }) // { text: 'Body', offset: 0, total: 4 }
  * ```
  */
 export class BrowserReading implements BrowserReadingInterface {
@@ -62,7 +62,7 @@ export class BrowserReading implements BrowserReadingInterface {
 	}
 
 	markdown(options?: BrowserReadOptions): BrowserReadResult {
-		const distill = options?.distill ?? true
+		const distill = options?.distill ?? false
 		let text = this.#markdowns.get(distill)
 		if (text === undefined) {
 			text = renderMarkdown(htmlToMarkdown(this.#source(distill).document))
@@ -72,7 +72,7 @@ export class BrowserReading implements BrowserReadingInterface {
 	}
 
 	text(options?: BrowserReadOptions): BrowserReadResult {
-		const distill = options?.distill ?? true
+		const distill = options?.distill ?? false
 		let text = this.#texts.get(distill)
 		if (text === undefined) {
 			text = renderText(this.#source(distill).document)
@@ -82,7 +82,12 @@ export class BrowserReading implements BrowserReadingInterface {
 	}
 
 	#source(distill: boolean): HTMLInterface {
-		if (!distill) return this.#html
+		if (!distill)
+			return this.#html.map((node) =>
+				node.category === 'element'
+					? { ...node, attributes: resolveAttributes(node, this.#url) }
+					: node,
+			)
 		this.#distilled ??= this.#html.distill({ base: this.#url })
 		return this.#distilled
 	}

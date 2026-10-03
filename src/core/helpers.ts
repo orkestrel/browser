@@ -43,6 +43,7 @@ import type {
 	BrowserRouteQuery,
 	BrowserQuad,
 	BrowserReadResult,
+	BrowserReadMatch,
 	BrowserReceipt,
 	BrowserElementInterface,
 	BrowserSnapshotInput,
@@ -241,9 +242,7 @@ export function matchBrowserOutline(
 	nodes: readonly BrowserOutlineNode[],
 	search: string,
 ): readonly BrowserOutlineNode[] {
-	const words = new Set(
-		Array.from(search.toLowerCase().matchAll(BROWSER_SEARCH_PATTERN), (match) => match[0]),
-	)
+	const words = collectBrowserWords(search)
 	if (words.size === 0) return []
 	let best = 0
 	const scored: Array<{ readonly node: BrowserOutlineNode; readonly score: number }> = []
@@ -257,12 +256,7 @@ export function matchBrowserOutline(
 			role === 'StaticText'
 		)
 			continue
-		const own = new Set(
-			Array.from(
-				`${role} ${node.name ?? ''}`.toLowerCase().matchAll(BROWSER_SEARCH_PATTERN),
-				(match) => match[0],
-			),
-		)
+		const own = collectBrowserWords(`${role} ${node.name ?? ''}`)
 		let score = 0
 		for (const word of words) if (own.has(word)) score += 1
 		if (score === 0) continue
@@ -270,6 +264,53 @@ export function matchBrowserOutline(
 		scored.push({ node, score })
 	}
 	return scored.filter((entry) => entry.score === best).map((entry) => entry.node)
+}
+
+/**
+ * Collects distinct lowercase words of at least 3 letters or digits.
+ *
+ * @param text - Text to scan
+ * @returns The searchable whole words
+ *
+ * @example
+ * ```ts
+ * import { collectBrowserWords } from '@orkestrel/browser'
+ * [...collectBrowserWords('The cart, the bag')] // ['the', 'cart', 'bag']
+ * ```
+ */
+export function collectBrowserWords(text: string): ReadonlySet<string> {
+	return new Set(
+		Array.from(text.toLowerCase().matchAll(BROWSER_SEARCH_PATTERN), (match) => match[0]),
+	)
+}
+
+/**
+ * Matches the lines sharing the most distinct search words, in document order.
+ *
+ * @param text - The complete projection
+ * @param search - Words to match, using the outline's word rule
+ * @returns The best-scoring lines and their original UTF-16 offsets; empty without a shared word
+ *
+ * @example
+ * ```ts
+ * import { matchBrowserText } from '@orkestrel/browser'
+ * matchBrowserText('Cart\nBlue kettle', 'kettle') // [{ offset: 5, text: 'Blue kettle' }]
+ * ```
+ */
+export function matchBrowserText(text: string, search: string): readonly BrowserReadMatch[] {
+	const words = collectBrowserWords(search)
+	if (words.size === 0) return []
+	let best = 0
+	const scored: Array<{ readonly match: BrowserReadMatch; readonly score: number }> = []
+	for (const line of text.matchAll(/[^\r\n]+/g)) {
+		const own = collectBrowserWords(line[0])
+		let score = 0
+		for (const word of words) if (own.has(word)) score += 1
+		if (score === 0) continue
+		best = Math.max(best, score)
+		scored.push({ match: { offset: line.index, text: line[0] }, score })
+	}
+	return scored.filter((entry) => entry.score === best).map((entry) => entry.match)
 }
 
 /**

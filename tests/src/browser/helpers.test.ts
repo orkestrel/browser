@@ -618,7 +618,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		]) {
 			expect(reading.text({ distill: false }).text).toContain(phrase)
 			expect(reading.markdown({ distill: false }).text).toContain(phrase)
-			expect(reading.text().text).not.toContain(phrase)
+			expect(reading.text({ distill: true }).text).not.toContain(phrase)
 		}
 		expect(reading.text().text).toContain('Painted prose')
 	})
