@@ -41,6 +41,45 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('item 12 adds and lists an absent wait and refuses malformed absence', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(createBrowserJourneyFixture())
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		try {
+			const edited = await toolset.tools.execute({
+				id: 'add',
+				name: 'edit',
+				arguments: {
+					journey: 'check-ready',
+					edits: [
+						{
+							operation: 'add',
+							step: { action: 'wait', arguments: { text: 'Saved', absent: true } },
+						},
+					],
+				},
+			})
+			expect(readProperty(edited, 'value')).toContain('s2 wait "Saved", absent')
+			const refused = await toolset.tools.execute({
+				id: 'bad',
+				name: 'edit',
+				arguments: {
+					journey: 'check-ready',
+					edits: [
+						{
+							operation: 'add',
+							step: { action: 'wait', arguments: { text: 'Saved', absent: 'yes' } },
+						},
+					],
+				},
+			})
+			expect(readProperty(refused, 'success')).toBe(false)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
 	it('lists matching journey headings with offsets independent of search and excludes steps', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		const first = { ...createBrowserJourneyFixture(), name: 'alpha', description: 'Ordinary route' }

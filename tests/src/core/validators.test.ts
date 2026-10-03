@@ -168,6 +168,22 @@ describe('journey validators', () => {
 	it.each(BROWSER_JOURNEY_TEMPLATE_CASES)('accepts the $line shape', ({ step }) => {
 		expect(() => validateBrowserJourneyStep(step)).not.toThrow()
 	})
+	it('item 12 validates boolean absence and refuses a string', () => {
+		expect(() =>
+			validateBrowserJourneyStep({
+				id: 's1',
+				action: 'wait',
+				arguments: { text: 'Saved', absent: true },
+			}),
+		).not.toThrow()
+		expect(() =>
+			validateBrowserJourneyStep({
+				id: 's1',
+				action: 'wait',
+				arguments: { text: 'Saved', absent: 'yes' },
+			}),
+		).toThrow('Invariant 7 (actions): has malformed native arguments')
+	})
 	it('validates the binding, target, tab, and parameter leaves', () => {
 		expect(isBrowserJourneyBinding({ parameter: 'email' })).toBe(true)
 		expect(isBrowserJourneyBinding({ parameter: 'Email' })).toBe(false)

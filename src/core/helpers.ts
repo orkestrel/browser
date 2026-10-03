@@ -2881,7 +2881,7 @@ export function renderBrowserJourney(journey: BrowserJourney): string {
 			case 'press':
 				return `${step.id} press ${text}${suffix}`
 			case 'wait':
-				return `${step.id} wait ${JSON.stringify(text)}${suffix}`
+				return `${step.id} wait ${JSON.stringify(text)}${suffix}${step.arguments['absent'] === true ? ', absent' : ''}`
 			case 'dialog':
 				return `${step.id} dialog ${step.arguments['accept'] === true ? 'accept' : 'dismiss'}${binding === undefined ? '' : ` ${JSON.stringify(text)}${suffix}`}`
 			case 'switch':

@@ -80,10 +80,110 @@ import {
 	ignoreCall,
 	readCDPExpression,
 	readBrowserCompiledTimers,
+	runBrowserCompiledTimers,
 	replyOk,
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it('item 12 absent receipts, outcomes, validation, and appearance control', async () => {
+		for (const waited of [true, false]) {
+			const view = createBrowserViewDouble({ waited })
+			const toolset = new BrowserToolset(view)
+			try {
+				await toolset.start()
+				const result = await toolset.perform({
+					id: 'gone',
+					name: 'wait',
+					arguments: { text: 'Saved', absent: true, timeout: 0.01 },
+				})
+				expect(result.action?.outcome).toBe(waited ? 'done' : 'timeout')
+				expect(result.action?.receipt).toBe(
+					waited ? '"Saved" is not on the page.' : '"Saved" is still on the page after 0.01 s.',
+				)
+				expect(view.calls).toContain('wait Saved absent')
+				await toolset.perform({
+					id: 'present',
+					name: 'wait',
+					arguments: { text: 'Saved', absent: false },
+				})
+				expect(view.calls).toContain('wait Saved')
+				const calls = view.calls.length
+				await expect(
+					requireValue(toolset.tools.tool('wait')).execute(
+						{ text: 'Saved', absent: 'yes' },
+						{ signal: new AbortController().signal },
+					),
+				).rejects.toMatchObject({
+					code: 'BROWSER_TOOLSET_ARGUMENT',
+					context: { key: 'absent' },
+					message: 'The absent parameter must be a boolean.',
+				})
+				expect(view.calls).toHaveLength(calls)
+			} finally {
+				await toolset.destroy()
+			}
+		}
+	})
+	it('item 12 passes absence through the page into the compiled predicate', async () => {
+		const fixture = await createBrowserElementFixture({
+			evaluation: async (message) => {
+				const run = await runBrowserCompiledTimers(String(message.params?.['expression']))
+				fixture.transport.reply(message.id, { result: { value: run.result } })
+			},
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			const performed = await toolset.perform({
+				id: 'gone',
+				name: 'wait',
+				arguments: { text: 'Saved', absent: true },
+			})
+			expect(performed.action?.outcome).toBe('done')
+			expect(performed.action?.receipt).toBe('"Saved" is not on the page.')
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('item 12 labels an absent wait interrupted by a dialog', async () => {
+		const waits: CDPSentMessage[] = []
+		const fixture = await createBrowserElementFixture({
+			evaluation: (message) => {
+				if (String(message.params?.['expression']).includes('Order placed')) waits.push(message)
+				else fixture.transport.reply(message.id, { result: { value: true } })
+			},
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			let settled = false
+			const waited = toolset.tools
+				.execute({ id: 'gone', name: 'wait', arguments: { text: 'Order placed', absent: true } })
+				.then((result) => {
+					settled = true
+					return result
+				})
+			await waitForCondition(
+				'the absent wait is pending or refused',
+				() => waits.length === 1 || settled,
+			)
+			expect(waits).toHaveLength(1)
+			fixture.transport.event(
+				'Page.javascriptDialogOpening',
+				{ type: 'confirm', message: 'Leave?' },
+				'session-main',
+			)
+			expect(await waited).toMatchObject({
+				success: true,
+				value:
+					'Waited for "Order placed" to leave. A confirm dialog is open: "Leave?"; call dialog.',
+			})
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 	it('strips synthetic purpose before calling a parameterless page tool', async () => {
 		const inputs = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
 		const source: BrowserToolSourceInterface = {
@@ -901,13 +1001,13 @@ describe('BrowserToolset', () => {
 					'secret',
 				),
 			}
-			// The measured full copy is 6,559 UTF-16 code units; 6,600 is the smallest multiple of 50
+			// The measured full copy is 6,675 UTF-16 code units; 6,700 is the smallest multiple of 50
 			// that holds it. The journey copy measures 3,090, giving the same bound rule 3,100.
 			// Include the secret property's name and schema without charging for the rest of type.
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
 				.toBeLessThanOrEqual(3100)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6600)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6700)
 		})
 
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
@@ -972,7 +1072,7 @@ describe('BrowserToolset', () => {
 				type: 'Types into the text control with that reference; set submit to true to submit its form.',
 				press: 'Presses that key or chord, such as Enter or Control+a.',
 				navigate: 'Opens that absolute web address in the current tab.',
-				wait: 'Waits for that text to appear on the page.',
+				wait: 'Waits for text to appear; set absent to true to wait for it to leave.',
 				dialog: 'Accepts or dismisses the open dialog.',
 				tabs: 'Lists the open tabs; the current one is marked.',
 				switch: 'Switches to a tab from tabs, such as t2.',
@@ -983,6 +1083,12 @@ describe('BrowserToolset', () => {
 					'submit',
 				),
 			).toEqual({ type: 'boolean', description: 'True to submit its form after typing.' })
+			expect(
+				readProperty(
+					readProperty<object>(BROWSER_TOOL_COPY.wait.parameters, 'properties'),
+					'absent',
+				),
+			).toEqual({ type: 'boolean', description: 'True to wait for the text to leave the page.' })
 		})
 
 		it('catches a look or read that advertises or accepts ref, or a tool that runs with a parameter it does not advertise', async () => {

@@ -21,6 +21,27 @@ import {
 } from '../../../setup.js'
 
 describe('BrowserRecorder', () => {
+	it('item 12 keeps done absence arguments and drops a timed out absence wait', async () => {
+		for (const waited of [true, false]) {
+			const toolset = new BrowserToolset(createBrowserViewDouble({ waited }))
+			const recorder = new BrowserRecorder(toolset)
+			try {
+				await toolset.start()
+				await recorder.start()
+				await toolset.perform({
+					id: 'gone',
+					name: 'wait',
+					arguments: { text: 'Saved', absent: true },
+				})
+				expect(recorder.steps().map((step) => step.arguments)).toEqual(
+					waited ? [{ text: 'Saved', absent: true }] : [],
+				)
+			} finally {
+				await recorder.destroy()
+				await toolset.destroy()
+			}
+		}
+	})
 	it('starts with a gap when constructed after a hold was acquired', async () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		await toolset.start()

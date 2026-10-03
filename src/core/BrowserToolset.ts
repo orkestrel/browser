@@ -124,6 +124,8 @@ import {
  * error message and JSON output reach the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT`
  * (4 096) by the registry, so a `limit` over that shows at most 4 096 characters of either; a page
  * tool's text output reaches the boundary whole.
+ * `wait` with `absent` set to `true` settles when the text is not on the page, and a miss
+ * returns the `timeout` outcome as an appearance miss does.
  *
  * `click`, `type`, `press`, `navigate`, and `switch` are actions: one runs at a time, in call
  * order, and holds the queue until its receipt. A queued action whose signal aborts leaves
@@ -1102,6 +1104,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	): Promise<readonly [string, string]> {
 		const text = readBrowserToolString(args, 'text')
 		const seconds = args['timeout']
+		const absent = args['absent']
+		if (absent !== undefined && !isBoolean(absent)) {
+			throw new BrowserError(
+				'The absent parameter must be a boolean.',
+				'BROWSER_TOOLSET_ARGUMENT',
+				{ key: 'absent' },
+			)
+		}
 		if (seconds !== undefined && (!isFiniteNumber(seconds) || seconds <= 0)) {
 			throw new BrowserError(
 				'The timeout parameter must be a positive number of seconds.',
@@ -1116,11 +1126,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const quoted = JSON.stringify(text)
 		try {
 			await this.#race(
-				this.#cursor.wait(text, { timeout, signal: context.signal }),
-				`Waited for ${quoted}`,
+				this.#cursor.wait(text, { timeout, signal: context.signal, absent: absent === true }),
+				`Waited for ${quoted}${absent === true ? ' to leave' : ''}`,
 				context.signal,
 			)
-			return [`${quoted} is on the page.`, '']
+			return [`${quoted} is ${absent === true ? 'not ' : ''}on the page.`, '']
 		} catch (error) {
 			if (
 				!context.signal.aborted &&
@@ -1131,7 +1141,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					...this.#actions.get(context.signal),
 					outcome: 'timeout',
 				})
-				return [`${quoted} did not appear within ${timeout / 1000} s.`, '']
+				return [
+					absent === true
+						? `${quoted} is still on the page after ${timeout / 1000} s.`
+						: `${quoted} did not appear within ${timeout / 1000} s.`,
+					'',
+				]
 			}
 			throw error
 		}

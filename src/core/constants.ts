@@ -522,6 +522,7 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * `untrusted`, `wait` and `tabs` annotate `pure`, and the rest carry no annotation. `type` takes
  * `secret` beside `ref`, `text`, and `submit`. The journey tools `record`, `save`, `journeys`,
  * `edit`, and `replay` are advertised only by a toolset constructed with `journeys`.
+ * `wait` takes `absent` beside `text` and `timeout`.
  */
 export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>> = Object.freeze({
 	look: Object.freeze({
@@ -643,11 +644,15 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	wait: Object.freeze({
 		name: 'wait',
-		description: 'Waits for that text to appear on the page.',
+		description: 'Waits for text to appear; set absent to true to wait for it to leave.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
 				text: Object.freeze({ type: 'string', description: 'The text to wait for.' }),
+				absent: Object.freeze({
+					type: 'boolean',
+					description: 'True to wait for the text to leave the page.',
+				}),
 				timeout: Object.freeze({
 					type: 'integer',
 					description: 'The most seconds to wait, at most 30. Default: 5.',

@@ -194,6 +194,13 @@ describe('createDocumentToolset', () => {
 		)
 		const resolved = performance.now()
 		expect(waited).toBe('"Late arrival" is on the page.')
+		probe.late.textContent = ''
+		expect(
+			await requireValue(toolset.tools.tool('wait')).execute(
+				{ text: 'Late arrival', absent: true },
+				{ signal },
+			),
+		).toBe('"Late arrival" is not on the page.')
 		const [[at] = [Number.NaN]] = appended.calls
 		expect(resolved - at).toBeLessThan(100)
 		await toolset.destroy()

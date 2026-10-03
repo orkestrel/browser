@@ -3681,6 +3681,11 @@ export const BROWSER_JOURNEY_TEMPLATE_CASES: ReadonlyArray<{
 		trigger: 'Saved',
 	},
 	{
+		step: { id: 's1', action: 'wait', arguments: { text: 'Saving', absent: true } },
+		line: 's1 wait "Saving", absent',
+		trigger: 'Saving',
+	},
+	{
 		step: { id: 's1', action: 'dialog', arguments: { accept: true } },
 		line: 's1 dialog accept',
 		trigger: 'accept',

@@ -25,6 +25,7 @@ import {
 	createBrowserReplay,
 	createBrowserToolset,
 	createCDPClient,
+	createMemoryBrowserJourneyStore,
 	renderBrowserRun,
 } from '@src/core'
 import {
@@ -639,6 +640,80 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 	})
 
 	describe('claim 7: a wait that times out stops the run', () => {
+		it('item 12 records an exit check, replays it, and stops when dismissal leaves the toast', async () => {
+			const store = createMemoryBrowserJourneyStore()
+			const recordingPage = await context.create({ url: fixtures.url('/form') })
+			pages.push(recordingPage)
+			const recording = createBrowserToolset(recordingPage, { journeys: { store } })
+			toolsets.push(recording)
+			await recordingPage.evaluate(
+				`document.body.innerHTML = ${JSON.stringify('<p id="toast">Saved to drafts</p><button onclick="document.getElementById(\'toast\').remove()">Dismiss</button>')}`,
+			)
+			await recording.start()
+			requireToolText(
+				await recording.tools.execute({
+					id: 'record',
+					name: 'record',
+					arguments: { journey: 'dismiss-toast' },
+				}),
+			)
+			requireToolText(
+				await recording.tools.execute({
+					id: 'appear',
+					name: 'wait',
+					arguments: { text: 'Saved to drafts' },
+				}),
+			)
+			const dismiss = await requireBrowserJourneyElement(recordingPage, {
+				role: 'button',
+				name: 'Dismiss',
+			})
+			requireToolText(
+				await recording.tools.execute({
+					id: 'dismiss',
+					name: 'click',
+					arguments: { ref: dismiss.reference },
+				}),
+			)
+			requireToolText(
+				await recording.tools.execute({
+					id: 'gone',
+					name: 'wait',
+					arguments: { text: 'Saved to drafts', absent: true, timeout: 1 },
+				}),
+			)
+			const saved = requireToolText(
+				await recording.tools.execute({
+					id: 'save',
+					name: 'save',
+					arguments: { description: 'Dismiss the toast and check its exit' },
+				}),
+			)
+			expect(saved).toContain('s3 wait "Saved to drafts", absent')
+			const journey = requireValue(await store.get('dismiss-toast')).journey
+			for (const removes of [true, false]) {
+				const fresh = await context.create({ url: fixtures.url('/form') })
+				pages.push(fresh)
+				await fresh.evaluate(
+					`document.body.innerHTML = ${JSON.stringify(`<p id="toast">Saved to drafts</p><button${removes ? ' onclick="document.getElementById(\'toast\').remove()"' : ''}>Dismiss</button>`)}`,
+				)
+				const replaying = createBrowserToolset(fresh)
+				toolsets.push(replaying)
+				await replaying.start()
+				const run = await createBrowserReplay(replaying, { journey }).execute()
+				expect(run.outcome).toBe(removes ? 'complete' : 'stopped')
+				expect(run.steps.map((step) => [step.id, step.outcome])).toEqual([
+					['s1', 'done'],
+					['s2', 'done'],
+					['s3', removes ? 'done' : 'timeout'],
+				])
+				expect(run.steps[2]?.result).toBe(
+					removes
+						? '"Saved to drafts" is not on the page.'
+						: '"Saved to drafts" is still on the page after 1 s.',
+				)
+			}
+		})
 		it('stops at a wait whose text never appears with outcome timeout and the direct receipt, and sends no following input', async () => {
 			const page = await context.create({ url: fixtures.url('/form') })
 			pages.push(page)
