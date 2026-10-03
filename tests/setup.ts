@@ -9,6 +9,7 @@ import type {
 	BrowserStoreOptions,
 	BrowserStoreFault,
 	BrowserCallOptions,
+	BrowserWaitOptions,
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserElementQuery,
@@ -52,6 +53,12 @@ import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, waitForEvent } from '@orkestrel/test'
+
+/** Holds an exit whose visibility changes after its last DOM mutation. */
+export const WAIT_EXIT_HTML = `<style>
+#toast{visibility:hidden;transition:visibility 0s linear 200ms}
+#toast.shown{visibility:visible;transition:none}
+</style><p id="toast" class="shown">Saved to drafts</p>`
 
 /** Holds stylesheet-hidden panels and the rendered capture's layout controls. */
 export const RENDERED_PAGE = `<!doctype html><html><head><title>Rendered reading</title><style>
@@ -421,7 +428,8 @@ export function readBrowserCompiledTimers(expression: string): readonly BrowserC
 		`
 		const globalThis = {}
 		const MutationObserver = observer
-		const document = { body: { innerText: '' } }
+		const listeners = []
+		const document = { body: { innerText: '' }, addEventListener: (name, _handler, options) => listeners.push({ name, capture: options.capture, signal: options.signal }) }
 		const requestAnimationFrame = () => 0
 		const cancelAnimationFrame = () => undefined
 		const clearTimeout = () => undefined
@@ -436,6 +444,8 @@ export function readBrowserCompiledTimers(expression: string): readonly BrowserC
 
 /** Reports what a compiled wait registered, disconnected, and resolved after its deadline ran. */
 export interface BrowserCompiledRun {
+	readonly listeners: ReadonlyArray<{ readonly name: string; readonly capture: boolean }>
+	readonly released: number
 	readonly timers: readonly BrowserCompiledTimer[]
 	readonly disconnects: number
 	readonly result: unknown
@@ -450,6 +460,11 @@ export async function runBrowserCompiledTimers(expression: string): Promise<Brow
 	const timers: BrowserCompiledTimer[] = []
 	const callbacks: Array<() => void> = []
 	const counts = { disconnects: 0 }
+	const listeners: Array<{
+		readonly name: string
+		readonly capture: boolean
+		readonly signal: AbortSignal
+	}> = []
 	class RecordingObserver {
 		observe(): void {
 			return undefined
@@ -462,10 +477,11 @@ export async function runBrowserCompiledTimers(expression: string): Promise<Brow
 		'observer',
 		'timers',
 		'callbacks',
+		'listeners',
 		`
 		const globalThis = {}
 		const MutationObserver = observer
-		const document = { body: { innerText: '' } }
+		const document = { body: { innerText: '' }, addEventListener: (name, _handler, options) => listeners.push({ name, capture: options.capture, signal: options.signal }) }
 		const requestAnimationFrame = () => 0
 		const cancelAnimationFrame = () => undefined
 		const clearTimeout = () => undefined
@@ -480,9 +496,16 @@ export async function runBrowserCompiledTimers(expression: string): Promise<Brow
 		RecordingObserver,
 		timers,
 		callbacks,
+		listeners,
 	])
 	callbacks[0]?.()
-	return { timers, disconnects: counts.disconnects, result: await pending }
+	return {
+		timers,
+		disconnects: counts.disconnects,
+		result: await pending,
+		listeners: listeners.map(({ name, capture }) => ({ name, capture })),
+		released: listeners.filter(({ signal }) => signal.aborted).length,
+	}
 }
 
 /** Supplies inert observer methods to the compiler timer-argument instrument. */
@@ -3086,9 +3109,9 @@ export class BrowserViewDouble implements BrowserViewInterface {
 		return createBrowserReading({ url: this.#url, title: this.#title, html: this.#html })
 	}
 
-	async wait(text: string, options?: BrowserCallOptions): Promise<void> {
+	async wait(text: string, options?: BrowserWaitOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
-		this.#calls.push(`wait ${text}`)
+		this.#calls.push(`wait ${text}${options?.absent === true ? ' absent' : ''}`)
 		if (!this.#waited)
 			throw new BrowserError('Browser text wait timed out', 'BROWSER_WAIT_TIMEOUT', { text })
 	}

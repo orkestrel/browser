@@ -4,6 +4,7 @@ import type {
 	BrowserReadinessWait,
 	BrowserReferenceFunction,
 	BrowserCallOptions,
+	BrowserWaitOptions,
 	BrowserCodegenInterface,
 	BrowserRecorderOptions,
 	BrowserClockInterface,
@@ -420,7 +421,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		return await super.read(options)
 	}
 
-	async wait(text: string, options?: BrowserCallOptions): Promise<void> {
+	async wait(text: string, options?: BrowserWaitOptions): Promise<void> {
 		this.assert()
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
@@ -435,7 +436,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				const result = await this.send(
 					'Runtime.evaluate',
 					{
-						expression: compileTextWaitExpression(text, remaining, key),
+						expression: compileTextWaitExpression(text, remaining, key, options?.absent === true),
 						contextId: context,
 						returnByValue: true,
 						awaitPromise: true,

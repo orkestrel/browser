@@ -67,6 +67,7 @@ import {
 	readBrowserSubmitToken,
 	scriptBrowserElements,
 	readBrowserCompiledTimers,
+	runBrowserCompiledTimers,
 	createBrowserElementFixture,
 	createBrowserViewDouble,
 	createAttachedPage,
@@ -154,6 +155,18 @@ describe('element protocol and compiler fixtures', () => {
 			} finally {
 				await fixture.client.close()
 			}
+		}
+	})
+
+	it('records compiled listeners and distinguishes released from retained signals', async () => {
+		for (const abort of [true, false]) {
+			const run = await runBrowserCompiledTimers(`new Promise(resolve => {
+				const release = new AbortController()
+				document.addEventListener('sample', () => {}, {capture:true,signal:release.signal})
+				setTimeout(() => { ${abort ? 'release.abort();' : ''} resolve(true) }, 5)
+			})`)
+			expect(run.listeners).toEqual([{ name: 'sample', capture: true }])
+			expect(run.released).toBe(abort ? 1 : 0)
 		}
 	})
 

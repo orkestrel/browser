@@ -1,17 +1,18 @@
 import type { BrowserDOMWaitInterface, BrowserMutationWait } from './types.js'
 import { attempt } from '@orkestrel/contract'
-import { BrowserElementError, BrowserError } from '@src/core'
+import { BROWSER_WAIT_EVENTS, BrowserElementError, BrowserError } from '@src/core'
 import { isBrowserDocument } from './helpers.js'
 
 /**
- * Parks one condition on DOM mutations until it holds, with one deadline and no other timer.
+ * Parks one condition on DOM mutations and finished transitions and animations until it holds, with one deadline and no other timer.
  *
  * @remarks
  * The wait observes every root `roots` returns, each through a `MutationObserver` of that root's
- * realm, and re-reads the roots after every mutation batch and every capture-phase `load` in an
+ * realm, and re-reads the roots after every mutation batch, every capture-phase `load`, and
+ * every `BROWSER_WAIT_EVENTS` event in an
  * observed root: a same-origin frame or an open shadow root that appears joins the observation,
  * and a root that departed (a replaced frame document, a removed shadow root) leaves it, with its
- * observer disconnected and its `load` listener removed. The check runs before the wait parks and
+ * observer disconnected and its listeners removed. The check runs before the wait parks and
  * again after every subscription, and no check runs once the deadline, counted from `start`, has
  * passed, which the wait reads again after `roots` returns. The wait settles one time: on the
  * check's first value, on the signal's abort with its reason, at the deadline with
@@ -118,6 +119,8 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 			})
 			const release = new AbortController()
 			root.addEventListener('load', this.#recheckHandler, { capture: true, signal: release.signal })
+			for (const name of BROWSER_WAIT_EVENTS)
+				root.addEventListener(name, this.#recheckHandler, { capture: true, signal: release.signal })
 			this.#observers.set(root, { observer, release })
 			// Only the first root's window failing ends the wait; a child frame's unload is followed
 			// by its next document's `load`, which reconciles the roots.

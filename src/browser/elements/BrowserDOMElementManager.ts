@@ -3,7 +3,7 @@ import type {
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserElementQuery,
-	BrowserElementWaitOptions,
+	BrowserWaitOptions,
 	BrowserOutline,
 	BrowserOutlineNode,
 	BrowserOutlineOptions,
@@ -122,7 +122,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 
 	async wait(
 		query: BrowserElementQuery,
-		options?: BrowserElementWaitOptions,
+		options?: BrowserWaitOptions,
 	): Promise<readonly BrowserDOMElementInterface[]> {
 		this.#input.signal.throwIfAborted()
 		const start = performance.now()

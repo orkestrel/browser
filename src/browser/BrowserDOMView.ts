@@ -1,5 +1,6 @@
 import type {
 	BrowserCallOptions,
+	BrowserWaitOptions,
 	BrowserElementManagerInterface,
 	BrowserReadingInterface,
 } from '@src/core'
@@ -105,7 +106,7 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 		})
 	}
 
-	async wait(text: string, options?: BrowserCallOptions): Promise<void> {
+	async wait(text: string, options?: BrowserWaitOptions): Promise<void> {
 		this.#release.signal.throwIfAborted()
 		const start = performance.now()
 		const timeout = options?.timeout ?? BROWSER_DOCUMENT_TIMEOUT_MS
@@ -113,7 +114,7 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 		const document = this.#current()
 		await new BrowserDOMWait({
 			roots: collectBrowserRoots.bind(undefined, document),
-			check: this.#contains.bind(this, document, text),
+			check: this.#contains.bind(this, document, text, options?.absent === true),
 			timeout,
 			start,
 			signal:
@@ -153,8 +154,8 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 		if (event === undefined || event.type === 'pagehide') this.#elements.clear()
 	}
 
-	#contains(document: Document, text: string): true | undefined {
-		return (document.body?.innerText ?? '').includes(text) ? true : undefined
+	#contains(document: Document, text: string, absent: boolean): true | undefined {
+		return (document.body?.innerText ?? '').includes(text) !== absent ? true : undefined
 	}
 
 	// Subscribes to the navigation events of the window's current document.

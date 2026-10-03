@@ -14,9 +14,59 @@ import {
 	findProbeElement,
 	loadProbeFrame,
 } from '../../setupBrowser.js'
-import { RENDERED_PAGE } from '../../setup.js'
+import { RENDERED_PAGE, WAIT_EXIT_HTML } from '../../setup.js'
 
 describe('BrowserDOMView', () => {
+	it('waits for removal and hiding, accepts initial absence, and times out when text stays', async () => {
+		const document = createProbeDocument('<p>Saved</p>')
+		const view = createBrowserDOMView({ document })
+		try {
+			for (const hide of [true, false]) {
+				document.body.innerHTML = '<p>Saved</p>'
+				const paragraph = requireValue(document.querySelector('p'))
+				let settled = false
+				const pending = view.wait('Saved', { absent: true, timeout: 1_000 }).then(() => {
+					settled = true
+				})
+				await new Promise(requestAnimationFrame)
+				expect(settled).toBe(false)
+				if (hide) paragraph.hidden = true
+				else paragraph.remove()
+				await pending
+			}
+			await view.wait('Never present', { absent: true, timeout: 0 })
+			document.body.innerHTML = '<p>Saved</p>'
+			await expect(view.wait('Saved', { absent: true, timeout: 25 })).rejects.toMatchObject({
+				code: 'BROWSER_WAIT_TIMEOUT',
+			})
+			await view.wait('Saved', { absent: false })
+		} finally {
+			view.destroy()
+		}
+	})
+	it('item 12 P1 waits for a delayed visibility exit and an immediate control', async () => {
+		const document = createProbeDocument(WAIT_EXIT_HTML)
+		const view = createBrowserDOMView({ document })
+		try {
+			const toast = requireValue(document.querySelector('#toast'))
+			await view.wait('Saved to drafts')
+			await new Promise(requestAnimationFrame)
+			const options = { absent: true, timeout: 2_000 }
+			const waiting = view.wait('Saved to drafts', options)
+			const start = performance.now()
+			toast.classList.remove('shown')
+			await waiting
+			expect(performance.now() - start).toBeGreaterThanOrEqual(150)
+			expect(performance.now() - start).toBeLessThan(1_000)
+			toast.classList.add('shown')
+			await view.wait('Saved to drafts')
+			const control = view.wait('Saved to drafts', options)
+			toast.remove()
+			await control
+		} finally {
+			view.destroy()
+		}
+	})
 	describe('read', () => {
 		it('drops captured navigation only when distillation is requested', async () => {
 			const view = createBrowserDOMView({

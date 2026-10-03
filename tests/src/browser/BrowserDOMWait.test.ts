@@ -5,6 +5,59 @@ import { createRecorder, requireValue, waitForDelay, waitForEvent } from '@orkes
 import { createProbeDocument, createProbeElements, loadProbeFrame } from '../../setupBrowser.js'
 
 describe('BrowserDOMWait', () => {
+	for (const name of ['transitionend', 'animationend']) {
+		it(`wakes on ${name} in the document and a non-composed shadow root, and releases listeners`, async () => {
+			const document = createProbeDocument('<div></div>')
+			const shadow = requireValue(document.querySelector('div')).attachShadow({ mode: 'open' })
+			for (const root of [document, shadow]) {
+				let ready = false
+				const checks = createRecorder<[]>()
+				const pending = new BrowserDOMWait({
+					roots: () => [document, shadow],
+					check: () => {
+						checks.handler()
+						return ready ? 'done' : undefined
+					},
+					timeout: 1_000,
+					start: performance.now(),
+					subject: 'Event wait',
+				}).execute()
+				ready = true
+				root.dispatchEvent(new Event(name, { composed: false }))
+				expect(await pending).toBe('done')
+				const settled = checks.count
+				root.dispatchEvent(new Event(name))
+				expect(checks.count).toBe(settled)
+			}
+		})
+		it(`releases ${name} on a departed shadow root`, async () => {
+			const document = createProbeDocument('<div></div>')
+			const host = requireValue(document.querySelector('div'))
+			const shadow = host.attachShadow({ mode: 'open' })
+			let ready = false
+			const checks = createRecorder<[]>()
+			const wait = new BrowserDOMWait({
+				roots: () => (host.isConnected ? [document, shadow] : [document]),
+				check: () => {
+					checks.handler()
+					return ready ? true : undefined
+				},
+				timeout: 1_000,
+				start: performance.now(),
+				subject: 'Departed root',
+			})
+			const pending = wait.execute()
+			host.remove()
+			await new Promise(requestAnimationFrame)
+			expect(wait.roots).not.toContain(shadow)
+			const departed = checks.count
+			shadow.dispatchEvent(new Event(name))
+			expect(checks.count).toBe(departed)
+			ready = true
+			document.dispatchEvent(new Event(name))
+			await pending
+		})
+	}
 	it('resolves at once when the check already holds', async () => {
 		const probe = createProbeDocument('<p id="ready">ready</p>')
 		const found = await new BrowserDOMWait({

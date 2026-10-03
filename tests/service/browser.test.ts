@@ -59,6 +59,7 @@ import {
 	SERVICE_BROWSER_ARGS,
 	SERVICE_REGISTRY_ARGS,
 } from '../setupService.js'
+import { WAIT_EXIT_HTML } from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 const REAL_BROWSER_ARGS = [...SERVICE_BROWSER_ARGS]
@@ -934,6 +935,53 @@ describe('Browser proofs against the fixture pages', () => {
 			code: 'BROWSER_WAIT_TIMEOUT',
 		})
 		expect(performance.now() - started).toBeGreaterThanOrEqual(1_000 - 2)
+	})
+
+	it('item 12 P1 waits for a delayed visibility exit and an immediate control', async () => {
+		const page = await browser.create({ url: fixtures.url('/late') })
+		opened.push(page)
+		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
+		await page.wait('Saved to drafts')
+		await page.evaluate(
+			'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+		)
+		const options = { absent: true, timeout: 2_000 }
+		const waiting = page.wait('Saved to drafts', options)
+		await page.evaluate("document.getElementById('toast').classList.remove('shown')")
+		const start = performance.now()
+		await waiting
+		expect(performance.now() - start).toBeGreaterThanOrEqual(150)
+		expect(performance.now() - start).toBeLessThan(1_000)
+		await page.evaluate("document.getElementById('toast').classList.add('shown')")
+		await page.wait('Saved to drafts')
+		const control = page.wait('Saved to drafts', options)
+		await page.evaluate("document.getElementById('toast').remove()")
+		await control
+	})
+
+	it('waits for removal and hiding, accepts initial absence, and times out when text stays', async () => {
+		const page = await browser.create({ url: fixtures.url('/late') })
+		opened.push(page)
+		for (const hide of [true, false]) {
+			await page.evaluate("document.body.innerHTML = '<p>Saved</p>'")
+			const settled = createRecorder<[]>()
+			const pending = page.wait('Saved', { absent: true, timeout: 2_000 })
+			void pending.then(settled.handler, settled.handler)
+			await page.evaluate(
+				'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+			)
+			expect(settled.count).toBe(0)
+			await page.evaluate(
+				hide ? "document.querySelector('p').hidden = true" : "document.querySelector('p').remove()",
+			)
+			await pending
+		}
+		await page.wait('Never present', { absent: true })
+		await page.evaluate("document.body.innerHTML = '<p>Saved</p>'")
+		await expect(page.wait('Saved', { absent: true, timeout: 100 })).rejects.toMatchObject({
+			code: 'BROWSER_WAIT_TIMEOUT',
+		})
+		await page.wait('Saved', { absent: false })
 	})
 
 	it('navigate clears references: a stale element refuses GONE naming look, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {

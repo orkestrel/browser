@@ -15,12 +15,16 @@ import {
 	BROWSER_SCREENSHOT_ATTRIBUTE,
 	BROWSER_STABLE_FRAME_COUNT,
 	BROWSER_SUBMIT_KEY,
+	BROWSER_WAIT_EVENTS,
 } from './constants.js'
 import { validateBrowserJourney } from './helpers.js'
 import { isBrowserSecretBinding } from './validators.js'
 
 /**
- * Compiles a mutation-driven wait with one deadline and explicit disconnect ownership.
+ * Compiles a wait woken by mutations and finished transitions and animations, with one deadline and explicit disconnect ownership.
+ * @remarks
+ * Events inside a shadow root do not cross its boundary in Chromium 154.0.4258.53, so this
+ * document listener cannot wake for them. Mutations inside that root are not observed either.
  * @param deadline - Maximum time in milliseconds
  * @param key - Isolated-world property owning this observer
  * @param predicate - Optional expression checked immediately and after each mutation batch
@@ -35,8 +39,10 @@ export function compileQueryWaitExpression(
 	let frame
 	let timer
 	let observer
+	const events = new AbortController()
 	const finish = (value) => {
 		observer?.disconnect()
+		events.abort()
 		if (frame !== undefined) cancelAnimationFrame(frame)
 		clearTimeout(timer)
 		delete globalThis[${JSON.stringify(key)}]
@@ -47,27 +53,35 @@ export function compileQueryWaitExpression(
 		if (${predicate ?? 'true'}) finish(true)
 	}
 	globalThis[${JSON.stringify(key)}] = () => finish(false)
-	observer = new MutationObserver(() => {
+	const schedule = () => {
 		if (frame === undefined) frame = requestAnimationFrame(check)
-	})
+	}
+	observer = new MutationObserver(schedule)
 	observer.observe(document, { childList: true, attributes: true, characterData: true, subtree: true })
+	for (const name of ${JSON.stringify(BROWSER_WAIT_EVENTS)}) document.addEventListener(name, schedule, { capture: true, signal: events.signal })
 	timer = setTimeout(() => finish(false), ${JSON.stringify(deadline)})
 	${predicate === undefined ? '' : 'check()'}
 })`
 }
 
 /**
- * Compiles a visible-text wait coalesced by animation frames.
+ * Compiles a wait for the presence or absence of visible text, coalesced by animation frames.
  * @param text - Text to find in the main document body
  * @param deadline - Maximum time in milliseconds
  * @param key - Isolated-world property owning this observer
+ * @param absent - If `true`, resolves when the body's `innerText` lacks `text`; if `false`, when it contains it. Default: `false`
  * @returns Mutation-driven promise expression with one deadline
  */
-export function compileTextWaitExpression(text: string, deadline: number, key: string): string {
+export function compileTextWaitExpression(
+	text: string,
+	deadline: number,
+	key: string,
+	absent = false,
+): string {
 	return compileQueryWaitExpression(
 		deadline,
 		key,
-		`(document.body?.innerText ?? '').includes(${JSON.stringify(text)})`,
+		`${absent ? '!' : ''}(document.body?.innerText ?? '').includes(${JSON.stringify(text)})`,
 	)
 }
 

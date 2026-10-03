@@ -4,7 +4,7 @@ import type {
 	BrowserElementManagerInput,
 	BrowserElementManagerInterface,
 	BrowserElementQuery,
-	BrowserElementWaitOptions,
+	BrowserWaitOptions,
 	BrowserOutline,
 	BrowserOutlineNode,
 	BrowserOutlineOptions,
@@ -213,7 +213,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 
 	async wait(
 		query: BrowserElementQuery,
-		options?: BrowserElementWaitOptions,
+		options?: BrowserWaitOptions,
 	): Promise<readonly BrowserPageElementInterface[]> {
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)

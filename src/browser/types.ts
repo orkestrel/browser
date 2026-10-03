@@ -111,11 +111,11 @@ export interface BrowserDOMElementInput {
 }
 
 /**
- * Describes one wait parked on DOM mutations.
+ * Describes one wait parked on DOM mutations and finished transitions and animations.
  *
  * @remarks
  * - `roots` — returns the documents and shadow roots whose mutations re-run the check; the wait
- *   re-reads it after every mutation batch and every `load` in an observed root, observing the
+ *   re-reads it after every mutation batch, every `load`, and every `BROWSER_WAIT_EVENTS` event in an observed root, observing the
  *   roots that appeared and releasing the ones that departed, and a `pagehide` in the first
  *   root's window fails the wait
  * - `check` — returns the value the wait settles on, or `undefined` to keep waiting
@@ -137,7 +137,7 @@ export interface BrowserMutationWait<T> {
 	readonly subject: string
 }
 
-/** Settles one wait parked on DOM mutations. */
+/** Settles one wait parked on DOM mutations and finished transitions and animations. */
 export interface BrowserDOMWaitInterface<T> {
 	/** The roots the wait observes at this moment; empty before it parks and after it settles. */
 	readonly roots: readonly Node[]

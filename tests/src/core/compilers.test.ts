@@ -145,7 +145,25 @@ describe('element compilers', () => {
 			expect(run.result).toBe(false)
 			expect(run.timers).toEqual([{ name: 'setTimeout', delay: '73' }])
 			expect(run.disconnects).toBe(1)
+			expect(run.listeners).toEqual([
+				{ name: 'transitionend', capture: true },
+				{ name: 'animationend', capture: true },
+			])
+			expect(run.released).toBe(2)
 		}
+	})
+
+	it('settles an absent text predicate immediately and releases its listeners', async () => {
+		const run = await runBrowserCompiledTimers(compileTextWaitExpression('ready', 73, 'text', true))
+		expect(run.result).toBe(true)
+		expect(run.listeners).toEqual([
+			{ name: 'transitionend', capture: true },
+			{ name: 'animationend', capture: true },
+		])
+		expect(run.released).toBe(2)
+		expect(
+			(await runBrowserCompiledTimers(compileTextWaitExpression('ready', 73, 'text'))).result,
+		).toBe(false)
 	})
 
 	it('reports a re-armed timer from a deadline callback that registers another', async () => {

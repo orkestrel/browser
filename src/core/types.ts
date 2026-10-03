@@ -2414,8 +2414,15 @@ export interface BrowserElementQuery {
 	readonly exact?: boolean
 }
 
-/** Configures an element wait, including whether absence satisfies it. */
-export interface BrowserElementWaitOptions extends BrowserCallOptions {
+/**
+ * Configures a text or element wait, including whether absence satisfies it.
+ *
+ * @remarks
+ * - `absent` — if `true`, the wait resolves when the body's `innerText` lacks the text or no
+ *   element matches; if `false` or omitted, when the text is present or an element matches.
+ *   A condition that already holds resolves at the first check
+ */
+export interface BrowserWaitOptions extends BrowserCallOptions {
 	readonly absent?: boolean
 }
 
@@ -2632,13 +2639,10 @@ export interface BrowserElementManagerInterface<
 	 */
 	find(query: BrowserElementQuery, options?: BrowserCallOptions): Promise<readonly TElement[]>
 	/**
-	 * Resolves with the elements matching `query` after a mutation produces a match, or after none
+	 * Resolves with the elements matching `query` after a mutation or a finished transition or animation produces a match, or after none
 	 * matches when `absent` is set; rejects at the deadline or on abort.
 	 */
-	wait(
-		query: BrowserElementQuery,
-		options?: BrowserElementWaitOptions,
-	): Promise<readonly TElement[]>
+	wait(query: BrowserElementQuery, options?: BrowserWaitOptions): Promise<readonly TElement[]>
 	/**
 	 * Returns the element a reference names, or `undefined` when the reference is unknown or was
 	 * dropped.
@@ -2679,10 +2683,10 @@ export interface BrowserViewInterface<E extends BrowserElementInterface = Browse
 	 */
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
 	/**
-	 * Resolves when `text` is visible in the document; rejects with a `BrowserError` coded
+	 * Resolves when the main document body’s `innerText` contains `text`, or lacks it with `absent`; rejects with a `BrowserError` coded
 	 * `BROWSER_WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort.
 	 */
-	wait(text: string, options?: BrowserCallOptions): Promise<void>
+	wait(text: string, options?: BrowserWaitOptions): Promise<void>
 }
 
 /**
@@ -3348,8 +3352,8 @@ export interface BrowserPageInterface
 	readonly keyboard: BrowserKeyboardInterface
 	readonly mouse: BrowserMouseInterface
 	readonly touch: BrowserTouchInterface
-	/** Waits for visible text in the main document, rejecting at the deadline or on abort. */
-	wait(text: string, options?: BrowserCallOptions): Promise<void>
+	/** Waits for text in the main document body’s `innerText`, or its absence with `absent`, rejecting at the deadline or on abort. */
+	wait(text: string, options?: BrowserWaitOptions): Promise<void>
 	readonly emitter: EmitterInterface<BrowserPageEventMap>
 	readonly registry: BrowserRegistryInterface
 	readonly network: BrowserNetworkManagerInterface
