@@ -21,6 +21,8 @@ declare module 'vitest' {
 		readonly server: string
 		/** The CDP WebSocket endpoint of a Chromium that allows every origin. */
 		readonly endpoint: string
+		/** The browser product advertised by the endpoint's HTTP discovery reply. */
+		readonly product: string
 		/** The CDP WebSocket endpoint of a Chromium launched without `--remote-allow-origins`. */
 		readonly endpointWithoutFlag: string
 	}
@@ -322,6 +324,14 @@ export async function setup(
 		const [flagged, control] = launched
 		if (flagged?.status !== 'fulfilled') throw flagged?.reason
 		if (control?.status !== 'fulfilled') throw control?.reason
+		const discovery = new URL('/json/version', flagged.value.endpoint)
+		discovery.protocol = discovery.protocol === 'wss:' ? 'https:' : 'http:'
+		const response = await fetch(discovery)
+		if (!response.ok) throw new Error('browser discovery did not answer')
+		const version: unknown = await response.json()
+		if (!isRecord(version) || !isString(version['Browser']) || version['Browser'].length === 0)
+			throw new Error('browser discovery returned no product')
+		project.provide('product', version['Browser'])
 		project.provide('server', `http://127.0.0.1:${address.port}`)
 		project.provide('endpoint', flagged.value.endpoint)
 		project.provide('endpointWithoutFlag', control.value.endpoint)

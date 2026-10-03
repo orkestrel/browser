@@ -13,7 +13,14 @@ describe('SocketCDPTransport', () => {
 		try {
 			const version = await client.send('Browser.getVersion')
 			const product: unknown = Reflect.get(Object(version), 'product')
-			expect(isString(product) && product).toMatch(/Chrom/)
+			expect(product).toBe(inject('product'))
+			expect(isString(product) && product).toMatch(/^[^\s/]+\/\d+(?:\.\d+)+$/)
+			expect(version).toMatchObject({
+				protocolVersion: expect.stringMatching(/^\d+\.\d+$/),
+				revision: expect.stringMatching(/^\S+$/),
+				jsVersion: expect.stringMatching(/^\d+(?:\.\d+)+/),
+				userAgent: expect.stringContaining('Mozilla/'),
+			})
 		} finally {
 			await client.close()
 		}

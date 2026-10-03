@@ -56,7 +56,13 @@ describe('setup', () => {
 			try {
 				expect(launcher?.watching).toBe(true)
 				expect(closes.calls).toEqual([])
-				expect([...provided.keys()].sort()).toEqual(['endpoint', 'endpointWithoutFlag', 'server'])
+				expect([...provided.keys()].sort()).toEqual([
+					'endpoint',
+					'endpointWithoutFlag',
+					'product',
+					'server',
+				])
+				expect(provided.get('product')).toMatch(/^[^\s/]+\/\d+(?:\.\d+)+$/)
 				expect(origin).toMatch(/^http:\/\/127\.0\.0\.1:\d+$/)
 				expect(endpoint).toMatch(/^ws:\/\/[^/]+\/devtools\/browser\/[\w-]+$/)
 				expect(control).toMatch(/^ws:\/\/[^/]+\/devtools\/browser\/[\w-]+$/)
