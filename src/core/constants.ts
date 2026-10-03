@@ -443,14 +443,14 @@ export const BROWSER_TOOL_CHANGED_NOTE =
 	'(The page changed before the view could be read; call look.)'
 
 /**
- * Holds the clause that ends the footer of a cut result that carries no view: a read note, a tab
- * list, a wait, a page tool's output, or an error message.
+ * Holds the clause that ends the footer of a cut result other than an action or `dialog` receipt
+ * that carries a view, including `look` and `read` results.
  */
 export const BROWSER_TOOL_CUT_FOOTER = 'the rest was cut'
 
 /**
- * Holds the clause that ends the footer of a cut action receipt, which carries a view, and names
- * `look` as the call that finds an element the cut view leaves out.
+ * Holds the clause that ends the footer of a cut action or `dialog` receipt that carries a view,
+ * and names `look` as the call that finds an element the cut view leaves out.
  */
 export const BROWSER_TOOL_VIEW_FOOTER = 'the rest was cut; call look with what you want to find'
 

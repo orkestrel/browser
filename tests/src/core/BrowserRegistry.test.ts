@@ -363,9 +363,12 @@ describe('BrowserRegistry', () => {
 			const registry = requireValue(page.registry)
 			replyOk(transport, 'WebMCP.enable')
 			let id = 'long'
-			transport.onSend('WebMCP.invokeTool', (message) =>
-				transport.reply(message.id, { invocationId: id }),
-			)
+			let sent = Promise.withResolvers<void>()
+			replyOk(transport, 'Runtime.evaluate', { result: { type: 'undefined' } })
+			transport.onSend('WebMCP.invokeTool', (message) => {
+				transport.reply(message.id, { invocationId: id })
+				sent.resolve()
+			})
 			await registry.start()
 			transport.event(
 				'WebMCP.toolsAdded',
@@ -376,7 +379,9 @@ describe('BrowserRegistry', () => {
 			const responses = createRecorder<readonly [BrowserInvocationResult]>()
 			registry.emitter.on('respond', responses.handler)
 			const pending = registry.execute(tool, {})
-			await waitForDelay()
+			await sent.promise
+			// A later protocol reply lets the invocation reply settle before response events arrive.
+			await client.send('Runtime.evaluate', { expression: 'void 0' }, { session: 'session-1' })
 			for (let index = 0; index < 1000; index++) {
 				transport.event(
 					'WebMCP.toolResponded',
@@ -394,8 +399,10 @@ describe('BrowserRegistry', () => {
 			// Reusing every foreign id makes any retained response observable as a stale settlement.
 			for (let index = 0; index < 1000; index++) {
 				id = `foreign-${index}`
+				sent = Promise.withResolvers<void>()
 				const next = registry.execute(tool, {})
-				await waitForDelay()
+				await sent.promise
+				await client.send('Runtime.evaluate', { expression: 'void 0' }, { session: 'session-1' })
 				transport.event(
 					'WebMCP.toolResponded',
 					{ invocationId: id, status: 'Completed', output: 'fresh' },

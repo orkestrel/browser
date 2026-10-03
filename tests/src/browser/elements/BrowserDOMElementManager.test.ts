@@ -309,6 +309,21 @@ describe('BrowserDOMElementManager', () => {
 			expect((await view.elements.outline()).focus).toBe('e2 button "Inner"')
 		})
 
+		it('discards stale focus in a frame after focus returns to the parent', async () => {
+			const probe = await loadProbeDocument('<button>Parent</button>')
+			const child = await loadProbeFrame(probe, probe.body, '<input aria-label="Child">')
+			const input = requireValue(child.querySelector('input'))
+			const button = requireValue(probe.querySelector('button'))
+			const view = createBrowserDOMView({ document: probe })
+			input.focus()
+			expect((await view.elements.outline()).focus).toBe('e2 textbox "Child"')
+			button.focus()
+			expect(child.activeElement).toBe(child.body)
+			expect((await view.elements.outline()).focus).toBe('e1 button "Parent"')
+			button.blur()
+			expect((await view.elements.outline()).focus).toBeUndefined()
+		})
+
 		it('refuses a negative or fractional limit and an unknown within reference', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })

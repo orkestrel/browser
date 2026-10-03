@@ -495,8 +495,8 @@ export function deriveBrowserToolSchema(
  * units, one fewer when the last would split a surrogate pair (so a limit of 1 before a pair keeps
  * nothing), followed by `\n[characters 0–END of TOTAL; FOOTER]`. The footer has no default, so
  * every caller states what the cut result's reader does next: the toolset passes
- * `BROWSER_TOOL_VIEW_FOOTER` for a result that carries a view and `BROWSER_TOOL_CUT_FOOTER` for
- * any other.
+ * `BROWSER_TOOL_VIEW_FOOTER` for an action or `dialog` receipt that carries a view and
+ * `BROWSER_TOOL_CUT_FOOTER` for any other result, including `look` and `read` results.
  *
  * @param text - The page-authored or composed string
  * @param limit - The most characters kept before the footer, a positive integer
@@ -537,7 +537,7 @@ export function boundBrowserText(text: string, limit: number, footer: string): s
  * import { BROWSER_TOOL_COPY, validateBrowserToolArguments } from '@orkestrel/browser'
  *
  * validateBrowserToolArguments(BROWSER_TOOL_COPY.look, { what: 'cart', ref: 'e1' })
- * // throws 'The look tool takes no ref parameter; call look with what.'
+ * // throws 'The look tool takes no ref parameter; call look with what and offset.'
  * ```
  */
 export function validateBrowserToolArguments(

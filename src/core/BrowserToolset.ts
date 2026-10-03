@@ -112,9 +112,11 @@ import {
  * refuses every tool but `dialog` while a dialog is open, forwards `ToolContext.signal` into every
  * protocol call, refuses a call to a toolset tool that carries a parameter the tool does not
  * advertise, and cuts every returned string and every thrown message at `limit` characters plus
- * a footer; the footer of a cut action receipt, which carries a view, names `look` as the next
+ * a footer; the footer of a cut action or `dialog` receipt that carries a view names `look` as the next
  * call. `look` and `read` read the page, never one element, and return pages of at most `limit`
- * characters that end at a line break and name the offset the next page starts at. A `look` whose
+ * characters and name the offset the next page starts at. A page ends after the last line break
+ * in its window that lies past the page's start, or at the window's end when no such break fits,
+ * without splitting a surrogate pair. The last page ends at the end of the outline or reading. A `look` whose
  * `what` matches referenced rows lists those rows first, and its pages reach every referenced row.
  * A `press` receipt names the referenced element that has focus after the key. A page tool's
  * error message and JSON output reach the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT`

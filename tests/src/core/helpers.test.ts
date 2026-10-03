@@ -220,7 +220,8 @@ describe('outline search and focus helpers', () => {
 		{ role: 'heading', name: 'Archive dialog', reference: 'e9' },
 		{ role: 'button', name: 'Close', reference: 'e1' },
 		{ role: 'button', name: 'Archive', reference: 'e2' },
-		{ role: 'StaticText', name: 'Archive dialog button' },
+		{ role: 'StaticText', name: 'Archive dialog button', reference: 'e8' },
+		{ role: 'generic', name: 'Archive dialog', reference: 'e10' },
 		{ role: 'button', name: 'Archive dialog button', reference: 'e3', ignored: true },
 		{ role: 'textbox', name: 'Tracking number', reference: 'e4' },
 		{ role: 'link', name: 'Other', reference: 'e5' },
@@ -242,6 +243,22 @@ describe('outline search and focus helpers', () => {
 			'e1',
 			'e2',
 		])
+	})
+
+	it('counts distinct search words and preserves non-ASCII whole words', () => {
+		const nodes = createBrowserOutlineNodes([
+			{ role: 'link', name: 'Cart', reference: 'e1' },
+			{ role: 'link', name: 'Checkout', reference: 'e2' },
+			{ role: 'button', name: 'Zurück', reference: 'e3' },
+			{ role: 'button', name: 'Zurich', reference: 'e4' },
+			{ role: 'button', name: '日本語', reference: 'e5' },
+		])
+		expect(matchBrowserOutline(nodes, 'cart cart checkout').map((node) => node.reference)).toEqual([
+			'e1',
+			'e2',
+		])
+		expect(matchBrowserOutline(nodes, 'zurück').map((node) => node.reference)).toEqual(['e3'])
+		expect(matchBrowserOutline(nodes, '日本語').map((node) => node.reference)).toEqual(['e5'])
 	})
 
 	it('ignores words under 3 characters and never matches a word inside another word', () => {

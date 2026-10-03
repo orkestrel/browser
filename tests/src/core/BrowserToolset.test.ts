@@ -4414,6 +4414,110 @@ describe('BrowserToolset', () => {
 	})
 
 	describe('look pages and matches', () => {
+		it('omits an oversized match header and preserves a header when no row fits', async () => {
+			const fixture = await createBrowserElementFixture({
+				accessibility: (message) =>
+					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
+			})
+			try {
+				const toolset = createBrowserToolset(fixture.page, { limit: 500 })
+				await toolset.start()
+				const look = requireValue(toolset.tools.tool('look'))
+				const context = { signal: new AbortController().signal }
+				const plain = await look.execute({ what: 'tracking' }, context)
+				for (const length of [300, 600]) {
+					const result = String(
+						await look.execute({ what: `button ${'x'.repeat(length)}` }, context),
+					)
+					expect(result.startsWith('page "Cart" ')).toBe(true)
+					expect(result).not.toContain('match')
+					expect(result).toBe(plain)
+				}
+				const what = `button ${'x'.repeat(210)}`
+				const result = String(await look.execute({ what }, context))
+				expect(result.startsWith(`160 elements match "${what}":\n\npage "Cart" `)).toBe(true)
+			} finally {
+				await fixture.client.close()
+			}
+		})
+
+		it('shares the look page room with the move note and counts only outline characters', async () => {
+			const fixture = await createBrowserElementFixture({
+				accessibility: (message) =>
+					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
+			})
+			const { client, page, transport } = fixture
+			try {
+				for (const method of ['Page.setInterceptFileChooserDialog', 'Network.enable'])
+					replyOk(transport, method)
+				const toolset = createBrowserToolset(page, { limit: 500 })
+				await toolset.start()
+				const moved = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
+					toolset.emitter.on('select', handler)
+					return () => toolset.emitter.off('select', handler)
+				}, 'the view follows the popup')
+				transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: 'popup-session',
+						targetInfo: { targetId: 'popup-1', type: 'page', url: 'https://example.test/popup' },
+					},
+					'session-main',
+				)
+				const [popup] = await moved
+				const whole = (await popup.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text
+				const look = requireValue(toolset.tools.tool('look'))
+				const context = { signal: new AbortController().signal }
+				const note = 'The view moved to a new tab: https://example.test/popup.\n\n'
+				const first = extractBrowserPage(String(await look.execute({ what: '' }, context)))
+				expect(first.body.startsWith(note)).toBe(true)
+				expect(first.body.length).toBeLessThanOrEqual(500)
+				const body = first.body.slice(note.length)
+				expect(first.end).toBe(body.length)
+				const next = extractBrowserPage(
+					String(await look.execute({ what: '', offset: first.end }, context)),
+				)
+				expect(whole.startsWith(body + next.body)).toBe(true)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('places the focus clause after the submission status with a semicolon', async () => {
+			const fixture = await createBrowserElementFixture({
+				accessibility: (message) =>
+					fixture.transport.reply(message.id, {
+						nodes: [
+							{
+								nodeId: 'email',
+								backendDOMNodeId: 3,
+								role: { value: 'textbox' },
+								name: { value: 'Email' },
+								properties: [{ name: 'focused', value: { type: 'boolean', value: true } }],
+							},
+						],
+					}),
+			})
+			try {
+				const toolset = createBrowserToolset(fixture.page)
+				await toolset.start()
+				fixture.windows
+					.window('session-main', 91)
+					.focus({ name: 'input', form: { method: 'post' } })
+				const result = String(
+					await requireValue(toolset.tools.tool('press')).execute(
+						{ key: 'Enter' },
+						{ signal: new AbortController().signal },
+					),
+				)
+				expect(result.split('\n', 1)[0]).toBe(
+					'Pressed Enter; no form received the submission; focus is on e1 textbox "Email".',
+				)
+			} finally {
+				await fixture.client.close()
+			}
+		})
+
 		it('catches look pages that skip, repeat, or exceed the limit, or stop at the outline cap', async () => {
 			const fixture = await createBrowserElementFixture({
 				accessibility: (message) =>
