@@ -80,6 +80,36 @@ export const RENDERED_TEXT =
 /** Declares the floor fixture's printed text and explicit graphic alternatives. */
 export const CAPTURE_CASES = Object.freeze([
 	{
+		name: 'HTML switch element',
+		html: '<switch>Enable alerts</switch>',
+		edit: '',
+		text: 'Enable alerts',
+	},
+	{
+		name: 'HTML switch mixed children',
+		html: '<switch><span>Bold</span> rest</switch>',
+		edit: '',
+		text: 'Bold rest',
+	},
+	{
+		name: 'SVG switch symbol use',
+		html: '<svg><symbol id="caption"><switch><text y="20">Used label</text><text y="20">Used label</text></switch></symbol><use href="#caption"></use></svg>',
+		edit: '',
+		text: 'Used label',
+	},
+	{
+		name: 'SVG switch defs use',
+		html: '<svg><defs><g id="caption"><switch><text y="20">Used label</text><text y="20">Used label</text></switch></g></defs><use href="#caption"></use></svg>',
+		edit: '',
+		text: 'Used label',
+	},
+	{
+		name: 'SVG switch offscreen auto visibility',
+		html: '<div style="position:absolute;top:100000px;content-visibility:auto;contain-intrinsic-size:300px 100px"><svg><switch><foreignObject requiredExtensions="urn:example:unsupported" width="200" height="40"><div>Unsupported label</div></foreignObject><text y="20">Supported label</text></switch></svg></div>',
+		edit: '',
+		text: 'Supported label',
+	},
+	{
 		name: 'SVG switch first branch',
 		html: '<svg><switch><foreignObject width="200" height="40"><div>Order total</div></foreignObject><text y="20">Order total</text></switch></svg>',
 		edit: '',
@@ -275,6 +305,26 @@ export const CAPTURE_CASES = Object.freeze([
 
 /** Declares ancestors whose children do not contribute rendered prose. */
 export const CAPTURE_ANCESTORS = Object.freeze([
+	{
+		name: 'unselected switch branch',
+		html: '<svg><switch><foreignObject requiredExtensions="urn:example:unsupported" width="200" height="40"><div id="target">Omitted text</div></foreignObject><text y="20">Public label</text></switch></svg>',
+		edit: '',
+	},
+	{
+		name: 'input control',
+		html: '<input value="Public label">',
+		edit: 'const target=document.createElement("span");target.id="target";target.textContent="Omitted text";document.querySelector("input").append(target)',
+	},
+	{
+		name: 'select non-option descendant',
+		html: '<select><option>Public label</option></select>',
+		edit: 'const target=document.createElement("span");target.id="target";target.textContent="Omitted text";document.querySelector("select").append(target)',
+	},
+	{
+		name: 'optgroup non-option descendant',
+		html: '<select><optgroup label="Public group"><option>Public label</option></optgroup></select>',
+		edit: 'const target=document.createElement("span");target.id="target";target.textContent="Omitted text";document.querySelector("optgroup").append(target)',
+	},
 	{
 		name: 'textarea control',
 		html: '<textarea></textarea><p>Public label</p>',

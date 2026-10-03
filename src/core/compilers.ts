@@ -441,6 +441,9 @@ export function compileReadFunction(): string {
 					parent instanceof view.HTMLInputElement ||
 					parent instanceof view.HTMLTextAreaElement ||
 					parent instanceof view.HTMLOptionElement ||
+					(parent.namespaceURI === 'http://www.w3.org/2000/svg' &&
+						parent.localName === 'switch' &&
+						child !== (Array.from(parent.children).find((candidate) => candidate.getClientRects().length > 0) ?? parent.firstElementChild)) ||
 					((parent instanceof view.HTMLSelectElement || parent instanceof view.HTMLOptGroupElement) &&
 						!(node instanceof view.HTMLOptionElement || node instanceof view.HTMLOptGroupElement)) ||
 					[
@@ -541,8 +544,9 @@ export function compileReadFunction(): string {
 					: undefined
 
 			// Native layout selects the switch branch after its conditional processing tests.
-			const branch = rendered && tag === 'switch'
-				? Array.from(live.children).find((candidate) => candidate.getClientRects().length > 0)
+			const conditional = tag === 'switch' && live.namespaceURI === 'http://www.w3.org/2000/svg'
+			const branch = rendered && conditional
+				? (Array.from(live.children).find((candidate) => candidate.getClientRects().length > 0) ?? live.firstElementChild)
 				: undefined
 			// Save sibling pointers before pruning invalidates the copied child collections.
 			let element = live.lastElementChild
@@ -554,7 +558,7 @@ export function compileReadFunction(): string {
 				const previousMirror = mirror.previousSibling
 				const previousElement = element?.previousElementSibling ?? null
 				const previousCounterpart = counterpart?.previousElementSibling ?? null
-				let omitted = rendered && ((summary !== undefined && child !== summary) || (tag === 'switch' && child !== branch))
+				let omitted = rendered && ((summary !== undefined && child !== summary) || (conditional && child !== branch))
 				if (rendered && live.shadowRoot !== null) {
 					const slot =
 						child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
