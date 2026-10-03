@@ -657,6 +657,22 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(await page.evaluate('document.visibilityState')).toBe('hidden')
 	})
 
+	it('activates a hidden page before waiting for stable pointer input', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const front = await browser.create({ url: fixtures.url('/form') })
+		opened.push(front)
+		await front.send('Page.bringToFront')
+		expect(await page.evaluate('document.visibilityState')).toBe('hidden')
+		const button = requireValue(
+			(await page.elements.find({ role: 'button', name: 'Save draft', exact: true }))[0],
+		)
+		await button.click({ timeout: 1000 })
+		expect(await page.evaluate('document.body.dataset.saved')).toBe('yes')
+		expect(await page.evaluate('document.body.dataset.clicks')).toBe('save:true')
+		expect(await page.evaluate('document.visibilityState')).toBe('visible')
+	})
+
 	describe('an out-of-process frame', () => {
 		let page: BrowserPageInterface
 		let child: CDPClientInterface

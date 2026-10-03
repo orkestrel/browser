@@ -1804,6 +1804,8 @@ async function order(view: BrowserViewInterface): Promise<void> {
 Filling and selecting check visibility and enabled state without waiting for animation frames;
 filling also checks editability. The actionability compiler samples frames only when its caller
 requests `stable: true`, so a hidden tab does not suspend a check that needs no paint.
+Pointer actions activate their owning page before sampling stability, because Chromium suspends
+animation frames in hidden tabs. The stability check still uses real animation frames.
 
 One referenced element of a page, acted on through trusted input on the page session. `frame` is a Surface data member: the id of the frame whose document holds the element, which a toolset passes to `page.navigation.record`. A click scrolls the element into view, checks that it is visible, enabled, and stable across two animation frames, reads its content quad on its own session, hit-tests the quad center, and dispatches a pressed and released mouse event; each step refuses with a coded `BrowserElementError` whose `context.reason` is `GONE`, `HIDDEN`, `OCCLUDED`, `DISABLED`, `UNTRUSTED`, or `UNKNOWN`, and whose one-line message carries that reason and, for `GONE`, the refresh directive `; call look for fresh refs.` For an element inside an out-of-process frame the point is composed through each frame's content box.
 
