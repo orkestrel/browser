@@ -637,6 +637,26 @@ describe('Browser proofs against the fixture pages', () => {
 		await teardown.destroy()
 	})
 
+	it('fills and selects in a hidden page without waiting for unrequested animation frames', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const front = await browser.create({ url: fixtures.url('/form') })
+		opened.push(front)
+		await front.send('Page.bringToFront')
+		expect(await page.evaluate('document.visibilityState')).toBe('hidden')
+		const name = requireValue(
+			(await page.elements.find({ role: 'textbox', name: 'Name', exact: true }))[0],
+		)
+		await name.fill('Grace', { timeout: 1000 })
+		const speed = requireValue(
+			(await page.elements.find({ role: 'combobox', name: 'Speed', exact: true }))[0],
+		)
+		await speed.select(['Express'], { timeout: 1000 })
+		expect(await page.evaluate("document.getElementById('name').value")).toBe('Grace')
+		expect(await page.evaluate("document.getElementById('speed').value")).toBe('Express')
+		expect(await page.evaluate('document.visibilityState')).toBe('hidden')
+	})
+
 	describe('an out-of-process frame', () => {
 		let page: BrowserPageInterface
 		let child: CDPClientInterface

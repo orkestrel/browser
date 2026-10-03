@@ -969,7 +969,7 @@ export function compileActionabilityFunction(options: BrowserActionabilityOption
 	if (${JSON.stringify(options.enabled === true)} && this.matches(':disabled')) throw new Error('Element is disabled')
 	if (${JSON.stringify(options.editable === true)} && (this.matches('[readonly]') || (!this.isContentEditable && !('value' in this)))) throw new Error('Element is not editable')
 	let previous
-	for (let index = 0; index < ${BROWSER_STABLE_FRAME_COUNT}; index += 1) {
+	for (let index = 0; index < ${options.stable === true ? BROWSER_STABLE_FRAME_COUNT : 0}; index += 1) {
 		await new Promise((resolve) => requestAnimationFrame(resolve))
 		const rect = this.getBoundingClientRect()
 		const current = [rect.x, rect.y, rect.width, rect.height]
