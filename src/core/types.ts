@@ -2375,19 +2375,40 @@ export interface BrowserElementWaitOptions extends BrowserCallOptions {
 	readonly absent?: boolean
 }
 
-/** Configures an outline's element limit and optional subtree. */
+/**
+ * Configures an outline's element limit, optional subtree, and search.
+ *
+ * @remarks
+ * - `search` — the words that select the outline's `matches`: the text is lowercased and split
+ *   into whole words of at least 3 letters or digits (`BROWSER_SEARCH_PATTERN`), each referenced
+ *   row's role and accessible name are split the same way, and a row scores the number of distinct
+ *   search words equal to one of its words; every referenced row with the highest score above 0
+ *   matches
+ */
 export interface BrowserOutlineOptions extends BrowserCallOptions {
 	readonly limit?: number
 	readonly within?: string
+	readonly search?: string
 }
 
-/** Carries a document-order outline and its included and available element counts. */
+/**
+ * Carries a document-order outline and its included and available element counts.
+ *
+ * @remarks
+ * - `matches` — the rendered rows that best match the options' `search`, in document order and
+ *   past `limit` included; empty without a `search` or without a match
+ * - `focus` — the rendered row of the referenced element that has focus, past `limit` included;
+ *   the last such row in document order when several do, and `undefined` when focus is on no
+ *   referenced element
+ */
 export interface BrowserOutline {
 	readonly url: string
 	readonly title: string
 	readonly text: string
 	readonly count: number
 	readonly total: number
+	readonly matches: readonly string[]
+	readonly focus: string | undefined
 }
 
 /** Associates an outline row with its frame, session, and optional actionable reference. */
@@ -2556,7 +2577,8 @@ export interface BrowserElementManagerInterface<
 > {
 	/**
 	 * Captures the view's document as a document-order outline, binding a reference to each
-	 * interactive element and bounding the referenced rows by `limit`.
+	 * interactive element and bounding the referenced rows by `limit`. The outline also lists the
+	 * rows that best match `search` and names the focused referenced row, both past `limit`.
 	 */
 	outline(options?: BrowserOutlineOptions): Promise<BrowserOutline>
 	/**

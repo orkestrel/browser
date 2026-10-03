@@ -25,6 +25,7 @@ import {
 	compileGuardedEvaluateExpression,
 	compileSubmitObserverExpression,
 	compileSubmitReadExpression,
+	readBrowserAccessibility,
 } from '@src/core'
 import {
 	captureError,
@@ -37,6 +38,9 @@ import {
 } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
+	buildBrowserButtonTree,
+	createBrowserOutlineNodes,
+	extractBrowserPage,
 	BROWSER_ELEMENT_FRAMED_FIXTURE,
 	BROWSER_RECORD_PARENTS,
 	BROWSER_PENDING_REQUEST_CASES,
@@ -360,6 +364,64 @@ describe('element protocol and compiler fixtures', () => {
 })
 
 // === Fake CDP transport
+
+describe('createBrowserOutlineNodes', () => {
+	it('builds main-session nodes in order, unreferenced and not ignored unless a row says so', () => {
+		const [save, hidden] = createBrowserOutlineNodes([
+			{ role: 'button', name: 'Save', reference: 'e1', properties: { focused: true } },
+			{ role: 'link', name: 'Help', ignored: true },
+		])
+		expect(save).toMatchObject({
+			id: '1',
+			role: 'button',
+			name: 'Save',
+			reference: 'e1',
+			ignored: false,
+			session: 'main',
+			properties: { focused: true },
+		})
+		expect(hidden).toMatchObject({ id: '2', reference: undefined, ignored: true, properties: {} })
+	})
+})
+
+describe('buildBrowserButtonTree', () => {
+	it('builds a decodable tree of named buttons with focus on the named node alone', () => {
+		const tree = readBrowserAccessibility(buildBrowserButtonTree(3, 'button-2'))
+		expect(tree.nodes.map((node) => [node.role, node.name, node.properties['focused']])).toEqual([
+			['RootWebArea', 'Shop', undefined],
+			['button', 'Button 1', undefined],
+			['button', 'Button 2', true],
+			['button', 'Button 3', undefined],
+		])
+		expect(
+			readBrowserAccessibility(buildBrowserButtonTree(1, 'root')).nodes.map(
+				(node) => node.properties['focused'],
+			),
+		).toEqual([true, undefined])
+	})
+})
+
+describe('extractBrowserPage', () => {
+	it('reads the body, the range, and the next offset of a continued, a last, and a whole page', () => {
+		expect(
+			extractBrowserPage('alpha\n\n\n[characters 0–6 of 20; call look with offset 6 for more]'),
+		).toEqual({ body: 'alpha\n', start: 0, end: 6, total: 20, next: 6 })
+		expect(extractBrowserPage('gamma\n\n[characters 14–20 of 20]')).toEqual({
+			body: 'gamma',
+			start: 14,
+			end: 20,
+			total: 20,
+			next: undefined,
+		})
+		expect(extractBrowserPage('whole')).toEqual({
+			body: 'whole',
+			start: 0,
+			end: 5,
+			total: 5,
+			next: undefined,
+		})
+	})
+})
 
 describe('createCDPTestTransport', () => {
 	it('decomposes a request frame into the recorded message and skips a frame carrying no request', async () => {

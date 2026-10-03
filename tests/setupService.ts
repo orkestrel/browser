@@ -217,20 +217,22 @@ export interface ServiceOutlineRow {
 }
 
 /**
- * Extracts the element rows of a rendered outline, in row order.
+ * Extracts the element rows of a rendered outline, in row order, each reference once.
  *
  * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
  * @returns The reference, role, and JSON-decoded name of each row that opens with a reference
- * such as `e12` followed by a role and a quoted name; heading, text, and summary rows contribute
- * nothing
+ * such as `e12` followed by a role and a quoted name, at its first occurrence, so a `look` match
+ * row that repeats an outline row counts once; heading, text, and summary rows contribute nothing
  */
 export function extractOutlineRows(text: string): readonly ServiceOutlineRow[] {
+	const seen = new Set<string>()
 	return [...text.matchAll(/^(e[1-9]\d*) (\S+) ("(?:[^"\\\n]|\\.)*")/gm)].flatMap((match) => {
 		const [, reference, role, quoted] = match
 		const name: unknown = JSON.parse(quoted ?? '""')
-		return reference === undefined || role === undefined || !isString(name)
-			? []
-			: [{ reference, role, name }]
+		if (reference === undefined || role === undefined || !isString(name) || seen.has(reference))
+			return []
+		seen.add(reference)
+		return [{ reference, role, name }]
 	})
 }
 
@@ -304,6 +306,19 @@ export const SERVICE_EDITABLE_HTML = [
 	'<div contenteditable="true" role="textbox" aria-label="Notes"></div>',
 	'<div contenteditable="true">Draft <button type="button">Bold</button></div>',
 	'<input aria-label="Coupon" role="button">',
+].join('')
+
+/**
+ * Holds markup that renders more than `BROWSER_TOOL_LIMIT` characters of paragraph text before a
+ * text input labelled `Tracking number` whose id is `tracking`.
+ */
+export const SERVICE_TRACKING_HTML = [
+	...Array.from(
+		{ length: 60 },
+		(_, index) =>
+			`<p>Shipment note ${index + 1} records where the parcel waited and who signed for it.</p>`,
+	),
+	'<label>Tracking number <input id="tracking" type="text"></label>',
 ].join('')
 
 /**

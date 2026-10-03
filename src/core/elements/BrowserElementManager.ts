@@ -96,6 +96,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				requireBrowserString(readEvaluationResult(result), 'Document title'),
 				this.#within(rows, options?.within),
 				limit,
+				options?.search,
 			)
 		} catch (error) {
 			// A navigation destroys the contexts, nodes, and sessions the capture was reading, so a

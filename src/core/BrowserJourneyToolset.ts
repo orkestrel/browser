@@ -553,11 +553,12 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		}
 	}
 
-	// Reads the view a receipt carries through `look`, so it is cut at the toolset's limit and
-	// carries the notes of any view move.
+	// Reads the view a receipt carries through `look`, so it is the first page at the toolset's
+	// limit and carries the notes of any view move; an empty `what` searches nothing, so the page
+	// carries no matches.
 	async #view(signal: AbortSignal): Promise<string> {
 		const performed = await this.#toolset.perform(
-			{ id: 'journey', name: 'look', arguments: { what: 'the page' } },
+			{ id: 'journey', name: 'look', arguments: { what: '' } },
 			{ signal },
 		)
 		return performed.result.success ? String(performed.result.value) : performed.result.error

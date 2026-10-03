@@ -84,6 +84,7 @@ import {
 	BROWSER_JOURNEY_PARAMETER_PATTERN,
 	BASE64_CHARS,
 	BROWSER_OUTLINE_OMITTED_ROLES,
+	BROWSER_SEARCH_PATTERN,
 	BASE64_LOOKUP,
 	BROWSER_RESULT_LIMIT,
 	BROWSER_REGISTRY_OUTPUT_LIMIT,
@@ -148,18 +149,176 @@ export function filterBrowserOutline(
 }
 
 /**
+ * Renders one outline row: the node's reference, its role, its quoted accessible name, and the
+ * states it carries.
+ *
+ * @remarks
+ * After the name the row appends `value="V"` when the node carries a non-empty value, `[checked]`
+ * when it is checked, `[disabled]` when it is disabled, and `[tool=NAME]` when it is a page tool's
+ * form, in that order. A node without a reference renders without one.
+ *
+ * @param node - The outline node
+ * @returns The rendered row
+ *
+ * @example
+ * ```ts
+ * import { renderBrowserOutlineRow } from '@orkestrel/browser'
+ *
+ * renderBrowserOutlineRow({
+ * 	id: '4',
+ * 	parent: undefined,
+ * 	children: [],
+ * 	backend: undefined,
+ * 	frame: undefined,
+ * 	ignored: false,
+ * 	role: 'checkbox',
+ * 	name: ' Gift  wrap ',
+ * 	description: undefined,
+ * 	value: undefined,
+ * 	properties: { checked: 'true' },
+ * 	session: 'main',
+ * 	reference: 'e4',
+ * }) // 'e4 checkbox "Gift wrap" [checked]'
+ * ```
+ */
+export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
+	const name = JSON.stringify(normalizeBrowserName(node.name ?? ''))
+	const role = node.role ?? 'unknown'
+	let row = node.reference === undefined ? `${role} ${name}` : `${node.reference} ${role} ${name}`
+	if (node.value !== undefined && node.value !== '')
+		row += ` value=${JSON.stringify(String(node.value))}`
+	if (node.properties['checked'] === true || node.properties['checked'] === 'true')
+		row += ' [checked]'
+	if (node.properties['disabled'] === true) row += ' [disabled]'
+	if (node.tool !== undefined) row += ` [tool=${node.tool}]`
+	return row
+}
+
+/**
+ * Returns the referenced outline nodes whose role and accessible name share the most words with a
+ * search, in document order.
+ *
+ * @remarks
+ * The search and each node's role and name are lowercased and split into whole words by
+ * `BROWSER_SEARCH_PATTERN`, so a word shorter than 3 letters or digits never counts, and words
+ * compare whole, with no substring or prefix match. A node scores the number of distinct search
+ * words equal to one of its words, and every node with the highest score above 0 matches. Only a
+ * node an outline renders as a referenced row takes part: one that is not ignored, carries a
+ * reference, and whose role is not omitted, a heading, or text.
+ *
+ * @param nodes - Ordered accessibility rows
+ * @param search - The words to match
+ * @returns The best-matching nodes in document order; empty when no node shares a word
+ *
+ * @example
+ * ```ts
+ * import { matchBrowserOutline } from '@orkestrel/browser'
+ *
+ * const node = {
+ * 	parent: undefined,
+ * 	children: [],
+ * 	backend: undefined,
+ * 	frame: undefined,
+ * 	ignored: false,
+ * 	description: undefined,
+ * 	value: undefined,
+ * 	properties: {},
+ * 	session: 'main',
+ * }
+ * const nodes = [
+ * 	{ ...node, id: '1', role: 'button', name: 'Close', reference: 'e1' },
+ * 	{ ...node, id: '2', role: 'button', name: 'Archive', reference: 'e2' },
+ * ]
+ * matchBrowserOutline(nodes, 'archive dialog button').map((match) => match.reference) // ['e2']
+ * ```
+ */
+export function matchBrowserOutline(
+	nodes: readonly BrowserOutlineNode[],
+	search: string,
+): readonly BrowserOutlineNode[] {
+	const words = new Set(
+		Array.from(search.toLowerCase().matchAll(BROWSER_SEARCH_PATTERN), (match) => match[0]),
+	)
+	if (words.size === 0) return []
+	let best = 0
+	const scored: Array<{ readonly node: BrowserOutlineNode; readonly score: number }> = []
+	for (const node of nodes) {
+		const role = node.role ?? ''
+		if (
+			node.ignored ||
+			node.reference === undefined ||
+			BROWSER_OUTLINE_OMITTED_ROLES.has(role) ||
+			role === 'heading' ||
+			role === 'StaticText'
+		)
+			continue
+		const own = new Set(
+			Array.from(
+				`${role} ${node.name ?? ''}`.toLowerCase().matchAll(BROWSER_SEARCH_PATTERN),
+				(match) => match[0],
+			),
+		)
+		let score = 0
+		for (const word of words) if (own.has(word)) score += 1
+		if (score === 0) continue
+		best = Math.max(best, score)
+		scored.push({ node, score })
+	}
+	return scored.filter((entry) => entry.score === best).map((entry) => entry.node)
+}
+
+/**
  * Renders document-order text and referenced elements with a bounded element count.
+ *
+ * @remarks
+ * Each referenced row renders through `renderBrowserOutlineRow`, and the closing
+ * `(COUNT of TOTAL elements)` line counts the rows included and available. `matches` holds the
+ * rows `matchBrowserOutline` returns for `search`, and `focus` the last referenced row whose node
+ * carries a `focused` property of `true`; both reach past `limit`.
+ *
  * @param url - Document address
  * @param title - Document title
  * @param nodes - Ordered accessibility rows
  * @param limit - Maximum referenced rows to include
- * @returns Outline text and element counts
+ * @param search - The words whose best-matching rows `matches` lists. Default: none, which lists
+ * none
+ * @returns Outline text, element counts, matching rows, and the focused row
+ *
+ * @example
+ * ```ts
+ * import { renderBrowserOutline } from '@orkestrel/browser'
+ *
+ * const node = {
+ * 	parent: undefined,
+ * 	children: [],
+ * 	backend: undefined,
+ * 	frame: undefined,
+ * 	ignored: false,
+ * 	description: undefined,
+ * 	value: undefined,
+ * 	session: 'main',
+ * }
+ * const outline = renderBrowserOutline(
+ * 	'https://shop.example/cart',
+ * 	'Cart',
+ * 	[
+ * 		{ ...node, id: '1', role: 'button', name: 'Close', properties: {}, reference: 'e1' },
+ * 		{ ...node, id: '2', role: 'button', name: 'Archive', properties: { focused: true }, reference: 'e2' },
+ * 	],
+ * 	1,
+ * 	'archive button',
+ * )
+ * outline.text // 'page "Cart" https://shop.example/cart\ne1 button "Close"\n(1 of 2 elements)'
+ * outline.matches // ['e2 button "Archive"']
+ * outline.focus // 'e2 button "Archive"'
+ * ```
  */
 export function renderBrowserOutline(
 	url: string,
 	title: string,
 	nodes: readonly BrowserOutlineNode[],
 	limit: number,
+	search?: string,
 ): BrowserOutline {
 	const rows = [`page ${JSON.stringify(title)} ${url}`]
 	const sessions = new Map<string, Map<string, BrowserOutlineNode>>()
@@ -173,6 +332,7 @@ export function renderBrowserOutline(
 	}
 	let count = 0
 	let total = 0
+	let focus: BrowserOutlineNode | undefined
 	for (const node of nodes) {
 		if (node.ignored || BROWSER_OUTLINE_OMITTED_ROLES.has(node.role ?? '')) continue
 		const name = normalizeBrowserName(node.name ?? '')
@@ -188,19 +348,22 @@ export function renderBrowserOutline(
 		}
 		if (node.reference === undefined) continue
 		total += 1
+		if (node.properties['focused'] === true) focus = node
 		if (count >= limit) continue
 		count += 1
-		let row = `${node.reference} ${node.role ?? 'unknown'} ${JSON.stringify(name)}`
-		if (node.value !== undefined && node.value !== '')
-			row += ` value=${JSON.stringify(String(node.value))}`
-		if (node.properties['checked'] === true || node.properties['checked'] === 'true')
-			row += ' [checked]'
-		if (node.properties['disabled'] === true) row += ' [disabled]'
-		if (node.tool !== undefined) row += ` [tool=${node.tool}]`
-		rows.push(row)
+		rows.push(renderBrowserOutlineRow(node))
 	}
 	rows.push(`(${count} of ${total} elements)`)
-	return { url, title, text: rows.join('\n'), count, total }
+	return {
+		url,
+		title,
+		text: rows.join('\n'),
+		count,
+		total,
+		matches:
+			search === undefined ? [] : matchBrowserOutline(nodes, search).map(renderBrowserOutlineRow),
+		focus: focus === undefined ? undefined : renderBrowserOutlineRow(focus),
+	}
 }
 
 /**

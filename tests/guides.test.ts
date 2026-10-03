@@ -67,7 +67,7 @@ const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 	'\tcontent: `What does the Alpine Kettle cost?\\n\\nThe browser shows this page:\\n${view}`,',
 ])
 /** The receipt the guide's Tools section quotes for a `look` call that carries `ref`. */
-const UNADVERTISED_RECEIPT = 'The look tool takes no ref parameter; call look with what.'
+const UNADVERTISED_RECEIPT = 'The look tool takes no ref parameter; call look with what and offset.'
 /** The headings that open and close the guide's Tools table. */
 const TOOLS_SECTION = Object.freeze(['\n### Tools\n', '\n### Receipts\n'])
 /** The heading of the fence that shows the `add-kettle` listing. */

@@ -59,12 +59,14 @@ import {
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
 	SERVICE_EDITABLE_HTML,
+	SERVICE_TRACKING_HTML,
 } from '../setupService.js'
 import {
 	BROWSER_JOURNEY_SERVICE_CASES,
 	BROWSER_JOURNEY_COMBOBOX_HTML,
 	BROWSER_JOURNEY_FRAME_HTML,
 	BROWSER_JOURNEY_POPUP_LINK_HTML,
+	extractBrowserPage,
 	requireBrowserJourneyElement,
 } from '../setup.js'
 
@@ -407,6 +409,109 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(
 			[look, click, typed, read].filter((receipt) => receipt.length > BROWSER_TOOL_LIMIT),
 		).toStrictEqual([])
+	})
+
+	describe('look past the cut view', () => {
+		it('lists the Tracking number textbox first on a page whose text before it runs past the limit, and its reference types into the field (control: a look that shares no word starts with the page line)', async () => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			await page.evaluate(
+				`(() => { document.querySelector('main').insertAdjacentHTML('afterbegin', ${JSON.stringify(SERVICE_TRACKING_HTML)}); return true })()`,
+			)
+			const tools = createToolManager()
+			const toolset = createBrowserToolset(page, { tools })
+			toolsets.push(toolset)
+			await toolset.start()
+			const outline = (await page.elements.outline()).text
+			const tracking = requireOutlineReference(outline, 'textbox', 'Tracking number')
+			expect(outline.indexOf(`${tracking} textbox`)).toBeGreaterThan(BROWSER_TOOL_LIMIT)
+
+			const look = requireToolText(
+				await tools.execute({
+					id: 'look',
+					name: 'look',
+					arguments: { what: 'the Tracking number textbox' },
+				}),
+			)
+			expect(
+				look.startsWith(
+					`1 element matches "the Tracking number textbox":\n${tracking} textbox "Tracking number"\n\npage "Delivery form" `,
+				),
+			).toBe(true)
+			expect(extractBrowserPage(look).body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			expect(
+				await tools.execute({
+					id: 'type',
+					name: 'type',
+					arguments: { ref: tracking, text: '1Z999AA10123456784' },
+				}),
+			).toMatchObject({ success: true })
+			expect(await page.evaluate("document.getElementById('tracking').value")).toBe(
+				'1Z999AA10123456784',
+			)
+
+			const control = requireToolText(
+				await tools.execute({ id: 'control', name: 'look', arguments: { what: 'zebra crossing' } }),
+			)
+			expect(control.startsWith('page "Delivery form" ')).toBe(true)
+			expect(control).not.toContain(`${tracking} textbox`)
+		})
+
+		it('pages the outline of that page through to its count line', async () => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			await page.evaluate(
+				`(() => { document.querySelector('main').insertAdjacentHTML('afterbegin', ${JSON.stringify(SERVICE_TRACKING_HTML)}); return true })()`,
+			)
+			const tools = createToolManager()
+			const toolset = createBrowserToolset(page, { tools })
+			toolsets.push(toolset)
+			await toolset.start()
+			const bodies: string[] = []
+			let offset: number | undefined = 0
+			while (offset !== undefined) {
+				const paged = extractBrowserPage(
+					requireToolText(
+						await tools.execute({ id: 'look', name: 'look', arguments: { what: '', offset } }),
+					),
+				)
+				expect(paged.start).toBe(offset)
+				expect(paged.body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+				bodies.push(paged.body)
+				offset = paged.next
+			}
+			expect(bodies.length).toBeGreaterThan(1)
+			expect(bodies.join('')).toBe(
+				(await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text,
+			)
+			expect(bodies.at(-1)).toMatch(/\n\(9 of 9 elements\)$/)
+		})
+
+		it('names the focused element in the receipt of each Tab press', async () => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			const tools = createToolManager()
+			const toolset = createBrowserToolset(page, { tools })
+			toolsets.push(toolset)
+			await toolset.start()
+			const outline = (await page.elements.outline()).text
+			const name = requireOutlineReference(outline, 'textbox', 'Name')
+			const notes = requireOutlineReference(outline, 'textbox', 'Notes')
+			const first = requireToolText(
+				await tools.execute({ id: 'first', name: 'press', arguments: { key: 'Tab' } }),
+			)
+			expect(first.split('\n', 1)[0]).toBe(
+				`Pressed Tab; focus is on ${name} textbox "Name" value="Ada".`,
+			)
+			expect(await page.evaluate('document.activeElement.id')).toBe('name')
+			const second = requireToolText(
+				await tools.execute({ id: 'second', name: 'press', arguments: { key: 'Tab' } }),
+			)
+			expect(second.split('\n', 1)[0]).toBe(
+				`Pressed Tab; focus is on ${notes} textbox "Notes" value="Leave at the door".`,
+			)
+			expect(await page.evaluate('document.activeElement.id')).toBe('notes')
+		})
 	})
 
 	it('returns the cart view in the receipt of a click whose POST form the server answers with 303, and the same page with the handled status for a form whose submit handler prevents the submission', async () => {
@@ -974,7 +1079,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(
 			requireToolText(
-				await tools.execute({ id: 'after', name: 'look', arguments: { what: 'the voucher' } }),
+				await tools.execute({ id: 'after', name: 'look', arguments: { what: 'what happened' } }),
 			),
 		).toBe(applied)
 	})

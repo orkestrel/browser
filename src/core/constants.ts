@@ -305,6 +305,16 @@ export const BROWSER_REFERENCE_PREFIX = 'e'
 /** Bounds the default number of actionable elements in an outline. */
 export const BROWSER_OUTLINE_LIMIT = 150
 
+/**
+ * Matches one word of an outline search and of a row's role and name: a run of at least 3 letters
+ * or digits.
+ *
+ * @remarks
+ * The 3-character floor drops words such as `a`, `to`, and `of`, which would otherwise score a row
+ * whose name shares them with the search.
+ */
+export const BROWSER_SEARCH_PATTERN = /[\p{L}\p{N}]{3,}/gu
+
 /** Names accessibility roles that receive actionable outline references. */
 export const BROWSER_INTERACTIVE_ROLES: ReadonlySet<string> = Object.freeze(
 	new Set([
@@ -439,10 +449,10 @@ export const BROWSER_TOOL_CHANGED_NOTE =
 export const BROWSER_TOOL_CUT_FOOTER = 'the rest was cut'
 
 /**
- * Holds the clause that ends the footer of a cut result that carries a view, the result of
- * `look` and of every action, and names `read` as the call that returns the page's text.
+ * Holds the clause that ends the footer of a cut action receipt, which carries a view, and names
+ * `look` as the call that finds an element the cut view leaves out.
  */
-export const BROWSER_TOOL_VIEW_FOOTER = "the rest was cut; call read for the page's text"
+export const BROWSER_TOOL_VIEW_FOOTER = 'the rest was cut; call look with what you want to find'
 
 /**
  * Names the accessibility roles the `type` tool writes to: `textbox`, `searchbox`, and
@@ -504,8 +514,8 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * Every tool description is at most 25 words and says what the tool shows or does, and for
  * `look` and `read` when to call it; every parameter description is at most 100 characters.
  * Every tool declares at least one required parameter, because the streamed tool-call parser of
- * Ollama 0.34.4 rejects a call to a tool that declares no parameter. `look` takes `what` alone
- * and `read` takes `what` and `offset`; neither is scoped to an element, and an element's own
+ * Ollama 0.34.4 rejects a call to a tool that declares no parameter. `look` and `read` take `what`
+ * and `offset`; neither is scoped to an element, and an element's own
  * reading is `BrowserElementInterface.read`. `look`, `read`, and `journeys` annotate `pure` and
  * `untrusted`, `wait` and `tabs` annotate `pure`, and the rest carry no annotation. `type` takes
  * `secret` beside `ref`, `text`, and `submit`. The journey tools `record`, `save`, `journeys`,
@@ -519,7 +529,14 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
-				what: Object.freeze({ type: 'string', description: 'What you want to find or act on.' }),
+				what: Object.freeze({
+					type: 'string',
+					description: 'What you want to find or act on; the elements that match are listed first.',
+				}),
+				offset: Object.freeze({
+					type: 'integer',
+					description: 'The character to continue from, as the last reply names. Default: 0.',
+				}),
 			}),
 			required: Object.freeze(['what']),
 		}),

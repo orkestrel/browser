@@ -279,6 +279,36 @@ describe('BrowserDOMElementManager', () => {
 			expect(text.split('\n').slice(1)).toEqual(['e1 button "Seen"', '(1 of 1 elements)'])
 		})
 
+		it('lists the rows that best match a search past the limit', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			const outline = await view.elements.outline({ limit: 1, search: 'the Email textbox' })
+			expect(outline.matches).toEqual(['e4 textbox "Email"'])
+			expect(outline.count).toBe(1)
+			expect(outline.text).not.toContain('e4 textbox')
+			expect((await view.elements.outline({ limit: 1 })).matches).toEqual([])
+		})
+
+		it('names the focused element and none after it loses focus', async () => {
+			const probe = await createProbeElements()
+			const view = createBrowserDOMView({ document: probe.document })
+			probe.save.focus()
+			expect((await view.elements.outline({ limit: 0 })).focus).toBe('e3 button "Save"')
+			probe.save.blur()
+			expect((await view.elements.outline()).focus).toBeUndefined()
+		})
+
+		it('names an element focused inside an open shadow root', async () => {
+			const probe = await loadProbeDocument(
+				'<button>Outer</button><div><template shadowrootmode="open"><button>Inner</button></template></div>',
+			)
+			const view = createBrowserDOMView({ document: probe })
+			const host = requireValue(probe.querySelector('div'), 'shadow host')
+			requireValue(host.shadowRoot?.querySelector('button'), 'inner button').focus()
+			expect(probe.activeElement).toBe(host)
+			expect((await view.elements.outline()).focus).toBe('e2 button "Inner"')
+		})
+
 		it('refuses a negative or fractional limit and an unknown within reference', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })

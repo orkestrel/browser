@@ -103,6 +103,23 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			expect(collectOutlinePairs(dom)).toStrictEqual(collectOutlinePairs(cdp))
 		})
 
+		it('lists the same match rows in the DOM look as the CDP outline search of the same page', async () => {
+			const what = 'Gift wrap checkbox'
+			const cdp = await page.elements.outline({ search: what })
+			expect(collectOutlinePairs(cdp.matches.join('\n'))).toStrictEqual(['checkbox "Gift wrap"'])
+			const dom = requireToolText(
+				await page.evaluate(
+					`documentToolset.tools.execute({ id: 'look', name: 'look', arguments: { what: ${JSON.stringify(what)} } })`,
+				),
+			)
+			const [block = ''] = dom.split('\n\npage "')
+			const [header, ...rows] = block.split('\n')
+			expect(header).toBe(`1 element matches ${JSON.stringify(what)}:`)
+			expect(collectOutlinePairs(rows.join('\n'))).toStrictEqual(
+				collectOutlinePairs(cdp.matches.join('\n')),
+			)
+		})
+
 		it('ends a DOM click receipt with (untrusted event) and records isTrusted false, while a CDP click receipt on the same page carries no marker and records isTrusted true', async () => {
 			const look = requireToolText(
 				await page.evaluate(

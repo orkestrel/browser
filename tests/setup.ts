@@ -15,6 +15,7 @@ import type {
 	BrowserFrameInterface,
 	BrowserNavigationEventMap,
 	BrowserOutline,
+	BrowserOutlineNode,
 	BrowserOutlineOptions,
 	BrowserReadingInterface,
 	BrowserReferenceFunction,
@@ -1720,6 +1721,110 @@ export const BROWSER_ELEMENT_NAME_AX_FIXTURE = Object.freeze({
 	})),
 })
 
+/** Describes one outline node a fixture builds: its role, its name, and its optional state. */
+export interface BrowserOutlineNodeFixture {
+	readonly role: string
+	readonly name: string
+	readonly reference?: string
+	readonly ignored?: boolean
+	readonly properties?: Readonly<Record<string, unknown>>
+}
+
+/**
+ * Builds main-session outline nodes in the given order, each identified by its position.
+ *
+ * @param rows - The role, name, reference, ignored flag, and properties of each node
+ * @returns One `BrowserOutlineNode` per row, unreferenced and not ignored unless the row says so
+ */
+export function createBrowserOutlineNodes(
+	rows: readonly BrowserOutlineNodeFixture[],
+): readonly BrowserOutlineNode[] {
+	return rows.map((row, index) => ({
+		id: String(index + 1),
+		parent: undefined,
+		children: [],
+		backend: index + 1,
+		frame: 'main',
+		ignored: row.ignored ?? false,
+		role: row.role,
+		name: row.name,
+		description: undefined,
+		value: undefined,
+		properties: row.properties ?? {},
+		session: 'main',
+		reference: row.reference,
+	}))
+}
+
+/**
+ * Builds an accessibility tree of a `RootWebArea` named `Shop` over `count` buttons named
+ * `Button N`, where N counts from 1, with an optional node carrying the `focused` property.
+ *
+ * @param count - The number of buttons
+ * @param focused - The node id that carries `focused`: `root`, or `button-N`. Default: none
+ * @returns The `Accessibility.getFullAXTree` result
+ */
+export function buildBrowserButtonTree(
+	count: number,
+	focused?: string,
+): { readonly nodes: ReadonlyArray<Readonly<Record<string, unknown>>> } {
+	const buttons = Array.from({ length: count }, (_, index) => `button-${index + 1}`)
+	const focus = [{ name: 'focused', value: { type: 'boolean', value: true } }]
+	return {
+		nodes: [
+			{
+				nodeId: 'root',
+				backendDOMNodeId: 1,
+				role: { value: 'RootWebArea' },
+				name: { value: 'Shop' },
+				childIds: buttons,
+				...(focused === 'root' ? { properties: focus } : {}),
+			},
+			...buttons.map((id, index) => ({
+				nodeId: id,
+				parentId: 'root',
+				backendDOMNodeId: index + 2,
+				role: { value: 'button' },
+				name: { value: `Button ${index + 1}` },
+				...(focused === id ? { properties: focus } : {}),
+			})),
+		],
+	}
+}
+
+/** Describes one page of a `look` or `read` result: its body and the range its footer names. */
+export interface BrowserPageFixture {
+	readonly body: string
+	readonly start: number
+	readonly end: number
+	readonly total: number
+	readonly next: number | undefined
+}
+
+/**
+ * Extracts the body and the footer's range from one page of a `look` or `read` result.
+ *
+ * @param result - The tool's result text
+ * @returns The body before the footer, the footer's start, end, and total, and the offset the
+ * footer names for the next page; a result with no footer reads as the whole text from 0 with no
+ * next offset
+ */
+export function extractBrowserPage(result: string): BrowserPageFixture {
+	const footer =
+		/\n\n\[characters (\d+)–(\d+) of (\d+)(?:; call (?:look|read) with offset (\d+) for more)?\]$/.exec(
+			result,
+		)
+	if (footer === null)
+		return { body: result, start: 0, end: result.length, total: result.length, next: undefined }
+	return {
+		body: result.slice(0, footer.index),
+		start: Number(footer[1]),
+		end: Number(footer[2]),
+		total: Number(footer[3]),
+		next: footer[4] === undefined ? undefined : Number(footer[4]),
+	}
+}
+
 /** Holds query expectations shared by the remote and DOM element managers. */
 export const BROWSER_ELEMENT_NAME_CASES: ReadonlyArray<{
 	readonly title: string
@@ -2588,6 +2693,8 @@ export class BrowserElementManagerDouble implements BrowserElementManagerInterfa
 			].join('\n'),
 			count: this.#elements.length,
 			total: this.#elements.length,
+			matches: [],
+			focus: undefined,
 		}
 	}
 

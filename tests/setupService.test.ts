@@ -205,6 +205,17 @@ describe('extractOutlineRows', () => {
 		).toStrictEqual([{ reference: 'e1', role: 'button', name: 'Delete' }])
 		expect(extractOutlineRows('')).toStrictEqual([])
 	})
+
+	it('reads a look match row that repeats an outline row once, at its first occurrence', () => {
+		expect(
+			extractOutlineRows(
+				'1 element matches "the delete button":\ne1 button "Delete"\n\npage "Drafts" http://127.0.0.1/confirm\ne2 button "Keep"\ne1 button "Delete"\n(2 of 2 elements)',
+			),
+		).toStrictEqual([
+			{ reference: 'e1', role: 'button', name: 'Delete' },
+			{ reference: 'e2', role: 'button', name: 'Keep' },
+		])
+	})
 })
 
 describe('collectOutlinePairs', () => {
@@ -224,6 +235,9 @@ describe('collectOutlinePairs', () => {
 			collectOutlinePairs(cdp),
 		)
 		expect(collectOutlinePairs('(0 of 0 elements)')).toStrictEqual([])
+		expect(
+			collectOutlinePairs(`1 element matches "gift wrap":\ne7 checkbox "Gift wrap"\n\n${dom}`),
+		).toStrictEqual(collectOutlinePairs(cdp))
 	})
 })
 
@@ -234,6 +248,13 @@ describe('requireOutlineReference', () => {
 	it('returns the reference of the one row with the role and the name', () => {
 		expect(requireOutlineReference(text, 'button', 'Keep')).toBe('e2')
 		expect(requireOutlineReference(text, 'link', 'Keep')).toBe('e3')
+		expect(
+			requireOutlineReference(
+				`2 elements match "keep":\ne2 button "Keep"\ne3 link "Keep"\n\n${text}`,
+				'button',
+				'Keep',
+			),
+		).toBe('e2')
 	})
 
 	it('refuses an absent row and a role and name two rows share', () => {

@@ -57,7 +57,8 @@ import {
  * wrapper reports that latest capture, also after the manager drops the reference. A reference
  * and a reading from any walked document record that document's epoch, which advances on its own
  * navigation events and on the view's; that document's `pagehide` drops its references. A form
- * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A `select` row
+ * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A row carries
+ * `focused` when its element is the active element of its own document or shadow root. A `select` row
  * is followed by one `option` row per option, named by its label. Whitespace between two texts of
  * one block renders as one space, as a rendered `br` between them does, and texts with neither
  * between them stay joined. A CSS query
@@ -105,7 +106,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		options?.signal?.throwIfAborted()
 		const document = this.#input.document()
 		const rows = this.#capture(this.#root(document, options?.within), options?.within)
-		return renderBrowserOutline(document.URL, document.title, rows, limit)
+		return renderBrowserOutline(document.URL, document.title, rows, limit, options?.search)
 	}
 
 	async find(
@@ -380,6 +381,12 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			input !== undefined && (input.type === 'checkbox' || input.type === 'radio')
 				? input.checked
 				: element.getAttribute('aria-checked') === 'true'
+		// Focus inside a shadow tree leaves its host as the document's active element, so the
+		// element is compared with the active element of its own root.
+		const root = element.getRootNode()
+		const focused =
+			(root instanceof view.Document || root instanceof view.ShadowRoot) &&
+			root.activeElement === element
 		let value: string | undefined
 		if (element instanceof view.HTMLSelectElement)
 			value = Array.from(element.selectedOptions, (option) => option.label).join(', ')
@@ -401,7 +408,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			name,
 			description: undefined,
 			value,
-			properties: { checked, disabled: element.matches(':disabled') },
+			properties: { checked, disabled: element.matches(':disabled'), focused },
 			...(tool === null || tool === '' ? {} : { tool }),
 			session: '',
 			reference,

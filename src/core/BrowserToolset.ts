@@ -18,6 +18,7 @@ import type {
 	BrowserPageInterface,
 	BrowserPopupRecordInterface,
 	BrowserReadingInterface,
+	BrowserReadResult,
 	BrowserTab,
 	BrowserTool,
 	BrowserToolName,
@@ -82,6 +83,7 @@ import { compileSubmitObserverExpression, compileSubmitReadExpression } from './
 import {
 	boundBrowserText,
 	deriveBrowserToolSchema,
+	extractBrowserSlice,
 	normalizeBrowserKey,
 	readBrowserToolString,
 	renderBrowserElement,
@@ -110,11 +112,14 @@ import {
  * refuses every tool but `dialog` while a dialog is open, forwards `ToolContext.signal` into every
  * protocol call, refuses a call to a toolset tool that carries a parameter the tool does not
  * advertise, and cuts every returned string and every thrown message at `limit` characters plus
- * a footer; the footer of a cut result that carries a view names `read` as the next call. `look`
- * and `read` read the page, never one element. A page tool's error message and JSON output reach
- * the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT` (4 096) by the registry, so a
- * `limit` over that shows at most 4 096 characters of either; a page tool's text output reaches
- * the boundary whole.
+ * a footer; the footer of a cut action receipt, which carries a view, names `look` as the next
+ * call. `look` and `read` read the page, never one element, and return pages of at most `limit`
+ * characters that end at a line break and name the offset the next page starts at. A `look` whose
+ * `what` matches referenced rows lists those rows first, and its pages reach every referenced row.
+ * A `press` receipt names the referenced element that has focus after the key. A page tool's
+ * error message and JSON output reach the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT`
+ * (4 096) by the registry, so a `limit` over that shows at most 4 096 characters of either; a page
+ * tool's text output reaches the boundary whole.
  *
  * `click`, `type`, `press`, `navigate`, and `switch` are actions: one runs at a time, in call
  * order, and holds the queue until its receipt. A queued action whose signal aborts leaves
@@ -262,7 +267,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
 		})
-		const look = this.#create('look', this.#look.bind(this), BROWSER_TOOL_VIEW_FOOTER)
+		const look = this.#create('look', this.#look.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		const read = this.#create('read', this.#read.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		const click = this.#create('click', this.#click.bind(this), BROWSER_TOOL_VIEW_FOOTER)
 		const type = this.#create('type', this.#type.bind(this), BROWSER_TOOL_VIEW_FOOTER)
@@ -681,27 +686,56 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	async #look(
-		_args: Readonly<Record<string, unknown>>,
+		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
+		const offset = this.#readOffset(args)
+		const what = args['what']
+		const search = isString(what) ? what : undefined
 		// The outline carries the signal, so an abort rejects with its own pending protocol
-		// entry's reason rather than a toolset-level copy of it.
-		const outline = await this.#race(this.#cursor.elements.outline({ signal: context.signal }), '')
-		return [outline.text, '']
+		// entry's reason rather than a toolset-level copy of it. Every referenced row is listed,
+		// because the pages reach past the default cap.
+		const outline = await this.#race(
+			this.#cursor.elements.outline({
+				signal: context.signal,
+				limit: Number.MAX_SAFE_INTEGER,
+				...(search === undefined ? {} : { search }),
+			}),
+			'',
+		)
+		const total = outline.text.length
+		// Each call captures afresh; an unchanged page renders the same text, so a line-ended page
+		// continues exactly, and an offset at or past the end restarts at 0.
+		const start = offset < total ? offset : 0
+		const note = this.#drainNote()
+		const room = this.#limit - note.length
+		// The matches stay outside the paged text, so an offset never depends on `what`.
+		let block = ''
+		const count = outline.matches.length
+		if (start === 0 && count > 0) {
+			const half = Math.floor(room / 2)
+			let text = `${count} ${count === 1 ? 'element matches' : 'elements match'} ${JSON.stringify(search)}:\n`
+			if (text.length + 1 <= half) {
+				for (const row of outline.matches) {
+					if (text.length + row.length + 2 > half) break
+					text += `${row}\n`
+				}
+				block = `${text}\n`
+			}
+		}
+		const space = room - block.length
+		const slice =
+			space < 1
+				? { text: '', offset: start, total }
+				: extractBrowserSlice(outline.text, start, space)
+		return this.#pageSlice('look', note, slice, block)
 	}
 
 	async #read(
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
-		const offset = args['offset'] ?? 0
-		if (!isInteger(offset) || offset < 0) {
-			throw new BrowserError(
-				'The offset parameter must be a non-negative integer.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'offset' },
-			)
-		}
+		const offset = this.#readOffset(args)
 		const view = this.#cursor
 		const retained = this.#reading
 		let reading = retained?.reading
@@ -722,32 +756,56 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			reading === retained?.reading && offset < reading.markdown({ offset: 0, limit: 1 }).total
 				? offset
 				: 0
-		// A move note shares the limit with the slice, so the continuation offset counts only the
-		// reading characters this result carries.
-		const note = boundBrowserText(
-			this.#drain(),
-			Math.max(1, this.#limit - 1),
-			BROWSER_TOOL_CUT_FOOTER,
-		)
+		const note = this.#drainNote()
 		const room = this.#limit - note.length
 		const slice =
 			room < 1
 				? { text: '', offset: start, total: reading.markdown({ offset: 0 }).total }
 				: reading.markdown({ offset: start, limit: room })
+		return this.#pageSlice('read', note, slice)
+	}
+
+	// Reads the `offset` argument of `look` and `read` before either captures anything.
+	#readOffset(args: Readonly<Record<string, unknown>>): number {
+		const offset = args['offset'] ?? 0
+		if (!isInteger(offset) || offset < 0) {
+			throw new BrowserError(
+				'The offset parameter must be a non-negative integer.',
+				'BROWSER_TOOLSET_ARGUMENT',
+				{ key: 'offset' },
+			)
+		}
+		return offset
+	}
+
+	// A move note shares the limit with the page, so the continuation offset counts only the
+	// paged characters a result carries.
+	#drainNote(): string {
+		return boundBrowserText(this.#drain(), Math.max(1, this.#limit - 1), BROWSER_TOOL_CUT_FOOTER)
+	}
+
+	// Returns one page of `look` or `read`: the note, the block, and the slice as the body, and the
+	// footer that names the range and the next offset, absent when the whole text fits at offset 0.
+	#pageSlice(
+		name: 'look' | 'read',
+		note: string,
+		slice: BrowserReadResult,
+		block = '',
+	): readonly [string, string] {
 		// A limit that cannot hold the next code point would never advance the continuation.
 		if (note === '' && slice.text === '' && slice.offset < slice.total) {
 			throw new BrowserError(
-				`The read limit of ${this.#limit} characters cannot hold the next character at offset ${start}; raise the toolset limit.`,
+				`The ${name} limit of ${this.#limit} characters cannot hold the next character at offset ${slice.offset}; raise the toolset limit.`,
 				'BROWSER_TOOLSET_LIMIT',
-				{ limit: this.#limit, offset: start },
+				{ limit: this.#limit, offset: slice.offset },
 			)
 		}
 		const end = slice.offset + slice.text.length
 		const more = end < slice.total
-		if (start === 0 && !more) return [`${note}${slice.text}`, '']
+		if (slice.offset === 0 && !more) return [`${note}${block}${slice.text}`, '']
 		return [
-			`${note}${slice.text}`,
-			`\n\n[characters ${start}–${end} of ${slice.total}${more ? `; call read with offset ${end} for more` : ''}]`,
+			`${note}${block}${slice.text}`,
+			`\n\n[characters ${slice.offset}–${end} of ${slice.total}${more ? `; call ${name} with offset ${end} for more` : ''}]`,
 		]
 	}
 
@@ -952,6 +1010,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					popups,
 					observation,
 					key === 'Enter' ? { explicit: false, action } : undefined,
+					true,
 				),
 				'',
 			]
@@ -1004,7 +1063,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			})
 			const action = `Navigated to ${result.url}`
 			return [
-				renderBrowserReceipt({ action, view: await this.#capture(action, context.signal) }),
+				renderBrowserReceipt({ action, view: (await this.#capture(action, context.signal)).view }),
 				'',
 			]
 		} finally {
@@ -1087,7 +1146,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			this.#stage()
 			const action = `${accept ? 'Accepted' : 'Dismissed'} the ${dialog.category} dialog ${JSON.stringify(dialog.message)}`
 			return [
-				renderBrowserReceipt({ action, view: await this.#capture(action, context.signal) }),
+				renderBrowserReceipt({ action, view: (await this.#capture(action, context.signal)).view }),
 				'',
 			]
 		} finally {
@@ -1137,7 +1196,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const front = page.send('Page.bringToFront', undefined, { signal: context.signal })
 			await this.#command(front, action, front)
 			return [
-				renderBrowserReceipt({ action, view: await this.#capture(action, context.signal) }),
+				renderBrowserReceipt({ action, view: (await this.#capture(action, context.signal)).view }),
 				'',
 			]
 		} finally {
@@ -1279,6 +1338,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// not prove one. A popup the input opened is part of the settlement: after the navigation, the
 	// popup record waits within the same bound for the popups its reports name, and the view moves to
 	// the first open one before the capture, so the receipt carries the popup's view and the move.
+	// `focus` adds the focused referenced row of the captured view to the status.
 	async #settle(
 		command: Promise<void>,
 		action: string,
@@ -1288,6 +1348,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		popups?: BrowserPopupRecordInterface,
 		observation?: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
 		enter?: { readonly explicit: boolean; readonly action: string },
+		focus = false,
 	): Promise<string> {
 		let deadline: number | undefined
 		try {
@@ -1361,11 +1422,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					settled?.reason === 'formSubmissionPost')
 					? enter.action
 					: action
+			const captured = await this.#capture(line, signal, deadline)
+			const clause =
+				focus && captured.focus !== undefined ? `focus is on ${captured.focus}` : undefined
+			const parts = [status, clause].filter((part) => part !== undefined)
 			return renderBrowserReceipt({
 				action: line,
 				trusted,
-				...(status === undefined ? {} : { status }),
-				view: await this.#capture(line, signal, deadline),
+				...(parts.length === 0 ? {} : { status: parts.join('; ') }),
+				view: captured.view,
 			})
 		} finally {
 			record?.destroy()
@@ -1721,8 +1786,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		action: string,
 		signal: AbortSignal,
 		deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS,
-	): Promise<string> {
-		if (deadline - performance.now() < 1) return BROWSER_TOOL_DEADLINE_NOTE
+	): Promise<{ readonly view: string; readonly focus: string | undefined }> {
+		if (deadline - performance.now() < 1)
+			return { view: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined }
 		// The capture belongs to the receipt: settling the receipt aborts it, so no readiness wait
 		// or protocol call outlives the receipt. The deadline alone ends the capture; the outline's
 		// own timeout sits past it, so a capture that runs out always reports the deadline note.
@@ -1735,13 +1801,18 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		}
 		try {
 			const outline = await this.#bounded(this.#cursor.elements.outline(options), deadline, action)
-			return outline === undefined ? BROWSER_TOOL_DEADLINE_NOTE : outline.text
+			return outline === undefined
+				? { view: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined }
+				: { view: outline.text, focus: outline.focus }
 		} catch (error) {
 			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
 				throw error
 			}
 			if (!isBrowserElementError(error) || error.context?.['reason'] !== 'GONE') {
-				return `(The view could not be read: ${isError(error) ? error.message : String(error)}; call look.)`
+				return {
+					view: `(The view could not be read: ${isError(error) ? error.message : String(error)}; call look.)`,
+					focus: undefined,
+				}
 			}
 			// A navigation replaced the document mid-capture; the outline waits for the replacing
 			// document's readiness before it reads once more, inside the same deadline.
@@ -1751,12 +1822,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					deadline,
 					action,
 				)
-				return outline === undefined ? BROWSER_TOOL_DEADLINE_NOTE : outline.text
+				return outline === undefined
+					? { view: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined }
+					: { view: outline.text, focus: outline.focus }
 			} catch (retry) {
 				if (signal.aborted || (isBrowserError(retry) && retry.code === 'BROWSER_TOOLSET_RECEIPT')) {
 					throw retry
 				}
-				return BROWSER_TOOL_CHANGED_NOTE
+				return { view: BROWSER_TOOL_CHANGED_NOTE, focus: undefined }
 			}
 		} finally {
 			receipt.abort(new BrowserError('the receipt settled', 'BROWSER_TOOLSET_SETTLED'))

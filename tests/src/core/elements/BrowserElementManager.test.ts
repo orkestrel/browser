@@ -321,8 +321,11 @@ describe('element manager', () => {
 				count: 6,
 				total: 6,
 				text: 'page "Cart" https://example.test/cart\n# Your cart\ne1 link "Home"\ne2 textbox "Email" value="sam@example.test"\ne3 checkbox "Gift wrap" [checked]\ne4 button "Place order" [disabled]\nTwo items, 48.00 total.\ne5 Iframe "Checkout"\ne6 button "Save"\nDelivery included.\n(6 of 6 elements)',
+				matches: [],
+				focus: undefined,
 			})
-			const cut = await page.elements.outline({ limit: 2 })
+			const cut = await page.elements.outline({ limit: 2, search: 'the save button' })
+			expect(cut.matches).toEqual(['e6 button "Save"'])
 			expect(cut.count).toBe(2)
 			expect(cut.total).toBe(6)
 			expect(cut.text).toContain('Two items, 48.00 total.')

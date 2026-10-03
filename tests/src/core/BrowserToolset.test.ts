@@ -57,6 +57,8 @@ import {
 	BROWSER_ELEMENT_FRAMED_FIXTURE,
 	BROWSER_CHILD_ARRANGEMENTS,
 	BROWSER_ELEMENT_WORLDS,
+	buildBrowserButtonTree,
+	extractBrowserPage,
 	BROWSER_SESSION_MOVES,
 	answerBrowserEvaluation,
 	buildBrowserElementTree,
@@ -788,7 +790,7 @@ describe('BrowserToolset', () => {
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
 				.toBeLessThanOrEqual(3100)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(5900)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6050)
 		})
 
 		it('catches a tool outside the seven, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
@@ -866,7 +868,7 @@ describe('BrowserToolset', () => {
 		it('catches a look or read that advertises or accepts ref, or a tool that runs with a parameter it does not advertise', async () => {
 			expect(
 				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.look.parameters, 'properties')),
-			).toEqual(['what'])
+			).toEqual(['what', 'offset'])
 			expect(
 				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.read.parameters, 'properties')),
 			).toEqual(['what', 'offset'])
@@ -879,7 +881,7 @@ describe('BrowserToolset', () => {
 				{ id: '3', name: 'type', arguments: { ref: 'e2', text: 'sam', what: 'the email' } },
 			])
 			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
-				'The look tool takes no ref parameter; call look with what.',
+				'The look tool takes no ref parameter; call look with what and offset.',
 				'The read tool takes no ref parameter; call read with what and offset.',
 				'The type tool takes no what parameter; call type with ref, text, submit, and secret.',
 			])
@@ -4411,6 +4413,143 @@ describe('BrowserToolset', () => {
 		})
 	})
 
+	describe('look pages and matches', () => {
+		it('catches look pages that skip, repeat, or exceed the limit, or stop at the outline cap', async () => {
+			const fixture = await createBrowserElementFixture({
+				accessibility: (message) =>
+					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
+			})
+			const { client, page } = fixture
+			try {
+				const capped = await page.elements.outline()
+				expect([capped.count, capped.total]).toEqual([150, 160])
+				expect(capped.text).not.toContain('e160 ')
+				const whole = (await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text
+				const toolset = createBrowserToolset(page, { limit: 500 })
+				await toolset.start()
+				const look = requireValue(toolset.tools.tool('look'))
+				const signal = new AbortController().signal
+				const bodies: string[] = []
+				let offset: number | undefined = 0
+				while (offset !== undefined) {
+					const paged = extractBrowserPage(
+						String(await look.execute({ what: '', offset }, { signal })),
+					)
+					expect(paged.start).toBe(offset)
+					expect(paged.body.length).toBeLessThanOrEqual(500)
+					bodies.push(paged.body)
+					offset = paged.next
+				}
+				expect(bodies.length).toBeGreaterThan(2)
+				expect(bodies.join('')).toBe(whole)
+				expect(bodies.slice(0, -1).every((body) => body.endsWith('\n'))).toBe(true)
+				expect(bodies.at(-1)).toMatch(/\ne160 button "Button 160"\n\(160 of 160 elements\)$/)
+				const last = String(await look.execute({ what: '', offset: whole.length - 10 }, { signal }))
+				expect(last).toMatch(/\[characters \d+–\d+ of \d+\]$/)
+				expect(last).not.toContain('for more')
+				expect(await look.execute({ what: '', offset: whole.length }, { signal })).toBe(
+					await look.execute({ what: '' }, { signal }),
+				)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('catches a match block that pages, shifts the offsets, outgrows half the room, or appears unasked', async () => {
+			const fixture = await createBrowserElementFixture({
+				accessibility: (message) =>
+					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
+			})
+			const { client, page } = fixture
+			try {
+				const whole = (await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text
+				const toolset = createBrowserToolset(page, { limit: 500 })
+				await toolset.start()
+				const look = requireValue(toolset.tools.tool('look'))
+				const signal = new AbortController().signal
+				const first = extractBrowserPage(
+					String(await look.execute({ what: 'the button 155' }, { signal })),
+				)
+				const block = '1 element matches "the button 155":\ne155 button "Button 155"\n\n'
+				expect(first.body.startsWith(`${block}page "Cart" `)).toBe(true)
+				expect(first.start).toBe(0)
+				expect(whole.startsWith(first.body.slice(block.length))).toBe(true)
+				expect(first.end).toBe(first.body.length - block.length)
+				const next = requireValue(first.next)
+				const continued = await look.execute({ what: 'the button 155', offset: next }, { signal })
+				expect(continued).toBe(await look.execute({ what: 'tracking', offset: next }, { signal }))
+				expect(continued).not.toContain('match')
+				const all = extractBrowserPage(String(await look.execute({ what: 'button' }, { signal })))
+				const [listed = ''] = all.body.split('page "Cart" ')
+				expect(listed.startsWith('160 elements match "button":\ne1 button "Button 1"\n')).toBe(true)
+				expect(listed.endsWith('"\n\n')).toBe(true)
+				expect(listed.length).toBeLessThanOrEqual(250)
+				expect(listed.split('\n').length - 3).toBeLessThan(160)
+				const plain = await look.execute({ what: 'tracking' }, { signal })
+				expect(String(plain).startsWith('page "Cart" ')).toBe(true)
+				expect(await look.execute({ what: 155 }, { signal })).toBe(plain)
+				expect(await look.execute({ what: 'a to 1' }, { signal })).toBe(plain)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('catches a look that captures before refusing a malformed offset', async () => {
+			const { client, page, transport } = await createBrowserElementFixture()
+			try {
+				const toolset = createBrowserToolset(page)
+				await toolset.start()
+				const look = requireValue(toolset.tools.tool('look'))
+				const signal = new AbortController().signal
+				const before = transport.sent.filter(
+					(message) => message.method === 'Accessibility.getFullAXTree',
+				).length
+				for (const offset of [-1, 1.5, '3']) {
+					const refused = await Promise.resolve(
+						look.execute({ what: 'save', offset }, { signal }),
+					).catch((caught: unknown) => caught)
+					expect(readProperty(refused, 'message')).toBe(
+						'The offset parameter must be a non-negative integer.',
+					)
+					expect(readProperty(refused, 'code')).toBe('BROWSER_TOOLSET_ARGUMENT')
+					expect(readProperty(refused, 'context')).toEqual({ key: 'offset' })
+				}
+				expect(
+					transport.sent.filter((message) => message.method === 'Accessibility.getFullAXTree'),
+				).toHaveLength(before)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('catches a press receipt that omits the focused element past the cap or names an unreferenced one', async () => {
+			for (const [focused, line] of [
+				['button-180', 'Pressed Tab; focus is on e180 button "Button 180".'],
+				[undefined, 'Pressed Tab.'],
+				['root', 'Pressed Tab.'],
+			] as const) {
+				const fixture = await createBrowserElementFixture({
+					accessibility: (message) =>
+						fixture.transport.reply(message.id, buildBrowserButtonTree(200, focused)),
+				})
+				try {
+					const toolset = createBrowserToolset(fixture.page)
+					await toolset.start()
+					const pressed = String(
+						await requireValue(toolset.tools.tool('press')).execute(
+							{ key: 'Tab' },
+							{ signal: new AbortController().signal },
+						),
+					)
+					expect(pressed.split('\n', 1)[0]).toBe(line)
+					expect(pressed).toContain('\n(150 of 200 elements)')
+				} finally {
+					await fixture.client.close()
+				}
+			}
+		})
+	})
+
 	describe('bounds', () => {
 		it('catches a view, a slice, a page tool output or error, a dialog message, or a tab title that escapes the limit', async () => {
 			const huge = 'm'.repeat(1_000_000)
@@ -4460,7 +4599,7 @@ describe('BrowserToolset', () => {
 				const tab = await context.create()
 				const cut = /^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut\]$/
 				const viewed =
-					/^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut; call read for the page's text\]$/
+					/^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut; call look with what you want to find\]$/
 				const refused = await Promise.resolve(
 					requireValue(
 						createBrowserToolset(page, { limit: 64, tools: createToolManager() }).native[2],
@@ -4475,9 +4614,13 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page, { limit: 64, context })
 				await toolset.start()
 				const signal = new AbortController().signal
-				expect(
+				const looked = String(
 					await requireValue(toolset.tools.tool('look')).execute({ what: 'cart' }, { signal }),
-				).toMatch(viewed)
+				)
+				const [view = '', range = ''] = looked.split('\n\n[characters ')
+				expect(view.length).toBeLessThanOrEqual(64)
+				expect(view.endsWith('\n')).toBe(true)
+				expect(range).toMatch(/^0–\d+ of \d+; call look with offset \d+ for more\]$/)
 				const slice = String(
 					await requireValue(toolset.tools.tool('read')).execute({ what: 'guide' }, { signal }),
 				)
@@ -4764,10 +4907,9 @@ describe('BrowserToolset', () => {
 			expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(five)
 			expect(toolset.view).toBe(view)
 			const signal = new AbortController().signal
-			const cut = /\n\[characters 0–60 of \d+; the rest was cut; call read for the page's text\]$/
 			expect(
 				await requireValue(toolset.tools.tool('look')).execute({ what: 'form' }, { signal }),
-			).toMatch(cut)
+			).toMatch(/\n\n\[characters 0–\d+ of \d+; call look with offset \d+ for more\]$/)
 			const read = String(
 				await requireValue(toolset.tools.tool('read')).execute({ what: 'form' }, { signal }),
 			)
@@ -5632,7 +5774,7 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const outline = String(
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal }),
+					await requireValue(toolset.tools.tool('look')).execute({ what: 'the cart' }, { signal }),
 				)
 				expect(
 					await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),

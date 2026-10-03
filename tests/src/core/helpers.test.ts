@@ -23,10 +23,12 @@ import {
 	resolveBrowserJourneyBinding,
 	composeBrowserPoint,
 	filterBrowserOutline,
+	matchBrowserOutline,
 	normalizeBrowserKey,
 	normalizeBrowserName,
 	readBrowserAccessibility,
 	renderBrowserOutline,
+	renderBrowserOutlineRow,
 	BrowserError,
 	renderBrowserToolOutput,
 	deriveBrowserToolSchema,
@@ -79,6 +81,7 @@ import {
 	createDOMSnapshotResult,
 	JPEG_BASE64,
 	PNG_BASE64,
+	createBrowserOutlineNodes,
 } from '../../setup.js'
 
 describe('journey step helpers', () => {
@@ -158,6 +161,8 @@ describe('element helpers', () => {
 			text: 'page "title" url\ne1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\ne4 link "Later"\n(4 of 4 elements)',
 			count: 4,
 			total: 4,
+			matches: [],
+			focus: undefined,
 		})
 	})
 
@@ -201,7 +206,115 @@ describe('element helpers', () => {
 		expect(
 			filterBrowserOutline(rows, { role: 'button', name: 'order' }).map((node) => node.id),
 		).toEqual(['order'])
-		expect(renderBrowserOutline('url', 'title', rows, 0)).toMatchObject({ count: 0, total: 1 })
+		expect(renderBrowserOutline('url', 'title', rows, 0)).toMatchObject({
+			count: 0,
+			total: 1,
+			matches: [],
+			focus: undefined,
+		})
+	})
+})
+
+describe('outline search and focus helpers', () => {
+	const dialog = createBrowserOutlineNodes([
+		{ role: 'heading', name: 'Archive dialog', reference: 'e9' },
+		{ role: 'button', name: 'Close', reference: 'e1' },
+		{ role: 'button', name: 'Archive', reference: 'e2' },
+		{ role: 'StaticText', name: 'Archive dialog button' },
+		{ role: 'button', name: 'Archive dialog button', reference: 'e3', ignored: true },
+		{ role: 'textbox', name: 'Tracking number', reference: 'e4' },
+		{ role: 'link', name: 'Other', reference: 'e5' },
+		{ role: 'link', name: 'Go to top', reference: 'e6' },
+		{ role: 'link', name: 'Cart', reference: 'e7' },
+	])
+
+	it('ranks the row that shares the most whole search words above rows that share fewer', () => {
+		expect(
+			matchBrowserOutline(dialog, 'archive dialog button').map((node) => node.reference),
+		).toEqual(['e2'])
+		expect(
+			matchBrowserOutline(dialog, 'the Tracking number textbox').map((node) => node.reference),
+		).toEqual(['e4'])
+	})
+
+	it('keeps tied rows in document order', () => {
+		expect(matchBrowserOutline(dialog, 'BUTTON').map((node) => node.reference)).toEqual([
+			'e1',
+			'e2',
+		])
+	})
+
+	it('ignores words under 3 characters and never matches a word inside another word', () => {
+		expect(matchBrowserOutline(dialog, 'go to cart').map((node) => node.reference)).toEqual(['e7'])
+		expect(matchBrowserOutline(dialog, 'the')).toEqual([])
+		expect(matchBrowserOutline(dialog, 'arch')).toEqual([])
+	})
+
+	it('returns nothing for an empty or wordless search', () => {
+		expect(matchBrowserOutline(dialog, '')).toEqual([])
+		expect(matchBrowserOutline(dialog, 'a to - !')).toEqual([])
+	})
+
+	it('never matches an ignored node, a heading, or a text row', () => {
+		expect(matchBrowserOutline(dialog, 'dialog')).toEqual([])
+	})
+
+	it('renders a row with its reference, role, quoted name, and states in order', () => {
+		expect(
+			createBrowserOutlineNodes([
+				{
+					role: 'checkbox',
+					name: ' Gift  "wrap" ',
+					reference: 'e4',
+					properties: { checked: true, disabled: true },
+				},
+				{ role: 'button', name: 'Save' },
+			]).map(renderBrowserOutlineRow),
+		).toEqual(['e4 checkbox "Gift \\"wrap\\"" [checked] [disabled]', 'button "Save"'])
+	})
+
+	it('lists matches and the focused row past the limit', () => {
+		const nodes = createBrowserOutlineNodes([
+			{ role: 'button', name: 'Close', reference: 'e1' },
+			{ role: 'button', name: 'Cancel', reference: 'e2' },
+			{ role: 'button', name: 'Archive', reference: 'e3', properties: { focused: true } },
+		])
+		expect(renderBrowserOutline('url', 'title', nodes, 1, 'archive button')).toEqual({
+			url: 'url',
+			title: 'title',
+			text: 'page "title" url\ne1 button "Close"\n(1 of 3 elements)',
+			count: 1,
+			total: 3,
+			matches: ['e3 button "Archive"'],
+			focus: 'e3 button "Archive"',
+		})
+		expect(renderBrowserOutline('url', 'title', nodes, 1).matches).toEqual([])
+	})
+
+	it('names the last focused referenced row and none when only an unreferenced row has focus', () => {
+		const focused = { focused: true }
+		expect(
+			renderBrowserOutline(
+				'url',
+				'title',
+				createBrowserOutlineNodes([
+					{ role: 'button', name: 'Host', reference: 'e1', properties: focused },
+					{ role: 'button', name: 'Inner', reference: 'e2', properties: focused },
+				]),
+				150,
+			).focus,
+		).toBe('e2 button "Inner"')
+		expect(
+			renderBrowserOutline(
+				'url',
+				'title',
+				createBrowserOutlineNodes([
+					{ role: 'RootWebArea', name: 'Shop', properties: focused },
+					{ role: 'button', name: 'Save', reference: 'e1', properties: { focused: false } },
+				]),
+				150,
+			).focus,
+		).toBeUndefined()
 	})
 })
 
