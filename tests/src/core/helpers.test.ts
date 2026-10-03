@@ -23,9 +23,9 @@ import {
 	resolveBrowserJourneyBinding,
 	composeBrowserPoint,
 	filterBrowserOutline,
-	matchBrowserOutline,
+	scanBrowserOutline,
 	collectBrowserWords,
-	matchBrowserText,
+	scanBrowserText,
 	renderBrowserMatches,
 	normalizeBrowserKey,
 	normalizeBrowserName,
@@ -92,12 +92,30 @@ describe('reading matches', () => {
 		expect(renderBrowserMatches('Matches:', ['x'.repeat(100), 'y'.repeat(100), 'last'], 48)).toBe(
 			'Matches:\nxxxxxxx…\nlast\n\n',
 		)
-		expect(renderBrowserMatches('Matches:', ['a😀tail'], 26)).toBe('Matches:\na…\n\n')
+		expect(renderBrowserMatches('Matches:', ['a😀tail'], 28)).toBe('Matches:\na…\n\n')
 		expect(renderBrowserMatches('Matches:', ['short', 'x'.repeat(100), 'last'], 48)).toBe(
 			'Matches:\nshort\nlast\n\n',
 		)
 		expect(renderBrowserMatches('Matches:', [], 100)).toBe('')
 		expect(renderBrowserMatches('Matches:', ['row'], 10)).toBe('')
+	})
+	it('preserves the first offset or reference when a later row nearly fills the room', () => {
+		expect(renderBrowserMatches('Matches:', [`[120] ${'x'.repeat(100)}`, 'y'.repeat(11)], 48)).toBe(
+			`Matches:\n[120] ${'x'.repeat(6)}…\n\n`,
+		)
+		expect(renderBrowserMatches('Matches:', [`[812] ${'x'.repeat(100)}`, 'y'.repeat(6)], 48)).toBe(
+			`Matches:\n[812] ${'x'.repeat(6)}…\n\n`,
+		)
+		expect(renderBrowserMatches('Matches:', [`e12 ${'x'.repeat(100)}`, 'y'.repeat(8)], 48)).toBe(
+			`Matches:\ne12 ${'x'.repeat(8)}…\n\n`,
+		)
+		expect(renderBrowserMatches('Matches:', [`[120] ${'x'.repeat(100)}`, 'y'.repeat(5)], 48)).toBe(
+			'Matches:\n[120] …\nyyyyy\n\n',
+		)
+	})
+	it('omits a block with no room for a character before the ellipsis', () => {
+		expect(renderBrowserMatches('Matches:', ['row'], 24)).toBe('')
+		expect(renderBrowserMatches('Matches:', ['😀tail'], 26)).toBe('')
 	})
 	it('collects distinct whole Unicode words and digits of at least three characters', () => {
 		expect([...collectBrowserWords('Cart CART cartwheel a to 12 123 café 中文字')]).toEqual([
@@ -109,13 +127,13 @@ describe('reading matches', () => {
 		])
 	})
 	it('keeps only the top-scoring lines and preserves duplicate offsets', () => {
-		expect(matchBrowserText('cart\nBlue cart\ncartwheel\r\nBlue cart', 'BLUE cart blue')).toEqual([
+		expect(scanBrowserText('cart\nBlue cart\ncartwheel\r\nBlue cart', 'BLUE cart blue')).toEqual([
 			{ offset: 5, text: 'Blue cart' },
 			{ offset: 26, text: 'Blue cart' },
 		])
-		expect(matchBrowserText('cart', 'a to 12')).toEqual([])
-		expect(matchBrowserText('cartwheel', 'cart')).toEqual([])
-		expect(matchBrowserText('', 'cart')).toEqual([])
+		expect(scanBrowserText('cart', 'a to 12')).toEqual([])
+		expect(scanBrowserText('cartwheel', 'cart')).toEqual([])
+		expect(scanBrowserText('', 'cart')).toEqual([])
 	})
 })
 
@@ -316,18 +334,15 @@ describe('outline search and focus helpers', () => {
 
 	it('ranks the row that shares the most whole search words above rows that share fewer', () => {
 		expect(
-			matchBrowserOutline(dialog, 'archive dialog button').map((node) => node.reference),
+			scanBrowserOutline(dialog, 'archive dialog button').map((node) => node.reference),
 		).toEqual(['e2'])
 		expect(
-			matchBrowserOutline(dialog, 'the Tracking number textbox').map((node) => node.reference),
+			scanBrowserOutline(dialog, 'the Tracking number textbox').map((node) => node.reference),
 		).toEqual(['e4'])
 	})
 
 	it('keeps tied rows in document order', () => {
-		expect(matchBrowserOutline(dialog, 'BUTTON').map((node) => node.reference)).toEqual([
-			'e1',
-			'e2',
-		])
+		expect(scanBrowserOutline(dialog, 'BUTTON').map((node) => node.reference)).toEqual(['e1', 'e2'])
 	})
 
 	it('counts distinct search words and preserves non-ASCII whole words', () => {
@@ -338,27 +353,27 @@ describe('outline search and focus helpers', () => {
 			{ role: 'button', name: 'Zurich', reference: 'e4' },
 			{ role: 'button', name: '日本語', reference: 'e5' },
 		])
-		expect(matchBrowserOutline(nodes, 'cart cart checkout').map((node) => node.reference)).toEqual([
+		expect(scanBrowserOutline(nodes, 'cart cart checkout').map((node) => node.reference)).toEqual([
 			'e1',
 			'e2',
 		])
-		expect(matchBrowserOutline(nodes, 'zurück').map((node) => node.reference)).toEqual(['e3'])
-		expect(matchBrowserOutline(nodes, '日本語').map((node) => node.reference)).toEqual(['e5'])
+		expect(scanBrowserOutline(nodes, 'zurück').map((node) => node.reference)).toEqual(['e3'])
+		expect(scanBrowserOutline(nodes, '日本語').map((node) => node.reference)).toEqual(['e5'])
 	})
 
 	it('ignores words under 3 characters and never matches a word inside another word', () => {
-		expect(matchBrowserOutline(dialog, 'go to cart').map((node) => node.reference)).toEqual(['e7'])
-		expect(matchBrowserOutline(dialog, 'the')).toEqual([])
-		expect(matchBrowserOutline(dialog, 'arch')).toEqual([])
+		expect(scanBrowserOutline(dialog, 'go to cart').map((node) => node.reference)).toEqual(['e7'])
+		expect(scanBrowserOutline(dialog, 'the')).toEqual([])
+		expect(scanBrowserOutline(dialog, 'arch')).toEqual([])
 	})
 
 	it('returns nothing for an empty or wordless search', () => {
-		expect(matchBrowserOutline(dialog, '')).toEqual([])
-		expect(matchBrowserOutline(dialog, 'a to - !')).toEqual([])
+		expect(scanBrowserOutline(dialog, '')).toEqual([])
+		expect(scanBrowserOutline(dialog, 'a to - !')).toEqual([])
 	})
 
 	it('never matches an ignored node, a heading, or a text row', () => {
-		expect(matchBrowserOutline(dialog, 'dialog')).toEqual([])
+		expect(scanBrowserOutline(dialog, 'dialog')).toEqual([])
 	})
 
 	it('renders a row with its reference, role, quoted name, and states in order', () => {

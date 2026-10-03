@@ -218,7 +218,7 @@ export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
  *
  * @example
  * ```ts
- * import { matchBrowserOutline } from '@orkestrel/browser'
+ * import { scanBrowserOutline } from '@orkestrel/browser'
  *
  * const node = {
  * 	parent: undefined,
@@ -235,10 +235,10 @@ export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
  * 	{ ...node, id: '1', role: 'button', name: 'Close', reference: 'e1' },
  * 	{ ...node, id: '2', role: 'button', name: 'Archive', reference: 'e2' },
  * ]
- * matchBrowserOutline(nodes, 'archive dialog button').map((match) => match.reference) // ['e2']
+ * scanBrowserOutline(nodes, 'archive dialog button').map((match) => match.reference) // ['e2']
  * ```
  */
-export function matchBrowserOutline(
+export function scanBrowserOutline(
 	nodes: readonly BrowserOutlineNode[],
 	search: string,
 ): readonly BrowserOutlineNode[] {
@@ -293,11 +293,11 @@ export function collectBrowserWords(text: string): ReadonlySet<string> {
  *
  * @example
  * ```ts
- * import { matchBrowserText } from '@orkestrel/browser'
- * matchBrowserText('Cart\nBlue kettle', 'kettle') // [{ offset: 5, text: 'Blue kettle' }]
+ * import { scanBrowserText } from '@orkestrel/browser'
+ * scanBrowserText('Cart\nBlue kettle', 'kettle') // [{ offset: 5, text: 'Blue kettle' }]
  * ```
  */
-export function matchBrowserText(text: string, search: string): readonly BrowserReadMatch[] {
+export function scanBrowserText(text: string, search: string): readonly BrowserReadMatch[] {
 	const words = collectBrowserWords(search)
 	if (words.size === 0) return []
 	let best = 0
@@ -318,8 +318,9 @@ export function matchBrowserText(text: string, search: string): readonly Browser
  *
  * @remarks
  * An oversized first row is cut with an ellipsis without splitting a surrogate pair, reserving
- * room for the first later row that can fit beside it. Later rows that do not fit are skipped.
- * An empty collection or a heading without room for a row produces no block.
+ * room for the first later row that can fit beside it only when the cut keeps the leading token
+ * through its first space. Otherwise it cuts without reserving. Later rows that do not fit are
+ * skipped. An empty collection or a cut with no character before the ellipsis produces no block.
  *
  * @param heading - The match count and search, ending with a colon
  * @param rows - Matching rows in document order
@@ -347,9 +348,11 @@ export function renderBrowserMatches(
 			if (count > 0) continue
 			let end = space - 1
 			const later = rows.slice(1).find((candidate) => candidate.length + 2 <= space)
-			if (later !== undefined) end -= later.length + 1
+			if (later !== undefined && end - later.length - 1 >= row.indexOf(' ') + 1)
+				end -= later.length + 1
 			const last = row.charCodeAt(end - 1)
 			if (last >= 0xd800 && last <= 0xdbff) end -= 1
+			if (end < 1) break
 			text += `${row.slice(0, end)}…\n`
 		} else text += `${row}\n`
 		count += 1
@@ -363,7 +366,7 @@ export function renderBrowserMatches(
  * @remarks
  * Each referenced row renders through `renderBrowserOutlineRow`, and the closing
  * `(COUNT of TOTAL elements)` line counts the rows included and available. `matches` holds the
- * rows `matchBrowserOutline` returns for `search`, and `focus` the last referenced row whose node
+ * rows `scanBrowserOutline` returns for `search`, and `focus` the last referenced row whose node
  * carries a `focused` property of `true`; both reach past `limit`.
  *
  * @param url - Document address
@@ -451,7 +454,7 @@ export function renderBrowserOutline(
 		count,
 		total,
 		matches:
-			search === undefined ? [] : matchBrowserOutline(nodes, search).map(renderBrowserOutlineRow),
+			search === undefined ? [] : scanBrowserOutline(nodes, search).map(renderBrowserOutlineRow),
 		focus: focus === undefined ? undefined : renderBrowserOutlineRow(focus),
 	}
 }

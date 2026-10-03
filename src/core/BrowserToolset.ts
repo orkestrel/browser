@@ -84,7 +84,7 @@ import {
 	boundBrowserText,
 	deriveBrowserToolSchema,
 	extractBrowserSlice,
-	matchBrowserText,
+	scanBrowserText,
 	renderBrowserMatches,
 	normalizeBrowserKey,
 	readBrowserToolString,
@@ -716,7 +716,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			this.#cursor.elements.outline({
 				signal: context.signal,
 				limit: Number.MAX_SAFE_INTEGER,
-				...(search === undefined ? {} : { search }),
+				search,
 			}),
 			'',
 		)
@@ -773,7 +773,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const note = this.#drainNote()
 		const room = this.#limit - note.length
 		const search = isString(args['search']) ? args['search'] : ''
-		const matches = start === 0 ? matchBrowserText(whole.text, search) : []
+		const matches = start === 0 ? scanBrowserText(whole.text, search) : []
 		const count = matches.length
 		const block = renderBrowserMatches(
 			`${count} ${count === 1 ? 'line matches' : 'lines match'} ${JSON.stringify(search)}:`,
@@ -1189,7 +1189,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			)
 			.join('\n')
 		const search = isString(args['search']) ? args['search'] : ''
-		const matches = matchBrowserText(text, search)
+		const matches = scanBrowserText(text, search)
 		const count = matches.length
 		const note = this.#drainNote()
 		const block = renderBrowserMatches(

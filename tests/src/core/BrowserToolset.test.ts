@@ -84,6 +84,26 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it('strips synthetic purpose before calling a parameterless page tool', async () => {
+		const inputs = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
+		const source: BrowserToolSourceInterface = {
+			emitter: new Emitter<BrowserToolSourceEventMap>(),
+			adopt: async () => [
+				createTool({ name: 'checkout', execute: (args) => inputs.handler(args) }),
+			],
+		}
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { source })
+		try {
+			await toolset.start()
+			const tool = requireValue(toolset.tools.tool('checkout'))
+			const context = { signal: new AbortController().signal }
+			expect(tool.parameters?.['required']).toEqual(['purpose'])
+			await tool.execute({ purpose: 'place the order' }, context)
+			expect(inputs.calls).toEqual([[{}]])
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	it.each(['read', 'plain'])(
 		'reading search on %s jumps beyond 4000 and pages its projection',
 		async (name) => {
@@ -881,7 +901,8 @@ describe('BrowserToolset', () => {
 					'secret',
 				),
 			}
-			// Reading change: full 6,023 → 6,559; journey 3,067 → 3,090 UTF-16 code units.
+			// The measured full copy is 6,559 UTF-16 code units; 6,600 is the smallest multiple of 50
+			// that holds it. The journey copy measures 3,090, giving the same bound rule 3,100.
 			// Include the secret property's name and schema without charging for the rest of type.
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')

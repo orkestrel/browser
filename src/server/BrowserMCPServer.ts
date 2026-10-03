@@ -33,9 +33,9 @@ import {
  * the Model Context Protocol on stdio, and launches Chromium on the first tool call.
  *
  * @remarks
- * The server's own manager holds one dispatcher per name of the vocabulary — `look`, `read`,
+ * The server's own manager holds one dispatcher per name of the vocabulary — `look`, `read`, `plain`,
  * `click`, `type`, `press`, `navigate`, `wait`, `dialog`, `tabs`, `switch`, `record`, `save`,
- * `journeys`, `edit`, and `replay` — each carrying the description, parameters, and annotations
+ * `journeys`, `edit`, `replay`, and `forget` — each carrying the description, parameters, and annotations
  * `BROWSER_TOOL_COPY` gives, so `tools/list` answers before Chromium starts and with Chromium
  * absent. After the launch, a tool the toolset's manager adds under another name, such as a page
  * tool it adopts, is mirrored as a dispatcher with that tool's definition, and the mirror is

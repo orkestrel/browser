@@ -2935,8 +2935,8 @@ export interface BrowserTab extends BrowserJourneyTab {
  * - `emitter` — emits `adopt`, `skip`, `select`, `action`, `hold`, and `release`
  * - `tools` — the manager the toolset fills, with execution through the `perform` boundary
  * - `native` — the generic tools alone, which a consumer publishes to a built-in agent: the
- *   page-backed tools, and `look`, `read`, `plain`, `click`, `type`, and `wait` for a
- *   view-backed one
+ *   `look`, `read`, `plain`, `click`, `type`, `press`, `navigate`, and `wait` for a page-backed
+ *   toolset, and `look`, `read`, `plain`, `click`, `type`, and `wait` for a view-backed one
  * - `view` — the view the tools act on
  */
 export interface BrowserToolsetInterface {

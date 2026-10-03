@@ -54,7 +54,7 @@ import { createToolManager } from '@orkestrel/tool'
 
 const toolset = createBrowserToolset(page, { tools: createToolManager() })
 await toolset.start()
-await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'the form' } })
+await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'Email' } })
 await toolset.tools.execute({ id: '2', name: 'read', arguments: { search: 'delivery' } })
 await toolset.tools.execute({ id: '3', name: 'plain', arguments: { search: 'confirmation' } })
 await toolset.destroy()

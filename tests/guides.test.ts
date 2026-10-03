@@ -127,7 +127,7 @@ await new GuideCommand({
 	})
 
 	it('executes the whole-page reading and matching fence', async () => {
-		const { createBrowserReading, collectBrowserWords, matchBrowserText, renderBrowserMatches } =
+		const { createBrowserReading, collectBrowserWords, scanBrowserText, renderBrowserMatches } =
 			await import('@src/core')
 		const reading = createBrowserReading({
 			url: 'https://example.test/',
@@ -137,7 +137,7 @@ await new GuideCommand({
 		expect(reading.text().text).toBe('Menu\nBlue kettle')
 		expect(reading.text({ distill: true }).text).toBe('Blue kettle')
 		expect([...collectBrowserWords('Blue BLUE to 12')]).toEqual(['blue'])
-		const matches = matchBrowserText(reading.text().text, 'blue kettle')
+		const matches = scanBrowserText(reading.text().text, 'blue kettle')
 		expect(matches).toEqual([{ offset: 5, text: 'Blue kettle' }])
 		expect(
 			renderBrowserMatches(
@@ -146,6 +146,46 @@ await new GuideCommand({
 				100,
 			),
 		).toBe('Matches:\n[5] Blue kettle\n\n')
+	})
+	it('shows the matching heading before the saved journey edit listing', async () => {
+		const { BrowserToolset, BrowserJourneyToolset, createMemoryBrowserJourneyStore } =
+			await import('@src/core')
+		const { createBrowserJourneyFixture, createBrowserViewDouble } = await import('./setup.js')
+		const fence = requireValue(
+			own.guide.fences().find((entry) => entry.title === 'Edit a saved journey'),
+		)
+		const shown = [
+			...(fence.code.split('await toolset.tools.execute')[1] ?? '').matchAll(/^\/\/ ?(.*)$/gm),
+		]
+			.map((line) => line[1])
+			.join('\n')
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(
+			createBrowserJourneyFixture(
+				[
+					{
+						action: 'type',
+						arguments: { text: 'Ada Lovelace', submit: true },
+						target: { role: 'textbox', name: 'Full name' },
+					},
+					{ action: 'press', arguments: { key: 'Enter' } },
+					{ action: 'wait', arguments: { text: 'Order confirmed' } },
+					{ action: 'click', arguments: {}, target: { role: 'link', name: 'Orders' } },
+				],
+				{ name: 'place-order', description: 'Order the Alpine Kettle with a name' },
+			),
+		)
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		try {
+			const tool = requireValue(toolset.tools.tool('journeys'))
+			expect(
+				await tool.execute({ search: 'place-order' }, { signal: new AbortController().signal }),
+			).toBe(shown)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
 	})
 
 	// The example half of the equality case is silent over an empty population: with no

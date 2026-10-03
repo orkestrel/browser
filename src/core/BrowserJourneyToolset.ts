@@ -28,7 +28,7 @@ import { BrowserElementError, BrowserError, isBrowserError } from './errors.js'
 import { createBrowserRecorder, createBrowserReplay } from './factories.js'
 import {
 	editBrowserJourney,
-	matchBrowserText,
+	scanBrowserText,
 	renderBrowserMatches,
 	readBrowserToolString,
 	renderBrowserJourney,
@@ -301,7 +301,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		const listing = listings.join('\n\n')
 		const start = offset < listing.length ? offset : 0
 		const search = isString(args['search']) ? args['search'] : ''
-		const matches = start === 0 ? matchBrowserText(headings.join('\n'), search) : []
+		const matches = start === 0 ? scanBrowserText(headings.join('\n'), search) : []
 		const count = matches.length
 		const block = renderBrowserMatches(
 			`${count} ${count === 1 ? 'journey matches' : 'journeys match'} ${JSON.stringify(search)}:`,
