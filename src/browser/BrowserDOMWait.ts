@@ -9,8 +9,8 @@ import { isBrowserDocument } from './helpers.js'
  * @remarks
  * The wait observes every root `roots` returns, each through a `MutationObserver` of that root's
  * realm, and re-reads the roots after every mutation batch, every capture-phase `load`, and
- * every `BROWSER_WAIT_EVENTS` event in an
- * observed root: a same-origin frame or an open shadow root that appears joins the observation,
+ * every animation frame with a `BROWSER_WAIT_EVENTS` event in an observed root: a same-origin
+ * frame or an open shadow root that appears joins the observation,
  * and a root that departed (a replaced frame document, a removed shadow root) leaves it, with its
  * observer disconnected and its listeners removed. The check runs before the wait parks and
  * again after every subscription, and no check runs once the deadline, counted from `start`, has
@@ -24,9 +24,9 @@ import { isBrowserDocument } from './helpers.js'
  * observer, listener, or further check behind.
  *
  * A shadow root attached after the wait began is a declared limit: attaching one fires no
- * mutation record and no event, so the wait discovers it at the next mutation or `load` it
- * observes, and a match inserted into it with no other observed change is not seen before the
- * deadline. The wait never polls to close that gap.
+ * mutation record and no event, so the wait discovers it at the next mutation batch, `load`,
+ * or `BROWSER_WAIT_EVENTS` event it observes, and a match inserted into it with no other
+ * observed change is not seen before the deadline. The wait never polls to close that gap.
  *
  * @example
  * ```ts
@@ -49,7 +49,10 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 	>()
 	#main: Window | undefined
 	#timer: ReturnType<typeof setTimeout> | undefined
+	#frame: number | undefined
 	readonly #recheckHandler = this.#recheck.bind(this)
+	readonly #scheduleHandler = this.#schedule.bind(this)
+	readonly #wakeHandler = this.#wake.bind(this)
 	readonly #unloadHandler = this.#unload.bind(this)
 
 	constructor(wait: BrowserMutationWait<T>) {
@@ -73,6 +76,17 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 		})
 		this.#recheck()
 		return await this.#settled.promise
+	}
+
+	// Finish events from many elements share a check while preserving the last frame's wake.
+	#schedule(): void {
+		if (this.#release.signal.aborted || this.#frame !== undefined) return
+		this.#frame = this.#main?.requestAnimationFrame(this.#wakeHandler)
+	}
+
+	#wake(): void {
+		this.#frame = undefined
+		this.#recheck()
 	}
 
 	// Subscribes to every live root and prunes departed ones, then runs the check. From here on
@@ -120,7 +134,10 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 			const release = new AbortController()
 			root.addEventListener('load', this.#recheckHandler, { capture: true, signal: release.signal })
 			for (const name of BROWSER_WAIT_EVENTS)
-				root.addEventListener(name, this.#recheckHandler, { capture: true, signal: release.signal })
+				root.addEventListener(name, this.#scheduleHandler, {
+					capture: true,
+					signal: release.signal,
+				})
 			this.#observers.set(root, { observer, release })
 			// Only the first root's window failing ends the wait; a child frame's unload is followed
 			// by its next document's `load`, which reconciles the roots.
@@ -160,6 +177,8 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 	// Releases every observer, listener, and the timer before the promise settles.
 	#stop(): void {
 		clearTimeout(this.#timer)
+		if (this.#frame !== undefined) this.#main?.cancelAnimationFrame(this.#frame)
+		this.#frame = undefined
 		this.#release.abort()
 		for (const entry of this.#observers.values()) {
 			entry.observer.disconnect()

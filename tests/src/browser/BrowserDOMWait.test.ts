@@ -5,6 +5,89 @@ import { createRecorder, requireValue, waitForDelay, waitForEvent } from '@orkes
 import { createProbeDocument, createProbeElements, loadProbeFrame } from '../../setupBrowser.js'
 
 describe('BrowserDOMWait', () => {
+	it('coalesces a burst of finish events per frame and wakes on the last event', async () => {
+		const document = createProbeDocument('<div></div>')
+		const shadow = requireValue(document.querySelector('div')).attachShadow({ mode: 'open' })
+		const checks = createRecorder<[]>()
+		let ready = false
+		const waiting = new BrowserDOMWait({
+			roots: () => [document, shadow],
+			check: () => {
+				checks.handler()
+				return ready ? 'done' : undefined
+			},
+			timeout: 1_000,
+			start: performance.now(),
+			subject: 'Finish burst',
+		})
+			.execute()
+			.catch((error: unknown) => error)
+		const initial = checks.count
+		for (let count = 0; count < 100; count += 1) {
+			document.dispatchEvent(new Event('transitionend'))
+			shadow.dispatchEvent(new Event('animationend', { composed: false }))
+		}
+		await new Promise(
+			requireValue(document.defaultView).requestAnimationFrame.bind(document.defaultView),
+		)
+		expect(checks.count - initial).toBe(1)
+		ready = true
+		shadow.dispatchEvent(new Event('animationend', { composed: false }))
+		expect(await waiting).toBe('done')
+		expect(checks.count - initial).toBe(2)
+	})
+	for (const ending of ['settle', 'abort', 'deadline']) {
+		it(`aborts every root listener signal after ${ending}`, async () => {
+			const document = createProbeDocument('<div></div>')
+			const shadow = requireValue(document.querySelector('div')).attachShadow({ mode: 'open' })
+			const listeners = createRecorder<[Node, string, AbortSignal | undefined]>()
+			for (const root of [document, shadow]) {
+				const add = root.addEventListener.bind(root)
+				Object.defineProperty(root, 'addEventListener', {
+					configurable: true,
+					value: (
+						name: string,
+						listener: EventListenerOrEventListenerObject,
+						options?: boolean | AddEventListenerOptions,
+					) => {
+						listeners.handler(root, name, typeof options === 'object' ? options.signal : undefined)
+						add(name, listener, options)
+					},
+				})
+			}
+			const controller = new AbortController()
+			let ready = false
+			const waiting = new BrowserDOMWait({
+				roots: () => [document, shadow],
+				check: () => (ready ? 'done' : undefined),
+				timeout: ending === 'deadline' ? 25 : 1_000,
+				start: performance.now(),
+				signal: controller.signal,
+				subject: 'Listener release',
+			})
+				.execute()
+				.catch((error: unknown) =>
+					isBrowserError(error) ? error.code : error instanceof Error ? error.message : error,
+				)
+			for (const root of [document, shadow]) {
+				for (const name of ['load', 'transitionend', 'animationend']) {
+					const call = requireValue(
+						listeners.calls.find((entry) => entry[0] === root && entry[1] === name),
+					)
+					expect(requireValue(call[2]).aborted).toBe(false)
+				}
+			}
+			if (ending === 'settle') {
+				ready = true
+				shadow.dispatchEvent(new Event('transitionend', { composed: false }))
+			} else if (ending === 'abort') controller.abort(new Error('stopped'))
+			const result = await waiting
+			expect(result).toBe(
+				ending === 'settle' ? 'done' : ending === 'abort' ? 'stopped' : 'BROWSER_WAIT_TIMEOUT',
+			)
+			for (const call of listeners.calls) expect(requireValue(call[2]).aborted).toBe(true)
+		})
+	}
 	for (const name of ['transitionend', 'animationend']) {
 		it(`wakes on ${name} in the document and a non-composed shadow root, and releases listeners`, async () => {
 			const document = createProbeDocument('<div></div>')

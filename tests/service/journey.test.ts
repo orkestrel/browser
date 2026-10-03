@@ -640,7 +640,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 	})
 
 	describe('claim 7: a wait that times out stops the run', () => {
-		it('item 12 records an exit check, replays it, and stops when dismissal leaves the toast', async () => {
+		it('records an exit check, replays it, and stops when dismissal leaves the toast', async () => {
 			const store = createMemoryBrowserJourneyStore()
 			const recordingPage = await context.create({ url: fixtures.url('/form') })
 			pages.push(recordingPage)

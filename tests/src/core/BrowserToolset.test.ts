@@ -85,7 +85,7 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
-	it('item 12 absent receipts, outcomes, validation, and appearance control', async () => {
+	it('reports absence receipts and outcomes, validates absence, and keeps appearance waits', async () => {
 		for (const waited of [true, false]) {
 			const view = createBrowserViewDouble({ waited })
 			const toolset = new BrowserToolset(view)
@@ -124,7 +124,7 @@ describe('BrowserToolset', () => {
 			}
 		}
 	})
-	it('item 12 passes absence through the page into the compiled predicate', async () => {
+	it('passes absence through the page into the compiled predicate', async () => {
 		const fixture = await createBrowserElementFixture({
 			evaluation: async (message) => {
 				const run = await runBrowserCompiledTimers(String(message.params?.['expression']))
@@ -146,7 +146,7 @@ describe('BrowserToolset', () => {
 			await fixture.client.close()
 		}
 	})
-	it('item 12 labels an absent wait interrupted by a dialog', async () => {
+	it('labels an absent wait interrupted by a dialog', async () => {
 		const waits: CDPSentMessage[] = []
 		const fixture = await createBrowserElementFixture({
 			evaluation: (message) => {

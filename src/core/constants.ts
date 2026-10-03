@@ -152,6 +152,18 @@ export const BROWSER_FRAME_WORLD_NAME = '__orkestrelBrowserFrame'
 /** Sets the number of animation frames whose element bounds must agree before trusted input. */
 export const BROWSER_STABLE_FRAME_COUNT = 2
 
+/**
+ * Names the finished transitions and animations that wake a parked wait.
+ *
+ * @remarks
+ * Chromium 154.0.4258.53 delivers these events in main and isolated worlds after a
+ * visibility or discrete display exit. Opacity alone leaves text in `innerText`.
+ */
+export const BROWSER_WAIT_EVENTS: readonly string[] = Object.freeze([
+	'transitionend',
+	'animationend',
+])
+
 /** Maps a canonical modifier name to its CDP Input modifier bit value. */
 export const BROWSER_KEY_MODIFIERS: Readonly<Record<string, number>> = Object.freeze({
 	Alt: 1,
@@ -950,14 +962,3 @@ export const BROWSER_JOURNEY_RECORDING_REFUSAL = 'A journey is recording; call s
 /** Holds the refusal `save` returns when no journey is recording. */
 export const BROWSER_JOURNEY_IDLE_REFUSAL =
 	'No journey is recording, so nothing can be saved; answer the user. A journey holds only the actions after record, so call record before them.'
-/**
- * Names the finished transitions and animations that wake a parked wait.
- *
- * @remarks
- * Chromium 154.0.4258.53 delivers these events in main and isolated worlds after a
- * visibility or discrete display exit. Opacity alone leaves text in `innerText`.
- */
-export const BROWSER_WAIT_EVENTS: readonly string[] = Object.freeze([
-	'transitionend',
-	'animationend',
-])

@@ -41,7 +41,7 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
-	it('item 12 adds and lists an absent wait and refuses malformed absence', async () => {
+	it('adds and lists an absent wait and refuses malformed absence', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		await store.set(createBrowserJourneyFixture())
 		const toolset = new BrowserToolset(createBrowserViewDouble())

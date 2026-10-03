@@ -1726,7 +1726,7 @@ A page constructed through a context, which passes it a reference allocator, hol
 
 ```ts
 await page.navigate('https://example.com', { condition: 'idle' })
-await page.wait('Welcome', { timeout: 5_000 }) // visible text, parked on a MutationObserver
+await page.wait('Welcome', { timeout: 5_000 }) // wakes on mutations, transitionend, and animationend
 const reading = await page.read()
 await page.reload()
 await page.back()
@@ -2872,14 +2872,14 @@ The following fence reads and waits on a child document.
 ```ts
 const view = createBrowserDOMView({ document: frame.contentDocument })
 log(await view.title())
-await view.wait('Saved', { timeout: 2_000 }) // a MutationObserver, never a poll
+await view.wait('Saved', { timeout: 2_000 }) // wakes on mutations, load, transitionend, and animationend
 const reading = await view.read()
 view.destroy()
 ```
 
 #### `BrowserDOMWaitInterface`
 
-One wait parked on mutations and finished transitions and animations across a document, its open shadow roots, and its same-origin frame documents. It checks at once, re-checks after each mutation batch, each `load`, and each `BROWSER_WAIT_EVENTS` event in an observed root, and settles at its deadline with `BROWSER_WAIT_TIMEOUT`, on a `pagehide` with `GONE`, or on abort with the signal's reason. `roots` is a Surface data member. A text wait with `absent` that a navigation ends settles `done` in the CDP placement and fails with `GONE` in this one. The CDP document listener doesn’t observe mutations or non-composed transition and animation events inside shadow roots; the DOM placement listens on each observed root.
+One wait parked on mutations and finished transitions and animations across a document, its open shadow roots, and its same-origin frame documents. It checks at once, re-checks after each mutation batch, each `load`, and each animation frame with a `BROWSER_WAIT_EVENTS` event in an observed root, and settles at its deadline with `BROWSER_WAIT_TIMEOUT`, on a `pagehide` with `GONE`, or on abort with the signal's reason. `roots` is a Surface data member. A text wait with `absent` that a navigation ends settles `done` in the CDP placement and fails with `GONE` in this one. The CDP document listener doesn’t observe mutations or non-composed transition and animation events inside shadow roots; the DOM placement listens on each observed root.
 
 | Method    | Returns      | Summary                                                                                                                                  |
 | --------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------- |
@@ -2929,9 +2929,9 @@ A page-backed toolset advertises `look`, `read`, `plain`, `click`, `type`, `pres
 
 A call to one of the preceding tools that carries a parameter the tool does not advertise is refused before the tool's handler runs, with a `BrowserError` coded `BROWSER_TOOLSET_ARGUMENT` whose message is the receipt: `The look tool takes no ref parameter; call look with search and offset.` `validateBrowserToolArguments` performs that check; a page tool's arguments are the page's to check.
 
-A text `wait` reads the main document body’s `innerText`; child-frame text doesn’t count. With `absent: true`, removal, `display: none`, and hidden visibility satisfy the wait. Opacity 0, off-screen positioning, and `aria-hidden` don’t remove text from this reading. In Chromium 154.0.4258.53, a closed `details` body and `hidden="until-found"` text are absent; opening the `details` includes its body. Finished transitions and animations wake both wait engines, including element waits, without a polling timer.
+A text `wait` reads the main document body’s `innerText`; child-frame and shadow-root-owned text don’t count. Offscreen `content-visibility: auto` text is absent from this reading while `read` keeps it; `look` can list shadow-root-owned text that never counts here. With `absent: true`, removal, `display: none`, and hidden visibility satisfy the wait. Opacity 0, off-screen positioning, and `aria-hidden` don’t remove text from this reading. In Chromium 154.0.4258.53, a closed `details` body and `hidden="until-found"` text are absent; opening the `details` includes its body. Finished transitions and animations wake both wait engines, including element waits, without a polling timer.
 
-An absent wait succeeds at its first check if the text was never present. Record an appearance wait before dismissal to prove the text was there. A misspelled string or an outline token such as `expanded=true` can otherwise pass without checking the intended exit. A timeout isn’t recorded, and replay and a generated module stop at it.
+An absent wait succeeds at its first check if the text was never present. Record an appearance wait before dismissal to prove the text was there. A misspelled string, an outline token such as `expanded=true`, offscreen `content-visibility: auto` text shown by `read`, or shadow-root-owned text shown by `look` can otherwise pass at once without checking the intended exit. A timeout isn’t recorded, and replay and a generated module stop at it.
 
 ### Receipts
 

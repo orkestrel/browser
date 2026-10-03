@@ -464,7 +464,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				}
 				if (
 					!isError(error) ||
-					!/execution context was destroyed|cannot find context with specified id/i.test(
+					!/execution context was destroyed|cannot find context with specified id|inspected target navigated or closed/i.test(
 						error.message,
 					)
 				)

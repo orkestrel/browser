@@ -14,9 +14,54 @@ import {
 	findProbeElement,
 	loadProbeFrame,
 } from '../../setupBrowser.js'
-import { RENDERED_PAGE, WAIT_EXIT_HTML } from '../../setup.js'
+import { RENDERED_PAGE, WAIT_DETAILS_HTML, WAIT_EXIT_HTML, WAIT_TEXT_CASES } from '../../setup.js'
 
 describe('BrowserDOMView', () => {
+	for (const scenario of WAIT_TEXT_CASES) {
+		it(`reads ${scenario.name} in an absent text wait`, async () => {
+			const document = createProbeDocument(scenario.html)
+			const view = createBrowserDOMView({ document })
+			try {
+				const waiting = view.wait('Wait subject', {
+					absent: true,
+					timeout: scenario.absent ? 0 : 25,
+				})
+				const result = await waiting.catch((error: unknown) =>
+					isBrowserError(error) ? error.code : error,
+				)
+				expect(result).toBe(scenario.absent ? undefined : 'BROWSER_WAIT_TIMEOUT')
+			} finally {
+				view.destroy()
+			}
+		})
+	}
+	it('opening details makes an absent text wait time out', async () => {
+		const document = createProbeDocument(WAIT_DETAILS_HTML)
+		const view = createBrowserDOMView({ document })
+		try {
+			requireValue(document.querySelector('details')).open = true
+			await expect(view.wait('Wait subject', { absent: true, timeout: 25 })).rejects.toMatchObject({
+				code: 'BROWSER_WAIT_TIMEOUT',
+			})
+		} finally {
+			view.destroy()
+		}
+	})
+	it('navigation rejects a pending absent text wait with GONE', async () => {
+		const document = createProbeDocument('<p>Wait subject</p>')
+		const view = createBrowserDOMView({ document })
+		try {
+			await view.wait('Wait subject', { timeout: 0 })
+			const waiting = view
+				.wait('Wait subject', { absent: true, timeout: 1_000 })
+				.catch((error: unknown) => error)
+			const frame = requireValue(document.defaultView?.frameElement)
+			frame.setAttribute('srcdoc', '<p>Destination</p>')
+			expect(await waiting).toMatchObject({ context: { reason: 'GONE' } })
+		} finally {
+			view.destroy()
+		}
+	})
 	it('waits for removal and hiding, accepts initial absence, and times out when text stays', async () => {
 		const document = createProbeDocument('<p>Saved</p>')
 		const view = createBrowserDOMView({ document })
@@ -44,7 +89,7 @@ describe('BrowserDOMView', () => {
 			view.destroy()
 		}
 	})
-	it('item 12 P1 waits for a delayed visibility exit and an immediate control', async () => {
+	it('waits for a delayed visibility exit and an immediate removal', async () => {
 		const document = createProbeDocument(WAIT_EXIT_HTML)
 		const view = createBrowserDOMView({ document })
 		try {

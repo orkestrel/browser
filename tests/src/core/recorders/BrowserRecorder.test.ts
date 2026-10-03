@@ -21,7 +21,7 @@ import {
 } from '../../../setup.js'
 
 describe('BrowserRecorder', () => {
-	it('item 12 keeps done absence arguments and drops a timed out absence wait', async () => {
+	it('keeps done absence arguments and drops a timed out absence wait', async () => {
 		for (const waited of [true, false]) {
 			const toolset = new BrowserToolset(createBrowserViewDouble({ waited }))
 			const recorder = new BrowserRecorder(toolset)

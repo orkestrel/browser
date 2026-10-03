@@ -59,7 +59,7 @@ import {
 	SERVICE_BROWSER_ARGS,
 	SERVICE_REGISTRY_ARGS,
 } from '../setupService.js'
-import { WAIT_EXIT_HTML } from '../setup.js'
+import { WAIT_DETAILS_HTML, WAIT_EXIT_HTML, WAIT_TEXT_CASES } from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 const REAL_BROWSER_ARGS = [...SERVICE_BROWSER_ARGS]
@@ -937,7 +937,47 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(performance.now() - started).toBeGreaterThanOrEqual(1_000 - 2)
 	})
 
-	it('item 12 P1 waits for a delayed visibility exit and an immediate control', async () => {
+	for (const scenario of WAIT_TEXT_CASES) {
+		it(`reads ${scenario.name} in an absent text wait`, async () => {
+			const page = await browser.create({ url: fixtures.url('/late') })
+			opened.push(page)
+			await page.evaluate(`document.body.innerHTML = ${JSON.stringify(scenario.html)}`)
+			await page.wait('')
+			const waiting = page.wait('Wait subject', {
+				absent: true,
+				timeout: scenario.absent ? 0 : 100,
+			})
+			const result = await waiting.catch((error: unknown) =>
+				isBrowserError(error) ? error.code : error,
+			)
+			expect(result).toBe(scenario.absent ? undefined : 'BROWSER_WAIT_TIMEOUT')
+		})
+	}
+	it('opening details makes an absent text wait time out', async () => {
+		const page = await browser.create({ url: fixtures.url('/late') })
+		opened.push(page)
+		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_DETAILS_HTML)}`)
+		await page.evaluate("document.querySelector('details').open = true")
+		await expect(page.wait('Wait subject', { absent: true, timeout: 100 })).rejects.toMatchObject({
+			code: 'BROWSER_WAIT_TIMEOUT',
+		})
+	})
+	it('navigation settles a pending absent text wait', async () => {
+		const page = await browser.create({ url: fixtures.url('/late') })
+		opened.push(page)
+		await page.evaluate("document.body.innerHTML = '<p>Wait subject</p>'")
+		await page.wait('Wait subject')
+		const settled = createRecorder<[]>()
+		const waiting = page.wait('Wait subject', { absent: true, timeout: 2_000 })
+		void waiting.then(settled.handler, settled.handler)
+		await page.evaluate(
+			'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+		)
+		expect(settled.count).toBe(0)
+		await page.navigate(fixtures.url('/form'))
+		await expect(waiting).resolves.toBeUndefined()
+	})
+	it('waits for a delayed visibility exit and an immediate removal', async () => {
 		const page = await browser.create({ url: fixtures.url('/late') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
@@ -947,8 +987,8 @@ describe('Browser proofs against the fixture pages', () => {
 		)
 		const options = { absent: true, timeout: 2_000 }
 		const waiting = page.wait('Saved to drafts', options)
-		await page.evaluate("document.getElementById('toast').classList.remove('shown')")
 		const start = performance.now()
+		await page.evaluate("document.getElementById('toast').classList.remove('shown')")
 		await waiting
 		expect(performance.now() - start).toBeGreaterThanOrEqual(150)
 		expect(performance.now() - start).toBeLessThan(1_000)

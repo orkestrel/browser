@@ -168,7 +168,7 @@ describe('journey validators', () => {
 	it.each(BROWSER_JOURNEY_TEMPLATE_CASES)('accepts the $line shape', ({ step }) => {
 		expect(() => validateBrowserJourneyStep(step)).not.toThrow()
 	})
-	it('item 12 validates boolean absence and refuses a string', () => {
+	it('validates boolean absence and refuses a string', () => {
 		expect(() =>
 			validateBrowserJourneyStep({
 				id: 's1',

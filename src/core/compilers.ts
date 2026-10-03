@@ -23,11 +23,12 @@ import { isBrowserSecretBinding } from './validators.js'
 /**
  * Compiles a wait woken by mutations and finished transitions and animations, with one deadline and explicit disconnect ownership.
  * @remarks
- * Events inside a shadow root do not cross its boundary in Chromium 154.0.4258.53, so this
- * document listener cannot wake for them. Mutations inside that root are not observed either.
+ * `transitionend` and `animationend` inside a shadow root are not composed in Chromium
+ * 154.0.4258.53, so this document listener does not see them. Mutations inside that root are
+ * not observed either.
  * @param deadline - Maximum time in milliseconds
  * @param key - Isolated-world property owning this observer
- * @param predicate - Optional expression checked immediately and after each mutation batch
+ * @param predicate - Optional expression checked immediately, after each mutation batch, and on each `BROWSER_WAIT_EVENTS` event
  * @returns Promise expression resolving true on a match or change, false at the deadline
  */
 export function compileQueryWaitExpression(

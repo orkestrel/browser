@@ -54,6 +54,17 @@ import { Emitter } from '@orkestrel/emitter'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, waitForEvent } from '@orkestrel/test'
 
+/** Holds details whose body becomes readable when opened. */
+export const WAIT_DETAILS_HTML = '<details><summary>Summary</summary><p>Wait subject</p></details>'
+
+/** Holds text-wait visibility cases shared by the DOM and CDP placements. */
+export const WAIT_TEXT_CASES = Object.freeze([
+	{ name: 'closed details', html: WAIT_DETAILS_HTML, absent: true },
+	{ name: 'until-found', html: '<p hidden="until-found">Wait subject</p>', absent: true },
+	{ name: 'opacity zero', html: '<p style="opacity:0">Wait subject</p>', absent: false },
+	{ name: 'aria-hidden', html: '<p aria-hidden="true">Wait subject</p>', absent: false },
+])
+
 /** Holds an exit whose visibility changes after its last DOM mutation. */
 export const WAIT_EXIT_HTML = `<style>
 #toast{visibility:hidden;transition:visibility 0s linear 200ms}
