@@ -104,8 +104,7 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		const epoch = this.#epoch()
 		const capture = await this.#call(
 			`function() {
-		const capture = (${compileReadFunction()})()
-		capture.html = this.outerHTML
+		const capture = (${compileReadFunction()})(this)
 		return ${compileGuardedEvaluateExpression('capture', BROWSER_RESULT_LIMIT)}
 	}`,
 			options,

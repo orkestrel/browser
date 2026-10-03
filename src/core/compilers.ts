@@ -406,20 +406,245 @@ ${expression}
 }
 
 /**
- * Compiles the in-page function that reads the document's URL, title, and serialized HTML.
+ * Compiles the in-page function that reads the document's URL, title, and rendered HTML.
  *
  * @remarks
- * The declaration takes no arguments and returns `{ url, title, html }` from `location.href`,
- * `document.title`, and `document.documentElement.outerHTML`, with `html` empty for a document
- * that has no root element. Call it inside {@link compileGuardedEvaluateExpression} to bound the
- * result under {@link BROWSER_RESULT_LIMIT}.
+ * The optional root defaults to `document.documentElement`. {@link BrowserReadingInput}
+ * defines its inert capture, lowering, redaction, and limits. A missing root yields empty HTML.
+ * Call it inside {@link compileGuardedEvaluateExpression} to bound the final serialized result
+ * under {@link BROWSER_RESULT_LIMIT}.
  *
  * @returns A function declaration source
  */
 export function compileReadFunction(): string {
-	return `function() {
-	const root = document.documentElement
-	return { url: location.href, title: document.title, html: root ? root.outerHTML : '' }
+	return `function(node = document.documentElement) {
+	const owner = node?.ownerDocument ?? document
+	if (!node) return { url: owner.URL, title: owner.title, html: '' }
+	const capture = { url: owner.URL, title: owner.title, html: '' }
+	const view = owner.defaultView
+	const rendered = view !== null && node.isConnected
+	const inert = owner.implementation.createHTMLDocument('')
+	let root = inert.importNode(node, true)
+	// The paired postorder walk keeps live indexes valid when a copied parent is replaced.
+	const pending = [{ live: node, twin: root, visited: false }]
+	if (rendered) {
+		for (
+			let parent = node;
+			parent?.ownerDocument === owner;
+			parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
+		) {
+			if (view.getComputedStyle(parent).display === 'none') {
+				root = undefined
+				pending.length = 0
+				break
+			}
+		}
+	}
+	while (pending.length > 0) {
+		const entry = pending.pop()
+		if (entry === undefined) continue
+		const { live, twin, visited } = entry
+		const tag = live.localName
+		const input = tag === 'input' ? (live.getAttribute('type')?.toLowerCase() ?? 'text') : ''
+		if (
+			[
+				'script',
+				'style',
+				'template',
+				'frame',
+				'frameset',
+				'iframe',
+				'object',
+				'embed',
+				'applet',
+				'noscript',
+				'meta',
+				'link',
+				'base',
+				'math',
+			].includes(tag) ||
+			(tag === 'input' && ['password', 'hidden'].includes(input))
+		) {
+			twin.remove()
+			if (twin === root) root = undefined
+			continue
+		}
+		const style = entry.style ?? (rendered ? view.getComputedStyle(live) : undefined)
+		const invisible = style?.visibility === 'hidden' || style?.visibility === 'collapse'
+		if (style?.display === 'none' || (invisible && !live.hasChildNodes())) {
+			twin.remove()
+			if (twin === root) root = undefined
+			continue
+		}
+		if (!visited) {
+			pending.push({ live, twin, style, visited: true })
+			if (rendered) {
+				twin.removeAttribute('hidden')
+				twin.removeAttribute('aria-hidden')
+			}
+			if (rendered && (live instanceof view.HTMLAnchorElement || live instanceof view.HTMLAreaElement) && live.hasAttribute('href'))
+				twin.setAttribute('href', live.href)
+			if (style?.contentVisibility === 'hidden' || ['canvas', 'video', 'audio'].includes(tag)) {
+				twin.replaceChildren()
+				continue
+			}
+			if (rendered && ['input', 'textarea', 'select', 'option', 'optgroup'].includes(tag))
+				continue
+			const summary =
+				tag === 'details' && !live.hasAttribute('open')
+					? live.querySelector(':scope > summary')
+					: undefined
+			let elementIndex = live.children.length - 1
+			for (let index = live.childNodes.length - 1; index >= 0; index -= 1) {
+				const child = live.childNodes[index]
+				const mirror = twin.childNodes[index]
+				if (child === undefined || mirror === undefined) continue
+				let omitted = rendered && summary !== undefined && child !== summary
+				if (rendered && live.shadowRoot !== null) {
+					const slot =
+						child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
+					if (slot === null) omitted = true
+					for (
+						let parent = slot;
+						parent !== null && parent !== live;
+						parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
+					) {
+						if (view.getComputedStyle(parent).display === 'none') omitted = true
+					}
+				}
+				if (omitted || (child.nodeType === 3 && invisible)) mirror.parentNode?.removeChild(mirror)
+				else if (child.nodeType === 1) {
+					// Element collections retain their type across windowless owner realms.
+					const element = live.children.item(elementIndex)
+					const counterpart = twin.children.item(elementIndex)
+					if (element !== null && counterpart !== null) pending.push({ live: element, twin: counterpart, visited: false })
+				}
+				if (child.nodeType === 1) elementIndex -= 1
+			}
+			continue
+		}
+		if (!rendered || style?.contentVisibility === 'hidden') continue
+		if (
+			['div', 'summary', 'details'].includes(tag) &&
+			!style?.display.startsWith('inline') &&
+			style?.display !== 'contents' &&
+			twin.hasChildNodes()
+		) {
+			twin.prepend(inert.createElement('br'))
+			twin.append(inert.createElement('br'))
+		}
+		let lines
+		let container = false
+		if (live instanceof view.HTMLInputElement) {
+			lines = []
+			if (['text', 'email', 'search', 'tel', 'url', 'number'].includes(live.type)) {
+				if (live.type !== 'number' || !live.validity.badInput) {
+					const placeholder = view.getComputedStyle(live, '::placeholder')
+					lines = [
+						live.value ||
+							(live.matches(':placeholder-shown') &&
+							placeholder.visibility === 'visible' &&
+							placeholder.opacity !== '0' &&
+							placeholder.color !== 'rgba(0, 0, 0, 0)'
+								? live.placeholder
+								: ''),
+					]
+				}
+			} else if (['submit', 'reset', 'button'].includes(live.type)) lines = [live.value]
+			else if (live.type === 'file' && live.files?.length === 1) lines = Array.from(live.files ?? [], (file) => file.name)
+			else if (live.type === 'image' && live.getAttribute('aria-hidden') !== 'true')
+				lines = [live.getAttribute('aria-label')?.trim() || live.alt]
+		} else if (live instanceof view.HTMLTextAreaElement) lines = live.value.split(/\\r?\\n/)
+		else if (
+			live instanceof view.HTMLSelectElement ||
+			live instanceof view.HTMLOptionElement ||
+			live instanceof view.HTMLOptGroupElement
+		) {
+			lines = []
+			const select = live instanceof view.HTMLSelectElement ? live : live.closest('select')
+			if (select !== null) {
+				if (!select.multiple && select.size <= 1) {
+					const option = select.selectedOptions[0]
+					if (option !== undefined && (live === select || live === option || live.contains(option)))
+						lines.push(option.label)
+				} else {
+					const box = select.getBoundingClientRect()
+					const top = box.top + select.clientTop
+					const bottom = top + select.clientHeight
+					const rows =
+						live === select
+							? select.querySelectorAll('option,optgroup')
+							: [live, ...live.querySelectorAll('option')]
+					for (const row of rows) {
+						const rowStyle = view.getComputedStyle(row)
+						const groupStyle =
+							row.parentElement instanceof view.HTMLOptGroupElement
+								? view.getComputedStyle(row.parentElement)
+								: undefined
+						if (
+							rowStyle.display === 'none' ||
+							rowStyle.visibility !== 'visible' ||
+							groupStyle?.display === 'none'
+						)
+							continue
+						const rect = row.getBoundingClientRect()
+						// The group box includes its options; its caption ends where the first row starts.
+						const end =
+							row instanceof view.HTMLOptGroupElement
+								? (Array.from(row.querySelectorAll('option')).find(option=>option.getClientRects().length > 0)?.getBoundingClientRect().top ?? rect.bottom)
+								: rect.bottom
+						if (
+							end > top &&
+							rect.top < bottom &&
+							rect.right > box.left + select.clientLeft &&
+							rect.left < box.left + select.clientLeft + select.clientWidth &&
+							(row instanceof view.HTMLOptionElement || row instanceof view.HTMLOptGroupElement)
+						)
+							lines.push(row.label)
+					}
+				}
+			}
+		} else if (tag === 'svg') {
+			lines = []
+			for (const text of twin.querySelectorAll('text')) {
+				if (text.textContent) lines.push(text.textContent)
+			}
+			if (!invisible && lines.length === 0 && live.getAttribute('aria-hidden') !== 'true')
+				lines.push(
+					live.getAttribute('aria-label')?.trim() ||
+						live.querySelector(':scope > title')?.textContent ||
+						'',
+				)
+		} else if (['form', 'dialog', 'button'].includes(tag)) {
+			container = true
+			if (live instanceof view.HTMLButtonElement && !invisible && live.innerText.trim() === '') {
+				const name = live.getAttribute('aria-label')?.trim()
+				if (name) {
+					lines = [name]
+					container = false
+				}
+			}
+		}
+		if (lines === undefined && !container) continue
+		if (invisible && !container && tag !== 'svg') lines = []
+		const block = !style?.display.startsWith('inline') && style?.display !== 'contents'
+		const carrier = inert.createElement(block ? 'div' : 'span')
+		if (container) carrier.append(...twin.childNodes)
+		else
+			for (const [index, line] of (lines ?? []).entries()) {
+				if (index > 0) carrier.append(inert.createElement('br'))
+				carrier.append(inert.createTextNode(line))
+			}
+		if (carrier.hasChildNodes()) {
+			carrier.prepend(inert.createElement('br'))
+			carrier.append(inert.createElement('br'))
+		}
+		twin.replaceWith(carrier)
+		if (twin === root) root = carrier
+	}
+	capture.html = root?.outerHTML ?? ''
+
+return capture
 }`
 }
 

@@ -21,8 +21,11 @@ import type { FixtureServerInterface } from '../setupServer.js'
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
 import { createBrowser } from '@src/server'
 import { createBrowserToolset } from '@src/core'
+import { compileReadFunction } from '@src/core'
+import { renderHTML } from '@orkestrel/html'
+import { chromium } from 'playwright'
 import { createToolManager } from '@orkestrel/tool'
-import { createTeardown } from '@orkestrel/test'
+import { createTeardown, requireValue, waitForDelay } from '@orkestrel/test'
 import {
 	createFixtureServer,
 	createTempDirectory,
@@ -41,7 +44,13 @@ import {
 	SERVICE_EDITABLE_HTML,
 	SERVICE_TOGGLE_HTML,
 } from '../setupService.js'
-import { BROWSER_JOURNEY_FRAME_HTML, BROWSER_JOURNEY_FRAME_JOURNEY } from '../setup.js'
+import {
+	BROWSER_JOURNEY_FRAME_HTML,
+	BROWSER_JOURNEY_FRAME_JOURNEY,
+	CAPTURE_CASES,
+	RENDERED_PAGE,
+	RENDERED_SHADOW_EXPRESSION,
+} from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 
@@ -52,6 +61,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 	const teardown = createTeardown()
 	let fixtures: FixtureServerInterface
 	let browser: BrowserInterface
+	let port: number
 
 	beforeAll(async () => {
 		requireDocumentBundle()
@@ -61,12 +71,13 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 
 		const profile = createTempDirectory('orkestrel-browser-profile-')
 		teardown.add(() => profile.destroy())
+		port = await reservePort()
 		const launched = createBrowser({
 			executable: REAL_BROWSER_EXECUTABLE,
 			headless: true,
 			profile: profile.path,
 			args: [...SERVICE_BROWSER_ARGS],
-			cdp: { port: await reservePort() },
+			cdp: { port },
 			timeout: 20_000,
 		})
 		teardown.add(() => launched.destroy())
@@ -90,6 +101,192 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 		afterEach(async () => {
 			for (const toolset of toolsets.splice(0)) await toolset.destroy().catch(() => undefined)
 			await page.close().catch(() => undefined)
+		})
+
+		it.each(CAPTURE_CASES)(
+			'captures $name through public CDP and DOM reads',
+			async ({ html, edit, text }) => {
+				await page.evaluate(
+					`(()=>{document.body.innerHTML=${JSON.stringify(html)};${edit};return true})()`,
+				)
+				const cdp = await page.read()
+				const dom = await page.evaluate(
+					`(async () => { const {createBrowserDOMView}=await import('/dist/src/browser/index.js');const view=createBrowserDOMView({document,own:true});try { const reading=await view.read();return [reading.markdown().text,reading.markdown({distill:false}).text,reading.text().text,reading.text({distill:false}).text].map(text=>text.replace(/\\s+/g,' ').trim()) } finally {view.destroy()} })()`,
+				)
+				expect(dom).toEqual([text, text, text, text])
+				for (const distill of [true, false]) {
+					expect(cdp.markdown({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(text)
+					expect(cdp.text({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(text)
+				}
+				expect(renderHTML(cdp.html.document)).not.toMatch(
+					/private-default|private-edited|hidden-payload|fakepath/,
+				)
+			},
+		)
+
+		it('captures direct roots, hidden ancestors, shadow hosts, and child frames', async () => {
+			await page.evaluate(
+				`(()=>{document.body.innerHTML=${JSON.stringify(RENDERED_PAGE)};${RENDERED_SHADOW_EXPRESSION};return true})()`,
+			)
+			for (const [css, expected] of [
+				['#region', 'Region shown'],
+				['#hidden-child', ''],
+			]) {
+				const element = requireValue((await page.elements.find({ css: requireValue(css) }))[0])
+				expect((await element.read()).text().text.trim()).toBe(expected)
+			}
+			expect(
+				await page.evaluate(
+					`(${compileReadFunction()})(document.querySelector('#hidden-host').shadowRoot.querySelector('p')).html`,
+				),
+			).toBe('')
+			await page.evaluate(
+				`(()=>{document.body.innerHTML='<p>Outside text</p><button>Inside text</button>';return true})()`,
+			)
+			expect(
+				(await requireValue((await page.elements.find({ css: 'button' }))[0]).read())
+					.text()
+					.text.trim(),
+			).toBe('Inside text')
+			await page.evaluate(
+				`new Promise(resolve=>{const frame=document.createElement('iframe');frame.onload=()=>resolve(true);frame.srcdoc='<form>Frame prose<input value="Frame value"></form>';document.body.append(frame)})`,
+			)
+			const frame = requireValue(
+				(await page.frames()).find((candidate) => candidate.parent !== undefined),
+			)
+			expect((await frame.read()).text().text.replace(/\s+/g, ' ').trim()).toBe(
+				'Frame prose Frame value',
+			)
+		})
+
+		it('keeps read tool parity as a stylesheet-hidden panel becomes shown', async () => {
+			await page.evaluate(
+				`(()=>{document.body.innerHTML='<style>.toast:not(.show){display:none}</style><p>Public prose</p><div class="toast">Toast body dismissed</div>';return true})()`,
+			)
+			const tools = createToolManager()
+			const toolset = createBrowserToolset(page, { tools })
+			toolsets.push(toolset)
+			await toolset.start()
+			for (const shown of [false, true]) {
+				await page.evaluate(`document.querySelector('.toast').classList.toggle('show',${shown})`)
+				const cdp = requireToolText(
+					await tools.execute({
+						id: 'read',
+						name: 'read',
+						arguments: { what: 'the page', offset: 0 },
+					}),
+				)
+				const dom = requireToolText(
+					await page.evaluate(
+						`documentToolset.tools.execute({id:'read',name:'read',arguments:{what:'the page',offset:0}})`,
+					),
+				)
+				expect(dom).toBe(cdp)
+				expect(cdp.includes('Toast body dismissed')).toBe(shown)
+			}
+		})
+
+		it('omits a number during an invalid edit without substituting its placeholder', async () => {
+			await page.evaluate(
+				`document.body.innerHTML='<input type="number" placeholder="Guessed number">'`,
+			)
+			const connection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+			const target = requireValue(
+				connection
+					.contexts()[0]
+					?.pages()
+					.find((candidate) => candidate.url() === page.url),
+			)
+			await target.locator('input').pressSequentially('1e')
+			expect(
+				await target
+					.locator('input')
+					.evaluate((element) => element instanceof HTMLInputElement && element.validity.badInput),
+			).toBe(true)
+			expect((await page.read()).text().text).toBe('')
+			expect(
+				await page.evaluate(
+					`(async()=>{const {readBrowserCapture}=await import('/dist/src/browser/index.js');const {createBrowserReading}=await import('/dist/src/core/index.js');return createBrowserReading(readBrowserCapture(document.documentElement)).text().text})()`,
+				),
+			).toBe('')
+		})
+
+		it('imports inertly without requests, constructors, or live writes in both worlds', async () => {
+			const connection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+			const target = requireValue(
+				connection
+					.contexts()[0]
+					?.pages()
+					.find((candidate) => candidate.url() === page.url),
+			)
+			const cdp = await target.context().newCDPSession(target)
+			try {
+				await target.evaluate("import('/dist/src/browser/index.js')")
+				await cdp.send('Network.enable')
+				await cdp.send('Network.setCacheDisabled', { cacheDisabled: true })
+				const requests: string[] = []
+				const pending = new Set<string>()
+				cdp.on('Network.requestWillBeSent', (event) => {
+					requests.push(event.request.url)
+					if (event.request.url.includes('/capture-')) pending.add(event.requestId)
+				})
+				cdp.on('Network.loadingFinished', (event) => pending.delete(event.requestId))
+				cdp.on('Network.loadingFailed', (event) => pending.delete(event.requestId))
+				await target.evaluate(
+					`window.captureCount=0;customElements.define('capture-card',class extends HTMLElement{constructor(){super();window.captureCount++}})`,
+				)
+				const tree = await cdp.send('Page.getFrameTree')
+				const world = await cdp.send('Page.createIsolatedWorld', {
+					frameId: tree.frameTree.frame.id,
+					worldName: 'capture-proof',
+				})
+				for (const contextId of [undefined, world.executionContextId]) {
+					requests.length = 0
+					await target.evaluate(
+						`document.body.innerHTML='<img src="/capture-image"><img srcset="/capture-srcset 1x"><picture><source srcset="/capture-picture 1x"><img></picture><video src="/capture-video" poster="/capture-poster"></video><audio src="/capture-audio"></audio><input type="image" src="/capture-input"><object data="/capture-object"></object><link rel="preload" as="image" href="/capture-preload"><capture-card></capture-card>'.replaceAll('/capture-','/capture-${contextId ?? 'main'}-');window.captureMutations=0;window.captureObserver=new MutationObserver(records=>window.captureMutations+=records.length);captureObserver.observe(document,{subtree:true,childList:true,attributes:true,characterData:true})`,
+					)
+					await expect
+						.poll(() => requests.filter((url) => url.includes('/capture-')).length)
+						.toBeGreaterThanOrEqual(9)
+					await expect.poll(() => pending.size).toBe(0)
+					await target.evaluate('captureMutations=0;captureObserver.takeRecords()')
+					requests.length = 0
+					const before = await target.evaluate(
+						'({count:captureCount,html:document.documentElement.outerHTML})',
+					)
+					const expression =
+						contextId === undefined
+							? `(async()=>{const {readBrowserCapture}=await import('/dist/src/browser/index.js');return readBrowserCapture(document.documentElement).html.length})()`
+							: `(${compileReadFunction()})().html.length`
+					const capture = await cdp.send('Runtime.evaluate', {
+						expression,
+						awaitPromise: true,
+						returnByValue: true,
+						...(contextId === undefined ? {} : { contextId }),
+					})
+					expect(capture.exceptionDetails).toBeUndefined()
+					await waitForDelay(100)
+					expect(requests.filter((url) => url.includes('/capture-'))).toEqual([])
+					expect(
+						await target.evaluate('({count:captureCount,html:document.documentElement.outerHTML})'),
+					).toEqual(before)
+					expect(
+						await target.evaluate('captureMutations+captureObserver.takeRecords().length'),
+					).toBe(0)
+					await cdp.send('Runtime.evaluate', {
+						expression: 'document.documentElement.cloneNode(true)',
+						...(contextId === undefined ? {} : { contextId }),
+					})
+					await expect
+						.poll(() => requests.filter((url) => url.includes('/capture-')).length)
+						.toBeGreaterThan(0)
+					expect(
+						await target.evaluate('({count:captureCount,html:document.documentElement.outerHTML})'),
+					).not.toEqual(before)
+				}
+			} finally {
+				await cdp.detach()
+			}
 		})
 
 		it('lists the same interactive (role, name) set in the DOM look as the CDP outline of the same page', async () => {

@@ -2295,6 +2295,33 @@ export type BrowserEpochFunction = () => number
  *   `navigation` returns at construction
  * - `navigation` — reads the source's navigation epoch at the moment of the call; a reading
  *   built without it never reports stale
+ *
+ * A view, frame, or element captures rendered markup by importing its root into an HTML
+ * document without a window, so that nothing in the copy loads or runs, and pruning the copy
+ * against the live document's computed styles. The live document is never written.
+ * - A root or flat-tree ancestor in its own document with `display: none` yields empty HTML.
+ * - Descendants with `display: none` are removed.
+ * - Text under `visibility: hidden` or `collapse`, and invisible elements without children,
+ *   are removed; visible descendants of invisible elements remain.
+ * - A child node of an element with an open shadow root is removed when no slot takes it or
+ *   when its slot sits under an element whose computed `display` is `none`.
+ * - Closed `details` keeps only its first `summary` child. Elements with `content-visibility:
+ *   hidden`, and `canvas`, `video`, and `audio` elements, lose their child nodes.
+ * Forms, rendered dialogs, and buttons become neutral carriers. Text fields and textareas
+ * carry live values; empty text fields carry visible placeholders. Selects carry the selected
+ * label, or displayed option and group labels in a listbox's client area. Named graphics carry
+ * one explicit alternative; printed button text takes precedence over its accessible name.
+ * Links carry resolved live addresses. Region elements remain available to distillation.
+ * Password and hidden inputs are removed entirely, including in the data-only fallback for
+ * detached roots and documents without a window. Active floor elements are dropped.
+ * Checkbox, radio, range, and color values aren't printed text. Native control captions,
+ * localized dates, invalid or intermediate number edits, and MathML are omitted rather than
+ * guessed. A file input carries its sole filename; native multiple-file summaries are omitted.
+ * Valid committed numbers carry their live value.
+ * Opacity, clipping outside listboxes, size, position, and `content-visibility: auto` remove
+ * nothing. Shadow-root text, generated content, text transformations, localized number
+ * formatting, textarea clipping, and significant spaces are outside the capture's fidelity.
+ * Caller-supplied HTML is parsed as given; projection options and their safety floors apply.
  */
 export interface BrowserReadingInput {
 	readonly url: string
@@ -2311,7 +2338,8 @@ export interface BrowserReadingInput {
  * @remarks
  * - `url` — the document URL at capture
  * - `title` — the document title at capture
- * - `html` — the parsed document handle every projection reads
+ * - `html` — the parsed captured and normalized document handle every projection reads;
+ *   caller-supplied HTML remains as supplied
  * - `stale` — true when the source frame has navigated or detached since the capture; false
  *   otherwise
  *
@@ -2534,8 +2562,9 @@ export interface BrowserElementInterface {
 	/** Moves focus to the element. */
 	focus(options?: BrowserCallOptions): Promise<void>
 	/**
-	 * Captures the element's markup with its document's URL and title as a reading whose `stale` flag
-	 * tracks later navigations of that document.
+	 * Captures the element's rendered markup with its document's URL and title as a reading whose
+	 * `stale` flag tracks later navigations of that document; {@link BrowserReadingInput} defines
+	 * the rendered markup.
 	 */
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
 	/**
@@ -2629,8 +2658,8 @@ export interface BrowserViewInterface<E extends BrowserElementInterface = Browse
 	/** Resolves the document title. */
 	title(options?: BrowserCallOptions): Promise<string>
 	/**
-	 * Captures the document URL, title, and markup as a reading whose `stale` flag tracks later
-	 * navigations.
+	 * Captures the document URL, title, and rendered markup as a reading whose `stale` flag tracks
+	 * later navigations; {@link BrowserReadingInput} defines the rendered markup.
 	 */
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
 	/**
@@ -3047,11 +3076,11 @@ export interface BrowserFrameInterface {
 	/** Resolves the frame document title. */
 	title(options?: BrowserCallOptions): Promise<string>
 	/**
-	 * Captures the document URL, title, and HTML in one size-guarded evaluation in the frame's
+	 * Captures the document URL, title, and rendered HTML in one size-guarded evaluation in the frame's
 	 * isolated world and returns them as a reading whose `stale` flag tracks later navigations.
 	 * A frame constructed without an epoch source (a standalone `BrowserFrame` with no `epoch`
 	 * argument) returns readings whose `stale` stays `false`, because no navigation counter is
-	 * available to it.
+	 * available to it. {@link BrowserReadingInput} defines the rendered markup.
 	 */
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
 	/** Evaluates an expression in the frame execution world under the result-size guard. */

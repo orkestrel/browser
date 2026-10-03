@@ -42,6 +42,7 @@ import {
 	BrowserToolset,
 	MemoryBrowserRunStore,
 	compileSubmitObserverExpression,
+	compileReadFunction,
 	compileSubmitReadExpression,
 	createBrowserReading,
 	createCDPClient,
@@ -51,6 +52,130 @@ import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, waitForEvent } from '@orkestrel/test'
+
+/** Holds stylesheet-hidden panels and the rendered capture's layout controls. */
+export const RENDERED_PAGE = `<!doctype html><html><head><title>Rendered reading</title><style>
+.toast:not(.show),.tab-pane,.carousel-item,.hidden-host{display:none}
+.offcanvas{visibility:hidden}.revealed{visibility:visible}.transparent{opacity:0}
+.contents{display:contents}.skipped{content-visibility:hidden}
+</style></head><body><main><p>Order summary shown</p>
+<div class="toast">Toast body dismissed</div><div class="tab-pane"><p id="hidden-child">Notes pane inactive</p></div>
+<div class="offcanvas">Offcanvas title closed<span class="revealed">Visible inside hidden</span><img src="/pixel.png" alt="Hidden image alt"></div>
+<img src="/pixel.png" alt="Shown image alt"><div class="carousel-item">Slide caption inactive</div>
+<dialog>Closed dialog text</dialog><p class="transparent">Transparent text kept</p><div class="contents">Contents wrapper kept</div>
+<select><option>Option label kept</option></select>
+<details><summary>Summary label</summary>Closed details body<summary>Second summary hidden</summary></details>
+<details open><summary>Open label</summary>Open details body</details>
+<div class="skipped">Skipped contents</div><div>Skipped contents twin</div>
+<canvas>Canvas fallback</canvas><video>Video fallback</video><audio controls>Audio fallback</audio><iframe>Iframe fallback</iframe>
+<section id="region" aria-label="Region"><p>Region shown</p><p style="display:none">Region hidden</p></section>
+<div id="shadow"><span slot="shown">Slotted shown</span><span slot="hidden">Slotted hidden</span><span>Unslotted element</span>Unslotted text</div>
+<div id="hidden-host" class="hidden-host"></div>
+</main></body></html>`
+
+/** Declares visible prose independently of the capture implementation. */
+export const RENDERED_TEXT =
+	'Order summary shown Visible inside hidden Transparent text kept Contents wrapper kept Option label kept Summary label Open label Open details body Skipped contents twin Region shown Slotted shown'
+
+/** Declares the floor fixture's printed text and explicit graphic alternatives. */
+export const CAPTURE_CASES = Object.freeze([
+	{
+		name: 'form',
+		html: '<form action="/submit"><p>Form prose</p><label>Name <input value="Old name"></label></form>',
+		edit: 'document.querySelector("input").value="Typed name"',
+		text: 'Form prose Name Typed name',
+	},
+	{
+		name: 'dialog',
+		html: '<dialog open style="position:static">Open notice</dialog><dialog>Closed notice</dialog>',
+		edit: '',
+		text: 'Open notice',
+	},
+	{
+		name: 'buttons',
+		html: '<button aria-label="Wrong name">Save changes</button><button disabled>Unavailable action</button>',
+		edit: '',
+		text: 'Save changes Unavailable action',
+	},
+	{
+		name: 'selection',
+		html: '<select><option selected>Default selection</option><option label="Shown selection" value="payload">Source selection</option></select>',
+		edit: 'document.querySelector("select").selectedIndex=1',
+		text: 'Shown selection',
+	},
+	{
+		name: 'listbox',
+		html: '<select multiple size="3"><option selected>First row</option><option>Second row</option><option>Third row</option><option>Fourth row</option></select>',
+		edit: '',
+		text: 'First row Second row Third row',
+	},
+	{
+		name: 'groups',
+		html: '<select size="5"><optgroup label="Group caption"><option>Group first</option><option selected>Group second</option></optgroup><optgroup label="Other caption"><option>Group third</option></optgroup></select>',
+		edit: '',
+		text: 'Group caption Group first Group second Other caption Group third',
+	},
+	{
+		name: 'values',
+		html: '<input value="Old text"><input type="email" value="old@example.test"><input type="search" value="Old search"><input type="number" value="12"><textarea>Old notes</textarea>',
+		edit: 'document.querySelector("input").value="Typed text";document.querySelector("[type=email]").value="typed@example.test";document.querySelector("[type=search]").value="Typed search";document.querySelector("[type=number]").value="37";document.querySelector("textarea").value="Typed notes\\nSecond line"',
+		text: 'Typed text typed@example.test Typed search 37 Typed notes Second line',
+	},
+	{
+		name: 'privacy',
+		html: '<p>Public label</p><input type="password" value="private-default" placeholder="private-hint"><input type="hidden" value="hidden-payload" style="display:block">',
+		edit: 'document.querySelector("[type=password]").value="private-edited"',
+		text: 'Public label',
+	},
+	{
+		name: 'nontext',
+		html: '<label>Checkbox label<input type="checkbox" checked value="Payload only"></label><input type="radio" value="Radio payload"><input type="range" value="73"><input type="color" value="#abcdef"><input type="file">',
+		edit: 'const transfer=new DataTransfer();transfer.items.add(new File(["fixture"],"visible-report.txt"));document.querySelector("[type=file]").files=transfer.files',
+		text: 'Checkbox label visible-report.txt',
+	},
+	{
+		name: 'graphics',
+		html: '<button aria-label="Search records"><svg><title>Duplicate graphic</title><circle r="2"/></svg></button><svg><title>Star title</title><path d="M0 0L1 1"/></svg><svg aria-label="Blue circle"><title>Wrong title</title></svg><svg aria-hidden="true"><title>Decorative title</title></svg><input type="image" alt="Image action">',
+		edit: '',
+		text: 'Search records Star title Blue circle Image action',
+	},
+	{
+		name: 'separators',
+		html: '<button>Left control</button><button>Right control</button><textarea>First line\nLast line</textarea>',
+		edit: '',
+		text: 'Left control Right control First line Last line',
+	},
+	{
+		name: 'painted',
+		html: '<p aria-hidden="true">Painted prose</p><p hidden style="display:block">Displayed hidden attribute</p>',
+		edit: '',
+		text: 'Painted prose Displayed hidden attribute',
+	},
+	{
+		name: 'limits',
+		html: '<p>Supported prose</p><input type="submit"><input type="reset"><input type="file"><input type="date" value="2026-10-03"><input type="datetime-local" value="2026-10-03T12:00"><math aria-label="Guessed equation"><mfrac><mi>x</mi><mn>2</mn></mfrac></math>',
+		edit: '',
+		text: 'Supported prose',
+	},
+	{
+		name: 'captions',
+		html: '<input type="submit" value="Send"><input type="reset" value="Clear"><input type="button" value="Action">',
+		edit: '',
+		text: 'Send Clear Action',
+	},
+	{
+		name: 'placeholder',
+		html: '<input placeholder="Visible hint"><input placeholder="Invisible hint" style="--unused:0"><style>input:last-of-type::placeholder{opacity:0}</style>',
+		edit: 'document.querySelector("input").focus()',
+		text: 'Visible hint',
+	},
+])
+
+/** Installs the capture's open-shadow fixtures in either browser placement. */
+export const RENDERED_SHADOW_EXPRESSION = `(() => {
+	document.querySelector('#shadow').attachShadow({mode:'open'}).innerHTML = '<div style="display:none"><slot name="hidden"></slot></div><slot name="shown"></slot><p>Shadow own text</p>'
+	document.querySelector('#hidden-host').attachShadow({mode:'open'}).innerHTML = '<p id="shadow-child">Shadow child hidden</p>'
+})()`
 
 /** Supplies a path-free fault whose slash belongs to its reason rather than a filesystem path. */
 export const BROWSER_STORE_FAULT_FIXTURE: BrowserStoreFault = Object.freeze({
@@ -2144,7 +2269,7 @@ export function scriptBrowserElements(
 			options.text(message)
 			return
 		}
-		if (isString(declaration) && declaration.includes('capture.html')) {
+		if (isString(declaration) && declaration.includes(compileReadFunction())) {
 			transport.reply(message.id, {
 				result: {
 					value: { url: 'https://example.test/cart', title: 'Cart', html: '<button>Save</button>' },

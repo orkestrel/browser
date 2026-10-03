@@ -2,12 +2,40 @@ import type { BrowserDOMElementInterface, BrowserDOMViewInterface } from '@src/b
 import type { ModelContextInterface } from '@orkestrel/mcp/browser'
 import type { ModelContextFixtureInterface } from './fixtures/modelContext.js'
 import type { RecorderInterface } from '@orkestrel/test'
+import type { BrowserReadingInput } from '@src/core'
+import {
+	compileReadFunction,
+	compileGuardedEvaluateExpression,
+	BROWSER_RESULT_LIMIT,
+} from '@src/core'
+import { isRecord, isString } from '@orkestrel/contract'
 import { afterEach, inject } from 'vitest'
 import { createModelContext } from '@orkestrel/mcp/browser'
 import { createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
 import { installModelContext } from './fixtures/modelContext.js'
 
 const frames = new Set<HTMLIFrameElement>()
+
+/**
+ * Executes the CDP capture declaration against a real DOM root.
+ * @param root - The capture root
+ * @returns The validated capture
+ */
+export function readCompiledCapture(root: Element): BrowserReadingInput {
+	const result: unknown = new Function(
+		'document',
+		'root',
+		`return ${compileGuardedEvaluateExpression(`(${compileReadFunction()})(root)`, BROWSER_RESULT_LIMIT)}`,
+	)(root.ownerDocument, root)
+	if (
+		!isRecord(result) ||
+		!isString(result['url']) ||
+		!isString(result['title']) ||
+		!isString(result['html'])
+	)
+		throw new Error('Invalid compiled capture')
+	return { url: result['url'], title: result['title'], html: result['html'] }
+}
 
 afterEach(() => {
 	for (const frame of frames) frame.remove()

@@ -13,12 +13,25 @@ import {
 	readBrowserFixtureBase,
 	readNativeValue,
 	readProbeCase,
+	readCompiledCapture,
 	recordProbeSubscriptions,
 } from './setupBrowser.js'
 
 describe('readBrowserFixtureBase', () => {
 	it('returns the origin the global setup injected', () => {
 		expect(readBrowserFixtureBase()).toBe(inject('server'))
+	})
+})
+
+describe('readCompiledCapture', () => {
+	it('executes against a supplied root in its document', () => {
+		const document = createProbeDocument(
+			'<title>Capture</title><button>Inside</button><p>Outside</p>',
+		)
+		const result = readCompiledCapture(requireValue(document.querySelector('button')))
+		expect(result.title).toBe('Capture')
+		expect(result.html).toContain('Inside')
+		expect(result.html).not.toContain('Outside')
 	})
 })
 

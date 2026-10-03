@@ -8,10 +8,41 @@ import {
 } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
 import { readProperty, requireValue, waitForEvent } from '@orkestrel/test'
-import { createProbeElements, findProbeElement, loadProbeFrame } from '../../setupBrowser.js'
+import {
+	createProbeDocument,
+	createProbeElements,
+	findProbeElement,
+	loadProbeFrame,
+} from '../../setupBrowser.js'
+import { RENDERED_PAGE } from '../../setup.js'
 
 describe('BrowserDOMView', () => {
 	describe('read', () => {
+		it('reads live fields and a direct lowered element without outside prose', async () => {
+			const document = createProbeDocument(
+				'<p>Outside prose</p><form><input value="Stale default"></form><button>Inside button</button>',
+			)
+			requireValue(document.querySelector('input')).value = 'Live field'
+			const view = createBrowserDOMView({ document })
+			try {
+				expect((await view.read()).text().text).toContain('Live field')
+				expect((await view.read()).text().text).not.toContain('Stale default')
+				const button = requireValue((await view.elements.find({ css: 'button' }))[0])
+				expect((await button.read()).text().text.trim()).toBe('Inside button')
+			} finally {
+				view.destroy()
+			}
+		})
+		it('rendered read omits inactive panels and keeps shown text', async () => {
+			const view = createBrowserDOMView({ document: createProbeDocument(RENDERED_PAGE) })
+			try {
+				const text = (await view.read()).markdown().text
+				expect(text).toContain('Order summary shown')
+				expect(text).not.toContain('Notes pane inactive')
+			} finally {
+				view.destroy()
+			}
+		})
 		it('captures the document address, title, and markup', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })

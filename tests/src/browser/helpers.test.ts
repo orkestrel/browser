@@ -21,7 +21,13 @@ import {
 	BROWSER_EXPANDED_ROLES,
 	skipBrowserSubtree,
 } from '@src/browser'
-import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError } from '@src/core'
+import { BROWSER_RESULT_LIMIT, createBrowserReading, isBrowserResultLimitError } from '@src/core'
+import {
+	RENDERED_PAGE,
+	RENDERED_TEXT,
+	CAPTURE_CASES,
+	RENDERED_SHADOW_EXPRESSION,
+} from '../../setup.js'
 import { captureError, createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
 import {
 	createProbeDocument,
@@ -34,6 +40,7 @@ import {
 	PROBE_STATE_CASES,
 	readBrowserFixtureBase,
 	readProbeCase,
+	readCompiledCapture,
 } from '../../setupBrowser.js'
 
 describe('readBrowserToken and readBrowserStates', () => {
@@ -410,6 +417,280 @@ describe('listenBrowserNavigation', () => {
 		)
 		probe.frame.remove()
 		expect(events.calls).toEqual([['pagehide']])
+	})
+})
+
+describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
+	const read = placement === 'DOM' ? readBrowserCapture : readCompiledCapture
+	it('retains visible SVG descendants of an invisible graphic', () => {
+		const document = createProbeDocument(
+			'<svg style="visibility:hidden"><title>Hidden graphic name</title><text y="20" style="visibility:visible">Visible drawing</text></svg>',
+		)
+		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+			'Visible drawing',
+		)
+	})
+	it('prunes hidden SVG text descendants before lowering printed drawing text', () => {
+		const document = createProbeDocument(
+			'<svg aria-hidden="true"><text y="20">Printed <tspan style="display:none">Hidden drawing</tspan><tspan style="visibility:hidden">Invisible drawing</tspan><tspan>drawing</tspan></text></svg>',
+		)
+		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+			'Printed drawing',
+		)
+	})
+	it('keeps a group caption when its first option is hidden', () => {
+		const document = createProbeDocument(
+			'<select size="4"><optgroup label="Shown group"><option style="display:none">Hidden first</option><option>Shown row</option></optgroup></select>',
+		)
+		expect(
+			createBrowserReading(read(document.documentElement)).text().text.replace(/\s+/g, ' ').trim(),
+		).toBe('Shown group Shown row')
+	})
+	it('omits unavailable native multiple-file summaries', () => {
+		const document = createProbeDocument('<input type="file" multiple>')
+		const view = requireValue(document.defaultView)
+		const transfer = new view.DataTransfer()
+		transfer.items.add(new view.File(['one'], 'first-unprinted.txt'))
+		transfer.items.add(new view.File(['two'], 'second-unprinted.txt'))
+		requireValue(document.querySelector('input')).files = transfer.files
+		expect(createBrowserReading(read(document.documentElement)).text().text).toBe('')
+	})
+	it('drops active floor subtrees even when styled or disconnected', () => {
+		const document = createProbeDocument('<p>Outside control</p>')
+		for (const tag of [
+			'script',
+			'style',
+			'template',
+			'frame',
+			'frameset',
+			'iframe',
+			'object',
+			'embed',
+			'applet',
+			'noscript',
+			'meta',
+			'link',
+			'base',
+		]) {
+			const root = document.createElement(tag)
+			root.textContent = 'Nonreading payload'
+			root.setAttribute('style', 'display:block')
+			expect(read(root).html).toBe('')
+		}
+	})
+	it('scrolls listbox rows and reads direct options through their control', () => {
+		const document = createProbeDocument(
+			'<select size="3"><option>First row</option><option>Second row</option><option>Third row</option><option>Fourth row</option></select><select id="collapsed"><option selected>Chosen</option><option>Not shown</option></select>',
+		)
+		const select = requireValue(document.querySelector('select'))
+		expect(createBrowserReading(read(select)).text().text.replace(/\s+/g, ' ').trim()).toBe(
+			'First row Second row Third row',
+		)
+		select.scrollTop = select.scrollHeight
+		expect(createBrowserReading(read(select)).text().text.replace(/\s+/g, ' ').trim()).toBe(
+			'Second row Third row Fourth row',
+		)
+		expect(createBrowserReading(read(requireValue(select.options[0]))).text().text).toBe('')
+		expect(
+			createBrowserReading(read(requireValue(select.options[3])))
+				.text()
+				.text.trim(),
+		).toBe('Fourth row')
+		expect(
+			createBrowserReading(
+				read(requireValue(document.querySelector('#collapsed option:last-child'))),
+			).text().text,
+		).toBe('')
+	})
+	it('excludes hidden listbox rows and groups', () => {
+		const document = createProbeDocument(
+			'<select multiple size="5"><optgroup label="Hidden group" style="display:none"><option>Hidden child</option></optgroup><option style="display:none">Hidden row</option><option style="visibility:hidden">Invisible row</option><option>Shown row</option></select>',
+		)
+		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+			'Shown row',
+		)
+	})
+	it('redacts private controls in disconnected and windowless data', () => {
+		for (const document of [
+			globalThis.document,
+			globalThis.document.implementation.createHTMLDocument(''),
+			createProbeDocument('<p>Other realm</p>').implementation.createHTMLDocument(''),
+		]) {
+			const root = document.createElement('div')
+			root.innerHTML =
+				'<p style="display:none">Data only</p><input type="password" value="private-default"><input type="hidden" value="hidden-payload"><template><input type="password" value="template-secret"></template>'
+			const capture = read(root)
+			expect(capture.html).toContain('Data only')
+			expect(capture.html).not.toMatch(/private-default|hidden-payload|template-secret|input/)
+			for (const distill of [true, false]) {
+				expect(createBrowserReading(capture).text({ distill }).text).not.toMatch(
+					/private-default|hidden-payload/,
+				)
+				expect(createBrowserReading(capture).markdown({ distill }).text).not.toMatch(
+					/private-default|hidden-payload/,
+				)
+			}
+			for (const type of ['password', 'hidden']) {
+				const input = document.createElement('input')
+				input.type = type
+				input.value = 'private-root'
+				expect(read(input).html).toBe('')
+			}
+		}
+	})
+	it('keeps regions and resolves live links while retaining the distill choice', () => {
+		const document = createProbeDocument(
+			'<base href="https://example.test/base/"><nav><form>Navigation prose</form></nav><header>Header prose</header><aside>Aside prose</aside><menu>Menu prose</menu><p>Outside main</p><main><a href="next">Resolved link</a><p aria-hidden="true">Painted prose</p></main><footer>Footer prose</footer>',
+		)
+		const capture = read(document.documentElement)
+		const reading = createBrowserReading(capture)
+		expect(capture.html).toMatch(/<nav>/)
+		expect(capture.html).toContain('href="https://example.test/base/next"')
+		expect(reading.markdown({ distill: false }).text).toContain(
+			'[Resolved link](https://example.test/base/next)',
+		)
+		for (const phrase of [
+			'Navigation prose',
+			'Header prose',
+			'Aside prose',
+			'Menu prose',
+			'Outside main',
+			'Footer prose',
+		]) {
+			expect(reading.text({ distill: false }).text).toContain(phrase)
+			expect(reading.markdown({ distill: false }).text).toContain(phrase)
+			expect(reading.text().text).not.toContain(phrase)
+		}
+		expect(reading.text().text).toContain('Painted prose')
+	})
+	it('reads replacement roots and retains escaped page text without markup injection', () => {
+		const document = createProbeDocument(
+			'<p>Outside text</p><button>Inside text</button><input><select><option>Chosen text</option></select><svg><title>Graphic text</title></svg>',
+		)
+		for (const [selector, expected] of [
+			['button', 'Inside text'],
+			['select', 'Chosen text'],
+			['svg', 'Graphic text'],
+		]) {
+			const result = createBrowserReading(
+				read(requireValue(document.querySelector(requireValue(selector)))),
+			)
+			expect(result.text().text.trim()).toBe(expected)
+		}
+		const input = requireValue(document.querySelector('input'))
+		input.value = '<script>Printed & safe</script>'
+		const capture = read(input)
+		expect(capture.html).toContain('&lt;script&gt;Printed &amp; safe&lt;/script&gt;')
+		expect(createBrowserReading(capture).text().text.trim()).toBe(input.value)
+	})
+	it('keeps modal background and SVG printed text independently of accessibility', () => {
+		const document = createProbeDocument(
+			'<p>Painted background</p><dialog>Modal prose</dialog><svg aria-hidden="true"><text y="20">Printed drawing</text><title>Decorative title</title></svg>',
+		)
+		requireValue(document.querySelector('dialog')).showModal()
+		const reading = createBrowserReading(read(document.documentElement))
+		expect(reading.text().text.replace(/\s+/g, ' ').trim()).toBe(
+			'Painted background Modal prose Printed drawing',
+		)
+	})
+	it('measures lowered and JSON escaped values instead of source defaults', () => {
+		const document = createProbeDocument('<input>')
+		const input = requireValue(document.querySelector('input'))
+		input.value = '"'.repeat(Math.ceil(BROWSER_RESULT_LIMIT / 2))
+		expect(input.outerHTML.length).toBeLessThan(100)
+		expect(() => read(input)).toThrow(/RESULT_LIMIT/)
+	})
+	it.each(CAPTURE_CASES)(
+		'lowers $name with ordered printed expectations',
+		({ html, edit, text }) => {
+			const document = createProbeDocument(html)
+			requireValue(document.defaultView).eval(edit)
+			const capture = read(document.documentElement)
+			const reading = createBrowserReading(capture)
+			for (const distill of [true, false]) {
+				expect(reading.markdown({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(text)
+				expect(reading.text({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(text)
+			}
+			expect(capture.html).not.toMatch(
+				/private-|hidden-payload|Payload only|Radio payload|#abcdef|fakepath|Old notes|Old name|Default selection|Source selection|Duplicate graphic|Decorative title|Wrong title|Guessed equation|2026-10-03/,
+			)
+		},
+	)
+	it('prunes hidden branches and retains visibility overrides', () => {
+		const document = createProbeDocument(RENDERED_PAGE)
+		requireValue(document.defaultView).eval(RENDERED_SHADOW_EXPRESSION)
+		const capture = read(document.documentElement)
+		const reading = createBrowserReading(capture)
+		for (const distill of [true, false])
+			expect(reading.text({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(RENDERED_TEXT)
+	})
+	it('rendered capture removes invisible alt text and drops active head elements', () => {
+		const document = createProbeDocument(RENDERED_PAGE)
+		const capture = read(document.documentElement)
+		const markdown = createBrowserReading(capture).markdown().text
+		expect(markdown).toContain('Shown image alt')
+		expect(markdown).not.toContain('Hidden image alt')
+		expect(capture.html).not.toContain('<head')
+		expect(capture.title).toBe('Rendered reading')
+	})
+	it('rendered capture empties roots under hidden ancestors including shadow hosts', () => {
+		const document = createProbeDocument(RENDERED_PAGE)
+		requireValue(document.defaultView).eval(RENDERED_SHADOW_EXPRESSION)
+		expect(document.body.innerText).not.toContain('Notes pane inactive')
+		expect(read(requireValue(document.querySelector('#hidden-child'))).html).toBe('')
+		expect(
+			read(requireValue(document.querySelector('#hidden-host')?.shadowRoot?.querySelector('p')))
+				.html,
+		).toBe('')
+	})
+	it('rendered capture copies without constructors or live mutations', () => {
+		const document = createProbeDocument('<main><p>Text</p></main>')
+		const view = requireValue(document.defaultView)
+		let count = 0
+		view.customElements.define(
+			'reading-card',
+			class extends view.HTMLElement {
+				constructor() {
+					super()
+					count += 1
+				}
+			},
+		)
+		document.body.append(document.createElement('reading-card'))
+		count = 0
+		const observer = new view.MutationObserver(() => undefined)
+		observer.observe(document, {
+			subtree: true,
+			childList: true,
+			attributes: true,
+			characterData: true,
+		})
+		const raw = document.documentElement.outerHTML
+		expect(read(document.documentElement).html).toContain('reading-card')
+		expect(count).toBe(0)
+		expect(document.documentElement.outerHTML).toBe(raw)
+		expect(observer.takeRecords()).toHaveLength(0)
+		observer.disconnect()
+		document.documentElement.cloneNode(true)
+		expect(count).toBe(1)
+	})
+	it('rendered capture measures pruned markup against the result limit', () => {
+		const document = createProbeDocument(
+			`<div style="display:none">${'x'.repeat(BROWSER_RESULT_LIMIT)}</div><p>Small rendered page</p>`,
+		)
+		expect(document.documentElement.outerHTML.length).toBeGreaterThan(BROWSER_RESULT_LIMIT)
+		expect(read(document.documentElement).html).toContain('Small rendered page')
+	})
+	it('rendered capture retains auto contents, textarea values, and disconnected data', () => {
+		const document = createProbeDocument(
+			'<div style="position:absolute;top:5000px;content-visibility:auto">Auto offscreen</div><textarea>Draft area</textarea>',
+		)
+		const capture = read(document.documentElement)
+		expect(capture.html).toContain('Auto offscreen')
+		expect(capture.html).toContain('Draft area')
+		const detached = document.createElement('p')
+		detached.innerHTML = '<span style="display:none">Detached text</span>'
+		expect(read(detached).html).toBe(detached.outerHTML)
 	})
 })
 

@@ -9,6 +9,27 @@ const html =
 // === BrowserReading
 
 describe('BrowserReading', () => {
+	it('preserves lowered carrier order while caller HTML retains the safety floor', () => {
+		const lowered = createBrowserReading({
+			url,
+			title: '',
+			html: '<div><p>Form prose</p><span><br>Field value<br></span><span><br>Chosen label<br></span><div><br>First line<br>Second line<br></div></div>',
+		})
+		const supplied = createBrowserReading({
+			url,
+			title: '',
+			html: '<p>Outside control</p><form>Form prose</form><select><option>Chosen label</option></select>',
+		})
+		for (const distill of [true, false]) {
+			expect(lowered.markdown({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(
+				'Form prose Field value Chosen label First line Second line',
+			)
+			expect(lowered.text({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(
+				'Form prose Field value Chosen label First line Second line',
+			)
+			expect(supplied.markdown({ distill }).text).toBe('Outside control')
+		}
+	})
 	it('carries the captured url and title and parses the html one time into its handle', () => {
 		const reading = createBrowserReading({ url, title: 'Field notes', html })
 

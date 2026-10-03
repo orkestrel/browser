@@ -152,19 +152,27 @@ describe('compileGuardedEvaluateExpression', () => {
 })
 
 describe('compileReadFunction', () => {
-	it('reads the url, title, and root html of the document it runs against', () => {
+	it('defaults to the document root and retains document metadata', () => {
 		const read = new Function('document', 'location', `return (${compileReadFunction()})()`)
-
+		const roots: string[] = []
 		expect(
 			Reflect.apply(read, undefined, [
-				{ title: 'Field notes', documentElement: { outerHTML: '<html><body>Notes</body></html>' } },
+				{
+					title: 'Field notes',
+					URL: 'https://example.com/notes',
+					get documentElement() {
+						roots.push('root')
+						return null
+					},
+				},
 				{ href: 'https://example.com/notes' },
 			]),
 		).toEqual({
 			url: 'https://example.com/notes',
 			title: 'Field notes',
-			html: '<html><body>Notes</body></html>',
+			html: '',
 		})
+		expect(roots).toEqual(['root'])
 	})
 
 	it('reads an empty html for a document without a root element', () => {
@@ -172,7 +180,7 @@ describe('compileReadFunction', () => {
 
 		expect(
 			Reflect.apply(read, undefined, [
-				{ title: '', documentElement: null },
+				{ title: '', URL: 'about:blank', documentElement: null },
 				{ href: 'about:blank' },
 			]),
 		).toEqual({ url: 'about:blank', title: '', html: '' })
