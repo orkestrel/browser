@@ -12,7 +12,7 @@ import type {
 	BrowserPoint,
 } from '../types.js'
 import { BrowserPageElement } from './BrowserPageElement.js'
-import { BrowserElementError, BrowserError, isBrowserElementError } from '../errors.js'
+import { BrowserElementError, BrowserError, isCDPTimeoutError } from '../errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	BROWSER_CONTEXT_LOSS_PATTERN,
@@ -225,31 +225,33 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				: AbortSignal.any([options.signal, this.#lifetime.signal])
 		while (true) {
 			signal.throwIfAborted()
-			const remaining = Math.max(0, end - performance.now())
-			const call = { timeout: remaining, signal }
-			await this.#input.ready(call)
-			const frame = this.#scopeFrame(query.within)
-			const session = await this.#input.resolve(frame)
-			const context = await this.#input.world(frame, session, call)
 			const key = `__browserQueryWait${++this.#sequence}`
-			// Arm before capturing so mutations during find are retained by the pending promise.
-			const pending = this.#input.client
-				.send(
-					'Runtime.evaluate',
-					{
-						expression: compileQueryWaitExpression(remaining, key),
-						contextId: context,
-						returnByValue: true,
-						awaitPromise: true,
-					},
-					{ session, timeout: remaining + 1000, signal },
-				)
-				.then(
-					(result) => ({ result }),
-					(error: unknown) => ({ error }),
-				)
+			let session: string | undefined
+			let context: number | undefined
 			const changes = this.#changes
 			try {
+				await this.#input.ready({ timeout: this.#remaining(end), signal })
+				const frame = this.#scopeFrame(query.within)
+				session = await this.#input.resolve(frame)
+				context = await this.#input.world(frame, session, { timeout: this.#remaining(end), signal })
+				const remaining = this.#remaining(end)
+				const call = { timeout: remaining, signal }
+				// Arm before capturing so mutations during find are retained by the pending promise.
+				const pending = this.#input.client
+					.send(
+						'Runtime.evaluate',
+						{
+							expression: compileQueryWaitExpression(remaining, key),
+							contextId: context,
+							returnByValue: true,
+							awaitPromise: true,
+						},
+						{ session, timeout: remaining + 1000, signal },
+					)
+					.then(
+						(result) => ({ result }),
+						(error: unknown) => ({ error }),
+					)
 				const found = await this.find(query, call)
 				if (options?.absent === true ? found.length === 0 : found.length > 0) return found
 				const outcome = await pending
@@ -258,33 +260,37 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 					throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
 			} catch (error) {
 				signal.throwIfAborted()
-				this.#input.page.assert()
+				if (isCDPTimeoutError(error))
+					throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
 				if (
-					!(
-						this.#changes !== changes &&
-						isBrowserElementError(error) &&
-						error.context?.reason === 'GONE'
-					) &&
-					(!isError(error) || !BROWSER_CONTEXT_LOSS_PATTERN.test(error.message))
+					this.#input.page.closed ||
+					(this.#changes === changes &&
+						(!isError(error) || !BROWSER_CONTEXT_LOSS_PATTERN.test(error.message)))
 				)
 					throw error
-				if (performance.now() >= end)
-					throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
-				await this.#input.ready({ signal, timeout: Math.max(0, end - performance.now()) })
+				const remaining = this.#remaining(end)
+				if (this.#changes === changes) await this.#input.recover({ signal, timeout: remaining })
 			} finally {
-				await this.#input.client
-					.send(
-						'Runtime.evaluate',
-						{
-							expression: `globalThis[${JSON.stringify(key)}]?.()`,
-							contextId: context,
-							returnByValue: true,
-						},
-						{ session, timeout: 1000 },
-					)
-					.catch(() => undefined)
+				if (context !== undefined && session !== undefined)
+					await this.#input.client
+						.send(
+							'Runtime.evaluate',
+							{
+								expression: `globalThis[${JSON.stringify(key)}]?.()`,
+								contextId: context,
+								returnByValue: true,
+							},
+							{ session, timeout: 1000 },
+						)
+						.catch(() => undefined)
 			}
 		}
+	}
+
+	#remaining(end: number): number {
+		const remaining = end - performance.now()
+		if (remaining <= 0) throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
+		return remaining
 	}
 
 	element(reference: string): BrowserPageElementInterface | undefined {

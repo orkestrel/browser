@@ -1,4 +1,5 @@
 import type { BrowserFrameInterface } from '@src/core'
+import type { CDPSentMessage } from '../../../setup.js'
 import { describe, expect, it } from 'vitest'
 import { BrowserContext, BrowserPage } from '@src/core'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
@@ -17,6 +18,179 @@ import {
 } from '../../../setup.js'
 
 describe('element manager', () => {
+	it.each(['query', 'describe', 'accessibility', 'document'])(
+		'resumes a wait after navigation interrupts %s',
+		async (method) => {
+			let attempts = 0
+			const fixture = await createBrowserElementFixture({
+				local: true,
+				[method]: (message: CDPSentMessage) => {
+					attempts += 1
+					if (attempts === 1) {
+						fixture.transport.event(
+							'Page.frameNavigated',
+							{
+								frame: { id: 'main', url: fixture.page.url, loaderId: 'next' },
+							},
+							'session-main',
+						)
+						fixture.transport.event(
+							'Page.lifecycleEvent',
+							{
+								frameId: 'main',
+								loaderId: 'next',
+								name: 'DOMContentLoaded',
+							},
+							'session-main',
+						)
+						if (method === 'document') fixture.transport.reply(message.id, {})
+						else fixture.transport.fail(message.id, 'Could not find node with given id')
+					} else if (method === 'accessibility') fixture.transport.reply(message.id, { nodes: [] })
+					else if (method === 'describe')
+						fixture.transport.reply(message.id, { node: { backendNodeId: 7 } })
+					else if (method === 'document')
+						fixture.transport.reply(message.id, { root: { nodeId: 2 } })
+					else fixture.transport.reply(message.id, { nodeIds: [50] })
+				},
+			})
+			const { page, client } = fixture
+			try {
+				await expect(
+					page.elements.wait({ css: '#destination' }, { timeout: 500 }),
+				).resolves.toHaveLength(1)
+				expect(attempts).toBeGreaterThanOrEqual(2)
+			} finally {
+				await client.close()
+			}
+		},
+	)
+
+	it('rethrows a persistent protocol failure after the navigation retry', async () => {
+		let attempts = 0
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			query: (message) => {
+				attempts += 1
+				if (attempts === 1) {
+					fixture.transport.event(
+						'Page.frameNavigated',
+						{ frame: { id: 'main', url: fixture.page.url, loaderId: 'next' } },
+						'session-main',
+					)
+					fixture.transport.event(
+						'Page.lifecycleEvent',
+						{ frameId: 'main', loaderId: 'next', name: 'DOMContentLoaded' },
+						'session-main',
+					)
+				}
+				fixture.transport.fail(message.id, 'Selector is invalid')
+			},
+		})
+		const { page, client } = fixture
+		try {
+			await expect(page.elements.wait({ css: '[' }, { timeout: 500 })).rejects.toMatchObject({
+				code: 'BROWSER_CDP_ERROR',
+				message: 'Selector is invalid',
+			})
+			expect(attempts).toBe(2)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('parks an absent wait on DOM readiness after context loss without a navigation step', async () => {
+		let captures = 0
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) => {
+				captures += 1
+				if (captures === 1) fixture.transport.fail(message.id, 'Execution context was destroyed')
+				else fixture.transport.reply(message.id, { nodes: [] })
+			},
+		})
+		try {
+			const pending = fixture.page.elements.wait(
+				{ name: 'spinner' },
+				{ absent: true, timeout: 500 },
+			)
+			await waitForCondition('the context was lost', () => captures > 0)
+			const concurrent = fixture.page.elements.wait(
+				{ name: 'spinner' },
+				{ absent: true, timeout: 500 },
+			)
+			await waitForDelay(20)
+			const beforeReady = captures
+			fixture.transport.event(
+				'Page.lifecycleEvent',
+				{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
+				'session-main',
+			)
+			await expect(pending).resolves.toEqual([])
+			await expect(concurrent).resolves.toEqual([])
+			expect(beforeReady).toBe(1)
+			expect(captures).toBe(3)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('reports a wait timeout when world creation consumes the remaining time', async () => {
+		const { page, client } = await createBrowserElementFixture({
+			local: true,
+			world: () => undefined,
+		})
+		try {
+			await expect(page.elements.wait({ css: '#missing' }, { timeout: 20 })).rejects.toMatchObject({
+				code: 'BROWSER_WAIT_TIMEOUT',
+			})
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('sends no world request after an element wait deadline is spent', async () => {
+		const { page, client, transport } = await createBrowserElementFixture({ local: true })
+		try {
+			await expect(page.elements.wait({ css: '#missing' }, { timeout: 0 })).rejects.toMatchObject({
+				code: 'BROWSER_WAIT_TIMEOUT',
+			})
+			expect(transport.sent.some((message) => message.method === 'Page.createIsolatedWorld')).toBe(
+				false,
+			)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('rejects an element wait when the page closes before its deadline', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			evaluation: (message) => {
+				if (message.params?.['awaitPromise'] !== true)
+					fixture.transport.reply(message.id, { result: { value: false } })
+			},
+		})
+		fixture.transport.onSend('Target.closeTarget', (message) =>
+			fixture.transport.reply(message.id, { success: true }),
+		)
+		try {
+			const pending = fixture.page.elements
+				.wait({ name: 'missing' }, { timeout: 10_000 })
+				.catch((error: unknown) => error)
+			await waitForCondition('the observer is armed', () =>
+				fixture.transport.sent.some((message) => message.params?.['awaitPromise'] === true),
+			)
+			const started = performance.now()
+			await fixture.page.close()
+			expect(await Promise.race([pending, waitForDelay(200)])).toMatchObject({
+				code: 'BROWSER_ERROR',
+			})
+			expect(performance.now() - started).toBeLessThan(500)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
 	it.each(BROWSER_ELEMENT_NAME_CASES)('$title', async ({ query, expected }) => {
 		const fixture = await createBrowserElementFixture({
 			accessibility: (message) =>

@@ -2302,6 +2302,7 @@ export interface BrowserElementFixtureOptions {
 	readonly observe?: CDPSentHandler
 	readonly loaderless?: boolean
 	readonly readiness?: CDPSentHandler
+	readonly world?: CDPSentHandler
 	readonly title?: CDPSentHandler
 	readonly document?: CDPSentHandler
 	readonly query?: CDPSentHandler
@@ -2394,11 +2395,13 @@ export function scriptBrowserElements(
 			root === undefined ? buildBrowserElementTree(options) : { frameTree: { frame: root } },
 		)
 	})
-	transport.onSend('Page.createIsolatedWorld', (message) =>
-		transport.reply(message.id, {
-			executionContextId: BROWSER_ELEMENT_WORLDS[String(message.params?.['frameId'])] ?? 91,
-		}),
-	)
+	transport.onSend('Page.createIsolatedWorld', (message) => {
+		if (options?.world !== undefined) options.world(message)
+		else
+			transport.reply(message.id, {
+				executionContextId: BROWSER_ELEMENT_WORLDS[String(message.params?.['frameId'])] ?? 91,
+			})
+	})
 	transport.onSend('Accessibility.getFullAXTree', (message) => {
 		if (options?.accessibility !== undefined) options.accessibility(message)
 		else

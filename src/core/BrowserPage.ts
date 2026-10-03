@@ -64,7 +64,7 @@ import { BrowserNavigationManager } from './BrowserNavigationManager.js'
 import { BrowserScriptManager } from './BrowserScriptManager.js'
 import { BrowserSnapshot } from './BrowserSnapshot.js'
 import { BrowserWorker } from './BrowserWorker.js'
-import { BrowserError } from './errors.js'
+import { BrowserError, CDPTimeoutError } from './errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	BROWSER_CONTEXT_LOSS_PATTERN,
@@ -260,6 +260,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#floor = 0
 	#closed = false
 	readonly #waitRelease = new AbortController()
+	readonly #textWaits = new Map<string, number>()
 	#codegen: BrowserCodegen | undefined
 	#registry: BrowserRegistry | undefined
 	readonly #codegenStart: BrowserTransition<BrowserCodegen> = new BrowserTransition()
@@ -336,6 +337,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			session: sessionId,
 			resolve: this.#resolveFrameSession.bind(this),
 			world: this.#world.bind(this),
+			recover: this.#recoverReadiness.bind(this),
 			reference: this.#reference,
 			ready: this.#ready.bind(this),
 		})
@@ -441,6 +443,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			await this.#ready({ ...options, timeout: remaining })
 			const context = await this.#world(this.id, this.#sessionId, options)
 			const key = `__browserTextWait${++this.#waitSequence}`
+			this.#textWaits.set(key, context)
 			try {
 				const result = await this.send(
 					'Runtime.evaluate',
@@ -460,27 +463,18 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				return
 			} catch (error) {
 				if (options?.signal?.aborted === true) {
-					if (!this.#closed)
-						await this.send(
-							'Runtime.evaluate',
-							{
-								expression: `globalThis[${JSON.stringify(key)}]?.()`,
-								contextId: context,
-								returnByValue: true,
-							},
-							{ timeout: 1000 },
-						).catch(() => undefined)
+					if (!this.#closed) await this.#releaseTextWait(key, context)
 					throw options.signal.reason
 				}
 				if (!isError(error) || !BROWSER_CONTEXT_LOSS_PATTERN.test(error.message)) throw error
-				this.assert()
-				this.#dom = undefined
 				if (performance.now() >= end)
 					throw new BrowserError('Browser text wait timed out', 'BROWSER_WAIT_TIMEOUT', {
 						text,
 						timeout,
 					})
-				await this.#parkReadiness({ ...options, timeout: Math.max(0, end - performance.now()) })
+				await this.#recoverReadiness({ ...options, timeout: Math.max(0, end - performance.now()) })
+			} finally {
+				this.#textWaits.delete(key)
 			}
 		}
 	}
@@ -983,6 +977,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	async #releaseResources(): Promise<void> {
 		this.#waitRelease.abort(new BrowserError('Browser page is closed'))
+		await Promise.all(
+			[...this.#textWaits].map(([key, context]) => this.#releaseTextWait(key, context)),
+		)
 		this.#unhold()
 		this.#announcement.reject(new BrowserError('Browser session ended'))
 		this.#client.unsubscribe('Page.lifecycleEvent', this.#lifecycleHandler, this.#sessionId)
@@ -1036,6 +1033,21 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#emitter.destroy()
 		}
 		this.#steps.destroy()
+	}
+
+	async #releaseTextWait(key: string, context: number): Promise<void> {
+		// The target survives destroy, so release through the session even after the page closes.
+		await this.#client
+			.send(
+				'Runtime.evaluate',
+				{
+					expression: `globalThis[${JSON.stringify(key)}]?.()`,
+					contextId: context,
+					returnByValue: true,
+				},
+				{ session: this.#sessionId, timeout: 1000 },
+			)
+			.catch(() => undefined)
 	}
 
 	#frame(frame: BrowserFrameInfo): BrowserFrameInterface {
@@ -1094,6 +1106,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	#rejectSeed(seed: Promise<void>): void {
 		if (this.#seed === seed) this.#seed = undefined
+	}
+
+	#recoverReadiness(options?: BrowserCallOptions): Promise<void> {
+		this.#dom = undefined
+		return this.#parkReadiness(options)
 	}
 
 	// The seed answers for the document it was issued against: `#floor` changes only when the
@@ -1168,16 +1185,17 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		for (const id of this.#readiness.keys()) this.#settleReadiness(id)?.resolve()
 	}
 
-	#world(frame: string, session: string, options?: BrowserCallOptions): Promise<number> {
+	async #world(frame: string, session: string, options?: BrowserCallOptions): Promise<number> {
+		options?.signal?.throwIfAborted()
 		const cached = this.#worlds.get(frame)
 		if (cached !== undefined) return Promise.resolve(cached.context)
 		const existing = this.#creating.get(frame)
-		if (existing !== undefined) return existing.promise
+		if (existing !== undefined) return await this.#awaitWorld(existing.promise, options)
 		const pending: Promise<number> = this.#client
 			.send(
 				'Page.createIsolatedWorld',
 				{ frameId: frame, worldName: BROWSER_FRAME_WORLD_NAME },
-				{ session, ...options },
+				{ session, signal: this.#waitRelease.signal },
 			)
 			.then(this.#decodeWorld.bind(this, frame))
 		this.#creating.set(frame, { session, promise: pending })
@@ -1185,7 +1203,31 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#publishWorld.bind(this, frame, session, pending),
 			this.#settleWorld.bind(this, frame, pending),
 		)
-		return pending
+		return await this.#awaitWorld(pending, options)
+	}
+
+	async #awaitWorld(pending: Promise<number>, options?: BrowserCallOptions): Promise<number> {
+		const signal = options?.signal
+		signal?.throwIfAborted()
+		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		validateBrowserTimeout(timeout)
+		const abandoned = Promise.withResolvers<number>()
+		const abort = this.#abandonWorld.bind(this, abandoned, signal)
+		const timer = setTimeout(
+			() => abandoned.reject(new CDPTimeoutError('Isolated world wait timed out')),
+			timeout,
+		)
+		signal?.addEventListener('abort', abort, { once: true })
+		try {
+			return await Promise.race([pending, abandoned.promise])
+		} finally {
+			clearTimeout(timer)
+			signal?.removeEventListener('abort', abort)
+		}
+	}
+
+	#abandonWorld(pending: PromiseWithResolvers<number>, signal: AbortSignal | undefined): void {
+		pending.reject(signal?.reason)
 	}
 
 	#decodeWorld(frame: string, world: unknown): number {

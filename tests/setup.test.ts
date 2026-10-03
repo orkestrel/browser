@@ -183,6 +183,24 @@ describe('element protocol and compiler fixtures', () => {
 		expect(() => readBrowserCompiledTimers('(')).toThrow('Unexpected')
 	})
 
+	it('uses the isolated-world reply supplied by the fixture', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			world: (message) => {
+				fixture.transport.reply(message.id, { executionContextId: 123 })
+			},
+		})
+		try {
+			await fixture.page.wait('ready')
+			expect(
+				fixture.transport.sent.find((message) => message.params?.['awaitPromise'] === true)
+					?.params?.['contextId'],
+			).toBe(123)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
 	it('holds the page target with held, so a second holder is refused, and holds none without it', async () => {
 		const held = await createBrowserElementFixture({ held: true })
 		const free = await createBrowserElementFixture()

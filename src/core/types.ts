@@ -2541,6 +2541,8 @@ export interface BrowserElementManagerInput {
 	readonly world: BrowserElementWorldFunction
 	readonly reference: BrowserReferenceFunction
 	readonly ready: BrowserReadinessFunction
+	/** Discards readiness after context loss and waits for the destination document. */
+	readonly recover: BrowserReadinessFunction
 }
 
 /** Binds an element to its document identity and the page's shared protocol resources. */

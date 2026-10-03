@@ -78,7 +78,7 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 		return await this.#settled.promise
 	}
 
-	// A task also runs when a hidden document suspends animation frames.
+	// Hidden documents suspend animation frames; tasks still run.
 	#schedule(): void {
 		if (this.#release.signal.aborted || this.#task !== undefined) return
 		this.#task = setTimeout(this.#wakeHandler, 0)

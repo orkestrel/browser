@@ -363,6 +363,76 @@ describe('BrowserPage', () => {
 		},
 	)
 
+	it.each(['first', 'second'])(
+		'keeps a shared world alive when the %s concurrent text wait aborts',
+		async (aborted) => {
+			const worlds: number[] = []
+			const { page, client, transport } = await createBrowserElementFixture({
+				local: true,
+				world: (message) => worlds.push(message.id),
+			})
+			const controller = new AbortController()
+			const reason = new Error('Caller left')
+			try {
+				const first = page
+					.wait('first', {
+						...(aborted === 'first' ? { signal: controller.signal } : {}),
+						timeout: 500,
+					})
+					.catch((error: unknown) => error)
+				const second = page
+					.wait('second', {
+						...(aborted === 'second' ? { signal: controller.signal } : {}),
+						timeout: 500,
+					})
+					.catch((error: unknown) => error)
+				await waitForCondition('the shared world is requested', () => worlds.length === 1)
+				controller.abort(reason)
+				expect(await Promise.race([aborted === 'first' ? first : second, waitForDelay(200)])).toBe(
+					reason,
+				)
+				transport.reply(requireValue(worlds[0]), { executionContextId: 91 })
+				expect(await (aborted === 'first' ? second : first)).toBeUndefined()
+				expect(worlds).toHaveLength(1)
+			} finally {
+				await client.close()
+			}
+		},
+	)
+
+	it('releases a text observer before destroy detaches the session', async () => {
+		const cleanups: number[] = []
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			evaluation: (message) => {
+				if (message.params?.['awaitPromise'] !== true) cleanups.push(message.id)
+			},
+		})
+		replyOk(fixture.transport, 'Target.detachFromTarget')
+		try {
+			const pending = fixture.page
+				.wait('missing', { timeout: 10_000 })
+				.catch((error: unknown) => error)
+			await waitForCondition('the observer is armed', () =>
+				fixture.transport.sent.some((message) => message.params?.['awaitPromise'] === true),
+			)
+			const closing = fixture.page.destroy()
+			await waitForDelay(20)
+			expect(cleanups).toHaveLength(1)
+			expect(
+				fixture.transport.sent.some((message) => message.method === 'Target.detachFromTarget'),
+			).toBe(false)
+			fixture.transport.reply(requireValue(cleanups[0]), { result: { value: false } })
+			await closing
+			expect(await pending).toMatchObject({ code: 'BROWSER_ERROR' })
+			expect(
+				fixture.transport.sent.some((message) => message.method === 'Target.detachFromTarget'),
+			).toBe(true)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
 	it('catches omitting observer disconnect when an in-flight text wait aborts', async () => {
 		const controller = new AbortController()
 		const reason = new Error('Stop text wait')
