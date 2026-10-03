@@ -425,19 +425,49 @@ export function compileReadFunction(): string {
 	const rendered = view !== null && node.isConnected
 	const inert = owner.implementation.createHTMLDocument('')
 	let root = inert.importNode(node, true)
-	// The paired postorder walk keeps live indexes valid when a copied parent is replaced.
+	// Save sibling pointers before pruning invalidates the copied child collections.
 	const pending = [{ live: node, twin: root, visited: false }]
 	if (rendered) {
+		let child = node
 		for (
 			let parent = node;
 			parent?.ownerDocument === owner;
 			parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
 		) {
-			if (view.getComputedStyle(parent).display === 'none') {
+			const style = view.getComputedStyle(parent)
+			const outside =
+				parent !== node &&
+				(style.contentVisibility === 'hidden' ||
+					['canvas', 'video', 'audio'].includes(parent.localName) ||
+					[
+						'script',
+						'style',
+						'template',
+						'frame',
+						'frameset',
+						'iframe',
+						'object',
+						'embed',
+						'applet',
+						'noscript',
+						'meta',
+						'link',
+						'base',
+						'math',
+					].includes(parent.localName) ||
+					(parent.localName === 'details' &&
+						!parent.hasAttribute('open') &&
+						child !== parent.querySelector(':scope > summary')))
+			const unassigned =
+				child.parentElement?.shadowRoot !== null &&
+				child.parentElement?.shadowRoot !== undefined &&
+				child.assignedSlot === null
+			if (style.display === 'none' || outside || unassigned) {
 				root = undefined
 				pending.length = 0
 				break
 			}
+			child = parent
 		}
 	}
 	while (pending.length > 0) {
@@ -482,44 +512,66 @@ export function compileReadFunction(): string {
 				twin.removeAttribute('hidden')
 				twin.removeAttribute('aria-hidden')
 			}
-			if (rendered && (live instanceof view.HTMLAnchorElement || live instanceof view.HTMLAreaElement) && live.hasAttribute('href'))
+			if (
+				rendered &&
+				(live instanceof view.HTMLAnchorElement || live instanceof view.HTMLAreaElement) &&
+				live.hasAttribute('href')
+			)
 				twin.setAttribute('href', live.href)
 			if (style?.contentVisibility === 'hidden' || ['canvas', 'video', 'audio'].includes(tag)) {
 				twin.replaceChildren()
 				continue
 			}
-			if (rendered && ['input', 'textarea', 'select', 'option', 'optgroup'].includes(tag))
+			if (
+				rendered &&
+				(live instanceof view.HTMLInputElement ||
+					live instanceof view.HTMLTextAreaElement ||
+					live instanceof view.HTMLSelectElement ||
+					live instanceof view.HTMLOptionElement ||
+					live instanceof view.HTMLOptGroupElement)
+			)
 				continue
 			const summary =
 				tag === 'details' && !live.hasAttribute('open')
 					? live.querySelector(':scope > summary')
 					: undefined
-			let elementIndex = live.children.length - 1
-			for (let index = live.childNodes.length - 1; index >= 0; index -= 1) {
-				const child = live.childNodes[index]
-				const mirror = twin.childNodes[index]
-				if (child === undefined || mirror === undefined) continue
+
+			let element = live.lastElementChild
+			let counterpart = twin.lastElementChild
+			let child = live.lastChild
+			let mirror = twin.lastChild
+			while (child !== null && mirror !== null) {
+				const previous = child.previousSibling
+				const previousMirror = mirror.previousSibling
+				const previousElement = element?.previousElementSibling ?? null
+				const previousCounterpart = counterpart?.previousElementSibling ?? null
 				let omitted = rendered && summary !== undefined && child !== summary
 				if (rendered && live.shadowRoot !== null) {
 					const slot =
 						child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
 					if (slot === null) omitted = true
-					for (
-						let parent = slot;
-						parent !== null && parent !== live;
-						parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
-					) {
-						if (view.getComputedStyle(parent).display === 'none') omitted = true
+					else {
+						for (
+							let parent = slot;
+							parent !== null && parent !== live;
+							parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
+						) {
+							if (view.getComputedStyle(parent).display === 'none') omitted = true
+						}
 					}
 				}
 				if (omitted || (child.nodeType === 3 && invisible)) mirror.parentNode?.removeChild(mirror)
 				else if (child.nodeType === 1) {
-					// Element collections retain their type across windowless owner realms.
-					const element = live.children.item(elementIndex)
-					const counterpart = twin.children.item(elementIndex)
-					if (element !== null && counterpart !== null) pending.push({ live: element, twin: counterpart, visited: false })
+					// Element sibling pointers retain their type across windowless owner realms.
+					if (element !== null && counterpart !== null)
+						pending.push({ live: element, twin: counterpart, visited: false })
 				}
-				if (child.nodeType === 1) elementIndex -= 1
+				if (child.nodeType === 1) {
+					element = previousElement
+					counterpart = previousCounterpart
+				}
+				child = previous
+				mirror = previousMirror
 			}
 			continue
 		}
@@ -533,6 +585,7 @@ export function compileReadFunction(): string {
 			twin.prepend(inert.createElement('br'))
 			twin.append(inert.createElement('br'))
 		}
+		let fragments
 		let lines
 		let container = false
 		if (live instanceof view.HTMLInputElement) {
@@ -551,11 +604,22 @@ export function compileReadFunction(): string {
 					]
 				}
 			} else if (['submit', 'reset', 'button'].includes(live.type)) lines = [live.value]
-			else if (live.type === 'file' && live.files?.length === 1) lines = Array.from(live.files ?? [], (file) => file.name)
+			else if (live.type === 'file' && live.files?.length === 1)
+				lines = Array.from(live.files ?? [], (file) => file.name)
 			else if (live.type === 'image' && live.getAttribute('aria-hidden') !== 'true')
 				lines = [live.getAttribute('aria-label')?.trim() || live.alt]
-		} else if (live instanceof view.HTMLTextAreaElement) lines = live.value.split(/\\r?\\n/)
-		else if (
+		} else if (live instanceof view.HTMLTextAreaElement) {
+			const placeholder = view.getComputedStyle(live, '::placeholder')
+			const value =
+				live.value ||
+				(live.matches(':placeholder-shown') &&
+				placeholder.visibility === 'visible' &&
+				placeholder.opacity !== '0' &&
+				placeholder.color !== 'rgba(0, 0, 0, 0)'
+					? live.placeholder
+					: '')
+			lines = value.split(/\\r?\\n/)
+		} else if (
 			live instanceof view.HTMLSelectElement ||
 			live instanceof view.HTMLOptionElement ||
 			live instanceof view.HTMLOptGroupElement
@@ -591,7 +655,9 @@ export function compileReadFunction(): string {
 						// The group box includes its options; its caption ends where the first row starts.
 						const end =
 							row instanceof view.HTMLOptGroupElement
-								? (Array.from(row.querySelectorAll('option')).find(option=>option.getClientRects().length > 0)?.getBoundingClientRect().top ?? rect.bottom)
+								? (Array.from(row.querySelectorAll('option'))
+										.find((option) => option.getClientRects().length > 0)
+										?.getBoundingClientRect().top ?? rect.bottom)
 								: rect.bottom
 						if (
 							end > top &&
@@ -605,11 +671,16 @@ export function compileReadFunction(): string {
 				}
 			}
 		} else if (tag === 'svg') {
+			if (twin.parentElement?.closest('svg')) continue
 			lines = []
-			for (const text of twin.querySelectorAll('text')) {
-				if (text.textContent) lines.push(text.textContent)
+			fragments = []
+			for (const content of twin.querySelectorAll('text, foreignObject')) {
+				if (content.parentElement?.closest('foreignObject')) continue
+				if (content.localName === 'foreignObject') fragments.push(...content.childNodes)
+				else if (content.textContent) fragments.push(inert.createTextNode(content.textContent))
 			}
-			if (!invisible && lines.length === 0 && live.getAttribute('aria-hidden') !== 'true')
+			if (fragments.length === 0) fragments = undefined
+			if (!invisible && fragments === undefined && live.getAttribute('aria-hidden') !== 'true')
 				lines.push(
 					live.getAttribute('aria-label')?.trim() ||
 						live.querySelector(':scope > title')?.textContent ||
@@ -630,7 +701,11 @@ export function compileReadFunction(): string {
 		const block = !style?.display.startsWith('inline') && style?.display !== 'contents'
 		const carrier = inert.createElement(block ? 'div' : 'span')
 		if (container) carrier.append(...twin.childNodes)
-		else
+		else if (fragments !== undefined) {
+			for (const fragment of fragments) {
+				carrier.append(fragment, inert.createElement('br'))
+			}
+		} else
 			for (const [index, line] of (lines ?? []).entries()) {
 				if (index > 0) carrier.append(inert.createElement('br'))
 				carrier.append(inert.createTextNode(line))
@@ -642,9 +717,12 @@ export function compileReadFunction(): string {
 		twin.replaceWith(carrier)
 		if (twin === root) root = carrier
 	}
+	// Redact after lowering as well, including descendants that a foreign realm left intact.
+	for (const input of root?.querySelectorAll('input[type="password" i],input[type="hidden" i]') ??
+		[])
+		input.remove()
 	capture.html = root?.outerHTML ?? ''
-
-return capture
+	return capture
 }`
 }
 

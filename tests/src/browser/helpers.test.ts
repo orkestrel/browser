@@ -26,9 +26,11 @@ import {
 	RENDERED_PAGE,
 	RENDERED_TEXT,
 	CAPTURE_CASES,
+	CAPTURE_ANCESTORS,
 	RENDERED_SHADOW_EXPRESSION,
 } from '../../setup.js'
 import { captureError, createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
+
 import {
 	createProbeDocument,
 	createProbeElements,
@@ -422,6 +424,63 @@ describe('listenBrowserNavigation', () => {
 
 describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 	const read = placement === 'DOM' ? readBrowserCapture : readCompiledCapture
+	it('preserves paired siblings while pruning mixed node kinds', () => {
+		const document = createProbeDocument(
+			'<div style="visibility:hidden">hidden <span style="visibility:visible">First</span>hidden <span style="display:none">Omitted</span>hidden <span style="visibility:visible">Last</span>tail</div>',
+		)
+		expect(
+			createBrowserReading(read(document.documentElement)).text().text.replace(/\s+/g, ' ').trim(),
+		).toBe('FirstLast')
+	})
+	it('visits children of a namespaced select that cannot be lowered', () => {
+		const document = createProbeDocument('<p>Public label</p>')
+		const select = document.createElementNS('urn:example', 'select')
+		select.innerHTML =
+			'<span style="display:none">Unvisited child</span><script>activePayload()</script>'
+		document.body.append(select)
+		expect(read(document.documentElement).html).not.toMatch(/Unvisited child|activePayload/)
+	})
+
+	it.each(CAPTURE_ANCESTORS)('omits a direct read under $name', ({ html, edit }) => {
+		const document = createProbeDocument(html)
+		requireValue(document.defaultView).eval(edit)
+		expect(createBrowserReading(read(document.documentElement)).text().text).not.toContain(
+			'Omitted text',
+		)
+		expect(read(requireValue(document.querySelector('#target'))).html).toBe('')
+	})
+	it('redacts adopted select children and still visits them', () => {
+		const source = createProbeDocument('<select></select>')
+		const destination = createProbeDocument('<p>Public label</p>')
+		const select = requireValue(source.querySelector('select'))
+		select.innerHTML = '<option>Chosen label</option>'
+		const input = source.createElement('input')
+		input.type = 'password'
+		input.value = 'private-adopted'
+		input.setAttribute('value', 'private-adopted')
+		select.append(input)
+		destination.body.append(destination.adoptNode(select))
+		const capture = read(destination.documentElement)
+		expect(capture.html).not.toMatch(/private-adopted|type="password"/)
+		expect(capture.html).toContain('Chosen label')
+	})
+	it('redacts private controls in child frame captures', () => {
+		const document = createProbeDocument(
+			'<p>Frame prose</p><input type="password" value="private-frame"><input type="hidden" value="hidden-payload">',
+		)
+		const capture = read(document.documentElement)
+		expect(capture.html).not.toMatch(/private-frame|hidden-payload|input/)
+		expect(createBrowserReading(capture).text().text.trim()).toBe('Frame prose')
+		for (const input of document.querySelectorAll('input')) expect(read(input).html).toBe('')
+	})
+	it('clips listbox rows outside the horizontal client area', () => {
+		const document = createProbeDocument(
+			'<select multiple size="3" style="width:120px"><option style="transform:translateX(200px)">Right outside</option><option style="transform:translateX(-200px)">Left outside</option><option>Shown row</option></select>',
+		)
+		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+			'Shown row',
+		)
+	})
 	it('retains visible SVG descendants of an invisible graphic', () => {
 		const document = createProbeDocument(
 			'<svg style="visibility:hidden"><title>Hidden graphic name</title><text y="20" style="visibility:visible">Visible drawing</text></svg>',
@@ -606,6 +665,8 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			const document = createProbeDocument(html)
 			requireValue(document.defaultView).eval(edit)
 			const capture = read(document.documentElement)
+			for (const input of document.querySelectorAll('input[type="password"],input[type="hidden"]'))
+				expect(read(input).html).toBe('')
 			const reading = createBrowserReading(capture)
 			for (const distill of [true, false]) {
 				expect(reading.markdown({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(text)

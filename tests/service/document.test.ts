@@ -25,7 +25,7 @@ import { compileReadFunction } from '@src/core'
 import { renderHTML } from '@orkestrel/html'
 import { chromium } from 'playwright'
 import { createToolManager } from '@orkestrel/tool'
-import { createTeardown, requireValue, waitForDelay } from '@orkestrel/test'
+import { createTeardown, requireValue, waitForCondition } from '@orkestrel/test'
 import {
 	createFixtureServer,
 	createTempDirectory,
@@ -149,7 +149,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 					.text.trim(),
 			).toBe('Inside text')
 			await page.evaluate(
-				`new Promise(resolve=>{const frame=document.createElement('iframe');frame.onload=()=>resolve(true);frame.srcdoc='<form>Frame prose<input value="Frame value"></form>';document.body.append(frame)})`,
+				`new Promise(resolve=>{const frame=document.createElement('iframe');frame.onload=()=>resolve(true);frame.srcdoc='<form>Frame prose<input value="Frame value"><input type="password" value="private-frame"><input type="hidden" value="hidden-payload"></form>';document.body.append(frame)})`,
 			)
 			const frame = requireValue(
 				(await page.frames()).find((candidate) => candidate.parent !== undefined),
@@ -245,10 +245,11 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 					await target.evaluate(
 						`document.body.innerHTML='<img src="/capture-image"><img srcset="/capture-srcset 1x"><picture><source srcset="/capture-picture 1x"><img></picture><video src="/capture-video" poster="/capture-poster"></video><audio src="/capture-audio"></audio><input type="image" src="/capture-input"><object data="/capture-object"></object><link rel="preload" as="image" href="/capture-preload"><capture-card></capture-card>'.replaceAll('/capture-','/capture-${contextId ?? 'main'}-');window.captureMutations=0;window.captureObserver=new MutationObserver(records=>window.captureMutations+=records.length);captureObserver.observe(document,{subtree:true,childList:true,attributes:true,characterData:true})`,
 					)
-					await expect
-						.poll(() => requests.filter((url) => url.includes('/capture-')).length)
-						.toBeGreaterThanOrEqual(9)
-					await expect.poll(() => pending.size).toBe(0)
+					await waitForCondition(
+						'live capture fixture requests',
+						() => requests.filter((url) => url.includes('/capture-')).length >= 9,
+					)
+					await waitForCondition('live capture fixture responses', () => pending.size === 0)
 					await target.evaluate('captureMutations=0;captureObserver.takeRecords()')
 					requests.length = 0
 					const before = await target.evaluate(
@@ -265,8 +266,18 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 						...(contextId === undefined ? {} : { contextId }),
 					})
 					expect(capture.exceptionDetails).toBeUndefined()
-					await waitForDelay(100)
-					expect(requests.filter((url) => url.includes('/capture-'))).toEqual([])
+					await target.evaluate(
+						`fetch('/capture-sentinel-${contextId ?? 'main'}').then(response=>response.text())`,
+					)
+					await waitForCondition(
+						'post-capture sentinel response',
+						() => requests.some((url) => url.includes('/capture-sentinel-')) && pending.size === 0,
+					)
+					expect(
+						requests.filter(
+							(url) => url.includes('/capture-') && !url.includes('/capture-sentinel-'),
+						),
+					).toEqual([])
 					expect(
 						await target.evaluate('({count:captureCount,html:document.documentElement.outerHTML})'),
 					).toEqual(before)
@@ -277,9 +288,11 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 						expression: 'document.documentElement.cloneNode(true)',
 						...(contextId === undefined ? {} : { contextId }),
 					})
-					await expect
-						.poll(() => requests.filter((url) => url.includes('/capture-')).length)
-						.toBeGreaterThan(0)
+					await waitForCondition('active clone control request', () =>
+						requests.some(
+							(url) => url.includes('/capture-') && !url.includes('/capture-sentinel-'),
+						),
+					)
 					expect(
 						await target.evaluate('({count:captureCount,html:document.documentElement.outerHTML})'),
 					).not.toEqual(before)

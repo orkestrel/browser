@@ -80,6 +80,72 @@ export const RENDERED_TEXT =
 /** Declares the floor fixture's printed text and explicit graphic alternatives. */
 export const CAPTURE_CASES = Object.freeze([
 	{
+		name: 'nested SVG',
+		html: '<svg><svg><text y="20">Inner label</text></svg></svg>',
+		edit: '',
+		text: 'Inner label',
+	},
+	{
+		name: 'foreignObject',
+		html: '<svg><foreignObject width="200" height="100"><p>Legend prose</p><input value="Legend value"></foreignObject></svg>',
+		edit: '',
+		text: 'Legend prose Legend value',
+	},
+	{
+		name: 'placeholder color',
+		html: '<input placeholder="Visible hint"><input id="unpainted" placeholder="Transparent hint"><style>#unpainted::placeholder{color:transparent}</style>',
+		edit: '',
+		text: 'Visible hint',
+	},
+	{
+		name: 'placeholder visibility',
+		html: '<input placeholder="Visible hint"><input id="unpainted" placeholder="Hidden hint"><style>#unpainted::placeholder{visibility:hidden}</style>',
+		edit: '',
+		text: 'Visible hint',
+	},
+	{
+		name: 'image privacy',
+		html: '<p>Public label</p><input type="image" aria-hidden="true" aria-label="Private image name" alt="Private image alt">',
+		edit: '',
+		text: 'Public label',
+	},
+	{
+		name: 'invisible button',
+		html: '<p>Public label</p><button style="visibility:hidden" aria-label="Hidden button"><svg style="visibility:visible" aria-label="Visible child"></svg></button>',
+		edit: '',
+		text: 'Public label Visible child',
+	},
+	{
+		name: 'textarea placeholder',
+		html: '<textarea placeholder="Visible notes"></textarea><textarea id="unpainted" placeholder="Hidden notes"></textarea><style>#unpainted::placeholder{opacity:0}</style>',
+		edit: '',
+		text: 'Visible notes',
+	},
+	{
+		name: 'namespaced select privacy',
+		html: '<p>Public label</p>',
+		edit: 'const box=document.createElementNS(\'urn:example\',\'select\');box.innerHTML=\'<input type="password" value="private-namespace"><input type="hidden" value="hidden-payload">\';document.body.append(box)',
+		text: 'Public label',
+	},
+	{
+		name: 'form privacy',
+		html: '<form>Public label<input type="password" value="private-form"><input type="hidden" value="hidden-payload"></form>',
+		edit: '',
+		text: 'Public label',
+	},
+	{
+		name: 'dialog privacy',
+		html: '<dialog open>Public label<input type="password" value="private-dialog"><input type="hidden" value="hidden-payload"></dialog>',
+		edit: '',
+		text: 'Public label',
+	},
+	{
+		name: 'slot privacy',
+		html: '<div id="host"><p>Public label</p><input type="password" value="private-slot"><input type="hidden" value="hidden-payload"></div>',
+		edit: "document.querySelector('#host').attachShadow({mode:'open'}).innerHTML='<slot></slot>'",
+		text: 'Public label',
+	},
+	{
 		name: 'form',
 		html: '<form action="/submit"><p>Form prose</p><label>Name <input value="Old name"></label></form>',
 		edit: 'document.querySelector("input").value="Typed name"',
@@ -168,6 +234,40 @@ export const CAPTURE_CASES = Object.freeze([
 		html: '<input placeholder="Visible hint"><input placeholder="Invisible hint" style="--unused:0"><style>input:last-of-type::placeholder{opacity:0}</style>',
 		edit: 'document.querySelector("input").focus()',
 		text: 'Visible hint',
+	},
+])
+
+/** Declares ancestors whose children do not contribute rendered prose. */
+export const CAPTURE_ANCESTORS = Object.freeze([
+	{
+		name: 'details',
+		html: '<details><summary>Shown summary</summary><p id="target">Omitted text</p></details><p>Public label</p>',
+		edit: '',
+	},
+	{
+		name: 'content visibility',
+		html: '<div style="content-visibility:hidden"><p id="target">Omitted text</p></div><p>Public label</p>',
+		edit: '',
+	},
+	{
+		name: 'canvas',
+		html: '<canvas><p id="target">Omitted text</p></canvas><p>Public label</p>',
+		edit: '',
+	},
+	{
+		name: 'video',
+		html: '<video><p id="target">Omitted text</p></video><p>Public label</p>',
+		edit: '',
+	},
+	{
+		name: 'audio',
+		html: '<audio controls><p id="target">Omitted text</p></audio><p>Public label</p>',
+		edit: '',
+	},
+	{
+		name: 'unassigned child',
+		html: '<div id="host"><p id="target">Omitted text</p></div><p>Public label</p>',
+		edit: 'document.querySelector("#host").attachShadow({mode:"open"}).innerHTML="<slot name=other></slot>"',
 	},
 ])
 
@@ -4775,3 +4875,35 @@ export async function createBrowserSecretSelectFixture(
 	})
 	return fixture
 }
+
+/** Holds table sizes that expose collection re-walk costs on an unvirtualized data grid. */
+export const CAPTURE_TABLE_SIZES = Object.freeze([1000, 2000, 4000])
+
+/** Holds the original indexed traversal as the guarded capture benchmark's control. */
+export const CAPTURE_INDEXED_WALK = `let elementIndex = live.children.length - 1
+			for (let index = live.childNodes.length - 1; index >= 0; index -= 1) {
+				const child = live.childNodes[index]
+				const mirror = twin.childNodes[index]
+				if (child === undefined || mirror === undefined) continue
+				let omitted = rendered && summary !== undefined && child !== summary
+				if (rendered && live.shadowRoot !== null) {
+					const slot =
+						child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
+					if (slot === null) omitted = true
+					for (
+						let parent = slot;
+						parent !== null && parent !== live;
+						parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
+					) {
+						if (view.getComputedStyle(parent).display === 'none') omitted = true
+					}
+				}
+				if (omitted || (child.nodeType === 3 && invisible)) mirror.parentNode?.removeChild(mirror)
+				else if (child.nodeType === 1) {
+					// Element collections retain their type across windowless owner realms.
+					const element = live.children.item(elementIndex)
+					const counterpart = twin.children.item(elementIndex)
+					if (element !== null && counterpart !== null) pending.push({ live: element, twin: counterpart, visited: false })
+				}
+				if (child.nodeType === 1) elementIndex -= 1
+			}`
