@@ -80,6 +80,42 @@ export const RENDERED_TEXT =
 /** Declares the floor fixture's printed text and explicit graphic alternatives. */
 export const CAPTURE_CASES = Object.freeze([
 	{
+		name: 'SVG switch first branch',
+		html: '<svg><switch><foreignObject width="200" height="40"><div>Order total</div></foreignObject><text y="20">Order total</text></switch></svg>',
+		edit: '',
+		text: 'Order total',
+	},
+	{
+		name: 'SVG switch unsupported extension',
+		html: '<svg><switch><foreignObject requiredExtensions="urn:example:unsupported" width="200" height="40"><div>Unsupported label</div></foreignObject><text y="20">Supported label</text></switch></svg>',
+		edit: '',
+		text: 'Supported label',
+	},
+	{
+		name: 'SVG inside foreignObject',
+		html: '<svg><foreignObject><div><svg><text y="20">Deep label</text></svg></div></foreignObject></svg>',
+		edit: '',
+		text: 'Deep label',
+	},
+	{
+		name: 'SVG switch empty first branch',
+		html: '<svg><switch><g></g><text y="20">Unused fallback</text></switch></svg>',
+		edit: '',
+		text: '',
+	},
+	{
+		name: 'SVG switch hidden first branch',
+		html: '<svg><switch><g style="display:none"><text>Hidden branch</text></g><text y="20">Unused fallback</text></switch></svg>',
+		edit: '',
+		text: '',
+	},
+	{
+		name: 'SVG nested text',
+		html: '<svg><text>A<text>B</text></text></svg>',
+		edit: '',
+		text: 'AB',
+	},
+	{
 		name: 'nested SVG',
 		html: '<svg><svg><text y="20">Inner label</text></svg></svg>',
 		edit: '',
@@ -239,6 +275,16 @@ export const CAPTURE_CASES = Object.freeze([
 
 /** Declares ancestors whose children do not contribute rendered prose. */
 export const CAPTURE_ANCESTORS = Object.freeze([
+	{
+		name: 'textarea control',
+		html: '<textarea></textarea><p>Public label</p>',
+		edit: 'const target=document.createElement("b");target.id="target";target.textContent="Omitted text";document.querySelector("textarea").append(target)',
+	},
+	{
+		name: 'option control',
+		html: '<select><option selected>Chosen label</option><option>Other label</option></select>',
+		edit: 'const target=document.createElement("span");target.id="target";target.textContent="Omitted text";document.querySelector("option:last-child").append(target)',
+	},
 	{
 		name: 'details',
 		html: '<details><summary>Shown summary</summary><p id="target">Omitted text</p></details><p>Public label</p>',

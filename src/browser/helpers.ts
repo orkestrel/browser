@@ -51,7 +51,6 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 	const rendered = view !== null && node.isConnected
 	const inert = document.implementation.createHTMLDocument('')
 	let root: Element | undefined = inert.importNode(node, true)
-	// Save sibling pointers before pruning invalidates the copied child collections.
 	const pending: Array<{
 		live: Element
 		twin: Element
@@ -70,6 +69,14 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 				parent !== node &&
 				(style.contentVisibility === 'hidden' ||
 					['canvas', 'video', 'audio'].includes(parent.localName) ||
+					parent instanceof view.HTMLInputElement ||
+					parent instanceof view.HTMLTextAreaElement ||
+					parent instanceof view.HTMLOptionElement ||
+					((parent instanceof view.HTMLSelectElement ||
+						parent instanceof view.HTMLOptGroupElement) &&
+						!(
+							node instanceof view.HTMLOptionElement || node instanceof view.HTMLOptGroupElement
+						)) ||
 					[
 						'script',
 						'style',
@@ -167,6 +174,12 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 					? live.querySelector(':scope > summary')
 					: undefined
 
+			// Native layout selects the switch branch after its conditional processing tests.
+			const branch =
+				rendered && tag === 'switch'
+					? Array.from(live.children).find((candidate) => candidate.getClientRects().length > 0)
+					: undefined
+			// Save sibling pointers before pruning invalidates the copied child collections.
 			let element = live.lastElementChild
 			let counterpart = twin.lastElementChild
 			let child = live.lastChild
@@ -176,7 +189,9 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 				const previousMirror = mirror.previousSibling
 				const previousElement: Element | null = element?.previousElementSibling ?? null
 				const previousCounterpart: Element | null = counterpart?.previousElementSibling ?? null
-				let omitted = rendered && summary !== undefined && child !== summary
+				let omitted =
+					rendered &&
+					((summary !== undefined && child !== summary) || (tag === 'switch' && child !== branch))
 				if (rendered && live.shadowRoot !== null) {
 					const slot =
 						child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
@@ -302,11 +317,17 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 				}
 			}
 		} else if (tag === 'svg') {
-			if (twin.parentElement?.closest('svg')) continue
+			if (twin.parentElement?.closest('svg, foreignObject')?.localName === 'svg') continue
 			lines = []
 			fragments = []
 			for (const content of twin.querySelectorAll('text, foreignObject')) {
-				if (content.parentElement?.closest('foreignObject')) continue
+				if (content.parentElement?.closest('svg, foreignObject')?.localName === 'foreignObject')
+					continue
+				if (
+					content.localName === 'text' &&
+					content.parentElement?.closest('text')?.closest('svg') === content.closest('svg')
+				)
+					continue
 				if (content.localName === 'foreignObject') fragments.push(...content.childNodes)
 				else if (content.textContent) fragments.push(inert.createTextNode(content.textContent))
 			}
@@ -348,7 +369,7 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 		twin.replaceWith(carrier)
 		if (twin === root) root = carrier
 	}
-	// Redact after lowering as well, including descendants that a foreign realm left intact.
+	// Guard a copy that has fallen out of step with the live tree.
 	for (const input of root?.querySelectorAll('input[type="password" i],input[type="hidden" i]') ??
 		[])
 		input.remove()

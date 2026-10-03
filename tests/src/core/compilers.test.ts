@@ -90,7 +90,7 @@ if (import.meta.env.MODE === 'benchmark') {
 							for (const placement of ['DOM', 'compiled']) {
 								const samples = { indexed: [], siblings: [] }
 								for (let round = 0; round < 20; round++) {
-									for (const candidate of round % 2 === 0 ? ['indexed', 'siblings'] : ['siblings', 'indexed']) {
+									for (const candidate of placement === 'DOM' ? ['siblings'] : round % 2 === 0 ? ['indexed', 'siblings'] : ['siblings', 'indexed']) {
 										const start = performance.now()
 										const result = candidate === 'indexed' ? indexed() : placement === 'DOM' ? readBrowserCapture(document.documentElement) : compiled()
 										if ((candidate === 'indexed' || placement === 'compiled') && JSON.stringify(result).length > ${BROWSER_RESULT_LIMIT}) throw new Error('Capture limit')
@@ -100,6 +100,7 @@ if (import.meta.env.MODE === 'benchmark') {
 									}
 								}
 								for (const [candidate, values] of Object.entries(samples)) {
+									if (values.length === 0) continue
 									values.sort((left, right) => left - right)
 									results.push({ placement, candidate, rows: ${rows}, collapsed: ${collapsed}, median: values[8], q1: values[4], q3: values[12], samples: values })
 								}
