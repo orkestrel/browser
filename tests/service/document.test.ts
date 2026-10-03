@@ -50,6 +50,7 @@ import {
 	CAPTURE_CASES,
 	RENDERED_PAGE,
 	RENDERED_SHADOW_EXPRESSION,
+	WAIT_EXIT_HTML,
 } from '../setup.js'
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
@@ -103,6 +104,98 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			await page.close().catch(() => undefined)
 		})
 
+		for (const placement of ['CDP', 'DOM']) {
+			it(`records the hidden-tab transition limit and settles a removal in the ${placement} placement`, async () => {
+				await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
+				await page.evaluate(`import('/dist/src/browser/index.js').then(({createBrowserDOMView}) => {
+					globalThis.hiddenView = createBrowserDOMView({document, own: true})
+				})`)
+				await page.wait('Saved to drafts')
+				await page.evaluate(
+					'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+				)
+				const front = await browser.create({ url: fixtures.url('/form') })
+				try {
+					await front.send('Page.bringToFront')
+					expect(await front.evaluate('document.visibilityState')).toBe('visible')
+					expect(await page.evaluate('document.visibilityState')).toBe('hidden')
+					await page.evaluate(`(() => {
+						globalThis.hiddenEnd = null
+						document.getElementById('toast').addEventListener('transitionend', () => { globalThis.hiddenEnd = performance.now() }, {once: true})
+						return true
+					})()`)
+					const start = performance.now()
+					const waiting = (
+						placement === 'CDP'
+							? page.wait('Saved to drafts', { absent: true, timeout: 5_000 })
+							: page.evaluate(
+									"hiddenView.wait('Saved to drafts', {absent: true, timeout: 5000}).then(() => 'done')",
+								)
+					).then(
+						() => 'done',
+						(error: unknown) => error,
+					)
+					await page.evaluate("document.getElementById('toast').classList.remove('shown')")
+					const outcome = await waiting
+					const elapsed = performance.now() - start
+					const reading =
+						await page.evaluate(`({visibility: document.visibilityState, text: document.body.innerText,
+						ended: hiddenEnd, style: getComputedStyle(document.getElementById('toast')).visibility})`)
+					console.log('hidden transition', { placement, elapsed, outcome, reading })
+					expect(outcome).toBeInstanceOf(Error)
+					expect(elapsed).toBeGreaterThanOrEqual(5_000)
+					expect(reading).toEqual({ visibility: 'hidden', text: '', ended: null, style: 'hidden' })
+					await page.evaluate("document.getElementById('toast').classList.add('shown')")
+					await page.wait('Saved to drafts')
+					const removed = (
+						placement === 'CDP'
+							? page.wait('Saved to drafts', { absent: true, timeout: 5_000 })
+							: page.evaluate(
+									"hiddenView.wait('Saved to drafts', {absent: true, timeout: 5000}).then(() => 'done')",
+								)
+					).then(
+						() => 'done',
+						(error: unknown) => error,
+					)
+					await page.evaluate('new Promise(resolve => setTimeout(resolve, 0))')
+					const removal = performance.now()
+					await page.evaluate("document.getElementById('toast').remove()")
+					const result = await removed
+					console.log('hidden removal', { placement, elapsed: performance.now() - removal, result })
+					expect(result).toBe('done')
+					expect(performance.now() - removal).toBeLessThan(3_000)
+					await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
+					await page.wait('Saved to drafts')
+					const finished = (
+						placement === 'CDP'
+							? page.wait('Saved to drafts', { absent: true, timeout: 5_000 })
+							: page.evaluate(
+									"hiddenView.wait('Saved to drafts', {absent: true, timeout: 5000}).then(() => 'done')",
+								)
+					).then(
+						() => 'done',
+						(error: unknown) => error,
+					)
+					await page.evaluate(`(() => {
+						document.getElementById('toast').classList.remove('shown')
+						setTimeout(() => document.getElementById('toast').dispatchEvent(new Event('transitionend', {bubbles: true})), 350)
+						return true
+					})()`)
+					const delivered = performance.now()
+					const completion = await finished
+					console.log('hidden delivered event', {
+						placement,
+						elapsed: performance.now() - delivered,
+						completion,
+					})
+					expect(completion).toBe('done')
+					expect(performance.now() - delivered).toBeLessThan(3_000)
+				} finally {
+					await page.evaluate('hiddenView.destroy()')
+					await front.close()
+				}
+			})
+		}
 		it.each(CAPTURE_CASES)(
 			'captures $name through public CDP and DOM reads',
 			async ({ html, edit, text }) => {

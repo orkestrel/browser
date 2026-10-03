@@ -122,16 +122,16 @@ if (import.meta.env.MODE === 'benchmark') {
 }
 
 describe('element compilers', () => {
-	it('catches polling, duplicate timers, and a deadline placed in the wrong argument', () => {
+	it('catches polling and distinguishes the wake task from the deadline timer', () => {
 		for (const expression of [
 			compileTextWaitExpression('ready', 73, 'text'),
 			compileQueryWaitExpression(73, 'query'),
 		]) {
 			expect(expression).not.toContain('setInterval')
-			expect(expression.match(/setTimeout/g)).toHaveLength(1)
+			expect(expression.match(/setTimeout/g)).toHaveLength(2)
 			expect(readBrowserCompiledTimers(expression)).toEqual([{ name: 'setTimeout', delay: '73' }])
 			expect(expression).toContain('new MutationObserver')
-			expect(expression).toContain('requestAnimationFrame(check)')
+			expect(expression).toContain('setTimeout(check, 0)')
 			expect(expression).toContain('observer?.disconnect()')
 		}
 	})

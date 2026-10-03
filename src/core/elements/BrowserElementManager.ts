@@ -12,9 +12,10 @@ import type {
 	BrowserPoint,
 } from '../types.js'
 import { BrowserPageElement } from './BrowserPageElement.js'
-import { BrowserElementError, BrowserError } from '../errors.js'
+import { BrowserElementError, BrowserError, isBrowserElementError } from '../errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_CONTEXT_LOSS_PATTERN,
 	BROWSER_OUTLINE_LIMIT,
 	BROWSER_INTERACTIVE_ROLES,
 } from '../constants.js'
@@ -30,7 +31,7 @@ import {
 	validateBrowserTimeout,
 } from '../helpers.js'
 import { parseBrowserReference } from '../parsers.js'
-import { isArray, isInteger, isRecord, isString } from '@orkestrel/contract'
+import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/contract'
 
 /**
  * Captures accessibility trees and binds stable references to their owning frame sessions.
@@ -247,6 +248,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 					(result) => ({ result }),
 					(error: unknown) => ({ error }),
 				)
+			const changes = this.#changes
 			try {
 				const found = await this.find(query, call)
 				if (options?.absent === true ? found.length === 0 : found.length > 0) return found
@@ -254,6 +256,21 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				if ('error' in outcome) throw outcome.error
 				if (readEvaluationResult(outcome.result) !== true || performance.now() >= end)
 					throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
+			} catch (error) {
+				signal.throwIfAborted()
+				this.#input.page.assert()
+				if (
+					!(
+						this.#changes !== changes &&
+						isBrowserElementError(error) &&
+						error.context?.reason === 'GONE'
+					) &&
+					(!isError(error) || !BROWSER_CONTEXT_LOSS_PATTERN.test(error.message))
+				)
+					throw error
+				if (performance.now() >= end)
+					throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
+				await this.#input.ready({ signal, timeout: Math.max(0, end - performance.now()) })
 			} finally {
 				await this.#input.client
 					.send(

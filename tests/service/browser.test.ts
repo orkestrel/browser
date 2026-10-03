@@ -962,6 +962,40 @@ describe('Browser proofs against the fixture pages', () => {
 			code: 'BROWSER_WAIT_TIMEOUT',
 		})
 	})
+	it('closing a page rejects a pending text wait well before its deadline', async () => {
+		const page = await browser.create({ url: fixtures.url('/late') })
+		opened.push(page)
+		await page.wait('Order')
+		const settled = createRecorder<[]>()
+		const waiting = page.wait('Never shown', { timeout: 5_000 })
+		void waiting.then(settled.handler, settled.handler)
+		await page.evaluate(
+			'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+		)
+		expect(settled.count).toBe(0)
+		const start = performance.now()
+		await page.close()
+		const refusal = await waiting.catch((error: unknown) => error)
+		console.log('close wait', { elapsed: performance.now() - start, refusal })
+		expect(refusal).toBeInstanceOf(Error)
+		expect(isBrowserError(refusal) && refusal.code).not.toBe('BROWSER_WAIT_TIMEOUT')
+		expect(performance.now() - start).toBeLessThan(1_000)
+	})
+	it('navigation settles a pending absent element wait', async () => {
+		const page = await browser.create({ url: fixtures.url('/late') })
+		opened.push(page)
+		await page.evaluate("document.body.innerHTML = '<p id=subject>Wait subject</p>'")
+		await page.elements.wait({ css: '#subject' })
+		const settled = createRecorder<[]>()
+		const waiting = page.elements.wait({ css: '#subject' }, { absent: true, timeout: 2_000 })
+		void waiting.then(settled.handler, settled.handler)
+		await page.evaluate(
+			'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
+		)
+		expect(settled.count).toBe(0)
+		await page.navigate(fixtures.url('/form'))
+		await expect(waiting).resolves.toEqual([])
+	})
 	it('navigation settles a pending absent text wait', async () => {
 		const page = await browser.create({ url: fixtures.url('/late') })
 		opened.push(page)

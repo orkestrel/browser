@@ -4,12 +4,12 @@ import { BROWSER_WAIT_EVENTS, BrowserElementError, BrowserError } from '@src/cor
 import { isBrowserDocument } from './helpers.js'
 
 /**
- * Parks one condition on DOM mutations and finished transitions and animations until it holds, with one deadline and no other timer.
+ * Parks one condition on DOM mutations and finished transitions and animations until it holds, with one deadline and coalesced wake tasks.
  *
  * @remarks
  * The wait observes every root `roots` returns, each through a `MutationObserver` of that root's
  * realm, and re-reads the roots after every mutation batch, every capture-phase `load`, and
- * every animation frame with a `BROWSER_WAIT_EVENTS` event in an observed root: a same-origin
+ * the task after a `BROWSER_WAIT_EVENTS` event in an observed root: a same-origin
  * frame or an open shadow root that appears joins the observation,
  * and a root that departed (a replaced frame document, a removed shadow root) leaves it, with its
  * observer disconnected and its listeners removed. The check runs before the wait parks and
@@ -49,7 +49,7 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 	>()
 	#main: Window | undefined
 	#timer: ReturnType<typeof setTimeout> | undefined
-	#frame: number | undefined
+	#task: ReturnType<typeof setTimeout> | undefined
 	readonly #recheckHandler = this.#recheck.bind(this)
 	readonly #scheduleHandler = this.#schedule.bind(this)
 	readonly #wakeHandler = this.#wake.bind(this)
@@ -78,14 +78,14 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 		return await this.#settled.promise
 	}
 
-	// Finish events from many elements share a check while preserving the last frame's wake.
+	// A task also runs when a hidden document suspends animation frames.
 	#schedule(): void {
-		if (this.#release.signal.aborted || this.#frame !== undefined) return
-		this.#frame = this.#main?.requestAnimationFrame(this.#wakeHandler)
+		if (this.#release.signal.aborted || this.#task !== undefined) return
+		this.#task = setTimeout(this.#wakeHandler, 0)
 	}
 
 	#wake(): void {
-		this.#frame = undefined
+		this.#task = undefined
 		this.#recheck()
 	}
 
@@ -177,8 +177,8 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 	// Releases every observer, listener, and the timer before the promise settles.
 	#stop(): void {
 		clearTimeout(this.#timer)
-		if (this.#frame !== undefined) this.#main?.cancelAnimationFrame(this.#frame)
-		this.#frame = undefined
+		clearTimeout(this.#task)
+		this.#task = undefined
 		this.#release.abort()
 		for (const entry of this.#observers.values()) {
 			entry.observer.disconnect()

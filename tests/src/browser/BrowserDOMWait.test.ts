@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest'
-import { isBrowserElementError, isBrowserError } from '@src/core'
+import { compileQueryWaitExpression, isBrowserElementError, isBrowserError } from '@src/core'
 import { BrowserDOMWait, collectBrowserRoots } from '@src/browser'
 import { createRecorder, requireValue, waitForDelay, waitForEvent } from '@orkestrel/test'
-import { createProbeDocument, createProbeElements, loadProbeFrame } from '../../setupBrowser.js'
+import {
+	createProbeDocument,
+	createProbeElements,
+	loadProbeFrame,
+	recordProbeSubscriptions,
+} from '../../setupBrowser.js'
 
 describe('BrowserDOMWait', () => {
-	it('coalesces a burst of finish events per frame and wakes on the last event', async () => {
+	it('coalesces a burst of finish events per task and wakes on the last event', async () => {
 		const document = createProbeDocument('<div></div>')
 		const shadow = requireValue(document.querySelector('div')).attachShadow({ mode: 'open' })
 		const checks = createRecorder<[]>()
@@ -27,34 +32,43 @@ describe('BrowserDOMWait', () => {
 			document.dispatchEvent(new Event('transitionend'))
 			shadow.dispatchEvent(new Event('animationend', { composed: false }))
 		}
-		await new Promise(
-			requireValue(document.defaultView).requestAnimationFrame.bind(document.defaultView),
-		)
+		await waitForDelay()
 		expect(checks.count - initial).toBe(1)
 		ready = true
 		shadow.dispatchEvent(new Event('animationend', { composed: false }))
 		expect(await waiting).toBe('done')
 		expect(checks.count - initial).toBe(2)
 	})
+	it('coalesces compiled finish bursts and wakes on the final event', async () => {
+		const document = createProbeDocument('<div></div>')
+		const checks = createRecorder<[]>()
+		let ready = false
+		const waiting: unknown = new Function(
+			'document',
+			'predicate',
+			`return ${compileQueryWaitExpression(1_000, 'burst', 'predicate()')}`,
+		)(document, () => {
+			checks.handler()
+			return ready
+		})
+		const initial = checks.count
+		for (let count = 0; count < 100; count += 1) document.dispatchEvent(new Event('transitionend'))
+		await waitForDelay()
+		expect(checks.count - initial).toBe(1)
+		ready = true
+		document.dispatchEvent(new Event('animationend'))
+		expect(await waiting).toBe(true)
+		expect(checks.count - initial).toBe(2)
+	})
 	for (const ending of ['settle', 'abort', 'deadline']) {
 		it(`aborts every root listener signal after ${ending}`, async () => {
 			const document = createProbeDocument('<div></div>')
 			const shadow = requireValue(document.querySelector('div')).attachShadow({ mode: 'open' })
-			const listeners = createRecorder<[Node, string, AbortSignal | undefined]>()
-			for (const root of [document, shadow]) {
-				const add = root.addEventListener.bind(root)
-				Object.defineProperty(root, 'addEventListener', {
-					configurable: true,
-					value: (
-						name: string,
-						listener: EventListenerOrEventListenerObject,
-						options?: boolean | AddEventListenerOptions,
-					) => {
-						listeners.handler(root, name, typeof options === 'object' ? options.signal : undefined)
-						add(name, listener, options)
-					},
-				})
-			}
+			const listeners = [document, shadow].flatMap((root) =>
+				['load', 'transitionend', 'animationend'].map((name) =>
+					recordProbeSubscriptions(root, name),
+				),
+			)
 			const controller = new AbortController()
 			let ready = false
 			const waiting = new BrowserDOMWait({
@@ -69,14 +83,8 @@ describe('BrowserDOMWait', () => {
 				.catch((error: unknown) =>
 					isBrowserError(error) ? error.code : error instanceof Error ? error.message : error,
 				)
-			for (const root of [document, shadow]) {
-				for (const name of ['load', 'transitionend', 'animationend']) {
-					const call = requireValue(
-						listeners.calls.find((entry) => entry[0] === root && entry[1] === name),
-					)
-					expect(requireValue(call[2]).aborted).toBe(false)
-				}
-			}
+			for (const listener of listeners)
+				expect(requireValue(listener.calls[0]?.[0]).aborted).toBe(false)
 			if (ending === 'settle') {
 				ready = true
 				shadow.dispatchEvent(new Event('transitionend', { composed: false }))
@@ -85,7 +93,8 @@ describe('BrowserDOMWait', () => {
 			expect(result).toBe(
 				ending === 'settle' ? 'done' : ending === 'abort' ? 'stopped' : 'BROWSER_WAIT_TIMEOUT',
 			)
-			for (const call of listeners.calls) expect(requireValue(call[2]).aborted).toBe(true)
+			for (const listener of listeners)
+				expect(requireValue(listener.calls[0]?.[0]).aborted).toBe(true)
 		})
 	}
 	for (const name of ['transitionend', 'animationend']) {
@@ -117,6 +126,9 @@ describe('BrowserDOMWait', () => {
 			const document = createProbeDocument('<div></div>')
 			const host = requireValue(document.querySelector('div'))
 			const shadow = host.attachShadow({ mode: 'open' })
+			const listeners = ['load', 'transitionend', 'animationend'].map((event) =>
+				recordProbeSubscriptions(shadow, event),
+			)
 			let ready = false
 			const checks = createRecorder<[]>()
 			const wait = new BrowserDOMWait({
@@ -129,10 +141,14 @@ describe('BrowserDOMWait', () => {
 				start: performance.now(),
 				subject: 'Departed root',
 			})
-			const pending = wait.execute()
+			const pending = wait.execute().catch((error: unknown) => error)
+			for (const listener of listeners)
+				expect(requireValue(listener.calls[0]?.[0]).aborted).toBe(false)
 			host.remove()
 			await new Promise(requestAnimationFrame)
 			expect(wait.roots).not.toContain(shadow)
+			for (const listener of listeners)
+				expect(requireValue(listener.calls[0]?.[0]).aborted).toBe(true)
 			const departed = checks.count
 			shadow.dispatchEvent(new Event(name))
 			expect(checks.count).toBe(departed)

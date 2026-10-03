@@ -164,6 +164,10 @@ export const BROWSER_WAIT_EVENTS: readonly string[] = Object.freeze([
 	'animationend',
 ])
 
+/** Matches protocol errors caused by replacement or closure of an execution context. */
+export const BROWSER_CONTEXT_LOSS_PATTERN =
+	/execution context was destroyed|cannot find context with specified id|inspected target navigated or closed/i
+
 /** Maps a canonical modifier name to its CDP Input modifier bit value. */
 export const BROWSER_KEY_MODIFIERS: Readonly<Record<string, number>> = Object.freeze({
 	Alt: 1,

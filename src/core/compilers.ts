@@ -28,7 +28,7 @@ import { isBrowserSecretBinding } from './validators.js'
  * not observed either.
  * @param deadline - Maximum time in milliseconds
  * @param key - Isolated-world property owning this observer
- * @param predicate - Optional expression checked immediately, after each mutation batch, and on each `BROWSER_WAIT_EVENTS` event
+ * @param predicate - Optional expression checked immediately and on the task after a mutation batch or a `BROWSER_WAIT_EVENTS` event
  * @returns Promise expression resolving true on a match or change, false at the deadline
  */
 export function compileQueryWaitExpression(
@@ -37,25 +37,25 @@ export function compileQueryWaitExpression(
 	predicate?: string,
 ): string {
 	return `new Promise((resolve) => {
-	let frame
+	let task
 	let timer
 	let observer
 	const events = new AbortController()
 	const finish = (value) => {
 		observer?.disconnect()
 		events.abort()
-		if (frame !== undefined) cancelAnimationFrame(frame)
+		if (task !== undefined) clearTimeout(task)
 		clearTimeout(timer)
 		delete globalThis[${JSON.stringify(key)}]
 		resolve(value)
 	}
 	const check = () => {
-		frame = undefined
+		task = undefined
 		if (${predicate ?? 'true'}) finish(true)
 	}
 	globalThis[${JSON.stringify(key)}] = () => finish(false)
 	const schedule = () => {
-		if (frame === undefined) frame = requestAnimationFrame(check)
+		if (task === undefined) task = setTimeout(check, 0)
 	}
 	observer = new MutationObserver(schedule)
 	observer.observe(document, { childList: true, attributes: true, characterData: true, subtree: true })
@@ -66,7 +66,7 @@ export function compileQueryWaitExpression(
 }
 
 /**
- * Compiles a wait for the presence or absence of visible text, coalesced by animation frames.
+ * Compiles a wait for the presence or absence of visible text, coalesced by tasks.
  * @param text - Text to find in the main document body
  * @param deadline - Maximum time in milliseconds
  * @param key - Isolated-world property owning this observer

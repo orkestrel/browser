@@ -67,6 +67,7 @@ import { BrowserWorker } from './BrowserWorker.js'
 import { BrowserError } from './errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_CONTEXT_LOSS_PATTERN,
 	BROWSER_NAVIGATION_REASONS,
 	BROWSER_RELOAD_NAVIGATION_TYPES,
 	BROWSER_REFERENCE_PREFIX,
@@ -258,6 +259,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#epoch = 0
 	#floor = 0
 	#closed = false
+	readonly #waitRelease = new AbortController()
 	#codegen: BrowserCodegen | undefined
 	#registry: BrowserRegistry | undefined
 	readonly #codegenStart: BrowserTransition<BrowserCodegen> = new BrowserTransition()
@@ -423,6 +425,13 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	async wait(text: string, options?: BrowserWaitOptions): Promise<void> {
 		this.assert()
+		options = {
+			...options,
+			signal:
+				options?.signal === undefined
+					? this.#waitRelease.signal
+					: AbortSignal.any([options.signal, this.#waitRelease.signal]),
+		}
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
 		const end = performance.now() + timeout
@@ -451,24 +460,20 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				return
 			} catch (error) {
 				if (options?.signal?.aborted === true) {
-					await this.send(
-						'Runtime.evaluate',
-						{
-							expression: `globalThis[${JSON.stringify(key)}]?.()`,
-							contextId: context,
-							returnByValue: true,
-						},
-						{ timeout: 1000 },
-					).catch(() => undefined)
+					if (!this.#closed)
+						await this.send(
+							'Runtime.evaluate',
+							{
+								expression: `globalThis[${JSON.stringify(key)}]?.()`,
+								contextId: context,
+								returnByValue: true,
+							},
+							{ timeout: 1000 },
+						).catch(() => undefined)
 					throw options.signal.reason
 				}
-				if (
-					!isError(error) ||
-					!/execution context was destroyed|cannot find context with specified id|inspected target navigated or closed/i.test(
-						error.message,
-					)
-				)
-					throw error
+				if (!isError(error) || !BROWSER_CONTEXT_LOSS_PATTERN.test(error.message)) throw error
+				this.assert()
 				this.#dom = undefined
 				if (performance.now() >= end)
 					throw new BrowserError('Browser text wait timed out', 'BROWSER_WAIT_TIMEOUT', {
@@ -977,6 +982,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async #releaseResources(): Promise<void> {
+		this.#waitRelease.abort(new BrowserError('Browser page is closed'))
 		this.#unhold()
 		this.#announcement.reject(new BrowserError('Browser session ended'))
 		this.#client.unsubscribe('Page.lifecycleEvent', this.#lifecycleHandler, this.#sessionId)
