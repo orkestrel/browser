@@ -157,6 +157,9 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			expect((await frame.read()).text().text.replace(/\s+/g, ' ').trim()).toBe(
 				'Frame prose Frame value',
 			)
+			expect(renderHTML((await frame.read()).html.document)).not.toMatch(
+				/private-frame|hidden-payload/,
+			)
 		})
 
 		it('keeps read tool parity as a stylesheet-hidden panel becomes shown', async () => {

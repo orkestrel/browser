@@ -424,6 +424,31 @@ describe('listenBrowserNavigation', () => {
 
 describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 	const read = placement === 'DOM' ? readBrowserCapture : readCompiledCapture
+	it('reads the selected switch branch after offscreen auto content is skipped', async () => {
+		const fixture = requireValue(
+			CAPTURE_CASES.find((candidate) => candidate.name === 'SVG switch offscreen auto visibility'),
+		)
+		const document = createProbeDocument(fixture.html)
+		const view = requireValue(document.defaultView)
+		await new Promise<void>((resolve) => view.requestAnimationFrame(() => resolve()))
+		await new Promise<void>((resolve) => view.requestAnimationFrame(() => resolve()))
+		const subtree = requireValue(document.querySelector('div'))
+		expect(subtree.getBoundingClientRect().top).toBeGreaterThan(view.innerHeight)
+		expect(
+			requireValue(document.querySelector('svg')).checkVisibility({ contentVisibilityAuto: true }),
+		).toBe(false)
+		const branches = Array.from(document.querySelectorAll('switch > *'))
+		expect(branches.map((branch) => branch.getClientRects().length)).toEqual([0, 1])
+		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+			fixture.text,
+		)
+		expect(read(requireValue(document.querySelector('foreignObject div'))).html).toBe('')
+		expect(
+			createBrowserReading(read(requireValue(document.querySelector('text'))))
+				.text()
+				.text.trim(),
+		).toBe(fixture.text)
+	})
 	it('preserves paired siblings while pruning mixed node kinds', () => {
 		const document = createProbeDocument(
 			'<div style="visibility:hidden">hidden <span style="visibility:visible">First</span>hidden <span style="display:none">Omitted</span>hidden <span style="visibility:visible">Last</span>tail</div>',

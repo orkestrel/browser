@@ -2318,13 +2318,15 @@ export type BrowserEpochFunction = () => number
  *   when its slot sits under an element whose computed `display` is `none`.
  * - Closed `details` keeps only its first `summary` child. Elements with `content-visibility:
  *   hidden`, and `canvas`, `video`, and `audio` elements, lose their child nodes.
+ * - SVG `switch` keeps the child element with client rects, or its first child element when
+ *   none has rects, including definitions referenced by `use`. Other branches are removed.
  * Forms, rendered dialogs, and buttons become neutral carriers. Text fields and textareas
  * carry live values; empty text fields and textareas carry visible placeholders. Selects carry the selected
  * label, or displayed option and group labels in a listbox's client area. Named graphics carry
  * one explicit alternative; printed button text takes precedence over its accessible name.
  * Links carry resolved live addresses. Region elements remain available to distillation.
- * Carriers and block div, summary, and details elements receive br separators around their
- * contents. The html handle is this normalized capture, not the original DOM serialization.
+ * Carriers and block `div`, `summary`, and `details` elements receive `br` separators around their
+ * contents. The `html` handle is this normalized capture, not the original DOM serialization.
  * Direct element reads apply the same ancestor visibility and child-pruning rules.
  * Password and hidden inputs are removed entirely, including in the data-only fallback for
  * detached roots and documents without a window. Active floor elements are dropped.
