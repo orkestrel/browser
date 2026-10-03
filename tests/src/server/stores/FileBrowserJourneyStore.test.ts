@@ -1,5 +1,4 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
-import { linkBrowserFixture } from '../../../setupServer.js'
 import { afterEach, describe, it, expect } from 'vitest'
 import { watch } from 'node:fs'
 import { mkdir, rename, readFile, readdir } from 'node:fs/promises'
@@ -11,7 +10,12 @@ import {
 	createBrowserViewDouble,
 } from '../../../setup.js'
 import { requireValue } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import {
+	createScratch,
+	createLink,
+	supportsFileLinks,
+	supportsDirectoryLinks,
+} from '@orkestrel/test/server'
 import { BrowserJourneyToolset, BrowserToolset } from '@src/core'
 import {
 	createFileBrowserJourneyStore,
@@ -180,17 +184,13 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 						: join(root, journey.name, component)
 			if (component === 'journey.lock') await mkdir(path)
 			await rename(path, path + '-moved')
-			const reason = await linkBrowserFixture(
-				path + '-moved',
-				path,
+			const directory =
 				component === 'root' || component === 'journey' || component === 'journey.lock'
-					? 'dir'
-					: 'file',
+			context.skip(
+				!(directory ? supportsDirectoryLinks() : supportsFileLinks()),
+				'The installed link capability probe cannot create and read this link category',
 			)
-			if (reason !== undefined) {
-				context.skip(reason)
-				return
-			}
+			createLink(path, path + '-moved')
 			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
 			await expect(store.delete(journey.name)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',

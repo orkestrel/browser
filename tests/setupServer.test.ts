@@ -29,7 +29,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { once } from 'node:events'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
-import { readFile } from 'node:fs/promises'
+import { readFile, rmdir } from 'node:fs/promises'
 import { createConnection, createServer } from 'node:net'
 import { basename, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -45,9 +45,9 @@ import {
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import {
 	alignLoopClock,
-	linkBrowserFixture,
 	BrowseChild,
 	BrowserLockObserver,
+	observeBrowserFilesystem,
 	COOPERATIVE_SIGTERM,
 	PROCESS_TABLE,
 	createBrowserJourneyStage,
@@ -152,6 +152,27 @@ describe('BrowserLockObserver', () => {
 			)
 			expect(observed.count).toBe(2)
 		} finally {
+			scratch.destroy()
+		}
+	})
+})
+
+describe('observeBrowserFilesystem', () => {
+	it('interleaves after a real filesystem failure and before its promise resumes only once', async () => {
+		const scratch = createScratch()
+		const observed = createRecorder<[]>()
+		const path = join(scratch.path, 'replacement')
+		const hook = observeBrowserFilesystem(() => {
+			mkdirSync(path)
+			observed.handler()
+		})
+		try {
+			await expect(rmdir(path)).rejects.toMatchObject({ code: 'ENOENT' })
+			expect(lstatSync(path).isDirectory()).toBe(true)
+			await rmdir(path)
+			expect(observed.count).toBe(1)
+		} finally {
+			hook.disable()
 			scratch.destroy()
 		}
 	})
@@ -723,42 +744,6 @@ describe('readFixtureProcessId', () => {
 			join(scratch.path, 'absent.txt'),
 		)
 	})
-})
-
-describe('linkBrowserFixture', () => {
-	it.for(['file', 'dir'] as const)(
-		'creates or reports the probed capability for %s',
-		async (category) => {
-			const scratch = createScratch()
-			try {
-				const target =
-					category === 'dir' ? scratch.ensure('target') : scratch.write('target', 'control')
-				const path = join(scratch.path, 'link')
-				expect(lstatSync(target).isSymbolicLink()).toBe(false)
-				const reason = await linkBrowserFixture(target, path, category)
-				expect(reason === undefined || reason.includes('EPERM')).toBe(true)
-				expect(existsSync(path)).toBe(reason === undefined)
-				expect(reason === undefined ? lstatSync(path).isSymbolicLink() : false).toBe(
-					reason === undefined,
-				)
-				expect(reason === undefined ? realpathSync(path) : undefined).toBe(
-					reason === undefined ? realpathSync(target) : undefined,
-				)
-				await expect(
-					linkBrowserFixture(
-						target,
-						join(scratch.path, 'wrong'),
-						category === 'dir' ? 'file' : 'dir',
-					),
-				).rejects.toThrow('ordinary target')
-				await expect(
-					linkBrowserFixture(join(scratch.path, 'missing'), path, category),
-				).rejects.toMatchObject({ code: 'ENOENT' })
-			} finally {
-				scratch.destroy()
-			}
-		},
-	)
 })
 
 describe('createFakeBrowserProcess', () => {

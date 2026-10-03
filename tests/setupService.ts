@@ -13,8 +13,7 @@
  */
 
 import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/server'
-import type { BrowserPageInterface } from '@src/core'
-import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, isCDPError } from '@src/core'
+import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
 import { findSystemBrowser } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { waitForCondition } from '@orkestrel/test'
@@ -77,21 +76,6 @@ export function requireSystemBrowser(options?: SystemBrowserOptions): SystemBrow
  */
 export const REGISTRY_ABSENT_REASON =
 	'WebMCP.enable answers CDP error -32601 (method not found), so this browser has no page registry to mirror'
-
-/**
- * Probes registry support by the protocol command rather than the incomplete domain listing.
- * @param page - Page session to probe
- * @returns Whether WebMCP.enable succeeds; only a method-not-found refusal returns false
- */
-export async function supportsServiceRegistry(page: BrowserPageInterface): Promise<boolean> {
-	try {
-		await page.send('WebMCP.enable')
-		return true
-	} catch (error) {
-		if (isCDPError(error) && error.context?.['code'] === -32601) return false
-		throw error
-	}
-}
 
 /**
  * Parses the domain names a `Schema.getDomains` reply lists.
@@ -289,7 +273,7 @@ export function collectOutlineEntries(text: string): readonly string[] {
 
 /** Supplies toggle, expansion, selection, and absent-state controls for both placements. */
 export const SERVICE_TOGGLE_HTML =
-	'<button aria-pressed="true">Toggle on</button><button aria-pressed="false">Toggle off</button><button aria-pressed="mixed">Toggle mixed</button><button>Plain toggle control</button><button aria-expanded="false">Disclosure</button><a href="#" aria-expanded="true">Expanded link</a><div role="tablist"><button role="tab" aria-selected="true">Selected tab</button><button role="tab" aria-selected="false">Unselected tab</button><button role="tab">Default tab</button></div><div role="tree"><div role="treeitem" aria-selected="true">Selected treeitem</div><div role="treeitem" aria-selected="false">Unselected treeitem</div><div role="treeitem">Default treeitem</div></div><div role="listbox" aria-label="ARIA choices"><div role="option" aria-selected="true">Selected option</div><div role="option" aria-selected="false">Unselected option</div><div role="option">Default option</div><div role="option" aria-selected="">Empty option</div><div role="option" aria-selected="undefined">Undefined option</div></div><select aria-label="Override" aria-expanded="true"><option selected aria-selected="false">Native false</option><option aria-selected="true">Native true</option></select>'
+	'<button aria-pressed="true">Toggle on</button><button aria-pressed="false">Toggle off</button><button aria-pressed="mixed">Toggle mixed</button><button aria-pressed="TRUE">Uppercase toggle</button><button aria-pressed="foo">Unknown toggle</button><button aria-pressed=" false ">Spaced toggle</button><button aria-pressed="">Empty toggle</button><button aria-pressed="undefined">Undefined toggle</button><button aria-expanded="mixed">Mixed expansion</button><button aria-expanded="foo">Unknown expansion</button><button>Plain toggle control</button><button aria-expanded="false">Disclosure</button><a href="#" aria-expanded="true">Expanded link</a><div role="tablist"><button role="tab" aria-selected="true">Selected tab</button><button role="tab" aria-selected="false">Unselected tab</button><button role="tab">Default tab</button></div><div role="tree"><div role="treeitem" aria-selected="true">Selected treeitem</div><div role="treeitem" aria-selected="false">Unselected treeitem</div><div role="treeitem">Default treeitem</div></div><div role="listbox" aria-label="ARIA choices"><div role="option" aria-selected="true">Selected option</div><div role="option" aria-selected="false">Unselected option</div><div role="option">Default option</div><div role="option" aria-selected="">Empty option</div><div role="option" aria-selected="undefined">Undefined option</div></div><select aria-label="Native"><option>Native first</option><option selected>Native chosen</option></select><select aria-label="Override" aria-expanded="true"><option selected aria-selected="false">Native false</option><option aria-selected="true">Native true</option></select>'
 
 /**
  * Returns the reference of the one outline row with a role and a name, or throws.

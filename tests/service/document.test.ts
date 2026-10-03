@@ -262,6 +262,16 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 				'button "Toggle on" pressed=true',
 				'button "Toggle off" pressed=false',
 				'button "Toggle mixed" pressed=mixed',
+				'button "Uppercase toggle" pressed=true',
+				'button "Unknown toggle" pressed=true',
+				'button "Spaced toggle" pressed=true',
+				'button "Empty toggle"',
+				'button "Undefined toggle"',
+				'button "Mixed expansion" expanded=true',
+				'button "Unknown expansion" expanded=true',
+				'combobox "Native" value="Native chosen" expanded=false',
+				'option "Native first" selected=false',
+				'option "Native chosen" selected=true',
 				'button "Disclosure" expanded=false',
 				'link "Expanded link" expanded=true',
 				'button "Plain toggle control"',
@@ -290,6 +300,68 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 		it('keeps complete DOM rows equal to the CDP rows, including false and native overrides', () => {
 			expect(collectOutlineEntries(dom)).toEqual(collectOutlineEntries(cdp))
 		})
+	})
+
+	it('declares the lone tab selection difference between CDP and DOM', async () => {
+		const page = await browser.create({ url: fixtures.url('/document') })
+		try {
+			await requireDocumentToolset(page)
+			await page.evaluate(
+				'document.querySelector("main").insertAdjacentHTML("beforeend", "<button role=tab>Lone tab</button>")',
+			)
+			expect(collectOutlineEntries((await page.elements.outline()).text)).toContain(
+				'tab "Lone tab" selected=false',
+			)
+			const entries = collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_LOOK)))
+			expect(entries).toContain('tab "Lone tab"')
+			expect(entries).not.toContain('tab "Lone tab" selected=false')
+		} finally {
+			await page.close()
+		}
+	})
+
+	it('declares the native summary row difference between CDP and DOM', async () => {
+		const page = await browser.create({ url: fixtures.url('/document') })
+		try {
+			await requireDocumentToolset(page)
+			await page.evaluate(
+				'document.querySelector("main").insertAdjacentHTML("beforeend", "<details><summary>Delivery details</summary>Delivery instructions</details>")',
+			)
+			expect(collectOutlineEntries((await page.elements.outline()).text)).toContain(
+				'DisclosureTriangle "Delivery details" expanded=false',
+			)
+			const dom = requireToolText(await page.evaluate(DOCUMENT_LOOK))
+			expect(dom).toContain('Delivery details')
+			expect(extractOutlineRows(dom).filter((row) => row.name === 'Delivery details')).toEqual([])
+		} finally {
+			await page.close()
+		}
+	})
+
+	it('declares the lone treeitem role and state difference between CDP and DOM', async () => {
+		const page = await browser.create({ url: fixtures.url('/document') })
+		try {
+			await requireDocumentToolset(page)
+			await page.evaluate(
+				'document.querySelector("main").insertAdjacentHTML("beforeend", "<div role=treeitem aria-expanded=true aria-selected=false>Lone treeitem</div>")',
+			)
+			const { nodes } = await page.accessibility.snapshot()
+			const text = nodes.find((node) => node.role === 'StaticText' && node.name === 'Lone treeitem')
+			expect(text).toBeDefined()
+			const item = nodes.find((node) => node.id === text?.parent)
+			expect(item).toMatchObject({ role: 'generic' })
+			expect(item?.properties).not.toHaveProperty('pressed')
+			expect(item?.properties).not.toHaveProperty('expanded')
+			expect(item?.properties).not.toHaveProperty('selected')
+			const cdp = (await page.elements.outline()).text
+			expect(cdp).toContain('Lone treeitem')
+			expect(extractOutlineRows(cdp).filter((row) => row.name === 'Lone treeitem')).toEqual([])
+			expect(collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_LOOK)))).toContain(
+				'treeitem "Lone treeitem" expanded=true selected=false',
+			)
+		} finally {
+			await page.close()
+		}
 	})
 
 	describe('with a select appended to the document page', () => {

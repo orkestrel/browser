@@ -154,7 +154,12 @@ export class FileBrowserStore {
 			} catch (error) {
 				// A file cannot replace a directory: hosts report EISDIR or EPERM.
 				const target = await lstat(path).catch(() => undefined)
-				if (target?.isDirectory())
+				if (
+					error instanceof Error &&
+					'code' in error &&
+					(error.code === 'EISDIR' || error.code === 'EPERM') &&
+					target?.isDirectory()
+				)
 					throw new BrowserError(`Cannot replace directory: ${path}`, 'BROWSER_JOURNEY_FILE', {
 						path,
 					})
@@ -394,9 +399,9 @@ export class FileBrowserStore {
 		} catch (error) {
 			if (error instanceof Error && 'code' in error) {
 				if (error.code === 'ENOTEMPTY') return
-				if (error.code === 'ENOENT') {
+				if (error.code === 'ENOENT' || error.code === 'EPERM') {
 					try {
-						await lstat(path)
+						if ((await lstat(path)).isDirectory()) return
 					} catch (cause) {
 						if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT') return
 					}

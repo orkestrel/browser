@@ -24,12 +24,10 @@ import type { BrowserOutlineNode } from '@src/core'
 import { BROWSER_TOOL_DEADLINE_NOTE, renderBrowserOutline } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createAttachedPage } from './setup.js'
 import * as setupService from './setupService.js'
 import {
 	collectOutlinePairs,
 	collectOutlineEntries,
-	supportsServiceRegistry,
 	extractOutlineReferences,
 	extractOutlineRows,
 	matchesToolReceipt,
@@ -113,36 +111,9 @@ describe('requireSystemBrowser', () => {
 })
 
 describe('REGISTRY_ABSENT_REASON', () => {
-	it('cites the protocol error code and the domain listing a live proof asserts before skipping', () => {
+	it('cites the protocol error code and the command refusal a live proof asserts before skipping', () => {
 		expect(REGISTRY_ABSENT_REASON).toContain('WebMCP.enable answers CDP error -32601')
 		expect(REGISTRY_ABSENT_REASON).toContain('method not found')
-	})
-})
-
-describe('supportsServiceRegistry', () => {
-	it('distinguishes command support and method absence from another protocol failure', async () => {
-		const { page, client, transport } = await createAttachedPage()
-		try {
-			let code: number | undefined
-			transport.onSend('WebMCP.enable', (message) => {
-				if (code === undefined) transport.reply(message.id, {})
-				else transport.fail(message.id, 'Protocol refusal', code)
-			})
-			await expect(supportsServiceRegistry(page)).resolves.toBe(true)
-			code = -32601
-			await expect(supportsServiceRegistry(page)).resolves.toBe(false)
-			code = -32602
-			await expect(supportsServiceRegistry(page)).rejects.toMatchObject({
-				context: { code: -32602 },
-			})
-			expect(transport.sent.map((message) => message.method)).toEqual([
-				'WebMCP.enable',
-				'WebMCP.enable',
-				'WebMCP.enable',
-			])
-		} finally {
-			await client.close()
-		}
 	})
 })
 

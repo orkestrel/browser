@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, it, expect } from 'vitest'
 import { isRecord, parseJSON } from '@orkestrel/contract'
-import { createScratch } from '@orkestrel/test/server'
+import { createScratch, supportsMode } from '@orkestrel/test/server'
 import { waitForEvent } from '@orkestrel/test'
 import { formatBrowserLockEntry, parseBrowserLockEntry } from '@src/server'
 import {
@@ -428,7 +428,11 @@ process.send?.({ outcome: 'ready' })
 		})
 
 		it('reports chmod 000 permission errors from a non-root child with the denied path', async (context) => {
-			const { chmod } = await import('node:fs/promises')
+			context.skip(
+				!supportsMode(),
+				'supportsMode reports that chmod permission bits do not round-trip on this host',
+			)
+			const { chmod, stat } = await import('node:fs/promises')
 			const { FileBrowserJourneyStore, FileBrowserRunStore } = await import('@src/server')
 			const root = process.getuid?.() === 0
 			const account = root
@@ -471,7 +475,7 @@ process.send?.({ outcome: 'ready' })
 					'access.ts',
 					`
 import { strict as assert } from 'node:assert'
-import { readFile } from 'node:fs/promises'
+import { readFile, stat } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -484,8 +488,7 @@ assert.equal(await readFile(join(root, 'read-control'), 'utf8'), 'readable')
 const journeys = new FileBrowserJourneyStore({ root })
 const runs = new FileBrowserRunStore({ root })
 for (const path of [join(root, journey, 'journey.json'), join(root, run, 'runs', id, 'run.json')]) {
-	try { await readFile(path); process.exit(77) }
-	catch (error) { assert.equal(error.code, 'EACCES') }
+	assert.equal((await stat(path)).mode & 0o777, 0)
 	await assert.rejects(readFile(path), { code: 'EACCES' })
 }
 const outcomes = await Promise.allSettled([journeys.get(journey), runs.get(run, id)])
@@ -501,6 +504,7 @@ console.log(JSON.stringify({
 				for (const path of paths) {
 					expect(parseJSON(readFileSync(path, 'utf8'))).toBeDefined()
 					await chmod(path, 0)
+					expect((await stat(path)).mode & 0o777).toBe(0)
 				}
 				try {
 					const child = spawnSync(
@@ -509,12 +513,6 @@ console.log(JSON.stringify({
 						{ uid, gid, encoding: 'utf8', timeout: 10000 },
 					)
 					expect(child.error).toBeUndefined()
-					if (child.status === 77) {
-						context.skip(
-							'node:fs chmod(file, 0) permits readFile in the non-root child; readable-file control passed, so mode bits cannot build an unreadable file',
-						)
-						return
-					}
 					expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' })
 					expect(parseJSON(child.stdout)).toEqual({
 						uid: uid ?? process.getuid?.(),

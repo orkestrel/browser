@@ -24,6 +24,7 @@ import { join } from 'node:path'
 import { createBrowser, createCDPTransport } from '@src/server'
 import {
 	BROWSER_RESULT_LIMIT,
+	BROWSER_REGISTRY_ABSENT_CODE,
 	createCDPClient,
 	isBrowserError,
 	isBrowserResultLimitError,
@@ -52,7 +53,6 @@ import {
 import {
 	extractOutlineReferences,
 	parseProtocolDomains,
-	supportsServiceRegistry,
 	REGISTRY_ABSENT_REASON,
 	requireCacheRestore,
 	requireSystemBrowser,
@@ -1135,19 +1135,33 @@ describe('Browser proofs against the fixture pages', () => {
 
 		expect(domains).toContain('Page')
 		await expect(page.send('MissingProbe.enable')).rejects.toMatchObject({
-			context: { code: -32601 },
+			context: { code: BROWSER_REGISTRY_ABSENT_CODE },
 		})
-		const supported = await supportsServiceRegistry(page)
-		expect(await page.registry.start()).toBe(supported)
+		const refusal: unknown = await page.send('WebMCP.enable').then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+		expect(refusal).toBeOneOf([
+			undefined,
+			expect.objectContaining({ context: { code: BROWSER_REGISTRY_ABSENT_CODE } }),
+		])
+		expect(await page.registry.start()).toBe(refusal === undefined)
 	})
 
 	it('mirrors a page-registered tool through the live WebMCP domain on a browser launched with the WebMCP feature switch', async (context) => {
 		const page = await registry.create({ url: fixtures.url('/registry') })
 		opened.push(page)
-		const supported = await supportsServiceRegistry(page)
+		const refusal: unknown = await page.send('WebMCP.enable').then(
+			() => undefined,
+			(error: unknown) => error,
+		)
+		expect(refusal).toBeOneOf([
+			undefined,
+			expect.objectContaining({ context: { code: BROWSER_REGISTRY_ABSENT_CODE } }),
+		])
 		const started = await page.registry.start()
 
-		expect(started).toBe(supported)
+		expect(started).toBe(refusal === undefined)
 		context.skip(!started, REGISTRY_ABSENT_REASON)
 		await waitForCondition(
 			'the registry mirrored the page tool',
