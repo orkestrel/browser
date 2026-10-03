@@ -25,7 +25,7 @@ import {
 	recordProbeSubscriptions,
 } from '../../setupBrowser.js'
 
-const VIEW_TOOLS = ['look', 'read', 'click', 'type', 'wait']
+const VIEW_TOOLS = ['look', 'read', 'plain', 'click', 'type', 'wait']
 
 describe('createBrowserDOMView', () => {
 	it('creates an untrusted view over a probe document', async () => {
@@ -109,7 +109,7 @@ describe('createDocumentToolset', () => {
 		const look = requireValue(toolset.tools.tool('look'), 'look')
 		const click = requireValue(toolset.tools.tool('click'), 'click')
 		const type = requireValue(toolset.tools.tool('type'), 'type')
-		await look.execute({ what: 'form' }, { signal })
+		await look.execute({ search: 'form' }, { signal })
 		const [gift] = await toolset.view.elements.find({ role: 'checkbox', name: 'Gift wrap' })
 		const [label] = await toolset.view.elements.find({ role: 'button', name: 'Terms' })
 		const [note] = await toolset.view.elements.find({ role: 'textbox', name: 'Note' })
@@ -117,12 +117,12 @@ describe('createDocumentToolset', () => {
 		expect(Reflect.get(box ?? {}, 'checked')).toBe(true)
 		expect(trusted.calls).toEqual([[false]])
 		expect(clicked).toBe(
-			`Clicked ${gift?.reference} checkbox "Gift wrap". (untrusted event)\n\n${String(await look.execute({ what: 'form' }, { signal }))}`,
+			`Clicked ${gift?.reference} checkbox "Gift wrap". (untrusted event)\n\n${String(await look.execute({ search: 'form' }, { signal }))}`,
 		)
 		const labelled = await click.execute({ ref: label?.reference }, { signal })
 		expect(Reflect.get(terms ?? {}, 'checked')).toBe(true)
 		expect(labelled).toBe(
-			`Clicked ${label?.reference} button "Terms". (untrusted event)\n\n${String(await look.execute({ what: 'form' }, { signal }))}`,
+			`Clicked ${label?.reference} button "Terms". (untrusted event)\n\n${String(await look.execute({ search: 'form' }, { signal }))}`,
 		)
 		const typed = await type.execute(
 			{ ref: note?.reference, text: 'sam', submit: true },
@@ -130,7 +130,7 @@ describe('createDocumentToolset', () => {
 		)
 		expect(submits.calls).toEqual([[true]])
 		expect(typed).toBe(
-			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await look.execute({ what: 'form' }, { signal }))}`,
+			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await look.execute({ search: 'form' }, { signal }))}`,
 		)
 		await toolset.destroy()
 	})
@@ -142,7 +142,7 @@ describe('createDocumentToolset', () => {
 		const signal = new AbortController().signal
 		const look = String(
 			await requireValue(toolset.tools.tool('look'), 'look').execute(
-				{ what: 'search' },
+				{ search: 'search' },
 				{ signal },
 			),
 		)
@@ -170,7 +170,7 @@ describe('createDocumentToolset', () => {
 		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(VIEW_TOOLS)
 		expect(toolset.native.map((tool) => tool.name)).toEqual(VIEW_TOOLS)
 		const signal = new AbortController().signal
-		await requireValue(toolset.tools.tool('look'), 'look').execute({ what: 'save' }, { signal })
+		await requireValue(toolset.tools.tool('look'), 'look').execute({ search: 'save' }, { signal })
 		const [save] = await toolset.view.elements.find({ role: 'button', name: 'Save' })
 		probe.save.remove()
 		const gone = await Promise.resolve(

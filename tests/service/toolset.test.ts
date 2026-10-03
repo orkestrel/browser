@@ -336,7 +336,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'toggle' } }),
+			await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'toggle' } }),
 		)
 		expect(collectOutlineEntries(look)).toEqual(
 			expect.arrayContaining([
@@ -362,7 +362,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await toolset.start()
 
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the delivery form' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the delivery form' } }),
 		)
 		const [name, notes, speed, standard, express, submit, save, review] = extractOutlineRows(
 			look,
@@ -429,12 +429,16 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 
 		const read = requireToolText(
-			await tools.execute({ id: 'read', name: 'read', arguments: { what: 'the confirmation' } }),
+			await tools.execute({ id: 'read', name: 'read', arguments: { search: 'the confirmation' } }),
 		)
 		expect(read).toBe('# Order placed\n\nDelivery booked for Grace Hopper at Standard speed.')
+		const plain = requireToolText(
+			await tools.execute({ id: 'plain', name: 'plain', arguments: { search: '' } }),
+		)
+		expect(plain).toBe('Order placed\nDelivery booked for Grace Hopper at Standard speed.')
 
 		expect(
-			[look, click, typed, read].filter((receipt) => receipt.length > BROWSER_TOOL_LIMIT),
+			[look, click, typed, read, plain].filter((receipt) => receipt.length > BROWSER_TOOL_LIMIT),
 		).toStrictEqual([])
 	})
 
@@ -457,7 +461,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await tools.execute({
 					id: 'look',
 					name: 'look',
-					arguments: { what: 'the Tracking number textbox' },
+					arguments: { search: 'the Tracking number textbox' },
 				}),
 			)
 			expect(
@@ -478,7 +482,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			)
 
 			const control = requireToolText(
-				await tools.execute({ id: 'control', name: 'look', arguments: { what: 'zebra crossing' } }),
+				await tools.execute({
+					id: 'control',
+					name: 'look',
+					arguments: { search: 'zebra crossing' },
+				}),
 			)
 			expect(control.startsWith('page "Delivery form" ')).toBe(true)
 			expect(control).not.toContain(`${tracking} textbox`)
@@ -499,7 +507,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			while (offset !== undefined) {
 				const paged = extractBrowserPage(
 					requireToolText(
-						await tools.execute({ id: 'look', name: 'look', arguments: { what: '', offset } }),
+						await tools.execute({ id: 'look', name: 'look', arguments: { search: '', offset } }),
 					),
 				)
 				expect(paged.start).toBe(offset)
@@ -549,7 +557,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the tray' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the tray' } }),
 		)
 		const add = requireOutlineReference(look, 'button', 'Add to cart')
 		const hold = requireOutlineReference(look, 'button', 'Save for later')
@@ -586,7 +594,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the checkout' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the checkout' } }),
 		)
 		const name = requireOutlineReference(look, 'textbox', 'Name')
 		const recipient = requireOutlineReference(look, 'textbox', 'Gift name')
@@ -647,7 +655,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the notes' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the notes' } }),
 		)
 		const notes = requireOutlineReference(look, 'textbox', 'Notes')
 		const bold = requireOutlineReference(look, 'button', 'Bold')
@@ -698,7 +706,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the drafts' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the drafts' } }),
 		)
 		const remove = requireOutlineReference(look, 'button', 'Delete')
 		const keep = requireOutlineReference(look, 'button', 'Keep')
@@ -759,7 +767,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await toolset.start()
 		const next = requireOutlineReference(
 			requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the note' } }),
+				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the note' } }),
 			),
 			'link',
 			'Next',
@@ -798,7 +806,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		].join('\n')
 		expect(
 			requireToolText(
-				await tools.execute({ id: 'after', name: 'look', arguments: { what: 'the next note' } }),
+				await tools.execute({ id: 'after', name: 'look', arguments: { search: 'the next note' } }),
 			),
 		).toBe(destination)
 
@@ -810,7 +818,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await control.start()
 		const link = requireOutlineReference(
 			requireToolText(
-				await controls.execute({ id: 'look', name: 'look', arguments: { what: 'the note' } }),
+				await controls.execute({ id: 'look', name: 'look', arguments: { search: 'the note' } }),
 			),
 			'link',
 			'Next',
@@ -855,7 +863,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await started.start()
 			toolset = started
 			const catalog = requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the catalog' } }),
+				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
 			)
 			const open = requireOutlineReference(catalog, 'button', 'Open details')
 			child = fixtures.url('/popup/child')
@@ -917,7 +925,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const catalog = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the catalog' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
 		)
 		const stay = requireOutlineReference(catalog, 'button', 'Stay')
 
@@ -931,7 +939,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(await page.evaluate('document.body.dataset.stayed')).toBe('yes')
 		expect(
 			requireToolText(
-				await tools.execute({ id: 'tabs', name: 'tabs', arguments: { what: 'the open tabs' } }),
+				await tools.execute({ id: 'tabs', name: 'tabs', arguments: { search: 'the open tabs' } }),
 			),
 		).toBe(`t1 "Catalog" ${fixtures.url('/popup')} (current)`)
 		expect(toolset.view).toBe(page)
@@ -960,7 +968,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolset = createBrowserToolset(catalogPage, { tools, context })
 			await toolset.start()
 			catalog = requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the catalog' } }),
+				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
 			)
 		})
 
@@ -969,7 +977,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolset.emitter.on('select', selected.handler)
 			expect(
 				requireToolText(
-					await tools.execute({ id: 'tabs', name: 'tabs', arguments: { what: 'the open tabs' } }),
+					await tools.execute({ id: 'tabs', name: 'tabs', arguments: { search: 'the open tabs' } }),
 				),
 			).toBe(
 				`t1 "Catalog" ${fixtures.url('/popup')} (current)\nt2 "Details" ${fixtures.url('/popup/child')}`,
@@ -1029,7 +1037,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			)
 			expect(
 				requireToolText(
-					await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the catalog' } }),
+					await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
 				),
 			).toBe(
 				`The tab ${closed} closed; the view returned to ${fixtures.url('/popup')}.\n\n${catalog}`,
@@ -1068,7 +1076,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			fixtures.url('/frame/field', 'localhost'),
 		)
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the voucher' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the voucher' } }),
 		)
 		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
 		const code = requireOutlineReference(look, 'textbox', 'Code')
@@ -1106,7 +1114,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(
 			requireToolText(
-				await tools.execute({ id: 'after', name: 'look', arguments: { what: 'what happened' } }),
+				await tools.execute({ id: 'after', name: 'look', arguments: { search: 'what happened' } }),
 			),
 		).toBe(applied)
 	})
@@ -1124,7 +1132,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			{ budget: 10_000, interval: 20 },
 		)
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the voucher' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the voucher' } }),
 		)
 		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
 		const code = requireOutlineReference(look, 'textbox', 'Code')
@@ -1172,7 +1180,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(inner?.parent).toBe(requireValue(middle).id)
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the coupon' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the coupon' } }),
 		)
 		const coupon = requireOutlineReference(look, 'textbox', 'Coupon')
 
@@ -1202,7 +1210,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the search' } }),
+			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the search' } }),
 		)
 		const find = requireOutlineReference(look, 'button', 'Find')
 		const started = performance.now()
@@ -1238,7 +1246,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await toolset.start()
 			const name = requireOutlineReference(
 				requireToolText(
-					await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the form' } }),
+					await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the form' } }),
 				),
 				'textbox',
 				'Name',
@@ -1276,7 +1284,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const drafts = requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the drafts' } }),
+				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the drafts' } }),
 			)
 			const remove = requireOutlineReference(drafts, 'button', 'Delete')
 
@@ -1307,7 +1315,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await toolset.start()
 			const link = requireOutlineReference(
 				requireToolText(
-					await tools.execute({ id: 'look', name: 'look', arguments: { what: 'the note' } }),
+					await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the note' } }),
 				),
 				'link',
 				'Next',

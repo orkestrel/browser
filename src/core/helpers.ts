@@ -314,6 +314,50 @@ export function matchBrowserText(text: string, search: string): readonly Browser
 }
 
 /**
+ * Renders matching rows in at most half the available reply room.
+ *
+ * @remarks
+ * An oversized first row is cut with an ellipsis without splitting a surrogate pair, reserving
+ * room for the first later row that can fit beside it. Later rows that do not fit are skipped.
+ * An empty collection or a heading without room for a row produces no block.
+ *
+ * @param heading - The match count and search, ending with a colon
+ * @param rows - Matching rows in document order
+ * @param room - Characters available in the reply
+ * @returns The bounded block with a trailing blank line, or an empty string
+ *
+ * @example
+ * ```ts
+ * import { renderBrowserMatches } from '@orkestrel/browser'
+ * renderBrowserMatches('Matches:', ['[5] Cart'], 100) // 'Matches:\n[5] Cart\n\n'
+ * ```
+ */
+export function renderBrowserMatches(
+	heading: string,
+	rows: readonly string[],
+	room: number,
+): string {
+	const half = Math.floor(room / 2)
+	let text = `${heading}\n`
+	let count = 0
+	for (const row of rows) {
+		const space = half - text.length - 2
+		if (space < 1) break
+		if (row.length > space) {
+			if (count > 0) continue
+			let end = space - 1
+			const later = rows.slice(1).find((candidate) => candidate.length + 2 <= space)
+			if (later !== undefined) end -= later.length + 1
+			const last = row.charCodeAt(end - 1)
+			if (last >= 0xd800 && last <= 0xdbff) end -= 1
+			text += `${row.slice(0, end)}…\n`
+		} else text += `${row}\n`
+		count += 1
+	}
+	return count === 0 ? '' : `${text}\n`
+}
+
+/**
  * Renders document-order text and referenced elements with a bounded element count.
  *
  * @remarks
@@ -509,26 +553,26 @@ export function renderBrowserToolOutput(value: unknown): string {
 }
 
 /**
- * Derives the advertised input schema from an authored one, adding a required `what` parameter when the schema requires nothing.
+ * Derives the advertised input schema from an authored one, adding a required `purpose` parameter when the schema requires nothing.
  * @param schema - Authored input schema, or undefined for a parameterless tool
- * @returns An advertised schema, or undefined when the authored `what` parameter is optional
- * @remarks The caller strips only a synthetic `what` parameter before invoking the page tool.
+ * @returns An advertised schema, or undefined when the authored `purpose` parameter is optional
+ * @remarks The caller strips only a synthetic `purpose` parameter before invoking the page tool.
  */
 export function deriveBrowserToolSchema(
 	schema: Readonly<Record<string, unknown>> | undefined,
 ): Readonly<Record<string, unknown>> | undefined {
 	const properties = isRecord(schema?.['properties']) ? schema['properties'] : {}
 	const required = isArray(schema?.['required']) ? schema['required'].filter(isString) : []
-	if (Object.hasOwn(properties, 'what') && !required.includes('what')) return undefined
+	if (Object.hasOwn(properties, 'purpose') && !required.includes('purpose')) return undefined
 	if (required.length > 0) return schema
 	return {
 		...schema,
 		type: 'object',
 		properties: {
 			...properties,
-			what: { type: 'string', description: 'Describe the purpose of this action.' },
+			purpose: { type: 'string', description: 'Describe the purpose of this action.' },
 		},
-		required: ['what'],
+		required: ['purpose'],
 	}
 }
 
@@ -582,8 +626,8 @@ export function boundBrowserText(text: string, limit: number, footer: string): s
  * ```ts
  * import { BROWSER_TOOL_COPY, validateBrowserToolArguments } from '@orkestrel/browser'
  *
- * validateBrowserToolArguments(BROWSER_TOOL_COPY.look, { what: 'cart', ref: 'e1' })
- * // throws 'The look tool takes no ref parameter; call look with what and offset.'
+ * validateBrowserToolArguments(BROWSER_TOOL_COPY.look, { search: 'cart', ref: 'e1' })
+ * // throws 'The look tool takes no ref parameter; call look with search and offset.'
  * ```
  */
 export function validateBrowserToolArguments(

@@ -558,13 +558,13 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				await toolset.tools.execute({
 					id: 'checkout',
 					name: 'checkout',
-					arguments: { what: 'the cart' },
+					arguments: { search: 'the cart' },
 				}),
 			]
 			const passed = [
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'drafts' } }),
-				await toolset.tools.execute({ id: 'read', name: 'read', arguments: { what: 'drafts' } }),
-				await toolset.tools.execute({ id: 'tabs', name: 'tabs', arguments: { what: 'tabs' } }),
+				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'drafts' } }),
+				await toolset.tools.execute({ id: 'read', name: 'read', arguments: { search: 'drafts' } }),
+				await toolset.tools.execute({ id: 'tabs', name: 'tabs', arguments: { search: 'tabs' } }),
 				await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Drafts' } }),
 			]
 			await page.evaluate(
@@ -828,7 +828,11 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				}),
 			)
 			const view = requireToolText(
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'the form' } }),
+				await toolset.tools.execute({
+					id: 'look',
+					name: 'look',
+					arguments: { search: 'the form' },
+				}),
 			)
 			requireToolText(
 				await toolset.tools.execute({
@@ -855,11 +859,15 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				await toolset.tools.execute({
 					id: 'journeys',
 					name: 'journeys',
-					arguments: { what: 'saved journeys' },
+					arguments: { search: 'saved journeys' },
 				}),
 			)
 			const current = requireToolText(
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'the form' } }),
+				await toolset.tools.execute({
+					id: 'look',
+					name: 'look',
+					arguments: { search: 'the form' },
+				}),
 			)
 			const review = requireOutlineReference(current, 'button', 'Review')
 			const edited = requireToolText(
@@ -953,7 +961,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				),
 			]
 			const view = requireToolText(
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'sign in' } }),
+				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'sign in' } }),
 			)
 			receipts.push(
 				view,
@@ -988,7 +996,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				await toolset.tools.execute({
 					id: 'journeys',
 					name: 'journeys',
-					arguments: { what: 'saved journeys' },
+					arguments: { search: 'saved journeys' },
 				}),
 			)
 			await page.evaluate(

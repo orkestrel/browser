@@ -84,6 +84,8 @@ import {
 	boundBrowserText,
 	deriveBrowserToolSchema,
 	extractBrowserSlice,
+	matchBrowserText,
+	renderBrowserMatches,
 	normalizeBrowserKey,
 	readBrowserToolString,
 	renderBrowserElement,
@@ -98,7 +100,7 @@ import {
  * view's own tools beside them.
  *
  * @remarks
- * Every toolset advertises `look`, `read`, `click`, `type`, and `wait`, which need only the
+ * Every toolset advertises `look`, `read`, `plain`, `click`, `type`, and `wait`, which need only the
  * `BrowserViewInterface` it is constructed over. With `options.page` it also advertises `press`
  * and `navigate`, stages the `dialog` tool while a dialog is open on the current page, follows a
  * popup the current page opens and returns to the opener when the popup closes, and adopts
@@ -113,11 +115,11 @@ import {
  * protocol call, refuses a call to a toolset tool that carries a parameter the tool does not
  * advertise, and cuts every returned string and every thrown message at `limit` characters plus
  * a footer; the footer of a cut action or `dialog` receipt that carries a view names `look` as the next
- * call. `look` and `read` read the page, never one element, and return pages of at most `limit`
+ * call. `look`, `read`, and `plain` read the page and return pages of at most `limit`
  * characters and name the offset the next page starts at. A page ends after the last line break
  * in its window that lies past the page's start, or at the window's end when no such break fits,
  * without splitting a surrogate pair. The last page ends at the end of the outline or reading. A `look` whose
- * `what` matches referenced rows lists those rows first, and its pages reach every referenced row.
+ * `search` matches referenced rows lists those rows first, and its pages reach every referenced row.
  * A `press` receipt names the referenced element that has focus after the key. A page tool's
  * error message and JSON output reach the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT`
  * (4 096) by the registry, so a `limit` over that shows at most 4 096 characters of either; a page
@@ -152,7 +154,7 @@ import {
  * page placement's `type` with `submit` ends its action with `and submitted the form` when a read
  * recorded a submission, or when the navigation the receipt settled names `formSubmissionGet` or
  * `formSubmissionPost` as its reason, whatever the read answered, and with `and pressed Enter`
- * otherwise. A `read`
+ * otherwise. A `read` or `plain`
  * at an offset at or past its retained reading's end restarts that reading at 0. A receipt that
  * waits for a requested navigation shares one `BROWSER_TOOL_TIMEOUT_MS` deadline between that
  * wait and its view capture, of which `BROWSER_TOOL_CAPTURE_MS` is reserved for the capture. The
@@ -168,9 +170,9 @@ import {
  * A page tool is skipped, with `skip` emitted, when its name is reserved (`unresolved` included), when the manager holds
  * its name under a tool the toolset did not add (checked again immediately before each addition),
  * when its name falls outside `BROWSER_TOOL_NAME_PATTERN`, when its parameters or, for a source
- * that supplies `tools()`, its selected registration declare `what` optional, or when that
+ * that supplies `tools()`, its selected registration declare `purpose` optional, or when that
  * registration is marked `debugging`. The selected registration is the main frame's, then the
- * earlier one. A page tool whose parameters require nothing advertises a required `what`, which
+ * earlier one. A page tool whose parameters require nothing advertises a required `purpose`, which
  * is stripped before the tool runs. Every adopted tool is advertised `untrusted`. `destroy()`
  * removes only the tools the manager still holds under the instances the toolset added, never
  * closes a page, and ends only what `options.release` hands over, calling it one time last.
@@ -181,7 +183,7 @@ import {
  *
  * const toolset = new BrowserToolset(page, { page })
  * await toolset.start()
- * const result = await toolset.tools.execute({ id: '1', name: 'look', arguments: { what: 'cart' } })
+ * const result = await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'cart' } })
  * await toolset.destroy()
  * ```
  */
@@ -224,7 +226,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#page: BrowserPageInterface | undefined
 	#following: BrowserToolSourceInterface | undefined
 	#reading:
-		| { readonly view: BrowserViewInterface; readonly reading: BrowserReadingInterface }
+		| {
+				readonly view: BrowserViewInterface
+				readonly reading: BrowserReadingInterface
+				readonly name: 'read' | 'plain'
+		  }
 		| undefined
 	#tail: Promise<void> = Promise.resolve()
 	#pending: Promise<void> | undefined
@@ -270,16 +276,26 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			...(options?.error === undefined ? {} : { error: options.error }),
 		})
 		const look = this.#create('look', this.#look.bind(this), BROWSER_TOOL_CUT_FOOTER)
-		const read = this.#create('read', this.#read.bind(this), BROWSER_TOOL_CUT_FOOTER)
+		const read = this.#create(
+			'read',
+			this.#read.bind(this, 'read', (reading) => reading.markdown()),
+			BROWSER_TOOL_CUT_FOOTER,
+		)
+		const plain = this.#create(
+			'plain',
+			this.#read.bind(this, 'plain', (reading) => reading.text()),
+			BROWSER_TOOL_CUT_FOOTER,
+		)
 		const click = this.#create('click', this.#click.bind(this), BROWSER_TOOL_VIEW_FOOTER)
 		const type = this.#create('type', this.#type.bind(this), BROWSER_TOOL_VIEW_FOOTER)
 		const wait = this.#create('wait', this.#wait.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		this.#native = Object.freeze(
 			options?.page === undefined
-				? [look, read, click, type, wait]
+				? [look, read, plain, click, type, wait]
 				: [
 						look,
 						read,
+						plain,
 						click,
 						type,
 						this.#create('press', this.#press.bind(this), BROWSER_TOOL_VIEW_FOOTER),
@@ -692,8 +708,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
 		const offset = this.#readOffset(args)
-		const what = args['what']
-		const search = isString(what) ? what : undefined
+		const search = isString(args['search']) ? args['search'] : ''
 		// The outline carries the signal, so an abort rejects with its own pending protocol
 		// entry's reason rather than a toolset-level copy of it. Every referenced row is listed,
 		// because the pages reach past the default cap.
@@ -711,20 +726,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const start = offset < total ? offset : 0
 		const note = this.#drainNote()
 		const room = this.#limit - note.length
-		// The matches stay outside the paged text, so an offset never depends on `what`.
-		let block = ''
+		// The matches stay outside the paged text, so an offset never depends on `search`.
 		const count = outline.matches.length
-		if (start === 0 && count > 0) {
-			const half = Math.floor(room / 2)
-			let text = `${count} ${count === 1 ? 'element matches' : 'elements match'} ${JSON.stringify(search)}:\n`
-			if (text.length + 1 <= half) {
-				for (const row of outline.matches) {
-					if (text.length + row.length + 2 > half) break
-					text += `${row}\n`
-				}
-				block = `${text}\n`
-			}
-		}
+		const block =
+			start === 0
+				? renderBrowserMatches(
+						`${count} ${count === 1 ? 'element matches' : 'elements match'} ${JSON.stringify(search)}:`,
+						outline.matches,
+						room,
+					)
+				: ''
 		const space = room - block.length
 		const slice =
 			space < 1
@@ -734,6 +745,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	async #read(
+		name: 'read' | 'plain',
+		project: (reading: BrowserReadingInterface) => BrowserReadResult,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
@@ -748,26 +761,34 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			offset === 0 ||
 			retained === undefined ||
 			reading === undefined ||
+			retained.name !== name ||
 			retained.view !== view ||
 			reading.stale
 		) {
 			reading = await this.#race(view.read({ signal: context.signal }), '', context.signal)
-			this.#reading = { view, reading }
+			this.#reading = { view, reading, name }
 		}
-		const start =
-			reading === retained?.reading && offset < reading.markdown({ offset: 0, limit: 1 }).total
-				? offset
-				: 0
+		const whole = project(reading)
+		const start = reading === retained?.reading && offset < whole.total ? offset : 0
 		const note = this.#drainNote()
 		const room = this.#limit - note.length
+		const search = isString(args['search']) ? args['search'] : ''
+		const matches = start === 0 ? matchBrowserText(whole.text, search) : []
+		const count = matches.length
+		const block = renderBrowserMatches(
+			`${count} ${count === 1 ? 'line matches' : 'lines match'} ${JSON.stringify(search)}:`,
+			matches.map((match) => `[${match.offset}] ${match.text}`),
+			room,
+		)
+		const space = room - block.length
 		const slice =
-			room < 1
-				? { text: '', offset: start, total: reading.markdown({ offset: 0 }).total }
-				: reading.markdown({ offset: start, limit: room })
-		return this.#pageSlice('read', note, slice)
+			space < 1
+				? { text: '', offset: start, total: whole.total }
+				: extractBrowserSlice(whole.text, start, space)
+		return this.#pageSlice(name, note, slice, block)
 	}
 
-	// Reads the `offset` argument of `look` and `read` before either captures anything.
+	// Reads the `offset` argument before the tool captures anything.
 	#readOffset(args: Readonly<Record<string, unknown>>): number {
 		const offset = args['offset'] ?? 0
 		if (!isInteger(offset) || offset < 0) {
@@ -786,10 +807,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return boundBrowserText(this.#drain(), Math.max(1, this.#limit - 1), BROWSER_TOOL_CUT_FOOTER)
 	}
 
-	// Returns one page of `look` or `read`: the note, the block, and the slice as the body, and the
+	// Returns one page: the note, the block, and the slice as the body, and the
 	// footer that names the range and the next offset, absent when the whole text fits at offset 0.
 	#pageSlice(
-		name: 'look' | 'read',
+		name: 'look' | 'read' | 'plain',
 		note: string,
 		slice: BrowserReadResult,
 		block = '',
@@ -1157,19 +1178,26 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	async #tabs(
-		_args: Readonly<Record<string, unknown>>,
+		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
 		const tabs = await this.#list(context.signal, true)
-		return [
-			tabs
-				.map(
-					(tab) =>
-						`${tab.id} ${JSON.stringify(tab.title)} ${tab.url}${tab.current ? ' (current)' : ''}`,
-				)
-				.join('\n'),
-			'',
-		]
+		const text = tabs
+			.map(
+				(tab) =>
+					`${tab.id} ${JSON.stringify(tab.title)} ${tab.url}${tab.current ? ' (current)' : ''}`,
+			)
+			.join('\n')
+		const search = isString(args['search']) ? args['search'] : ''
+		const matches = matchBrowserText(text, search)
+		const count = matches.length
+		const note = this.#drainNote()
+		const block = renderBrowserMatches(
+			`${count} ${count === 1 ? 'tab matches' : 'tabs match'} ${JSON.stringify(search)}:`,
+			matches.map((match) => match.text),
+			this.#limit - note.length,
+		)
+		return [`${note}${block}${text}`, '']
 	}
 
 	async #switch(
@@ -1215,7 +1243,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const turn = await this.#acquire(context.signal)
 		try {
 			const input = synthetic
-				? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'what'))
+				? Object.fromEntries(Object.entries(args).filter(([key]) => key !== 'purpose'))
 				: args
 			const command = Promise.resolve(tool.execute(input, context))
 			const output = await this.#command(command, `Called ${tool.name}`, command, context.signal)

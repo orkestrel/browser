@@ -55,7 +55,7 @@ import {
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 
 const DOCUMENT_LOOK =
-	"documentToolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'the gift options' } })"
+	"documentToolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'the gift options' } })"
 
 describe('createDocumentToolset served from dist/src/browser against CDP on the same page', () => {
 	const teardown = createTeardown()
@@ -173,12 +173,12 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 					await tools.execute({
 						id: 'read',
 						name: 'read',
-						arguments: { what: 'the page', offset: 0 },
+						arguments: { search: 'the page', offset: 0 },
 					}),
 				)
 				const dom = requireToolText(
 					await page.evaluate(
-						`documentToolset.tools.execute({id:'read',name:'read',arguments:{what:'the page',offset:0}})`,
+						`documentToolset.tools.execute({id:'read',name:'read',arguments:{search:'the page',offset:0}})`,
 					),
 				)
 				expect(dom).toBe(cdp)
@@ -316,17 +316,17 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 		})
 
 		it('lists the same match rows in the DOM look as the CDP outline search of the same page', async () => {
-			const what = 'Gift wrap checkbox'
-			const cdp = await page.elements.outline({ search: what })
+			const search = 'Gift wrap checkbox'
+			const cdp = await page.elements.outline({ search: search })
 			expect(collectOutlinePairs(cdp.matches.join('\n'))).toStrictEqual(['checkbox "Gift wrap"'])
 			const dom = requireToolText(
 				await page.evaluate(
-					`documentToolset.tools.execute({ id: 'look', name: 'look', arguments: { what: ${JSON.stringify(what)} } })`,
+					`documentToolset.tools.execute({ id: 'look', name: 'look', arguments: { search: ${JSON.stringify(search)} } })`,
 				),
 			)
 			const [block = ''] = dom.split('\n\npage "')
 			const [header, ...rows] = block.split('\n')
-			expect(header).toBe(`1 element matches ${JSON.stringify(what)}:`)
+			expect(header).toBe(`1 element matches ${JSON.stringify(search)}:`)
 			expect(collectOutlinePairs(rows.join('\n'))).toStrictEqual(
 				collectOutlinePairs(cdp.matches.join('\n')),
 			)
@@ -335,7 +335,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 		it('ends a DOM click receipt with (untrusted event) and records isTrusted false, while a CDP click receipt on the same page carries no marker and records isTrusted true', async () => {
 			const look = requireToolText(
 				await page.evaluate(
-					"documentToolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'gift wrap' } })",
+					"documentToolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'gift wrap' } })",
 				),
 			)
 			const wrap = requireOutlineReference(look, 'checkbox', 'Gift wrap')
@@ -356,7 +356,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			await toolset.start()
 			const reference = requireOutlineReference(
 				requireToolText(
-					await tools.execute({ id: 'look', name: 'look', arguments: { what: 'gift wrap' } }),
+					await tools.execute({ id: 'look', name: 'look', arguments: { search: 'gift wrap' } }),
 				),
 				'checkbox',
 				'Gift wrap',

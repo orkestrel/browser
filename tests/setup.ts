@@ -2036,7 +2036,7 @@ export interface BrowserPageFixture {
  */
 export function extractBrowserPage(result: string): BrowserPageFixture {
 	const footer =
-		/\n\n\[characters (\d+)–(\d+) of (\d+)(?:; call (?:look|read) with offset (\d+) for more)?\]$/.exec(
+		/\n\n\[characters (\d+)–(\d+) of (\d+)(?:; call (?:look|read|plain) with offset (\d+) for more)?\]$/.exec(
 			result,
 		)
 	if (footer === null)

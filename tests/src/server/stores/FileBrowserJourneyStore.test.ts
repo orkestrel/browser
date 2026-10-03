@@ -141,7 +141,7 @@ describe('BrowserJourneyToolset file listing', () => {
 			const result = await toolset.tools.execute({
 				id: 'listing',
 				name: 'journeys',
-				arguments: { what: 'all' },
+				arguments: { search: 'all' },
 			})
 			expect(result).toMatchObject({ success: true })
 			if (!result.success || typeof result.value !== 'string')

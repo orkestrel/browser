@@ -26,6 +26,7 @@ import {
 	matchBrowserOutline,
 	collectBrowserWords,
 	matchBrowserText,
+	renderBrowserMatches,
 	normalizeBrowserKey,
 	normalizeBrowserName,
 	readBrowserAccessibility,
@@ -87,6 +88,17 @@ import {
 } from '../../setup.js'
 
 describe('reading matches', () => {
+	it('bounds matches, cuts a long first row safely, and skips later long rows', () => {
+		expect(renderBrowserMatches('Matches:', ['x'.repeat(100), 'y'.repeat(100), 'last'], 48)).toBe(
+			'Matches:\nxxxxxxx…\nlast\n\n',
+		)
+		expect(renderBrowserMatches('Matches:', ['a😀tail'], 26)).toBe('Matches:\na…\n\n')
+		expect(renderBrowserMatches('Matches:', ['short', 'x'.repeat(100), 'last'], 48)).toBe(
+			'Matches:\nshort\nlast\n\n',
+		)
+		expect(renderBrowserMatches('Matches:', [], 100)).toBe('')
+		expect(renderBrowserMatches('Matches:', ['row'], 10)).toBe('')
+	})
 	it('collects distinct whole Unicode words and digits of at least three characters', () => {
 		expect([...collectBrowserWords('Cart CART cartwheel a to 12 123 café 中文字')]).toEqual([
 			'cart',
@@ -432,27 +444,31 @@ describe('WebMCP adoption helpers', () => {
 		expect(renderBrowserToolOutput(cycle)).toBe('[Unserializable tool output]')
 	})
 
-	it('adds a synthetic required what without mutating the authored schema', () => {
-		expect(deriveBrowserToolSchema(undefined)?.['required']).toEqual(['what'])
+	it('adds a synthetic required purpose without mutating the authored schema', () => {
+		expect(deriveBrowserToolSchema(undefined)?.['required']).toEqual(['purpose'])
 		const schema = { type: 'object', properties: { query: { type: 'string' } }, required: [] }
 		const result = deriveBrowserToolSchema(schema)
-		expect(result?.['required']).toEqual(['what'])
+		expect(result?.['required']).toEqual(['purpose'])
 		expect(result?.['properties']).toHaveProperty('query')
-		expect(result?.['properties']).toHaveProperty('what')
+		expect(result?.['properties']).toHaveProperty('purpose')
 		expect(schema.required).toEqual([])
-		expect(schema.properties).not.toHaveProperty('what')
+		expect(schema.properties).not.toHaveProperty('purpose')
 	})
 
-	it('retains required parameters and refuses an optional authored what', () => {
-		const schema = { type: 'object', properties: { what: { type: 'string' } }, required: ['what'] }
+	it('retains required parameters and refuses an optional authored purpose', () => {
+		const schema = {
+			type: 'object',
+			properties: { purpose: { type: 'string' } },
+			required: ['purpose'],
+		}
 		expect(deriveBrowserToolSchema(schema)).toBe(schema)
 		expect(
-			deriveBrowserToolSchema({ type: 'object', properties: { what: { type: 'string' } } }),
+			deriveBrowserToolSchema({ type: 'object', properties: { purpose: { type: 'string' } } }),
 		).toBeUndefined()
 		expect(
 			deriveBrowserToolSchema({
 				type: 'object',
-				properties: { what: { type: 'string' } },
+				properties: { purpose: { type: 'string' } },
 				required: ['query'],
 			}),
 		).toBeUndefined()

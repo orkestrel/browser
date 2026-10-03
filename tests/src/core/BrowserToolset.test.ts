@@ -84,6 +84,99 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it.each(['read', 'plain'])(
+		'reading search on %s jumps beyond 4000 and pages its projection',
+		async (name) => {
+			const html = `<nav>Navigation retained</nav><main>${'<p>Ordinary paragraph with a <a href="/catalog">catalog link</a>.</p>'.repeat(180)}<h2>Delivery schedule</h2><p>Arrives on Friday.</p></main>`
+			const fixture = await createBrowserElementFixture({
+				evaluation: (message) =>
+					fixture.transport.reply(message.id, {
+						result: {
+							value: String(message.params?.['expression']).includes('outerHTML')
+								? { url: 'https://example.test/cart', title: 'Cart', html }
+								: true,
+						},
+					}),
+			})
+			const toolset = createBrowserToolset(fixture.page)
+			try {
+				await toolset.start()
+				const tool = requireValue(toolset.tools.tool(name))
+				const context = { signal: new AbortController().signal }
+				const reading = createBrowserReading({
+					url: 'https://example.test/cart',
+					title: 'Cart',
+					html,
+				})
+				const whole = (name === 'read' ? reading.markdown() : reading.text()).text
+				const heading = name === 'read' ? '## Delivery schedule' : 'Delivery schedule'
+				const offset = whole.indexOf(heading)
+				expect(offset).toBeGreaterThan(4000)
+				const first = String(await tool.execute({ search: 'delivery schedule' }, context))
+				expect(
+					first.startsWith(`1 line matches "delivery schedule":\n[${offset}] ${heading}\n\n`),
+				).toBe(true)
+				expect(first).toContain('Navigation retained')
+				expect(tool.annotations).toEqual({ pure: true, untrusted: true })
+				const jumped = String(await tool.execute({ search: 'delivery schedule', offset }, context))
+				expect(jumped.startsWith(whole.slice(offset))).toBe(true)
+				expect(jumped).not.toContain('line matches')
+				const hold = await toolset.hold('replay')
+				try {
+					const actions = createRecorder<readonly [BrowserAction]>()
+					toolset.emitter.on('action', actions.handler)
+					let next = 0
+					let reconstructed = ''
+					do {
+						const slice = extractBrowserPage(
+							String(await tool.execute({ search: 'unmatchedword', offset: next }, context)),
+						)
+						expect(slice.body).not.toContain('matches')
+						reconstructed += slice.body
+						next = slice.next ?? whole.length
+					} while (next < whole.length)
+					expect(reconstructed).toBe(whole)
+					expect(actions.count).toBe(0)
+				} finally {
+					hold.destroy()
+				}
+				const before = fixture.transport.sent.filter((message) =>
+					String(message.params?.['expression']).includes('outerHTML'),
+				).length
+				const other = requireValue(toolset.tools.tool(name === 'read' ? 'plain' : 'read'))
+				const switched = String(await other.execute({ search: '', offset: 50 }, context))
+				expect(extractBrowserPage(switched).start).toBe(0)
+				expect(
+					fixture.transport.sent.filter((message) =>
+						String(message.params?.['expression']).includes('outerHTML'),
+					),
+				).toHaveLength(before + 1)
+			} finally {
+				await toolset.destroy()
+				await fixture.client.close()
+			}
+		},
+	)
+	it('refuses the former what argument and names search', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			for (const name of ['look', 'read', 'plain']) {
+				await expect(
+					requireValue(toolset.tools.tool(name)).execute(
+						{ what: 'cart' },
+						{ signal: new AbortController().signal },
+					),
+				).rejects.toThrow(
+					`The ${name} tool takes no what parameter; call ${name} with search and offset.`,
+				)
+			}
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 	it('skips a page tool named unresolved as reserved', async () => {
 		const source: BrowserToolSourceInterface = {
 			emitter: new Emitter<BrowserToolSourceEventMap>(),
@@ -111,7 +204,7 @@ describe('BrowserToolset', () => {
 				expect(toolset.tools.tools()).toEqual(manager.tools())
 				expect(toolset.tools.definitions()).toEqual(manager.definitions())
 				expect(toolset.tools.tool('look')).toBe(manager.tool('look'))
-				const call = { id: 'look', name: 'look', arguments: { what: 'form' } }
+				const call = { id: 'look', name: 'look', arguments: { search: 'form' } }
 				const missing = { id: 'missing', name: 'missing', arguments: {} }
 				expect(await toolset.tools.execute([call, missing])).toEqual([
 					await manager.execute(call),
@@ -440,7 +533,8 @@ describe('BrowserToolset', () => {
 				expect(direct).toEqual(first.result)
 				expect(actions.calls[2]?.[0].receipt).toBe(first.action?.receipt)
 				expect(
-					(await toolset.perform({ id: 'look', name: 'look', arguments: { what: 'form' } })).action,
+					(await toolset.perform({ id: 'look', name: 'look', arguments: { search: 'form' } }))
+						.action,
 				).toBeUndefined()
 				expect(
 					(await toolset.perform({ id: 'missing', name: 'missing', arguments: {} })).action,
@@ -589,7 +683,7 @@ describe('BrowserToolset', () => {
 				const refused = await toolset.perform({
 					id: 'foreign',
 					name: 'checkout',
-					arguments: { what: 'cart' },
+					arguments: { search: 'cart' },
 				})
 				expect(refused.result).toMatchObject({
 					success: false,
@@ -604,15 +698,16 @@ describe('BrowserToolset', () => {
 				).catch((error: unknown) => error)
 				expect(readProperty(denied, 'code')).toBe('BROWSER_TOOLSET_BUSY')
 				for (const call of [
-					{ id: 'look', name: 'look', arguments: { what: 'form' } },
-					{ id: 'read', name: 'read', arguments: { what: 'form' } },
+					{ id: 'look', name: 'look', arguments: { search: 'form' } },
+					{ id: 'read', name: 'read', arguments: { search: 'form' } },
+					{ id: 'plain', name: 'plain', arguments: { search: 'form' } },
 					{ id: 'wait', name: 'wait', arguments: { text: 'Form' } },
 				])
 					expect((await toolset.perform(call)).result.success).toBe(true)
 				expect(
 					(
 						await toolset.perform(
-							{ id: 'owner', name: 'checkout', arguments: { what: 'cart' } },
+							{ id: 'owner', name: 'checkout', arguments: { search: 'cart' } },
 							{ caller: hold.token, signal: new AbortController().signal },
 						)
 					).result.success,
@@ -640,7 +735,7 @@ describe('BrowserToolset', () => {
 				const acting = toolset.perform({
 					id: 'before',
 					name: 'checkout',
-					arguments: { what: 'cart' },
+					arguments: { search: 'cart' },
 				})
 				await waitForCondition('adopted input started', () => invoked.count === 1)
 				const holding = toolset.hold('add-kettle')
@@ -679,7 +774,7 @@ describe('BrowserToolset', () => {
 				const acting = toolset.perform({
 					id: 'before',
 					name: 'checkout',
-					arguments: { what: 'cart' },
+					arguments: { search: 'cart' },
 				})
 				await waitForCondition('adopted input started', () => invoked.count === 1)
 				const abort = new AbortController()
@@ -786,22 +881,23 @@ describe('BrowserToolset', () => {
 					'secret',
 				),
 			}
+			// Reading change: full 6,023 → 6,559; journey 3,067 → 3,090 UTF-16 code units.
 			// Include the secret property's name and schema without charging for the rest of type.
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
 				.toBeLessThanOrEqual(3100)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6050)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6600)
 		})
 
-		it('catches a tool outside the seven, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
+		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
 				const toolset = new BrowserToolset(page, { page })
 				expect(toolset.tools.count).toBe(0)
 				await toolset.start()
-				const seven = ['look', 'read', 'click', 'type', 'press', 'navigate', 'wait']
-				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(seven)
-				expect(toolset.native.map((tool) => tool.name)).toEqual(seven)
+				const names = ['look', 'read', 'plain', 'click', 'type', 'press', 'navigate', 'wait']
+				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(names)
+				expect(toolset.native.map((tool) => tool.name)).toEqual(names)
 				expect(toolset.native).toEqual(toolset.tools.tools())
 				expect(toolset.view).toBe(page)
 				expect(
@@ -809,6 +905,7 @@ describe('BrowserToolset', () => {
 				).toEqual({
 					look: { pure: true, untrusted: true },
 					read: { pure: true, untrusted: true },
+					plain: { pure: true, untrusted: true },
 					click: undefined,
 					type: undefined,
 					press: undefined,
@@ -847,7 +944,9 @@ describe('BrowserToolset', () => {
 				),
 			).toEqual({
 				look: "Shows the page's text and the elements you can act on, each with a reference like e4. Call it first and after the page changes.",
-				read: "Reads the page's text for what you name. Call it to learn a fact; continue with the offset a cut result names.",
+				read: 'Reads the page as Markdown, with headings, tables, and link addresses. Call it to learn a fact; continue with the offset a cut result names.',
+				plain:
+					'Reads the page as plain text, without Markdown, link addresses, or image text. Call it for words to pass to wait or type.',
 				click: 'Clicks the element with that reference.',
 				type: 'Types into the text control with that reference; set submit to true to submit its form.',
 				press: 'Presses that key or chord, such as Enter or Control+a.',
@@ -868,27 +967,27 @@ describe('BrowserToolset', () => {
 		it('catches a look or read that advertises or accepts ref, or a tool that runs with a parameter it does not advertise', async () => {
 			expect(
 				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.look.parameters, 'properties')),
-			).toEqual(['what', 'offset'])
+			).toEqual(['search', 'offset'])
 			expect(
 				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.read.parameters, 'properties')),
-			).toEqual(['what', 'offset'])
+			).toEqual(['search', 'offset'])
 			const view = createBrowserViewDouble()
 			const toolset = new BrowserToolset(view)
 			await toolset.start()
 			const results = await toolset.tools.execute([
-				{ id: '1', name: 'look', arguments: { what: 'the cart', ref: 'e1' } },
-				{ id: '2', name: 'read', arguments: { what: 'the cart', ref: 'e1' } },
-				{ id: '3', name: 'type', arguments: { ref: 'e2', text: 'sam', what: 'the email' } },
+				{ id: '1', name: 'look', arguments: { search: 'the cart', ref: 'e1' } },
+				{ id: '2', name: 'read', arguments: { search: 'the cart', ref: 'e1' } },
+				{ id: '3', name: 'type', arguments: { ref: 'e2', text: 'sam', search: 'the email' } },
 			])
 			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
-				'The look tool takes no ref parameter; call look with what and offset.',
-				'The read tool takes no ref parameter; call read with what and offset.',
-				'The type tool takes no what parameter; call type with ref, text, submit, and secret.',
+				'The look tool takes no ref parameter; call look with search and offset.',
+				'The read tool takes no ref parameter; call read with search and offset.',
+				'The type tool takes no search parameter; call type with ref, text, submit, and secret.',
 			])
 			expect(view.calls).toEqual([])
 			const refused = await Promise.resolve(
 				requireValue(toolset.tools.tool('look')).execute(
-					{ what: 'the cart', ref: 'e1' },
+					{ search: 'the cart', ref: 'e1' },
 					{ signal: new AbortController().signal },
 				),
 			).catch((caught: unknown) => caught)
@@ -948,7 +1047,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'order' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'order' }, { signal })
 				const click = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e4' }, { signal }),
 				)
@@ -966,8 +1065,9 @@ describe('BrowserToolset', () => {
 				)
 				expect(toolset.tools.tool('dialog')?.name).toBe('dialog')
 				const refusals = await toolset.tools.execute([
-					{ id: '1', name: 'look', arguments: { what: 'cart' } },
-					{ id: '2', name: 'read', arguments: { what: 'cart' } },
+					{ id: '1', name: 'look', arguments: { search: 'cart' } },
+					{ id: '2', name: 'read', arguments: { search: 'cart' } },
+					{ id: 'plain', name: 'plain', arguments: { search: 'cart' } },
 					{ id: '3', name: 'click', arguments: { ref: 'e1' } },
 					{ id: '4', name: 'type', arguments: { ref: 'e2', text: 'sam' } },
 					{ id: '5', name: 'press', arguments: { key: 'Enter' } },
@@ -1029,7 +1129,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'size' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'size' }, { signal })
 				const typed = Promise.resolve(
 					requireValue(toolset.tools.tool('type')).execute(
 						{ ref: 'e2', text: 'Large' },
@@ -1187,12 +1287,12 @@ describe('BrowserToolset', () => {
 				)
 				const staged = requireValue(toolset.tools.tool('dialog'))
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'look', arguments: { what: 'cart' } }),
+					await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'cart' } }),
 				).toMatchObject({ success: false, error: 'An alert dialog is open: "Saved"; call dialog.' })
 				transport.event('Page.javascriptDialogClosed', { result: true }, 'session-main')
 				expect(toolset.tools.tool('dialog')).toBeUndefined()
 				expect(
-					await toolset.tools.execute({ id: '2', name: 'look', arguments: { what: 'cart' } }),
+					await toolset.tools.execute({ id: '2', name: 'look', arguments: { search: 'cart' } }),
 				).toMatchObject({ success: true })
 				const refused = await Promise.resolve(
 					staged.execute({ accept: true }, { signal: new AbortController().signal }),
@@ -1212,7 +1312,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'email' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'email' }, { signal })
 				const sent = transport.sent.length
 				const typed = String(
 					await requireValue(toolset.tools.tool('type')).execute(
@@ -1388,7 +1488,7 @@ describe('BrowserToolset', () => {
 				const trusted = createBrowserToolset(page)
 				await trusted.start()
 				const signal = new AbortController().signal
-				await requireValue(trusted.tools.tool('look')).execute({ what: 'size' }, { signal })
+				await requireValue(trusted.tools.tool('look')).execute({ search: 'size' }, { signal })
 				const sent = transport.sent.length
 				expect(
 					await trusted.tools.execute({
@@ -1416,7 +1516,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				await requireValue(toolset.tools.tool('look')).execute(
-					{ what: 'email' },
+					{ search: 'email' },
 					{ signal: new AbortController().signal },
 				)
 				expect(
@@ -1465,7 +1565,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					capturing = true
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1524,7 +1624,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					capturing = true
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1633,7 +1733,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const started = performance.now()
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1686,7 +1786,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const started = performance.now()
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1734,7 +1834,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					// Setup helpers leave one-second budget timers behind; the baseline waits them out.
 					await waitForDelay(1_100)
 					const timers = process
@@ -1796,7 +1896,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const settled = createRecorder<[]>()
 				const clicked = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1842,7 +1942,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'the form' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
 					const settled = createRecorder<[]>()
 					const acting = Promise.resolve(
 						requireValue(toolset.tools.tool(name)).execute(args, { signal }),
@@ -1914,7 +2014,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'the form' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
 				const settled = createRecorder<[]>()
 				const typing = Promise.resolve(
 					requireValue(toolset.tools.tool('type')).execute(
@@ -1978,7 +2078,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'the form' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
 				const settled = createRecorder<[]>()
 				const typing = Promise.resolve(
 					requireValue(toolset.tools.tool('type')).execute(
@@ -2053,7 +2153,7 @@ describe('BrowserToolset', () => {
 					const signal = new AbortController().signal
 					const look = String(
 						await requireValue(toolset.tools.tool('look')).execute(
-							{ what: 'the voucher' },
+							{ search: 'the voucher' },
 							{ signal },
 						),
 					)
@@ -2127,7 +2227,7 @@ describe('BrowserToolset', () => {
 				const signal = new AbortController().signal
 				const look = String(
 					await requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'the voucher' },
+						{ search: 'the voucher' },
 						{ signal },
 					),
 				)
@@ -2202,7 +2302,10 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'the voucher' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute(
+					{ search: 'the voucher' },
+					{ signal },
+				)
 				const settled = createRecorder<[]>()
 				const pressing = Promise.resolve(
 					requireValue(toolset.tools.tool('press')).execute({ key: 'Enter' }, { signal }),
@@ -2253,7 +2356,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const refusal = await Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 				).catch((error: unknown) => error)
@@ -2283,7 +2386,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const result = String(
 					await requireValue(toolset.tools.tool('press')).execute({ key: 'Enter' }, { signal }),
 				)
@@ -2316,7 +2419,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal })
 				expect(
 					transport.sent
@@ -2358,7 +2461,7 @@ describe('BrowserToolset', () => {
 					const signal = new AbortController().signal
 					const look = String(
 						await requireValue(toolset.tools.tool('look')).execute(
-							{ what: 'the voucher' },
+							{ search: 'the voucher' },
 							{ signal },
 						),
 					)
@@ -2485,7 +2588,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const first = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 					)
@@ -2567,7 +2670,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal })
 				const settled = createRecorder<[]>()
 				const clicking = Promise.resolve(
@@ -2622,7 +2725,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const started = performance.now()
 				const result = String(
 					await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -2657,7 +2760,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const started = performance.now()
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -2695,7 +2798,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const settled = createRecorder<[]>()
 				const clicking = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -2766,7 +2869,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const settled = createRecorder<[]>()
 					const clicking = Promise.resolve(
 						requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -2815,7 +2918,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const settled = createRecorder<[]>()
 				const clicking = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -2865,7 +2968,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const settled = createRecorder<[]>()
 				const clicking = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -2922,7 +3025,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const settled = createRecorder<[]>()
 				const pressing = Promise.resolve(
 					requireValue(toolset.tools.tool('press')).execute({ key: 'Enter' }, { signal }),
@@ -3013,7 +3116,7 @@ describe('BrowserToolset', () => {
 				const signal = new AbortController().signal
 				const look = String(
 					await requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'the voucher' },
+						{ search: 'the voucher' },
 						{ signal },
 					),
 				)
@@ -3059,7 +3162,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'the form' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
 					const started = performance.now()
 					const result = String(
 						await requireValue(toolset.tools.tool(name)).execute(args, { signal }),
@@ -3083,7 +3186,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'the form' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
 					windows.window('session-main', 91).focus(main)
 					windows.window('session-child', 92).focus(child)
 					const result = String(
@@ -3117,7 +3220,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const result = String(
 					await requireValue(toolset.tools.tool('type')).execute(
 						{ ref: 'e2', text: 'sam', submit: true },
@@ -3155,7 +3258,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const typing = requireValue(toolset.tools.tool('type')).execute(
 						{ ref: 'e2', text: 'sam', submit: true },
 						{ signal },
@@ -3217,7 +3320,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					windows.window('session-main', 91).focus({ name: 'input', form: { method: 'post' } })
 					const typing = requireValue(toolset.tools.tool('type')).execute(
 						{ ref: 'e2', text: 'sam', submit: true },
@@ -3266,7 +3369,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const result = String(
 						await requireValue(toolset.tools.tool('type')).execute(
 							{ ref: 'e2', text: 'sam', submit: true },
@@ -3295,7 +3398,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const result = String(
 						await requireValue(toolset.tools.tool('type')).execute(
 							{ ref: 'e2', text: 'sam', submit: true },
@@ -3320,7 +3423,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const refusal = await Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 				).catch((error: unknown) => error)
@@ -3355,7 +3458,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				await requireValue(toolset.tools.tool('look')).execute(
-					{ what: 'home' },
+					{ search: 'home' },
 					{ signal: new AbortController().signal },
 				)
 				const controller = new AbortController()
@@ -3399,7 +3502,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					await requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'home' },
+						{ search: 'home' },
 						{ signal: new AbortController().signal },
 					)
 					const controller = new AbortController()
@@ -3452,7 +3555,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const refused = await Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 				).catch((error: unknown) => error)
@@ -3499,7 +3602,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				const clicking = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 				)
@@ -3541,7 +3644,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 					const started = performance.now()
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -3587,7 +3690,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					await requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'home' },
+						{ search: 'home' },
 						{ signal: new AbortController().signal },
 					)
 					const controller = new AbortController()
@@ -3641,7 +3744,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					await requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'home' },
+						{ search: 'home' },
 						{ signal: new AbortController().signal },
 					)
 					const censuses = transport.sent.filter(
@@ -3686,7 +3789,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				await requireValue(toolset.tools.tool('look')).execute(
-					{ what: 'home' },
+					{ search: 'home' },
 					{ signal: new AbortController().signal },
 				)
 				const controller = new AbortController()
@@ -3737,7 +3840,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				await requireValue(toolset.tools.tool('look')).execute(
-					{ what: 'home' },
+					{ search: 'home' },
 					{ signal: new AbortController().signal },
 				)
 				// Setup helpers leave one-second budget timers behind; the baseline waits them out.
@@ -3767,7 +3870,7 @@ describe('BrowserToolset', () => {
 				)
 				const look = String(
 					await requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'home' },
+						{ search: 'home' },
 						{ signal: new AbortController().signal },
 					),
 				)
@@ -3810,7 +3913,7 @@ describe('BrowserToolset', () => {
 			try {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'cart' } })
+				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
 				const start = transport.sent.length
 				const batch = toolset.tools.execute([
 					{ id: 'a', name: 'click', arguments: { ref: 'e1' } },
@@ -3857,7 +3960,7 @@ describe('BrowserToolset', () => {
 			try {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'cart' } })
+				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
 				const click = requireValue(toolset.tools.tool('click'))
 				const first = Promise.resolve(
 					click.execute({ ref: 'e1' }, { signal: new AbortController().signal }),
@@ -3901,7 +4004,7 @@ describe('BrowserToolset', () => {
 			try {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'cart' } })
+				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
 				const start = transport.sent.length
 				const click = requireValue(toolset.tools.tool('click'))
 				const aborted = Promise.resolve(
@@ -3944,7 +4047,7 @@ describe('BrowserToolset', () => {
 				const reason = new Error('the model stopped')
 				const looked = Promise.resolve(
 					requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'cart' },
+						{ search: 'cart' },
 						{ signal: controller.signal },
 					),
 				).catch((caught: unknown) => caught)
@@ -4010,6 +4113,7 @@ describe('BrowserToolset', () => {
 				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
 					'look',
 					'read',
+					'plain',
 					'click',
 					'type',
 					'press',
@@ -4021,8 +4125,16 @@ describe('BrowserToolset', () => {
 				expect(toolset.native.map((tool) => tool.name)).not.toContain('tabs')
 				const signal = new AbortController().signal
 				expect(
-					await requireValue(toolset.tools.tool('tabs')).execute({ what: 'tabs' }, { signal }),
+					await requireValue(toolset.tools.tool('tabs')).execute({ search: 'tabs' }, { signal }),
 				).toBe('t1 "Cart" about:blank (current)\nt2 "Cart" about:blank')
+				expect(
+					await requireValue(toolset.tools.tool('tabs')).execute({ search: 'current' }, { signal }),
+				).toBe(
+					'1 tab matches "current":\nt1 "Cart" about:blank (current)\n\nt1 "Cart" about:blank (current)\nt2 "Cart" about:blank',
+				)
+				await expect(
+					requireValue(toolset.tools.tool('tabs')).execute({ what: 'cart' }, { signal }),
+				).rejects.toThrow('The tabs tool takes no what parameter; call tabs with search.')
 				const selected = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
 					toolset.emitter.on('select', handler)
 					return () => toolset.emitter.off('select', handler)
@@ -4045,7 +4157,7 @@ describe('BrowserToolset', () => {
 					transport.sent.find((message) => message.method === 'Page.bringToFront')?.sessionId,
 				).toBe('session-tab-2')
 				expect(
-					await requireValue(toolset.tools.tool('tabs')).execute({ what: 'tabs' }, { signal }),
+					await requireValue(toolset.tools.tool('tabs')).execute({ search: 'tabs' }, { signal }),
 				).toBe('t1 "Cart" about:blank\nt2 "Cart" about:blank (current)')
 				expect(
 					await toolset.tools.execute({ id: 'nine', name: 'switch', arguments: { tab: 't9' } }),
@@ -4112,7 +4224,7 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const read = requireValue(toolset.tools.tool('read'))
-				const first = String(await read.execute({ what: 'guide' }, { signal }))
+				const first = String(await read.execute({ search: 'guide' }, { signal }))
 				const end = Number(requireValue(/call read with offset (\d+) for more\]$/.exec(first))[1])
 				const moved = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
 					toolset.emitter.on('select', handler)
@@ -4134,14 +4246,14 @@ describe('BrowserToolset', () => {
 				expect(popup.url).toBe('https://example.test/popup')
 				expect(toolset.view).toBe(popup)
 				const looked = String(
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'popup' }, { signal }),
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'popup' }, { signal }),
 				)
 				expect(
 					looked.startsWith(
 						'The view moved to a new tab: https://example.test/popup.\n\npage "Cart" https://example.test/popup',
 					),
 				).toBe(true)
-				const continued = String(await read.execute({ what: 'guide', offset: end }, { signal }))
+				const continued = String(await read.execute({ search: 'guide', offset: end }, { signal }))
 				expect(continued).toMatch(
 					/\n\n\[characters 0–\d+ of \d+; call read with offset \d+ for more\]$/,
 				)
@@ -4163,7 +4275,7 @@ describe('BrowserToolset', () => {
 				)
 				expect((await returned)[0]).toBe(page)
 				const back = String(
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'cart' }, { signal }),
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'cart' }, { signal }),
 				)
 				expect(
 					back.startsWith(
@@ -4214,7 +4326,7 @@ describe('BrowserToolset', () => {
 					const looked = await toolset.tools.execute({
 						id: 'look',
 						name: 'look',
-						arguments: { what: 'the details' },
+						arguments: { search: 'the details' },
 					})
 					expect(
 						looked.success &&
@@ -4229,7 +4341,7 @@ describe('BrowserToolset', () => {
 	})
 
 	describe('page tools', () => {
-		it('catches a page tool added under a reserved, held, malformed, optional-what, or debugging name, or a destroy that removes the consumer tool', async () => {
+		it('catches a page tool added under a reserved, held, malformed, optional-purpose, or debugging name, or a destroy that removes the consumer tool', async () => {
 			const fixture = await createBrowserElementFixture({
 				registry: (message) => fixture.transport.reply(message.id, {}),
 			})
@@ -4255,9 +4367,9 @@ describe('BrowserToolset', () => {
 							{ name: 'a.b', description: 'Dotted', frameId: 'main' },
 							{
 								name: 'lookup',
-								description: 'Optional what',
+								description: 'Optional purpose',
 								frameId: 'main',
-								inputSchema: { type: 'object', properties: { what: { type: 'string' } } },
+								inputSchema: { type: 'object', properties: { purpose: { type: 'string' } } },
 							},
 							{
 								name: 'debug',
@@ -4295,7 +4407,7 @@ describe('BrowserToolset', () => {
 					'session-main',
 				)
 				expect(
-					await tools.execute({ id: 'search', name: 'search', arguments: { what: 'boots' } }),
+					await tools.execute({ id: 'search', name: 'search', arguments: { purpose: 'boots' } }),
 				).toMatchObject({
 					success: false,
 					error: 'An alert dialog is open: "Hold on"; call dialog.',
@@ -4323,7 +4435,9 @@ describe('BrowserToolset', () => {
 				toolset.emitter.on('skip', skips.handler)
 				await toolset.start()
 				expect(skips.calls).toEqual([['click', 'reserved']])
-				expect(toolset.tools.tool('click')).toBe(toolset.native[2])
+				expect(toolset.tools.tool('click')).toBe(
+					toolset.native.find((tool) => tool.name === 'click'),
+				)
 				expect(toolset.tools.tool('extra')?.annotations).toEqual({ untrusted: true })
 				expect(toolset.tools.tool('extra')?.description).toBe('Page extra')
 			} finally {
@@ -4414,7 +4528,7 @@ describe('BrowserToolset', () => {
 	})
 
 	describe('look pages and matches', () => {
-		it('omits an oversized match header and preserves a header when no row fits', async () => {
+		it('omits an oversized match header and cuts the first oversized row', async () => {
 			const fixture = await createBrowserElementFixture({
 				accessibility: (message) =>
 					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
@@ -4424,18 +4538,19 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const look = requireValue(toolset.tools.tool('look'))
 				const context = { signal: new AbortController().signal }
-				const plain = await look.execute({ what: 'tracking' }, context)
+				const plain = await look.execute({ search: 'tracking' }, context)
 				for (const length of [300, 600]) {
 					const result = String(
-						await look.execute({ what: `button ${'x'.repeat(length)}` }, context),
+						await look.execute({ search: `button ${'x'.repeat(length)}` }, context),
 					)
 					expect(result.startsWith('page "Cart" ')).toBe(true)
 					expect(result).not.toContain('match')
 					expect(result).toBe(plain)
 				}
-				const what = `button ${'x'.repeat(210)}`
-				const result = String(await look.execute({ what }, context))
-				expect(result.startsWith(`160 elements match "${what}":\n\npage "Cart" `)).toBe(true)
+				const search = `button ${'x'.repeat(210)}`
+				const result = String(await look.execute({ search }, context))
+				expect(result.startsWith(`160 elements match "${search}":\n`)).toBe(true)
+				expect(result).toContain('…\n\npage "Cart" ')
 			} finally {
 				await fixture.client.close()
 			}
@@ -4469,13 +4584,13 @@ describe('BrowserToolset', () => {
 				const look = requireValue(toolset.tools.tool('look'))
 				const context = { signal: new AbortController().signal }
 				const note = 'The view moved to a new tab: https://example.test/popup.\n\n'
-				const first = extractBrowserPage(String(await look.execute({ what: '' }, context)))
+				const first = extractBrowserPage(String(await look.execute({ search: '' }, context)))
 				expect(first.body.startsWith(note)).toBe(true)
 				expect(first.body.length).toBeLessThanOrEqual(500)
 				const body = first.body.slice(note.length)
 				expect(first.end).toBe(body.length)
 				const next = extractBrowserPage(
-					String(await look.execute({ what: '', offset: first.end }, context)),
+					String(await look.execute({ search: '', offset: first.end }, context)),
 				)
 				expect(whole.startsWith(body + next.body)).toBe(true)
 			} finally {
@@ -4537,7 +4652,7 @@ describe('BrowserToolset', () => {
 				let offset: number | undefined = 0
 				while (offset !== undefined) {
 					const paged = extractBrowserPage(
-						String(await look.execute({ what: '', offset }, { signal })),
+						String(await look.execute({ search: '', offset }, { signal })),
 					)
 					expect(paged.start).toBe(offset)
 					expect(paged.body.length).toBeLessThanOrEqual(500)
@@ -4548,11 +4663,13 @@ describe('BrowserToolset', () => {
 				expect(bodies.join('')).toBe(whole)
 				expect(bodies.slice(0, -1).every((body) => body.endsWith('\n'))).toBe(true)
 				expect(bodies.at(-1)).toMatch(/\ne160 button "Button 160"\n\(160 of 160 elements\)$/)
-				const last = String(await look.execute({ what: '', offset: whole.length - 10 }, { signal }))
+				const last = String(
+					await look.execute({ search: '', offset: whole.length - 10 }, { signal }),
+				)
 				expect(last).toMatch(/\[characters \d+–\d+ of \d+\]$/)
 				expect(last).not.toContain('for more')
-				expect(await look.execute({ what: '', offset: whole.length }, { signal })).toBe(
-					await look.execute({ what: '' }, { signal }),
+				expect(await look.execute({ search: '', offset: whole.length }, { signal })).toBe(
+					await look.execute({ search: '' }, { signal }),
 				)
 			} finally {
 				await client.close()
@@ -4572,7 +4689,7 @@ describe('BrowserToolset', () => {
 				const look = requireValue(toolset.tools.tool('look'))
 				const signal = new AbortController().signal
 				const first = extractBrowserPage(
-					String(await look.execute({ what: 'the button 155' }, { signal })),
+					String(await look.execute({ search: 'the button 155' }, { signal })),
 				)
 				const block = '1 element matches "the button 155":\ne155 button "Button 155"\n\n'
 				expect(first.body.startsWith(`${block}page "Cart" `)).toBe(true)
@@ -4580,19 +4697,19 @@ describe('BrowserToolset', () => {
 				expect(whole.startsWith(first.body.slice(block.length))).toBe(true)
 				expect(first.end).toBe(first.body.length - block.length)
 				const next = requireValue(first.next)
-				const continued = await look.execute({ what: 'the button 155', offset: next }, { signal })
-				expect(continued).toBe(await look.execute({ what: 'tracking', offset: next }, { signal }))
+				const continued = await look.execute({ search: 'the button 155', offset: next }, { signal })
+				expect(continued).toBe(await look.execute({ search: 'tracking', offset: next }, { signal }))
 				expect(continued).not.toContain('match')
-				const all = extractBrowserPage(String(await look.execute({ what: 'button' }, { signal })))
+				const all = extractBrowserPage(String(await look.execute({ search: 'button' }, { signal })))
 				const [listed = ''] = all.body.split('page "Cart" ')
 				expect(listed.startsWith('160 elements match "button":\ne1 button "Button 1"\n')).toBe(true)
 				expect(listed.endsWith('"\n\n')).toBe(true)
 				expect(listed.length).toBeLessThanOrEqual(250)
 				expect(listed.split('\n').length - 3).toBeLessThan(160)
-				const plain = await look.execute({ what: 'tracking' }, { signal })
+				const plain = await look.execute({ search: 'tracking' }, { signal })
 				expect(String(plain).startsWith('page "Cart" ')).toBe(true)
-				expect(await look.execute({ what: 155 }, { signal })).toBe(plain)
-				expect(await look.execute({ what: 'a to 1' }, { signal })).toBe(plain)
+				expect(await look.execute({ search: 155 }, { signal })).toBe(plain)
+				expect(await look.execute({ search: 'a to 1' }, { signal })).toBe(plain)
 			} finally {
 				await client.close()
 			}
@@ -4610,7 +4727,7 @@ describe('BrowserToolset', () => {
 				).length
 				for (const offset of [-1, 1.5, '3']) {
 					const refused = await Promise.resolve(
-						look.execute({ what: 'save', offset }, { signal }),
+						look.execute({ search: 'save', offset }, { signal }),
 					).catch((caught: unknown) => caught)
 					expect(readProperty(refused, 'message')).toBe(
 						'The offset parameter must be a non-negative integer.',
@@ -4703,10 +4820,12 @@ describe('BrowserToolset', () => {
 				const tab = await context.create()
 				const cut = /^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut\]$/
 				const viewed =
-					/^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut; call look with what you want to find\]$/
+					/^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut; call look with words to find\]$/
 				const refused = await Promise.resolve(
 					requireValue(
-						createBrowserToolset(page, { limit: 64, tools: createToolManager() }).native[2],
+						createBrowserToolset(page, { limit: 64, tools: createToolManager() }).native.find(
+							(tool) => tool.name === 'click',
+						),
 					).execute({ ref: huge }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(refused, 'message')).toMatch(cut)
@@ -4719,14 +4838,14 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const looked = String(
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'cart' }, { signal }),
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'cart' }, { signal }),
 				)
 				const [view = '', range = ''] = looked.split('\n\n[characters ')
 				expect(view.length).toBeLessThanOrEqual(64)
 				expect(view.endsWith('\n')).toBe(true)
 				expect(range).toMatch(/^0–\d+ of \d+; call look with offset \d+ for more\]$/)
 				const slice = String(
-					await requireValue(toolset.tools.tool('read')).execute({ what: 'guide' }, { signal }),
+					await requireValue(toolset.tools.tool('read')).execute({ search: 'guide' }, { signal }),
 				)
 				const [body = '', footer = ''] = slice.split('\n\n[characters ')
 				expect(body.length).toBeLessThanOrEqual(64)
@@ -4746,8 +4865,8 @@ describe('BrowserToolset', () => {
 					() => toolset.tools.tool('broken') !== undefined,
 				)
 				const [big, broken] = await toolset.tools.execute([
-					{ id: '1', name: 'big', arguments: { what: 'output' } },
-					{ id: '2', name: 'broken', arguments: { what: 'error' } },
+					{ id: '1', name: 'big', arguments: { search: 'output' } },
+					{ id: '2', name: 'broken', arguments: { search: 'error' } },
 				])
 				expect(readProperty(big, 'value')).toMatch(cut)
 				expect(readProperty(broken, 'error')).toMatch(cut)
@@ -4758,7 +4877,7 @@ describe('BrowserToolset', () => {
 				const tabs = await toolset.tools.execute({
 					id: 't',
 					name: 'tabs',
-					arguments: { what: 'x' },
+					arguments: { search: 'x' },
 				})
 				expect(readProperty(tabs, 'value')).toMatch(cut)
 				transport.event(
@@ -4769,7 +4888,7 @@ describe('BrowserToolset', () => {
 				const refusal = await toolset.tools.execute({
 					id: 'r',
 					name: 'look',
-					arguments: { what: 'x' },
+					arguments: { search: 'x' },
 				})
 				expect(readProperty(refusal, 'error')).toMatch(cut)
 				expect(
@@ -4801,9 +4920,9 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const read = requireValue(toolset.tools.tool('read'))
-				const first = String(await read.execute({ what: 'guide' }, { signal }))
+				const first = String(await read.execute({ search: 'guide' }, { signal }))
 				const end = Number(requireValue(/call read with offset (\d+) for more\]$/.exec(first))[1])
-				const second = String(await read.execute({ what: 'guide', offset: end }, { signal }))
+				const second = String(await read.execute({ search: 'guide', offset: end }, { signal }))
 				expect(second).toMatch(new RegExp(`\\n\\n\\[characters ${end}–\\d+ of \\d+`))
 				expect(
 					transport.sent.filter((message) =>
@@ -4815,7 +4934,7 @@ describe('BrowserToolset', () => {
 					{ frameId: 'main', url: 'https://example.test/cart#next' },
 					'session-main',
 				)
-				const stale = String(await read.execute({ what: 'guide', offset: end }, { signal }))
+				const stale = String(await read.execute({ search: 'guide', offset: end }, { signal }))
 				expect(stale).toMatch(
 					/\n\n\[characters 0–\d+ of \d+; call read with offset \d+ for more\]$/,
 				)
@@ -4850,7 +4969,7 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const read = requireValue(toolset.tools.tool('read'))
-				const first = String(await read.execute({ what: 'guide' }, { signal }))
+				const first = String(await read.execute({ search: 'guide' }, { signal }))
 				const [, end = '', total = ''] = requireValue(
 					/\n\n\[characters 0–(\d+) of (\d+); call read with offset \d+ for more\]$/.exec(first),
 				)
@@ -4858,10 +4977,10 @@ describe('BrowserToolset', () => {
 				// The edit leaves the reading current, because only a navigation makes it stale.
 				html = '<main><h1>Edited</h1><p>The page changed its text in place.</p></main>'
 				for (const offset of [Number(total), Number(total) + 1_000]) {
-					expect(await read.execute({ what: 'guide', offset }, { signal })).toBe(first)
+					expect(await read.execute({ search: 'guide', offset }, { signal })).toBe(first)
 				}
 				const last = Number(total) - 1
-				expect(await read.execute({ what: 'guide', offset: last }, { signal })).toMatch(
+				expect(await read.execute({ search: 'guide', offset: last }, { signal })).toMatch(
 					new RegExp(`^[\\s\\S]\\n\\n\\[characters ${last}–${total} of ${total}\\]$`),
 				)
 				expect(
@@ -4869,7 +4988,7 @@ describe('BrowserToolset', () => {
 						String(message.params?.['expression']).includes('outerHTML'),
 					),
 				).toHaveLength(1)
-				expect(await read.execute({ what: 'guide' }, { signal })).toBe(
+				expect(await read.execute({ search: 'guide' }, { signal })).toBe(
 					'# Edited\n\nThe page changed its text in place.',
 				)
 			} finally {
@@ -4887,7 +5006,7 @@ describe('BrowserToolset', () => {
 			try {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'cart' } })
+				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
 				const click = requireValue(toolset.tools.tool('click'))
 				const look = requireValue(toolset.tools.tool('look'))
 				const holding = Promise.resolve(
@@ -4903,7 +5022,7 @@ describe('BrowserToolset', () => {
 				transport.reply(requireValue(releases[0]).id, {})
 				expect(readProperty(await holding, 'message')).toBe('the browser session ended')
 				const after = await Promise.resolve(
-					look.execute({ what: 'cart' }, { signal: new AbortController().signal }),
+					look.execute({ search: 'cart' }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(after, 'message')).toBe('the browser session ended')
 				expect(readProperty(after, 'code')).toBe('BROWSER_TOOLSET_ENDED')
@@ -5004,18 +5123,18 @@ describe('BrowserToolset', () => {
 			).join('')}</main>`
 			const view = createBrowserViewDouble({ html })
 			const toolset = new BrowserToolset(view, { limit: 60 })
-			const five = ['look', 'read', 'click', 'type', 'wait']
-			expect(toolset.native.map((tool) => tool.name)).toEqual(five)
+			const names = ['look', 'read', 'plain', 'click', 'type', 'wait']
+			expect(toolset.native.map((tool) => tool.name)).toEqual(names)
 			await toolset.start()
 			expect(view.calls).toEqual([])
-			expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(five)
+			expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(names)
 			expect(toolset.view).toBe(view)
 			const signal = new AbortController().signal
 			expect(
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'form' }, { signal }),
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'form' }, { signal }),
 			).toMatch(/\n\n\[characters 0–\d+ of \d+; call look with offset \d+ for more\]$/)
 			const read = String(
-				await requireValue(toolset.tools.tool('read')).execute({ what: 'form' }, { signal }),
+				await requireValue(toolset.tools.tool('read')).execute({ search: 'form' }, { signal }),
 			)
 			expect(read).toMatch(/\n\n\[characters 0–\d+ of \d+; call read with offset \d+ for more\]$/)
 			expect(
@@ -5130,7 +5249,7 @@ describe('BrowserToolset', () => {
 				expect(toolset.tools.count).toBe(0)
 				transport.reply(requireValue(enables[0]).id, {})
 				await Promise.all(starts)
-				expect(toolset.tools.count).toBe(7)
+				expect(toolset.tools.count).toBe(8)
 			} finally {
 				await client.close()
 			}
@@ -5237,7 +5356,7 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const listed = Promise.resolve(
 					requireValue(toolset.tools.tool('tabs')).execute(
-						{ what: 'tabs' },
+						{ search: 'tabs' },
 						{ signal: new AbortController().signal },
 					),
 				)
@@ -5286,7 +5405,7 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('catches a census-free tool advertised without the synthetic what, one that receives it, or an optional what that is adopted', async () => {
+		it('catches a census-free tool advertised without the synthetic purpose, one that receives it, or an optional purpose that is adopted', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
 				const inputs = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
@@ -5297,7 +5416,7 @@ describe('BrowserToolset', () => {
 							createTool({ name: 'extra', execute: inputs.handler }),
 							createTool({
 								name: 'maybe',
-								parameters: { type: 'object', properties: { what: { type: 'string' } } },
+								parameters: { type: 'object', properties: { purpose: { type: 'string' } } },
 								execute: ignoreCall,
 							}),
 						]),
@@ -5307,11 +5426,13 @@ describe('BrowserToolset', () => {
 				toolset.emitter.on('skip', skips.handler)
 				await toolset.start()
 				expect(skips.calls).toEqual([['maybe', 'schema']])
-				expect(readProperty(toolset.tools.tool('extra')?.parameters, 'required')).toEqual(['what'])
+				expect(readProperty(toolset.tools.tool('extra')?.parameters, 'required')).toEqual([
+					'purpose',
+				])
 				await toolset.tools.execute({
 					id: 'extra',
 					name: 'extra',
-					arguments: { what: 'find boots', query: 'boots' },
+					arguments: { purpose: 'find boots', query: 'boots' },
 				})
 				expect(inputs.calls.map(([input]) => input)).toEqual([{ query: 'boots' }])
 			} finally {
@@ -5319,7 +5440,7 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('catches a registry tool whose read-only hint is lost, whose untrusted mark follows the page, or whose synthetic what reaches the page', async () => {
+		it('catches a registry tool whose read-only hint is lost, whose untrusted mark follows the page, or whose synthetic purpose reaches the page', async () => {
 			const fixture = await createBrowserElementFixture({
 				registry: (message) => fixture.transport.reply(message.id, {}),
 			})
@@ -5356,10 +5477,10 @@ describe('BrowserToolset', () => {
 				)
 				const tool = requireValue(toolset.tools.tool('lookup'))
 				expect(tool.annotations).toEqual({ pure: true, untrusted: true })
-				expect(readProperty(tool.parameters, 'required')).toEqual(['what'])
+				expect(readProperty(tool.parameters, 'required')).toEqual(['purpose'])
 				expect(
 					await tool.execute(
-						{ what: 'Find the book', query: 'dune' },
+						{ purpose: 'Find the book', query: 'dune' },
 						{ signal: new AbortController().signal },
 					),
 				).toBe('found')
@@ -5492,7 +5613,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'size' }, { signal })
+					await requireValue(toolset.tools.tool('look')).execute({ search: 'size' }, { signal })
 					const typed = String(
 						await requireValue(toolset.tools.tool('type')).execute(
 							{ ref: 'e2', text: 'Large' },
@@ -5564,7 +5685,7 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				expect(
 					await requireValue(toolset.tools.tool('tabs')).execute(
-						{ what: 'tabs' },
+						{ search: 'tabs' },
 						{ signal: new AbortController().signal },
 					),
 				).toBe('t1 "" about:blank')
@@ -5610,13 +5731,13 @@ describe('BrowserToolset', () => {
 				const signal = new AbortController().signal
 				const read = requireValue(toolset.tools.tool('read'))
 				const note = 'The view moved to a new tab: https://example.test/popup.\n\n'
-				const first = String(await read.execute({ what: 'guide' }, { signal }))
+				const first = String(await read.execute({ search: '' }, { signal }))
 				expect(first.startsWith(note)).toBe(true)
 				const [head = '', tail = ''] = first.slice(note.length).split('\n\n[characters ')
 				const end = Number(requireValue(/call read with offset (\d+) for more\]$/.exec(tail))[1])
 				expect(end).toBe(head.length)
 				expect(first.length - tail.length - '\n\n[characters '.length).toBeLessThanOrEqual(200)
-				const second = String(await read.execute({ what: 'guide', offset: end }, { signal }))
+				const second = String(await read.execute({ search: '', offset: end }, { signal }))
 				const [next = ''] = second.split('\n\n[characters ')
 				const whole = createBrowserReading({
 					url: 'https://example.test/popup',
@@ -5652,7 +5773,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
 				// Setup helpers leave one-second budget timers behind; the baseline waits them out.
 				await waitForDelay(1_100)
 				const timers = process
@@ -5727,7 +5848,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					await requireValue(toolset.tools.tool('look')).execute(
-						{ what: 'home' },
+						{ search: 'home' },
 						{ signal: new AbortController().signal },
 					)
 					holding = true
@@ -5778,7 +5899,7 @@ describe('BrowserToolset', () => {
 			await narrow.start()
 			const refused = await Promise.resolve(
 				requireValue(narrow.tools.tool('read')).execute(
-					{ what: 'faces' },
+					{ search: 'faces' },
 					{ signal: new AbortController().signal },
 				),
 			).catch((caught: unknown) => caught)
@@ -5788,7 +5909,7 @@ describe('BrowserToolset', () => {
 			await pair.start()
 			expect(
 				await requireValue(pair.tools.tool('read')).execute(
-					{ what: 'faces' },
+					{ search: 'faces' },
 					{ signal: new AbortController().signal },
 				),
 			).toBe(`\u{1F600}\n\n[characters 0–2 of ${whole.length}; call read with offset 2 for more]`)
@@ -5809,6 +5930,7 @@ describe('BrowserToolset', () => {
 			expect(tools.tools().map((tool) => tool.name)).toEqual([
 				'look',
 				'read',
+				'plain',
 				'click',
 				'type',
 				'wait',
@@ -5827,11 +5949,11 @@ describe('BrowserToolset', () => {
 			const outline =
 				'page "Form" https://example.test/form\ne1 button "Save"\ne2 textbox "Email"\ne3 combobox "Size"\n(3 of 3 elements)'
 			expect(
-				await requireValue(toolset.tools.tool('look')).execute({ what: 'form' }, { signal }),
+				await requireValue(toolset.tools.tool('look')).execute({ search: 'form' }, { signal }),
 			).toBe(outline)
 			expect(
-				await requireValue(toolset.tools.tool('read')).execute({ what: 'form' }, { signal }),
-			).toBe('Form body')
+				await requireValue(toolset.tools.tool('read')).execute({ search: 'form' }, { signal }),
+			).toBe('1 line matches "form":\n[0] Form body\n\nForm body')
 			expect(
 				await requireValue(toolset.tools.tool('wait')).execute({ text: 'Form body' }, { signal }),
 			).toBe('"Form body" is on the page.')
@@ -5878,7 +6000,10 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const outline = String(
-					await requireValue(toolset.tools.tool('look')).execute({ what: 'the cart' }, { signal }),
+					await requireValue(toolset.tools.tool('look')).execute(
+						{ search: 'the cart' },
+						{ signal },
+					),
 				)
 				expect(
 					await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -6321,7 +6446,7 @@ describe('BrowserToolset', () => {
 				])
 				const listing = String(
 					await requireValue(toolset.tools.tool('tabs')).execute(
-						{ what: 'tabs' },
+						{ search: 'tabs' },
 						{ signal: new AbortController().signal },
 					),
 				)
@@ -6448,6 +6573,7 @@ describe('BrowserToolset', () => {
 				...BROWSER_JOURNEY_TOOL_NAMES,
 				'look',
 				'read',
+				'plain',
 				'click',
 				'type',
 				'wait',

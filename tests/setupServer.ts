@@ -1853,6 +1853,7 @@ export class MCPStdioPair {
 export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
 	'look',
 	'read',
+	'plain',
 	'click',
 	'type',
 	'press',
@@ -1995,7 +1996,7 @@ export async function startBrowseChild(child: BrowseChild): Promise<string> {
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/call',
-			params: { name: 'look', arguments: { what: 'the page' } },
+			params: { name: 'look', arguments: { search: 'the page' } },
 		},
 	)
 	const answer = await retryUntil(
@@ -2255,7 +2256,7 @@ export async function openBrowseSession(): Promise<BrowseSession> {
 	teardown.add(() => server.destroy())
 	await server.start()
 	await pair.initialize()
-	const looked = await pair.call(2, 'look', { what: 'the cart' })
+	const looked = await pair.call(2, 'look', { search: 'the cart' })
 	if (looked.error) throw new Error(looked.text)
 	const browser = requireValue(launcher.browsers[0], 'no launch was recorded')
 	const profile = requireValue(browser.options.profile, 'the launch named no profile')

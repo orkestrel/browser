@@ -415,7 +415,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 		context: ToolContext,
 	): Promise<string> {
 		const parameters = synthetic
-			? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'what'))
+			? Object.fromEntries(Object.entries(input).filter(([key]) => key !== 'purpose'))
 			: input
 		const result = await this.execute(tool, parameters, { signal: context.signal })
 		if (result.status !== 'Completed')

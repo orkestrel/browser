@@ -22,6 +22,7 @@ import {
 	MemoryBrowserRunStore,
 	createBrowserToolset,
 	createMemoryBrowserJourneyStore,
+	renderBrowserJourney,
 } from '@src/core'
 import {
 	BROWSER_JOURNEY_FIXTURE,
@@ -40,6 +41,38 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('lists matching journey headings with offsets independent of search and excludes steps', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const first = { ...createBrowserJourneyFixture(), name: 'alpha', description: 'Ordinary route' }
+		const second = {
+			...createBrowserJourneyFixture(),
+			name: 'delivery',
+			description: 'Delivery schedule',
+		}
+		await store.set(first)
+		await store.set(second)
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store, limit: 120 })
+		try {
+			const tool = requireValue(toolset.tools.tool('journeys'))
+			const context = { signal: new AbortController().signal }
+			const offset = renderBrowserJourney(first).length + 2
+			const matched = String(await tool.execute({ search: 'delivery schedule' }, context))
+			expect(matched.startsWith(`1 journey matches "delivery schedule":\n[${offset}]`)).toBe(true)
+			const continued = String(await tool.execute({ search: 'delivery schedule', offset }, context))
+			expect(continued.startsWith('delivery "Delivery schedule"')).toBe(true)
+			expect(continued).not.toContain('journey matches')
+			expect(await tool.execute({ search: 'Ready' }, context)).toBe(
+				await tool.execute({ search: '' }, context),
+			)
+			await expect(tool.execute({ what: 'delivery' }, context)).rejects.toThrow(
+				'The journeys tool takes no what parameter; call journeys with search and offset.',
+			)
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
 	it('l2a refuses forget on read-only journeys before touching the saved journey or runs', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		const runs = new MemoryBrowserRunStore()
@@ -444,7 +477,7 @@ describe('BrowserJourneyToolset', () => {
 				await toolset.tools.execute({
 					id: 'listing',
 					name: 'journeys',
-					arguments: { what: 'all' },
+					arguments: { search: 'all' },
 				}),
 				'h2c: the store reason is rendered verbatim once',
 			).toMatchObject({
@@ -573,7 +606,7 @@ describe('BrowserJourneyToolset', () => {
 				await toolset.tools.execute({
 					id: 'listing',
 					name: 'journeys',
-					arguments: { what: 'all' },
+					arguments: { search: 'all' },
 				}),
 				'h2b: direct construction lists at the owner cap of 10',
 			).toMatchObject({
@@ -600,7 +633,7 @@ describe('BrowserJourneyToolset', () => {
 				await inherited.tools.execute({
 					id: 'inherited',
 					name: 'journeys',
-					arguments: { what: 'all' },
+					arguments: { search: 'all' },
 				}),
 			).toMatchObject({
 				value: 'check-read\n\n[characters 0–10 of 45; call journeys with offset 10 for more]',
@@ -609,7 +642,7 @@ describe('BrowserJourneyToolset', () => {
 				await overridden.tools.execute({
 					id: 'overridden',
 					name: 'journeys',
-					arguments: { what: 'all' },
+					arguments: { search: 'all' },
 				}),
 			).toMatchObject({
 				value:
@@ -617,7 +650,7 @@ describe('BrowserJourneyToolset', () => {
 			})
 			await expect(
 				requireValue(overridden.tools.tool('journeys')).execute(
-					{ what: 'all', offset: -1 },
+					{ search: 'all', offset: -1 },
 					{ signal: new AbortController().signal },
 				),
 			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_ARGUMENT' })
@@ -649,7 +682,7 @@ describe('BrowserJourneyToolset', () => {
 		const { toolset, pending, invoked } = createBrowserPendingToolsetFixture()
 		const store = createMemoryBrowserJourneyStore()
 		await store.set(
-			createBrowserJourneyFixture([{ action: 'checkout', arguments: { what: 'cart' } }]),
+			createBrowserJourneyFixture([{ action: 'checkout', arguments: { search: 'cart' } }]),
 		)
 		const journeys = new BrowserJourneyToolset(toolset, { store })
 		await toolset.start()
@@ -752,7 +785,7 @@ describe('BrowserJourneyToolset', () => {
 			).toEqual({
 				record: ['journey'],
 				save: ['description'],
-				journeys: ['what'],
+				journeys: ['search'],
 				edit: ['journey', 'edits'],
 				replay: ['journey'],
 				forget: ['journey'],
@@ -779,10 +812,10 @@ describe('BrowserJourneyToolset', () => {
 			const refused = await toolset.tools.execute({
 				id: '1',
 				name: 'journeys',
-				arguments: { what: 'all', ref: 'e1' },
+				arguments: { search: 'all', ref: 'e1' },
 			})
 			expect(readProperty(refused, 'error')).toBe(
-				'The journeys tool takes no ref parameter; call journeys with what and offset.',
+				'The journeys tool takes no ref parameter; call journeys with search and offset.',
 			)
 			await journeys.destroy()
 			expect(toolset.tools.tools()).toEqual([])
@@ -947,7 +980,7 @@ s2 click button "Save"`,
 				)
 				expect(journeys.recording).toBe('check-form')
 				expect(
-					await toolset.tools.execute({ id: '4', name: 'journeys', arguments: { what: 'all' } }),
+					await toolset.tools.execute({ id: '4', name: 'journeys', arguments: { search: 'all' } }),
 				).toMatchObject({ value: BROWSER_JOURNEY_EMPTY_LISTING })
 				const locked = await toolset.tools.execute({
 					id: '6',
@@ -1042,15 +1075,15 @@ s2 unresolved: interrupted click`,
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			try {
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { what: 'all' } }),
+					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { search: 'all' } }),
 				).toMatchObject({ value: 'No journeys are saved; call record to start one.' })
 				await store.set(BROWSER_JOURNEY_FIXTURE)
 				expect(
-					await toolset.tools.execute({ id: '2', name: 'journeys', arguments: { what: 'all' } }),
+					await toolset.tools.execute({ id: '2', name: 'journeys', arguments: { search: 'all' } }),
 				).toMatchObject({ value: BROWSER_JOURNEY_LISTING })
 				await store.set(createBrowserJourneyFixture())
 				expect(
-					await toolset.tools.execute({ id: '3', name: 'journeys', arguments: { what: 'all' } }),
+					await toolset.tools.execute({ id: '3', name: 'journeys', arguments: { search: 'all' } }),
 				).toMatchObject({
 					value: `${BROWSER_JOURNEY_LISTING}
 
@@ -1072,11 +1105,11 @@ s1 wait "Ready"`,
 			const journeys = new BrowserJourneyToolset(toolset, { store, limit: 40 })
 			try {
 				const results = await toolset.tools.execute([
-					{ id: '1', name: 'journeys', arguments: { what: 'all' } },
-					{ id: '2', name: 'journeys', arguments: { what: 'all', offset: 40 } },
-					{ id: '3', name: 'journeys', arguments: { what: 'all', offset: 80 } },
-					{ id: '4', name: 'journeys', arguments: { what: 'all', offset: 82 } },
-					{ id: '5', name: 'journeys', arguments: { what: 'all', offset: -1 } },
+					{ id: '1', name: 'journeys', arguments: { search: 'all' } },
+					{ id: '2', name: 'journeys', arguments: { search: 'all', offset: 40 } },
+					{ id: '3', name: 'journeys', arguments: { search: 'all', offset: 80 } },
+					{ id: '4', name: 'journeys', arguments: { search: 'all', offset: 82 } },
+					{ id: '5', name: 'journeys', arguments: { search: 'all', offset: -1 } },
 				])
 				expect(results.map((result) => readProperty(result, 'value'))).toEqual([
 					'brew-tea "Brew thé"\ns1 wait "Ready"\n\nche\n\n[characters 0–40 of 82; call journeys with offset 40 for more]',
@@ -1104,7 +1137,7 @@ s1 wait "Ready"`,
 			const single = new BrowserJourneyToolset(narrow, { store, limit: 1 })
 			try {
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { what: 'all' } }),
+					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { search: 'all' } }),
 				).toMatchObject({
 					value:
 						'brew-tea "Brew \n\n[characters 0–15 of 34; call journeys with offset 15 for more]',
@@ -1112,7 +1145,7 @@ s1 wait "Ready"`,
 				const refused = await narrow.tools.execute({
 					id: '2',
 					name: 'journeys',
-					arguments: { what: 'all', offset: 15 },
+					arguments: { search: 'all', offset: 15 },
 				})
 				expect(readProperty(refused, 'error')).toBe(
 					'The journeys limit of 1 characters cannot hold the next character at offset 15; raise the journeys limit.',
@@ -1131,7 +1164,7 @@ s1 wait "Ready"`,
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			try {
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { what: 'all' } }),
+					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { search: 'all' } }),
 				).toMatchObject({
 					value: `brew-tea "Check readiness"
 s1 wait "Ready"
@@ -1158,7 +1191,7 @@ s1 wait "Ready"`,
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			await toolset.start()
 			try {
-				await toolset.tools.execute({ id: '1', name: 'look', arguments: { what: 'form' } })
+				await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'form' } })
 				const edited = await toolset.tools.execute({
 					id: '2',
 					name: 'edit',
@@ -1595,7 +1628,7 @@ e3 combobox "Size"
 			try {
 				const calls = [
 					{ id: '1', name: 'record', arguments: { journey: 'brew-tea' } },
-					{ id: '2', name: 'journeys', arguments: { what: 'all' } },
+					{ id: '2', name: 'journeys', arguments: { search: 'all' } },
 					{
 						id: '3',
 						name: 'edit',
@@ -1806,7 +1839,7 @@ s1 type (secret) as email into textbox "Email"`,
 				const listed = await toolset.tools.execute({
 					id: '4',
 					name: 'journeys',
-					arguments: { what: 'all' },
+					arguments: { search: 'all' },
 				})
 				const replayed = await toolset.tools.execute({
 					id: '5',

@@ -132,7 +132,7 @@ describe('pinned WebMCP conformance', () => {
 				expect(await settled).toBe(row.symbol)
 				const adopted = requireValue((await fixture.page.registry.adopt())[0])
 				const execution = Promise.resolve(
-					adopted.execute({ what: 'cars' }, { signal: new AbortController().signal }),
+					adopted.execute({ search: 'cars' }, { signal: new AbortController().signal }),
 				).catch((error: unknown) => error)
 				await waitForCondition(
 					'adopted invoke request',

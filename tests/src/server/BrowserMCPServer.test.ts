@@ -90,13 +90,13 @@ describe('BrowserMCPServer', () => {
 					jsonrpc: '2.0',
 					id: 2,
 					method: 'tools/call',
-					params: { name: 'look', arguments: { what: 'the cart' } },
+					params: { name: 'look', arguments: { search: 'the cart' } },
 				},
 				{
 					jsonrpc: '2.0',
 					id: 3,
 					method: 'tools/call',
-					params: { name: 'tabs', arguments: { what: 'the tabs' } },
+					params: { name: 'tabs', arguments: { search: 'the tabs' } },
 				},
 			)
 			await waitForCondition(
@@ -137,13 +137,13 @@ describe('BrowserMCPServer', () => {
 					jsonrpc: '2.0',
 					id: 2,
 					method: 'tools/call',
-					params: { name: 'look', arguments: { what: 'the cart' } },
+					params: { name: 'look', arguments: { search: 'the cart' } },
 				},
 				{
 					jsonrpc: '2.0',
 					id: 3,
 					method: 'tools/call',
-					params: { name: 'look', arguments: { what: 'the cart' } },
+					params: { name: 'look', arguments: { search: 'the cart' } },
 				},
 			)
 			await waitForCondition(
@@ -167,7 +167,7 @@ describe('BrowserMCPServer', () => {
 			expect(existsSync(requireValue(failed.options.profile, 'the launch named no profile'))).toBe(
 				false,
 			)
-			const retried = await pair.call(4, 'look', { what: 'the cart' })
+			const retried = await pair.call(4, 'look', { search: 'the cart' })
 			expect(retried.error).toBe(false)
 			expect(launcher.browsers).toHaveLength(2)
 			expect(readdirSync(join(root, '.profiles'))).toHaveLength(1)
@@ -198,7 +198,7 @@ describe('BrowserMCPServer', () => {
 				const pair = requireValue(pairs[index], 'no pair')
 				await server.start()
 				await pair.initialize()
-				expect((await pair.call(2, 'look', { what: 'the cart' })).error).toBe(false)
+				expect((await pair.call(2, 'look', { search: 'the cart' })).error).toBe(false)
 			}
 			const profiles = launchers.map((launcher) =>
 				requireValue(launcher.browsers[0]?.options.profile, 'the launch named no profile'),
@@ -254,10 +254,10 @@ describe('BrowserMCPServer', () => {
 			const expected = await toolset.tools.execute({
 				id: 'look',
 				name: 'look',
-				arguments: { what: 'the cart' },
+				arguments: { search: 'the cart' },
 			})
 			if (!expected.success) throw new Error(expected.error)
-			const unadvertised = { what: 'the cart', colour: 'red' }
+			const unadvertised = { search: 'the cart', colour: 'red' }
 			const refusal = await toolset.tools.execute({
 				id: 'look',
 				name: 'look',
@@ -266,7 +266,7 @@ describe('BrowserMCPServer', () => {
 			if (refusal.success) throw new Error('look accepted an unadvertised argument')
 			await server.start()
 			await pair.initialize()
-			expect(await pair.call(2, 'look', { what: 'the cart' })).toStrictEqual({
+			expect(await pair.call(2, 'look', { search: 'the cart' })).toStrictEqual({
 				text: expected.value,
 				error: false,
 			})
@@ -274,7 +274,7 @@ describe('BrowserMCPServer', () => {
 				text: refusal.error,
 				error: true,
 			})
-			expect(await pair.call(4, 'journeys', { what: 'every journey' })).toStrictEqual({
+			expect(await pair.call(4, 'journeys', { search: 'every journey' })).toStrictEqual({
 				text: BROWSER_JOURNEY_EMPTY_LISTING,
 				error: false,
 			})
@@ -305,7 +305,7 @@ describe('BrowserMCPServer', () => {
 					}),
 				{ budget: 2000, interval: 10 },
 			)
-			expect((await pair.call(6, 'tabs', { what: 'the tabs' })).error).toBe(false)
+			expect((await pair.call(6, 'tabs', { search: 'the tabs' })).error).toBe(false)
 			expect(pair.answered).not.toContain(5)
 		} finally {
 			await teardown.destroy()
@@ -333,7 +333,7 @@ describe('BrowserMCPServer', () => {
 		try {
 			await server.start()
 			await pair.initialize()
-			expect((await pair.call(2, 'look', { what: 'the order' })).error).toBe(false)
+			expect((await pair.call(2, 'look', { search: 'the order' })).error).toBe(false)
 			const transport = requireValue(
 				launcher.browsers[0]?.fixture?.transport,
 				'no launch connected',
@@ -405,7 +405,7 @@ describe('BrowserMCPServer', () => {
 			expect(acknowledged.done === false ? acknowledged.value.method : undefined).toBe(
 				'notifications/subscriptions/acknowledged',
 			)
-			await client.call('look', { what: 'the cart' })
+			await client.call('look', { search: 'the cart' })
 			const transport = requireValue(
 				launcher.browsers[0]?.fixture?.transport,
 				'no launch connected',
@@ -528,7 +528,7 @@ describe('BrowserMCPServer', () => {
 							jsonrpc: '2.0',
 							id: 3,
 							method: 'tools/call',
-							params: { name: 'look', arguments: { what: 'the cart' } },
+							params: { name: 'look', arguments: { search: 'the cart' } },
 						})
 						await waitForDelay(20)
 						expect(session.pair.input.readableLength).toBeGreaterThan(0)
@@ -563,7 +563,7 @@ describe('BrowserMCPServer', () => {
 					jsonrpc: '2.0',
 					id: 2,
 					method: 'tools/call',
-					params: { name: 'look', arguments: { what: 'the cart' } },
+					params: { name: 'look', arguments: { search: 'the cart' } },
 				})
 				await waitForCondition('destroy to begin', () => destroying !== undefined, {
 					budget: 3000,

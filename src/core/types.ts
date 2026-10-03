@@ -2758,7 +2758,7 @@ export interface BrowserRegistryInterface {
 	tool(name: string, frame?: string): BrowserTool | undefined
 	/** Returns every registered tool, including shadowed frame registrations. */
 	tools(): readonly BrowserTool[]
-	/** Projects tools as untrusted executable tools, omitting optional-what schemas. */
+	/** Projects tools as untrusted executable tools, omitting optional-purpose schemas. */
 	adopt(): Promise<readonly ToolInterface[]>
 	/** Invokes a tool and awaits its terminal event; rejects on abort, invalidation, or timeout. */
 	execute(
@@ -2784,13 +2784,14 @@ export interface BrowserRegistryPending {
 // === Browser toolset
 
 /**
- * Names a tool the browser toolset reserves: the seven generic tools, the staged `dialog`, the
+ * Names a tool the browser toolset reserves: the generic tools, the staged `dialog`, the
  * opt-in `tabs` and `switch`, and the journey tools `record`, `save`, `journeys`, `edit`,
  * `replay`, and `forget`, which a toolset constructed with `journeys` reserves.
  */
 export type BrowserToolName =
 	| 'look'
 	| 'read'
+	| 'plain'
 	| 'click'
 	| 'type'
 	| 'press'
@@ -2813,7 +2814,7 @@ export type BrowserToolName =
  * - `reserved` — the name is one of the toolset's own tool names
  * - `held` — the manager holds the name under a tool the toolset did not add
  * - `pattern` — the name falls outside `BROWSER_TOOL_NAME_PATTERN`
- * - `schema` — the page's input schema declares `what` as optional
+ * - `schema` — the page's input schema declares `purpose` as optional
  * - `debugging` — the page marks the tool for developers
  */
 export type BrowserToolsetReason = 'reserved' | 'held' | 'pattern' | 'schema' | 'debugging'
@@ -2934,7 +2935,7 @@ export interface BrowserTab extends BrowserJourneyTab {
  * - `emitter` — emits `adopt`, `skip`, `select`, `action`, `hold`, and `release`
  * - `tools` — the manager the toolset fills, with execution through the `perform` boundary
  * - `native` — the generic tools alone, which a consumer publishes to a built-in agent: the
- *   seven for a page-backed toolset, and `look`, `read`, `click`, `type`, and `wait` for a
+ *   page-backed tools, and `look`, `read`, `plain`, `click`, `type`, and `wait` for a
  *   view-backed one
  * - `view` — the view the tools act on
  */

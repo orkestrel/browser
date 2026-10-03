@@ -36,7 +36,7 @@ export function createBrowserDOMView(options: BrowserDOMViewOptions): BrowserDOM
  *
  * @remarks
  * The toolset runs over a view {@link createBrowserDOMView} creates for `document`, so it
- * advertises `look`, `read`, `click`, `type`, and `wait`, and a click or type receipt ends with
+ * advertises `look`, `read`, `plain`, `click`, `type`, and `wait`, and a click or type receipt ends with
  * ` (untrusted event)`. `source` supplies page tools, which the toolset adopts during `start()`
  * and again on every `change`; `toolset.native` never includes them, so publishing it to a
  * registry leaves that registry's own tools alone. The view belongs to the toolset: `destroy()`
@@ -56,7 +56,7 @@ export function createBrowserDOMView(options: BrowserDOMViewOptions): BrowserDOM
  * ```ts
  * const toolset = createDocumentToolset({ document: frame.contentDocument, source: bridge })
  * await toolset.start()
- * await toolset.tools.execute({ id: '1', name: 'look', arguments: { what: 'form' } })
+ * await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'form' } })
  * ```
  */
 export function createDocumentToolset(

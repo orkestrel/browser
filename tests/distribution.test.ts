@@ -1259,7 +1259,7 @@ describe('packed browse binary', () => {
 				expect(await callBrowse(client, 'record', { journey: 'reveal-code' })).toMatch(
 					/^Recording reveal-code; /u,
 				)
-				const view = await callBrowse(client, 'look', { what: 'the reveal button' })
+				const view = await callBrowse(client, 'look', { search: 'the reveal button' })
 				const ref = requireValue(
 					/\b(e\d+) button "Reveal"/u.exec(view)?.[1],
 					`no Reveal in ${view}`,
@@ -1273,7 +1273,7 @@ describe('packed browse binary', () => {
 				expect(
 					await callBrowse(client, 'save', { description: 'Reveals the confirmation code' }),
 				).toMatch(/^Saved reveal-code with 2 steps\./u)
-				const listing = await callBrowse(client, 'journeys', { what: 'the saved journeys' })
+				const listing = await callBrowse(client, 'journeys', { search: 'the saved journeys' })
 				expect(listing.split(/\r\n|\n/u)).toStrictEqual([
 					'reveal-code "Reveals the confirmation code"',
 					's1 click button "Reveal"',
@@ -1321,8 +1321,8 @@ describe('packed browse binary', () => {
 				const client = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
 				teardown.add(() => client.disconnect())
 				const views = await Promise.all([
-					callBrowse(client, 'look', { what: 'the page' }),
-					callBrowse(client, 'look', { what: 'the title' }),
+					callBrowse(client, 'look', { search: 'the page' }),
+					callBrowse(client, 'look', { search: 'the title' }),
 				])
 				expect(views).toStrictEqual([
 					expect.stringMatching(/^page /u),
@@ -1358,8 +1358,8 @@ describe('packed browse binary', () => {
 				const second = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
 				teardown.add(() => second.disconnect())
 				await Promise.all([
-					callBrowse(first, 'look', { what: 'the page' }),
-					callBrowse(second, 'look', { what: 'the page' }),
+					callBrowse(first, 'look', { search: 'the page' }),
+					callBrowse(second, 'look', { search: 'the page' }),
 				])
 				const created = readProfiles(profiles).filter((profile) => !before.includes(profile))
 				expect(created).toHaveLength(2)

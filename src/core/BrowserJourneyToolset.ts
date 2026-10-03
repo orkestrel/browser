@@ -28,6 +28,8 @@ import { BrowserElementError, BrowserError, isBrowserError } from './errors.js'
 import { createBrowserRecorder, createBrowserReplay } from './factories.js'
 import {
 	editBrowserJourney,
+	matchBrowserText,
+	renderBrowserMatches,
 	readBrowserToolString,
 	renderBrowserJourney,
 	renderBrowserRun,
@@ -266,16 +268,30 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		}
 		const listings: string[] = []
+		const headings: string[] = []
+		const offsets = new Map<number, number>()
+		let headingOffset = 0
+		let listingOffset = 0
 		const faults = new Set<string>()
 		let position = 0
 		for (;;) {
 			const page = await this.#store.list({ signal, offset: position })
-			listings.push(...page.entries.map((entry) => renderBrowserJourney(entry.journey)))
+			for (const entry of page.entries) {
+				const listing = renderBrowserJourney(entry.journey)
+				const heading = listing.split('\n', 1)[0] ?? ''
+				headings.push(heading)
+				offsets.set(headingOffset, listingOffset)
+				headingOffset += heading.length + 1
+				listingOffset += listing.length + 2
+				listings.push(listing)
+			}
 			// File stores can report the same unreadable path on successive pages.
 			for (const fault of page.faults) {
 				if (faults.has(fault.name)) continue
 				faults.add(fault.name)
-				listings.push(renderBrowserJourneyFault(fault))
+				const listing = renderBrowserJourneyFault(fault)
+				listings.push(listing)
+				listingOffset += listing.length + 2
 			}
 			const span = page.entries.length
 			position += span
@@ -284,7 +300,15 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		if (listings.length === 0) return BROWSER_JOURNEY_EMPTY_LISTING
 		const listing = listings.join('\n\n')
 		const start = offset < listing.length ? offset : 0
-		let end = Math.min(listing.length, start + this.#limit)
+		const search = isString(args['search']) ? args['search'] : ''
+		const matches = start === 0 ? matchBrowserText(headings.join('\n'), search) : []
+		const count = matches.length
+		const block = renderBrowserMatches(
+			`${count} ${count === 1 ? 'journey matches' : 'journeys match'} ${JSON.stringify(search)}:`,
+			matches.map((match) => `[${offsets.get(match.offset)}] ${match.text}`),
+			this.#limit,
+		)
+		let end = Math.min(listing.length, start + this.#limit - block.length)
 		const last = listing.charCodeAt(end - 1)
 		if (end < listing.length && last >= 0xd800 && last <= 0xdbff) end -= 1
 		// A limit that cannot hold the next code point would never advance the continuation.
@@ -296,8 +320,8 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		}
 		const text = listing.slice(start, end)
-		if (start === 0 && end === listing.length) return text
-		return `${text}\n\n[characters ${start}–${end} of ${listing.length}${end < listing.length ? `; call journeys with offset ${end} for more` : ''}]`
+		if (start === 0 && end === listing.length) return `${block}${text}`
+		return `${block}${text}\n\n[characters ${start}–${end} of ${listing.length}${end < listing.length ? `; call journeys with offset ${end} for more` : ''}]`
 	}
 
 	async #edit(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
@@ -554,11 +578,11 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	}
 
 	// Reads the view a receipt carries through `look`, so it is the first page at the toolset's
-	// limit and carries the notes of any view move; an empty `what` searches nothing, so the page
+	// limit and carries the notes of any view move; an empty `search` searches nothing, so the page
 	// carries no matches.
 	async #view(signal: AbortSignal): Promise<string> {
 		const performed = await this.#toolset.perform(
-			{ id: 'journey', name: 'look', arguments: { what: '' } },
+			{ id: 'journey', name: 'look', arguments: { search: '' } },
 			{ signal },
 		)
 		return performed.result.success ? String(performed.result.value) : performed.result.error

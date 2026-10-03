@@ -297,7 +297,7 @@ export const WEBMCP_TOOL = Object.freeze({
 	description: 'Search cars',
 	frameId: 'main',
 	backendNodeId: 50,
-	inputSchema: { type: 'object', properties: { what: { type: 'string' } }, required: ['what'] },
+	inputSchema: { type: 'object', properties: { search: { type: 'string' } }, required: ['search'] },
 	annotations: {
 		readOnly: true,
 		untrustedContent: false,

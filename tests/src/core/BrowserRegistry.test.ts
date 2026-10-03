@@ -82,7 +82,7 @@ describe('BrowserRegistry', () => {
 		}
 	})
 
-	it('adopts a required authored what and propagates its execution signal', async () => {
+	it('adopts a required authored purpose and propagates its execution signal', async () => {
 		const { page, client, transport } = await createAttachedPage()
 		try {
 			replyOk(transport, 'WebMCP.enable')
@@ -100,8 +100,8 @@ describe('BrowserRegistry', () => {
 							frameId: page.id,
 							inputSchema: {
 								type: 'object',
-								properties: { what: { type: 'string' } },
-								required: ['what'],
+								properties: { purpose: { type: 'string' } },
+								required: ['purpose'],
 							},
 						},
 					],
@@ -111,14 +111,14 @@ describe('BrowserRegistry', () => {
 			const tool = requireValue((await registry.adopt())[0])
 			const controller = new AbortController()
 			const result = Promise.resolve(
-				tool.execute({ what: 'authored' }, { signal: controller.signal }),
+				tool.execute({ purpose: 'authored' }, { signal: controller.signal }),
 			).catch((error: unknown) => error)
 			await waitForDelay()
 			controller.abort('adopted abort')
 			expect(await result).toBe('adopted abort')
 			expect(
 				transport.sent.find((message) => message.method === 'WebMCP.invokeTool')?.params?.['input'],
-			).toEqual({ what: 'authored' })
+			).toEqual({ purpose: 'authored' })
 			expect(
 				transport.sent.find((message) => message.method === 'WebMCP.cancelInvocation')?.params,
 			).toEqual({ invocationId: 'adopted' })
@@ -470,7 +470,7 @@ describe('BrowserRegistry', () => {
 		}
 	})
 
-	it('C7 adopts annotations and synthetic what without forwarding it, and bounds errors', async () => {
+	it('C7 adopts annotations and synthetic purpose without forwarding it, and bounds errors', async () => {
 		const { page, client, transport } = await createAttachedPage()
 		try {
 			const registry = requireValue(page.registry)
@@ -498,9 +498,9 @@ describe('BrowserRegistry', () => {
 						},
 						{
 							name: 'unsafe',
-							description: 'Optional what',
+							description: 'Optional purpose',
 							frameId: page.id,
-							inputSchema: { type: 'object', properties: { what: { type: 'string' } } },
+							inputSchema: { type: 'object', properties: { purpose: { type: 'string' } } },
 						},
 					],
 				},
@@ -519,10 +519,10 @@ describe('BrowserRegistry', () => {
 				)
 			})
 			for (const tool of adopted) {
-				expect(tool.parameters?.['required']).toEqual(['what'])
+				expect(tool.parameters?.['required']).toEqual(['purpose'])
 				expect(
 					await tool.execute(
-						{ what: 'Read the page', query: 'book' },
+						{ purpose: 'Read the page', query: 'book' },
 						{ signal: new AbortController().signal },
 					),
 				).toBe('result')
@@ -535,7 +535,7 @@ describe('BrowserRegistry', () => {
 			status = 'Error'
 			await expect(
 				requireValue(adopted[0]).execute(
-					{ what: 'Read' },
+					{ purpose: 'Read' },
 					{ signal: new AbortController().signal },
 				),
 			).rejects.toSatisfy(
