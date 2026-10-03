@@ -12,6 +12,18 @@ import {
 
 describe('BrowserDOMElementManager', () => {
 	describe('outline', () => {
+		it('renders veneer toggle states with a plain-button control', async () => {
+			const probe = await loadProbeDocument(
+				'<button aria-pressed="true">On</button><button aria-pressed="false">Off</button><button>Plain</button>',
+			)
+			const view = createBrowserDOMView({ document: probe })
+			expect((await view.elements.outline()).text.split('\n').slice(1, -1)).toEqual([
+				'e1 button "On" pressed=true',
+				'e2 button "Off" pressed=false',
+				'e3 button "Plain"',
+			])
+		})
+
 		it('names the probe page button, text field, and link, and renders headings and text', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
@@ -108,7 +120,7 @@ describe('BrowserDOMElementManager', () => {
 			expect(rows).toContain('e2 textbox "Secret"')
 			expect(rows).toContain('e3 checkbox "Gift wrap" [checked]')
 			expect(rows).toContain('e4 button "Place order" [disabled]')
-			expect(rows).toContain('e5 combobox "Size" value="Large"')
+			expect(rows).toContain('e5 combobox "Size" value="Large" expanded=false')
 			expect(rows.join('\n')).not.toContain('hunter2')
 		})
 
@@ -126,10 +138,10 @@ describe('BrowserDOMElementManager', () => {
 			const view = createBrowserDOMView({ document: probe })
 			const { text } = await view.elements.outline()
 			expect(text.split('\n').slice(1)).toEqual([
-				'e1 combobox "Size" value="Medium size"',
-				'e2 option "Small"',
-				'e3 option "Medium size"',
-				'e4 option "Large" [disabled]',
+				'e1 combobox "Size" value="Medium size" expanded=false',
+				'e2 option "Small" selected=false',
+				'e3 option "Medium size" selected=true',
+				'e4 option "Large" selected=false [disabled]',
 				'e5 button "Next"',
 				'(5 of 5 elements)',
 			])

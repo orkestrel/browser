@@ -8,6 +8,8 @@ import {
 	BROWSER_IMPLICIT_ROLES,
 	BROWSER_INTERACTIVE_CONTENT,
 	BROWSER_TYPED_INPUTS,
+	BROWSER_EXPANDED_ROLES,
+	BROWSER_SELECTED_ROLES,
 } from './constants.js'
 
 // === Browser document
@@ -666,4 +668,72 @@ export function listenBrowserNavigation(
 		window.addEventListener('hashchange', listener, options)
 	}
 	window.addEventListener('pagehide', listener, options)
+}
+
+/**
+ * Reads a lowercased ARIA token, preserving whitespace and treating empty or undefined tokens as absent.
+ *
+ * @param element - The element carrying the attribute
+ * @param attribute - The ARIA attribute name
+ * @returns The lowercased token, or `undefined` for a missing, empty, or `undefined` attribute
+ *
+ * @example
+ * ```ts
+ * const button = document.createElement('button')
+ * button.setAttribute('aria-pressed', 'TRUE')
+ * readBrowserToken(button, 'aria-pressed') // 'true'
+ * ```
+ */
+export function readBrowserToken(element: Element, attribute: string): string | undefined {
+	const token = element.getAttribute(attribute)?.toLowerCase()
+	return token === '' || token === 'undefined' ? undefined : token
+}
+
+/**
+ * Reads the pressed, expanded, and selected states the DOM outline assigns to an element's role.
+ *
+ * @remarks
+ * Only buttons carry pressed state. Expansion follows `BROWSER_EXPANDED_ROLES`, with native
+ * single selects always collapsed. Selection follows `BROWSER_SELECTED_ROLES`: an ARIA token
+ * overrides native option selectedness, and other elements without a token omit selection. Tokens are not
+ * trimmed; values other than `false` are true, except the pressed token `mixed`.
+ *
+ * @param element - The element whose attributes and native state are read
+ * @param role - Its computed accessibility role
+ * @returns Present states, including false, with pressed represented as a tristate string
+ *
+ * @example
+ * ```ts
+ * const button = document.createElement('button')
+ * button.setAttribute('aria-pressed', 'mixed')
+ * readBrowserStates(button, 'button') // { pressed: 'mixed' }
+ * ```
+ */
+export function readBrowserStates(
+	element: Element,
+	role: string,
+): Readonly<Record<string, string | boolean>> {
+	const states: Record<string, string | boolean> = {}
+	const pressed = readBrowserToken(element, 'aria-pressed')
+	const expanded = readBrowserToken(element, 'aria-expanded')
+	const selected = readBrowserToken(element, 'aria-selected')
+	const view = element.ownerDocument.defaultView
+	if (role === 'button' && pressed !== undefined)
+		states['pressed'] = pressed === 'false' || pressed === 'mixed' ? pressed : 'true'
+	if (
+		role === 'combobox' &&
+		view !== null &&
+		element instanceof view.HTMLSelectElement &&
+		!element.multiple &&
+		element.size <= 1
+	)
+		states['expanded'] = false
+	else if (BROWSER_EXPANDED_ROLES.has(role) && expanded !== undefined)
+		states['expanded'] = expanded !== 'false'
+	if (BROWSER_SELECTED_ROLES.has(role)) {
+		if (selected !== undefined) states['selected'] = selected !== 'false'
+		else if (view !== null && element instanceof view.HTMLOptionElement)
+			states['selected'] = element.selected
+	}
+	return states
 }

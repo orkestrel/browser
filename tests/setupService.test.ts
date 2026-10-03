@@ -28,6 +28,7 @@ import { createAttachedPage } from './setup.js'
 import * as setupService from './setupService.js'
 import {
 	collectOutlinePairs,
+	collectOutlineEntries,
 	supportsServiceRegistry,
 	extractOutlineReferences,
 	extractOutlineRows,
@@ -48,6 +49,17 @@ import {
 } from './setupService.js'
 
 const SERVICE_DIRECTORY = fileURLToPath(new URL('service/', import.meta.url))
+
+describe('collectOutlineEntries', () => {
+	it('retains suffixes and duplicate names, deduplicates references, and ignores nonrows', () => {
+		expect(
+			collectOutlineEntries(
+				'2 elements match "Toggle":\r\ne9 button "Toggle" pressed=false\r\npage "Title" url\r\ne2 button "Toggle" pressed=true [disabled]\r\ne9 button "Toggle" pressed=false\r\n# Heading\r\ne0 button "Invalid"\r\ne3 no-quoted-name\r\n(2 of 2 elements)',
+			),
+		).toEqual(['button "Toggle" pressed=false', 'button "Toggle" pressed=true [disabled]'])
+		expect(collectOutlineEntries('page "Title" url\n(0 of 0 elements)')).toEqual([])
+	})
+})
 
 describe('SERVICE_BROWSER_ARGS', () => {
 	it('carries the container-safe flags as a frozen list', () => {

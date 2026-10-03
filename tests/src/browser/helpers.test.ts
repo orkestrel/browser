@@ -16,6 +16,9 @@ import {
 	readBrowserCapture,
 	readBrowserBlock,
 	readBrowserParent,
+	readBrowserStates,
+	readBrowserToken,
+	BROWSER_EXPANDED_ROLES,
 	skipBrowserSubtree,
 } from '@src/browser'
 import { BROWSER_RESULT_LIMIT, isBrowserResultLimitError } from '@src/core'
@@ -27,9 +30,42 @@ import {
 	PROBE_NAME_CASES,
 	PROBE_POPUP_CASES,
 	PROBE_ROLE_CASES,
+	PROBE_TOKEN_CASES,
+	PROBE_STATE_CASES,
 	readBrowserFixtureBase,
 	readProbeCase,
 } from '../../setupBrowser.js'
+
+describe('readBrowserToken and readBrowserStates', () => {
+	it.each(PROBE_TOKEN_CASES)(
+		'reads pressed token $token without trimming',
+		({ token, normalized, pressed }) => {
+			const button = document.createElement('button')
+			if (token !== undefined) button.setAttribute('aria-pressed', token)
+			expect(readBrowserToken(button, 'aria-pressed')).toBe(normalized)
+			expect(readBrowserStates(button, 'button')).toEqual(pressed === undefined ? {} : { pressed })
+		},
+	)
+	it.each(PROBE_STATE_CASES)(
+		'reads $role states from $markup',
+		({ markup, css, role, expected }) => {
+			expect(readBrowserStates(readProbeCase(markup, css), role)).toEqual(expected)
+		},
+	)
+	it.each([...BROWSER_EXPANDED_ROLES])(
+		'reads explicit false and absent expansion for %s',
+		(role) => {
+			const element = document.createElement('div')
+			expect(readBrowserStates(element, role)).not.toHaveProperty('expanded')
+			element.setAttribute('aria-expanded', 'false')
+			expect(readBrowserStates(element, role)).toHaveProperty('expanded', false)
+			element.setAttribute('aria-expanded', 'mixed')
+			expect(readBrowserStates(element, role)).toHaveProperty('expanded', true)
+			element.setAttribute('aria-expanded', 'undefined')
+			expect(readBrowserStates(element, role)).not.toHaveProperty('expanded')
+		},
+	)
+})
 
 describe('isBrowserDocument', () => {
 	it('admits the page document and a probe document', () => {

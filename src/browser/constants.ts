@@ -132,6 +132,37 @@ export const BROWSER_CONTEXT_TARGETS: ReadonlySet<string> = Object.freeze(
 	new Set(['', '_self', '_parent', '_top']),
 )
 
+/**
+ * Names the roles whose ARIA expansion state the DOM outline reads.
+ *
+ * @remarks
+ * The role set follows the accessibility-tree reading from Chromium 141.0.7390.37.
+ */
+export const BROWSER_EXPANDED_ROLES: ReadonlySet<string> = Object.freeze(
+	new Set([
+		'button',
+		'link',
+		'checkbox',
+		'switch',
+		'menuitem',
+		'menuitemcheckbox',
+		'menuitemradio',
+		'tab',
+		'treeitem',
+		'combobox',
+	]),
+)
+
+/**
+ * Names the roles whose selection state the DOM outline reads.
+ *
+ * @remarks
+ * The role set follows the accessibility-tree reading from Chromium 141.0.7390.37.
+ */
+export const BROWSER_SELECTED_ROLES: ReadonlySet<string> = Object.freeze(
+	new Set(['option', 'tab', 'treeitem']),
+)
+
 /** Names the `input` type states whose value an untrusted `fill` sets as typed text. */
 export const BROWSER_TYPED_INPUTS: ReadonlySet<string> = Object.freeze(
 	new Set([

@@ -38,6 +38,7 @@ import {
 	matchesBrowserInvisible,
 	matchesBrowserOmitted,
 	readBrowserBlock,
+	readBrowserStates,
 	skipBrowserSubtree,
 } from '../helpers.js'
 
@@ -58,8 +59,9 @@ import {
  * and a reading from any walked document record that document's epoch, which advances on its own
  * navigation events and on the view's; that document's `pagehide` drops its references. A form
  * carrying a `toolname` attribute renders `[tool=NAME]` after its role and name. A row carries
- * `focused` when its element is the active element of its own document or shadow root. A `select` row
- * is followed by one `option` row per option, named by its label. Whitespace between two texts of
+ * `focused` when its element is the active element of its own document or shadow root. Rows carry
+ * pressed, expanded, and selected states through the Chromium mapping in `readBrowserStates`.
+ * A `select` row is followed by one `option` row per option, named by its label. Whitespace between two texts of
  * one block renders as one space, as a rendered `br` between them does, and texts with neither
  * between them stay joined. A CSS query
  * searches the document the view drives, not its child documents or shadow trees. After the
@@ -408,7 +410,12 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			name,
 			description: undefined,
 			value,
-			properties: { checked, disabled: element.matches(':disabled'), focused },
+			properties: {
+				checked,
+				disabled: element.matches(':disabled'),
+				focused,
+				...readBrowserStates(element, role),
+			},
 			...(tool === null || tool === '' ? {} : { tool }),
 			session: '',
 			reference,

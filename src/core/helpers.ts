@@ -187,6 +187,10 @@ export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
 	let row = node.reference === undefined ? `${role} ${name}` : `${node.reference} ${role} ${name}`
 	if (node.value !== undefined && node.value !== '')
 		row += ` value=${JSON.stringify(String(node.value))}`
+	for (const key of ['pressed', 'expanded', 'selected']) {
+		const value = node.properties[key]
+		if (isString(value) || isBoolean(value)) row += ` ${key}=${String(value)}`
+	}
 	if (node.properties['checked'] === true || node.properties['checked'] === 'true')
 		row += ' [checked]'
 	if (node.properties['disabled'] === true) row += ' [disabled]'

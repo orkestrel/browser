@@ -267,6 +267,31 @@ export function collectOutlinePairs(text: string): readonly string[] {
 }
 
 /**
+ * Collects complete element rows without references, sorted for comparison between placements.
+ *
+ * @param text - An outline or receipt, including an optional repeated matches block
+ * @returns One role, name, and state suffix per reference, keeping the first occurrence
+ */
+export function collectOutlineEntries(text: string): readonly string[] {
+	const seen = new Set<string>()
+	return text
+		.split(/\r\n|\n/)
+		.flatMap((line) => {
+			const match = /^(e[1-9]\d*) (\S+ "(?:[^"\\]|\\.)*".*)$/.exec(line)
+			const reference = match?.[1]
+			const entry = match?.[2]
+			if (reference === undefined || entry === undefined || seen.has(reference)) return []
+			seen.add(reference)
+			return [entry]
+		})
+		.toSorted()
+}
+
+/** Supplies toggle, expansion, selection, and absent-state controls for both placements. */
+export const SERVICE_TOGGLE_HTML =
+	'<button aria-pressed="true">Toggle on</button><button aria-pressed="false">Toggle off</button><button aria-pressed="mixed">Toggle mixed</button><button>Plain toggle control</button><button aria-expanded="false">Disclosure</button><a href="#" aria-expanded="true">Expanded link</a><div role="tablist"><button role="tab" aria-selected="true">Selected tab</button><button role="tab" aria-selected="false">Unselected tab</button><button role="tab">Default tab</button></div><div role="tree"><div role="treeitem" aria-selected="true">Selected treeitem</div><div role="treeitem" aria-selected="false">Unselected treeitem</div><div role="treeitem">Default treeitem</div></div><div role="listbox" aria-label="ARIA choices"><div role="option" aria-selected="true">Selected option</div><div role="option" aria-selected="false">Unselected option</div><div role="option">Default option</div><div role="option" aria-selected="">Empty option</div><div role="option" aria-selected="undefined">Undefined option</div></div><select aria-label="Override" aria-expanded="true"><option selected aria-selected="false">Native false</option><option aria-selected="true">Native true</option></select>'
+
+/**
  * Returns the reference of the one outline row with a role and a name, or throws.
  *
  * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one

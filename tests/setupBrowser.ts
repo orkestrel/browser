@@ -455,3 +455,186 @@ export class CollectedReference extends WeakRef<Element> {
 		return undefined
 	}
 }
+
+/** Supplies ARIA token normalization and pressed-state cases, including nontrimmed whitespace. */
+export const PROBE_TOKEN_CASES = Object.freeze([
+	{ token: 'true', normalized: 'true', pressed: 'true' },
+	{ token: 'false', normalized: 'false', pressed: 'false' },
+	{ token: 'mixed', normalized: 'mixed', pressed: 'mixed' },
+	{ token: 'TRUE', normalized: 'true', pressed: 'true' },
+	{ token: '', normalized: undefined, pressed: undefined },
+	{ token: 'undefined', normalized: undefined, pressed: undefined },
+	{ token: 'UNDEFINED', normalized: undefined, pressed: undefined },
+	{ token: 'foo', normalized: 'foo', pressed: 'true' },
+	{ token: ' false ', normalized: ' false ', pressed: 'true' },
+	{ token: undefined, normalized: undefined, pressed: undefined },
+])
+
+/** Supplies the role restrictions, native overrides, and absent-state controls of the DOM mapping. */
+export const PROBE_STATE_CASES = Object.freeze([
+	{
+		markup: '<div role="checkbox" aria-expanded="true"></div>',
+		css: 'div',
+		role: 'checkbox',
+		expected: { expanded: true },
+	},
+	{
+		markup: '<div role="switch" aria-expanded="true"></div>',
+		css: 'div',
+		role: 'switch',
+		expected: { expanded: true },
+	},
+	{
+		markup: '<div role="menuitem" aria-expanded="true"></div>',
+		css: 'div',
+		role: 'menuitem',
+		expected: { expanded: true },
+	},
+	{
+		markup: '<div role="menuitemcheckbox" aria-expanded="true"></div>',
+		css: 'div',
+		role: 'menuitemcheckbox',
+		expected: { expanded: true },
+	},
+	{
+		markup: '<div role="menuitemradio" aria-expanded="true"></div>',
+		css: 'div',
+		role: 'menuitemradio',
+		expected: { expanded: true },
+	},
+	{ markup: '<a href="#" aria-pressed="true">Link</a>', css: 'a', role: 'link', expected: {} },
+	{
+		markup: '<button aria-expanded="false">Button</button>',
+		css: 'button',
+		role: 'button',
+		expected: { expanded: false },
+	},
+	{
+		markup: '<a href="#" aria-expanded="TRUE">Link</a>',
+		css: 'a',
+		role: 'link',
+		expected: { expanded: true },
+	},
+	{
+		markup: '<button role="tab" aria-expanded="true">Tab</button>',
+		css: 'button',
+		role: 'tab',
+		expected: { expanded: true },
+	},
+	{
+		markup: '<input role="combobox" aria-expanded="foo">',
+		css: 'input',
+		role: 'combobox',
+		expected: { expanded: true },
+	},
+	{
+		markup: '<input type="radio" aria-expanded="true" aria-selected="true" aria-pressed="true">',
+		css: 'input',
+		role: 'radio',
+		expected: {},
+	},
+	{ markup: '<input aria-expanded="true">', css: 'input', role: 'textbox', expected: {} },
+	{
+		markup: '<select aria-expanded="true"><option>One</option></select>',
+		css: 'select',
+		role: 'combobox',
+		expected: { expanded: false },
+	},
+	{
+		markup: '<button role="tab">Tab</button>',
+		css: 'button',
+		role: 'tab',
+		expected: {},
+	},
+	{
+		markup: '<button role="tab" aria-selected="false">Tab</button>',
+		css: 'button',
+		role: 'tab',
+		expected: { selected: false },
+	},
+	{
+		markup: '<button role="tab" aria-selected="foo">Tab</button>',
+		css: 'button',
+		role: 'tab',
+		expected: { selected: true },
+	},
+	{
+		markup: '<select><option selected aria-selected="false">One</option></select>',
+		css: 'option',
+		role: 'option',
+		expected: { selected: false },
+	},
+	{
+		markup: '<select><option>One</option><option aria-selected="true">Two</option></select>',
+		css: 'option:last-child',
+		role: 'option',
+		expected: { selected: true },
+	},
+	{
+		markup: '<select><option selected aria-selected="undefined">One</option></select>',
+		css: 'option',
+		role: 'option',
+		expected: { selected: true },
+	},
+	{
+		markup: '<select><option>One</option><option>Two</option></select>',
+		css: 'option:last-child',
+		role: 'option',
+		expected: { selected: false },
+	},
+	{
+		markup:
+			'<div role="tree"><div role="treeitem" aria-expanded="false" aria-selected="true">Item</div></div>',
+		css: '[role="treeitem"]',
+		role: 'treeitem',
+		expected: { expanded: false, selected: true },
+	},
+	{
+		markup: '<div role="tree"><div role="treeitem">Item</div></div>',
+		css: '[role="treeitem"]',
+		role: 'treeitem',
+		expected: {},
+	},
+	{
+		markup: '<div role="tablist"><button role="tab">Tab</button></div>',
+		css: 'button',
+		role: 'tab',
+		expected: {},
+	},
+	{
+		markup: '<div role="listbox"><div role="option">Item</div></div>',
+		css: '[role="option"]',
+		role: 'option',
+		expected: {},
+	},
+	{
+		markup: '<div role="listbox"><div role="option" aria-selected="false">Item</div></div>',
+		css: '[role="option"]',
+		role: 'option',
+		expected: { selected: false },
+	},
+	{
+		markup: '<div role="listbox"><div role="option" aria-selected="true">Item</div></div>',
+		css: '[role="option"]',
+		role: 'option',
+		expected: { selected: true },
+	},
+	{
+		markup: '<div role="listbox"><div role="option" aria-selected="">Item</div></div>',
+		css: '[role="option"]',
+		role: 'option',
+		expected: {},
+	},
+	{
+		markup: '<div role="listbox"><div role="option" aria-selected="undefined">Item</div></div>',
+		css: '[role="option"]',
+		role: 'option',
+		expected: {},
+	},
+	{
+		markup: '<details open><summary>Details</summary></details>',
+		css: 'summary',
+		role: '',
+		expected: {},
+	},
+])

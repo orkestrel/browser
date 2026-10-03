@@ -121,6 +121,56 @@ describe('journey step helpers', () => {
 })
 
 describe('element helpers', () => {
+	it('renders toggle states in order in outlines, matches, and focus, retaining false and controls', () => {
+		const nodes = createBrowserOutlineNodes([
+			{ role: 'button', name: 'Off', reference: 'e1', properties: { pressed: 'false' } },
+			{
+				role: 'button',
+				name: 'Mixed',
+				reference: 'e2',
+				properties: { pressed: 'mixed', expanded: false, focused: true },
+			},
+			{ role: 'option', name: 'Chosen', reference: 'e3', properties: { selected: true } },
+			{
+				role: 'checkbox',
+				name: 'Flags',
+				reference: 'e4',
+				properties: { checked: 'true', disabled: true },
+			},
+			{ role: 'button', name: 'Plain', reference: 'e5' },
+			{
+				role: 'button',
+				name: 'All',
+				reference: 'e6',
+				properties: {
+					pressed: true,
+					expanded: 'false',
+					selected: false,
+					checked: true,
+					disabled: true,
+				},
+			},
+			{
+				role: 'button',
+				name: 'Invalid',
+				reference: 'e7',
+				properties: { pressed: 0, expanded: null, selected: {} },
+			},
+		]).map((node) => (node.reference === 'e6' ? { ...node, value: 'V', tool: 'act' } : node))
+		const outline = renderBrowserOutline('url', 'title', nodes, 150, 'Mixed')
+		expect(outline.text.split('\n').slice(1, -1)).toEqual([
+			'e1 button "Off" pressed=false',
+			'e2 button "Mixed" pressed=mixed expanded=false',
+			'e3 option "Chosen" selected=true',
+			'e4 checkbox "Flags" [checked] [disabled]',
+			'e5 button "Plain"',
+			'e6 button "All" value="V" pressed=true expanded=false selected=false [checked] [disabled] [tool=act]',
+			'e7 button "Invalid"',
+		])
+		expect(outline.matches).toEqual(['e2 button "Mixed" pressed=mixed expanded=false'])
+		expect(outline.focus).toBe('e2 button "Mixed" pressed=mixed expanded=false')
+	})
+
 	it('reads each text node parent from its own session, by first match, before or after the text', () => {
 		const nodes = readBrowserAccessibility(BROWSER_ELEMENT_AX_FIXTURE).nodes.filter(
 			(node) => node.id === 'link' || node.id === 'duplicate',

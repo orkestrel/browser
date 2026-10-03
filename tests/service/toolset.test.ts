@@ -51,6 +51,7 @@ import {
 } from '../setupServer.js'
 import {
 	extractOutlineRows,
+	collectOutlineEntries,
 	matchesToolReceipt,
 	requireOutlineReference,
 	requireSystemBrowser,
@@ -60,6 +61,7 @@ import {
 	SERVICE_BROWSER_ARGS,
 	SERVICE_EDITABLE_HTML,
 	SERVICE_TRACKING_HTML,
+	SERVICE_TOGGLE_HTML,
 } from '../setupService.js'
 import {
 	BROWSER_JOURNEY_SERVICE_CASES,
@@ -326,6 +328,31 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 	})
 
+	it('carries pressed and expanded CDP states into look with a plain-button control', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(SERVICE_TOGGLE_HTML)}`)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const look = requireToolText(
+			await toolset.tools.execute({ id: 'look', name: 'look', arguments: { what: 'toggle' } }),
+		)
+		expect(collectOutlineEntries(look)).toEqual(
+			expect.arrayContaining([
+				'button "Toggle on" pressed=true',
+				'button "Toggle off" pressed=false',
+				'button "Toggle mixed" pressed=mixed',
+				'button "Disclosure" expanded=false',
+				'link "Expanded link" expanded=true',
+				'button "Plain toggle control"',
+			]),
+		)
+		expect(collectOutlineEntries(look)).toEqual(
+			collectOutlineEntries((await page.elements.outline()).text),
+		)
+	})
+
 	it('runs one task end to end: look, click the text field by reference, type with submit, and read the result page, each receipt whole and under BROWSER_TOOL_LIMIT', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
@@ -350,9 +377,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			`${notes} textbox "Notes" value="Leave at the door"`,
 			'Leave at the door',
 			'Speed',
-			`${speed} combobox "Speed" value="Standard"`,
-			`${standard} option "Standard"`,
-			`${express} option "Express"`,
+			`${speed} combobox "Speed" value="Standard" expanded=false`,
+			`${standard} option "Standard" selected=true`,
+			`${express} option "Express" selected=false`,
 			`${submit} button "Submit"`,
 			`${save} button "Save draft"`,
 			`${review} button "Review"`,

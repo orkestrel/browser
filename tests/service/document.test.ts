@@ -31,6 +31,7 @@ import {
 } from '../setupServer.js'
 import {
 	collectOutlinePairs,
+	collectOutlineEntries,
 	extractOutlineRows,
 	requireDocumentToolset,
 	requireOutlineReference,
@@ -38,6 +39,7 @@ import {
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
 	SERVICE_EDITABLE_HTML,
+	SERVICE_TOGGLE_HTML,
 } from '../setupService.js'
 import { BROWSER_JOURNEY_FRAME_HTML, BROWSER_JOURNEY_FRAME_JOURNEY } from '../setup.js'
 
@@ -241,6 +243,52 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 				'dist/src/browser/index.js and dist/src/core/index.js are absent; run npm run build',
 			)
 			expect(requireDocumentBundle()).toBeUndefined()
+		})
+	})
+
+	describe('with toggle states appended to the document page', () => {
+		let page: BrowserPageInterface
+		let cdp: string
+		let dom: string
+		beforeAll(async () => {
+			page = await browser.create({ url: fixtures.url('/document') })
+			await requireDocumentToolset(page)
+			await page.evaluate(
+				`document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_TOGGLE_HTML)})`,
+			)
+			cdp = (await page.elements.outline()).text
+			const entries = collectOutlineEntries(cdp)
+			for (const entry of [
+				'button "Toggle on" pressed=true',
+				'button "Toggle off" pressed=false',
+				'button "Toggle mixed" pressed=mixed',
+				'button "Disclosure" expanded=false',
+				'link "Expanded link" expanded=true',
+				'button "Plain toggle control"',
+				'tab "Selected tab" selected=true',
+				'tab "Unselected tab" selected=false',
+				'tab "Default tab"',
+				'treeitem "Selected treeitem" selected=true',
+				'treeitem "Unselected treeitem" selected=false',
+				'treeitem "Default treeitem"',
+				'option "Selected option" selected=true',
+				'option "Unselected option" selected=false',
+				'option "Default option"',
+				'option "Empty option"',
+				'option "Undefined option"',
+				'combobox "Override" value="Native false" expanded=false',
+				'option "Native false" selected=false',
+				'option "Native true" selected=true',
+			]) {
+				if (!entries.includes(entry)) throw new Error(`CDP state precondition missing: ${entry}`)
+			}
+			dom = requireToolText(await page.evaluate(DOCUMENT_LOOK))
+		})
+		afterAll(async () => {
+			await page.close().catch(() => undefined)
+		})
+		it('keeps complete DOM rows equal to the CDP rows, including false and native overrides', () => {
+			expect(collectOutlineEntries(dom)).toEqual(collectOutlineEntries(cdp))
 		})
 	})
 
