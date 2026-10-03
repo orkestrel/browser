@@ -29,6 +29,7 @@ import {
 	createCDPTestServer,
 	createFakeBrowserProcess,
 	createTempDirectory,
+	observeBrowserPipes,
 	reservePort,
 	destroyFakeBrowsers,
 	destroyTempDirectories,
@@ -1601,6 +1602,38 @@ describe('Browser post-spawn connect failure', () => {
 // === destroy() kill escalation (lifecycle-6)
 
 describe('Browser destroy() kill escalation', () => {
+	it.each(['destroy', 'close'] satisfies ReadonlyArray<'destroy' | 'close'>)(
+		'%s releases the browser stderr pipe even when a descendant retains its writer',
+		async (method) => {
+			const pipes = new Set<number>()
+			const fake = createFakeBrowserProcess({ serveCDP: true, retainStderr: true })
+			const browser = createBrowser({
+				executable: fake.executable,
+				args: fake.args,
+				cdp: { port: await reservePort() },
+				timeout: 5000,
+			})
+			const hook = observeBrowserPipes(pipes)
+			try {
+				await browser.connect()
+				const descendant = await fake.descendant()
+				expect(pipes.size).toBe(1)
+				await browser[method]()
+				expect(isRunning(descendant)).toBe(true)
+				await waitForCondition('the owned browser stderr pipe is closed', () => pipes.size === 0, {
+					budget: 1000,
+					interval: 20,
+				})
+			} finally {
+				try {
+					await browser.destroy()
+				} finally {
+					hook.disable()
+				}
+			}
+		},
+	)
+
 	it('destroy() fully terminates a cooperative launched process', async () => {
 		const fake = createFakeBrowserProcess({ serveCDP: true })
 		const browser = createBrowser({

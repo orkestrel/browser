@@ -887,6 +887,7 @@ export class Browser implements BrowserInterface {
 			if (process !== undefined) {
 				const exited = await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS)
 				if (!exited) await this.#terminate(process)
+				await this.#closeProcessPipe(process)
 			}
 			this.#process = undefined
 			this.#servingPid = undefined
@@ -1122,23 +1123,37 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #terminate(process: ChildProcess | undefined): Promise<void> {
-		if (
-			process === undefined ||
-			((process.exitCode !== null || process.signalCode !== null) &&
-				this.#inspectRemainder(process) === false)
-		) {
-			return
+		try {
+			if (
+				process === undefined ||
+				((process.exitCode !== null || process.signalCode !== null) &&
+					this.#inspectRemainder(process) === false)
+			) {
+				return
+			}
+
+			if (this.#signalProcess(process, 'SIGTERM') === false) return
+			if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS)) return
+
+			if (this.#signalProcess(process, 'SIGKILL') === false) return
+			if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS, true)) return
+
+			throw new BrowserConnectionError('Browser process did not exit after SIGKILL', {
+				pid: this.#servingPid ?? process.pid,
+			})
+		} finally {
+			await this.#closeProcessPipe(process)
 		}
+	}
 
-		if (this.#signalProcess(process, 'SIGTERM') === false) return
-		if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS)) return
-
-		if (this.#signalProcess(process, 'SIGKILL') === false) return
-		if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS, true)) return
-
-		throw new BrowserConnectionError('Browser process did not exit after SIGKILL', {
-			pid: this.#servingPid ?? process.pid,
-		})
+	async #closeProcessPipe(process: ChildProcess | undefined): Promise<void> {
+		const stream = process?.stderr
+		if (stream === undefined || stream === null || stream.closed) return
+		// A descendant can inherit the writer after the browser exits, especially on Windows.
+		// Release our read end explicitly and await its close before teardown settles.
+		const closed = once(stream, 'close')
+		stream.destroy()
+		await closed
 	}
 
 	#finish(): void {
