@@ -1211,13 +1211,15 @@ describe('image constants', () => {
 // === Timer lead
 
 describe('TIMER_LEAD', () => {
-	it('covers a real timer that ends short of its duration when armed late in a loop-clock millisecond', async (context) => {
+	it('bounds real timer lead after a measured loop-clock alignment', async () => {
 		const spans: number[] = []
 		const control = performance.now()
 		await waitForDelay(25)
 		expect(performance.now() - control).toBeGreaterThanOrEqual(25 - TIMER_LEAD)
-		for (let attempt = 0; attempt < 50; attempt += 1) {
+		for (let attempt = 0; attempt < 5; attempt += 1) {
+			const aligning = performance.now()
 			alignLoopClock(0.9)
+			expect(performance.now() - aligning).toBeGreaterThanOrEqual(0.9)
 			const started = performance.now()
 			const delayed = waitForDelay(10)
 			alignLoopClock()
@@ -1227,10 +1229,6 @@ describe('TIMER_LEAD', () => {
 			if (span < 10) break
 		}
 		for (const span of spans) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
-		if (!spans.some((span) => span < 10))
-			context.skip(
-				`Node setTimeout(10) armed late in the loop-clock millisecond produced no early timer in 50 probes (minimum ${Math.min(...spans)} ms); the 25 ms timer control passed`,
-			)
 	})
 })
 

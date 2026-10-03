@@ -1,15 +1,70 @@
+import type { AsyncHook } from 'node:async_hooks'
 import { describe, it, expect } from 'vitest'
-import { createScratch } from '@orkestrel/test/server'
+import {
+	createScratch,
+	createLink,
+	supportsFileLinks,
+	supportsDirectoryLinks,
+} from '@orkestrel/test/server'
 import { mkdir, readdir, readFile, rename, rmdir, unlink, writeFile } from 'node:fs/promises'
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { validateBrowserRun } from '@src/core'
 import { BROWSER_JOURNEY_LOCK_ATTEMPTS, formatBrowserLockEntry } from '@src/server'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
-import { linkBrowserFixture } from '../../../setupServer.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
-import { BrowserLockObserver } from '../../../setupServer.js'
+import { BrowserLockObserver, observeBrowserFilesystem } from '../../../setupServer.js'
 
 describe('FileBrowserStore', () => {
+	it('preserves an unrelated rename failure when the destination is a directory', async () => {
+		const scratch = createScratch()
+		try {
+			const path = scratch.ensure('destination')
+			const files = new BrowserLockObserver({ root: scratch.path }, async (checked) => {
+				if (checked.endsWith('.tmp') && existsSync(checked)) await unlink(checked)
+			})
+			await expect(files.write(path, 'replacement')).rejects.toMatchObject({
+				code: 'BROWSER_JOURNEY_FILE',
+				message: expect.stringContaining('ENOENT'),
+			})
+			expect(await readdir(scratch.path)).toEqual(['destination'])
+		} finally {
+			scratch.destroy()
+		}
+	})
+	it('preserves the committed result when another writer reacquires after release rmdir gets ENOENT', async () => {
+		const scratch = createScratch()
+		let hook: AsyncHook | undefined
+		try {
+			const lock = join(scratch.path, 'journey.lock')
+			const foreign = formatBrowserLockEntry(process.pid, '22222222-2222-4222-8222-222222222222')
+			let committed = false
+			let reclaimed = false
+			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
+				if (path !== lock || !committed) return
+				expect(await readdir(lock)).toEqual([])
+				await rmdir(lock)
+				hook = observeBrowserFilesystem(() => {
+					mkdirSync(lock)
+					writeFileSync(join(lock, foreign), '')
+					reclaimed = true
+				})
+			})
+			await expect(
+				files.lock(lock, async () => {
+					await files.write(files.resolvePath('journey.json'), 'committed')
+					committed = true
+					return 'saved revision'
+				}),
+			).resolves.toBe('saved revision')
+			expect(reclaimed).toBe(true)
+			expect(await readFile(files.resolvePath('journey.json'), 'utf8')).toBe('committed')
+			expect(await readdir(lock)).toEqual([foreign])
+		} finally {
+			hook?.disable()
+			scratch.destroy()
+		}
+	})
 	it('refuses ambiguous publication and admits the uncontended control', async () => {
 		const scratch = createScratch()
 		try {
@@ -39,7 +94,7 @@ describe('FileBrowserStore', () => {
 			let releasing = false
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
 				if (path !== lock || !releasing) return
-				// Replace the emptied directory after its real check so rmdir reaches ENOTDIR.
+				// Replace the emptied directory after its real check so rmdir reaches ENOTDIR or ENOENT.
 				expect(await readdir(lock), 'release has unlinked its entry').toEqual([])
 				await rmdir(lock)
 				await writeFile(lock, 'replacement')
@@ -310,15 +365,11 @@ describe('FileBrowserStore', () => {
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
 			await writeFile(files.resolvePath('target'), 'saved')
-			const reason = await linkBrowserFixture(
-				files.resolvePath('target'),
-				files.resolvePath('.temporary.tmp'),
-				'file',
+			context.skip(
+				!supportsFileLinks(),
+				'supportsFileLinks cannot create and read a file symlink on this host',
 			)
-			if (reason !== undefined) {
-				context.skip(reason)
-				return
-			}
+			createLink(files.resolvePath('.temporary.tmp'), files.resolvePath('target'))
 			await expect(files.check(files.resolvePath('.temporary.tmp'))).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
@@ -347,21 +398,15 @@ describe('FileBrowserStore', () => {
 		const scratch = createScratch()
 		try {
 			await mkdir(join(scratch.path, 'root'))
-			const reason = await linkBrowserFixture(
-				join(scratch.path, 'root'),
-				join(scratch.path, 'alias'),
-				'dir',
+			context.skip(
+				!supportsDirectoryLinks(),
+				'supportsDirectoryLinks cannot create and read a directory link on this host',
 			)
-			if (reason !== undefined) {
-				context.skip(reason)
-				return
-			}
+			createLink(join(scratch.path, 'alias'), join(scratch.path, 'root'))
 			const files = new FileBrowserStore({ root: join(scratch.path, 'alias') })
 			expect(files.resolvePath('entry')).toBe(join(scratch.path, 'root', 'entry'))
 			await rename(join(scratch.path, 'root'), join(scratch.path, 'moved'))
-			expect(
-				await linkBrowserFixture(join(scratch.path, 'moved'), join(scratch.path, 'root'), 'dir'),
-			).toBeUndefined()
+			createLink(join(scratch.path, 'root'), join(scratch.path, 'moved'))
 			await expect(files.read(files.resolvePath('entry'))).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})

@@ -153,9 +153,10 @@ export function filterBrowserOutline(
  * states it carries.
  *
  * @remarks
- * After the name the row appends `value="V"` when the node carries a non-empty value, `[checked]`
- * when it is checked, `[disabled]` when it is disabled, and `[tool=NAME]` when it is a page tool's
- * form, in that order. A node without a reference renders without one.
+ * After the name the row appends `value="V"` when the node carries a non-empty value,
+ * `pressed=true|false|mixed`, `expanded=true|false`, and `selected=true|false` when present,
+ * `[checked]` when checked, `[disabled]` when disabled, and `[tool=NAME]` for a page tool's form,
+ * in that order. A node without a reference renders without one.
  *
  * @param node - The outline node
  * @returns The rendered row

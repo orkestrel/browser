@@ -262,6 +262,16 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 				'button "Toggle on" pressed=true',
 				'button "Toggle off" pressed=false',
 				'button "Toggle mixed" pressed=mixed',
+				'button "Uppercase toggle" pressed=true',
+				'button "Unknown toggle" pressed=true',
+				'button "Spaced toggle" pressed=true',
+				'button "Empty toggle"',
+				'button "Undefined toggle"',
+				'button "Mixed expansion" expanded=true',
+				'button "Unknown expansion" expanded=true',
+				'combobox "Native" value="Native chosen" expanded=false',
+				'option "Native first" selected=false',
+				'option "Native chosen" selected=true',
 				'button "Disclosure" expanded=false',
 				'link "Expanded link" expanded=true',
 				'button "Plain toggle control"',
@@ -290,6 +300,24 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 		it('keeps complete DOM rows equal to the CDP rows, including false and native overrides', () => {
 			expect(collectOutlineEntries(dom)).toEqual(collectOutlineEntries(cdp))
 		})
+	})
+
+	it('declares the lone tab selection difference between CDP and DOM', async () => {
+		const page = await browser.create({ url: fixtures.url('/document') })
+		try {
+			await requireDocumentToolset(page)
+			await page.evaluate(
+				'document.querySelector("main").insertAdjacentHTML("beforeend", "<button role=tab>Lone tab</button>")',
+			)
+			expect(collectOutlineEntries((await page.elements.outline()).text)).toContain(
+				'tab "Lone tab" selected=false',
+			)
+			const entries = collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_LOOK)))
+			expect(entries).toContain('tab "Lone tab"')
+			expect(entries).not.toContain('tab "Lone tab" selected=false')
+		} finally {
+			await page.close()
+		}
 	})
 
 	describe('with a select appended to the document page', () => {

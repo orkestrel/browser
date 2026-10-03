@@ -1,11 +1,15 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { afterEach, describe, it, expect } from 'vitest'
-import { createScratch } from '@orkestrel/test/server'
+import {
+	createScratch,
+	createLink,
+	supportsFileLinks,
+	supportsDirectoryLinks,
+} from '@orkestrel/test/server'
 import { lstat, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { FileBrowserRunStore } from '@src/server'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
-import { linkBrowserFixture } from '../../../setupServer.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 import { describeBrowserRunStore } from '../../core/stores/suite.js'
 
@@ -72,15 +76,11 @@ describe('FileBrowserRunStore captures', () => {
 							? slot.directory
 							: join(slot.directory, 's1.png')
 			await rename(path, path + '-moved')
-			const reason = await linkBrowserFixture(
-				path + '-moved',
-				path,
-				component === 'capture' ? 'file' : 'dir',
+			context.skip(
+				!(component === 'capture' ? supportsFileLinks() : supportsDirectoryLinks()),
+				'The installed link capability probe cannot create and read this link category',
 			)
-			if (reason !== undefined) {
-				context.skip(reason)
-				return
-			}
+			createLink(path, path + '-moved')
 			await expect(store.capture(slot, 's1.png', new Uint8Array([2]))).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
@@ -143,11 +143,11 @@ describe('FileBrowserRunStore persisted files', () => {
 						? join(scratch.path, 'check-ready', 'runs')
 						: slot.directory
 			await rename(path, path + '-moved')
-			const reason = await linkBrowserFixture(path + '-moved', path, 'dir')
-			if (reason !== undefined) {
-				context.skip(reason)
-				return
-			}
+			context.skip(
+				!supportsDirectoryLinks(),
+				'supportsDirectoryLinks cannot create and read a directory link on this host',
+			)
+			createLink(path, path + '-moved')
 			await expect(store.clear('check-ready')).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
@@ -214,11 +214,11 @@ describe('FileBrowserRunStore persisted files', () => {
 						? join(scratch.path, 'check-ready', 'runs')
 						: slot.directory
 			await rename(path, path + '-moved')
-			const reason = await linkBrowserFixture(path + '-moved', path, 'dir')
-			if (reason !== undefined) {
-				context.skip(reason)
-				return
-			}
+			context.skip(
+				!supportsDirectoryLinks(),
+				'supportsDirectoryLinks cannot create and read a directory link on this host',
+			)
+			createLink(path, path + '-moved')
 			await expect(store.delete('check-ready', slot.id)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
@@ -228,54 +228,56 @@ describe('FileBrowserRunStore persisted files', () => {
 			)
 		}
 	})
-	it('pages runs with faults and refuses links at the run file', async (context) => {
+	it('pages readable runs past malformed faults without requiring file links', async () => {
 		const scratch = createScratch()
 		scratches.push(scratch)
 		const store = new FileBrowserRunStore({ root: scratch.path, limit: 1 })
 		const slots = []
-		for (let index = 0; index < 4; index += 1) {
+		for (let index = 0; index < 3; index += 1) {
 			const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
 			slots.push(slot)
 			await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
 		}
 		slots.sort((left, right) => (left.id < right.id ? -1 : 1))
-		const broken = slots[0]
-		const linked = slots[1]
-		const readable = slots[2]
-		const last = slots[3]
-		if (
-			broken?.directory === undefined ||
-			linked?.directory === undefined ||
-			readable === undefined ||
-			last === undefined
-		)
+		const [broken, readable, last] = slots
+		if (broken?.directory === undefined || readable === undefined || last === undefined)
 			throw new Error('Missing allocated slots')
 		await writeFile(join(broken.directory, 'run.json'), '{')
-		const path = join(linked.directory, 'run.json')
-		await rename(path, path + '-moved')
-		const reason = await linkBrowserFixture(path + '-moved', path, 'file')
-		if (reason !== undefined) {
-			context.skip(reason)
-			return
-		}
-		await expect(store.get(BROWSER_RUN_FIXTURE.journey.name, linked.id)).rejects.toMatchObject({
-			code: 'BROWSER_JOURNEY_PATH',
-		})
-		await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: linked.id })).rejects.toMatchObject({
-			code: 'BROWSER_JOURNEY_PATH',
-		})
-		await expect(store.delete(BROWSER_RUN_FIXTURE.journey.name, linked.id)).rejects.toMatchObject({
-			code: 'BROWSER_JOURNEY_PATH',
-		})
 		const page = await store.list(BROWSER_RUN_FIXTURE.journey.name, { limit: 100 })
 		expect(page.entries.map((run) => run.id)).toEqual([readable.id])
 		expect(page.truncated).toBe(true)
 		expect(page.faults).toEqual([
 			{ name: broken.id, reason: 'The stored entry is malformed or unreadable' },
-			{ name: linked.id, reason: 'The entry path is refused' },
 		])
 		const next = await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 1 })
 		expect(next.entries.map((run) => run.id)).toEqual([last.id])
 		expect(next.truncated).toBe(false)
+	})
+	it('refuses links at the run file and reports the linked-entry fault', async (context) => {
+		context.skip(
+			!supportsFileLinks(),
+			'supportsFileLinks cannot create and read a file symlink on this host',
+		)
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const store = new FileBrowserRunStore({ root: scratch.path })
+		const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
+		await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+		if (slot.directory === undefined) throw new Error('Missing directory')
+		const path = join(slot.directory, 'run.json')
+		await rename(path, path + '-moved')
+		createLink(path, path + '-moved')
+		await expect(store.get(BROWSER_RUN_FIXTURE.journey.name, slot.id)).rejects.toMatchObject({
+			code: 'BROWSER_JOURNEY_PATH',
+		})
+		await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
+			code: 'BROWSER_JOURNEY_PATH',
+		})
+		await expect(store.delete(BROWSER_RUN_FIXTURE.journey.name, slot.id)).rejects.toMatchObject({
+			code: 'BROWSER_JOURNEY_PATH',
+		})
+		expect((await store.list(BROWSER_RUN_FIXTURE.journey.name)).faults).toEqual([
+			{ name: slot.id, reason: 'The entry path is refused' },
+		])
 	})
 })

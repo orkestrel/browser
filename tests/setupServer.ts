@@ -3,6 +3,7 @@ import type { IncomingMessage, Server as HTTPServer, ServerResponse } from 'node
 import type { AddressInfo, Server as NetServer, Socket } from 'node:net'
 import type { Duplex } from 'node:stream'
 import type { FileHandle } from 'node:fs/promises'
+import type { AsyncHook } from 'node:async_hooks'
 import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { RetryOptions, TeardownInterface } from '@orkestrel/test'
@@ -20,12 +21,13 @@ import type {
 } from '@src/server'
 import type { BrowserElementFixture, CDPSentMessage, CDPTestTransportInterface } from './setup.js'
 import { spawn as spawnProcess, spawnSync } from 'node:child_process'
+import { createHook } from 'node:async_hooks'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
-import { lstat, open, symlink } from 'node:fs/promises'
+import { open } from 'node:fs/promises'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -59,38 +61,6 @@ import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
 import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
-
-/**
- * Creates a fixture link, falling back to a directory junction when symlink privilege is absent.
- * @param target - Existing target
- * @param path - Link to create
- * @param category - Target category
- * @returns A cited skip reason when the host cannot create the link, otherwise absence
- */
-export async function linkBrowserFixture(
-	target: string,
-	path: string,
-	category: 'file' | 'dir',
-): Promise<string | undefined> {
-	const source = await lstat(target)
-	if (source.isSymbolicLink() || (category === 'dir' ? !source.isDirectory() : !source.isFile()))
-		throw new Error('The link control must be an ordinary target of the requested category')
-	try {
-		await symlink(target, path, category)
-	} catch (error) {
-		if (readErrorCode(error) !== 'EPERM') throw error
-		if (category === 'file')
-			return 'node:fs symlink(file) returned EPERM for an existing ordinary file; file-symlink privilege is unavailable'
-		try {
-			await symlink(target, path, 'junction')
-		} catch (cause) {
-			if (readErrorCode(cause) !== 'EPERM') throw cause
-			return 'node:fs symlink(dir) and symlink(junction) returned EPERM for an existing ordinary directory'
-		}
-	}
-	if (!(await lstat(path)).isSymbolicLink()) throw new Error('The link probe created no link')
-	return undefined
-}
 
 /**
  * Reads the loop clock Node stamps on a timer it arms, in whole milliseconds.
@@ -746,8 +716,8 @@ export interface FakeBrowserProcessInterface {
  * spawned process is never the one that serves CDP; `unnamed` leaves
  * `SystemInfo.getProcessInfo` unanswered so the endpoint never names the
  * process serving it; `split` prints the endpoint line in two chunks; `crlf` ends
- * it `\r\n`; `flood` writes 1 MB to stderr after readiness; `mute` closes the
- * serving process's stderr without printing the line and serves nothing. With none of these options the process idles (never
+ * it `\r\n`; `flood` writes 1 MB to stderr after readiness; `mute` exits without
+ * announcing readiness. With none of these options the process idles (never
  * serves CDP) — useful for launch-failure/abort scenarios.
  * @returns A {@link FakeBrowserProcessInterface}
  */
@@ -853,8 +823,6 @@ export function createFakeBrowserProcess(
 	)
 
 	if (options.mute === true) {
-		// closeSync(2) alone leaves an inherited Windows stderr handle open.
-		// Exiting closes every inherited handle on both hosts without announcing readiness.
 		lines.push('process.exit(0)')
 	}
 
@@ -2552,4 +2520,24 @@ export class BrowserLockObserver extends FileBrowserStore {
 		await this.#observe(path)
 		return present
 	}
+}
+
+/**
+ * Runs an interleaving before the next native filesystem promise delivers its completion.
+ * @param action - Synchronous filesystem action after the native operation has finished
+ * @returns The enabled hook, which the caller disables during cleanup
+ */
+export function observeBrowserFilesystem(action: () => void): AsyncHook {
+	let pending: number | undefined
+	let delivered = false
+	return createHook({
+		init(id, category) {
+			if (category === 'FSREQPROMISE' && pending === undefined) pending = id
+		},
+		before(id) {
+			if (id !== pending || delivered) return
+			delivered = true
+			action()
+		},
+	}).enable()
 }
