@@ -46,14 +46,13 @@ const INTERNAL: readonly string[] = Object.freeze([
 /** The heading every fence driving the toolset with a small model sits under. */
 const SMALL_MODEL_TITLE = 'Drive a page with a small model'
 /**
- * The system prompt the store proof in `@orkestrel/ollama` runs with, its
- * `STORE_SYSTEM_PROMPT` constant transcribed.
+ * The system prompt recommended for the reading vocabulary, transcribed for fence parity.
  */
 const SMALL_MODEL_PROMPT =
 	'You control a web browser with tools and must call a tool before you answer. ' +
 	'The first message shows the page as look returns it; references such as e4 name its elements. ' +
-	'To learn a fact, call read with what set to your question; when its result ends by naming an offset, call read again with that offset. ' +
-	'To search, call type with the search box reference, the words, and submit true. ' +
+	'To learn a fact, call read with search set to words from your question; when its result ends by naming an offset, call read again with that offset. ' +
+	"To use the site's search box, call type with its reference, the words, and submit true. " +
 	'To press a button or follow a link, call click with its reference from the latest result. Never invent a reference. ' +
 	'If text you expect has not appeared, call wait once. ' +
 	'When the task is done, answer in one short sentence.'
@@ -61,13 +60,14 @@ const SMALL_MODEL_PROMPT =
 const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 	'const toolset = createBrowserToolset(page, { tools: createToolManager() })',
 	'await toolset.start()',
-	"toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'click', 'type', 'press', 'navigate', 'wait']",
-	"const seeded = await toolset.tools.execute({\n\tid: 'seed',\n\tname: 'look',\n\targuments: { what: 'the page' },\n})",
+	"toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'plain', 'click', 'type', 'press', 'navigate', 'wait']",
+	"const seeded = await toolset.tools.execute({\n\tid: 'seed',\n\tname: 'look',\n\targuments: { search: '' },\n})",
 	'const view = seeded.success ? String(seeded.value) : seeded.error',
 	'\tcontent: `What does the Alpine Kettle cost?\\n\\nThe browser shows this page:\\n${view}`,',
 ])
 /** The receipt the guide's Tools section quotes for a `look` call that carries `ref`. */
-const UNADVERTISED_RECEIPT = 'The look tool takes no ref parameter; call look with what and offset.'
+const UNADVERTISED_RECEIPT =
+	'The look tool takes no ref parameter; call look with search and offset.'
 /** The headings that open and close the guide's Tools table. */
 const TOOLS_SECTION = Object.freeze(['\n### Tools\n', '\n### Receipts\n'])
 /** The heading of the fence that shows the `add-kettle` listing. */
@@ -126,6 +126,28 @@ await new GuideCommand({
 		expect(own.entry.spec).toBe(GUIDE_SPEC)
 	})
 
+	it('executes the whole-page reading and matching fence', async () => {
+		const { createBrowserReading, collectBrowserWords, matchBrowserText, renderBrowserMatches } =
+			await import('@src/core')
+		const reading = createBrowserReading({
+			url: 'https://example.test/',
+			title: '',
+			html: '<nav>Menu</nav><main><p>Blue kettle</p></main>',
+		})
+		expect(reading.text().text).toBe('Menu\nBlue kettle')
+		expect(reading.text({ distill: true }).text).toBe('Blue kettle')
+		expect([...collectBrowserWords('Blue BLUE to 12')]).toEqual(['blue'])
+		const matches = matchBrowserText(reading.text().text, 'blue kettle')
+		expect(matches).toEqual([{ offset: 5, text: 'Blue kettle' }])
+		expect(
+			renderBrowserMatches(
+				'Matches:',
+				matches.map((match) => `[${match.offset}] ${match.text}`),
+				100,
+			),
+		).toBe('Matches:\n[5] Blue kettle\n\n')
+	})
+
 	// The example half of the equality case is silent over an empty population: with no
 	// title on both sides `findDrift` compares no pair and the case passes on the summaries
 	// alone. This pins the population this repository's own guide contributes, so removing
@@ -157,8 +179,11 @@ await new GuideCommand({
 		it('carries the store proof system prompt in the Surface fence and the pattern fence', () => {
 			expect(fences).toHaveLength(2)
 			for (const fence of fences) {
-				const declared = /const system =\n((?:\t'[^'\n]*'(?: \+)?\n)+)/.exec(fence.code)?.[1] ?? ''
-				const literals = [...declared.matchAll(/'([^'\n]*)'/g)].map((match) => match[1] ?? '')
+				const declared =
+					/const system =\n((?:\t(?:'[^'\n]*'|"[^"\n]*")(?: \+)?\n)+)/.exec(fence.code)?.[1] ?? ''
+				const literals = [...declared.matchAll(/'([^'\n]*)'|"([^"\n]*)"/g)].map(
+					(match) => match[1] ?? match[2] ?? '',
+				)
 				expect(literals.join('')).toBe(SMALL_MODEL_PROMPT)
 			}
 		})
@@ -167,7 +192,7 @@ await new GuideCommand({
 			for (const line of SMALL_MODEL_LINES) expect(fences[0]?.code).toContain(line)
 		})
 
-		it('lists the seven tools its comment claims and seeds the look view over a real page', async () => {
+		it('lists the tools its comment claims and seeds the look view over a real page', async () => {
 			const { createBrowserElementFixture } = await import('./setup.js')
 			const { createBrowserToolset } = await import('@src/core')
 			const { createToolManager } = await import('@orkestrel/tool')
@@ -178,6 +203,7 @@ await new GuideCommand({
 				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
 					'look',
 					'read',
+					'plain',
 					'click',
 					'type',
 					'press',
@@ -187,7 +213,7 @@ await new GuideCommand({
 				const seeded = await toolset.tools.execute({
 					id: 'seed',
 					name: 'look',
-					arguments: { what: 'the page' },
+					arguments: { search: '' },
 				})
 				expect(seeded.success ? String(seeded.value) : seeded.error).toMatch(
 					/^page "[^"\n]*" https:\/\/example\.test\/cart\n/,
@@ -216,7 +242,7 @@ await new GuideCommand({
 			const result = await toolset.tools.execute({
 				id: 'unadvertised',
 				name: 'look',
-				arguments: { what: 'the cart', ref: 'e1' },
+				arguments: { search: 'the cart', ref: 'e1' },
 			})
 			expect(result).toMatchObject({ success: false, error: UNADVERTISED_RECEIPT })
 			expect(transport.sent.length).toBe(sent)

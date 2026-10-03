@@ -5,7 +5,7 @@
 > and publishes them as agent tools, an in-page face that drives a DOM document with native APIs,
 > and a Node runtime that finds, launches, and connects to the browser itself.
 
-Connect to a running browser or launch one with the `createBrowser` function, open a page, and drive it through stable element references and trusted input. Read the page as Markdown in bounded slices, and hand the whole vocabulary to an agent as `@orkestrel/tool` tools with `createBrowserToolset`. Inside a page, `createDocumentToolset` drives a DOM document with native APIs, and `createSocketCDPTransport` carries the core client over the browser's own `WebSocket`. Record a journey, one user intent kept as JSON, from a model's tool calls or a person's gestures on a page, then list, edit, replay, and forget it through the six journey tools, or compile it with `compileBrowserJourney` into a module a developer runs and customizes. Part of the `@orkestrel` line.
+Connect to a running browser or launch one with the `createBrowser` function, open a page, and drive it through stable element references and trusted input. Read the whole captured page as Markdown or plain text in bounded slices, and hand the whole vocabulary to an agent as `@orkestrel/tool` tools with `createBrowserToolset`. Inside a page, `createDocumentToolset` drives a DOM document with native APIs, and `createSocketCDPTransport` carries the core client over the browser's own `WebSocket`. Record a journey, one user intent kept as JSON, from a model's tool calls or a person's gestures on a page, then list, edit, replay, and forget it through the six journey tools, or compile it with `compileBrowserJourney` into a module a developer runs and customizes. Part of the `@orkestrel` line.
 
 ## Install
 
@@ -40,7 +40,8 @@ const [save] = await page.elements.find({ role: 'button', name: 'Save' })
 await save?.click()
 await page.wait('Saved')
 const reading = await page.read()
-reading.markdown({ limit: 4_000 }) // { text, offset, total }
+reading.markdown({ limit: 4_000 }) // { text, offset, total }; whole page by default
+reading.text({ distill: true }) // main content as plain text
 await page.screenshot({ path: 'example.png' })
 await browser.destroy()
 ```
@@ -53,7 +54,9 @@ import { createToolManager } from '@orkestrel/tool'
 
 const toolset = createBrowserToolset(page, { tools: createToolManager() })
 await toolset.start()
-await toolset.tools.execute({ id: '1', name: 'look', arguments: { what: 'the form' } })
+await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'the form' } })
+await toolset.tools.execute({ id: '2', name: 'read', arguments: { search: 'delivery' } })
+await toolset.tools.execute({ id: '3', name: 'plain', arguments: { search: 'confirmation' } })
 await toolset.destroy()
 ```
 
