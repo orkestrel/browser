@@ -399,7 +399,7 @@ export class FileBrowserStore {
 		} catch (error) {
 			if (error instanceof Error && 'code' in error) {
 				if (error.code === 'ENOTEMPTY') return
-				if (error.code === 'ENOENT') {
+				if (error.code === 'ENOENT' || error.code === 'EPERM') {
 					try {
 						if ((await lstat(path)).isDirectory()) return
 					} catch (cause) {

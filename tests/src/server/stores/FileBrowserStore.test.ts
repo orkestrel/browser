@@ -16,6 +16,37 @@ import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 import { BrowserLockObserver, observeBrowserFilesystem } from '../../../setupServer.js'
 
 describe('FileBrowserStore', () => {
+	it('preserves committed results when an empty lock removal races another writer', async () => {
+		const scratch = createScratch()
+		try {
+			const lock = join(scratch.path, 'journey.lock')
+			let committed = false
+			let competing: Promise<unknown> | undefined
+			let races = 0
+			const failures: unknown[] = []
+			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
+				if (path !== lock || !committed) return
+				races += 1
+				competing = rmdir(lock).catch((error: unknown) => error)
+			})
+			for (let index = 0; index < 512; index += 1) {
+				committed = false
+				const result = await files
+					.lock(lock, async () => {
+						committed = true
+						return index
+					})
+					.catch((error: unknown) => error)
+				await competing
+				if (result !== index) failures.push(result)
+			}
+			expect(races).toBe(512)
+			expect(failures).toEqual([])
+			expect(await readdir(scratch.path)).toEqual([])
+		} finally {
+			scratch.destroy()
+		}
+	})
 	it('preserves an unrelated rename failure when the destination is a directory', async () => {
 		const scratch = createScratch()
 		try {
