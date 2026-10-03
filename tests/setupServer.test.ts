@@ -27,6 +27,7 @@ import type { CDPTestServerInterface } from './setupServer.js'
 import { createAttachedPage } from './setup.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { existsSync, lstatSync, mkdirSync, readFileSync, realpathSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { createConnection, createServer } from 'node:net'
@@ -44,6 +45,7 @@ import {
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import {
 	alignLoopClock,
+	linkBrowserFixture,
 	BrowseChild,
 	BrowserLockObserver,
 	COOPERATIVE_SIGTERM,
@@ -723,7 +725,54 @@ describe('readFixtureProcessId', () => {
 	})
 })
 
+describe('linkBrowserFixture', () => {
+	it.for(['file', 'dir'] as const)(
+		'creates or reports the probed capability for %s',
+		async (category) => {
+			const scratch = createScratch()
+			try {
+				const target =
+					category === 'dir' ? scratch.ensure('target') : scratch.write('target', 'control')
+				const path = join(scratch.path, 'link')
+				expect(lstatSync(target).isSymbolicLink()).toBe(false)
+				const reason = await linkBrowserFixture(target, path, category)
+				expect(reason === undefined || reason.includes('EPERM')).toBe(true)
+				expect(existsSync(path)).toBe(reason === undefined)
+				expect(reason === undefined ? lstatSync(path).isSymbolicLink() : false).toBe(
+					reason === undefined,
+				)
+				expect(reason === undefined ? realpathSync(path) : undefined).toBe(
+					reason === undefined ? realpathSync(target) : undefined,
+				)
+				await expect(
+					linkBrowserFixture(
+						target,
+						join(scratch.path, 'wrong'),
+						category === 'dir' ? 'file' : 'dir',
+					),
+				).rejects.toThrow('ordinary target')
+				await expect(
+					linkBrowserFixture(join(scratch.path, 'missing'), path, category),
+				).rejects.toMatchObject({ code: 'ENOENT' })
+			} finally {
+				scratch.destroy()
+			}
+		},
+	)
+})
+
 describe('createFakeBrowserProcess', () => {
+	it('closes inherited stderr without announcing readiness after re-execution', async () => {
+		const fake = createFakeBrowserProcess({ launcher: true, mute: true })
+		const child = spawn(fake.executable, fake.args, { stdio: ['ignore', 'ignore', 'pipe'] })
+		const chunks: string[] = []
+		const stderr = requireValue(child.stderr)
+		stderr.setEncoding('utf8')
+		stderr.on('data', (chunk) => chunks.push(String(chunk)))
+		await once(stderr, 'close', { signal: AbortSignal.timeout(2000) })
+		expect(chunks).toEqual([])
+		expect(child.exitCode).toBe(0)
+	})
 	it('registers SIGTERM before publishing the browser pid', () => {
 		const fake = createFakeBrowserProcess({ ignoreSIGTERM: true })
 		const script = readFileSync(requireValue(fake.args[0]), 'utf8')

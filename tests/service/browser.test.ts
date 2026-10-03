@@ -52,6 +52,7 @@ import {
 import {
 	extractOutlineReferences,
 	parseProtocolDomains,
+	supportsServiceRegistry,
 	REGISTRY_ABSENT_REASON,
 	requireCacheRestore,
 	requireSystemBrowser,
@@ -1127,22 +1128,26 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	})
 
-	it('resolves registry.start() to whether Schema.getDomains lists WebMCP (control: the list names Page)', async () => {
+	it('resolves registry.start() to the direct WebMCP.enable capability with a missing-method control', async () => {
 		const page = await browser.create({ url: fixtures.url('/registry') })
 		opened.push(page)
 		const domains = requireValue(parseProtocolDomains(await page.send('Schema.getDomains')))
 
 		expect(domains).toContain('Page')
-		expect(await page.registry.start()).toBe(domains.includes('WebMCP'))
+		await expect(page.send('MissingProbe.enable')).rejects.toMatchObject({
+			context: { code: -32601 },
+		})
+		const supported = await supportsServiceRegistry(page)
+		expect(await page.registry.start()).toBe(supported)
 	})
 
 	it('mirrors a page-registered tool through the live WebMCP domain on a browser launched with the WebMCP feature switch', async (context) => {
 		const page = await registry.create({ url: fixtures.url('/registry') })
 		opened.push(page)
-		const domains = requireValue(parseProtocolDomains(await page.send('Schema.getDomains')))
+		const supported = await supportsServiceRegistry(page)
 		const started = await page.registry.start()
 
-		expect(domains.includes('WebMCP')).toBe(started)
+		expect(started).toBe(supported)
 		context.skip(!started, REGISTRY_ABSENT_REASON)
 		await waitForCondition(
 			'the registry mirrored the page tool',

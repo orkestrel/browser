@@ -1,7 +1,8 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
+import { linkBrowserFixture } from '../../../setupServer.js'
 import { afterEach, describe, it, expect } from 'vitest'
 import { watch } from 'node:fs'
-import { mkdir, rename, symlink, readFile, readdir } from 'node:fs/promises'
+import { mkdir, rename, readFile, readdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
 	BROWSER_JOURNEY_FIXTURE,
@@ -161,8 +162,9 @@ describe('BrowserJourneyToolset file listing', () => {
 })
 
 describe('FileBrowserJourneyStore filesystem boundaries', () => {
-	it('refuses links at every journey component', async () => {
-		for (const component of ['root', 'journey', 'journey.json', 'revision', 'journey.lock']) {
+	it.for(['root', 'journey', 'journey.json', 'revision', 'journey.lock'])(
+		'refuses links at journey component %s',
+		async (component, context) => {
 			const scratch = createScratch()
 			scratches.push(scratch)
 			const root = join(scratch.path, 'root')
@@ -178,19 +180,23 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 						: join(root, journey.name, component)
 			if (component === 'journey.lock') await mkdir(path)
 			await rename(path, path + '-moved')
-			await symlink(
+			const reason = await linkBrowserFixture(
 				path + '-moved',
 				path,
 				component === 'root' || component === 'journey' || component === 'journey.lock'
 					? 'dir'
 					: 'file',
 			)
+			if (reason !== undefined) {
+				context.skip(reason)
+				return
+			}
 			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
 			await expect(store.delete(journey.name)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
-		}
-	})
+		},
+	)
 	it('rolls back a journey replacement when cancellation prevents its counter write', async () => {
 		const scratch = createScratch()
 		scratches.push(scratch)

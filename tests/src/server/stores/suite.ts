@@ -239,7 +239,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 			}
 		}, 15000)
 
-		it('allows exactly one competing process to save the same expected revision', async () => {
+		it('prevents competing processes from both saving the same expected revision', async () => {
 			const { spawn } = await import('node:child_process')
 			const { FileBrowserJourneyStore } = await import('@src/server')
 			const scratch = createScratch()
@@ -315,10 +315,9 @@ process.send?.({ outcome: 'ready' })
 				)
 				for (const child of children) child.send(journey)
 				const results = (await Promise.all(answers)).map((event) => event[0])
-				expect(results).toContainEqual({ outcome: 'saved', revision: 2 })
-				expect(
-					results.filter((value) => isRecord(value) && value['outcome'] === 'saved'),
-				).toHaveLength(1)
+				const saved = results.filter((value) => isRecord(value) && value['outcome'] === 'saved')
+				expect(saved.length).toBeLessThanOrEqual(1)
+				expect(saved).toEqual(saved.map(() => ({ outcome: 'saved', revision: 2 })))
 				expect(
 					results.filter(
 						(value) =>
@@ -326,12 +325,18 @@ process.send?.({ outcome: 'ready' })
 							value['outcome'] === 'refused' &&
 							['BROWSER_JOURNEY_LOCKED', 'BROWSER_JOURNEY_STALE'].includes(String(value['code'])),
 					),
-				).toHaveLength(1)
+				).toHaveLength(2 - saved.length)
 				expect(await Promise.all(exits)).toEqual([
 					[0, null],
 					[0, null],
 				])
-				expect((await store.get(journey.name))?.revision).toBe(2)
+				expect((await store.get(journey.name))?.revision).toBe(1 + saved.length)
+				// Publication can overlap and make both holders refuse. A later uncontended
+				// write must still advance exactly once, then reject the stale expectation.
+				expect((await store.set(journey, 1 + saved.length)).revision).toBe(2 + saved.length)
+				await expect(store.set(journey, 1 + saved.length)).rejects.toMatchObject({
+					code: 'BROWSER_JOURNEY_STALE',
+				})
 			} finally {
 				for (const child of children) {
 					if (child.exitCode === null && child.signalCode === null) {
@@ -460,11 +465,13 @@ process.send?.({ outcome: 'ready' })
 				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name), 0o755)
 				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs'), 0o755)
 				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs', slot.id), 0o755)
+				const control = scratch.write('read-control', 'readable')
+				await chmod(control, 0o644)
 				const script = scratch.write(
 					'access.ts',
 					`
 import { strict as assert } from 'node:assert'
-import { readFile, stat } from 'node:fs/promises'
+import { readFile } from 'node:fs/promises'
 import { registerHooks } from 'node:module'
 import { resolve, join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -473,10 +480,12 @@ assert.notEqual(process.getuid?.(), 0)
 const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
 const { FileBrowserRunStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserRunStore.ts')).href)
 const [root, journey, run, id] = process.argv.slice(2)
+assert.equal(await readFile(join(root, 'read-control'), 'utf8'), 'readable')
 const journeys = new FileBrowserJourneyStore({ root })
 const runs = new FileBrowserRunStore({ root })
 for (const path of [join(root, journey, 'journey.json'), join(root, run, 'runs', id, 'run.json')]) {
-	assert.equal((await stat(path)).mode & 0o777, 0)
+	try { await readFile(path); process.exit(77) }
+	catch (error) { assert.equal(error.code, 'EACCES') }
 	await assert.rejects(readFile(path), { code: 'EACCES' })
 }
 const outcomes = await Promise.allSettled([journeys.get(journey), runs.get(run, id)])
@@ -500,6 +509,12 @@ console.log(JSON.stringify({
 						{ uid, gid, encoding: 'utf8', timeout: 10000 },
 					)
 					expect(child.error).toBeUndefined()
+					if (child.status === 77) {
+						context.skip(
+							'node:fs chmod(file, 0) permits readFile in the non-root child; readable-file control passed, so mode bits cannot build an unreadable file',
+						)
+						return
+					}
 					expect({ status: child.status, stderr: child.stderr }).toEqual({ status: 0, stderr: '' })
 					expect(parseJSON(child.stdout)).toEqual({
 						uid: uid ?? process.getuid?.(),

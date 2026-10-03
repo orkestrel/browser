@@ -149,7 +149,17 @@ export class FileBrowserStore {
 			await this.check(path, options)
 			await this.check(temporary, options)
 			options?.signal?.throwIfAborted()
-			await rename(temporary, path)
+			try {
+				await rename(temporary, path)
+			} catch (error) {
+				// A file cannot replace a directory: hosts report EISDIR or EPERM.
+				const target = await lstat(path).catch(() => undefined)
+				if (target?.isDirectory())
+					throw new BrowserError(`Cannot replace directory: ${path}`, 'BROWSER_JOURNEY_FILE', {
+						path,
+					})
+				throw error
+			}
 			owned = false
 		} catch (error) {
 			options?.signal?.throwIfAborted()
@@ -382,12 +392,16 @@ export class FileBrowserStore {
 		try {
 			await rmdir(path)
 		} catch (error) {
-			if (
-				error instanceof Error &&
-				'code' in error &&
-				(error.code === 'ENOENT' || error.code === 'ENOTEMPTY')
-			)
-				return
+			if (error instanceof Error && 'code' in error) {
+				if (error.code === 'ENOTEMPTY') return
+				if (error.code === 'ENOENT') {
+					try {
+						await lstat(path)
+					} catch (cause) {
+						if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT') return
+					}
+				}
+			}
 			throw new BrowserError(`Cannot remove lock directory: ${path}`, 'BROWSER_JOURNEY_ACCESS', {
 				path,
 			})

@@ -1,10 +1,11 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { afterEach, describe, it, expect } from 'vitest'
 import { createScratch } from '@orkestrel/test/server'
-import { lstat, readFile, readdir, rename, symlink, writeFile } from 'node:fs/promises'
+import { lstat, readFile, readdir, rename, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { FileBrowserRunStore } from '@src/server'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
+import { linkBrowserFixture } from '../../../setupServer.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 import { describeBrowserRunStore } from '../../core/stores/suite.js'
 
@@ -53,8 +54,9 @@ describe('FileBrowserRunStore captures', () => {
 		})
 		await expect(lstat(slot.directory)).rejects.toMatchObject({ code: 'ENOENT' })
 	})
-	it('refuses links at every capture component', async () => {
-		for (const component of ['journey', 'runs', 'slot', 'capture']) {
+	it.for(['journey', 'runs', 'slot', 'capture'])(
+		'refuses links at capture component %s',
+		async (component, context) => {
 			const scratch = createScratch()
 			scratches.push(scratch)
 			const store = new FileBrowserRunStore({ root: scratch.path })
@@ -70,12 +72,20 @@ describe('FileBrowserRunStore captures', () => {
 							? slot.directory
 							: join(slot.directory, 's1.png')
 			await rename(path, path + '-moved')
-			await symlink(path + '-moved', path, component === 'capture' ? 'file' : 'dir')
+			const reason = await linkBrowserFixture(
+				path + '-moved',
+				path,
+				component === 'capture' ? 'file' : 'dir',
+			)
+			if (reason !== undefined) {
+				context.skip(reason)
+				return
+			}
 			await expect(store.capture(slot, 's1.png', new Uint8Array([2]))).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
-		}
-	})
+		},
+	)
 })
 
 describe('FileBrowserRunStore persisted files', () => {
@@ -118,7 +128,7 @@ describe('FileBrowserRunStore persisted files', () => {
 		await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
 		expect(await store.clear('add-kettle')).toBe(1)
 	})
-	it('clear refuses linked run components before deleting siblings', async () => {
+	it('clear refuses linked run components before deleting siblings', async (context) => {
 		for (const component of ['journey', 'runs', 'slot']) {
 			const scratch = createScratch()
 			scratches.push(scratch)
@@ -133,7 +143,11 @@ describe('FileBrowserRunStore persisted files', () => {
 						? join(scratch.path, 'check-ready', 'runs')
 						: slot.directory
 			await rename(path, path + '-moved')
-			await symlink(path + '-moved', path, 'dir')
+			const reason = await linkBrowserFixture(path + '-moved', path, 'dir')
+			if (reason !== undefined) {
+				context.skip(reason)
+				return
+			}
 			await expect(store.clear('check-ready')).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
@@ -185,7 +199,7 @@ describe('FileBrowserRunStore persisted files', () => {
 		await expect(store.delete('check-ready', slot.id)).resolves.toBeUndefined()
 		expect(await readdir(join(scratch.path, 'check-ready', 'runs'))).toEqual([])
 	})
-	it('refuses deletion through linked directory components and preserves their files', async () => {
+	it('refuses deletion through linked directory components and preserves their files', async (context) => {
 		for (const component of ['journey', 'runs', 'slot']) {
 			const scratch = createScratch()
 			scratches.push(scratch)
@@ -200,7 +214,11 @@ describe('FileBrowserRunStore persisted files', () => {
 						? join(scratch.path, 'check-ready', 'runs')
 						: slot.directory
 			await rename(path, path + '-moved')
-			await symlink(path + '-moved', path, 'dir')
+			const reason = await linkBrowserFixture(path + '-moved', path, 'dir')
+			if (reason !== undefined) {
+				context.skip(reason)
+				return
+			}
 			await expect(store.delete('check-ready', slot.id)).rejects.toMatchObject({
 				code: 'BROWSER_JOURNEY_PATH',
 			})
@@ -210,7 +228,7 @@ describe('FileBrowserRunStore persisted files', () => {
 			)
 		}
 	})
-	it('pages runs with faults and refuses links at the run file', async () => {
+	it('pages runs with faults and refuses links at the run file', async (context) => {
 		const scratch = createScratch()
 		scratches.push(scratch)
 		const store = new FileBrowserRunStore({ root: scratch.path, limit: 1 })
@@ -235,7 +253,11 @@ describe('FileBrowserRunStore persisted files', () => {
 		await writeFile(join(broken.directory, 'run.json'), '{')
 		const path = join(linked.directory, 'run.json')
 		await rename(path, path + '-moved')
-		await symlink(path + '-moved', path, 'file')
+		const reason = await linkBrowserFixture(path + '-moved', path, 'file')
+		if (reason !== undefined) {
+			context.skip(reason)
+			return
+		}
 		await expect(store.get(BROWSER_RUN_FIXTURE.journey.name, linked.id)).rejects.toMatchObject({
 			code: 'BROWSER_JOURNEY_PATH',
 		})

@@ -25,7 +25,7 @@ import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { lstat, open, symlink } from 'node:fs/promises'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -59,6 +59,38 @@ import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
 import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
+
+/**
+ * Creates a fixture link, falling back to a directory junction when symlink privilege is absent.
+ * @param target - Existing target
+ * @param path - Link to create
+ * @param category - Target category
+ * @returns A cited skip reason when the host cannot create the link, otherwise absence
+ */
+export async function linkBrowserFixture(
+	target: string,
+	path: string,
+	category: 'file' | 'dir',
+): Promise<string | undefined> {
+	const source = await lstat(target)
+	if (source.isSymbolicLink() || (category === 'dir' ? !source.isDirectory() : !source.isFile()))
+		throw new Error('The link control must be an ordinary target of the requested category')
+	try {
+		await symlink(target, path, category)
+	} catch (error) {
+		if (readErrorCode(error) !== 'EPERM') throw error
+		if (category === 'file')
+			return 'node:fs symlink(file) returned EPERM for an existing ordinary file; file-symlink privilege is unavailable'
+		try {
+			await symlink(target, path, 'junction')
+		} catch (cause) {
+			if (readErrorCode(cause) !== 'EPERM') throw cause
+			return 'node:fs symlink(dir) and symlink(junction) returned EPERM for an existing ordinary directory'
+		}
+	}
+	if (!(await lstat(path)).isSymbolicLink()) throw new Error('The link probe created no link')
+	return undefined
+}
 
 /**
  * Reads the loop clock Node stamps on a timer it arms, in whole milliseconds.
@@ -821,7 +853,9 @@ export function createFakeBrowserProcess(
 	)
 
 	if (options.mute === true) {
-		lines.push("require('fs').closeSync(2)")
+		// closeSync(2) alone leaves an inherited Windows stderr handle open.
+		// Exiting closes every inherited handle on both hosts without announcing readiness.
+		lines.push('process.exit(0)')
 	}
 
 	if (options.serveCDP === true) {

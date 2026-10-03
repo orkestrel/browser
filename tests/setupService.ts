@@ -13,7 +13,8 @@
  */
 
 import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/server'
-import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
+import type { BrowserPageInterface } from '@src/core'
+import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, isCDPError } from '@src/core'
 import { findSystemBrowser } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { waitForCondition } from '@orkestrel/test'
@@ -75,7 +76,22 @@ export function requireSystemBrowser(options?: SystemBrowserOptions): SystemBrow
  * skip reports the mechanism rather than the browser's name.
  */
 export const REGISTRY_ABSENT_REASON =
-	'WebMCP.enable answers CDP error -32601 (method not found) and Schema.getDomains lists no WebMCP domain, so this browser has no page registry to mirror'
+	'WebMCP.enable answers CDP error -32601 (method not found), so this browser has no page registry to mirror'
+
+/**
+ * Probes registry support by the protocol command rather than the incomplete domain listing.
+ * @param page - Page session to probe
+ * @returns Whether WebMCP.enable succeeds; only a method-not-found refusal returns false
+ */
+export async function supportsServiceRegistry(page: BrowserPageInterface): Promise<boolean> {
+	try {
+		await page.send('WebMCP.enable')
+		return true
+	} catch (error) {
+		if (isCDPError(error) && error.context?.['code'] === -32601) return false
+		throw error
+	}
+}
 
 /**
  * Parses the domain names a `Schema.getDomains` reply lists.
