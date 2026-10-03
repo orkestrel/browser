@@ -2067,6 +2067,12 @@ read or write that file.
 
 ## Generated workspace
 
+The generated factories name unnamed browser instances after merging the caller's override, using
+the merged project label and browser. An override setting the label to `widgets` produces
+`widgets (chromium)`, including for an instance added by the override. Explicit instance names stay
+unchanged. Vue and journey factories discard inherited instance names before applying their own
+labels. Vitest reports the same names when a wrapper runs alone and when the root registers it.
+
 A workspace's file set is a function of its axes, its structural facts, and its extensions.
 Nothing is fixed except the manifest.
 
@@ -2084,7 +2090,8 @@ Nothing is fixed except the manifest.
   `dist/`, and `npm run check` would wait on `npm run build`. Every subpath is written before the
   bare specifier, because `vite.config.ts` derives its `alias` record from these entries in order and
   a bare specifier also matches its own subpaths. An `app` environment publishes nothing and maps no
-  such entry.
+  such entry. Browser and Vue scoped configurations exclude Node globals. Browser setup helpers
+  read CDP sessions as `unknown` and guard the members they use.
 - One template artifact, `configs/browsers.ts`, for a workspace selecting `browser` on either
   environment axis or in its setup runtime list.
   It resolves the Chromium the Playwright provider launches, and the root `vite.config.ts` calls it
@@ -2110,7 +2117,8 @@ Nothing is fixed except the manifest.
   journey per application of a journey workspace. Surfaces and extensions lists each face.
 - One template artifact, `tests/distribution.test.ts`, for a workspace publishing any `src`
   environment or sheet face. It is the packed-package proof, and it is claimed by presence rather
-  than birth, so a workspace that replaces it keeps its replacement. A published browser environment
+  than birth, so a workspace that replaces it keeps its replacement. The suite stages its consumer
+  during setup; listing the project creates no distribution staging directory. A published browser environment
   adds the
   real-browser stage to it: the stage bundles the installed package with the workspace's own
   `configs/browsers.ts` resolution, serves the bundle over a loopback server, and drives it in
@@ -2609,7 +2617,9 @@ The generated guide index lists each occupied Vue face with its source, tests, a
 - [`tests/src/core/cloners.test.ts`](../tests/src/core/cloners.test.ts) — ownership of a snapshot
   taken from a hostile value.
 - [`tests/src/core/templates.test.ts`](../tests/src/core/templates.test.ts) — the frozen template
-  definitions.
+  definitions and generated configurations under live Vitest. The isolated `templates` project runs
+  through `test:templates` in `prepublishOnly`; its compiler and Chromium processes run apart from
+  the `src:core` project.
 - [`tests/src/core/constants.test.ts`](../tests/src/core/constants.test.ts) — the seeded rows named
   as a set, the floor form every shared table and this manifest carry, and the emitted TypeScript
   bound.

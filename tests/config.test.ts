@@ -183,7 +183,9 @@ describe('selected faces', () => {
 			expect(project.test?.include).toContain(`tests/${axis}/${face}/**/*.test.ts`)
 			expect(project.test?.browser).toMatchObject({
 				enabled: true,
-				instances: expect.arrayContaining([expect.objectContaining({ browser: 'chromium' })]),
+				instances: expect.arrayContaining([
+					expect.objectContaining({ browser: 'chromium', name: `${axis}:${face} (chromium)` }),
+				]),
 			})
 			expect(project.optimizeDeps?.include).toEqual(
 				expect.arrayContaining(['@orkestrel/test', '@orkestrel/test/browser']),
@@ -355,6 +357,14 @@ describe('selected faces', () => {
 					width: selected.width,
 					height: selected.height,
 				})
+				expect(readConfigRecord(test.browser).instances).toEqual(
+					expect.arrayContaining([
+						expect.objectContaining({
+							browser: 'chromium',
+							name: `journey:${provide.variant} (chromium)`,
+						}),
+					]),
+				)
 				expect(typeof provide.capture).toBe('boolean')
 				expect(readConfigRecord(project.optimizeDeps).include).toEqual(
 					expect.arrayContaining(['@orkestrel/test', '@orkestrel/test/browser']),
@@ -398,6 +408,12 @@ describe('selected faces', () => {
 			)
 			const test = readConfigRecord(project.test)
 			if (readConfigRecord(test.browser ?? {}).enabled !== true) continue
+			const label = typeof test.name === 'string' ? test.name : readConfigRecord(test.name).label
+			expect(readConfigRecord(test.browser).instances).toEqual(
+				expect.arrayContaining([
+					expect.objectContaining({ browser: 'chromium', name: `${label} (chromium)` }),
+				]),
+			)
 			const include = readConfigRecord(project.optimizeDeps).include
 			expect(include).toEqual(
 				expect.arrayContaining([
