@@ -410,13 +410,23 @@ export async function requireDocumentToolset(
 	page: { evaluate(expression: string): Promise<unknown> },
 	budget = 10_000,
 ): Promise<void> {
-	await waitForCondition(
-		'precondition: the document page imported dist/src/browser and started its toolset',
-		async () =>
-			(await page.evaluate('document.body.dataset.ready ?? document.body.dataset.failed')) !==
-			undefined,
-		{ budget, interval: 20 },
-	)
+	try {
+		await waitForCondition(
+			'precondition: the document page imported dist/src/browser and started its toolset',
+			async () =>
+				(await page.evaluate('document.body.dataset.ready ?? document.body.dataset.failed')) !==
+				undefined,
+			{ budget, interval: 20 },
+		)
+	} catch (error) {
+		console.error(
+			'document startup state',
+			await page.evaluate(
+				'({url: location.href, visibility: document.visibilityState, readyState: document.readyState, dataset: {...document.body.dataset}, toolset: typeof window.documentToolset, resources: performance.getEntriesByType("resource").map(e => ({name: e.name, duration: e.duration, size: e.transferSize, status: e.responseStatus}))})',
+			),
+		)
+		throw error
+	}
 	const failed = await page.evaluate('document.body.dataset.failed')
 	if (failed !== undefined)
 		throw new Error(`Precondition failed: the document toolset did not start: ${String(failed)}`)

@@ -158,6 +158,7 @@ describe('trusted element actions', () => {
 					.slice(before)
 					.filter((message) =>
 						[
+							'Page.bringToFront',
 							'DOM.scrollIntoViewIfNeeded',
 							'Runtime.callFunctionOn',
 							'DOM.getContentQuads',
@@ -171,6 +172,7 @@ describe('trusted element actions', () => {
 							: message.method,
 					),
 			).toEqual([
+				'Page.bringToFront',
 				'DOM.scrollIntoViewIfNeeded',
 				'Runtime.callFunctionOn',
 				'DOM.getContentQuads',

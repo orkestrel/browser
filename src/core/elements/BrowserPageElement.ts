@@ -359,6 +359,8 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 
 	async #pointer(options?: BrowserCallOptions): Promise<BrowserPoint> {
 		this.#assert(options)
+		// Chromium suspends animation frames in hidden tabs; activate the page before sampling stability.
+		await this.#input.page.send('Page.bringToFront', undefined, options)
 		await this.#input.client
 			.send(
 				'DOM.scrollIntoViewIfNeeded',

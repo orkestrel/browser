@@ -2346,7 +2346,7 @@ export function scriptBrowserElements(
 	const windows = options?.windows ?? new BrowserSubmitWindows()
 	replyOk(transport, 'Accessibility.enable')
 	replyOk(transport, 'Runtime.releaseObject')
-	for (const method of ['DOM.focus', 'DOM.scrollIntoViewIfNeeded'])
+	for (const method of ['Page.bringToFront', 'DOM.focus', 'DOM.scrollIntoViewIfNeeded'])
 		transport.onSend(method, (message) => {
 			if (options?.failure?.method === method) transport.fail(message.id, options.failure.message)
 			else transport.reply(message.id, {})

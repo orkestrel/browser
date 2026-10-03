@@ -719,6 +719,8 @@ export interface FakeBrowserProcessInterface {
  * it `\r\n`; `flood` writes 1 MB to stderr after readiness; `mute` exits without
  * announcing readiness. With none of these options the process idles (never
  * serves CDP) — useful for launch-failure/abort scenarios.
+ * `retainStderr` starts a detached descendant that inherits stderr, keeping the parent's
+ * pipe open after its exit; fixture teardown owns and terminates that descendant separately.
  * @returns A {@link FakeBrowserProcessInterface}
  */
 export function createFakeBrowserProcess(
@@ -726,6 +728,7 @@ export function createFakeBrowserProcess(
 		readonly serveCDP?: boolean
 		readonly ignoreSIGTERM?: boolean
 		readonly descendant?: boolean
+		readonly retainStderr?: boolean
 		readonly launcher?: boolean
 		readonly unnamed?: boolean
 		readonly split?: boolean
@@ -784,7 +787,7 @@ export function createFakeBrowserProcess(
 		)
 	}
 
-	if (options.descendant === true) {
+	if (options.descendant === true || options.retainStderr === true) {
 		const descendantSource = [
 			...(options.ignoreSIGTERM === true ? ["process.on('SIGTERM', () => {})"] : []),
 			`require('fs').writeFileSync(${JSON.stringify(descendantFile)}, String(process.pid))`,
@@ -794,7 +797,7 @@ export function createFakeBrowserProcess(
 			'}, 500)',
 		].join('\n')
 		lines.push(
-			`require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: 'ignore' })`,
+			`require('child_process').spawn(process.execPath, ['-e', ${JSON.stringify(descendantSource)}], { stdio: ${options.retainStderr === true ? "['ignore', 'ignore', 'inherit']" : "'ignore'"}, detached: ${options.retainStderr === true} }).unref()`,
 		)
 	}
 
@@ -963,6 +966,22 @@ export function createFakeBrowserProcess(
 }
 
 // === Fixture pages for the live-browser proofs
+
+/**
+ * Observes native pipes acquired after installation, removing each id when its handle closes.
+ * @param pipes - The active ids the caller inspects
+ * @returns The enabled hook; disable it after releasing the observed resources
+ */
+export function observeBrowserPipes(pipes: Set<number>): AsyncHook {
+	return createHook({
+		init(id, type) {
+			if (type === 'PIPEWRAP') pipes.add(id)
+		},
+		destroy(id) {
+			pipes.delete(id)
+		},
+	}).enable()
+}
 
 /**
  * Names a loopback host the fixture server answers on.
