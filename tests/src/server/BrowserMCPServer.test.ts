@@ -1060,6 +1060,51 @@ describe('eager U6', () => {
 			await fixture.teardown.destroy()
 		}
 	})
+	it('keeps a cancelled post-failure ping and joins its remaining deadline', async () => {
+		const held = Promise.withResolvers<void>()
+		// Leave half the real command budget spent before the next call joins it.
+		const timeout = 800
+		const fixture = createBrowseFixture(undefined, {
+			timeout,
+			version: (call) => {
+				if (call >= 3) return held.promise
+			},
+		})
+		const client = createMCPClient({
+			transport: createDuplexClientTransport(fixture.pair.transport),
+			identity: { name: 'cancelled-ping', version: '1.0.0' },
+		})
+		fixture.teardown.add(bindClient(client, fixture.pair.transport))
+		const controller = new AbortController()
+		try {
+			await fixture.server.start()
+			await client.connect()
+			const transport = requireValue(fixture.launcher.browsers[0]?.fixture?.transport, 'lease')
+			const pending = client.call('click', { ref: 'e9999' }, { signal: controller.signal })
+			await waitForCondition(
+				'post-failure ping',
+				() =>
+					transport.sent.filter((message) => message.method === 'Browser.getVersion').length === 3,
+			)
+			const began = performance.now()
+			const reason = new Error('caller stopped during loss check')
+			controller.abort(reason)
+			await expect(pending).rejects.toThrow("MCP request 'tools/call' was aborted")
+			expect(performance.now() - began).toBeLessThan(timeout / 4)
+			await waitForDelay(timeout / 2)
+			const joined = performance.now()
+			const next = await client.call('look', { search: 'cart' })
+			expect(JSON.stringify(next)).toContain('BROWSER_SERVER_CRASH:')
+			expect(performance.now() - joined).toBeLessThan(timeout * 0.8)
+			expect(
+				transport.sent.filter((message) => message.method === 'Browser.getVersion'),
+			).toHaveLength(3)
+			expect(fixture.launcher.browsers).toHaveLength(2)
+		} finally {
+			held.resolve()
+			await fixture.teardown.destroy()
+		}
+	})
 	it('keeps a stalling sweep off the handshake and aborts its attach at destroy', async () => {
 		const fixture = createBrowseFixture()
 		const stall = await createStallServer()

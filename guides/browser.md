@@ -3589,6 +3589,8 @@ When the session's browser is lost, browse never repeats a call. A loss is the b
 
 A hang of the whole browser during a call can take two command deadlines, the call's and then the post-failure ping's, so in Codex set `tool_timeout_sec` for `browse` higher than the default 60 s.
 
+Cancelling a call ends its wait without cancelling the browser's liveness check. Concurrent checks share one ping per slot, so a later call joins the remaining deadline. A failed ping retires the slot and leaves the `BROWSER_SERVER_CRASH:` note for the successor's outcome.
+
 When no browser starts at setup, the server refuses on each surface and keeps answering until its input ends. Setup fails, for example, when the first browser fails to launch twice or the root cannot be created. The following list gives what each request answers, where `CAUSE` is the failure's message:
 
 - `initialize` answers the JSON-RPC error `-32000` with the message `BROWSER_SERVER_UNAVAILABLE: CAUSE` and `data.code` set to `BROWSER_SERVER_UNAVAILABLE`.

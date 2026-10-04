@@ -82,6 +82,8 @@ import {
  * A disconnect or current-page crash retires its slot. A failed call receives a liveness ping;
  * loss makes its outcome unresolved, while a known success remains successful. Pending losses
  * prefix the next outcome on a successor, or a refusal, and calls are never repeated.
+ * Concurrent checks share one ping per slot. Cancelling a call ends only its wait; the ping keeps
+ * its deadline and records loss for the next call.
  *
  * `start()` serves stdio and destroys the server at the end of its input, on `SIGINT`, and on
  * `SIGTERM`. `destroy()` stops reading requests and removes every dispatcher, then destroys every
@@ -121,6 +123,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #folders = new Set<string>()
 	readonly #faults = new Set<unknown>()
 	readonly #losses = new WeakMap<BrowserSlot, { readonly cause: unknown; readonly url: string }>()
+	readonly #pings = new WeakMap<BrowserSlot, Promise<void>>()
 	readonly #watches = new Map<BrowserSlot, BrowserSlotWatch>()
 	readonly #notice = new Set<BrowserSlot>()
 	readonly #reference: () => string
@@ -312,9 +315,9 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		if (!result.success) {
 			if (this.#lease?.value === slot && !context.signal.aborted) {
 				try {
-					await slot.browser.ping({ signal: AbortSignal.any([context.signal, this.#abort.signal]) })
-				} catch (error) {
-					if (!context.signal.aborted && !this.#abort.signal.aborted) this.#lose(slot, error)
+					await this.#race(this.#ping(slot), context.signal)
+				} catch {
+					// The shared ping records loss even when this caller stops waiting.
 				}
 			}
 			context.signal.throwIfAborted()
@@ -410,12 +413,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const held = this.#lease
 		if (held !== undefined) {
 			try {
-				await held.value.browser.ping({ signal: AbortSignal.any([signal, this.#abort.signal]) })
+				await this.#race(this.#ping(held.value), signal)
 				if (this.#lease === held) return held.value
-			} catch (error) {
+			} catch {
 				signal.throwIfAborted()
 				if (this.#abort.signal.aborted) throw this.#ended()
-				this.#lose(held.value, error)
 			}
 		}
 		try {
@@ -432,6 +434,19 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			}
 			throw error
 		}
+	}
+
+	#ping(slot: BrowserSlot): Promise<void> {
+		const pending = this.#pings.get(slot)
+		if (pending !== undefined) return pending
+		const ping = slot.browser
+			.ping({ signal: this.#abort.signal })
+			.catch((error: unknown) => {
+				if (!this.#abort.signal.aborted) this.#lose(slot, error)
+			})
+			.finally(() => this.#pings.delete(slot))
+		this.#pings.set(slot, ping)
+		return ping
 	}
 
 	async #validate(slot: BrowserSlot): Promise<boolean> {
