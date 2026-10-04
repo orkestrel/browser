@@ -3577,7 +3577,7 @@ Chromium starts when the server starts, before the client sends a request. The s
 
 A client gives a server a limited time to answer `initialize`. On 2026-10-03, Claude Code's documentation gave 30 s and connected servers in the background, the Codex configuration reference gave 10 s through `startup_timeout_sec`, and Cursor's documentation gave no limit; see [Claude Code's MCP documentation](https://code.claude.com/docs/en/mcp), [the Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), and [Cursor's MCP documentation](https://cursor.com/docs/context/mcp). On Windows 11 with Edge 154 on 2026-10-04, while a browser test suite ran beside it, the built binary answered `initialize` at most 2.07 s after its spawn at every `BROWSE_POOL` size, a leftover browser to sweep included. No client needs a longer startup timeout.
 
-Set `BROWSE_POOL` to `2` or `3` to keep a warm spare for failover. The session holds one browser at a time, and a spare waits idle until the session's browser is lost; the next call then runs on the spare while a replacement warms, and concurrent calls share that one spare. At `1`, the next call after a loss waits for a replacement launch. In the 2026-10-04 run, the next successful call after a kill of the session's browser took a median 1.92 s at `1` and 0.40 s at `2`, and an idle spare's process tree held a median 1.22 GB of summed working set, shared pages counted in every process that maps them.
+Set `BROWSE_POOL` to `2` or `3` to keep a warm spare for failover. The session holds one browser at a time, and a spare waits idle until the session's browser is lost; the next call then runs on the spare while a replacement warms, and concurrent calls share that one spare. At `1`, the next call after a loss waits for a replacement launch. In the 2026-10-04 run, the next successful call after a kill of the session's browser took a median 1.92 s at `1` and 0.40 s at `2`. On Windows 11 with Edge 154 on 2026-10-04, an idle spare's process tree used about 130% of one core in the first 20 s, then a median near 10%, and its summed working set grew from 1.22 GB to 1.78 GB over 2 minutes, with shared pages counted in every process that maps them. With `BROWSE_HEADLESS=false`, each spare opens its own window.
 
 When the session's browser is lost, browse never repeats a call. A loss is the browser process exiting, its CDP connection dropping, the renderer of its current page crashing, or a CDP ping it fails before a call or after a failed one; a crashed background tab is not a loss. The following list gives what each call answers around a loss:
 
@@ -3586,6 +3586,8 @@ When the session's browser is lost, browse never repeats a call. A loss is the b
 - A call that completed before the loss keeps its result, and the next call carries the note.
 - A call that fails for its own reason on a live browser answers its plain failure, with no note.
 - When no browser can serve, the call answers the note, then `BROWSER_SERVER_UNAVAILABLE:` naming the cause.
+
+A hang of the whole browser during a call can take two command deadlines, the call's and then the post-failure ping's, so in Codex set `tool_timeout_sec` for `browse` higher than the default 60 s.
 
 When no browser starts at setup, the server refuses on each surface and keeps answering until its input ends. Setup fails, for example, when the first browser fails to launch twice or the root cannot be created. The following list gives what each request answers, where `CAUSE` is the failure's message:
 
@@ -3597,7 +3599,7 @@ When no browser starts at setup, the server refuses on each surface and keeps an
 The server writes each diagnostic as one line on standard error in the form `browse: CODE: DETAIL`, where `CODE` is one of the following codes and `DETAIL` is the cause:
 
 - `BROWSER_SERVER_LAUNCH`: a browser failed to start, and the pool retries it within its bound.
-- `BROWSER_SERVER_EXHAUSTED`: a spare failed to start past the bound, so fewer browsers serve than `BROWSE_POOL` names, and the session keeps its browser.
+- `BROWSER_SERVER_EXHAUSTED`: setup's warming or a call's acquire rejected with the pool's `create` error after the launch bound was spent; a spare that spends the bound after setup writes `BROWSER_SERVER_LAUNCH` lines without this line.
 - `BROWSER_SERVER_UNAVAILABLE`: setup was refused, and the binary writes this line before it exits with code 1.
 - `BROWSER_SERVER_TEARDOWN`: a browser's termination is unconfirmed or its teardown failed; its profile folder stays until the shutdown recheck, and a shutdown that meets it exits with code 1.
 - `BROWSER_SERVER_SWEEP`: the sweep could not read the `.profiles` folder under `BROWSE_ROOT`, and the server serves without it.

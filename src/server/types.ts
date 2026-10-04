@@ -387,7 +387,7 @@ export interface BrowserSlotWatch {
  *   `true`
  * - `executable` — the path of the Chromium executable the server launches. Default: the browser
  *   `findSystemBrowser` finds
- * - `readonly` — if `true`, refuses `record`, `save`, and `edit`, and `replay` still writes runs;
+ * - `readonly` — if `true`, refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs;
  *   if `false` or omitted, every tool runs
  * - `launch` — creates each browser the pool warms. Default: `createBrowser`
  * - `stdio` — the streams the server reads requests from and writes answers to; the end of

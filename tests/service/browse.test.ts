@@ -373,8 +373,6 @@ describe('eager U7 real browse', () => {
 				refusal = error
 			}
 			expect(readErrorCode(refusal)).toBe(refusal === undefined ? undefined : 'ERR_UNKNOWN_SIGNAL')
-			if (refusal !== undefined) {
-			}
 			const supported = refusal === undefined
 			context.skip(!supported, BROWSE_SIGSTOP_REASON)
 			const began = performance.now()

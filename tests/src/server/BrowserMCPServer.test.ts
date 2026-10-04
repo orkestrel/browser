@@ -600,6 +600,37 @@ describe('eager U6', () => {
 		})
 	}
 
+	it('logs launch failures without exhausted when a post-setup spare spends the bound', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		try {
+			await fixture.server.start()
+			await waitForCondition(
+				'warm spare watch',
+				() => fixture.launcher.browsers[1]?.emitter.count('disconnect') === 1,
+			)
+			expect(await fixture.pair.initialize()).toHaveProperty('serverInfo')
+			expect(fixture.log.lines).toEqual([])
+			fixture.launcher.refuse(2)
+			requireValue(fixture.launcher.browsers[1], 'spare').kill()
+			await waitForCondition(
+				'post-setup replacement bound spent',
+				() =>
+					fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:')).length === 1,
+			)
+			expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(false)
+			expect(fixture.launcher.browsers).toHaveLength(3)
+			expect(fixture.launcher.browsers[0]?.destroyed).toBe(false)
+			expect(fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:'))).toEqual([
+				'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+			])
+			expect(
+				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_EXHAUSTED:')),
+			).toEqual([])
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
 	it('reports exhausted spares with the grant committed first', async () => {
 		const fixture = createBrowseFixture({ pool: { size: 2 } })
 		fixture.launcher.refuse(1)
