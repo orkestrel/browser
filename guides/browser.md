@@ -3569,6 +3569,7 @@ The `browse` binary serves the vocabulary and the journey tools over MCP on stdi
 - `BROWSE_HEADLESS`: `true`, `false`, `1`, or `0`. Default: `true`.
 - `BROWSE_EXECUTABLE`: the path of the Chromium executable. Default: the browser `findSystemBrowser` finds.
 - `BROWSE_READONLY`: `true`, `false`, `1`, or `0`; `true` refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs. Default: `false`.
+- `BROWSE_POOL`: an integer from `1` through `3` setting the number of warm browsers. Default: `1`.
 
 Any other value of `BROWSE_HEADLESS` or `BROWSE_READONLY` ends the process with exit code 1 and one line on standard error, such as `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"`. Chromium starts on the first tool call, not at registration, and on Linux a server running as root launches it with `--no-sandbox`, because Chromium refuses to start as root with its sandbox on.
 
