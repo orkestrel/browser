@@ -6,7 +6,7 @@ import type {
 	BrowserStorePage,
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
-import { lstat, readdir, rm } from 'node:fs/promises'
+import { lstat, readdir, rm, writeFile } from 'node:fs/promises'
 import { isRecord, parseJSON } from '@orkestrel/contract'
 import {
 	BROWSER_JOURNEY_FORMAT_VERSION,
@@ -35,6 +35,26 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 
 	constructor(options: FileBrowserStoreOptions) {
 		this.#files = new FileBrowserStore(options)
+	}
+
+	async snapshot(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string> {
+		options?.signal?.throwIfAborted()
+		const owned = new Uint8Array(bytes)
+		const directory = await this.#files.allocate(
+			this.#files.resolvePath(BROWSER_RUN_DIRECTORY),
+			generateBrowserRunId,
+			options,
+		)
+		const path = this.#files.resolvePath(directory.path, 'view.png')
+		try {
+			await this.#files.check(path, options)
+			options?.signal?.throwIfAborted()
+			await writeFile(path, owned, { flag: 'wx', signal: options?.signal })
+			return path
+		} catch (error) {
+			options?.signal?.throwIfAborted()
+			throw this.#files.translateError(path, error)
+		}
 	}
 
 	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {

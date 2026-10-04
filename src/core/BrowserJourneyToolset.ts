@@ -13,7 +13,7 @@ import type {
 	BrowserToolsetInterface,
 } from './types.js'
 import type { ToolContext, ToolInterface } from '@orkestrel/tool'
-import { attempt, isArray, isInteger, isRecord, isString } from '@orkestrel/contract'
+import { attempt, isArray, isBoolean, isInteger, isRecord, isString } from '@orkestrel/contract'
 import { createTool } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
@@ -41,13 +41,13 @@ import {
 } from './helpers.js'
 
 /**
- * Registers the journey tools `record`, `save`, `journeys`, `edit`, `replay`, and `forget` over a toolset
+ * Registers the journey tools `record`, `save`, `journeys`, `edit`, `replay`, `forget`, and `capture` over a toolset
  * and owns the recording and the active replay.
  *
  * @remarks
  * The journey toolset composes the toolset's public members: `perform` reads the view a receipt
  * carries through `look`, `hold` and `emitter` drive the recorder and the replay, `view` converts
- * an edit's `ref` to a target, and `tools` receives the six tools at construction, which refuses
+ * an edit's `ref` to a target, and `tools` receives the journey tools at construction, which refuses
  * with `BROWSER_TOOLSET_RESERVED` when the manager already holds one of the names. Every refusal
  * is a sentence that names the next call, and a reason inside it is a clause without a directive
  * or a final period.
@@ -63,7 +63,7 @@ import {
  * by the view after the run.
  *
  * `destroy()` aborts the active replay and waits for it to finish, stops a recording without
- * saving it, and removes the six tools the manager still holds under the instances it added.
+ * saving it, and removes the journey tools the manager still holds under the instances it added.
  *
  * @example
  * ```ts
@@ -120,6 +120,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			this.#create('edit', this.#edit.bind(this)),
 			this.#create('replay', this.#replayJourney.bind(this)),
 			this.#create('forget', this.#forget.bind(this)),
+			this.#create('capture', this.#capture.bind(this)),
 		])
 		toolset.tools.add(this.#tools)
 	}
@@ -160,6 +161,33 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		const signal = AbortSignal.any([context.signal, this.#lifetime.signal])
 		signal.throwIfAborted()
 		return handler(args, signal)
+	}
+
+	async #capture(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
+		const full = args['full']
+		if (!isBoolean(full))
+			throw new BrowserError(
+				'The full parameter must be true or false.',
+				'BROWSER_TOOLSET_ARGUMENT',
+			)
+		this.#idleReplay()
+		const view = this.#toolset.view
+		if (!view.trusted)
+			throw new BrowserError(
+				'This view is untrusted; capture requires a trusted browser view.',
+				'BROWSER_CAPTURE_UNTRUSTED',
+			)
+		if (view.screenshot === undefined)
+			throw new BrowserError('This view cannot capture an image.', 'BROWSER_CAPTURE_UNAVAILABLE')
+		const runs = this.#runs
+		if (runs?.snapshot === undefined)
+			throw new BrowserError(
+				'Capture requires a runs store with standalone file storage.',
+				'BROWSER_CAPTURE_UNAVAILABLE',
+			)
+		const screenshot = await view.screenshot({ format: 'png', full })
+		signal.throwIfAborted()
+		return runs.snapshot(screenshot.bytes, { signal })
 	}
 
 	async #record(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {

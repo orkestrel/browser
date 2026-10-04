@@ -41,6 +41,64 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('capture refuses an untrusted view with a coded error', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble(), {
+			journeys: { store: createMemoryBrowserJourneyStore(), runs: new MemoryBrowserRunStore() },
+		})
+		try {
+			await expect(
+				requireValue(toolset.tools.tool('capture')).execute(
+					{ full: false },
+					{ signal: new AbortController().signal },
+				),
+			).rejects.toMatchObject({ code: 'BROWSER_CAPTURE_UNTRUSTED' })
+		} finally {
+			await toolset.destroy()
+		}
+	})
+	it('capture requires a boolean and refuses stores without standalone storage before requesting a screenshot', async () => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			for (const runs of [undefined, new MemoryBrowserRunStore()]) {
+				const toolset = createBrowserToolset(fixture.page, {
+					journeys: {
+						store: createMemoryBrowserJourneyStore(),
+						...(runs === undefined ? {} : { runs }),
+					},
+				})
+				try {
+					const tool = requireValue(toolset.tools.tool('capture'))
+					const context = { signal: new AbortController().signal }
+					for (const args of [{}, { full: 'false' }, { full: 0 }])
+						await expect(tool.execute(args, context)).rejects.toMatchObject({
+							code: 'BROWSER_TOOLSET_ARGUMENT',
+						})
+					await expect(tool.execute({ full: false }, context)).rejects.toMatchObject({
+						code: 'BROWSER_CAPTURE_UNAVAILABLE',
+					})
+					const reason = new Error('Capture aborted')
+					await expect(
+						tool.execute({ full: false }, { signal: AbortSignal.abort(reason) }),
+					).rejects.toBe(reason)
+					const hold = await toolset.hold('check-ready')
+					try {
+						await expect(tool.execute({ full: false }, context)).rejects.toMatchObject({
+							code: 'BROWSER_TOOLSET_BUSY',
+						})
+					} finally {
+						hold.destroy()
+					}
+					expect(
+						fixture.transport.sent.some((message) => message.method === 'Page.captureScreenshot'),
+					).toBe(false)
+				} finally {
+					await toolset.destroy()
+				}
+			}
+		} finally {
+			await fixture.client.close()
+		}
+	})
 	it('adds and lists an absent wait and refuses malformed absence', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		await store.set(createBrowserJourneyFixture())
@@ -309,7 +367,7 @@ describe('BrowserJourneyToolset', () => {
 				'k3b: edits advertises anyOf and preserves its array item schema',
 			).toMatchObject({
 				description:
-					'The changes, as an array or a JSON string of the array, applied in order; one invalid change refuses them all.',
+					'The changes, as an array or its JSON string, applied in order; one invalid change refuses them all.',
 				anyOf: [
 					{
 						type: 'array',
@@ -782,7 +840,7 @@ describe('BrowserJourneyToolset', () => {
 		}
 	})
 	describe('tools', () => {
-		it('registers the six tools with their copy, a required parameter each, and journeys pure and untrusted', async () => {
+		it('registers the journey tools with their copy, a required parameter each, and journeys pure and untrusted', async () => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, {
 				store: createMemoryBrowserJourneyStore(),
@@ -794,6 +852,7 @@ describe('BrowserJourneyToolset', () => {
 				'edit',
 				'replay',
 				'forget',
+				'capture',
 			])
 			expect(
 				Object.fromEntries(
@@ -809,6 +868,7 @@ describe('BrowserJourneyToolset', () => {
 				journeys: 'Lists the saved journeys with their steps and the parameters each one takes.',
 				edit: 'Changes a saved journey: add, remove, or update steps by their ids from journeys, or declare a parameter.',
 				forget: 'Removes a saved journey and all its runs; the name is free to record again.',
+				capture: 'Saves the current view as a PNG in the runs directory and returns its path.',
 				replay: "Replays a saved journey step by step; give each parameter's value under inputs.",
 			})
 			expect(
@@ -828,11 +888,22 @@ describe('BrowserJourneyToolset', () => {
 				edit: ['journey', 'edits'],
 				replay: ['journey'],
 				forget: ['journey'],
+				capture: ['full'],
 			})
-			for (const name of BROWSER_JOURNEY_TOOL_NAMES)
+			for (const name of BROWSER_JOURNEY_TOOL_NAMES) {
 				expect(requireValue(toolset.tools.tool(name)).parameters).toEqual(
 					BROWSER_TOOL_COPY[name].parameters,
 				)
+				expect(
+					requireValue(BROWSER_TOOL_COPY[name].description).split(/\s+/u).length,
+				).toBeLessThanOrEqual(25)
+				const properties = readProperty<Readonly<Record<string, unknown>>>(
+					BROWSER_TOOL_COPY[name].parameters,
+					'properties',
+				)
+				for (const property of Object.values(properties))
+					expect(readProperty<string>(property, 'description').length).toBeLessThanOrEqual(100)
+			}
 			expect(
 				Object.fromEntries(
 					BROWSER_JOURNEY_TOOL_NAMES.map((name) => [
@@ -847,6 +918,7 @@ describe('BrowserJourneyToolset', () => {
 				edit: undefined,
 				replay: undefined,
 				forget: undefined,
+				capture: undefined,
 			})
 			const refused = await toolset.tools.execute({
 				id: '1',
