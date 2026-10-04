@@ -73,7 +73,7 @@ await client.close()
 
 ## Browse binary
 
-The package ships the `browse` binary, which serves the browser vocabulary and the journey tools over MCP on stdio and launches Chromium on the first tool call, keeping journeys and runs under `tmp/browsers`. Register it for a checkout with `claude mcp add --scope project browse -- node node_modules/@orkestrel/browser/dist/bin/main.js`, which writes the `browse` entry of the project's `.mcp.json`, then start `claude` in the checkout and approve the server; `BROWSE_ROOT`, `BROWSE_HEADLESS`, `BROWSE_EXECUTABLE`, and `BROWSE_READONLY` configure it. See [Register the browse binary with Claude Code](guides/browser.md#register-the-browse-binary-with-claude-code) for the entry, the approval, and a recorded exchange.
+The package ships the `browse` binary, which serves the browser vocabulary and the journey tools over MCP on stdio and starts Chromium when the server starts, before the client's first request, keeping journeys and runs under `tmp/browsers`. Register it for a checkout with `claude mcp add --scope project browse -- node node_modules/@orkestrel/browser/dist/bin/main.js`, which writes the `browse` entry of the project's `.mcp.json`, then start `claude` in the checkout and approve the server; `BROWSE_ROOT`, `BROWSE_HEADLESS`, `BROWSE_EXECUTABLE`, `BROWSE_READONLY`, and `BROWSE_POOL` configure it. See [Register the browse binary with Claude Code](guides/browser.md#register-the-browse-binary-with-claude-code) for the entry, the approval, the startup and recovery behavior, and a recorded exchange.
 
 ## Guide
 

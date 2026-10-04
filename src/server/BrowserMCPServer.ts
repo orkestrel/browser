@@ -84,8 +84,9 @@ import {
  * prefix the next outcome on a successor, or a refusal, and calls are never repeated.
  *
  * `start()` serves stdio and destroys the server at the end of its input, on `SIGINT`, and on
- * `SIGTERM`. `destroy()` stops reading requests and removes every dispatcher, then destroys the
- * toolset, which aborts the active replay, then the browser it launched, then removes the profile.
+ * `SIGTERM`. `destroy()` stops reading requests and removes every dispatcher, then destroys every
+ * slot through the pool — its toolset, which aborts the active replay, then its browser, then its
+ * profile — and rechecks the profile folders this server made or kept.
  *
  * Chromium on Linux refuses to start as the root user unless its sandbox is disabled, so a server
  * running as root on Linux launches Chromium with `--no-sandbox`; a launch that could run

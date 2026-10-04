@@ -10,7 +10,7 @@ The package has three library faces, each with one import specifier, and the `br
 - The core, `@orkestrel/browser`, compiles against `ESNext` and `WebWorker` with no DOM and no Node. `CDPClient` frames CDP messages over an injected `CDPTransportInterface`; `BrowserContext`, `BrowserPage`, and `BrowserFrame` model a browser context, its tabs, and their documents; `page.elements` outlines a page from its accessibility tree and acts on stable element references with trusted input; `frame.read()` captures a document as a `BrowserReadingInterface` value; `page.registry` mirrors the experimental `WebMCP` protocol domain; and `BrowserToolset` publishes all of it as `@orkestrel/tool` tools that an agent calls. The core also records, edits, replays, and compiles journeys, which [Journeys](#journeys) describes: `BrowserRecorder` and `page.codegen()` record steps, `BrowserReplay` replays them, `BrowserJourneyToolset` gives a model the six journey tools, `compileBrowserJourney` emits a module a developer runs, and two memory stores keep journeys and runs.
 - The in-page face, `@orkestrel/browser/browser`, adds the DOM. `BrowserDOMView` drives a document with `HTMLElement.click()`, native value setters, `form.requestSubmit()`, and `MutationObserver`, and reports what an untrusted event cannot do. `createDocumentToolset` publishes the same vocabulary over that view, and `SocketCDPTransport` carries the core client over the browser's own `WebSocket`, so a worker or an extension page drives a browser over CDP.
 - The Node runtime, `@orkestrel/browser/server`, adds `Browser`, which discovers a browser listening on a CDP port, attaches to it, or launches one and reads its endpoint from standard error; `WebSocketCDPTransport`; a filesystem-backed browser writer; the file journey and run stores; and `BrowserMCPServer`, which serves the vocabulary and the journey tools over MCP on stdio.
-- The `browse` binary, `src/bin`, reads four environment variables and starts a `BrowserMCPServer`; see [Register the browse binary with Claude Code](#register-the-browse-binary-with-claude-code) for its hookup.
+- The `browse` binary, `src/bin`, reads its environment variables and starts a `BrowserMCPServer`, which starts Chromium before the client's first request; see [Register the browse binary with Claude Code](#register-the-browse-binary-with-claude-code) for its hookup.
 
 The in-page face and the Node runtime each import the core, and neither imports the other; the binary imports the core and the Node runtime. Source: [`src/core`](../src/core), [`src/browser`](../src/browser), [`src/server`](../src/server), and [`src/bin`](../src/bin).
 
@@ -2345,8 +2345,8 @@ The following fence serves the vocabulary on the process's standard streams, wit
 import { createBrowserMCPServer } from '@orkestrel/browser/server'
 
 const server = createBrowserMCPServer({ root: 'tmp/browsers', headless: true, readonly: false })
-await server.start() // answers tools/list before Chromium starts
-await server.destroy() // aborts a replay, destroys the browser it launched, and removes its profile
+await server.start() // resolves after the first warm browser is leased; tools/list answers meanwhile
+await server.destroy() // aborts a replay, destroys every browser it launched, and removes each profile
 ```
 
 #### `BrowserWebSocketInterface`
@@ -3559,19 +3559,51 @@ const server = createMCPServer({
 await createStdioServer(server).start()
 ```
 
-The page tools the page registers join the manager as they are adopted and leave it as they are removed, so the client's next `tools/list` sees them. The `browse` binary serves the same vocabulary with the journey tools and launches the browser on its first call; see [Register the browse binary with Claude Code](#register-the-browse-binary-with-claude-code).
+The page tools the page registers join the manager as they are adopted and leave it as they are removed, so the client's next `tools/list` sees them. The `browse` binary serves the same vocabulary with the journey tools and starts its browser when the server starts; see [Register the browse binary with Claude Code](#register-the-browse-binary-with-claude-code).
 
 ### Register the browse binary with Claude Code
 
-The `browse` binary serves the vocabulary and the journey tools over MCP on stdio, so a client registers it as a command and needs no code. It ships in `@orkestrel/browser` as `dist/bin/main.js`, with `@orkestrel/mcp` as a runtime dependency, and takes no command-line arguments. It reads four environment variables, and an empty value counts as unset:
+The `browse` binary serves the vocabulary and the journey tools over MCP on stdio, so a client registers it as a command and needs no code. It ships in `@orkestrel/browser` as `dist/bin/main.js`, with `@orkestrel/mcp` as a runtime dependency, and takes no command-line arguments. It reads the following environment variables, and an empty value counts as unset:
 
 - `BROWSE_ROOT`: the root of the journeys, the runs, and the profiles, resolved against the working directory. Default: `tmp/browsers`.
 - `BROWSE_HEADLESS`: `true`, `false`, `1`, or `0`. Default: `true`.
 - `BROWSE_EXECUTABLE`: the path of the Chromium executable. Default: the browser `findSystemBrowser` finds.
 - `BROWSE_READONLY`: `true`, `false`, `1`, or `0`; `true` refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs. Default: `false`.
-- `BROWSE_POOL`: an integer from `1` through `3` setting the number of warm browsers. Default: `1`.
+- `BROWSE_POOL`: an integer from `1` through `3` setting the number of browsers the server keeps warm. Default: `1`.
 
-Any other value of `BROWSE_HEADLESS` or `BROWSE_READONLY` ends the process with exit code 1 and one line on standard error, such as `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"`. Chromium starts on the first tool call, not at registration, and on Linux a server running as root launches it with `--no-sandbox`, because Chromium refuses to start as root with its sandbox on.
+A malformed value ends the process with exit code 1 and one line on standard error. Any other value of `BROWSE_HEADLESS` or `BROWSE_READONLY`, and a `BROWSE_POOL` that is not an integer, writes a `BROWSER_SERVER_ENVIRONMENT` line, such as `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"`. An integer `BROWSE_POOL` outside `1` through `3` writes `browse: BROWSER_SERVER_OPTIONS: pool.size must be an integer from 1 through 3`. On Linux a server running as root launches Chromium with `--no-sandbox`, because Chromium refuses to start as root with its sandbox on.
+
+Chromium starts when the server starts, before the client sends a request. The server launches its first browser, checks that it answers a CDP ping, and leases it to the session. `initialize` and every tool call wait for that lease, and `ping` and `tools/list` answer while the browser warms. With `BROWSE_POOL` at `2` or `3`, the other browsers warm after the first, and `initialize` does not wait for them. A launch that fails is retried one time. The end of input or `SIGTERM` closes every browser and removes its profile, the process exits with code 0, and a run without a fault writes nothing to standard error.
+
+A client gives a server a limited time to answer `initialize`. On 2026-10-03, Claude Code's documentation gave 30 s and connected servers in the background, the Codex configuration reference gave 10 s through `startup_timeout_sec`, and Cursor's documentation gave no limit; see [Claude Code's MCP documentation](https://code.claude.com/docs/en/mcp), [the Codex configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference), and [Cursor's MCP documentation](https://cursor.com/docs/context/mcp). On Windows 11 with Edge 154 on 2026-10-04, while a browser test suite ran beside it, the built binary answered `initialize` at most 2.07 s after its spawn at every `BROWSE_POOL` size, a leftover browser to sweep included. No client needs a longer startup timeout.
+
+Set `BROWSE_POOL` to `2` or `3` to keep a warm spare for failover. The session holds one browser at a time, and a spare waits idle until the session's browser is lost; the next call then runs on the spare while a replacement warms, and concurrent calls share that one spare. At `1`, the next call after a loss waits for a replacement launch. In the 2026-10-04 run, the next successful call after a kill of the session's browser took a median 1.92 s at `1` and 0.40 s at `2`, and an idle spare's process tree held a median 1.22 GB of summed working set, shared pages counted in every process that maps them.
+
+When the session's browser is lost, browse never repeats a call. A loss is the browser process exiting, its CDP connection dropping, the renderer of its current page crashing, or a CDP ping it fails before a call or after a failed one; a crashed background tab is not a loss. The following list gives what each call answers around a loss:
+
+- A call after the loss runs on a fresh browser that starts at `about:blank`, and its text opens with a `BROWSER_SERVER_CRASH:` note that names the cause and the lost page's URL. An element reference from the lost page is refused.
+- A call the loss interrupts answers `BROWSER_SERVER_UNRESOLVED:`: its outcome is unknown, and browse did not repeat it. Read the page before you repeat the call.
+- A call that completed before the loss keeps its result, and the next call carries the note.
+- A call that fails for its own reason on a live browser answers its plain failure, with no note.
+- When no browser can serve, the call answers the note, then `BROWSER_SERVER_UNAVAILABLE:` naming the cause.
+
+When no browser starts at setup, the server refuses on each surface and keeps answering until its input ends. Setup fails, for example, when the first browser fails to launch twice or the root cannot be created. The following list gives what each request answers, where `CAUSE` is the failure's message:
+
+- `initialize` answers the JSON-RPC error `-32000` with the message `BROWSER_SERVER_UNAVAILABLE: CAUSE` and `data.code` set to `BROWSER_SERVER_UNAVAILABLE`.
+- `ping` answers `{}`, and `tools/list` answers the vocabulary.
+- Every `tools/call` answers an error result whose text opens with `BROWSER_SERVER_UNAVAILABLE:`, so a client that connects without the legacy `initialize` meets the refusal at its first tool call.
+- The binary writes `browse: BROWSER_SERVER_UNAVAILABLE: CAUSE` to standard error and exits with code 1 after its input ends.
+
+The server writes each diagnostic as one line on standard error in the form `browse: CODE: DETAIL`, where `CODE` is one of the following codes and `DETAIL` is the cause:
+
+- `BROWSER_SERVER_LAUNCH`: a browser failed to start, and the pool retries it within its bound.
+- `BROWSER_SERVER_EXHAUSTED`: a spare failed to start past the bound, so fewer browsers serve than `BROWSE_POOL` names, and the session keeps its browser.
+- `BROWSER_SERVER_UNAVAILABLE`: setup was refused, and the binary writes this line before it exits with code 1.
+- `BROWSER_SERVER_TEARDOWN`: a browser's termination is unconfirmed or its teardown failed; its profile folder stays until the shutdown recheck, and a shutdown that meets it exits with code 1.
+- `BROWSER_SERVER_SWEEP`: the sweep could not read the `.profiles` folder under `BROWSE_ROOT`, and the server serves without it.
+- `BROWSER_SERVER_ENVIRONMENT` and `BROWSER_SERVER_OPTIONS`: a malformed variable, as the earlier paragraph describes.
+
+At start, beside the launch, the server sweeps the profile folders that ended servers left under `ROOT/.profiles`, where `ROOT` is the `BROWSE_ROOT` directory. It visits each `<pid>-<uuid>` folder whose owning process has exited. It removes a folder with no `browse.json` record or whose recorded browser has exited, closes a recorded browser that still runs at a `ws://127.0.0.1` endpoint and then removes its folder, and keeps a folder whose record it cannot read, whose endpoint names a host other than `127.0.0.1`, or whose browser refuses to close; the shutdown recheck removes the last kind after its browser exits. `initialize` never waits for the sweep. The sweep never visits a bare `ROOT/.profiles/<uuid>` folder, which releases before 0.0.23 left: delete those folders by hand one time, while no `browse` server runs on that root, and leave every `<pid>-<uuid>` folder to the sweep.
 
 Claude Code 2.1.286 registers the binary for a checkout in four steps:
 
@@ -3582,7 +3614,7 @@ Claude Code 2.1.286 registers the binary for a checkout in four steps:
 
 Steps 2 and 3 ran on 2026-10-01 against a scratch checkout whose `node_modules/@orkestrel/browser` linked this package's build, with their output quoted. The approval in step 4 is interactive, and no approved Claude Code session drove the server in that run; the exchange that follows drove the command the entry names over stdio directly. With `@orkestrel/mcp` 0.0.34, a client that subscribes through `subscriptions/listen` receives `notifications/tools/list_changed` when the server mirrors a page tool, and a client that connects through `initialize` receives none and sees the tool at its next `tools/list`; which of the two Claude Code 2.1.286 opens is unread.
 
-The following fence adapts the recorded exchange to the vocabulary that replaces `what` with `search` and adds `plain`, one request and the text of its answer per line, with the view after each receipt left out; `tools/list` answered before Chromium started, and the replay wrote `tmp/browsers/add-kettle/runs/2026-10-01T03-07-06.041Z-6d7e/` with `run.json`, `s1.png`, `s2.png`, and `s3.png`.
+The following fence adapts the recorded exchange to the vocabulary that replaces `what` with `search` and adds `plain`, one request and the text of its answer per line, with the view after each receipt left out; the replay wrote `tmp/browsers/add-kettle/runs/2026-10-01T03-07-06.041Z-6d7e/` with `run.json`, `s1.png`, `s2.png`, and `s3.png`.
 
 ```ts
 // -> initialize { protocolVersion: '2025-06-18' }
@@ -3618,6 +3650,13 @@ The following fence adapts the recorded exchange to the vocabulary that replaces
 ```
 
 The `packed browse binary` case of [`tests/distribution.test.ts`](../tests/distribution.test.ts) runs the same command from an installed tarball through `@orkestrel/mcp`'s stdio client: it lists the vocabulary with Chromium absent, then records, saves, lists, edits, and replays a journey.
+
+On 2026-10-04, Claude Code 2.1.285 under `claude -p --mcp-config FILE --strict-mcp-config` and `codex exec` with `-c mcp_servers.browse.command`, `-c mcp_servers.browse.args`, and `-c mcp_servers.browse.env` overrides each started the built binary, where `FILE` names a JSON file holding the `browse` entry, with no saved client configuration. The following list gives what each client showed:
+
+- Claude Code connects `browse` when setup is refused and shows the refusal as the answer to the first tool call, a text that opens with `BROWSER_SERVER_UNAVAILABLE:` and names the cause.
+- Codex hides a server whose `initialize` fails: the agent sees no `browse` tools, and neither the agent nor the `exec` output carries the cause. Run the binary from a terminal with the same environment to read its `browse:` lines.
+- Codex `exec` asks approval for each `browse` tool that is not read-only. Under the approval policy `never`, it refused `navigate` with `MCP tool call requires approval, but approval policy is never`, and `look` ran.
+- A client that ends its session ends the server before its teardown finishes. On Windows 11 no browser stayed running, and one `<pid>-<uuid>` profile folder without a `browse.json` record stayed; the next start on the same root removes it.
 
 ### Publish native tools to a page
 
@@ -3727,7 +3766,7 @@ The following list names each test file and what it proves.
 - [`tests/src/server/Browser.test.ts`](../tests/src/server/Browser.test.ts): the discover, connect, launch, adopt, disconnect, destroy, and close lifecycle against a spawned stand-in process, the endpoint read from standard error, and the launcher hand-off.
 - [`tests/src/server/helpers.test.ts`](../tests/src/server/helpers.test.ts): system-browser discovery, profiles, the endpoint read, and target fetching.
 - [`tests/src/server/factories.test.ts`](../tests/src/server/factories.test.ts): the server factories against real files and a real in-process CDP endpoint, the file store factories included.
-- [`tests/src/server/BrowserMCPServer.test.ts`](../tests/src/server/BrowserMCPServer.test.ts): the vocabulary before any launch, one launch under concurrent first calls, profiles, forwarding with the signal, `dialog`, mirrored page tools, `readonly`, and teardown on the end of input, `SIGTERM`, and `SIGINT`.
+- [`tests/src/server/BrowserMCPServer.test.ts`](../tests/src/server/BrowserMCPServer.test.ts): the launch before any request and the vocabulary, the handshake gate, the onset refusal on each surface, the restart bound, failover and its shared acquire, the loss notes and unresolved calls, the sweep and the shutdown recheck, profiles, forwarding with the signal, `dialog`, mirrored page tools, `readonly`, and teardown on the end of input, `SIGTERM`, and `SIGINT`.
 - [`tests/src/server/stores/FileBrowserJourneyStore.test.ts`](../tests/src/server/stores/FileBrowserJourneyStore.test.ts), [`tests/src/server/stores/FileBrowserRunStore.test.ts`](../tests/src/server/stores/FileBrowserRunStore.test.ts), and [`tests/src/server/stores/FileBrowserStore.test.ts`](../tests/src/server/stores/FileBrowserStore.test.ts): the shared store suites and the filesystem suite over the file twins, symbolic links at each component, captures confined to an opened run directory, a failed write, and the lock.
 - [`tests/src/bin/main.test.ts`](../tests/src/bin/main.test.ts): the manifest's `bin.browse`, the built entry spawned with no browser, its exit on the end of input and on `SIGTERM`, and a malformed environment variable.
 - [`tests/src/server/errors.test.ts`](../tests/src/server/errors.test.ts): the guard that narrows a caught value to each server error.

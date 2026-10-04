@@ -1247,7 +1247,8 @@ describe('packed browse binary', () => {
 				teardown.add(() => absent.disconnect())
 				expect((await absent.tools()).map((tool) => tool.name)).toStrictEqual(BROWSE_VOCABULARY)
 				await absent.disconnect()
-				expect(existsSync(root)).toBe(false)
+				// Setup creates the profiles directory before it launches; each failed launch removes its own profile.
+				expect(readdirSync(join(root, '.profiles'))).toStrictEqual([])
 
 				const executable = requireBrowseExecutable(context)
 				const fixtures = await createFixtureServer()
@@ -1295,7 +1296,7 @@ describe('packed browse binary', () => {
 					existsSync(join(root, 'reveal-code/runs', requireValue(runs[0], 'no run'), 'run.json')),
 				).toBe(true)
 				expect(readdirSync(join(root, '.profiles'))).toHaveLength(1)
-				// Closing the client ends the child with `SIGTERM`, whose handler removes the profile.
+				// Closing the client ends the child's input, and the server's teardown removes the profile.
 				await client.disconnect()
 				expect(readdirSync(join(root, '.profiles'))).toStrictEqual([])
 			} finally {
@@ -1304,8 +1305,8 @@ describe('packed browse binary', () => {
 		},
 	)
 
-	// One stdio channel carries one client, so the two first calls share a server: sent before
-	// either answers, both reach it before its launch settles and must await that one launch.
+	// One stdio channel carries one client, so the two first calls share a server: at the default
+	// size the server launches one Chromium at start, and both calls run on the browser it leases.
 	it(
 		'launches one Chromium in one profile for two first calls sent at once, and ends both when the client closes [requires the registry and a browser]',
 		{ timeout: 120_000 },
