@@ -11,10 +11,16 @@ import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { join, dirname, basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { createTeardown, createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
+import {
+	createTeardown,
+	createRecorder,
+	requireValue,
+	waitForCondition,
+	waitForEvent,
+} from '@orkestrel/test'
 import { createScratch, createLoopback, readErrorCode } from '@orkestrel/test/server'
 import { isRecord, isString } from '@orkestrel/contract'
-import { createCDPClient } from '@src/core'
+import { createCDPClient, BROWSER_DEFAULT_TIMEOUT_MS, isBrowserConnectionError } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	createBrowserMCPServer,
@@ -23,6 +29,8 @@ import {
 	parseBrowserProfileRecord,
 	formatBrowserLockEntry,
 	createCDPTransport,
+	BROWSER_KILL_GRACE_MS,
+	BROWSER_PROCESS_EXIT_CAUSE,
 } from '@src/server'
 import {
 	BrowseLauncher,
@@ -533,8 +541,23 @@ describe('eager U6 real browse', () => {
 			)
 			writeFileSync(join(folder, 'browse.json'), JSON.stringify({ pid, endpoint }))
 			expect(probeProcess(pid)).toBe(true)
-			await server.start()
-			await waitForProcessExit(pid)
+			// The detached sweep can spend an attach deadline and a close deadline before exit grace.
+			// Browser reports its process exit through the coded error event, even after transport loss.
+			const exited = waitForEvent<[]>(
+				(listener) => {
+					browser.emitter.on('error', (error) => {
+						if (
+							isBrowserConnectionError(error) &&
+							error.context?.['cause'] === BROWSER_PROCESS_EXIT_CAUSE
+						)
+							listener()
+					})
+					return () => browser.emitter.clear('error')
+				},
+				'the synthesized orphan browser exit',
+				{ budget: 2 * BROWSER_DEFAULT_TIMEOUT_MS + BROWSER_KILL_GRACE_MS },
+			)
+			await Promise.all([server.start(), exited])
 			expect(probeProcess(pid)).toBe(false)
 			await server.destroy()
 			expect(existsSync(folder)).toBe(false)
