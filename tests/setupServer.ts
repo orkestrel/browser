@@ -8,7 +8,12 @@ import type { NodeWebSocketInterface } from '@orkestrel/websocket'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import type { RetryOptions, TeardownInterface } from '@orkestrel/test'
 import type { MCPTransportInterface } from '@orkestrel/mcp'
-import type { BrowserContextInterface, BrowserPageInterface, BrowserStoreOptions } from '@src/core'
+import type {
+	BrowserCallOptions,
+	BrowserContextInterface,
+	BrowserPageInterface,
+	BrowserStoreOptions,
+} from '@src/core'
 import type {
 	FileBrowserStoreOptions,
 	BrowserConnection,
@@ -22,6 +27,7 @@ import type {
 import type { BrowserElementFixture, CDPSentMessage, CDPTestTransportInterface } from './setup.js'
 import { spawn as spawnProcess, spawnSync } from 'node:child_process'
 import { createHook } from 'node:async_hooks'
+import { addAbortListener } from 'node:events'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough } from 'node:stream'
@@ -33,6 +39,7 @@ import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
 	isArray,
+	isError,
 	isFunction,
 	isInteger,
 	isNumber,
@@ -59,6 +66,7 @@ import {
 } from '@orkestrel/test'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
+import { BrowserDestroyedError, BrowserNotConnectedError } from '@src/server'
 import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
 
@@ -1515,8 +1523,14 @@ export const SOURCE_HOOK = `registerHooks({
  *   proof can withhold the text-wait evaluation
  * - `released` — answers each `mouseReleased` dispatch, so a proof can withhold a click's release
  * - `registry` — answers `WebMCP.enable`, so a page registry exists and its tools are adopted
+ * - `silent` — the number of initial doubles that never answer a ping
+ * - `timeout` — the ping deadline in milliseconds
+ * - `version` — receives each double's ping count, starting at 1
  */
 export interface BrowserLauncherOptions {
+	readonly silent?: number
+	readonly timeout?: number
+	readonly version?: (call: number) => Promise<void> | void
 	readonly failures?: number
 	readonly evaluation?: BrowserLaunchHandler
 	readonly released?: BrowserLaunchHandler
@@ -1550,6 +1564,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	readonly #emitter = new Emitter<BrowserEventMap>()
 	#fixture: BrowserElementFixture | undefined
 	#connects = 0
+	#pings = 0
 	#destroyed = false
 
 	constructor(
@@ -1588,6 +1603,12 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		return undefined
 	}
 
+	get endpoint(): string | undefined {
+		return this.#fixture?.client.connected === true
+			? 'ws://127.0.0.1/devtools/browser/fixture'
+			: undefined
+	}
+
 	/** Holds the options the server launched this browser with. */
 	get options(): BrowserOptions {
 		return this.#options
@@ -1608,13 +1629,36 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		return this.#fixture
 	}
 
+	async ping(options?: BrowserCallOptions): Promise<void> {
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		const fixture = this.#fixture
+		if (fixture?.client.connected !== true) throw new BrowserNotConnectedError()
+		const timeout = options?.timeout ?? this.#handlers.timeout
+		await fixture.client.send('Browser.getVersion', undefined, {
+			...options,
+			...(timeout === undefined ? {} : { timeout }),
+		})
+	}
+
 	async discover(): Promise<BrowserDiscoveryResult> {
 		return { endpoint: undefined, browser: undefined }
 	}
 
 	async connect(): Promise<void> {
 		this.#connects += 1
-		await this.#gate
+		const signal = this.#options.signal
+		signal?.throwIfAborted()
+		const aborted = Promise.withResolvers<never>()
+		const listener =
+			signal === undefined
+				? undefined
+				: addAbortListener(signal, () => aborted.reject(signal.reason))
+		try {
+			await Promise.race([this.#gate, aborted.promise])
+		} finally {
+			listener?.[Symbol.dispose]()
+		}
+		signal?.throwIfAborted()
 		if (this.#failure !== undefined) throw this.#failure
 		const { evaluation, released, registry } = this.#handlers
 		// The fixture scripts its transport before it returns it, so each answer reads the transport
@@ -1627,6 +1671,17 @@ export class BrowserLaunchDouble implements BrowserInterface {
 			...(registry === undefined ? {} : { registry: (message) => this.#answer(registry, message) }),
 		})
 		const { transport } = fixture
+		transport.onSend('Browser.getVersion', (message) => {
+			const call = ++this.#pings
+			if ((this.#handlers.silent ?? 0) > 0) return
+			void Promise.resolve()
+				.then(() => this.#handlers.version?.(call))
+				.then(
+					() => transport.reply(message.id, {}),
+					(error: unknown) =>
+						transport.fail(message.id, isError(error) ? error.message : String(error)),
+				)
+		})
 		transport.onSend('Target.createTarget', (message) =>
 			transport.reply(message.id, { targetId: 'main' }),
 		)
@@ -1645,7 +1700,9 @@ export class BrowserLaunchDouble implements BrowserInterface {
 
 	adopt(): void {}
 
-	async disconnect(): Promise<void> {}
+	async disconnect(): Promise<void> {
+		await this.#fixture?.client.close()
+	}
 
 	context(): BrowserContextInterface | undefined {
 		return undefined
@@ -1711,7 +1768,10 @@ export class BrowserLauncher {
 					? new BrowserError('The fixture refused the launch', 'BROWSER_FIXTURE_LAUNCH')
 					: undefined
 			if (this.#failures > 0) this.#failures -= 1
-			const browser = new BrowserLaunchDouble(options, this.#gate.promise, failure, this.#handlers)
+			const browser = new BrowserLaunchDouble(options, this.#gate.promise, failure, {
+				...this.#handlers,
+				silent: this.#browsers.length < (this.#handlers.silent ?? 0) ? 1 : 0,
+			})
 			this.#browsers.push(browser)
 			return browser
 		}

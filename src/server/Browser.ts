@@ -10,6 +10,7 @@ import type {
 	BrowserStatus,
 } from './types.js'
 import type {
+	BrowserCallOptions,
 	BrowserContextInterface,
 	BrowserContextOptions,
 	BrowserPageInterface,
@@ -137,6 +138,19 @@ export class Browser implements BrowserInterface {
 
 	get pid(): number | undefined {
 		return this.#servingPid ?? this.#process?.pid
+	}
+
+	get endpoint(): string | undefined {
+		return this.#endpoint
+	}
+
+	async ping(options?: BrowserCallOptions): Promise<void> {
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		const client = this.#client
+		if (this.#status !== 'connected' || client === undefined) {
+			throw new BrowserNotConnectedError()
+		}
+		await client.send('Browser.getVersion', undefined, options)
 	}
 
 	async discover(): Promise<BrowserDiscoveryResult> {
@@ -317,7 +331,7 @@ export class Browser implements BrowserInterface {
 					await this.#connectCDP(discovery.endpoint)
 					return
 				}
-			} else {
+			} else if (this.#options.cdp?.port !== undefined) {
 				await this.#raceAbort(this.#assertPortFree())
 			}
 

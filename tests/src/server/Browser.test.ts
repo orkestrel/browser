@@ -41,6 +41,54 @@ import { ignoreCall, throwListenerError } from '../../setup.js'
 
 let server: CDPTestServerInterface | undefined
 
+describe('Browser eager U2', () => {
+	it('reports the endpoint and pings across attachment lifecycle states', async () => {
+		server = await createCDPTestServer()
+		server.script('Browser.getVersion', { product: 'Fixture/1.0' })
+		const browser = createBrowser({ cdp: { endpoint: server.endpoint }, timeout: 30 })
+		try {
+			expect(browser.endpoint).toBeUndefined()
+			await expect(browser.ping()).rejects.toThrow(BrowserNotConnectedError)
+			await browser.connect()
+			expect(browser.endpoint).toBe(server.endpoint)
+			await expect(browser.ping()).resolves.toBeUndefined()
+			expect(
+				server.received.filter((request) => request.method === 'Browser.getVersion'),
+			).toHaveLength(1)
+			expect(browser.status).toBe('connected')
+			await browser.disconnect()
+			expect(browser.endpoint).toBeUndefined()
+			await expect(browser.ping()).rejects.toThrow(BrowserNotConnectedError)
+			await browser.connect()
+			browser.adopt()
+			await browser.disconnect()
+			expect(browser.endpoint).toBe(server.endpoint)
+			await expect(browser.ping()).rejects.toThrow(BrowserNotConnectedError)
+		} finally {
+			await browser.destroy()
+		}
+		expect(browser.endpoint).toBeUndefined()
+		await expect(browser.ping()).rejects.toThrow(BrowserDestroyedError)
+	})
+
+	it('uses the command deadline and honors ping cancellation', async () => {
+		server = await createCDPTestServer()
+		const browser = createBrowser({ cdp: { endpoint: server.endpoint }, timeout: 30 })
+		try {
+			await browser.connect()
+			await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_CDP_TIMEOUT_ERROR' })
+			const controller = new AbortController()
+			const pending = browser.ping({ signal: controller.signal })
+			const reason = new Error('ping cancelled')
+			controller.abort(reason)
+			await expect(pending).rejects.toBe(reason)
+			expect(browser.status).toBe('connected')
+		} finally {
+			await browser.destroy()
+		}
+	})
+})
+
 afterEach(async () => {
 	await server?.close()
 	server = undefined

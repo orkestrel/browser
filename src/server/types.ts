@@ -1,6 +1,7 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { StdioServerOptions } from '@orkestrel/mcp/server'
 import type {
+	BrowserCallOptions,
 	BrowserContextInterface,
 	BrowserContextOptions,
 	BrowserPageInterface,
@@ -100,7 +101,7 @@ export interface BrowserProfileResult {
  * - `endpoint` — explicit CDP WebSocket URL; when provided, skips discovery
  * - `discover` — whether `connect()` passively probes for an existing browser
  *   before launching (default `true`); set `false` to skip discovery and go
- *   straight to launch — a short probe of `port` still runs first and rejects
+ *   straight to launch — when `port` is explicit, a short probe runs first and rejects
  *   with a coded error naming the occupied port if something is already
  *   listening there, so a demanded fresh launch never silently attaches to a
  *   stranger browser
@@ -225,6 +226,10 @@ export interface BrowserOptions {
  * - `create(options?)` → shortcut to open a page in the default context
  */
 export interface BrowserInterface {
+	/** Reports the CDP WebSocket endpoint of the represented session, or undefined when none is. */
+	readonly endpoint: string | undefined
+	/** Sends CDP `Browser.getVersion` and resolves when the browser answers, changing no state. */
+	ping(options?: BrowserCallOptions): Promise<void>
 	readonly emitter: EmitterInterface<BrowserEventMap>
 	readonly engine: BrowserEngine
 	readonly status: BrowserStatus

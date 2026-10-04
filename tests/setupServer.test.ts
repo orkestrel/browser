@@ -46,6 +46,7 @@ import { createScratch, isRunning } from '@orkestrel/test/server'
 import {
 	alignLoopClock,
 	BrowseChild,
+	BrowserLauncher,
 	BrowserLockObserver,
 	observeBrowserFilesystem,
 	COOPERATIVE_SIGTERM,
@@ -89,6 +90,72 @@ import {
 } from './setupServer.js'
 
 const WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
+
+describe('BrowserLauncher eager U2', () => {
+	it('aborts a held connect with the supplied reason', async () => {
+		const launcher = new BrowserLauncher()
+		launcher.hold()
+		const controller = new AbortController()
+		const browser = launcher.launch({ signal: controller.signal })
+		const connecting = browser.connect()
+		const reason = new Error('held connect aborted')
+		controller.abort(reason)
+		await expect(connecting).rejects.toBe(reason)
+		expect(browser.endpoint).toBeUndefined()
+		await browser.destroy()
+	})
+
+	it('counts each double version from one and exposes its connected endpoint', async () => {
+		const calls = createRecorder<[number]>()
+		const launcher = new BrowserLauncher({ version: calls.handler })
+		const browser = launcher.launch({})
+		const second = launcher.launch({})
+		try {
+			expect(browser.endpoint).toBeUndefined()
+			await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+			await browser.connect()
+			expect(browser.endpoint).toMatch(/^ws:\/\/127\.0\.0\.1\/devtools\/browser\//)
+			await browser.ping()
+			await browser.ping()
+			await second.connect()
+			await second.ping()
+			expect(calls.calls).toEqual([[1], [2], [1]])
+			await browser.disconnect()
+			expect(browser.endpoint).toBeUndefined()
+			await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+		} finally {
+			await browser.destroy()
+			await second.destroy()
+		}
+		await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_DESTROYED_ERROR' })
+	})
+
+	it('bounds silent pings and propagates version failures and aborts', async () => {
+		const launcher = new BrowserLauncher({
+			silent: 1,
+			timeout: 20,
+			version: () => {
+				throw new Error('version refused')
+			},
+		})
+		const silent = launcher.launch({})
+		const refusing = launcher.launch({})
+		try {
+			await silent.connect()
+			await expect(silent.ping()).rejects.toMatchObject({ code: 'BROWSER_CDP_TIMEOUT_ERROR' })
+			const controller = new AbortController()
+			const pending = silent.ping({ signal: controller.signal })
+			const reason = new Error('ping aborted')
+			controller.abort(reason)
+			await expect(pending).rejects.toBe(reason)
+			await refusing.connect()
+			await expect(refusing.ping()).rejects.toThrow('version refused')
+		} finally {
+			await silent.destroy()
+			await refusing.destroy()
+		}
+	})
+})
 
 afterAll(async () => {
 	await destroyFakeBrowsers()

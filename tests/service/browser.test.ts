@@ -74,6 +74,37 @@ describe('Browser real launch', () => {
 		await destroyTempDirectories()
 	})
 
+	it('eager U2 refuses an explicit occupied port served by an ephemeral version fixture', async () => {
+		const requests: string[] = []
+		const fixture = createServer((request, response) => {
+			requests.push(request.url ?? '')
+			response.writeHead(200, { 'content-type': 'application/json' })
+			response.end(JSON.stringify({ Browser: 'Fixture/1.0' }))
+		})
+		await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve))
+		const port = readServerPort(fixture)
+		try {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				args: REAL_BROWSER_ARGS,
+				cdp: { port, discover: false },
+				timeout: 2000,
+			})
+			await expect(browser.connect()).rejects.toMatchObject({
+				message: `Port ${port} on 127.0.0.1 is already occupied by another CDP endpoint`,
+				context: { port, host: '127.0.0.1' },
+			})
+			expect(requests).toContain('/json/version')
+			expect(browser.status).toBe('error')
+			expect(browser.pid).toBeUndefined()
+		} finally {
+			await new Promise<void>((resolve, reject) =>
+				fixture.close((error) => (error === undefined ? resolve() : reject(error))),
+			)
+		}
+	})
+
 	it('creates a page and navigates it in a real browser', async () => {
 		const httpServer = createServer((_req, res) => {
 			res.writeHead(200, { 'content-type': 'text/html' })
@@ -94,6 +125,8 @@ describe('Browser real launch', () => {
 
 			await browser.connect()
 			expect(browser.status).toBe('connected')
+			expect(browser.endpoint).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//)
+			await expect(browser.ping()).resolves.toBeUndefined()
 
 			const page = await browser.create({ url })
 			const title = await page.title()
