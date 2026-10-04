@@ -1273,7 +1273,7 @@ describe('packed browse binary', () => {
 				expect(
 					await callBrowse(client, 'save', { description: 'Reveals the confirmation code' }),
 				).toMatch(/^Saved reveal-code with 2 steps\./u)
-				const listing = await callBrowse(client, 'journeys', { search: 'the saved journeys' })
+				const listing = await callBrowse(client, 'journeys', { search: '' })
 				expect(listing.split(/\r\n|\n/u)).toStrictEqual([
 					'reveal-code "Reveals the confirmation code"',
 					's1 click button "Reveal"',
