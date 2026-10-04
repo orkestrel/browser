@@ -49,6 +49,7 @@ import {
 	BrowserLauncher,
 	BrowserPromiseObserver,
 	BrowseLog,
+	BROWSE_VOCABULARY,
 	createBrowseFixture,
 	BrowserLockObserver,
 	observeBrowserFilesystem,
@@ -193,6 +194,31 @@ describe('BrowserLauncher eager U2', () => {
 			launcher.release()
 			await Promise.all(launcher.browsers.map((browser) => browser.destroy()))
 		}
+	})
+	it('lists the shared vocabulary followed by the holder tools', () => {
+		expect(BROWSE_VOCABULARY).toEqual([
+			'look',
+			'read',
+			'plain',
+			'click',
+			'type',
+			'press',
+			'navigate',
+			'wait',
+			'dialog',
+			'tabs',
+			'switch',
+			'record',
+			'save',
+			'journeys',
+			'edit',
+			'replay',
+			'forget',
+			'acquire',
+			'execute',
+			'tools',
+			'destroy',
+		])
 	})
 	it('collects diagnostic chunks and owns the browse fixture teardown', async () => {
 		const log = new BrowseLog()

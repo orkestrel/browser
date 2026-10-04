@@ -1,4 +1,5 @@
-import type { BrowserEngine } from './types.js'
+import type { ToolDefinition } from '@orkestrel/tool'
+import type { BrowserEngine, BrowserServerToolName } from './types.js'
 
 // === CDP discovery
 
@@ -249,3 +250,83 @@ export const BROWSER_SERVER_OPTIONS = 'BROWSER_SERVER_OPTIONS'
 export const BROWSER_SERVER_CRASH = 'BROWSER_SERVER_CRASH'
 /** Names an interrupted call whose outcome is unknown. */
 export const BROWSER_SERVER_UNRESOLVED = 'BROWSER_SERVER_UNRESOLVED'
+
+/** Names the refusal when every browser is admitted to a holder. */
+export const BROWSER_SERVER_BUSY = 'BROWSER_SERVER_BUSY'
+/** Names the refusal for an unknown or ended holder. */
+export const BROWSER_SERVER_HOLDER = 'BROWSER_SERVER_HOLDER'
+
+/** Defines the holder tools independently of the shared browser's vocabulary. */
+export const BROWSER_SERVER_COPY: Readonly<Record<BrowserServerToolName, ToolDefinition>> =
+	Object.freeze({
+		acquire: Object.freeze({
+			name: 'acquire',
+			description:
+				'Acquires an independent browser and returns its holder id and tool catalog. Destroy the holder when its work ends.',
+			parameters: Object.freeze({
+				type: 'object',
+				properties: Object.freeze({
+					purpose: Object.freeze({
+						type: 'string',
+						description: 'The work this browser will serve.',
+					}),
+				}),
+				required: Object.freeze(['purpose']),
+			}),
+		}),
+		execute: Object.freeze({
+			name: 'execute',
+			description:
+				'Runs a tool on the selected holder, with that tool’s arguments inside arguments. Get its available tools with tools.',
+			parameters: Object.freeze({
+				type: 'object',
+				properties: Object.freeze({
+					holder: Object.freeze({
+						type: 'string',
+						description: 'The holder id returned by acquire.',
+					}),
+					name: Object.freeze({
+						type: 'string',
+						description: 'The tool name from this holder’s catalog.',
+					}),
+					arguments: Object.freeze({
+						type: 'object',
+						description: 'The arguments for the selected tool.',
+					}),
+				}),
+				required: Object.freeze(['holder', 'name', 'arguments']),
+			}),
+			annotations: Object.freeze({ pure: false, untrusted: true }),
+		}),
+		tools: Object.freeze({
+			name: 'tools',
+			description: 'Lists the selected holder’s tools, including tools supplied by its page.',
+			parameters: Object.freeze({
+				type: 'object',
+				properties: Object.freeze({
+					holder: Object.freeze({
+						type: 'string',
+						description: 'The holder id returned by acquire.',
+					}),
+				}),
+				required: Object.freeze(['holder']),
+			}),
+			annotations: Object.freeze({ pure: true, untrusted: true }),
+		}),
+		destroy: Object.freeze({
+			name: 'destroy',
+			description:
+				'Ends the selected holder and destroys its browser. Calls still running on that holder report an unresolved outcome.',
+			parameters: Object.freeze({
+				type: 'object',
+				properties: Object.freeze({
+					holder: Object.freeze({
+						type: 'string',
+						description: 'The holder id returned by acquire.',
+					}),
+				}),
+				required: Object.freeze(['holder']),
+			}),
+			annotations: Object.freeze({ pure: false }),
+		}),
+	})

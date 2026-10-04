@@ -2102,6 +2102,10 @@ export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
 	'edit',
 	'replay',
 	'forget',
+	'acquire',
+	'execute',
+	'tools',
+	'destroy',
 ])
 
 /** Describes how a spawned browse child ended. */

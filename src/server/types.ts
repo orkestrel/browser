@@ -1,5 +1,7 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { StdioServerOptions } from '@orkestrel/mcp/server'
+import type { ToolDefinition, ToolInterface } from '@orkestrel/tool'
+import type { PoolToken } from '@orkestrel/pool'
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
@@ -411,11 +413,35 @@ export interface BrowserMCPServerOptions {
 	readonly log?: NodeJS.WritableStream
 }
 
+/** Names the server tools that manage independent browser holders. */
+export type BrowserServerToolName = 'acquire' | 'execute' | 'tools' | 'destroy'
+
+/** Identifies one admitted browser lifetime independently of its current pool token. */
+export interface BrowserServerHolder {
+	readonly id: string
+	readonly purpose: string
+	readonly abort: AbortController
+}
+
+/** Describes the JSON catalog returned by the holder tools. */
+export interface BrowserServerCatalog {
+	readonly holder: string
+	readonly tools: readonly ToolDefinition[]
+}
+
+/** Binds shared catalog subscriptions to the exact token that published them. */
+export interface BrowserServerMirror {
+	readonly token: PoolToken<BrowserSlot>
+	readonly added: (tool: ToolInterface) => void
+	readonly removed: (tool: ToolInterface) => void
+	readonly cleared: (tools: readonly ToolInterface[]) => void
+}
+
 /** Serves the browser vocabulary and the journey tools over MCP on stdio. */
 export interface BrowserMCPServerInterface {
 	/**
 	 * Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the
-	 * session leases a warm browser; the legacy handshake and every tool call await the same setup.
+	 * shared holder leases a warm browser; the legacy handshake and every tool call await the same setup.
 	 * Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with
 	 * `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup.
 	 */

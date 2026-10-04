@@ -8,6 +8,9 @@ import type {
 	BrowserLaunchFunction,
 	BrowserMCPServerInterface,
 	BrowserMCPServerOptions,
+	BrowserServerHolder,
+	BrowserServerCatalog,
+	BrowserServerMirror,
 	BrowserSlot,
 	BrowserSlotWatch,
 } from './types.js'
@@ -15,7 +18,7 @@ import { randomUUID } from 'node:crypto'
 import { addAbortListener } from 'node:events'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { isError, isInteger } from '@orkestrel/contract'
+import { isError, isInteger, isRecord, isString } from '@orkestrel/contract'
 import { createMCPLegacy, createMCPServer, JSONRPC_SERVER_ERROR, MCPError } from '@orkestrel/mcp'
 import { createPool, isPoolError } from '@orkestrel/pool'
 import { createStdioServer } from '@orkestrel/mcp/server'
@@ -39,6 +42,9 @@ import {
 } from './factories.js'
 import {
 	BROWSER_SERVER_EXHAUSTED,
+	BROWSER_SERVER_BUSY,
+	BROWSER_SERVER_HOLDER,
+	BROWSER_SERVER_COPY,
 	BROWSER_SERVER_LAUNCH,
 	BROWSER_SERVER_OPTIONS,
 	BROWSER_SERVER_POOL_LIMIT,
@@ -71,8 +77,11 @@ import {
  * absent. After the launch, a tool the toolset's manager adds under another name, such as a page
  * tool it adopts, is mirrored as a dispatcher with that tool's definition, and the mirror is
  * removed when the toolset withdraws the tool, so the server's tool list changes and a subscribed
- * client is notified. Startup warms the pool and leases one validated browser. The legacy
- * handshake and every tool call await that setup; concurrent callers share a replacement lease.
+ * client is notified. The server also advertises `acquire`, `execute`, `tools`, and `destroy` with
+ * `BROWSER_SERVER_COPY`. Startup warms the pool and leases the shared browser. The legacy
+ * handshake and browser calls await that setup. Named holders each own a lease, a pending grant,
+ * and loss notices; concurrent calls on a holder share its replacement grant. Ending a holder
+ * destroys its token, and admission counts that holder until disposal settles.
  * A launch creates `ROOT/.profiles/PID-UUID/` exclusively, connects a browser that never attaches to an
  * existing endpoint, opens one page in an isolated context, and constructs the page toolset with
  * that context and the file journey and run stores under the root, on a manager the toolset owns.
@@ -116,9 +125,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #abort = new AbortController()
 	readonly #signal: () => void
 	readonly #vocabulary: ReadonlySet<string>
-	readonly #added: (tool: ToolInterface) => void
-	readonly #removed: (tool: ToolInterface) => void
-	readonly #cleared: (tools: readonly ToolInterface[]) => void
+	#mirrored: BrowserServerMirror | undefined
 	readonly #pool: PoolInterface<BrowserSlot>
 	readonly #log: NodeJS.WritableStream
 	readonly #folders = new Set<string>()
@@ -126,13 +133,22 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #losses = new WeakMap<BrowserSlot, { readonly cause: unknown; readonly url: string }>()
 	readonly #pings = new WeakMap<BrowserSlot, Promise<void>>()
 	readonly #watches = new Map<BrowserSlot, BrowserSlotWatch>()
-	readonly #notice = new Set<BrowserSlot>()
+	readonly #shared: BrowserServerHolder = {
+		id: 'shared',
+		purpose: 'Shared browser',
+		abort: this.#abort,
+	}
+	readonly #holders = new Map<string, BrowserServerHolder>([[this.#shared.id, this.#shared]])
+	readonly #leases = new Map<BrowserServerHolder, PoolToken<BrowserSlot>>()
+	readonly #grants = new Map<BrowserServerHolder, Promise<PoolToken<BrowserSlot>>>()
+	readonly #notices = new Map<BrowserServerHolder, Set<BrowserSlot>>()
+	readonly #disposals = new Map<string, Promise<void>>()
+	readonly #drains = new Map<BrowserServerHolder, Set<Promise<void>>>()
+	readonly #size: number
 	readonly #reference: () => string
 	#references = 0
 	#failure: unknown
 	#stranded: unknown
-	#lease: PoolToken<BrowserSlot> | undefined
-	#granting: Promise<PoolToken<BrowserSlot>> | undefined
 	#starting: Promise<void> | undefined
 	#sweeping: Promise<void> | undefined
 	#closing: Promise<void> | undefined
@@ -149,6 +165,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				`pool.size must be an integer from 1 through ${BROWSER_SERVER_POOL_LIMIT}`,
 				BROWSER_SERVER_OPTIONS,
 			)
+		this.#size = size
 		this.#log = options?.log ?? process.stderr
 		this.#reference = this.#issue.bind(this)
 		this.#pool = createPool<BrowserSlot>({
@@ -170,15 +187,25 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#input = options?.stdio?.input ?? process.stdin
 		this.#tools = createToolManager()
 		const names = [...BROWSER_TOOL_NAMES, ...BROWSER_JOURNEY_TOOL_NAMES]
-		this.#vocabulary = new Set(names)
+		this.#vocabulary = new Set([...names, ...Object.keys(BROWSER_SERVER_COPY)])
 		for (const name of names) {
 			this.#tools.add(
 				createTool({
 					...BROWSER_TOOL_COPY[name],
-					execute: this.#forward.bind(this, name),
+					execute: this.#forward.bind(this, this.#shared, name),
 				}),
 			)
 		}
+		this.#tools.add(
+			createTool({ ...BROWSER_SERVER_COPY.acquire, execute: this.#acquire.bind(this) }),
+		)
+		this.#tools.add(
+			createTool({ ...BROWSER_SERVER_COPY.execute, execute: this.#dispatch.bind(this) }),
+		)
+		this.#tools.add(createTool({ ...BROWSER_SERVER_COPY.tools, execute: this.#catalog.bind(this) }))
+		this.#tools.add(
+			createTool({ ...BROWSER_SERVER_COPY.destroy, execute: this.#dispose.bind(this) }),
+		)
 		const server = createMCPServer({
 			identity: { name: 'browse', version },
 			tools: this.#tools,
@@ -192,9 +219,6 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		// One reference serves the end of input and both signals, because a listener is removed by
 		// identity.
 		this.#signal = this.#end.bind(this)
-		this.#added = this.#mirror.bind(this)
-		this.#removed = this.#withdraw.bind(this)
-		this.#cleared = this.#clear.bind(this)
 	}
 
 	async start(): Promise<void> {
@@ -218,7 +242,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			if (this.#closing !== undefined) return
 			this.#sweeping = this.#sweep()
 			const warming = this.#pool.start().then(undefined, (error: unknown) => error)
-			await this.#grant(this.#abort.signal)
+			await this.#grant(this.#shared, this.#abort.signal)
 			if (this.#closing !== undefined) return
 			void warming.then(this.#exhaust.bind(this))
 		} catch (error) {
@@ -236,7 +260,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#transport.stop()
 		for (const tool of this.#tools.tools()) this.#tools.remove(tool.name)
 		this.#unmirror()
-		this.#lease = undefined
+		this.#leases.clear()
+		for (const holder of this.#holders.values()) holder.abort.abort()
 		this.#abort.abort()
 		const barrier = this.#pool.destroy().catch((error: unknown) => {
 			for (const failure of isPoolError(error) ? (error.context?.failures ?? [error]) : [error])
@@ -244,6 +269,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		})
 		await this.#starting?.catch(() => undefined)
 		await barrier
+		await Promise.allSettled(this.#disposals.values())
+		this.#holders.clear()
 		await this.#sweeping
 		if (this.#stranded !== undefined) this.#faults.add(this.#stranded)
 		for (const folder of this.#folders) {
@@ -288,23 +315,153 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#write(`browse: ${describeBrowserServerLoss(BROWSER_SERVER_TEARDOWN, error)}`)
 	}
 
+	async #acquire(args: Readonly<Record<string, unknown>>, context: ToolContext): Promise<string> {
+		context.signal.throwIfAborted()
+		if (this.#closing !== undefined) throw this.#ended()
+		const purpose = args['purpose']
+		if (!isString(purpose) || purpose.trim().length === 0)
+			throw new BrowserError('purpose must describe the work', 'BROWSER_TOOLSET_ARGUMENT')
+		if (this.#holders.size >= this.#size)
+			throw new BrowserError(
+				`${BROWSER_SERVER_BUSY}: ${[...this.#holders.values()].map((holder) => `${holder.id} (${holder.purpose})`).join(', ')}. Call destroy for a holder no longer needed or call the named tools to share the shared browser.`,
+				BROWSER_SERVER_BUSY,
+			)
+		const holder: BrowserServerHolder = { id: randomUUID(), purpose, abort: new AbortController() }
+		this.#holders.set(holder.id, holder)
+		const listener = addAbortListener(context.signal, () =>
+			holder.abort.abort(context.signal.reason),
+		)
+		try {
+			const slot = await this.#serve(holder, context.signal)
+			context.signal.throwIfAborted()
+			if (holder.abort.signal.aborted || this.#holders.get(holder.id) !== holder)
+				throw this.#ended()
+			if (this.#leases.get(holder)?.value !== slot)
+				throw this.#unavailable(this.#losses.get(slot)?.cause)
+			const catalog: BrowserServerCatalog = {
+				holder: holder.id,
+				tools: slot.toolset.tools.definitions(),
+			}
+			return JSON.stringify(catalog)
+		} catch (error) {
+			await this.#retire(holder)
+			throw error
+		} finally {
+			listener[Symbol.dispose]()
+		}
+	}
+
+	#holder(value: unknown): BrowserServerHolder {
+		const holder = isString(value) ? this.#holders.get(value) : undefined
+		if (holder === undefined || holder === this.#shared || holder.abort.signal.aborted)
+			throw new BrowserError(
+				`${BROWSER_SERVER_HOLDER}: unknown or ended holder`,
+				BROWSER_SERVER_HOLDER,
+			)
+		return holder
+	}
+
+	async #dispatch(args: Readonly<Record<string, unknown>>, context: ToolContext): Promise<unknown> {
+		const holder = this.#holder(args['holder'])
+		const name = args['name']
+		const parameters = args['arguments']
+		if (!isString(name) || !isRecord(parameters))
+			throw new BrowserError('execute requires name and arguments', 'BROWSER_TOOLSET_ARGUMENT')
+		return this.#forward(holder, name, parameters, context)
+	}
+
+	async #catalog(args: Readonly<Record<string, unknown>>, context: ToolContext): Promise<string> {
+		const holder = this.#holder(args['holder'])
+		const signal = AbortSignal.any([context.signal, holder.abort.signal])
+		try {
+			const slot = await this.#serve(holder, signal)
+			signal.throwIfAborted()
+			if (this.#leases.get(holder)?.value !== slot)
+				throw this.#unavailable(this.#losses.get(slot)?.cause)
+			const catalog: BrowserServerCatalog = {
+				holder: holder.id,
+				tools: slot.toolset.tools.definitions(),
+			}
+			return this.#annotate(holder, JSON.stringify(catalog))
+		} catch (error) {
+			context.signal.throwIfAborted()
+			if (holder.abort.signal.aborted)
+				throw new BrowserError(
+					`${BROWSER_SERVER_UNRESOLVED}: the holder ended during the call`,
+					BROWSER_SERVER_UNRESOLVED,
+				)
+			if (isBrowserError(error))
+				throw new BrowserError(
+					this.#annotate(holder, `${error.code}: ${error.message}`),
+					error.code,
+				)
+			throw error
+		}
+	}
+
+	async #dispose(args: Readonly<Record<string, unknown>>): Promise<string> {
+		const id = args['holder']
+		const disposal = isString(id) ? this.#disposals.get(id) : undefined
+		await (disposal ?? this.#retire(this.#holder(id)))
+		return 'Holder destroyed.'
+	}
+
+	#retire(holder: BrowserServerHolder): Promise<void> {
+		const pending = this.#disposals.get(holder.id)
+		if (pending !== undefined) return pending
+		holder.abort.abort()
+		const token = this.#leases.get(holder)
+		this.#leases.delete(holder)
+		const disposal = Promise.resolve().then(async () => {
+			try {
+				await this.#grants.get(holder)?.catch(() => undefined)
+				await token?.destroy()
+				await Promise.all(this.#drains.get(holder) ?? [])
+			} finally {
+				if (this.#holders.get(holder.id) === holder) this.#holders.delete(holder.id)
+				this.#notices.delete(holder)
+				this.#drains.delete(holder)
+			}
+		})
+		this.#disposals.set(holder.id, disposal)
+		return disposal
+	}
+
 	async #forward(
+		holder: BrowserServerHolder,
 		name: string,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<unknown> {
+		const signal =
+			holder === this.#shared
+				? context.signal
+				: AbortSignal.any([context.signal, holder.abort.signal])
 		let slot: BrowserSlot
 		try {
-			slot = await this.#serve(context.signal)
+			slot = await this.#serve(holder, signal)
 		} catch (error) {
 			context.signal.throwIfAborted()
+			if (holder !== this.#shared && holder.abort.signal.aborted)
+				throw new BrowserError(
+					`${BROWSER_SERVER_UNRESOLVED}: the holder ended during the call`,
+					BROWSER_SERVER_UNRESOLVED,
+				)
 			if (isBrowserError(error))
-				throw new BrowserError(this.#annotate(`${error.code}: ${error.message}`), error.code)
+				throw new BrowserError(
+					this.#annotate(holder, `${error.code}: ${error.message}`),
+					error.code,
+				)
 			throw error
 		}
 		let result: ToolResult
 		try {
-			result = await slot.toolset.tools.execute({ id: name, name, arguments: args }, context)
+			const outcome = await this.#race(
+				slot.toolset.tools.execute({ id: name, name, arguments: args }, { ...context, signal }),
+				signal,
+			)
+			if (outcome === undefined) throw this.#ended()
+			result = outcome
 		} catch (error) {
 			result = {
 				id: name,
@@ -314,8 +471,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			}
 		}
 		context.signal.throwIfAborted()
+		if (holder !== this.#shared && holder.abort.signal.aborted)
+			throw new BrowserError(
+				BROWSER_SERVER_UNRESOLVED + ': the holder ended during the call',
+				BROWSER_SERVER_UNRESOLVED,
+			)
 		if (!result.success) {
-			if (this.#lease?.value === slot && !context.signal.aborted) {
+			if (this.#leases.get(holder)?.value === slot && !context.signal.aborted) {
 				try {
 					await this.#race(this.#ping(slot), context.signal)
 				} catch {
@@ -323,28 +485,31 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				}
 			}
 			context.signal.throwIfAborted()
-			if (this.#lease?.value !== slot) {
+			if (this.#leases.get(holder)?.value !== slot) {
 				const loss = this.#losses.get(slot)
 				throw new BrowserError(
 					this.#annotate(
+						holder,
 						describeBrowserServerLoss(BROWSER_SERVER_UNRESOLVED, loss?.cause, loss?.url),
 						slot,
 					),
 					BROWSER_SERVER_UNRESOLVED,
 				)
 			}
-			throw new BrowserError(this.#annotate(result.error, slot))
+			throw new BrowserError(this.#annotate(holder, result.error, slot))
 		}
-		return typeof result.value === 'string' ? this.#annotate(result.value, slot) : result.value
+		return typeof result.value === 'string'
+			? this.#annotate(holder, result.value, slot)
+			: result.value
 	}
 
-	#annotate(value: string, slot?: BrowserSlot): string {
+	#annotate(holder: BrowserServerHolder, value: string, slot?: BrowserSlot): string {
 		const notes: string[] = []
-		for (const lost of this.#notice) {
+		for (const lost of this.#notices.get(holder) ?? []) {
 			if (lost === slot) continue
 			const loss = this.#losses.get(lost)
 			notes.push(describeBrowserServerLoss(BROWSER_SERVER_CRASH, loss?.cause, loss?.url))
-			this.#notice.delete(lost)
+			this.#notices.get(holder)?.delete(lost)
 		}
 		return [...notes, value].join('\n')
 	}
@@ -374,61 +539,81 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	async #grant(signal: AbortSignal): Promise<PoolToken<BrowserSlot>> {
-		if (this.#lease !== undefined) return this.#lease
-		this.#granting ??= this.#pool
-			.acquire(this.#abort.signal)
-			.then(this.#hold.bind(this), this.#refuse.bind(this))
-		const token = await this.#race(this.#granting, signal)
+	async #grant(holder: BrowserServerHolder, signal: AbortSignal): Promise<PoolToken<BrowserSlot>> {
+		const held = this.#leases.get(holder)
+		if (held !== undefined) return held
+		let granting = this.#grants.get(holder)
+		if (granting === undefined) {
+			granting = this.#pool.acquire(holder.abort.signal).then(this.#hold.bind(this, holder))
+			this.#grants.set(holder, granting)
+			void granting
+				.finally(() => {
+					if (this.#grants.get(holder) === granting) this.#grants.delete(holder)
+				})
+				.catch(() => undefined)
+		}
+		const token = await this.#race(granting, signal)
 		if (token === undefined) throw this.#ended()
 		return token
 	}
 
-	#hold(token: PoolToken<BrowserSlot>): PoolToken<BrowserSlot> {
-		this.#granting = undefined
-		if (this.#closing !== undefined) throw this.#ended()
-		// Production process and transport events enter host callbacks; the commit-to-hold promise
-		// microtasks drain before the next host callback. Synthetic version continuations can enter
-		// that gap after the pool committed, so refuse any loss the watch already recorded.
+	async #hold(
+		holder: BrowserServerHolder,
+		token: PoolToken<BrowserSlot>,
+	): Promise<PoolToken<BrowserSlot>> {
+		if (
+			this.#closing !== undefined ||
+			this.#holders.get(holder.id) !== holder ||
+			holder.abort.signal.aborted
+		) {
+			await token.destroy()
+			throw this.#ended()
+		}
+		// A pool commit can settle after the watch recorded a loss.
 		if (this.#losses.has(token.value)) {
-			void token.destroy().catch(() => undefined)
+			await token.destroy().catch(() => undefined)
 			throw this.#unavailable(this.#losses.get(token.value)?.cause)
 		}
-		this.#lease = token
-		const tools = token.value.toolset.tools
-		for (const tool of tools.tools()) this.#mirror(tool)
-		tools.emitter.on('add', this.#added)
-		tools.emitter.on('remove', this.#removed)
-		tools.emitter.on('clear', this.#cleared)
+		this.#leases.set(holder, token)
+		if (holder === this.#shared) {
+			const tools = token.value.toolset.tools
+			const mirrored: BrowserServerMirror = {
+				token,
+				added: this.#mirror.bind(this, token),
+				removed: this.#withdraw.bind(this, token),
+				cleared: this.#clear.bind(this, token),
+			}
+			this.#mirrored = mirrored
+			for (const tool of tools.tools()) this.#mirror(token, tool)
+			tools.emitter.on('add', mirrored.added)
+			tools.emitter.on('remove', mirrored.removed)
+			tools.emitter.on('clear', mirrored.cleared)
+		}
 		return token
 	}
 
-	#refuse(error: unknown): never {
-		this.#granting = undefined
-		throw error
-	}
-
-	async #serve(signal: AbortSignal): Promise<BrowserSlot> {
-		if (this.#closing !== undefined) throw this.#ended()
+	async #serve(holder: BrowserServerHolder, signal: AbortSignal): Promise<BrowserSlot> {
+		if (this.#closing !== undefined || holder.abort.signal.aborted) throw this.#ended()
 		await this.#race(this.#starting, signal)
-		if (this.#closing !== undefined) throw this.#ended()
-		const held = this.#lease
+		if (this.#closing !== undefined || holder.abort.signal.aborted) throw this.#ended()
+		const held = this.#leases.get(holder)
 		if (held !== undefined) {
 			try {
 				await this.#race(this.#ping(held.value), signal)
-				if (this.#lease === held) return held.value
+				if (this.#leases.get(holder) === held) return held.value
 			} catch {
 				signal.throwIfAborted()
-				if (this.#abort.signal.aborted) throw this.#ended()
+				if (holder.abort.signal.aborted) throw this.#ended()
 			}
 		}
 		try {
-			const token = await this.#grant(signal)
-			if (this.#lease !== token) throw this.#unavailable(this.#losses.get(token.value)?.cause)
+			const token = await this.#grant(holder, signal)
+			if (this.#leases.get(holder) !== token)
+				throw this.#unavailable(this.#losses.get(token.value)?.cause)
 			return token.value
 		} catch (error) {
 			signal.throwIfAborted()
-			if (this.#abort.signal.aborted || (isPoolError(error) && error.code === 'destroyed'))
+			if (holder.abort.signal.aborted || (isPoolError(error) && error.code === 'destroyed'))
 				throw this.#ended()
 			if (isPoolError(error) && (error.code === 'create' || error.code === 'cleanup')) {
 				this.#exhaust(error)
@@ -465,12 +650,19 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		if (this.#closing !== undefined || this.#losses.has(slot)) return
 		this.#losses.set(slot, { cause, url: slot.toolset.view.url })
 		this.#failure = cause
-		if (this.#lease?.value !== slot) return
-		const token = this.#lease
-		this.#unmirror()
-		this.#lease = undefined
-		this.#notice.add(slot)
-		void token.destroy().catch(() => undefined)
+		for (const [holder, token] of this.#leases) {
+			if (token.value !== slot || this.#holders.get(holder.id) !== holder) continue
+			if (holder === this.#shared) this.#unmirror()
+			this.#leases.delete(holder)
+			const notices = this.#notices.get(holder) ?? new Set<BrowserSlot>()
+			notices.add(slot)
+			this.#notices.set(holder, notices)
+			const drain = token.destroy()
+			const drains = this.#drains.get(holder) ?? new Set<Promise<void>>()
+			drains.add(drain)
+			this.#drains.set(holder, drains)
+			void drain.finally(() => drains.delete(drain)).catch(() => undefined)
+		}
 	}
 
 	#watch(slot: BrowserSlot, signal: AbortSignal): Promise<unknown> {
@@ -707,34 +899,39 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	// Adds a dispatcher for a tool the toolset's manager added under a name outside the vocabulary.
-	#mirror(tool: ToolInterface): void {
-		if (this.#vocabulary.has(tool.name)) return
+	#mirror(token: PoolToken<BrowserSlot>, tool: ToolInterface): void {
+		if (this.#leases.get(this.#shared) !== token || this.#vocabulary.has(tool.name)) return
 		this.#tools.add(
-			createTool({ ...toolToDefinition(tool), execute: this.#forward.bind(this, tool.name) }),
+			createTool({
+				...toolToDefinition(tool),
+				execute: this.#forward.bind(this, this.#shared, tool.name),
+			}),
 		)
 	}
 
 	// Removes the dispatcher of a withdrawn tool; a replacement publishes `remove` while it is
 	// installed, so the mirror follows the manager's current tool rather than the event.
-	#withdraw(tool: ToolInterface): void {
-		if (this.#vocabulary.has(tool.name)) return
-		const current = this.#lease?.value.toolset.tools.tool(tool.name)
+	#withdraw(token: PoolToken<BrowserSlot>, tool: ToolInterface): void {
+		if (this.#leases.get(this.#shared) !== token || this.#vocabulary.has(tool.name)) return
+		const current = token.value.toolset.tools.tool(tool.name)
 		if (current === undefined) this.#tools.remove(tool.name)
-		else this.#mirror(current)
+		else this.#mirror(token, current)
 	}
 
-	#clear(tools: readonly ToolInterface[]): void {
-		for (const tool of tools) this.#withdraw(tool)
+	#clear(token: PoolToken<BrowserSlot>, tools: readonly ToolInterface[]): void {
+		for (const tool of tools) this.#withdraw(token, tool)
 	}
 
 	#unmirror(): void {
-		const mirrored = this.#lease?.value.toolset.tools
+		const mirrored = this.#mirrored
 		if (mirrored === undefined) return
-		for (const tool of mirrored.tools())
+		this.#mirrored = undefined
+		const tools = mirrored.token.value.toolset.tools
+		for (const tool of tools.tools())
 			if (!this.#vocabulary.has(tool.name)) this.#tools.remove(tool.name)
-		mirrored.emitter.off('add', this.#added)
-		mirrored.emitter.off('remove', this.#removed)
-		mirrored.emitter.off('clear', this.#cleared)
+		tools.emitter.off('add', mirrored.added)
+		tools.emitter.off('remove', mirrored.removed)
+		tools.emitter.off('clear', mirrored.cleared)
 	}
 
 	#ended(): BrowserError {

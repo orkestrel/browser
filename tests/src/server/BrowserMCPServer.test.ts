@@ -6,7 +6,7 @@ import { mkdir, rm } from 'node:fs/promises'
 import { Writable } from 'node:stream'
 import { basename, dirname, join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isRecord, isString, parseJSON } from '@orkestrel/contract'
 import {
 	bindClient,
 	createDuplexClientTransport,
@@ -18,6 +18,7 @@ import {
 	createTeardown,
 	createRecorder,
 	requireValue,
+	retryUntil,
 	waitForCondition,
 	waitForDelay,
 	waitForEvent,
@@ -32,7 +33,13 @@ import {
 	createBrowserToolset,
 	BrowserError,
 } from '@src/core'
-import { createBrowserMCPServer, formatBrowserLockEntry, BROWSER_SERVER_RECORD } from '@src/server'
+import {
+	createBrowser,
+	createBrowserMCPServer,
+	formatBrowserLockEntry,
+	BROWSER_SERVER_RECORD,
+	BROWSER_SERVER_COPY,
+} from '@src/server'
 import {
 	BROWSE_VOCABULARY,
 	BrowserLauncher,
@@ -48,6 +55,570 @@ import {
 } from '../../setupServer.js'
 
 const PROFILE_PATTERN = /^[1-9]\d*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+
+describe('holders H2', () => {
+	it('allocates references across real browser contexts and refuses a copied reference', async () => {
+		const peers = await Promise.all([
+			createCDPTestServer(),
+			createCDPTestServer(),
+			createCDPTestServer(),
+		])
+		const browsers = peers.map((peer) => createBrowser({ cdp: { endpoint: peer.endpoint } }))
+		let launched = 0
+		for (const peer of peers) {
+			for (const method of [
+				'Browser.getVersion',
+				'Page.enable',
+				'Runtime.enable',
+				'WebMCP.enable',
+				'WebMCP.disable',
+				'Target.detachFromTarget',
+				'Target.disposeBrowserContext',
+				'Target.setDiscoverTargets',
+				'Accessibility.enable',
+				'DOM.enable',
+			])
+				peer.script(method, {})
+			peer.script('Target.createBrowserContext', { browserContextId: 'isolated' })
+			peer.script('Target.createTarget', { targetId: 'page' })
+			peer.script('Target.attachToTarget', { sessionId: 'session' })
+			peer.script('Page.createIsolatedWorld', { executionContextId: 1 })
+			peer.script('Runtime.evaluate', (params: Readonly<Record<string, unknown>>) => ({
+				result: { value: params['expression'] === 'document.readyState' ? 'complete' : true },
+			}))
+			peer.script('Accessibility.getFullAXTree', {
+				nodes: [
+					{
+						nodeId: 'button',
+						backendDOMNodeId: 3,
+						role: { value: 'button' },
+						name: { value: 'Checkout' },
+						properties: [],
+					},
+				],
+			})
+		}
+		const fixture = createBrowseFixture({
+			pool: { size: 3 },
+			launch: () => requireValue(browsers[launched++]),
+		})
+		try {
+			await fixture.server.start()
+			const first = parseJSON(
+				(await fixture.pair.call(2, 'acquire', { purpose: 'first page' })).text,
+			)
+			const second = parseJSON(
+				(await fixture.pair.call(3, 'acquire', { purpose: 'second page' })).text,
+			)
+			if (!isRecord(first) || !isRecord(second)) throw new Error('Missing holders')
+			const page = requireValue(browsers[1]?.contexts().at(-1)?.pages()[0])
+			const other = requireValue(browsers[2]?.contexts().at(-1)?.pages()[0])
+			const elements = await page.elements.find({ role: 'button' })
+			const others = await other.elements.find({ role: 'button' })
+			const ref = requireValue(elements[0]).reference
+			expect(ref).not.toBe(requireValue(others[0]).reference)
+			const refused = await fixture.pair.call(4, 'execute', {
+				holder: second['holder'],
+				name: 'click',
+				arguments: { ref },
+			})
+			expect(refused.error).toBe(true)
+			expect(refused.text).toContain(`Element ${ref} is not in the current view`)
+			expect(
+				peers[2]?.received.some((message) => message.method === 'Input.dispatchMouseEvent'),
+			).toBe(false)
+		} finally {
+			await fixture.teardown.destroy()
+			await Promise.all(peers.map((peer) => peer.close()))
+		}
+	})
+
+	it('runs two holders concurrently on separate pages', async () => {
+		const held = createRecorder<[CDPSentMessage]>()
+		const fixture = createBrowseFixture(
+			{ pool: { size: 3 } },
+			{
+				evaluation: (message, transport) => {
+					if (message.params?.['awaitPromise'] === true) held.handler(message)
+					else transport.reply(message.id, { result: { value: true } })
+				},
+			},
+		)
+		try {
+			await fixture.server.start()
+			const first = parseJSON((await fixture.pair.call(2, 'acquire', { purpose: 'checkout' })).text)
+			const second = parseJSON(
+				(await fixture.pair.call(3, 'acquire', { purpose: 'inventory' })).text,
+			)
+			if (!isRecord(first) || !isRecord(second)) throw new Error('Missing holder catalogs')
+			expect(first['holder']).not.toBe(second['holder'])
+			expect(first['tools']).toEqual(
+				expect.arrayContaining([expect.objectContaining({ name: 'look' })]),
+			)
+			fixture.pair.send(
+				{
+					jsonrpc: '2.0',
+					id: 4,
+					method: 'tools/call',
+					params: {
+						name: 'execute',
+						arguments: { holder: first['holder'], name: 'wait', arguments: { text: 'first work' } },
+					},
+				},
+				{
+					jsonrpc: '2.0',
+					id: 5,
+					method: 'tools/call',
+					params: {
+						name: 'execute',
+						arguments: {
+							holder: second['holder'],
+							name: 'wait',
+							arguments: { text: 'second work' },
+						},
+					},
+				},
+			)
+			await waitForCondition('both holder pages executing', () => held.count === 2)
+			expect(fixture.pair.answered).not.toContain(4)
+			expect(fixture.pair.answered).not.toContain(5)
+			expect((await fixture.pair.call(6, 'tabs', { search: 'shared tabs' })).error).toBe(false)
+			for (const browser of fixture.launcher.browsers.slice(1)) {
+				const transport = requireValue(browser.fixture?.transport)
+				const message = requireValue(
+					transport.sent.find((entry) => entry.params?.['awaitPromise'] === true),
+				)
+				transport.reply(message.id, { result: { value: true } })
+			}
+			expect((await fixture.pair.answer(4))['isError']).not.toBe(true)
+			expect((await fixture.pair.answer(5))['isError']).not.toBe(true)
+			expect(fixture.launcher.browsers).toHaveLength(3)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('refuses capacity synchronously with holder ids and purposes and launches nothing', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		fixture.launcher.hold(1)
+		try {
+			await fixture.server.start()
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'acquire', arguments: { purpose: 'held checkout' } },
+			})
+			const busy = await fixture.pair.call(3, 'acquire', { purpose: 'overflow' })
+			expect(busy.error).toBe(true)
+			expect(busy.text).toMatch(/^BROWSER_SERVER_BUSY:/)
+			expect(busy.text).toContain('shared (Shared browser)')
+			expect(busy.text).toMatch(/[0-9a-f-]{36} \(held checkout\)/)
+			expect(busy.text).toContain('destroy')
+			expect(busy.text).toContain('named tools to share the shared browser')
+			expect(fixture.pair.answered).not.toContain(2)
+			expect(fixture.launcher.browsers).toHaveLength(2)
+			fixture.launcher.release()
+			expect((await fixture.pair.answer(2))['isError']).not.toBe(true)
+		} finally {
+			fixture.launcher.release()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('counts a destroying holder and resolves its in-flight call as unresolved', async () => {
+		const held = createRecorder<[CDPSentMessage]>()
+		const fixture = createBrowseFixture(
+			{ pool: { size: 2 } },
+			{
+				registry: (message, transport) => transport.reply(message.id, {}),
+				evaluation: (message, transport) => {
+					if (message.params?.['awaitPromise'] === true) held.handler(message)
+					else transport.reply(message.id, { result: { value: true } })
+				},
+			},
+		)
+		try {
+			await fixture.server.start()
+			const acquired = parseJSON(
+				(await fixture.pair.call(2, 'acquire', { purpose: 'closing checkout' })).text,
+			)
+			if (!isRecord(acquired)) throw new Error('Missing holder')
+			const holder = acquired['holder']
+			const transport = requireValue(fixture.launcher.browsers[1]?.fixture?.transport)
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 3,
+				method: 'tools/call',
+				params: {
+					name: 'execute',
+					arguments: { holder, name: 'wait', arguments: { text: 'pending work' } },
+				},
+			})
+			await waitForCondition('holder work entered', () => held.count === 1)
+			const disposal = new BrowserPromiseObserver(
+				/at BrowserMCPServer\.#destroySlot/,
+				undefined,
+				() =>
+					fixture.pair.send({
+						jsonrpc: '2.0',
+						id: 5,
+						method: 'tools/call',
+						params: { name: 'acquire', arguments: { purpose: 'replacement' } },
+					}),
+			)
+			try {
+				fixture.pair.send({
+					jsonrpc: '2.0',
+					id: 4,
+					method: 'tools/call',
+					params: { name: 'destroy', arguments: { holder } },
+				})
+				const busy = JSON.stringify(await fixture.pair.answer(5))
+				expect(busy).toContain(`${String(holder)} (closing checkout)`)
+				expect(busy).toContain('BROWSER_SERVER_BUSY')
+			} finally {
+				disposal.destroy()
+			}
+			expect(JSON.stringify(await fixture.pair.answer(3))).toContain('BROWSER_SERVER_UNRESOLVED')
+			expect(transport.sent.some((message) => message.params?.['awaitPromise'] === true)).toBe(true)
+			expect((await fixture.pair.answer(4))['isError']).not.toBe(true)
+			expect((await fixture.pair.call(6, 'destroy', { holder })).error).toBe(false)
+			expect((await fixture.pair.call(7, 'acquire', { purpose: 'replacement' })).error).toBe(false)
+		} finally {
+			for (const browser of fixture.launcher.browsers) browser.fixture?.transport.closeRemote()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('refuses unknown and ended handles without shared fallback and repeats destroy successfully', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		try {
+			await fixture.server.start()
+			const acquired = parseJSON(
+				(await fixture.pair.call(2, 'acquire', { purpose: 'temporary' })).text,
+			)
+			if (!isRecord(acquired)) throw new Error('Missing holder')
+			const holder = acquired['holder']
+			expect((await fixture.pair.call(3, 'destroy', { holder })).error).toBe(false)
+			let id = 4
+			for (const value of ['absent', holder, 'shared']) {
+				for (const name of ['execute', 'tools']) {
+					const result = await fixture.pair.call(id++, name, {
+						holder: value,
+						name: 'look',
+						arguments: { search: 'cart' },
+					})
+					expect(result.error).toBe(true)
+					expect(result.text).toContain('BROWSER_SERVER_HOLDER')
+				}
+			}
+			expect((await fixture.pair.call(id++, 'destroy', { holder: 'absent' })).error).toBe(true)
+			expect((await fixture.pair.call(id++, 'destroy', {})).error).toBe(true)
+			expect((await fixture.pair.call(id++, 'destroy', { holder })).error).toBe(false)
+			expect(
+				fixture.launcher.browsers[0]?.fixture?.transport.sent.some(
+					(message) => message.method === 'Accessibility.getFullAXTree',
+				),
+			).toBe(false)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('cancels acquisition after pool commit and destroys the undeliverable grant', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		await fixture.server.start()
+		const committed = new BrowserPromiseObserver(/at Pool\.acquire/, () =>
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				method: 'notifications/cancelled',
+				params: { requestId: 2 },
+			}),
+		)
+		try {
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'acquire', arguments: { purpose: 'cancelled' } },
+			})
+			await waitForCondition(
+				'undeliverable grant destroyed',
+				() => fixture.launcher.browsers[1]?.destroyed === true,
+			)
+			expect(committed.resolved).toContain('Pool.#commit')
+			expect(fixture.pair.answered).not.toContain(2)
+			let id = 3
+			const acquired = await retryUntil(
+				'cancelled holder disposal settled',
+				() => fixture.pair.call(id++, 'acquire', { purpose: 'replacement' }),
+				(result) => !result.text.includes('BROWSER_SERVER_BUSY'),
+			)
+			expect(acquired.error).toBe(false)
+			expect(fixture.launcher.browsers).toHaveLength(3)
+		} finally {
+			committed.destroy()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('removes a cancelled acquisition while its browser is still warming', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		fixture.launcher.hold(1)
+		try {
+			await fixture.server.start()
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'acquire', arguments: { purpose: 'cancelled' } },
+			})
+			expect((await fixture.pair.call(3, 'acquire', { purpose: 'capacity check' })).text).toContain(
+				'BROWSER_SERVER_BUSY',
+			)
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				method: 'notifications/cancelled',
+				params: { requestId: 2 },
+			})
+			await fixture.pair.request(4, 'ping')
+			fixture.launcher.release()
+			expect((await fixture.pair.call(5, 'acquire', { purpose: 'replacement' })).error).toBe(false)
+			expect(fixture.pair.answered).not.toContain(2)
+		} finally {
+			fixture.launcher.release()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('keeps loss notices local and waits for an owed refill at full capacity', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 3 } })
+		try {
+			await fixture.server.start()
+			const first = parseJSON((await fixture.pair.call(2, 'acquire', { purpose: 'checkout' })).text)
+			const second = parseJSON(
+				(await fixture.pair.call(3, 'acquire', { purpose: 'inventory' })).text,
+			)
+			if (!isRecord(first) || !isRecord(second)) throw new Error('Missing holders')
+			fixture.launcher.hold()
+			requireValue(fixture.launcher.browsers[1]).kill()
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 4,
+				method: 'tools/call',
+				params: {
+					name: 'execute',
+					arguments: { holder: first['holder'], name: 'look', arguments: { search: 'cart' } },
+				},
+			})
+			await waitForCondition('owed refill launched', () => fixture.launcher.browsers.length === 4)
+			const healthy = await fixture.pair.call(5, 'execute', {
+				holder: second['holder'],
+				name: 'look',
+				arguments: { search: 'cart' },
+			})
+			expect(healthy.error).toBe(false)
+			expect(healthy.text).not.toContain('BROWSER_SERVER_CRASH')
+			expect((await fixture.pair.call(6, 'look', { search: 'cart' })).text).not.toContain(
+				'BROWSER_SERVER_CRASH',
+			)
+			expect(fixture.pair.answered).not.toContain(4)
+			fixture.launcher.release()
+			expect(JSON.stringify(await fixture.pair.answer(4))).toContain('BROWSER_SERVER_CRASH')
+			expect(
+				(
+					await fixture.pair.call(7, 'execute', {
+						holder: first['holder'],
+						name: 'look',
+						arguments: { search: 'cart' },
+					})
+				).text,
+			).not.toContain('BROWSER_SERVER_CRASH')
+		} finally {
+			fixture.launcher.release()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('scopes adopted tools and preserves a page tool parameter named holder', async () => {
+		const fixture = createBrowseFixture(
+			{ pool: { size: 2 } },
+			{ registry: (message, transport) => transport.reply(message.id, {}) },
+		)
+		try {
+			await fixture.server.start()
+			const acquired = parseJSON(
+				(await fixture.pair.call(2, 'acquire', { purpose: 'catalog work' })).text,
+			)
+			if (!isRecord(acquired)) throw new Error('Missing holder')
+			const holder = acquired['holder']
+			const transport = requireValue(fixture.launcher.browsers[1]?.fixture?.transport)
+			transport.onSend('WebMCP.invokeTool', (message) => {
+				transport.reply(message.id, { invocationId: 'catalog-result' })
+				transport.event(
+					'WebMCP.toolResponded',
+					{ invocationId: 'catalog-result', status: 'Completed', output: 'page result' },
+					'session-main',
+				)
+			})
+			transport.event(
+				'WebMCP.toolsAdded',
+				{ tools: [{ name: 'search', description: 'Search this holder', frameId: 'main' }] },
+				'session-main',
+			)
+			await waitForCondition(
+				'page tool adopted',
+				() =>
+					requireValue(fixture.launcher.browsers[1]?.context()?.pages()[0]).registry.tool(
+						'search',
+					) !== undefined,
+			)
+			const catalog = await fixture.pair.call(3, 'tools', { holder })
+			expect(catalog.text).toContain('Search this holder')
+			expect(JSON.stringify(await fixture.pair.request(4, 'tools/list'))).not.toContain(
+				'Search this holder',
+			)
+			expect(
+				(
+					await fixture.pair.call(5, 'execute', {
+						holder,
+						name: 'search',
+						arguments: { holder: 'page-owned-value' },
+					})
+				).error,
+			).toBe(false)
+			expect(
+				transport.sent.find((message) => message.method === 'WebMCP.invokeTool')?.params,
+			).toMatchObject({ input: { holder: 'page-owned-value' } })
+		} finally {
+			for (const browser of fixture.launcher.browsers) {
+				const transport = browser.fixture?.transport
+				if (transport !== undefined) replyOk(transport, 'WebMCP.disable')
+			}
+			await fixture.teardown.destroy()
+		}
+	})
+})
+
+describe('holders H2 continuations', () => {
+	it('keeps the successor attached after an old token completes late', async () => {
+		const version = Promise.withResolvers<void>()
+		const entered = createRecorder<[]>()
+		const fixture = createBrowseFixture(
+			{ pool: { size: 3 } },
+			{
+				version: (call) => {
+					if (call !== 2) return
+					entered.handler()
+					return version.promise
+				},
+			},
+		)
+		try {
+			await fixture.server.start()
+			const acquired = parseJSON(
+				(await fixture.pair.call(2, 'acquire', { purpose: 'recovering page' })).text,
+			)
+			if (!isRecord(acquired)) throw new Error('Missing holder')
+			const holder = acquired['holder']
+			const browser = requireValue(fixture.launcher.browsers[1])
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 3,
+				method: 'tools/call',
+				params: {
+					name: 'execute',
+					arguments: { holder, name: 'look', arguments: { search: 'old call' } },
+				},
+			})
+			await waitForCondition('old token ping entered', () => entered.count === 1)
+			expect(fixture.pair.answered).not.toContain(3)
+			browser.kill()
+			const replacement = await fixture.pair.call(4, 'execute', {
+				holder,
+				name: 'look',
+				arguments: { search: 'successor' },
+			})
+			expect(replacement.error).toBe(false)
+			const successor = requireValue(fixture.launcher.browsers[2])
+			expect(
+				successor.fixture?.transport.sent.some(
+					(message) => message.method === 'Accessibility.getFullAXTree',
+				),
+			).toBe(true)
+			version.resolve()
+			await version.promise
+			expect((await fixture.pair.answer(3))['isError']).not.toBe(true)
+			expect(
+				(
+					await fixture.pair.call(5, 'execute', {
+						holder,
+						name: 'look',
+						arguments: { search: 'still attached' },
+					})
+				).error,
+			).toBe(false)
+			expect(successor.destroyed).toBe(false)
+			expect((await fixture.pair.call(6, 'look', { search: 'shared' })).text).not.toContain(
+				'BROWSER_SERVER_CRASH',
+			)
+		} finally {
+			version.resolve()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('reserves the server names against shared page tools and obeys tool copy limits', async () => {
+		const fixture = createBrowseFixture(undefined, {
+			registry: (message, transport) => transport.reply(message.id, {}),
+		})
+		try {
+			await fixture.server.start()
+			const transport = requireValue(fixture.launcher.browsers[0]?.fixture?.transport)
+			transport.event(
+				'WebMCP.toolsAdded',
+				{
+					tools: Object.keys(BROWSER_SERVER_COPY).map((name) => ({
+						name,
+						description: 'Page replacement',
+						frameId: 'main',
+					})),
+				},
+				'session-main',
+			)
+			await waitForCondition(
+				'reserved page tools arrived',
+				() =>
+					requireValue(fixture.launcher.browsers[0]?.context()?.pages()[0]).registry.tool(
+						'acquire',
+					) !== undefined,
+			)
+			const listed = await fixture.pair.request(2, 'tools/list')
+			expect(JSON.stringify(listed)).not.toContain('Page replacement')
+			for (const copy of Object.values(BROWSER_SERVER_COPY)) {
+				expect(copy.description?.split(/\s+/).length).toBeLessThanOrEqual(25)
+				const parameters = requireValue(copy.parameters)
+				expect(parameters['required']).toEqual(expect.arrayContaining([expect.any(String)]))
+				const properties = parameters['properties']
+				if (!isRecord(properties)) throw new Error('Missing parameter properties')
+				for (const property of Object.values(properties)) {
+					if (!isRecord(property) || !isString(property['description']))
+						throw new Error('Missing description')
+					expect(property['description'].length).toBeLessThanOrEqual(100)
+				}
+			}
+			expect(BROWSER_SERVER_COPY.execute.annotations?.pure).toBe(false)
+			expect(
+				(await fixture.pair.call(3, 'acquire', { purpose: 'default capacity' })).text,
+			).toContain('BROWSER_SERVER_BUSY')
+		} finally {
+			const transport = fixture.launcher.browsers[0]?.fixture?.transport
+			if (transport !== undefined) replyOk(transport, 'WebMCP.disable')
+			await fixture.teardown.destroy()
+		}
+	})
+})
 
 describe('eager U7', () => {
 	for (const loss of ['drop', 'kill'] as const) {
@@ -1313,9 +1884,10 @@ describe('BrowserMCPServer', () => {
 				tools.map((tool: unknown) => (isRecord(tool) ? tool['name'] : undefined)),
 			).toStrictEqual(BROWSE_VOCABULARY)
 			for (const tool of tools) {
-				const copy = Object.values(BROWSER_TOOL_COPY).find(
-					(row) => isRecord(tool) && row.name === tool['name'],
-				)
+				const copy = [
+					...Object.values(BROWSER_TOOL_COPY),
+					...Object.values(BROWSER_SERVER_COPY),
+				].find((row) => isRecord(tool) && row.name === tool['name'])
 				if (copy === undefined || !isRecord(tool))
 					throw new Error(`tools/list answered an unknown tool: ${JSON.stringify(tool)}`)
 				expect(tool['description']).toBe(copy.description)
