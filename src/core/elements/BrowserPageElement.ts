@@ -10,7 +10,13 @@ import type {
 	BrowserScreenshotResult,
 } from '../types.js'
 import { BrowserReading } from '../BrowserReading.js'
-import { BrowserElementError, isBrowserElementError, isCDPError } from '../errors.js'
+import {
+	BrowserElementError,
+	isBrowserElementError,
+	isCDPConnectionError,
+	isCDPError,
+	isCDPTimeoutError,
+} from '../errors.js'
 import { BROWSER_ELEMENT_REFUSALS, BROWSER_RESULT_LIMIT } from '../constants.js'
 import {
 	compileActionabilityFunction,
@@ -271,9 +277,17 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				throw new BrowserElementError(this.reference, 'GONE')
 			this.#assert(options)
 			return { object: result['object']['objectId'], context }
-		} catch {
+		} catch (error) {
 			options?.signal?.throwIfAborted()
-			throw new BrowserElementError(this.reference, 'GONE')
+			if (isCDPTimeoutError(error) || isCDPConnectionError(error)) throw error
+			if (
+				isCDPError(error) &&
+				/Could not find node|No node with given id|No node found for given backend id/i.test(
+					error.message,
+				)
+			)
+				throw new BrowserElementError(this.reference, 'GONE')
+			throw error
 		}
 	}
 
@@ -312,7 +326,8 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 
 	#failure(options: BrowserCallOptions | undefined, error: unknown): never {
 		options?.signal?.throwIfAborted()
-		if (isBrowserElementError(error)) throw error
+		if (isBrowserElementError(error) || isCDPTimeoutError(error) || isCDPConnectionError(error))
+			throw error
 		// An in-page refusal carries the page's stack after its first line; only that line reaches
 		// the refusal.
 		const message = (isError(error) ? error.message : String(error)).split('\n', 1)[0] ?? ''

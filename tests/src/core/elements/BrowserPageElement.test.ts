@@ -59,7 +59,7 @@ describe('real Chromium pointer settling', () => {
 		)
 		await expect(element.click({ timeout: 100 })).rejects.toMatchObject({
 			code: 'BROWSER_CDP_TIMEOUT_ERROR',
-			context: { method: 'Runtime.callFunctionOn', timeout: 100 },
+			context: { timeout: 100 },
 		})
 		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBeUndefined()
 	})
@@ -83,6 +83,93 @@ describe('real Chromium pointer settling', () => {
 })
 
 describe('trusted element actions', () => {
+	it('preserves a deadline that expires during node resolution', async () => {
+		const { page, client, transport } = await createBrowserElementFixture({
+			resolve: () => undefined,
+		})
+		try {
+			await page.elements.outline()
+			await expect(
+				requireValue(page.elements.element('e1')).focus({ timeout: 1 }),
+			).rejects.toMatchObject({
+				code: 'BROWSER_CDP_TIMEOUT_ERROR',
+				context: { method: 'DOM.resolveNode', timeout: 1 },
+			})
+			expect(transport.sent.some((message) => message.method === 'DOM.focus')).toBe(false)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('preserves a connection failure during node resolution', async () => {
+		const fixture = await createBrowserElementFixture({
+			resolve: () => fixture.transport.errorRemote(new Error('Transport context not found')),
+		})
+		try {
+			await fixture.page.elements.outline()
+			await expect(requireValue(fixture.page.elements.element('e1')).focus()).rejects.toMatchObject(
+				{
+					code: 'BROWSER_CDP_CONNECTION_ERROR',
+					context: { method: 'DOM.resolveNode' },
+					message: 'CDP connection failed: Error: Transport context not found',
+				},
+			)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('preserves the abort reason during node resolution', async () => {
+		const controller = new AbortController()
+		const reason = new Error('Abort context not found')
+		const { page, client } = await createBrowserElementFixture({
+			resolve: () => controller.abort(reason),
+		})
+		try {
+			await page.elements.outline()
+			await expect(
+				requireValue(page.elements.element('e1')).focus({ signal: controller.signal }),
+			).rejects.toBe(reason)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('preserves an unrelated protocol refusal during node resolution', async () => {
+		const fixture = await createBrowserElementFixture({
+			resolve: (message) => fixture.transport.fail(message.id, 'Internal error', -32603),
+		})
+		try {
+			await fixture.page.elements.outline()
+			await expect(requireValue(fixture.page.elements.element('e1')).focus()).rejects.toMatchObject(
+				{
+					code: 'BROWSER_CDP_ERROR',
+					context: { method: 'DOM.resolveNode', message: 'Internal error', code: -32603 },
+				},
+			)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('preserves a connection failure containing context during an element function call', async () => {
+		const fixture = await createBrowserElementFixture({
+			select: () => fixture.transport.errorRemote(new Error('Transport context not found')),
+		})
+		try {
+			await fixture.page.elements.outline()
+			await expect(
+				requireValue(fixture.page.elements.element('e1')).select(['Business']),
+			).rejects.toMatchObject({
+				code: 'BROWSER_CDP_CONNECTION_ERROR',
+				context: { method: 'Runtime.callFunctionOn' },
+				message: 'CDP connection failed: Error: Transport context not found',
+			})
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
 	it.each([
 		['DOM.scrollIntoViewIfNeeded', 'Node does not have a layout object', 'HIDDEN'],
 		['DOM.getContentQuads', 'Could not find node with given id', 'GONE'],
