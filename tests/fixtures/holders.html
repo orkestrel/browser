@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<title>Holder fixture</title>
+	</head>
+	<body>
+		<p id="state"></p>
+		<button
+			onclick="
+				document.cookie = 'holder=first; path=/'
+				localStorage.setItem('holder', 'first')
+				document.querySelector('#state').textContent = 'Seeded'
+			"
+		>
+			Seed state
+		</button>
+		<a href="/tab" target="_blank">Open holder tab</a>
+		<a href="/download" download="holders-h3-fixture.txt">Download holder file</a>
+		<script>
+			document.querySelector('#state').textContent =
+				'Cookie: ' +
+				(document.cookie || 'empty') +
+				'; Storage: ' +
+				(localStorage.getItem('holder') || 'empty')
+		</script>
+	</body>
+</html>

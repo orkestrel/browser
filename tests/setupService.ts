@@ -20,15 +20,110 @@ import type {
 	SystemBrowser,
 	SystemBrowserOptions,
 } from '@src/server'
-import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
-import { createBrowser, findSystemBrowser } from '@src/server'
+import type { MCPClientInterface } from '@orkestrel/mcp'
+import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, createCDPClient } from '@src/core'
+import {
+	createBrowser,
+	createCDPTransport,
+	findSystemBrowser,
+	parseBrowserProfileRecord,
+} from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
+import { createMCPClient } from '@orkestrel/mcp'
+import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { waitForCondition } from '@orkestrel/test'
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BrowseChild, SOURCE_HOOK } from './setupServer.js'
 export { reservePort } from './setupServer.js'
+
+/** Starts the built browse server with a real browser and a bounded holder pool.
+ * @param root - Owned journey and profile directory
+ * @returns The connected protocol client and its supervised transport
+ */
+export async function openHolderServer(root: string) {
+	const transport = createStdioClientTransport({
+		command: process.execPath,
+		args: [resolve('dist/bin/main.js')],
+		env: {
+			BROWSE_ROOT: root,
+			BROWSE_EXECUTABLE: requireSystemBrowser().executable,
+			BROWSE_POOL: '3',
+			BROWSE_HEADLESS: 'true',
+			BROWSE_READONLY: 'false',
+			BROWSE_VIEWPORT: '',
+		},
+	})
+	const client = createMCPClient({ transport, identity: { name: 'holders-proof', version: '1' } })
+	try {
+		await client.connect()
+		return Object.freeze({ client, transport })
+	} catch (error) {
+		await client.disconnect()
+		throw error
+	}
+}
+
+/** Reads a built server's textual tool result, retaining protocol errors as rejections.
+ * @param client - Connected server client
+ * @param name - Tool name
+ * @param args - Tool arguments
+ * @returns The tool's text
+ */
+export async function callHolderServer(
+	client: MCPClientInterface,
+	name: string,
+	args: Readonly<Record<string, unknown>>,
+): Promise<string> {
+	const result = await client.call(name, args)
+	if (result.resultType !== 'complete' || !isString(result.value))
+		throw new Error(`Missing ${name} text: ${JSON.stringify(result)}`)
+	return result.value
+}
+
+/** Acquires a holder and validates the server's returned handle.
+ * @param client - Connected server client
+ * @param purpose - Work description
+ * @returns The holder identifier
+ */
+export async function acquireHolder(client: MCPClientInterface, purpose: string): Promise<string> {
+	const result = await client.call('acquire', { purpose })
+	if (
+		result.resultType !== 'complete' ||
+		!isRecord(result.value) ||
+		!isString(result.value['holder'])
+	)
+		throw new Error('Missing holder handle')
+	return result.value['holder']
+}
+
+/** Locates a real holder's process and profile by its observable page URL.
+ * @param root - Server's profile root
+ * @param url - URL reached through that holder's navigation
+ * @returns The owned profile and Chromium identity
+ */
+export async function findHolderProfile(root: string, url: string) {
+	for (const name of readdirSync(join(root, '.profiles'))) {
+		const profile = join(root, '.profiles', name)
+		const record = parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8'))
+		if (record === undefined) throw new Error('Missing browser record')
+		const client = createCDPClient({ transport: createCDPTransport({ url: record.endpoint }) })
+		try {
+			await client.connect()
+			const targets: unknown = await client.send('Target.getTargets')
+			if (
+				isRecord(targets) &&
+				isArray(targets['targetInfos']) &&
+				targets['targetInfos'].some((target: unknown) => isRecord(target) && target['url'] === url)
+			)
+				return Object.freeze({ profile, ...record })
+		} finally {
+			await client.close()
+		}
+	}
+	throw new Error(`No holder has reached ${url}`)
+}
 
 /** Names both atomic record paths whose obstruction must fail a warm. */
 export const BROWSE_RECORD_BLOCKS: readonly string[] = Object.freeze([
@@ -43,6 +138,10 @@ export const BROWSE_SIGSTOP_REASON =
 /** Explains why a Windows runtime cannot prove a child's cooperative SIGTERM ending. */
 export const BROWSE_SIGTERM_REASON =
 	'NOT-EVIDENCED: Node ends a Windows child outright on SIGTERM, so its cooperative handler cannot run'
+
+/** Explains why an unlinkable process working directory cannot inject a cleanup refusal. */
+export const BROWSE_DIRECTORY_REASON =
+	'NOT-EVIDENCED: removing a live process working directory succeeds on this filesystem'
 
 /** Records the process and endpoint a real browser announced when it connected. */
 export interface BrowseConnection {

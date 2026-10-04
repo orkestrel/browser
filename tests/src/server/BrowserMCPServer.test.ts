@@ -4,6 +4,7 @@ import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { mkdir, rm } from 'node:fs/promises'
 import { Writable } from 'node:stream'
+import { createServer } from 'node:http'
 import { basename, dirname, join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
 import { isRecord, isString, parseJSON } from '@orkestrel/contract'
@@ -23,9 +24,11 @@ import {
 	waitForDelay,
 	waitForEvent,
 } from '@orkestrel/test'
-import { createScratch, readErrorCode } from '@orkestrel/test/server'
-import { describe, expect, it } from 'vitest'
-import { replyOk } from '../../setup.js'
+import { createLoopback, createScratch, readErrorCode } from '@orkestrel/test/server'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { createBrowserJourneyFixture, replyOk } from '../../setup.js'
+import { BrowseLauncher, requireSystemBrowser } from '../../setupService.js'
+import { FileBrowserStore } from '../../../src/server/stores/FileBrowserStore.js'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
 	BROWSER_JOURNEY_READONLY_REFUSAL,
@@ -36,6 +39,8 @@ import {
 import {
 	createBrowser,
 	createBrowserMCPServer,
+	createFileBrowserJourneyStore,
+	createFileBrowserRunStore,
 	formatBrowserLockEntry,
 	BROWSER_SERVER_RECORD,
 	BROWSER_SERVER_COPY,
@@ -55,6 +60,226 @@ import {
 } from '../../setupServer.js'
 
 const PROFILE_PATTERN = /^[1-9]\d*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+
+describe('holders H3 journey admission', () => {
+	const launcher = new BrowseLauncher()
+	let fixture: ReturnType<typeof createBrowseFixture>
+	let first: string
+	let second: string
+	let id = 1
+	beforeAll(async () => {
+		fixture = createBrowseFixture({
+			executable: requireSystemBrowser().executable,
+			pool: { size: 3 },
+			launch: launcher.launch,
+		})
+		await fixture.server.start()
+		const a = parseJSON(
+			(await fixture.pair.call(id++, 'acquire', { purpose: 'first replay' })).text,
+		)
+		const b = parseJSON(
+			(await fixture.pair.call(id++, 'acquire', { purpose: 'second replay' })).text,
+		)
+		if (!isRecord(a) || !isString(a['holder']) || !isRecord(b) || !isString(b['holder']))
+			throw new Error('Missing holders')
+		first = a['holder']
+		second = b['holder']
+	}, 20000)
+	afterAll(() => fixture.teardown.destroy())
+
+	it('refuses forget across holders while concurrent replays persist distinct runs', async () => {
+		const starting = Promise.withResolvers<void>()
+		const entered = Promise.withResolvers<void>()
+		const firstRelease = Promise.withResolvers<void>()
+		const release = Promise.withResolvers<void>()
+		let requests = 0
+		const pages = await createLoopback(
+			createServer(async (_request, response) => {
+				requests += 1
+				if (requests === 1) starting.resolve()
+				if (requests === 2) entered.resolve()
+				await (requests === 1 ? firstRelease.promise : release.promise)
+				response.end('<!doctype html><title>Ready</title><body>Ready</body>')
+			}),
+		)
+		const store = createFileBrowserJourneyStore({ root: fixture.root })
+		await store.set(
+			createBrowserJourneyFixture([{ action: 'navigate', arguments: { url: pages.url } }]),
+		)
+		const a = fixture.pair.call(id++, 'execute', {
+			holder: first,
+			name: 'replay',
+			arguments: { journey: 'check-ready' },
+		})
+		await Promise.race([
+			starting.promise,
+			a.then((result) => {
+				throw new Error(JSON.stringify(result))
+			}),
+		])
+		const b = fixture.pair.call(id++, 'execute', {
+			holder: second,
+			name: 'replay',
+			arguments: { journey: 'check-ready' },
+		})
+		try {
+			await Promise.race([
+				entered.promise,
+				b.then((result) => {
+					throw new Error(JSON.stringify(result))
+				}),
+			])
+			const refused = await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })
+			expect(refused.error).toBe(true)
+			expect(refused.text).toContain('BROWSER_JOURNEY_LOCKED')
+			const directories = readdirSync(join(fixture.root, 'check-ready', 'runs'))
+			expect(directories).toHaveLength(2)
+			expect(new Set(directories).size).toBe(2)
+			firstRelease.resolve()
+			expect((await a).error).toBe(false)
+			expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).text).toContain(
+				'BROWSER_JOURNEY_LOCKED',
+			)
+			release.resolve()
+			for (const result of await Promise.all([a, b])) {
+				expect(result.error).toBe(false)
+				expect(result.text).toContain('Replayed check-ready: 1 of 1 steps.')
+			}
+			const runs = createFileBrowserRunStore({ root: fixture.root })
+			for (const directory of directories)
+				expect((await runs.get('check-ready', directory))?.outcome).toBe('complete')
+			expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).error).toBe(
+				false,
+			)
+		} finally {
+			release.resolve()
+			firstRelease.resolve()
+			await Promise.allSettled([a, b])
+			await pages.destroy()
+		}
+	})
+
+	it('releases admission after cancellation and after a holder loss', async () => {
+		for (const loss of [false, true]) {
+			const entered = Promise.withResolvers<void>()
+			const release = Promise.withResolvers<void>()
+			const pages = await createLoopback(
+				createServer(async (_request, response) => {
+					entered.resolve()
+					await release.promise
+					response.end('<!doctype html><body>Ready</body>')
+				}),
+			)
+			const store = createFileBrowserJourneyStore({ root: fixture.root })
+			await store.set(
+				createBrowserJourneyFixture([{ action: 'navigate', arguments: { url: pages.url } }]),
+			)
+			const request = id++
+			const settled = Promise.withResolvers<void>()
+			const observer = new BrowserPromiseObserver(/at BrowserMCPServer\.#forward/, settled.resolve)
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: request,
+				method: 'tools/call',
+				params: {
+					name: 'execute',
+					arguments: { holder: first, name: 'replay', arguments: { journey: 'check-ready' } },
+				},
+			})
+			try {
+				await entered.promise
+				if (loss) process.kill(requireValue(launcher.browsers[1]?.pid), 'SIGKILL')
+				else
+					fixture.pair.send({
+						jsonrpc: '2.0',
+						method: 'notifications/cancelled',
+						params: { requestId: request },
+					})
+				if (loss) await fixture.pair.answer(request)
+				// MCP suppresses a cancelled reply; observe the real dispatch promise's settlement.
+				await settled.promise
+				expect(observer.resolved).toBeDefined()
+				expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).error).toBe(
+					false,
+				)
+			} finally {
+				observer.destroy()
+				release.resolve()
+				await pages.destroy()
+			}
+		}
+	})
+
+	it('keeps the per-name store lock and revision check for recordings on different holders', async () => {
+		const pages = await createLoopback(
+			createServer((_request, response) => response.end('<!doctype html><body>Ready</body>')),
+		)
+		const entered = Promise.withResolvers<void>()
+		const release = Promise.withResolvers<void>()
+		let locked: Promise<void> | undefined
+		try {
+			for (const holder of [first, second]) {
+				expect(
+					(
+						await fixture.pair.call(id++, 'execute', {
+							holder,
+							name: 'record',
+							arguments: { journey: 'same-recording' },
+						})
+					).error,
+				).toBe(false)
+				expect(
+					(
+						await fixture.pair.call(id++, 'execute', {
+							holder,
+							name: 'navigate',
+							arguments: { url: pages.url },
+						})
+					).error,
+				).toBe(false)
+			}
+			const files = new FileBrowserStore({ root: fixture.root })
+			locked = files.lock(join(fixture.root, 'same-recording', 'journey.lock'), async () => {
+				entered.resolve()
+				await release.promise
+			})
+			await entered.promise
+			const refused = await fixture.pair.call(id++, 'execute', {
+				holder: first,
+				name: 'save',
+				arguments: { description: 'First recording' },
+			})
+			expect(refused.error).toBe(true)
+			expect(refused.text).toContain('is locked')
+			release.resolve()
+			await locked
+			expect(
+				(
+					await fixture.pair.call(id++, 'execute', {
+						holder: first,
+						name: 'save',
+						arguments: { description: 'First recording' },
+					})
+				).error,
+			).toBe(false)
+			const stale = await fixture.pair.call(id++, 'execute', {
+				holder: second,
+				name: 'save',
+				arguments: { description: 'Second recording' },
+			})
+			expect(stale.error).toBe(true)
+			expect(stale.text).toContain('A journey named "same-recording" is saved')
+			expect(
+				(await createFileBrowserJourneyStore({ root: fixture.root }).get('same-recording'))?.journey
+					.description,
+			).toBe('First recording')
+		} finally {
+			release.resolve()
+			await locked
+			await pages.destroy()
+		}
+	})
+})
 
 describe('holders H2', () => {
 	it('allocates references across real browser contexts and refuses a copied reference', async () => {

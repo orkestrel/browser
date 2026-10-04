@@ -7,7 +7,10 @@ import {
 	writeFileSync,
 	symlinkSync,
 	unlinkSync,
+	rmdirSync,
 } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { once } from 'node:events'
 import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
 import { join, dirname, basename } from 'node:path'
@@ -22,7 +25,7 @@ import {
 import { createScratch, createLoopback, readErrorCode } from '@orkestrel/test/server'
 import { isRecord, isString } from '@orkestrel/contract'
 import { createCDPClient, BROWSER_DEFAULT_TIMEOUT_MS, isBrowserConnectionError } from '@src/core'
-import { describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
 	createBrowserMCPServer,
 	createBrowser,
@@ -30,6 +33,7 @@ import {
 	parseBrowserProfileRecord,
 	formatBrowserLockEntry,
 	createCDPTransport,
+	createFileBrowserJourneyStore,
 	BROWSER_KILL_GRACE_MS,
 	BROWSER_PROCESS_EXIT_CAUSE,
 } from '@src/server'
@@ -40,7 +44,14 @@ import {
 	BROWSE_RECORD_BLOCKS,
 	BROWSE_SIGSTOP_REASON,
 	BROWSE_SIGTERM_REASON,
+	BROWSE_DIRECTORY_REASON,
+	openHolderServer,
+	callHolderServer,
+	acquireHolder,
+	findHolderProfile,
+	requireOutlineReference,
 } from '../setupService.js'
+import { createBrowserJourneyFixture } from '../setup.js'
 import {
 	BrowseLog,
 	MCPStdioPair,
@@ -54,6 +65,324 @@ import {
 	COOPERATIVE_SIGTERM,
 	endBrowseChild,
 } from '../setupServer.js'
+
+describe('holders H3 built browse', () => {
+	let scratch: ReturnType<typeof createScratch>
+	let server: Awaited<ReturnType<typeof openHolderServer>>
+	let pages: Awaited<ReturnType<typeof createLoopback>>
+	let first: string
+	let second: string
+	let gate: PromiseWithResolvers<void> | undefined
+	let entered: PromiseWithResolvers<void> | undefined
+	beforeAll(async () => {
+		scratch = createScratch()
+		pages = await createLoopback(
+			createServer(async (request, response) => {
+				if (request.url === '/held') {
+					entered?.resolve()
+					await gate?.promise
+				}
+				if (request.url === '/download') {
+					response.setHeader('Content-Disposition', 'attachment; filename="holders-h3-fixture.txt"')
+					response.end('Owned holder download')
+				} else {
+					response.setHeader('Content-Type', 'text/html')
+					response.end(readFileSync(new URL('../fixtures/holders.html', import.meta.url)))
+				}
+			}),
+		)
+		server = await openHolderServer(scratch.path)
+		first = await acquireHolder(server.client, 'first holder')
+		second = await acquireHolder(server.client, 'second holder')
+	})
+	afterAll(async () => {
+		gate?.resolve()
+		await server?.client.disconnect()
+		await pages?.destroy()
+		scratch.destroy()
+	})
+
+	it(
+		'completes another holder action while one fixture request remains held',
+		{ timeout: 5000 },
+		async () => {
+			gate = Promise.withResolvers<void>()
+			entered = Promise.withResolvers<void>()
+			let finished = false
+			const held = callHolderServer(server.client, 'execute', {
+				holder: first,
+				name: 'navigate',
+				arguments: { url: `${pages.url}/held` },
+			}).finally(() => {
+				finished = true
+			})
+			try {
+				await entered.promise
+				expect(
+					await callHolderServer(server.client, 'execute', {
+						holder: second,
+						name: 'navigate',
+						arguments: { url: `${pages.url}/second` },
+					}),
+				).toContain('Holder fixture')
+				expect(finished).toBe(false)
+			} finally {
+				gate.resolve()
+				await held
+			}
+		},
+	)
+
+	it('isolates cookies, localStorage, tabs, and references between holders', async () => {
+		const firstView = await callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'navigate',
+			arguments: { url: `${pages.url}/first` },
+		})
+		const seed = requireOutlineReference(firstView, 'button', 'Seed state')
+		await callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'click',
+			arguments: { ref: seed },
+		})
+		const secondView = await callHolderServer(server.client, 'execute', {
+			holder: second,
+			name: 'navigate',
+			arguments: { url: `${pages.url}/second` },
+		})
+		expect(secondView).toContain('Cookie: empty; Storage: empty')
+		await expect(
+			callHolderServer(server.client, 'execute', {
+				holder: second,
+				name: 'click',
+				arguments: { ref: seed },
+			}),
+		).rejects.toThrow(`Element ${seed} is not in the current view`)
+		const firstAgain = await callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'navigate',
+			arguments: { url: `${pages.url}/first` },
+		})
+		expect(firstAgain).toContain('Cookie: holder=first; Storage: first')
+		await callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'click',
+			arguments: { ref: requireOutlineReference(firstAgain, 'link', 'Open holder tab') },
+		})
+		expect(
+			await callHolderServer(server.client, 'execute', {
+				holder: first,
+				name: 'tabs',
+				arguments: { search: '' },
+			}),
+		).toContain(`${pages.url}/tab`)
+		expect(
+			await callHolderServer(server.client, 'execute', {
+				holder: second,
+				name: 'tabs',
+				arguments: { search: '' },
+			}),
+		).not.toContain(`${pages.url}/tab`)
+	})
+
+	it('recovers a killed holder with every browser leased and keeps its loss notice local', async () => {
+		await callHolderServer(server.client, 'execute', {
+			holder: second,
+			name: 'navigate',
+			arguments: { url: `${pages.url}/victim` },
+		})
+		const victim = await findHolderProfile(scratch.path, `${pages.url}/victim`)
+		process.kill(victim.pid, 'SIGKILL')
+		expect(
+			await callHolderServer(server.client, 'execute', {
+				holder: first,
+				name: 'look',
+				arguments: { search: '' },
+			}),
+		).not.toContain('BROWSER_SERVER_CRASH')
+		const recovered = await callHolderServer(server.client, 'execute', {
+			holder: second,
+			name: 'look',
+			arguments: { search: '' },
+		})
+		expect(recovered).toContain('BROWSER_SERVER_CRASH')
+		expect(recovered).toContain('about:blank')
+		expect(
+			await callHolderServer(server.client, 'execute', {
+				holder: second,
+				name: 'look',
+				arguments: { search: '' },
+			}),
+		).not.toContain('BROWSER_SERVER_CRASH')
+	})
+
+	it('contains downloads and destroys their process and profile before capacity is reused cleanly', async () => {
+		await expect(acquireHolder(server.client, 'overflow')).rejects.toThrow('BROWSER_SERVER_BUSY')
+		const view = await callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'navigate',
+			arguments: { url: `${pages.url}/download-owner` },
+		})
+		const owner = await findHolderProfile(scratch.path, `${pages.url}/download-owner`)
+		await callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'click',
+			arguments: { ref: requireOutlineReference(view, 'link', 'Download holder file') },
+		})
+		const download = join(owner.profile, 'downloads', 'holders-h3-fixture.txt')
+		await waitForCondition(
+			'completed holder download',
+			() => existsSync(download) && readFileSync(download, 'utf8') === 'Owned holder download',
+		)
+		await callHolderServer(server.client, 'destroy', { holder: first })
+		expect(probeProcess(owner.pid)).toBe(false)
+		expect(existsSync(owner.profile)).toBe(false)
+		first = await acquireHolder(server.client, 'clean replacement')
+		expect(
+			await callHolderServer(server.client, 'execute', {
+				holder: first,
+				name: 'tabs',
+				arguments: { search: '' },
+			}),
+		).not.toContain(`${pages.url}/tab`)
+		const clean = await callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'navigate',
+			arguments: { url: `${pages.url}/clean` },
+		})
+		expect(clean).toContain('Cookie: empty; Storage: empty')
+		const replacement = await findHolderProfile(scratch.path, `${pages.url}/clean`)
+		expect(replacement.pid).not.toBe(owner.pid)
+		expect(replacement.profile).not.toBe(owner.profile)
+	})
+
+	it('persists a holder replay beside shared-browser navigation', { timeout: 5000 }, async () => {
+		gate = Promise.withResolvers<void>()
+		entered = Promise.withResolvers<void>()
+		await createFileBrowserJourneyStore({ root: scratch.path }).set(
+			createBrowserJourneyFixture([
+				{ action: 'navigate', arguments: { url: `${pages.url}/held` } },
+			]),
+		)
+		const replay = callHolderServer(server.client, 'execute', {
+			holder: first,
+			name: 'replay',
+			arguments: { journey: 'check-ready' },
+		})
+		try {
+			await entered.promise
+			expect(
+				await callHolderServer(server.client, 'navigate', { url: `${pages.url}/shared` }),
+			).toContain('Holder fixture')
+		} finally {
+			gate.resolve()
+			await replay
+		}
+		expect(await replay).toContain('Replayed check-ready: 1 of 1 steps.')
+		expect(readdirSync(join(scratch.path, 'check-ready', 'runs'))).toHaveLength(1)
+	})
+
+	it('tears down every live lease process and profile', async () => {
+		const records = readdirSync(join(scratch.path, '.profiles')).map((name) => ({
+			profile: join(scratch.path, '.profiles', name),
+			record: requireValue(
+				parseBrowserProfileRecord(
+					readFileSync(join(scratch.path, '.profiles', name, 'browse.json'), 'utf8'),
+				),
+			),
+		}))
+		expect(records).toHaveLength(3)
+		await server.client.disconnect()
+		expect(server.transport.evidence ?? '').toBe('')
+		for (const { profile, record } of records) {
+			expect(probeProcess(record.pid)).toBe(false)
+			expect(existsSync(profile)).toBe(false)
+		}
+	})
+})
+
+describe('holders H3 built cleanup refusal', () => {
+	it('reports a real filesystem refusal while ending several live leases', async (context) => {
+		const scratch = createScratch()
+		const lock = scratch.ensure('lock')
+		const locker = spawn(
+			process.execPath,
+			[fileURLToPath(new URL('../fixtures/holder-lock.ts', import.meta.url))],
+			{ cwd: lock, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true },
+		)
+		const child = new BrowseChild(
+			fileURLToPath(new URL('../../dist/bin/main.js', import.meta.url)),
+			scratch.path,
+			{
+				BROWSE_ROOT: scratch.ensure('server'),
+				BROWSE_EXECUTABLE: requireSystemBrowser().executable,
+				BROWSE_POOL: '3',
+			},
+		)
+		const pids: number[] = []
+		try {
+			if (locker.stdout === null) throw new Error('Missing lock process output')
+			await once(locker.stdout, 'data')
+			let refusal: unknown
+			try {
+				rmdirSync(lock)
+			} catch (error) {
+				refusal = error
+			}
+			expect(readErrorCode(refusal)).toBe(refusal === undefined ? undefined : 'EBUSY')
+			const supported = refusal !== undefined
+			context.skip(!supported, BROWSE_DIRECTORY_REASON)
+			child.send(
+				{
+					jsonrpc: '2.0',
+					id: 1,
+					method: 'tools/call',
+					params: { name: 'acquire', arguments: { purpose: 'first live lease' } },
+				},
+				{
+					jsonrpc: '2.0',
+					id: 2,
+					method: 'tools/call',
+					params: { name: 'acquire', arguments: { purpose: 'second live lease' } },
+				},
+			)
+			await waitForCondition('both holders acquired', () => child.lines.length === 2, {
+				budget: 15000,
+			})
+			for (const line of child.lines)
+				expect(JSON.parse(line)).not.toHaveProperty('result.isError', true)
+			const profiles = join(scratch.path, 'server', '.profiles')
+			const folders = readdirSync(profiles).map((name) => join(profiles, name))
+			expect(folders).toHaveLength(3)
+			for (const folder of folders)
+				pids.push(
+					requireValue(parseBrowserProfileRecord(readFileSync(join(folder, 'browse.json'), 'utf8')))
+						.pid,
+				)
+			const folder = requireValue(folders[0])
+			const locked = once(locker.stdout, 'data')
+			locker.stdin?.write(`${folder}\n`)
+			await locked
+			child.end()
+			expect(await child.ending).toEqual({ code: 1, signal: null })
+			expect(child.stderr).toContain('BROWSER_SERVER_TEARDOWN')
+			expect(child.stderr).toContain('The browse server teardown failed')
+			for (const pid of pids) expect(probeProcess(pid)).toBe(false)
+			for (const other of folders) expect(existsSync(other)).toBe(other === folder)
+		} finally {
+			const exited = once(locker, 'exit')
+			locker.stdin?.end()
+			await exited
+			await child.destroy()
+			for (const pid of pids) {
+				if (!probeProcess(pid)) continue
+				process.kill(pid, 'SIGKILL')
+				await waitForProcessExit(pid)
+			}
+			scratch.destroy()
+		}
+	})
+})
 
 describe('eager U8 built browse', () => {
 	it('reads innerWidth 390 with BROWSE_VIEWPORT=390x844', async () => {

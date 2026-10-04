@@ -144,6 +144,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #notices = new Map<BrowserServerHolder, Set<BrowserSlot>>()
 	readonly #disposals = new Map<string, Promise<void>>()
 	readonly #drains = new Map<BrowserServerHolder, Set<Promise<void>>>()
+	readonly #readers = new Map<string, Set<symbol>>()
+	readonly #writers = new Set<string>()
 	readonly #size: number
 	readonly #reference: () => string
 	#references = 0
@@ -433,6 +435,41 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<unknown> {
+		context.signal.throwIfAborted()
+		const journey = args['journey']
+		if ((name !== 'replay' && name !== 'forget') || !isString(journey))
+			return this.#perform(holder, name, args, context)
+		if (this.#writers.has(journey) || (name === 'forget' && this.#readers.has(journey)))
+			throw new BrowserError(
+				`BROWSER_JOURNEY_LOCKED: Journey ${journey} is locked; call ${name} again.`,
+				'BROWSER_JOURNEY_LOCKED',
+				{ name: journey },
+			)
+		const reader = Symbol(journey)
+		if (name === 'forget') this.#writers.add(journey)
+		else {
+			const readers = this.#readers.get(journey) ?? new Set<symbol>()
+			readers.add(reader)
+			this.#readers.set(journey, readers)
+		}
+		try {
+			return await this.#perform(holder, name, args, context)
+		} finally {
+			if (name === 'forget') this.#writers.delete(journey)
+			else {
+				const readers = this.#readers.get(journey)
+				readers?.delete(reader)
+				if (readers?.size === 0) this.#readers.delete(journey)
+			}
+		}
+	}
+
+	async #perform(
+		holder: BrowserServerHolder,
+		name: string,
+		args: Readonly<Record<string, unknown>>,
+		context: ToolContext,
+	): Promise<unknown> {
 		const signal =
 			holder === this.#shared
 				? context.signal
@@ -456,10 +493,14 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 		let result: ToolResult
 		try {
-			const outcome = await this.#race(
-				slot.toolset.tools.execute({ id: name, name, arguments: args }, { ...context, signal }),
-				signal,
+			const execution = slot.toolset.tools.execute(
+				{ id: name, name, arguments: args },
+				{ ...context, signal },
 			)
+			// A cancelled replay still persists its run before surrendering admission.
+			const outcome = await (name === 'replay' || name === 'forget'
+				? execution
+				: this.#race(execution, signal))
 			if (outcome === undefined) throw this.#ended()
 			result = outcome
 		} catch (error) {
@@ -770,6 +811,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			}
 			const context = await browser.isolate({
 				reference: this.#reference,
+				downloads: { path: join(profile, 'downloads') },
 				...(this.#viewport === undefined ? {} : { emulation: { viewport: this.#viewport } }),
 			})
 			const page = await context.create()
