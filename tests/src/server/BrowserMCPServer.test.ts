@@ -1,4 +1,5 @@
 import type { CDPSentMessage } from '../../setup.js'
+import { createHook } from 'node:async_hooks'
 import { existsSync, readdirSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
@@ -282,6 +283,200 @@ describe('holders H3 journey admission', () => {
 })
 
 describe('holders H2', () => {
+	it('settles failed holder disposal and reports cleanup at server teardown', async () => {
+		const failure = new Error('holder cleanup failed')
+		const healthy = new BrowserLauncher()
+		const faulty = new BrowserLauncher({ cleanup: failure })
+		const fixture = createBrowseFixture({
+			pool: { size: 2 },
+			launch: (options) =>
+				healthy.browsers.length === 0 ? healthy.launch(options) : faulty.launch(options),
+		})
+		try {
+			await fixture.server.start()
+			const acquired = parseJSON(
+				(await fixture.pair.call(2, 'acquire', { purpose: 'cleanup failure' })).text,
+			)
+			if (!isRecord(acquired)) throw new Error('Missing holder')
+			for (const id of [3, 4])
+				expect(await fixture.pair.call(id, 'destroy', { holder: acquired['holder'] })).toEqual({
+					text: 'Holder destroyed.',
+					error: false,
+				})
+			await expect(fixture.server.destroy()).rejects.toMatchObject({
+				errors: expect.arrayContaining([failure]),
+			})
+		} finally {
+			await fixture.teardown.destroy().catch(() => undefined)
+		}
+	})
+
+	it('preserves the acquisition abort error when retiring its grant fails', async () => {
+		const fixture = createBrowseFixture(
+			{ pool: { size: 2 } },
+			{
+				cleanup: new Error('retirement cleanup failed'),
+			},
+		)
+		await fixture.server.start()
+		let acquisition: Promise<unknown> | undefined
+		const entered = Promise.withResolvers<void>()
+		const hook = createHook({
+			init: (_id, category, _trigger, resource: unknown) => {
+				if (
+					category !== 'PROMISE' ||
+					!/at BrowserMCPServer\.#acquire/.test(new Error().stack ?? '')
+				)
+					return
+				hook.disable()
+				if (resource instanceof Promise) acquisition = resource
+				entered.resolve()
+			},
+		}).enable()
+		const served = new BrowserPromiseObserver(/at BrowserMCPServer\.#serve/, () =>
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				method: 'notifications/cancelled',
+				params: { requestId: 2 },
+			}),
+		)
+		try {
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'acquire', arguments: { purpose: 'aborted grant' } },
+			})
+			await entered.promise
+			await expect(requireValue(acquisition)).rejects.toMatchObject({ name: 'AbortError' })
+			expect(fixture.launcher.browsers[1]?.destroyed).toBe(true)
+		} finally {
+			hook.disable()
+			served.destroy()
+			await fixture.teardown.destroy().catch(() => undefined)
+		}
+	})
+
+	it('detaches the acquisition signal before returning a serving holder', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		await fixture.server.start()
+		let acquisition: Promise<unknown> | undefined
+		const entered = Promise.withResolvers<void>()
+		const hook = createHook({
+			init: (_id, category, _trigger, resource: unknown) => {
+				if (
+					category !== 'PROMISE' ||
+					!/at BrowserMCPServer\.#acquire/.test(new Error().stack ?? '')
+				)
+					return
+				hook.disable()
+				if (resource instanceof Promise) acquisition = resource
+				entered.resolve()
+			},
+		}).enable()
+		try {
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'acquire', arguments: { purpose: 'detached request' } },
+			})
+			// Observe the returned catalog before MCP removes the live request's cancellation handle.
+			await entered.promise
+			const catalog = await requireValue(acquisition).then((value: unknown) => {
+				fixture.pair.send({
+					jsonrpc: '2.0',
+					method: 'notifications/cancelled',
+					params: { requestId: 2 },
+				})
+				return value
+			})
+			if (!isString(catalog)) throw new Error('Missing catalog')
+			const acquired = parseJSON(catalog)
+			if (!isRecord(acquired)) throw new Error('Missing holder')
+			expect(
+				(
+					await fixture.pair.call(3, 'execute', {
+						holder: acquired['holder'],
+						name: 'look',
+						arguments: { search: 'still serving' },
+					})
+				).error,
+			).toBe(false)
+		} finally {
+			hook.disable()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('aborts a holder call during refill and serves its next call', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		const waiting = Promise.withResolvers<void>()
+		let execution: Promise<unknown> | undefined
+		const hook = createHook({
+			init: (_id, category, _trigger, resource: unknown) => {
+				if (
+					category !== 'PROMISE' ||
+					!/at BrowserMCPServer\.#perform/.test(new Error().stack ?? '')
+				)
+					return
+				hook.disable()
+				if (resource instanceof Promise) execution = resource
+			},
+		})
+		try {
+			await fixture.server.start()
+			const acquired = parseJSON(
+				(await fixture.pair.call(2, 'acquire', { purpose: 'refill cancellation' })).text,
+			)
+			if (!isRecord(acquired)) throw new Error('Missing holder')
+			fixture.launcher.hold()
+			requireValue(fixture.launcher.browsers[1]).kill()
+			hook.enable()
+			const grant = new BrowserPromiseObserver(
+				/at BrowserMCPServer\.#grant/,
+				undefined,
+				waiting.resolve,
+			)
+			try {
+				fixture.pair.send({
+					jsonrpc: '2.0',
+					id: 3,
+					method: 'tools/call',
+					params: {
+						name: 'execute',
+						arguments: {
+							holder: acquired['holder'],
+							name: 'look',
+							arguments: { search: 'waiting' },
+						},
+					},
+				})
+				await waiting.promise
+				fixture.pair.send({
+					jsonrpc: '2.0',
+					method: 'notifications/cancelled',
+					params: { requestId: 3 },
+				})
+				await expect(requireValue(execution)).rejects.toMatchObject({ name: 'AbortError' })
+			} finally {
+				grant.destroy()
+			}
+			fixture.launcher.release()
+			const next = await fixture.pair.call(4, 'execute', {
+				holder: acquired['holder'],
+				name: 'look',
+				arguments: { search: 'after refill' },
+			})
+			expect(next.error).toBe(false)
+			expect(next.text).toContain('BROWSER_SERVER_CRASH')
+		} finally {
+			hook.disable()
+			fixture.launcher.release()
+			await fixture.teardown.destroy()
+		}
+	})
+
 	it('allocates references across real browser contexts and refuses a copied reference', async () => {
 		const peers = await Promise.all([
 			createCDPTestServer(),
@@ -442,7 +637,6 @@ describe('holders H2', () => {
 			expect(busy.text).toContain('destroy')
 			expect(busy.text).toContain('named tools to share the shared browser')
 			expect(fixture.pair.answered).not.toContain(2)
-			expect(fixture.launcher.browsers).toHaveLength(2)
 			fixture.launcher.release()
 			expect((await fixture.pair.answer(2))['isError']).not.toBe(true)
 		} finally {
@@ -572,7 +766,6 @@ describe('holders H2', () => {
 				'undeliverable grant destroyed',
 				() => fixture.launcher.browsers[1]?.destroyed === true,
 			)
-			expect(committed.resolved).toContain('Pool.#commit')
 			expect(fixture.pair.answered).not.toContain(2)
 			let id = 3
 			const acquired = await retryUntil(

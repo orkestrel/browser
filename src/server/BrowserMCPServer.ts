@@ -346,7 +346,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			}
 			return JSON.stringify(catalog)
 		} catch (error) {
-			await this.#retire(holder)
+			await this.#retire(holder).catch(this.#fault.bind(this))
 			throw error
 		} finally {
 			listener[Symbol.dispose]()
@@ -419,6 +419,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				await this.#grants.get(holder)?.catch(() => undefined)
 				await token?.destroy()
 				await Promise.all(this.#drains.get(holder) ?? [])
+			} catch (error) {
+				this.#faults.add(error)
 			} finally {
 				if (this.#holders.get(holder.id) === holder) this.#holders.delete(holder.id)
 				this.#notices.delete(holder)
