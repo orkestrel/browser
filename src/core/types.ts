@@ -1605,6 +1605,8 @@ export interface BrowserDownloadOptions {
  * - `emulation` — emulation overrides inherited by every page of the context
  */
 export interface BrowserContextOptions {
+	/** Names each element reference the context's pages issue. Default: a counter the context owns. */
+	readonly reference?: BrowserReferenceFunction
 	readonly on?: EmitterHooks<BrowserContextEventMap>
 	readonly error?: EmitterErrorHandler
 	readonly proxy?: BrowserProxy

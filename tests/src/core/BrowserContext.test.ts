@@ -13,6 +13,7 @@ import {
 } from '@orkestrel/test'
 import {
 	createConnectedCDPClient,
+	createReferenceSequence,
 	createTarget,
 	readCDPParams,
 	replyOk,
@@ -25,6 +26,52 @@ import {
 // === BrowserContext
 
 describe('BrowserContext', () => {
+	it('eager U3 shares the context allocator across create and sync while defaults stay independent', async () => {
+		const shared = { reference: createReferenceSequence() }
+		for (const options of [shared, undefined]) {
+			const references: Array<string | undefined> = []
+			for (const attached of [true, false]) {
+				const { client, transport } = await createConnectedCDPClient()
+				scriptCDPAttach(transport)
+				scriptBrowserElements(transport, {
+					accessibility: (message) =>
+						transport.reply(message.id, {
+							nodes: [
+								{
+									nodeId: 'button',
+									backendDOMNodeId: 7,
+									role: { value: 'button' },
+									name: { value: 'Continue' },
+									childIds: [],
+								},
+							],
+						}),
+				})
+				replyOk(transport, 'Target.createTarget', { targetId: 'main' })
+				const context = new BrowserContext(
+					client,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					undefined,
+					options,
+				)
+				try {
+					if (attached) await context.create()
+					else await context.sync([createTarget({ id: 'main' })])
+					const page = requireValue(context.page(), 'context page')
+					await page.elements.outline()
+					references.push(page.elements.elements()[0]?.reference)
+				} finally {
+					await client.close()
+					await context.destroy()
+				}
+			}
+			expect(references).toEqual(options === undefined ? ['e1', 'e1'] : ['e1', 'e2'])
+		}
+	})
+
 	describe('page() / pages()', () => {
 		it('returns undefined before any page exists', async () => {
 			const { client } = await createConnectedCDPClient()

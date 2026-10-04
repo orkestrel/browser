@@ -1616,6 +1616,8 @@ await client.close()
 
 #### `BrowserContextInterface`
 
+`BrowserContextOptions.reference` supplies the allocator every page in the context uses, including pages attached by `sync()`. Share one allocator across contexts to keep their references distinct. Without it, each context starts its own counter at `e1`.
+
 An isolated browser session over a CDP browser context; follows the manager
 accessor pattern (`page(index?)` / `pages()`).
 

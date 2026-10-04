@@ -10,6 +10,7 @@ import type {
 	BrowserPageInterface,
 	BrowserPageOptions,
 	BrowserPermissionManagerInterface,
+	BrowserReferenceFunction,
 	BrowserStorageManagerInterface,
 	BrowserViewport,
 	CDPClientInterface,
@@ -56,6 +57,7 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #viewport: BrowserViewport | undefined
 	readonly #writer: BrowserWriterInterface | undefined
 	readonly #downloads: BrowserDownloadOptions | undefined
+	readonly #allocator: BrowserReferenceFunction | undefined
 	readonly #emitter: Emitter<BrowserContextEventMap>
 	readonly #cookies: BrowserCookieManager
 	readonly #permissions: BrowserPermissionManager
@@ -85,6 +87,7 @@ export class BrowserContext implements BrowserContextInterface {
 		this.#viewport = viewport
 		this.#writer = writer
 		this.#downloads = downloads
+		this.#allocator = options?.reference
 		this.#emitter = new Emitter({
 			...(options?.on !== undefined ? { on: options.on } : {}),
 			...(options?.error !== undefined ? { error: options.error } : {}),
@@ -290,7 +293,7 @@ export class BrowserContext implements BrowserContextInterface {
 				this.#id,
 				undefined,
 				options,
-				this.#nextReference.bind(this),
+				this.#allocator ?? this.#nextReference.bind(this),
 				ready,
 			)
 			this.#observe(page)
@@ -329,7 +332,7 @@ export class BrowserContext implements BrowserContextInterface {
 				this.#id,
 				undefined,
 				undefined,
-				this.#nextReference.bind(this),
+				this.#allocator ?? this.#nextReference.bind(this),
 				ready,
 			)
 			this.#observe(page)
