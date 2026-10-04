@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<title>Smooth scroll pointer fixture</title>
+		<style>
+			:root {
+				scroll-behavior: smooth;
+			}
+			body {
+				margin: 0;
+				height: 16000px;
+			}
+			#start {
+				position: absolute;
+				top: 14000px;
+				left: 20px;
+			}
+			#finish {
+				position: fixed;
+				bottom: 20px;
+				right: 20px;
+			}
+			#refused {
+				position: fixed;
+				top: -100px;
+				left: -100px;
+			}
+		</style>
+	</head>
+	<body>
+		<div id="top">Top of the document</div>
+		<a
+			id="start"
+			href="#top"
+			onclick="
+				this.dataset.clicked = String(event.isTrusted)
+				requestAnimationFrame(function scroll() {
+					window.scrollTo({ top: 0, behavior: 'smooth' })
+					if (window.scrollY > 0) requestAnimationFrame(scroll)
+				})
+			"
+			>Scroll to top</a
+		>
+		<button
+			id="finish"
+			onclick="
+				this.dataset.clicked = String(event.isTrusted)
+				this.dataset.scroll = String(window.scrollY)
+			"
+		>
+			Finish
+		</button>
+		<button id="refused">Outside the viewport</button>
+	</body>
+</html>
