@@ -69,15 +69,29 @@ const resolve = {
 // merges it, so an override's arrays elsewhere concatenate with the base's rather than
 // replacing them.
 export function mergeOverride(base: UserConfig, override?: UserConfig): UserConfig {
-	if (override === undefined) return base
-	if ('command' in override && 'mode' in override) {
+	if (override !== undefined && 'command' in override && 'mode' in override) {
 		if (typeof override.mode !== 'string') {
 			throw new Error('The project invocation carries no string mode')
 		}
-		return { ...base, mode: override.mode }
+		override = { mode: override.mode }
 	}
-	const merged: UserConfig = mergeConfig(base, override)
-	if (merged.plugins === undefined) return merged
+	const merged: UserConfig = override === undefined ? { ...base } : mergeConfig(base, override)
+	const name = merged.test?.name
+	const label = typeof name === 'string' ? name : name?.label
+	const browser = merged.test?.browser
+	if (label !== undefined && browser?.instances !== undefined) {
+		merged.test = {
+			...merged.test,
+			browser: {
+				...browser,
+				instances: browser.instances.map((instance) => ({
+					...instance,
+					name: instance.name ?? `${label} (${instance.browser})`,
+				})),
+			},
+		}
+	}
+	if (merged.plugins === undefined || override === undefined) return merged
 	const candidates = override.plugins ?? []
 	const taken = new Set<number>()
 	const selected: PluginOption[] = []
