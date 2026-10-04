@@ -2,6 +2,11 @@ import { parseBoolean, parseInteger } from '@orkestrel/contract'
 import { BrowserError, isBrowserError } from '@src/core'
 import { createBrowserMCPServer } from '@src/server'
 
+// The entry owns stderr; a closed reader must not interrupt the server's teardown barrier.
+process.stderr.on('error', () => {
+	process.exitCode = 1
+})
+
 try {
 	const { BROWSE_ROOT, BROWSE_HEADLESS, BROWSE_EXECUTABLE, BROWSE_READONLY, BROWSE_POOL } =
 		process.env

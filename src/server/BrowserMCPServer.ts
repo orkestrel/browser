@@ -217,6 +217,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			void warming.then(this.#exhaust.bind(this))
 		} catch (error) {
 			if (this.#closing !== undefined) return
+			if (isBrowserError(error) && error.code === BROWSER_SERVER_UNAVAILABLE) throw error
 			throw this.#unavailable(isPoolError(error) ? (error.cause ?? this.#failure) : error)
 		}
 	}
@@ -306,6 +307,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				error: isError(error) ? error.message : String(error),
 			}
 		}
+		context.signal.throwIfAborted()
 		if (!result.success) {
 			if (this.#lease?.value === slot && !context.signal.aborted) {
 				try {
@@ -314,6 +316,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 					if (!context.signal.aborted && !this.#abort.signal.aborted) this.#lose(slot, error)
 				}
 			}
+			context.signal.throwIfAborted()
 			if (this.#lease?.value !== slot) {
 				const loss = this.#losses.get(slot)
 				throw new BrowserError(
@@ -524,8 +527,9 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		if (this.#closing !== undefined) throw this.#ended()
 		if (this.#stranded !== undefined)
 			throw new BrowserError(
-				describeBrowserServerLoss(BROWSER_SERVER_TEARDOWN, this.#stranded),
+				isError(this.#stranded) ? this.#stranded.message : String(this.#stranded),
 				BROWSER_SERVER_TEARDOWN,
+				isBrowserError(this.#stranded) ? this.#stranded.context : undefined,
 			)
 		const profile = join(this.#root, '.profiles', formatBrowserLockEntry(process.pid, randomUUID()))
 		// Without `recursive`, an existing directory refuses with `EEXIST`, so no two launches share one.
@@ -570,7 +574,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				await this.#destroySlot(profile, browser, toolset).catch((failure: unknown) => {
 					this.#stranded = failure
 				})
-			this.#write(`browse: ${describeBrowserServerLoss(BROWSER_SERVER_LAUNCH, error)}`)
+			if (this.#closing === undefined)
+				this.#write(`browse: ${describeBrowserServerLoss(BROWSER_SERVER_LAUNCH, error)}`)
 			throw error
 		}
 	}

@@ -43,7 +43,7 @@ import {
 /**
  * Probes whether a process has not been confirmed absent.
  * @param pid - Process identifier to probe with signal zero
- * @returns True unless the host reports ESRCH; false when that process is absent
+ * @returns True if the host has not confirmed absence with ESRCH; false otherwise
  * @example
  * probeProcess(process.pid) // true
  */
@@ -88,13 +88,13 @@ export function describeBrowserServerLoss(code: string, cause: unknown, url?: st
 	const pid = isBrowserError(cause) ? cause.context?.['pid'] : undefined
 	const detail =
 		cause === undefined ? 'Browser session lost' : isError(cause) ? cause.message : String(cause)
-	const message = `${code}: ${detail}${isNumber(pid) ? ` (pid ${pid})` : ''}.`
+	const message = `${code}: ${detail.replace(/\.+$/u, '')}${isNumber(pid) ? ` (pid ${pid})` : ''}.`
 	if (code !== BROWSER_SERVER_CRASH && code !== BROWSER_SERVER_UNRESOLVED) return message
 	const lost = `Lost the page${url === undefined ? '' : ` at ${url}`}, its tabs, every element reference, the retained reading, dialogs, holds, an unsaved recording, the active replay, and the isolated context's cookies.`
 	const next = `The next call acquires a browser that starts at about:blank, or answers ${BROWSER_SERVER_UNAVAILABLE} when none can serve.`
 	return code === BROWSER_SERVER_UNRESOLVED
 		? `${message} The outcome is unknown. ${lost} Browse did not repeat the call. ${next}`
-		: `${message} ${lost} ${next}`
+		: `${message} ${lost}`
 }
 
 /**

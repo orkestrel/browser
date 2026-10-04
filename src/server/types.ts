@@ -392,6 +392,10 @@ export interface BrowserSlotWatch {
  * - `launch` — creates each browser the pool warms. Default: `createBrowser`
  * - `stdio` — the streams the server reads requests from and writes answers to; the end of
  *   `input` destroys the server. Default: `process.stdin` and `process.stdout`
+ * - `pool.size` — the integer number of browsers kept warm, from 1 through
+ *   `BROWSER_SERVER_POOL_LIMIT`. Default: `BROWSER_SERVER_POOL_SIZE`.
+ * - `log` — receives diagnostic lines. Default: `process.stderr`
+ * @throws Thrown when `pool.size` is outside that range or is not an integer, with `BROWSER_SERVER_OPTIONS`
  */
 export interface BrowserMCPServerOptions {
 	readonly root?: string
@@ -400,9 +404,7 @@ export interface BrowserMCPServerOptions {
 	readonly readonly?: boolean
 	readonly launch?: BrowserLaunchFunction
 	readonly stdio?: StdioServerOptions
-	/** Sets the browsers kept warm, from 1 through `BROWSER_SERVER_POOL_LIMIT`; defaults to `BROWSER_SERVER_POOL_SIZE`. */
 	readonly pool?: { readonly size?: number }
-	/** Receives diagnostic lines; defaults to `process.stderr`. */
 	readonly log?: NodeJS.WritableStream
 }
 
