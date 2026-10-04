@@ -6,6 +6,7 @@ import type {
 	BrowserContextOptions,
 	BrowserPageInterface,
 	BrowserPageOptions,
+	BrowserToolsetInterface,
 	BrowserViewport,
 	CDPTransportEventMap,
 } from '@src/core'
@@ -351,13 +352,21 @@ export interface FileBrowserStoreOptions {
 // === Browser MCP server
 
 /**
- * Creates the browser a browse server connects on its first tool call.
+ * Creates a browser a browse server connects while warming its pool.
  *
  * @param options - The launch the server composes: `headless`, `executable`, the profile it
  *   owns, `cdp.discover` set to `false`, and the signal its `destroy()` aborts
  * @returns A browser whose `connect()` launches it
  */
 export type BrowserLaunchFunction = (options: BrowserOptions) => BrowserInterface
+
+/** Holds one warm browser a browse server owns: the browser, its profile, its isolated context, and its started toolset. */
+export interface BrowserSlot {
+	readonly browser: BrowserInterface
+	readonly profile: string
+	readonly context: BrowserContextInterface
+	readonly toolset: BrowserToolsetInterface
+}
 
 /**
  * Configures the browse server.
@@ -371,7 +380,7 @@ export type BrowserLaunchFunction = (options: BrowserOptions) => BrowserInterfac
  *   `findSystemBrowser` finds
  * - `readonly` — if `true`, refuses `record`, `save`, and `edit`, and `replay` still writes runs;
  *   if `false` or omitted, every tool runs
- * - `launch` — creates the browser the first tool call connects. Default: `createBrowser`
+ * - `launch` — creates each browser the pool warms. Default: `createBrowser`
  * - `stdio` — the streams the server reads requests from and writes answers to; the end of
  *   `input` destroys the server. Default: `process.stdin` and `process.stdout`
  */
@@ -382,18 +391,23 @@ export interface BrowserMCPServerOptions {
 	readonly readonly?: boolean
 	readonly launch?: BrowserLaunchFunction
 	readonly stdio?: StdioServerOptions
+	/** Sets the browsers kept warm, from 1 through `BROWSER_SERVER_POOL_LIMIT`; defaults to `BROWSER_SERVER_POOL_SIZE`. */
+	readonly pool?: { readonly size?: number }
+	/** Receives diagnostic lines; defaults to `process.stderr`. */
+	readonly log?: NodeJS.WritableStream
 }
 
 /** Serves the browser vocabulary and the journey tools over MCP on stdio. */
 export interface BrowserMCPServerInterface {
 	/**
-	 * Serves the tool list over stdio before Chromium starts; the first tool call launches Chromium
-	 * with a profile the server owns.
+	 * Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the
+	 * session leases a warm browser; the legacy handshake and every tool call await the same setup.
+	 * Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with
+	 * `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup.
 	 */
 	start(): Promise<void>
 	/**
-	 * Stops admission, aborts the active replay, destroys the toolset and the browser it launched,
-	 * and removes its profile.
+	 * Stops admission, tears down every browser, its toolset, and its profile, then rechecks the folders it answers for.
 	 */
 	destroy(): Promise<void>
 }
