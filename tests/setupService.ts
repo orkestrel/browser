@@ -12,12 +12,78 @@
  * by its own proof in the `setup` project, which `npm test` runs on any host.
  */
 
-import type { BrowserEngine, SystemBrowser, SystemBrowserOptions } from '@src/server'
+import type {
+	BrowserEngine,
+	BrowserInterface,
+	BrowserLaunchFunction,
+	BrowserOptions,
+	SystemBrowser,
+	SystemBrowserOptions,
+} from '@src/server'
 import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE } from '@src/core'
-import { findSystemBrowser } from '@src/server'
+import { createBrowser, findSystemBrowser } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { waitForCondition } from '@orkestrel/test'
+import { readFileSync, writeFileSync } from 'node:fs'
+import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { BrowseChild, SOURCE_HOOK } from './setupServer.js'
 export { reservePort } from './setupServer.js'
+
+/** Names both atomic record paths whose obstruction must fail a warm. */
+export const BROWSE_RECORD_BLOCKS: readonly string[] = Object.freeze([
+	'browse.json',
+	'browse.json.tmp',
+])
+
+/** Records the process and endpoint a real browser announced when it connected. */
+export interface BrowseConnection {
+	readonly pid: number | undefined
+	readonly endpoint: string | undefined
+	readonly options: BrowserOptions
+}
+
+/** Records real browser launches and their connected process identities. */
+export class BrowseLauncher {
+	readonly #browsers: BrowserInterface[] = []
+	readonly #connections: BrowseConnection[] = []
+	/** Lists the real browser wrappers in launch order. */
+	get browsers(): readonly BrowserInterface[] {
+		return this.#browsers
+	}
+	/** Lists the process identities observed at connection. */
+	get connections(): readonly BrowseConnection[] {
+		return this.#connections
+	}
+	/** Creates each real browser and observes its connection. */
+	get launch(): BrowserLaunchFunction {
+		return (options) => {
+			const browser = createBrowser(options)
+			this.#browsers.push(browser)
+			browser.emitter.on('connect', () =>
+				this.#connections.push({ pid: browser.pid, endpoint: browser.endpoint, options }),
+			)
+			return browser
+		}
+	}
+}
+
+/** Starts a child running the source browse server, for orphan recovery proofs.
+ * @param root - Owned fixture root
+ * @param executable - Real browser executable
+ * @returns The child process and its recorded output
+ */
+export function createEagerBrowseChild(root: string, executable: string): BrowseChild {
+	const entry = join(root, 'browse-child.ts')
+	const manifest = pathToFileURL(resolve('package.json')).href
+	const version = `const manifest = ${readFileSync('package.json', 'utf8')}; export const version = manifest.version`
+	// The source uses the named JSON export the bundler supplies; Node's JSON module has only a default export.
+	writeFileSync(
+		entry,
+		`import { registerHooks } from 'node:module'\nimport { resolve } from 'node:path'\nimport { pathToFileURL } from 'node:url'\n${SOURCE_HOOK}\nregisterHooks({ load(url, context, next) { return url === ${JSON.stringify(manifest)} ? { format: 'module', source: ${JSON.stringify(version)}, shortCircuit: true } : next(url, context) } })\nconst { createBrowserMCPServer } = await import(${JSON.stringify(pathToFileURL(resolve('src/server/index.ts')).href)})\nconst server = createBrowserMCPServer({ root: ${JSON.stringify(root)}, executable: ${JSON.stringify(executable)} })\nawait server.start()\nconsole.log('ready')\n`,
+	)
+	return new BrowseChild(entry, process.cwd(), {})
+}
 
 /**
  * Lists the container-safe launch flags every live-browser proof shares.

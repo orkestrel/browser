@@ -227,6 +227,22 @@ export const BROWSER_FILE_STORE_LIMIT = 100
 
 /** Names the refusal when no browser can serve a call. */
 export const BROWSER_SERVER_UNAVAILABLE = 'BROWSER_SERVER_UNAVAILABLE'
+/** Sets the default number of warm browsers to 1. */
+export const BROWSER_SERVER_POOL_SIZE = 1
+/** Limits the number of warm browsers to 3. */
+export const BROWSER_SERVER_POOL_LIMIT = 3
+/** Permits one failed refill before the next failure spends the bound. */
+export const BROWSER_SERVER_RESTARTS = 1
+/** Names the browser process record in each profile. */
+export const BROWSER_SERVER_RECORD = 'browse.json'
+/** Names the diagnostic when the warm floor spends its restart bound. */
+export const BROWSER_SERVER_EXHAUSTED = 'BROWSER_SERVER_EXHAUSTED'
+/** Names a failed browser server teardown. */
+export const BROWSER_SERVER_TEARDOWN = 'BROWSER_SERVER_TEARDOWN'
+/** Names a failed profile sweep. */
+export const BROWSER_SERVER_SWEEP = 'BROWSER_SERVER_SWEEP'
+/** Names a refused browser server option. */
+export const BROWSER_SERVER_OPTIONS = 'BROWSER_SERVER_OPTIONS'
 /** Names the notice that a browser and its session state were lost. */
 export const BROWSER_SERVER_CRASH = 'BROWSER_SERVER_CRASH'
 /** Names an interrupted call whose outcome is unknown. */

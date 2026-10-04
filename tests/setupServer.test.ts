@@ -47,6 +47,8 @@ import {
 	alignLoopClock,
 	BrowseChild,
 	BrowserLauncher,
+	BrowseLog,
+	createBrowseFixture,
 	BrowserLockObserver,
 	observeBrowserFilesystem,
 	COOPERATIVE_SIGTERM,
@@ -92,6 +94,45 @@ import {
 const WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
 
 describe('BrowserLauncher eager U2', () => {
+	it('holds from an index and refuses only the requested launch count', async () => {
+		const launcher = new BrowserLauncher()
+		launcher.hold(1)
+		launcher.refuse(1, 1)
+		const first = launcher.launch({})
+		const refused = launcher.launch({})
+		const later = launcher.launch({})
+		try {
+			await first.connect()
+			const pending = refused.connect()
+			expect(launcher.browsers[0]?.fixture).toBeDefined()
+			expect(launcher.browsers[1]?.fixture).toBeUndefined()
+			launcher.release()
+			await expect(pending).rejects.toThrow('The fixture refused the launch')
+			await later.connect()
+			expect(launcher.browsers[2]?.fixture).toBeDefined()
+		} finally {
+			launcher.release()
+			await Promise.all(launcher.browsers.map((browser) => browser.destroy()))
+		}
+	})
+	it('collects diagnostic chunks and owns the browse fixture teardown', async () => {
+		const log = new BrowseLog()
+		log.write('first\n')
+		log.write('second\n')
+		expect(log.lines).toEqual(['first\n', 'second\n'])
+		log.destroy()
+		const fixture = createBrowseFixture()
+		try {
+			await fixture.server.start()
+			expect(fixture.launcher.browsers).toHaveLength(1)
+			await fixture.teardown.destroy()
+			expect(existsSync(fixture.scratch.path)).toBe(false)
+			expect(fixture.pair.input.destroyed).toBe(true)
+			expect(fixture.pair.output.destroyed).toBe(true)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
 	it('aborts a held connect with the supplied reason', async () => {
 		const launcher = new BrowserLauncher()
 		launcher.hold()

@@ -1176,14 +1176,14 @@ await browser.destroy() // closes the process and releases resources
 
 The following table lists the server factories.
 
-| API                             | Kind     | Summary                                                                                                                                                                     |
-| ------------------------------- | -------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `createBrowser`                 | function | Creates a raw-CDP `BrowserInterface` façade with discovery, connection, and lifecycle management.                                                                           |
-| `createCDPTransport`            | function | Creates a Node `WebSocket`-backed `CDPTransportInterface` for the given CDP debugger URL.                                                                                   |
-| `createBrowserWriter`           | function | Creates a filesystem-backed `BrowserWriterInterface` that persists bytes through `node:fs/promises`.                                                                        |
-| `createFileBrowserJourneyStore` | function | Creates a journey store over an existing filesystem root.                                                                                                                   |
-| `createFileBrowserRunStore`     | function | Creates a run store over an existing filesystem root.                                                                                                                       |
-| `createBrowserMCPServer`        | function | Creates the browse server, which serves the browser vocabulary and the journey tools over the Model Context Protocol on stdio and launches Chromium on the first tool call. |
+| API                             | Kind     | Summary                                                                                                                                                           |
+| ------------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `createBrowser`                 | function | Creates a raw-CDP `BrowserInterface` façade with discovery, connection, and lifecycle management.                                                                 |
+| `createCDPTransport`            | function | Creates a Node `WebSocket`-backed `CDPTransportInterface` for the given CDP debugger URL.                                                                         |
+| `createBrowserWriter`           | function | Creates a filesystem-backed `BrowserWriterInterface` that persists bytes through `node:fs/promises`.                                                              |
+| `createFileBrowserJourneyStore` | function | Creates a journey store over an existing filesystem root.                                                                                                         |
+| `createFileBrowserRunStore`     | function | Creates a run store over an existing filesystem root.                                                                                                             |
+| `createBrowserMCPServer`        | function | Creates the browse server, which serves the browser vocabulary and the journey tools over the Model Context Protocol on stdio and warms Chromium at server start. |
 
 The following fence builds the Node transport and the filesystem writer that `Browser` composes.
 
@@ -1199,14 +1199,14 @@ await writer.write('shots/hero.png', new Uint8Array([137, 80, 78, 71]))
 
 The following table lists the server classes.
 
-| API                       | Kind  | Summary                                                                                                                                                                             |
-| ------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Browser`                 | class | Discovers, launches, connects to, and owns Chromium-family browser sessions.                                                                                                        |
-| `WebSocketCDPTransport`   | class | Provides a raw CDP text transport backed by `@orkestrel/websocket`.                                                                                                                 |
-| `FileBrowserWriter`       | class | Persists captured browser bytes to the filesystem through `node:fs/promises`.                                                                                                       |
-| `FileBrowserJourneyStore` | class | Persists journeys with exclusive writes and revision counters retained across deletion.                                                                                             |
-| `FileBrowserRunStore`     | class | Persists runs and captures only in directories allocated by this instance.                                                                                                          |
-| `BrowserMCPServer`        | class | Implements `BrowserMCPServerInterface`: serves the browser vocabulary and the journey tools over the Model Context Protocol on stdio, and launches Chromium on the first tool call. |
+| API                       | Kind  | Summary                                                                                                                                                                   |
+| ------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Browser`                 | class | Discovers, launches, connects to, and owns Chromium-family browser sessions.                                                                                              |
+| `WebSocketCDPTransport`   | class | Provides a raw CDP text transport backed by `@orkestrel/websocket`.                                                                                                       |
+| `FileBrowserWriter`       | class | Persists captured browser bytes to the filesystem through `node:fs/promises`.                                                                                             |
+| `FileBrowserJourneyStore` | class | Persists journeys with exclusive writes and revision counters retained across deletion.                                                                                   |
+| `FileBrowserRunStore`     | class | Persists runs and captures only in directories allocated by this instance.                                                                                                |
+| `BrowserMCPServer`        | class | Implements `BrowserMCPServerInterface`: serves the browser vocabulary and the journey tools over the Model Context Protocol on stdio, and warms Chromium at server start. |
 
 #### Constants
 
@@ -1246,6 +1246,14 @@ The following table lists the server constants.
 | `BROWSER_JOURNEY_LOCK_DIRECTORY`  | const | Names the exclusive journey write lock directory.                                                                                                                                                                             |
 | `BROWSER_RUN_FILE`                | const | Names the persisted run snapshot.                                                                                                                                                                                             |
 | `BROWSER_RUN_DIRECTORY`           | const | Names the journey directory holding its runs.                                                                                                                                                                                 |
+| `BROWSER_SERVER_POOL_SIZE`        | const | Sets the default number of warm browsers to 1.                                                                                                                                                                                |
+| `BROWSER_SERVER_POOL_LIMIT`       | const | Limits the number of warm browsers to 3.                                                                                                                                                                                      |
+| `BROWSER_SERVER_RESTARTS`         | const | Permits one failed refill before the next failure spends the bound.                                                                                                                                                           |
+| `BROWSER_SERVER_RECORD`           | const | Names the browser process record in each profile.                                                                                                                                                                             |
+| `BROWSER_SERVER_EXHAUSTED`        | const | Names the diagnostic when the warm floor spends its restart bound.                                                                                                                                                            |
+| `BROWSER_SERVER_TEARDOWN`         | const | Names a failed browser server teardown.                                                                                                                                                                                       |
+| `BROWSER_SERVER_SWEEP`            | const | Names a failed profile sweep.                                                                                                                                                                                                 |
+| `BROWSER_SERVER_OPTIONS`          | const | Names a refused browser server option.                                                                                                                                                                                        |
 | `BROWSER_SERVER_UNAVAILABLE`      | const | Names the refusal when no browser can serve a call.                                                                                                                                                                           |
 | `BROWSER_SERVER_CRASH`            | const | Names the notice that a browser and its session state were lost.                                                                                                                                                              |
 | `BROWSER_SERVER_UNRESOLVED`       | const | Names an interrupted call whose outcome is unknown.                                                                                                                                                                           |
@@ -1362,25 +1370,26 @@ if (found !== undefined) {
 
 The following table lists the server types.
 
-| API                            | Kind      | Summary                                                                                         |
-| ------------------------------ | --------- | ----------------------------------------------------------------------------------------------- |
-| `BrowserEngine`                | type      | Names a supported browser engine (raw CDP targets Chromium-family browsers only).               |
-| `BrowserConnection`            | type      | Names how the browser connection was established.                                               |
-| `BrowserStatus`                | type      | Names the lifecycle status of a browser wrapper.                                                |
-| `BrowserDiscoveryResult`       | interface | Describes the result of passive browser discovery.                                              |
-| `SystemBrowserOptions`         | interface | Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources. |
-| `SystemBrowser`                | type      | Represents one discovered browser executable on this machine.                                   |
-| `BrowserProfileRecord`         | interface | Names the browser a browse profile serves, which a later start's sweep reads.                   |
-| `BrowserProfileResult`         | interface | Describes the resolved browser profile directory used for a Chromium-family launch.             |
-| `BrowserCDPOptions`            | interface | Configures the CDP (Chrome DevTools Protocol) connection.                                       |
-| `BrowserEventMap`              | type      | Maps the events a `BrowserInterface` emits.                                                     |
-| `BrowserOptions`               | interface | Describes the options for creating a `Browser` instance.                                        |
-| `BrowserInterface`             | interface | Wraps a browser with discovery, connection management, and lifecycle control.                   |
-| `WebSocketCDPTransportOptions` | interface | Describes the options for creating a `WebSocketCDPTransport` instance.                          |
-| `FileBrowserStoreOptions`      | interface | Configures a file store: its root under the checkout and the listing cap.                       |
-| `BrowserLaunchFunction`        | type      | Creates the browser a browse server connects on its first tool call.                            |
-| `BrowserMCPServerOptions`      | interface | Configures the browse server.                                                                   |
-| `BrowserMCPServerInterface`    | interface | Serves the browser vocabulary and the journey tools over MCP on stdio.                          |
+| API                            | Kind      | Summary                                                                                                               |
+| ------------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
+| `BrowserEngine`                | type      | Names a supported browser engine (raw CDP targets Chromium-family browsers only).                                     |
+| `BrowserConnection`            | type      | Names how the browser connection was established.                                                                     |
+| `BrowserStatus`                | type      | Names the lifecycle status of a browser wrapper.                                                                      |
+| `BrowserDiscoveryResult`       | interface | Describes the result of passive browser discovery.                                                                    |
+| `SystemBrowserOptions`         | interface | Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources.                       |
+| `SystemBrowser`                | type      | Represents one discovered browser executable on this machine.                                                         |
+| `BrowserProfileRecord`         | interface | Names the browser a browse profile serves, which a later start's sweep reads.                                         |
+| `BrowserProfileResult`         | interface | Describes the resolved browser profile directory used for a Chromium-family launch.                                   |
+| `BrowserCDPOptions`            | interface | Configures the CDP (Chrome DevTools Protocol) connection.                                                             |
+| `BrowserEventMap`              | type      | Maps the events a `BrowserInterface` emits.                                                                           |
+| `BrowserOptions`               | interface | Describes the options for creating a `Browser` instance.                                                              |
+| `BrowserInterface`             | interface | Wraps a browser with discovery, connection management, and lifecycle control.                                         |
+| `WebSocketCDPTransportOptions` | interface | Describes the options for creating a `WebSocketCDPTransport` instance.                                                |
+| `FileBrowserStoreOptions`      | interface | Configures a file store: its root under the checkout and the listing cap.                                             |
+| `BrowserLaunchFunction`        | type      | Creates a browser a browse server connects while warming its pool.                                                    |
+| `BrowserSlot`                  | interface | Holds one warm browser a browse server owns: the browser, its profile, its isolated context, and its started toolset. |
+| `BrowserMCPServerOptions`      | interface | Configures the browse server.                                                                                         |
+| `BrowserMCPServerInterface`    | interface | Serves the browser vocabulary and the journey tools over MCP on stdio.                                                |
 
 ### Browser
 
@@ -2319,10 +2328,10 @@ await browser.destroy() // terminates and awaits the owned process
 
 Serves the browser vocabulary over MCP on stdio: `look`, `read`, `plain`, `click`, `type`, `press`, `navigate`, `wait`, `dialog`, `tabs`, `switch`, `record`, `save`, `journeys`, `edit`, `replay`, and `forget`. `BrowserMCPServer` composes `@orkestrel/mcp`'s `createMCPServer`, `createMCPLegacy`, and `createStdioServer`. Its own manager holds one dispatcher per name with the description and parameters `BROWSER_TOOL_COPY` gives, so `tools/list` answers before Chromium starts and with no Chromium on the host. The first tool call launches Chromium one time, with later callers awaiting that launch and a failed launch retried on the next call, creates the profile `ROOT/.profiles/ID/` exclusively, opens one page in an isolated context, and constructs the page toolset with `context` and `journeys` over the file stores on a second manager the toolset owns, so the toolset's `start()` meets no foreign name. Every dispatcher forwards its call and its signal to the toolset's manager. While no dialog is open, the toolset's manager holds no `dialog`, and a `dialog` call is answered with that manager's `tool not found: dialog`. A page tool the toolset adopts is mirrored as a dispatcher and removed when the page withdraws it, and `@orkestrel/mcp` sends `notifications/tools/list_changed`; with `@orkestrel/mcp` 0.0.34, a client that subscribed through `subscriptions/listen` receives it, and a client of a dated revision that connected through `initialize` receives none and sees the change at its next `tools/list`. On Linux, when the process runs as root, the launch passes `--no-sandbox`, because Chromium refuses to start as root with its sandbox on; every other launch keeps the sandbox. The end of standard input, `SIGTERM`, and `SIGINT` stop admission and destroy the server. A second server in the same root launches its own browser with its own profile, and a server never attaches to another client's browser.
 
-| Method    | Returns         | Summary                                                                                                                       |
-| --------- | --------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `start`   | `Promise<void>` | Serves the tool list over stdio before Chromium starts; the first tool call launches Chromium with a profile the server owns. |
-| `destroy` | `Promise<void>` | Stops admission, aborts the active replay, destroys the toolset and the browser it launched, and removes its profile.         |
+| Method    | Returns         | Summary                                                                                                                                                                                                                                                                                                                                                            |
+| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start`   | `Promise<void>` | Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the session leases a warm browser; the legacy handshake and every tool call await the same setup. Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup. |
+| `destroy` | `Promise<void>` | Stops admission, tears down every browser, its toolset, and its profile, then rechecks the folders it answers for.                                                                                                                                                                                                                                                 |
 
 The following fence serves the vocabulary on the process's standard streams, with the journeys under `tmp/browsers`.
 

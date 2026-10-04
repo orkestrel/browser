@@ -24,6 +24,8 @@ import type { BrowserOutlineNode } from '@src/core'
 import { BROWSER_TOOL_DEADLINE_NOTE, renderBrowserOutline } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
+import { createScratch } from '@orkestrel/test/server'
+import { createCDPTestServer } from './setupServer.js'
 import * as setupService from './setupService.js'
 import {
 	collectOutlinePairs,
@@ -44,9 +46,43 @@ import {
 	SERVICE_CHANGED_NOTE,
 	SERVICE_ENGINE_ENV_KEY,
 	SERVICE_REGISTRY_ARGS,
+	BrowseLauncher,
+	createEagerBrowseChild,
+	BROWSE_RECORD_BLOCKS,
 } from './setupService.js'
 
 const SERVICE_DIRECTORY = fileURLToPath(new URL('service/', import.meta.url))
+
+describe('eager browse service fixtures', () => {
+	it('records real Browser connections independently of browser availability', async () => {
+		const peer = await createCDPTestServer()
+		const launcher = new BrowseLauncher()
+		const options = { cdp: { endpoint: peer.endpoint } }
+		const browser = launcher.launch(options)
+		try {
+			expect(launcher.connections).toEqual([])
+			await browser.connect()
+			expect(launcher.browsers).toEqual([browser])
+			expect(launcher.connections).toEqual([{ pid: browser.pid, endpoint: peer.endpoint, options }])
+		} finally {
+			await browser.destroy()
+			await peer.close()
+		}
+	})
+	it('loads the source server in its child and reports the missing executable', async () => {
+		const scratch = createScratch()
+		const child = createEagerBrowseChild(scratch.path, join(scratch.path, 'absent-browser.exe'))
+		try {
+			await child.ending
+			expect(child.stderr).toContain('ENOENT')
+			expect(child.lines).not.toContain('ready')
+			expect(BROWSE_RECORD_BLOCKS).toEqual(['browse.json', 'browse.json.tmp'])
+		} finally {
+			await child.destroy()
+			scratch.destroy()
+		}
+	})
+})
 
 describe('collectOutlineEntries', () => {
 	it('retains suffixes and duplicate names, deduplicates references, and ignores nonrows', () => {

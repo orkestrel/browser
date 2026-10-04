@@ -21,6 +21,7 @@ import type {
 	BrowserEventMap,
 	BrowserInterface,
 	BrowserLaunchFunction,
+	BrowserMCPServerOptions,
 	BrowserOptions,
 	BrowserStatus,
 } from '@src/server'
@@ -30,7 +31,8 @@ import { createHook } from 'node:async_hooks'
 import { addAbortListener } from 'node:events'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
-import { PassThrough } from 'node:stream'
+import { PassThrough, Writable } from 'node:stream'
+import { createBrowserMCPServer } from '@src/server'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
 import { open } from 'node:fs/promises'
@@ -1528,6 +1530,8 @@ export const SOURCE_HOOK = `registerHooks({
  * - `version` — receives each double's ping count, starting at 1
  */
 export interface BrowserLauncherOptions {
+	/** Fails teardown after the double released its transport. */
+	readonly cleanup?: Error
 	readonly silent?: number
 	readonly timeout?: number
 	readonly version?: (call: number) => Promise<void> | void
@@ -1726,6 +1730,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	async destroy(): Promise<void> {
 		this.#destroyed = true
 		await this.#fixture?.client.close()
+		if (this.#handlers.cleanup !== undefined) throw this.#handlers.cleanup
 	}
 
 	async close(): Promise<void> {
@@ -1747,6 +1752,9 @@ export class BrowserLauncher {
 	readonly #browsers: BrowserLaunchDouble[] = []
 	readonly #handlers: BrowserLauncherOptions
 	#failures: number
+	#from = 0
+	#refusing = Infinity
+	#refusals = Infinity
 	#gate = Promise.withResolvers<void>()
 
 	constructor(options?: BrowserLauncherOptions) {
@@ -1764,28 +1772,90 @@ export class BrowserLauncher {
 	get launch(): BrowserLaunchFunction {
 		return (options) => {
 			const failure =
-				this.#failures > 0
+				this.#failures > 0 || (this.#browsers.length >= this.#refusing && this.#refusals > 0)
 					? new BrowserError('The fixture refused the launch', 'BROWSER_FIXTURE_LAUNCH')
 					: undefined
 			if (this.#failures > 0) this.#failures -= 1
-			const browser = new BrowserLaunchDouble(options, this.#gate.promise, failure, {
-				...this.#handlers,
-				silent: this.#browsers.length < (this.#handlers.silent ?? 0) ? 1 : 0,
-			})
+			if (this.#browsers.length >= this.#refusing) this.#refusals -= 1
+			const browser = new BrowserLaunchDouble(
+				options,
+				this.#browsers.length >= this.#from ? this.#gate.promise : Promise.resolve(),
+				failure,
+				{
+					...this.#handlers,
+					silent: this.#browsers.length < (this.#handlers.silent ?? 0) ? 1 : 0,
+				},
+			)
 			this.#browsers.push(browser)
 			return browser
 		}
 	}
 
 	/** Parks every later `connect()` until `release()`. */
-	hold(): void {
+	hold(from = this.#browsers.length): void {
+		this.#from = from
 		this.#gate = Promise.withResolvers<void>()
+	}
+
+	/** Refuses launches from the zero-based index for the requested count, or indefinitely. */
+	refuse(from: number, count = Infinity): void {
+		this.#refusing = from
+		this.#refusals = count
 	}
 
 	/** Lets every parked and later `connect()` continue. */
 	release(): void {
 		this.#gate.resolve()
 	}
+}
+
+/** Collects each diagnostic chunk a browse server writes. */
+export class BrowseLog extends Writable {
+	readonly #lines: string[] = []
+	/** Lists the diagnostic chunks in write order. */
+	get lines(): readonly string[] {
+		return this.#lines
+	}
+	override _write(
+		chunk: Buffer,
+		_encoding: BufferEncoding,
+		callback: (error?: Error | null) => void,
+	): void {
+		this.#lines.push(chunk.toString())
+		callback()
+	}
+}
+
+/** Creates an unstarted browse server and owns its streams, launch recorder, and scratch root.
+ * @param options - Server overrides
+ * @param launch - Double behavior
+ * @returns The fixture and its teardown barrier
+ */
+export function createBrowseFixture(
+	options?: BrowserMCPServerOptions,
+	launch?: BrowserLauncherOptions,
+) {
+	const scratch = createScratch()
+	const launcher = new BrowserLauncher(launch)
+	const pair = new MCPStdioPair()
+	const log = new BrowseLog()
+	const root = join(scratch.path, 'browsers')
+	const server = createBrowserMCPServer({
+		root,
+		launch: launcher.launch,
+		stdio: pair,
+		log,
+		...options,
+	})
+	const teardown = createTeardown()
+	teardown.add(() => scratch.destroy())
+	teardown.add(() => {
+		pair.input.destroy()
+		pair.output.destroy()
+		log.destroy()
+	})
+	teardown.add(() => server.destroy())
+	return { scratch, root, launcher, pair, log, server, teardown }
 }
 
 /**
@@ -1990,6 +2060,11 @@ export class BrowseChild {
 		const output = this.#child.stdout
 		if (output !== null)
 			createInterface({ input: output }).on('line', (line) => this.#lines.push(line))
+	}
+
+	/** Reports the child process identifier while its handle retains it. */
+	get pid(): number | undefined {
+		return this.#child.pid
 	}
 
 	/** Lists the lines the child wrote to standard output. */
@@ -2315,9 +2390,6 @@ export interface BrowseSession {
  * @throws Thrown when the `look` fails or the launch made no profile
  */
 export async function openBrowseSession(): Promise<BrowseSession> {
-	// The server entry loads on demand, as the store proofs load it, so the global setup that
-	// imports this module never loads it.
-	const { createBrowserMCPServer } = await import('../src/server/index.js')
 	const scratch = createScratch()
 	const launcher = new BrowserLauncher()
 	const pair = new MCPStdioPair()

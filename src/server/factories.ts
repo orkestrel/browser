@@ -90,7 +90,7 @@ export function createFileBrowserRunStore(
 
 /**
  * Creates the browse server, which serves the browser vocabulary and the journey tools over the
- * Model Context Protocol on stdio and launches Chromium on the first tool call.
+ * Model Context Protocol on stdio and warms Chromium at server start.
  *
  * @param options - The root, the launch, the journeys' read-only switch, and the streams
  * @returns A {@link BrowserMCPServerInterface} that reads nothing until `start()`
@@ -100,7 +100,7 @@ export function createFileBrowserRunStore(
  * import { createBrowserMCPServer } from '@orkestrel/browser/server'
  *
  * const server = createBrowserMCPServer({ root: 'tmp/browsers', headless: true })
- * await server.start() // answers tools/list before Chromium starts
+ * await server.start() // resolves after leasing a connected browser
  * await server.destroy()
  * ```
  */

@@ -1,5 +1,9 @@
 import type { CDPSentMessage } from '../../setup.js'
-import { existsSync, readdirSync } from 'node:fs'
+import { existsSync, readdirSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
+import { mkdir } from 'node:fs/promises'
+import { Writable } from 'node:stream'
 import { basename, dirname, join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
 import { isRecord, isString } from '@orkestrel/contract'
@@ -8,9 +12,17 @@ import {
 	createDuplexClientTransport,
 	createMCPClient,
 	toolAnnotationsToMCP,
+	MCP_MODERN_VERSION,
 } from '@orkestrel/mcp'
-import { createTeardown, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import {
+	createTeardown,
+	createRecorder,
+	requireValue,
+	waitForCondition,
+	waitForDelay,
+	waitForEvent,
+} from '@orkestrel/test'
+import { createScratch, readErrorCode } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import { replyOk } from '../../setup.js'
 import {
@@ -18,20 +30,661 @@ import {
 	BROWSER_JOURNEY_READONLY_REFUSAL,
 	BROWSER_TOOL_COPY,
 	createBrowserToolset,
+	BrowserError,
 } from '@src/core'
-import { BrowserMCPServer, createBrowserMCPServer } from '@src/server'
+import {
+	BrowserMCPServer,
+	createBrowserMCPServer,
+	formatBrowserLockEntry,
+	BROWSER_SERVER_RECORD,
+} from '@src/server'
 import {
 	BROWSE_VOCABULARY,
 	BrowserLauncher,
 	COOPERATIVE_SIGTERM,
 	MCPStdioPair,
 	openBrowseSession,
+	createBrowseFixture,
+	readExitedProcessId,
+	createStallServer,
+	createCDPTestServer,
+	waitForProcessExit,
 } from '../../setupServer.js'
 
-const PROFILE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+const PROFILE_PATTERN = /^[1-9]\d*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
+
+describe('eager U6', () => {
+	it('gates the handshake and a modern call while ping and list answer', async () => {
+		const fixture = createBrowseFixture()
+		const { launcher, server, pair } = fixture
+		launcher.hold()
+		const starting = server.start()
+		try {
+			const initialized = pair.initialize()
+			pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: {
+					name: 'look',
+					arguments: { search: 'cart' },
+					_meta: {
+						'io.modelcontextprotocol/protocolVersion': MCP_MODERN_VERSION,
+						'io.modelcontextprotocol/clientCapabilities': {},
+					},
+				},
+			})
+			expect(await pair.request(3, 'ping')).toEqual({})
+			expect((await pair.request(4, 'tools/list'))['tools']).toBeInstanceOf(Array)
+			await waitForCondition('held launch', () => launcher.browsers.length === 1)
+			expect(pair.answered).not.toContain(1)
+			expect(pair.answered).not.toContain(2)
+			launcher.release()
+			await starting
+			expect(await initialized).toHaveProperty('serverInfo')
+			expect(await pair.answer(2)).not.toHaveProperty('isError', true)
+			expect(launcher.browsers).toHaveLength(1)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('answers initialize while the second launch remains held', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		fixture.launcher.hold(1)
+		const starting = fixture.server.start()
+		try {
+			await starting
+			expect(await fixture.pair.initialize()).toHaveProperty('serverInfo')
+			await waitForCondition('held spare', () => fixture.launcher.browsers.length === 2)
+			expect(fixture.launcher.browsers[1]?.fixture).toBeUndefined()
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	for (const size of [1, 2, 3]) {
+		it(`refuses startup at size ${size} after exactly two failed launches`, async () => {
+			const fixture = createBrowseFixture({ pool: { size } }, { failures: size === 1 ? 2 : 20 })
+			try {
+				await expect(fixture.server.start()).rejects.toMatchObject({
+					code: 'BROWSER_SERVER_UNAVAILABLE',
+					message: expect.stringContaining('The fixture refused the launch'),
+				})
+				const initialized = await fixture.pair.initialize()
+				expect(initialized).toMatchObject({
+					code: -32000,
+					data: { code: 'BROWSER_SERVER_UNAVAILABLE' },
+				})
+				expect(JSON.stringify(initialized).match(/The fixture refused the launch/g)).toHaveLength(1)
+				const answer = await fixture.pair.call(2, 'look', { search: 'cart' })
+				expect(answer.error).toBe(true)
+				expect(answer.text.match(/BROWSER_SERVER_UNAVAILABLE/g)).toHaveLength(1)
+				expect(answer.text.match(/The fixture refused the launch/g)).toHaveLength(1)
+				const modern = await fixture.pair.request(3, 'tools/call', {
+					name: 'look',
+					arguments: { search: 'cart' },
+					_meta: {
+						'io.modelcontextprotocol/protocolVersion': MCP_MODERN_VERSION,
+						'io.modelcontextprotocol/clientCapabilities': {},
+					},
+				})
+				expect(JSON.stringify(modern).match(/BROWSER_SERVER_UNAVAILABLE/g)).toHaveLength(1)
+				expect(JSON.stringify(modern).match(/The fixture refused the launch/g)).toHaveLength(1)
+				expect(fixture.launcher.browsers).toHaveLength(2)
+				expect(fixture.log.lines.filter((line) => line.includes('UNAVAILABLE'))).toHaveLength(2)
+			} finally {
+				await fixture.teardown.destroy()
+			}
+		})
+	}
+
+	it('reports exhausted spares with the grant committed first', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		fixture.launcher.refuse(1)
+		fixture.launcher.hold(1)
+		try {
+			await fixture.server.start()
+			fixture.launcher.release()
+			await waitForCondition('exhausted floor', () =>
+				fixture.log.lines.some((line) => line.includes('EXHAUSTED')),
+			)
+			expect(fixture.launcher.browsers).toHaveLength(3)
+			expect(fixture.log.lines.filter((line) => line.includes('EXHAUSTED'))).toHaveLength(1)
+			expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(false)
+			expect(fixture.launcher.browsers[0]?.destroyed).toBe(false)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+	it('names a pid-bearing launch failure in the unavailable response', async () => {
+		const failure = new BrowserError('termination unconfirmed', 'BROWSER_FIXTURE', {
+			pid: process.pid,
+		})
+		const fixture = createBrowseFixture({
+			launch: () => {
+				throw failure
+			},
+		})
+		try {
+			await expect(fixture.server.start()).rejects.toThrow(`pid ${process.pid}`)
+			expect((await fixture.pair.call(2, 'look', { search: 'cart' })).text).toContain(
+				`pid ${process.pid}`,
+			)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('resets strikes when the first grant follows both spare refusals', async () => {
+		const version = Promise.withResolvers<void>()
+		const fixture = createBrowseFixture({ pool: { size: 2 } }, { version: () => version.promise })
+		fixture.launcher.refuse(1)
+		const starting = fixture.server.start()
+		try {
+			await waitForCondition(
+				'both spare refusals',
+				() => fixture.log.lines.filter((line) => line.includes('UNAVAILABLE')).length === 2,
+			)
+			expect(fixture.launcher.browsers).toHaveLength(3)
+			version.resolve()
+			await starting
+			await waitForCondition(
+				'refills after grant reset',
+				() => fixture.launcher.browsers.length === 5,
+			)
+			await waitForCondition('exhausted report', () =>
+				fixture.log.lines.some((line) => line.includes('EXHAUSTED')),
+			)
+			expect(fixture.log.lines.filter((line) => line.includes('EXHAUSTED'))).toHaveLength(1)
+		} finally {
+			version.resolve()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('never starts the pool again on demand after its bound is spent', async () => {
+		const fixture = createBrowseFixture(undefined, {
+			version: (call) => {
+				if (call > 1) throw new Error('ping refused')
+			},
+		})
+		fixture.launcher.refuse(1)
+		try {
+			await fixture.server.start()
+			for (const id of [2, 3, 4]) {
+				expect((await fixture.pair.call(id, 'look', { search: 'cart' })).text).toMatch(
+					/^BROWSER_SERVER_UNAVAILABLE:/,
+				)
+				expect(fixture.launcher.browsers).toHaveLength(3)
+			}
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('makes one acquire per call without pinging the acquired browser again', async () => {
+		const fixture = createBrowseFixture(undefined, {
+			version: (call) => {
+				if (call > 1) throw new Error('ping refused')
+			},
+		})
+		try {
+			await fixture.server.start()
+			for (const id of [2, 3, 4]) {
+				const before = fixture.launcher.browsers.length
+				expect((await fixture.pair.call(id, 'look', { search: 'cart' })).error).toBe(false)
+				expect(fixture.launcher.browsers.length - before).toBe(1)
+			}
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+	it('shares one failover acquire between concurrent calls and leaves the refill blank', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		try {
+			await fixture.server.start()
+			await waitForCondition(
+				'warm spare',
+				() => fixture.launcher.browsers[1]?.fixture !== undefined,
+			)
+			await requireValue(fixture.launcher.browsers[0], 'lease').disconnect()
+			const replies = await Promise.all([
+				fixture.pair.call(2, 'tabs', { search: 'tabs' }),
+				fixture.pair.call(3, 'look', { search: 'cart' }),
+			])
+			expect(replies.every((reply) => !reply.error)).toBe(true)
+			await waitForCondition(
+				'refill page',
+				() => fixture.launcher.browsers[2]?.fixture !== undefined,
+			)
+			const spare = requireValue(fixture.launcher.browsers[1]?.fixture, 'adopted spare')
+			const refill = requireValue(fixture.launcher.browsers[2]?.fixture, 'refill')
+			expect(
+				spare.transport.sent.some((message) => message.method === 'Accessibility.getFullAXTree'),
+			).toBe(true)
+			expect(refill.transport.sent.some((message) => message.method === 'Page.navigate')).toBe(
+				false,
+			)
+			expect(
+				refill.transport.sent.find((message) => message.method === 'Target.createTarget')?.params?.[
+					'url'
+				],
+			).toBe('about:blank')
+			expect(fixture.launcher.browsers).toHaveLength(3)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	for (const size of [0, 4, 1.5, -1, NaN, Infinity]) {
+		it(`refuses pool size ${size}`, () => {
+			expect(() => createBrowserMCPServer({ pool: { size } })).toThrow(
+				expect.objectContaining({ code: 'BROWSER_SERVER_OPTIONS' }),
+			)
+		})
+	}
+
+	it('destroys during a held connect without releasing it or writing afterward', async () => {
+		const fixture = createBrowseFixture()
+		fixture.launcher.hold()
+		const starting = fixture.server.start()
+		try {
+			fixture.pair.send({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} })
+			await waitForCondition('held connect', () => fixture.launcher.browsers[0]?.connects === 1)
+			await fixture.server.destroy()
+			await starting
+			expect(fixture.pair.answered).toEqual([])
+			expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('destroys during a hand-out ping without refilling', async () => {
+		const version = Promise.withResolvers<void>()
+		let pinged = false
+		const fixture = createBrowseFixture(undefined, {
+			version: () => {
+				pinged = true
+				return version.promise
+			},
+		})
+		const starting = fixture.server.start()
+		try {
+			await waitForCondition('hand-out ping', () => pinged)
+			await fixture.server.destroy()
+			await starting
+			expect(fixture.launcher.browsers).toHaveLength(1)
+			expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])
+		} finally {
+			version.resolve()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('closes in one turn without sweeping an exited owner or attaching listeners', async () => {
+		const fixture = createBrowseFixture()
+		const owner = readExitedProcessId()
+		const folder = fixture.scratch.ensure(`browsers/.profiles/${owner}`)
+		const listeners = process.listenerCount('SIGTERM')
+		try {
+			await Promise.all([fixture.server.start(), fixture.server.destroy()])
+			expect(fixture.launcher.browsers).toEqual([])
+			expect(existsSync(folder)).toBe(true)
+			expect(process.listenerCount('SIGTERM')).toBe(listeners)
+			expect(fixture.pair.input.listenerCount('end')).toBe(0)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('destroys a never-started server without listing an absent profiles directory', async () => {
+		const fixture = createBrowseFixture()
+		try {
+			await fixture.server.destroy()
+			expect(existsSync(fixture.root)).toBe(false)
+			await expect(fixture.server.start()).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ENDED' })
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('refuses calls after unusable-root setup instead of parking on an unstarted pool', async () => {
+		const scratch = createScratch()
+		const root = scratch.write('file', 'regular file')
+		const code = await mkdir(join(root, '.profiles'), { recursive: true }).then(
+			() => undefined,
+			readErrorCode,
+		)
+		expect(typeof code).toBe('string')
+		const fixture = createBrowseFixture({ root })
+		try {
+			await expect(fixture.server.start()).rejects.toThrow(String(code))
+			expect(await fixture.pair.initialize()).toMatchObject({
+				code: -32000,
+				data: { code: 'BROWSER_SERVER_UNAVAILABLE' },
+			})
+			const answer = await fixture.pair.request(2, 'tools/call', {
+				name: 'look',
+				arguments: { search: 'cart' },
+				_meta: {
+					'io.modelcontextprotocol/protocolVersion': MCP_MODERN_VERSION,
+					'io.modelcontextprotocol/clientCapabilities': {},
+				},
+			})
+			expect(JSON.stringify(answer)).toContain('BROWSER_SERVER_UNAVAILABLE:')
+			await fixture.server.destroy()
+		} finally {
+			await fixture.teardown.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it('sweeps missing records and parsed records whose browser pid is gone', async () => {
+		const fixture = createBrowseFixture()
+		const pid = readExitedProcessId()
+		const absent = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(pid, '11111111-1111-4111-8111-111111111111')}`,
+		)
+		const gone = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(pid, '22222222-2222-4222-8222-222222222222')}`,
+		)
+		writeFileSync(
+			join(gone, BROWSER_SERVER_RECORD),
+			JSON.stringify({ pid, endpoint: 'ws://127.0.0.1:12345/devtools/browser/gone' }),
+		)
+		const legacy = fixture.scratch.ensure('browsers/.profiles/33333333-3333-4333-8333-333333333333')
+		const live = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(process.pid, '44444444-4444-4444-8444-444444444444')}`,
+		)
+		try {
+			await fixture.server.start()
+			await waitForCondition(
+				'removed stale folders',
+				() => !existsSync(absent) && !existsSync(gone),
+			)
+			expect(existsSync(legacy)).toBe(true)
+			expect(existsSync(live)).toBe(true)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('keeps unreadable and non-loopback records', async () => {
+		const fixture = createBrowseFixture()
+		const peer = await createCDPTestServer()
+		peer.script('Browser.close', {})
+		const pid = readExitedProcessId()
+		const unreadable = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(pid, '11111111-1111-4111-8111-111111111111')}`,
+		)
+		mkdirSync(join(unreadable, BROWSER_SERVER_RECORD))
+		const refused = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(pid, '22222222-2222-4222-8222-222222222222')}`,
+		)
+		writeFileSync(
+			join(refused, BROWSER_SERVER_RECORD),
+			JSON.stringify({
+				pid: process.pid,
+				endpoint: peer.endpoint
+					.replace('127.0.0.1', 'localhost')
+					.replace('/cdp', '/devtools/browser/foreign'),
+			}),
+		)
+		const marker = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(pid, '33333333-3333-4333-8333-333333333333')}`,
+		)
+		const order = readdirSync(dirname(marker))
+		expect(order.indexOf(basename(marker))).toBeGreaterThan(order.indexOf(basename(refused)))
+		try {
+			await fixture.server.start()
+			await waitForCondition('sweep passed the refused record', () => !existsSync(marker))
+			await fixture.server.destroy()
+			expect(existsSync(unreadable)).toBe(true)
+			expect(existsSync(refused)).toBe(true)
+			expect(peer.received).toEqual([])
+		} finally {
+			await fixture.teardown.destroy()
+			await peer.close()
+		}
+	})
+	it('reports only a persistent folder removal failure at shutdown', async (context) => {
+		context.skip(
+			process.platform !== 'win32',
+			'Windows holds a child current-directory handle against rm; POSIX permits unlinking that directory',
+		)
+		for (const persistent of [false, true]) {
+			const fixture = createBrowseFixture()
+			await fixture.server.start()
+			const browser = requireValue(fixture.launcher.browsers[0], 'lease')
+			const folder = requireValue(browser.options.profile, 'profile')
+			const child = spawn(process.execPath, ['-e', 'console.log("ready");process.stdin.resume()'], {
+				cwd: folder,
+				stdio: ['pipe', 'pipe', 'ignore'],
+			})
+			const pid = requireValue(child.pid, 'folder holder')
+			try {
+				await waitForEvent<[Buffer]>((listener) => {
+					child.stdout?.once('data', listener)
+					return () => child.stdout?.off('data', listener)
+				}, 'child holds profile directory')
+				await browser.disconnect()
+				expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(false)
+				expect(existsSync(folder)).toBe(true)
+				if (!persistent) {
+					child.stdin?.end()
+					await waitForProcessExit(pid)
+				}
+				const failure = await fixture.server.destroy().then(
+					() => undefined,
+					(error: unknown) => error,
+				)
+				const expected = expect.objectContaining({
+					errors: expect.arrayContaining([expect.objectContaining({ code: 'EBUSY' })]),
+				})
+				expect(failure).toEqual(persistent ? expected : undefined)
+				expect(existsSync(folder)).toBe(persistent)
+			} finally {
+				child.kill()
+				await waitForProcessExit(pid)
+				await fixture.teardown.destroy().catch(() => undefined)
+			}
+		}
+	}, 15000)
+	it('cancels a per-call ping without losing the held browser or answering the request', async () => {
+		const held = Promise.withResolvers<void>()
+		let calls = 0
+		const fixture = createBrowseFixture(undefined, {
+			version: (call) => {
+				calls = call
+				if (call === 2) return held.promise
+			},
+		})
+		try {
+			await fixture.server.start()
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'look', arguments: { search: 'cart' } },
+			})
+			await waitForCondition('held per-call ping', () => calls === 2)
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				method: 'notifications/cancelled',
+				params: { requestId: 2, reason: 'caller stopped' },
+			})
+			await fixture.pair.request(3, 'ping')
+			held.resolve()
+			expect((await fixture.pair.call(4, 'look', { search: 'cart' })).error).toBe(false)
+			expect(fixture.pair.answered).not.toContain(2)
+			expect(fixture.launcher.browsers).toHaveLength(1)
+			expect(fixture.launcher.browsers[0]?.destroyed).toBe(false)
+		} finally {
+			held.resolve()
+			await fixture.teardown.destroy()
+		}
+	})
+	it('keeps a stalling sweep off the handshake and aborts its attach at destroy', async () => {
+		const fixture = createBrowseFixture()
+		const stall = await createStallServer()
+		const folder = fixture.scratch.ensure(
+			join('browsers', '.profiles', formatBrowserLockEntry(readExitedProcessId(), randomUUID())),
+		)
+		writeFileSync(
+			join(folder, BROWSER_SERVER_RECORD),
+			JSON.stringify({
+				pid: process.pid,
+				endpoint: stall.endpoint.replace('/cdp', '/devtools/browser/stall'),
+			}),
+		)
+		try {
+			await fixture.server.start()
+			expect(await fixture.pair.initialize()).toHaveProperty('serverInfo')
+			await fixture.server.destroy()
+			expect(existsSync(folder)).toBe(true)
+		} finally {
+			await fixture.teardown.destroy()
+			await stall.close()
+		}
+	})
+	it('rechecks a sweep-kept live child after the child exits', async () => {
+		const fixture = createBrowseFixture()
+		const peer = await createCDPTestServer()
+		const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+			stdio: ['pipe', 'ignore', 'ignore'],
+		})
+		const pid = requireValue(child.pid, 'child pid')
+		const folder = fixture.scratch.ensure(
+			join('browsers', '.profiles', formatBrowserLockEntry(readExitedProcessId(), randomUUID())),
+		)
+		writeFileSync(
+			join(folder, BROWSER_SERVER_RECORD),
+			JSON.stringify({ pid, endpoint: peer.endpoint.replace('/cdp', '/devtools/browser/child') }),
+		)
+		try {
+			await fixture.server.start()
+			await waitForCondition('sweep close request', () =>
+				peer.received.some((message) => message.method === 'Browser.close'),
+			)
+			const request = requireValue(
+				peer.received.find((message) => message.method === 'Browser.close'),
+				'close request',
+			)
+			peer.fail(request.id, 'refusing close')
+			await waitForCondition('sweep released connection', () => peer.sockets === 0)
+			expect(existsSync(folder)).toBe(true)
+			child.stdin?.end()
+			await waitForProcessExit(pid)
+			await fixture.server.destroy()
+			expect(existsSync(folder)).toBe(false)
+		} finally {
+			child.kill()
+			await waitForProcessExit(pid)
+			await fixture.teardown.destroy()
+			await peer.close()
+		}
+	})
+	it('reports an unreadable profiles directory when the host enforces mode 0300', async (context) => {
+		context.skip(
+			process.platform === 'win32' || process.getuid?.() === 0,
+			'POSIX non-root mode 0300 denies readdir while permitting mkdir; Windows modes and root do not enforce that restriction',
+		)
+		const fixture = createBrowseFixture()
+		const profiles = fixture.scratch.ensure('browsers/.profiles')
+		chmodSync(profiles, 0o300)
+		try {
+			expect(() => readdirSync(profiles)).toThrow(expect.objectContaining({ code: 'EACCES' }))
+			await fixture.server.start()
+			expect(await fixture.pair.initialize()).toHaveProperty('serverInfo')
+			await waitForCondition('sweep failure line', () =>
+				fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_SWEEP')),
+			)
+			expect(
+				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_SWEEP')),
+			).toHaveLength(1)
+		} finally {
+			chmodSync(profiles, 0o700)
+			await fixture.teardown.destroy()
+		}
+	})
+	it('writes one teardown line when a later end listener emits SIGTERM', async () => {
+		const failure = new Error('fixture teardown failed')
+		const fixture = createBrowseFixture(undefined, { cleanup: failure })
+		const exitCode = process.exitCode
+		try {
+			await fixture.server.start()
+			fixture.pair.input.on('end', () => process.emit('SIGTERM'))
+			fixture.pair.input.end()
+			await waitForCondition('teardown line', () =>
+				fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_TEARDOWN')),
+			)
+			expect(
+				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_TEARDOWN')),
+			).toHaveLength(1)
+			expect(process.exitCode).toBe(1)
+			await expect(fixture.server.destroy()).rejects.toMatchObject({ errors: [failure] })
+		} finally {
+			await fixture.teardown.destroy().catch(() => undefined)
+			process.exitCode = exitCode
+		}
+	})
+
+	it('retains a throwing log write for destroy without an unhandled rejection', async () => {
+		const failure = new Error('host write threw')
+		const log = new Writable({
+			write() {
+				throw failure
+			},
+		})
+		const unhandled = createRecorder<[unknown]>()
+		process.on('unhandledRejection', unhandled.handler)
+		const fixture = createBrowseFixture({ log }, { failures: 2 })
+		try {
+			await expect(fixture.server.start()).rejects.toMatchObject({
+				code: 'BROWSER_SERVER_UNAVAILABLE',
+			})
+			await expect(fixture.server.destroy()).rejects.toMatchObject({ errors: [failure] })
+			await waitForDelay()
+			expect(unhandled.calls).toEqual([])
+		} finally {
+			process.off('unhandledRejection', unhandled.handler)
+			await fixture.teardown.destroy().catch(() => undefined)
+			log.destroy()
+		}
+	})
+
+	it('retains the callback error from a destroyed log stream without adding listeners', async () => {
+		const log = new Writable({
+			write(_chunk, _encoding, callback) {
+				callback()
+			},
+		})
+		log.destroy()
+		const listeners = log.listenerCount('error')
+		const unhandled = createRecorder<[unknown]>()
+		process.on('unhandledRejection', unhandled.handler)
+		const fixture = createBrowseFixture({ log }, { failures: 2 })
+		try {
+			await expect(fixture.server.start()).rejects.toMatchObject({
+				code: 'BROWSER_SERVER_UNAVAILABLE',
+			})
+			await expect(fixture.server.destroy()).rejects.toMatchObject({
+				errors: expect.arrayContaining([expect.objectContaining({ code: 'ERR_STREAM_DESTROYED' })]),
+			})
+			expect(log.listenerCount('error')).toBe(listeners)
+			await waitForDelay()
+			expect(unhandled.calls).toEqual([])
+		} finally {
+			process.off('unhandledRejection', unhandled.handler)
+			await fixture.teardown.destroy().catch(() => undefined)
+		}
+	})
+})
 
 describe('BrowserMCPServer', () => {
-	it('lists the vocabulary with its copy before any launch', async () => {
+	it('eager U6 launches before input and lists the vocabulary with its copy', async () => {
 		const scratch = createScratch()
 		const root = join(scratch.path, 'tmp/browsers')
 		const launcher = new BrowserLauncher()
@@ -42,6 +695,8 @@ describe('BrowserMCPServer', () => {
 		teardown.add(() => server.destroy())
 		try {
 			await server.start()
+			expect(launcher.browsers).toHaveLength(1)
+			expect(pair.answered).toEqual([])
 			expect(await pair.initialize()).toMatchObject({ serverInfo: { name: 'browse' } })
 			const listed = await pair.request(2, 'tools/list')
 			const tools = listed['tools']
@@ -61,8 +716,8 @@ describe('BrowserMCPServer', () => {
 					copy.annotations === undefined ? undefined : toolAnnotationsToMCP(copy.annotations),
 				)
 			}
-			expect(launcher.browsers).toStrictEqual([])
-			expect(existsSync(root)).toBe(false)
+			expect(launcher.browsers).toHaveLength(1)
+			expect(existsSync(root)).toBe(true)
 		} finally {
 			await teardown.destroy()
 		}
@@ -119,63 +774,6 @@ describe('BrowserMCPServer', () => {
 		}
 	})
 
-	it('rejects every caller of a failed launch and launches again on the next call', async () => {
-		const scratch = createScratch()
-		const root = join(scratch.path, 'tmp/browsers')
-		const launcher = new BrowserLauncher({ failures: 1 })
-		const pair = new MCPStdioPair()
-		const server = createBrowserMCPServer({ root, launch: launcher.launch, stdio: pair })
-		const teardown = createTeardown()
-		teardown.add(() => scratch.destroy())
-		teardown.add(() => server.destroy())
-		try {
-			await server.start()
-			await pair.initialize()
-			launcher.hold()
-			pair.send(
-				{
-					jsonrpc: '2.0',
-					id: 2,
-					method: 'tools/call',
-					params: { name: 'look', arguments: { search: 'the cart' } },
-				},
-				{
-					jsonrpc: '2.0',
-					id: 3,
-					method: 'tools/call',
-					params: { name: 'look', arguments: { search: 'the cart' } },
-				},
-			)
-			await waitForCondition(
-				'the failing launch to park at connect',
-				() => launcher.browsers[0]?.connects === 1,
-				{
-					budget: 3000,
-					interval: 10,
-				},
-			)
-			await waitForDelay()
-			launcher.release()
-			const refused = {
-				content: [{ type: 'text', text: 'The fixture refused the launch' }],
-				isError: true,
-			}
-			expect(await pair.answer(2)).toStrictEqual(refused)
-			expect(await pair.answer(3)).toStrictEqual(refused)
-			const failed = requireValue(launcher.browsers[0], 'no launch was recorded')
-			expect(failed.destroyed).toBe(true)
-			expect(existsSync(requireValue(failed.options.profile, 'the launch named no profile'))).toBe(
-				false,
-			)
-			const retried = await pair.call(4, 'look', { search: 'the cart' })
-			expect(retried.error).toBe(false)
-			expect(launcher.browsers).toHaveLength(2)
-			expect(readdirSync(join(root, '.profiles'))).toHaveLength(1)
-		} finally {
-			await teardown.destroy()
-		}
-	})
-
 	it('gives a second server in the same root its own profile and never attaches', async () => {
 		const scratch = createScratch()
 		const root = join(scratch.path, 'tmp/browsers')
@@ -216,6 +814,11 @@ describe('BrowserMCPServer', () => {
 				expect(existsSync(profile)).toBe(true)
 			}
 			expect(new Set(profiles).size).toBe(2)
+			await servers[0]?.destroy()
+			expect(existsSync(requireValue(profiles[1], 'second profile'))).toBe(true)
+			expect(
+				(await requireValue(pairs[1], 'second pair').call(3, 'look', { search: 'cart' })).error,
+			).toBe(false)
 			for (const server of servers) await server.destroy()
 			expect(profiles.filter((profile) => existsSync(profile))).toStrictEqual([])
 			expect(readdirSync(join(root, '.profiles'))).toStrictEqual([])
@@ -571,8 +1174,8 @@ describe('BrowserMCPServer', () => {
 				})
 				await destroying
 				await waitForDelay(50)
-				expect(launcher.browsers).toStrictEqual([])
-				expect(existsSync(root)).toBe(false)
+				expect(launcher.browsers).toHaveLength(1)
+				expect(readdirSync(join(root, '.profiles'))).toEqual([])
 				expect(pair.answered).not.toContain(2)
 			} finally {
 				await teardown.destroy()
