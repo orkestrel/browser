@@ -40,6 +40,10 @@ export const BROWSE_RECORD_BLOCKS: readonly string[] = Object.freeze([
 export const BROWSE_SIGSTOP_REASON =
 	'NOT-EVIDENCED: SIGSTOP is refused by the runtime with ERR_UNKNOWN_SIGNAL'
 
+/** Explains why a Windows runtime cannot prove a child's cooperative SIGTERM ending. */
+export const BROWSE_SIGTERM_REASON =
+	'NOT-EVIDENCED: Node ends a Windows child outright on SIGTERM, so its cooperative handler cannot run'
+
 /** Records the process and endpoint a real browser announced when it connected. */
 export interface BrowseConnection {
 	readonly pid: number | undefined

@@ -420,7 +420,7 @@ describe('waitForProcessExit', () => {
 })
 
 describe('startBrowseChild', () => {
-	it('refuses a first look that answers an error, and the child exits 0 at the end of its input', async () => {
+	it('refuses a first look that answers an error, and the child exits 1 at the end of its input', async () => {
 		const scratch = createTempDirectory()
 		const child = new BrowseChild(join(WORKSPACE, 'dist/bin/main.js'), scratch.path, {
 			BROWSE_EXECUTABLE: join(scratch.path, 'missing/chrome'),
@@ -428,7 +428,7 @@ describe('startBrowseChild', () => {
 		try {
 			await expect(startBrowseChild(child)).rejects.toThrow(/^the first look answered .*ENOENT/u)
 			endBrowseChild(child, 'EOF')
-			expect(await child.ending).toStrictEqual({ code: 0, signal: null })
+			expect(await child.ending).toStrictEqual({ code: 1, signal: null })
 		} finally {
 			await child.destroy()
 		}

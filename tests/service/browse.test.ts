@@ -30,6 +30,7 @@ import {
 	requireSystemBrowser,
 	BROWSE_RECORD_BLOCKS,
 	BROWSE_SIGSTOP_REASON,
+	BROWSE_SIGTERM_REASON,
 } from '../setupService.js'
 import {
 	BrowseLog,
@@ -48,106 +49,102 @@ import {
 describe('eager U8 built browse', () => {
 	for (const pool of [undefined, '', '1', '2', '3']) {
 		for (const ending of BROWSE_ENDINGS) {
-			// Node ends a child outright on Windows SIGTERM, so its cooperative handler cannot run.
-			it.runIf(ending === 'EOF' || COOPERATIVE_SIGTERM)(
-				`answers initialize, tools/list, and navigate with BROWSE_POOL=${JSON.stringify(pool)} and cleans profiles on ${ending}`,
-				async () => {
-					const scratch = createScratch()
-					const pages = await createFixtureServer()
-					const child = new BrowseChild(
-						fileURLToPath(new URL('../../dist/bin/main.js', import.meta.url)),
-						scratch.path,
-						{
-							BROWSE_EXECUTABLE: requireSystemBrowser().executable,
-							...(pool === undefined ? {} : { BROWSE_POOL: pool }),
+			it(`answers initialize, tools/list, and navigate with BROWSE_POOL=${JSON.stringify(pool)} and cleans profiles on ${ending}`, async (context) => {
+				const cooperative = ending === 'EOF' || COOPERATIVE_SIGTERM
+				context.skip(!cooperative, BROWSE_SIGTERM_REASON)
+				const scratch = createScratch()
+				const pages = await createFixtureServer()
+				const child = new BrowseChild(
+					fileURLToPath(new URL('../../dist/bin/main.js', import.meta.url)),
+					scratch.path,
+					{
+						BROWSE_EXECUTABLE: requireSystemBrowser().executable,
+						...(pool === undefined ? {} : { BROWSE_POOL: pool }),
+					},
+				)
+				const pids: number[] = []
+				try {
+					child.send({
+						jsonrpc: '2.0',
+						id: 1,
+						method: 'initialize',
+						params: {
+							protocolVersion: '2025-06-18',
+							capabilities: {},
+							clientInfo: { name: 'browse-bin-test', version: '1.0.0' },
 						},
-					)
-					const pids: number[] = []
-					try {
-						child.send({
-							jsonrpc: '2.0',
-							id: 1,
-							method: 'initialize',
-							params: {
-								protocolVersion: '2025-06-18',
-								capabilities: {},
-								clientInfo: { name: 'browse-bin-test', version: '1.0.0' },
-							},
-						})
-						await waitForCondition('built initialize', () => child.lines.length === 1, {
-							budget: 15000,
-						})
-						expect(JSON.parse(child.lines[0] ?? '')).toMatchObject({
-							id: 1,
-							result: { serverInfo: { name: 'browse' } },
-						})
-						child.send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
-						await waitForCondition('built vocabulary', () => child.lines.length === 2)
-						const answer: unknown = JSON.parse(child.lines[1] ?? '')
-						const result = isRecord(answer) ? answer['result'] : undefined
-						const tools = isRecord(result) ? result['tools'] : undefined
-						expect(
-							Array.isArray(tools)
-								? tools.map((tool: unknown) => (isRecord(tool) ? tool['name'] : undefined))
-								: undefined,
-						).toEqual(BROWSE_VOCABULARY)
-						const url = pages.url('/form')
-						child.send({
-							jsonrpc: '2.0',
-							id: 3,
-							method: 'tools/call',
-							params: { name: 'navigate', arguments: { url } },
-						})
-						await waitForCondition('built navigate', () => child.lines.length === 3, {
-							budget: 15000,
-						})
-						expect(JSON.parse(child.lines[2] ?? '')).toMatchObject({
-							id: 3,
-							result: { content: [{ type: 'text', text: expect.stringContaining(url) }] },
-						})
-						expect(JSON.parse(child.lines[2] ?? '')).not.toHaveProperty('result.isError', true)
-						const profiles = join(scratch.path, 'tmp/browsers/.profiles')
-						const size = pool === undefined || pool === '' ? 1 : Number(pool)
-						await waitForCondition(
-							'built warm floor records',
-							() => {
-								const names = readdirSync(profiles)
-								return (
-									names.length === size &&
-									names.every((name) => existsSync(join(profiles, name, 'browse.json')))
-								)
-							},
-							{ budget: 15000 },
-						)
-						for (const name of readdirSync(profiles)) {
-							expect(name.startsWith(`${child.pid}-`)).toBe(true)
-							const record = requireValue(
-								parseBrowserProfileRecord(
-									readFileSync(join(profiles, name, 'browse.json'), 'utf8'),
-								),
-								'built browser record',
+					})
+					await waitForCondition('built initialize', () => child.lines.length === 1, {
+						budget: 15000,
+					})
+					expect(JSON.parse(child.lines[0] ?? '')).toMatchObject({
+						id: 1,
+						result: { serverInfo: { name: 'browse' } },
+					})
+					child.send({ jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} })
+					await waitForCondition('built vocabulary', () => child.lines.length === 2)
+					const answer: unknown = JSON.parse(child.lines[1] ?? '')
+					const result = isRecord(answer) ? answer['result'] : undefined
+					const tools = isRecord(result) ? result['tools'] : undefined
+					expect(
+						Array.isArray(tools)
+							? tools.map((tool: unknown) => (isRecord(tool) ? tool['name'] : undefined))
+							: undefined,
+					).toEqual(BROWSE_VOCABULARY)
+					const url = pages.url('/form')
+					child.send({
+						jsonrpc: '2.0',
+						id: 3,
+						method: 'tools/call',
+						params: { name: 'navigate', arguments: { url } },
+					})
+					await waitForCondition('built navigate', () => child.lines.length === 3, {
+						budget: 15000,
+					})
+					expect(JSON.parse(child.lines[2] ?? '')).toMatchObject({
+						id: 3,
+						result: { content: [{ type: 'text', text: expect.stringContaining(url) }] },
+					})
+					expect(JSON.parse(child.lines[2] ?? '')).not.toHaveProperty('result.isError', true)
+					const profiles = join(scratch.path, 'tmp/browsers/.profiles')
+					const size = pool === undefined || pool === '' ? 1 : Number(pool)
+					await waitForCondition(
+						'built warm floor records',
+						() => {
+							const names = readdirSync(profiles)
+							return (
+								names.length === size &&
+								names.every((name) => existsSync(join(profiles, name, 'browse.json')))
 							)
-							pids.push(record.pid)
-							expect(probeProcess(record.pid)).toBe(true)
-						}
-						endBrowseChild(child, ending)
-						expect(await child.ending).toEqual({ code: 0, signal: null })
-						expect(child.stderr).toBe('')
-						expect(child.lines).toHaveLength(3)
-						expect(readdirSync(profiles)).toEqual([])
-						for (const pid of pids) expect(probeProcess(pid)).toBe(false)
-					} finally {
-						await child.destroy()
-						for (const pid of pids) {
-							if (!probeProcess(pid)) continue
-							process.kill(pid, 'SIGKILL')
-							await waitForProcessExit(pid)
-						}
-						await pages.destroy()
-						scratch.destroy()
+						},
+						{ budget: 15000 },
+					)
+					for (const name of readdirSync(profiles)) {
+						expect(name.startsWith(`${child.pid}-`)).toBe(true)
+						const record = requireValue(
+							parseBrowserProfileRecord(readFileSync(join(profiles, name, 'browse.json'), 'utf8')),
+							'built browser record',
+						)
+						pids.push(record.pid)
+						expect(probeProcess(record.pid)).toBe(true)
 					}
-				},
-			)
+					endBrowseChild(child, ending)
+					expect(await child.ending).toEqual({ code: 0, signal: null })
+					expect(child.stderr).toBe('')
+					expect(child.lines).toHaveLength(3)
+					expect(readdirSync(profiles)).toEqual([])
+					for (const pid of pids) expect(probeProcess(pid)).toBe(false)
+				} finally {
+					await child.destroy()
+					for (const pid of pids) {
+						if (!probeProcess(pid)) continue
+						process.kill(pid, 'SIGKILL')
+						await waitForProcessExit(pid)
+					}
+					await pages.destroy()
+					scratch.destroy()
+				}
+			})
 		}
 	}
 })
