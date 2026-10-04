@@ -1274,6 +1274,23 @@ describe('eager U6', () => {
 })
 
 describe('BrowserMCPServer', () => {
+	it('forwards viewport to every warm, spare, and refill', async () => {
+		const viewport = { width: 390, height: 844 }
+		const fixture = createBrowseFixture({ viewport, pool: { size: 2 } })
+		try {
+			await fixture.server.start()
+			await waitForCondition('viewport spare', () => fixture.launcher.browsers.length === 2)
+			for (const browser of fixture.launcher.browsers)
+				expect(browser.options.viewport).toEqual(viewport)
+			requireValue(fixture.launcher.browsers[0], 'lease').drop()
+			expect((await fixture.pair.call(2, 'look', { search: 'page' })).error).toBe(false)
+			await waitForCondition('viewport refill', () => fixture.launcher.browsers.length === 3)
+			expect(fixture.launcher.browsers[2]?.options.viewport).toEqual(viewport)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
 	it('eager U6 launches before input and lists the vocabulary with its copy', async () => {
 		const scratch = createScratch()
 		const root = join(scratch.path, 'tmp/browsers')
@@ -1287,6 +1304,7 @@ describe('BrowserMCPServer', () => {
 			await server.start()
 			expect(launcher.browsers).toHaveLength(1)
 			expect(pair.answered).toEqual([])
+			expect(launcher.browsers[0]?.options).not.toHaveProperty('viewport')
 			expect(await pair.initialize()).toMatchObject({ serverInfo: { name: 'browse' } })
 			const listed = await pair.request(2, 'tools/list')
 			const tools = listed['tools']

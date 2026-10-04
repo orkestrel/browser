@@ -355,7 +355,7 @@ export interface FileBrowserStoreOptions {
  * Creates a browser a browse server connects while warming its pool.
  *
  * @param options - The launch the server composes: `headless`, `executable`, the profile it
- *   owns, `cdp.discover` set to `false`, and the signal its `destroy()` aborts
+ *   owns, the optional `viewport`, `cdp.discover` set to `false`, and the signal its `destroy()` aborts
  * @returns A browser whose `connect()` launches it
  */
 export type BrowserLaunchFunction = (options: BrowserOptions) => BrowserInterface
@@ -387,6 +387,8 @@ export interface BrowserSlotWatch {
  *   `true`
  * - `executable` — the path of the Chromium executable the server launches. Default: the browser
  *   `findSystemBrowser` finds
+ * - `viewport` — the default viewport for every page in each browser's isolated context;
+ *   omission keeps the browser's launch default
  * - `readonly` — if `true`, refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs;
  *   if `false` or omitted, every tool runs
  * - `launch` — creates each browser the pool warms. Default: `createBrowser`
@@ -401,6 +403,7 @@ export interface BrowserMCPServerOptions {
 	readonly root?: string
 	readonly headless?: boolean
 	readonly executable?: string
+	readonly viewport?: BrowserViewport
 	readonly readonly?: boolean
 	readonly launch?: BrowserLaunchFunction
 	readonly stdio?: StdioServerOptions

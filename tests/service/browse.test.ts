@@ -1,3 +1,4 @@
+import type { BrowserPageInterface } from '@src/core'
 import {
 	existsSync,
 	readdirSync,
@@ -55,6 +56,78 @@ import {
 } from '../setupServer.js'
 
 describe('eager U8 built browse', () => {
+	it('reads innerWidth 390 with BROWSE_VIEWPORT=390x844', async () => {
+		const scratch = createScratch()
+		const pages = await createLoopback(
+			createServer((_request, response) => {
+				response.setHeader('Content-Type', 'text/html')
+				response.end(
+					'<!doctype html><body><script>document.body.textContent = innerWidth + "x" + innerHeight</script>',
+				)
+			}),
+		)
+		const child = new BrowseChild(
+			fileURLToPath(new URL('../../dist/bin/main.js', import.meta.url)),
+			scratch.path,
+			{ BROWSE_EXECUTABLE: requireSystemBrowser().executable, BROWSE_VIEWPORT: '390x844' },
+		)
+		try {
+			child.send({
+				jsonrpc: '2.0',
+				id: 1,
+				method: 'tools/call',
+				params: {
+					name: 'navigate',
+					arguments: { url: pages.url },
+				},
+			})
+			await waitForCondition('viewport navigation', () => child.lines.length === 1, {
+				budget: 15000,
+			})
+			expect(JSON.parse(child.lines[0] ?? '')).not.toHaveProperty('result.isError', true)
+			child.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: {
+					name: 'plain',
+					arguments: { search: '' },
+				},
+			})
+			await waitForCondition('viewport reading', () => child.lines.length === 2)
+			expect(JSON.parse(child.lines[1] ?? '')).toMatchObject({
+				id: 2,
+				result: { content: [{ type: 'text', text: expect.stringContaining('390x844') }] },
+			})
+			child.end()
+			expect(await child.ending).toEqual({ code: 0, signal: null })
+			expect(child.stderr).toBe('')
+		} finally {
+			await child.destroy()
+			await pages.destroy()
+			scratch.destroy()
+		}
+	})
+
+	it('refuses malformed BROWSE_VIEWPORT with BROWSER_SERVER_ENVIRONMENT', async () => {
+		const scratch = createScratch()
+		const child = new BrowseChild(
+			fileURLToPath(new URL('../../dist/bin/main.js', import.meta.url)),
+			scratch.path,
+			{ BROWSE_VIEWPORT: 'widexhigh', BROWSE_EXECUTABLE: join(scratch.path, 'missing/chrome') },
+		)
+		try {
+			child.end()
+			expect(await child.ending).toEqual({ code: 1, signal: null })
+			expect(child.stderr).toContain('browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_VIEWPORT')
+			expect(child.lines).toEqual([])
+			expect(existsSync(join(scratch.path, 'tmp/browsers'))).toBe(false)
+		} finally {
+			await child.destroy()
+			scratch.destroy()
+		}
+	})
+
 	for (const pool of [undefined, '', '1', '2', '3']) {
 		for (const ending of BROWSE_ENDINGS) {
 			it(`answers initialize, tools/list, and navigate with BROWSE_POOL=${JSON.stringify(pool)} and cleans profiles on ${ending}`, async (context) => {
@@ -158,6 +231,57 @@ describe('eager U8 built browse', () => {
 })
 
 describe('eager U7 real browse', () => {
+	it('inherits viewport on isolated pages, popups, spares, and refills', async () => {
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			executable: requireSystemBrowser().executable,
+			viewport: { width: 390, height: 844 },
+			pool: { size: 2 },
+			launch: launcher.launch,
+		})
+		try {
+			await fixture.server.start()
+			for (const index of [0, 1, 2]) {
+				await waitForCondition(
+					'isolated viewport page',
+					() =>
+						launcher.browsers[index]
+							?.contexts()
+							.some((context) => context.id !== undefined && context.pages().length > 0) === true,
+					{ budget: 15000 },
+				)
+				const browser = requireValue(launcher.browsers[index], 'warm browser')
+				const context = requireValue(
+					browser.contexts().find((entry) => entry.id !== undefined),
+					'isolated context',
+				)
+				const first = requireValue(context.pages()[0], 'initial page')
+				const added = await context.create()
+				for (const page of [first, added])
+					expect(await page.evaluate('[innerWidth, innerHeight]')).toEqual([390, 844])
+				const popup = waitForEvent<readonly [BrowserPageInterface]>(
+					(listener) => context.emitter.on('page', listener),
+					'viewport popup',
+					{ budget: 5000 },
+				)
+				await first.send('Runtime.evaluate', {
+					expression: 'window.open("about:blank")',
+					userGesture: true,
+				})
+				const [opened] = await popup
+				expect(await opened.evaluate('[innerWidth, innerHeight]')).toEqual([390, 844])
+				if (index === 1) {
+					const pid = requireValue(launcher.browsers[0]?.pid, 'lease pid')
+					process.kill(pid, 'SIGKILL')
+					await waitForProcessExit(pid)
+				}
+				expect((await fixture.pair.call(index + 2, 'look', { search: 'page' })).error).toBe(false)
+			}
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
 	for (const size of [1, 2]) {
 		it(`replaces a killed lease at size ${size} and refuses a stale reference`, async () => {
 			const launcher = new BrowseLauncher()

@@ -1,6 +1,6 @@
 import type { ChildProcess } from 'node:child_process'
 import type { Readable } from 'node:stream'
-import type { CDPTarget } from '@src/core'
+import type { BrowserViewport, CDPTarget } from '@src/core'
 import type { Result } from '@orkestrel/contract'
 import type {
 	BrowserEngine,
@@ -14,7 +14,15 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, win32 as pathWin32, posix as pathPosix } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { isArray, isError, isNumber, isRecord, isString, parseJSON } from '@orkestrel/contract'
+import {
+	isArray,
+	isError,
+	isNumber,
+	isRecord,
+	isString,
+	parseInteger,
+	parseJSON,
+} from '@orkestrel/contract'
 import { BrowserConnectionError, BrowserError, isBrowserError } from '@src/core'
 import {
 	BROWSER_CDP_PROTOCOL,
@@ -39,6 +47,31 @@ import {
 	BROWSER_SERVER_UNRESOLVED,
 	BROWSER_SERVER_UNAVAILABLE,
 } from './constants.js'
+
+/**
+ * Parses positive integer viewport dimensions in WIDTHxHEIGHT form.
+ * @param value - The viewport environment variable, or undefined when unset
+ * @returns The viewport, or undefined when absent or malformed
+ * @example
+ * parseBrowserViewport('1280x720') // { width: 1280, height: 720 }
+ */
+export function parseBrowserViewport(value: string | undefined): BrowserViewport | undefined {
+	if (value === undefined) return undefined
+	const match = /^([0-9]+)x([0-9]+)$/u.exec(value)
+	if (match === null || match[0] !== value) return undefined
+	const width = parseInteger(match[1])
+	const height = parseInteger(match[2])
+	if (
+		width === undefined ||
+		height === undefined ||
+		!Number.isSafeInteger(width) ||
+		!Number.isSafeInteger(height) ||
+		width <= 0 ||
+		height <= 0
+	)
+		return undefined
+	return { width, height }
+}
 
 /**
  * Probes whether a process has not been confirmed absent.

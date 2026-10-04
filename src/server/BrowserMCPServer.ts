@@ -1,4 +1,4 @@
-import type { BrowserPageInterface, BrowserToolsetInterface } from '@src/core'
+import type { BrowserPageInterface, BrowserToolsetInterface, BrowserViewport } from '@src/core'
 import type { MCPCallResult, MCPExecutionContext, MCPMethodOptions } from '@orkestrel/mcp'
 import type { PoolInterface, PoolToken } from '@orkestrel/pool'
 import type { StdioServerInterface } from '@orkestrel/mcp/server'
@@ -107,6 +107,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #root: string
 	readonly #headless: boolean
 	readonly #executable: string | undefined
+	readonly #viewport: BrowserViewport | undefined
 	readonly #readonly: boolean
 	readonly #launcher: BrowserLaunchFunction
 	readonly #input: NodeJS.ReadableStream
@@ -163,6 +164,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#root = resolve(options?.root ?? 'tmp/browsers')
 		this.#headless = options?.headless ?? true
 		this.#executable = options?.executable
+		this.#viewport = options?.viewport
 		this.#readonly = options?.readonly ?? false
 		this.#launcher = options?.launch ?? createBrowser
 		this.#input = options?.stdio?.input ?? process.stdin
@@ -560,6 +562,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				cdp: { discover: false },
 				signal: this.#abort.signal,
 				...(this.#executable === undefined ? {} : { executable: this.#executable }),
+				...(this.#viewport === undefined ? {} : { viewport: this.#viewport }),
 				...(process.platform === 'linux' && process.getuid?.() === 0
 					? { args: ['--no-sandbox'] }
 					: {}),
@@ -573,7 +576,10 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				)
 				await rename(`${record}.tmp`, record)
 			}
-			const context = await browser.isolate({ reference: this.#reference })
+			const context = await browser.isolate({
+				reference: this.#reference,
+				...(this.#viewport === undefined ? {} : { emulation: { viewport: this.#viewport } }),
+			})
 			const page = await context.create()
 			toolset = createBrowserToolset(page, {
 				context,

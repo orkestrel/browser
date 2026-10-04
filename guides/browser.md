@@ -1297,6 +1297,7 @@ The following table lists the server helpers.
 | `formatBrowserLockEntry`    | function | Formats a process identifier and UUID token as a lock entry name.                                                                                          |
 | `probeProcess`              | function | Probes whether a process has not been confirmed absent.                                                                                                    |
 | `parseBrowserProfileRecord` | function | Parses a profile record naming a positive process identifier and a loopback DevTools endpoint.                                                             |
+| `parseBrowserViewport`      | function | Parses positive integer viewport dimensions in WIDTHxHEIGHT form.                                                                                          |
 | `describeBrowserServerLoss` | function | Describes a browser loss with its code, cause, and the session state it invalidates.                                                                       |
 | `parseBrowserLockEntry`     | function | Parses the holder process identifier from a lock entry name.                                                                                               |
 | `parseBrowserEngine`        | function | Classifies an executable path/name into a `BrowserEngine` by case-insensitive hint, checked in the order edge → chromium → chrome.                         |
@@ -2338,6 +2339,12 @@ The end of input, `SIGINT`, and `SIGTERM` stop admission and destroy the pool. T
 | --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `start`   | `Promise<void>` | Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the session leases a warm browser; the legacy handshake and every tool call await the same setup. Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup. |
 | `destroy` | `Promise<void>` | Stops admission, tears down every browser, its toolset, and its profile, then rechecks the folders it answers for.                                                                                                                                                                                                                                                 |
+
+The viewport option applies to every warmed browser, including spares and refills, and to every page and popup in its isolated context.
+
+| Option     | Type              | Default                      | Behavior                                                                                     |
+| ---------- | ----------------- | ---------------------------- | -------------------------------------------------------------------------------------------- |
+| `viewport` | `BrowserViewport` | The browser's launch default | Sets the isolated context's page dimensions and emulation through `BrowserMCPServerOptions`. |
 
 The following fence serves the vocabulary on the process's standard streams, with the journeys under `tmp/browsers`.
 
@@ -3570,8 +3577,9 @@ The `browse` binary serves the vocabulary and the journey tools over MCP on stdi
 - `BROWSE_EXECUTABLE`: the path of the Chromium executable. Default: the browser `findSystemBrowser` finds.
 - `BROWSE_READONLY`: `true`, `false`, `1`, or `0`; `true` refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs. Default: `false`.
 - `BROWSE_POOL`: an integer from `1` through `3` setting the number of browsers the server keeps warm. Default: `1`.
+- `BROWSE_VIEWPORT`: positive integer dimensions in `WIDTHxHEIGHT` form, such as `390x844`. Applies to every page and popup, including those in spares and refills. Default: the browser's launch default.
 
-A malformed value ends the process with exit code 1 and one line on standard error. Any other value of `BROWSE_HEADLESS` or `BROWSE_READONLY`, and a `BROWSE_POOL` that is not an integer, writes a `BROWSER_SERVER_ENVIRONMENT` line, such as `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"`. An integer `BROWSE_POOL` outside `1` through `3` writes `browse: BROWSER_SERVER_OPTIONS: pool.size must be an integer from 1 through 3`. On Linux a server running as root launches Chromium with `--no-sandbox`, because Chromium refuses to start as root with its sandbox on.
+A malformed value ends the process with exit code 1 and one line on standard error. Any other value of `BROWSE_HEADLESS` or `BROWSE_READONLY`, a `BROWSE_POOL` that is not an integer, and a malformed `BROWSE_VIEWPORT` write a `BROWSER_SERVER_ENVIRONMENT` line, such as `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"`. Viewport dimensions must be positive safe integers written as decimal digits with a lowercase `x` separator and no whitespace. An integer `BROWSE_POOL` outside `1` through `3` writes `browse: BROWSER_SERVER_OPTIONS: pool.size must be an integer from 1 through 3`. On Linux a server running as root launches Chromium with `--no-sandbox`, because Chromium refuses to start as root with its sandbox on.
 
 Chromium starts when the server starts, before the client sends a request. The server launches its first browser, checks that it answers a CDP ping, and leases it to the session. `initialize` and every tool call wait for that lease, and `ping` and `tools/list` answer while the browser warms. With `BROWSE_POOL` at `2` or `3`, the other browsers warm after the first, and `initialize` does not wait for them. A launch that fails is retried one time. The end of input or `SIGTERM` closes every browser and removes its profile, the process exits with code 0, and a run without a fault writes nothing to standard error.
 

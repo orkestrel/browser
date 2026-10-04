@@ -258,6 +258,25 @@ describe('bin entry', () => {
 		})
 	}
 
+	it.each(['0x720', '-1x2', '1.5x2', '1280', '1280x', 'widexhigh'])(
+		'refuses malformed BROWSE_VIEWPORT=%s before launching',
+		async (value) => {
+			const scratch = createScratch()
+			const child = new BrowseChild(BUILT_ENTRY, scratch.path, { BROWSE_VIEWPORT: value })
+			try {
+				expect(await child.ending).toEqual({ code: 1, signal: null })
+				expect(child.lines).toEqual([])
+				expect(child.stderr).toBe(
+					`browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_VIEWPORT must be positive integers in WIDTHxHEIGHT form, not "${value}"\n`,
+				)
+				expect(existsSync(join(scratch.path, 'tmp/browsers'))).toBe(false)
+			} finally {
+				await child.destroy()
+				scratch.destroy()
+			}
+		},
+	)
+
 	it('refuses a malformed flag with one line and exit code 1', async () => {
 		const scratch = createScratch()
 		const child = new BrowseChild(BUILT_ENTRY, scratch.path, { BROWSE_HEADLESS: 'sometimes' })

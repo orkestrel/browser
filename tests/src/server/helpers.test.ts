@@ -36,6 +36,7 @@ import {
 	parseBrowserLockEntry,
 	probeProcess,
 	parseBrowserProfileRecord,
+	parseBrowserViewport,
 	describeBrowserServerLoss,
 	BROWSER_SERVER_CRASH,
 	BROWSER_SERVER_LAUNCH,
@@ -47,6 +48,39 @@ import { createCDPTestServer, readExitedProcessId } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
+
+describe('parseBrowserViewport', () => {
+	it('parses positive integer dimensions', () => {
+		expect(parseBrowserViewport('1280x720')).toEqual({ width: 1280, height: 720 })
+		expect(parseBrowserViewport('1x1')).toEqual({ width: 1, height: 1 })
+	})
+	it('leaves an omitted or empty value unset', () => {
+		expect(parseBrowserViewport(undefined)).toBeUndefined()
+		expect(parseBrowserViewport('')).toBeUndefined()
+	})
+	it.each([
+		'0x720',
+		'-1x2',
+		'1.5x2',
+		'1280',
+		'1280x',
+		'widexhigh',
+		'2x0',
+		'2x-1',
+		'2x1.5',
+		'1280X720',
+		' 1280x720',
+		'1280x720 ',
+		'1280x720\n',
+		'1280x720x1',
+		'1e3x720',
+		'Infinityx720',
+		'9007199254740992x720',
+		'1280x9007199254740992',
+	])('refuses %j', (value) => {
+		expect(parseBrowserViewport(value)).toBeUndefined()
+	})
+})
 
 describe('eager U4 profile and loss helpers', () => {
 	it('treats a runtime-proven EPERM process as present', (context) => {
