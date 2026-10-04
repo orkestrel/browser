@@ -1001,13 +1001,13 @@ describe('BrowserToolset', () => {
 					'secret',
 				),
 			}
-			// The measured full copy is 6,675 UTF-16 code units; 6,700 is the smallest multiple of 50
-			// that holds it. The journey copy measures 3,090, giving the same bound rule 3,100.
+			// With capture, the measured full copy is 6,941 UTF-16 code units; 7,000 is the smallest
+			// multiple of 50 that holds it. The journey copy measures 3,356, giving the same bound rule 3,400.
 			// Include the secret property's name and schema without charging for the rest of type.
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
-				.toBeLessThanOrEqual(3100)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6700)
+				.toBeLessThanOrEqual(3400)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(7000)
 		})
 
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {

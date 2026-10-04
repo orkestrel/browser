@@ -2125,6 +2125,14 @@ export interface BrowserRunSlot {
 
 /** Keeps runs by the journey name and run id the run carries. */
 export interface BrowserRunStoreInterface {
+	/**
+	 * Saves a standalone PNG under the runs root without replacing an existing file.
+	 * @param bytes - PNG bytes to persist
+	 * @param options - Cancellation options
+	 * @returns Absolute path of the saved image
+	 * @remarks Stores without standalone file storage omit this capability.
+	 */
+	snapshot?(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string>
 	/** Mints a run id for the journey and creates its run directory exclusively. */
 	open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot>
 	/** Returns the run stored under the journey name and id, or `undefined` when none is stored. */
@@ -2172,7 +2180,7 @@ export interface BrowserRunStoreInterface {
  *
  * @remarks
  * - `store` — keeps the journeys the tools record, list, edit, and replay
- * - `runs` — keeps each replay's run; omitting it writes no run
+ * - `runs` — keeps each replay's run and saves standalone images when it provides `snapshot`
  * - `limit` — positive integer listing cap in characters; Default: the owner's `limit`, including direct construction
  * - `readonly` — if `true`, refuses `record`, `save`, `edit`, and `forget` before any store access, and
  *   `replay` still writes runs; if `false` or omitted, every tool runs
@@ -2185,7 +2193,7 @@ export interface BrowserJourneyOptions {
 }
 
 /**
- * Registers the six journey tools over a toolset and owns the recording and the active replay.
+ * Registers the journey tools over a toolset and owns the recording and the active replay.
  *
  * @remarks
  * - `recording` — the name of the journey being recorded, or `undefined` when none is
@@ -2194,7 +2202,7 @@ export interface BrowserJourneyOptions {
 export interface BrowserJourneyToolsetInterface {
 	readonly recording: string | undefined
 	readonly replaying: string | undefined
-	/** Aborts the active replay and removes the six journey tools from the manager. */
+	/** Aborts the active replay and removes the journey tools from the manager. */
 	destroy(): Promise<void>
 }
 
@@ -2796,7 +2804,7 @@ export interface BrowserRegistryPending {
 /**
  * Names a tool the browser toolset reserves: the generic tools, the staged `dialog`, the
  * opt-in `tabs` and `switch`, and the journey tools `record`, `save`, `journeys`, `edit`,
- * `replay`, and `forget`, which a toolset constructed with `journeys` reserves.
+ * `replay`, `forget`, and `capture`, which a toolset constructed with `journeys` reserves.
  */
 export type BrowserToolName =
 	| 'look'
@@ -2816,6 +2824,7 @@ export type BrowserToolName =
 	| 'edit'
 	| 'replay'
 	| 'forget'
+	| 'capture'
 
 /**
  * Names why a toolset declined a page tool.

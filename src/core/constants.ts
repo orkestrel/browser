@@ -781,7 +781,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 				}),
 				edits: Object.freeze({
 					description:
-						'The changes, as an array or a JSON string of the array, applied in order; one invalid change refuses them all.',
+						'The changes, as an array or its JSON string, applied in order; one invalid change refuses them all.',
 					anyOf: Object.freeze([
 						Object.freeze({
 							type: 'array',
@@ -853,6 +853,20 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 				}),
 			}),
 			required: Object.freeze(['journey']),
+		}),
+	}),
+	capture: Object.freeze({
+		name: 'capture',
+		description: 'Saves the current view as a PNG in the runs directory and returns its path.',
+		parameters: Object.freeze({
+			type: 'object',
+			properties: Object.freeze({
+				full: Object.freeze({
+					type: 'boolean',
+					description: 'True captures the full page; false captures the viewport.',
+				}),
+			}),
+			required: Object.freeze(['full']),
 		}),
 	}),
 	forget: Object.freeze({
@@ -937,7 +951,7 @@ export const BROWSER_JOURNEY_EMPTY_LISTING = 'No journeys are saved; call record
 
 /**
  * Names the journey tools a toolset constructed with `journeys` registers and reserves: `record`,
- * `save`, `journeys`, `edit`, `replay`, and `forget`.
+ * `save`, `journeys`, `edit`, `replay`, `forget`, and `capture`.
  */
 export const BROWSER_JOURNEY_TOOL_NAMES: readonly BrowserToolName[] = Object.freeze([
 	'record',
@@ -946,6 +960,7 @@ export const BROWSER_JOURNEY_TOOL_NAMES: readonly BrowserToolName[] = Object.fre
 	'edit',
 	'replay',
 	'forget',
+	'capture',
 ])
 
 /** Names observation and journey tools that cannot become journey steps. */

@@ -7,8 +7,11 @@ import {
 	supportsDirectoryLinks,
 } from '@orkestrel/test/server'
 import { lstat, readFile, readdir, rename, writeFile } from 'node:fs/promises'
-import { join } from 'node:path'
-import { FileBrowserRunStore } from '@src/server'
+import { dirname, isAbsolute, join } from 'node:path'
+import { requireValue } from '@orkestrel/test'
+import { createBrowserToolset, createMemoryBrowserJourneyStore } from '@src/core'
+import { createBrowser, FileBrowserRunStore } from '@src/server'
+import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../../../setupService.js'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 import { describeBrowserRunStore } from '../../core/stores/suite.js'
@@ -21,6 +24,104 @@ describeBrowserRunStore('FileBrowserRunStore', () => {
 	const scratch = createScratch()
 	scratches.push(scratch)
 	return new FileBrowserRunStore({ root: scratch.path })
+})
+
+describe('FileBrowserRunStore standalone captures', () => {
+	it('refuses an aborted snapshot before creating a runs directory', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const store = new FileBrowserRunStore({ root: scratch.path })
+		const reason = new Error('Snapshot aborted')
+		await expect(
+			store.snapshot(new Uint8Array(), { signal: AbortSignal.abort(reason) }),
+		).rejects.toBe(reason)
+		expect(await readdir(scratch.path)).toEqual([])
+	})
+
+	it('refuses a linked standalone runs directory', async (context) => {
+		context.skip(
+			!supportsDirectoryLinks(),
+			'The directory link capability probe cannot create and read a link',
+		)
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const outside = scratch.ensure('outside')
+		createLink(join(scratch.path, 'runs'), outside)
+		const store = new FileBrowserRunStore({ root: scratch.path })
+		await expect(store.snapshot(new Uint8Array([1]))).rejects.toMatchObject({
+			code: 'BROWSER_JOURNEY_PATH',
+		})
+		expect(await readdir(outside)).toEqual([])
+	})
+
+	it('capture saves real Chromium PNGs and returns only distinct file paths', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const browser = createBrowser({
+			executable: requireSystemBrowser().executable,
+			headless: true,
+			profile: scratch.ensure('profile'),
+			args: SERVICE_BROWSER_ARGS,
+		})
+		try {
+			await browser.connect()
+			const page = await requireValue(browser.context()).create()
+			const toolset = createBrowserToolset(page, {
+				journeys: {
+					store: createMemoryBrowserJourneyStore(),
+					runs: new FileBrowserRunStore({ root: scratch.path }),
+					readonly: true,
+				},
+			})
+			try {
+				await toolset.start()
+				const first = await toolset.tools.execute({
+					id: 'first',
+					name: 'capture',
+					arguments: { full: false },
+				})
+				expect(first.success).toBe(true)
+				if (!first.success || typeof first.value !== 'string')
+					throw new Error('Capture returned no text path')
+				expect(isAbsolute(first.value)).toBe(true)
+				expect(dirname(dirname(first.value))).toBe(join(scratch.path, 'runs'))
+				const bytes = await readFile(first.value)
+				expect([...bytes.subarray(0, 8)]).toEqual([137, 80, 78, 71, 13, 10, 26, 10])
+				const second = await toolset.tools.execute({
+					id: 'second',
+					name: 'capture',
+					arguments: { full: true },
+				})
+				expect(second.success).toBe(true)
+				if (!second.success || typeof second.value !== 'string')
+					throw new Error('Capture returned no text path')
+				expect(second.value).not.toBe(first.value)
+				expect(dirname(dirname(second.value))).toBe(join(scratch.path, 'runs'))
+				expect([...(await readFile(second.value)).subarray(0, 8)]).toEqual([
+					137, 80, 78, 71, 13, 10, 26, 10,
+				])
+				expect(await readFile(first.value)).toEqual(bytes)
+			} finally {
+				await toolset.destroy()
+			}
+		} finally {
+			await browser.destroy()
+		}
+	}, 30_000)
+
+	it('saves independent images under the runs root without replacing the first image', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const store = new FileBrowserRunStore({ root: scratch.path })
+		const first = await store.snapshot(new Uint8Array([137, 80]))
+		const second = await store.snapshot(new Uint8Array([137, 81]))
+		expect(first).not.toBe(second)
+		expect(dirname(dirname(first))).toBe(join(scratch.path, 'runs'))
+		expect(dirname(dirname(second))).toBe(join(scratch.path, 'runs'))
+		expect(await readFile(first)).toEqual(Buffer.from([137, 80]))
+		expect(await readFile(second)).toEqual(Buffer.from([137, 81]))
+		expect(await readdir(join(scratch.path, 'runs'))).toHaveLength(2)
+	})
 })
 
 describe('FileBrowserRunStore captures', () => {
