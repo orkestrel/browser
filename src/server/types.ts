@@ -91,6 +91,12 @@ export interface BrowserProfileResult {
 	readonly temporary: boolean
 }
 
+/** Names the browser a browse profile serves, which a later start's sweep reads. */
+export interface BrowserProfileRecord {
+	readonly pid: number
+	readonly endpoint: string
+}
+
 /**
  * Configures the CDP (Chrome DevTools Protocol) connection.
  *

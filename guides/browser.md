@@ -1246,6 +1246,9 @@ The following table lists the server constants.
 | `BROWSER_JOURNEY_LOCK_DIRECTORY`  | const | Names the exclusive journey write lock directory.                                                                                                                                                                             |
 | `BROWSER_RUN_FILE`                | const | Names the persisted run snapshot.                                                                                                                                                                                             |
 | `BROWSER_RUN_DIRECTORY`           | const | Names the journey directory holding its runs.                                                                                                                                                                                 |
+| `BROWSER_SERVER_UNAVAILABLE`      | const | Names the refusal when no browser can serve a call.                                                                                                                                                                           |
+| `BROWSER_SERVER_CRASH`            | const | Names the notice that a browser and its session state were lost.                                                                                                                                                              |
+| `BROWSER_SERVER_UNRESOLVED`       | const | Names an interrupted call whose outcome is unknown.                                                                                                                                                                           |
 | `BROWSER_FILE_STORE_LIMIT`        | const | Bounds a file-store listing page by default.                                                                                                                                                                                  |
 
 #### Errors
@@ -1278,28 +1281,31 @@ try {
 
 The following table lists the server helpers.
 
-| API                       | Kind     | Summary                                                                                                                                                    |
-| ------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `findSystemBrowsers`      | function | Enumerates every Chrome/Chromium/Edge executable discoverable on this machine, deduplicated by normalized absolute path.                                   |
-| `findSystemBrowser`       | function | Locates a Chrome/Chromium/Edge executable on this machine — the first entry of `findSystemBrowsers`.                                                       |
-| `formatBrowserLockEntry`  | function | Formats a process identifier and UUID token as a lock entry name.                                                                                          |
-| `parseBrowserLockEntry`   | function | Parses the holder process identifier from a lock entry name.                                                                                               |
-| `parseBrowserEngine`      | function | Classifies an executable path/name into a `BrowserEngine` by case-insensitive hint, checked in the order edge → chromium → chrome.                         |
-| `normalizeExecutablePath` | function | Normalizes an executable path for cross-source deduplication (case-insensitive on Windows).                                                                |
-| `browserToEngine`         | function | Classifies a `/json/version` `Browser` string into a `BrowserEngine` (`Edg/` → edge, `Chrome/` → chrome, else chromium).                                   |
-| `createBrowserProfile`    | function | Resolves a persistent caller profile or creates an isolated temporary one.                                                                                 |
-| `removeBrowserProfile`    | function | Removes a library-owned isolated browser profile.                                                                                                          |
-| `findEnvOverrides`        | function | Checks the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order and returns every one that exists.                                     |
-| `buildInstallPaths`       | function | Builds the default well-known install-path candidates for a platform, deriving Windows roots from env vars.                                                |
-| `buildWindowsRoots`       | function | Derives Windows install roots from env vars, falling back to well-known literals when absent.                                                              |
-| `findInstallPaths`        | function | Returns every candidate path that exists on disk, in the given order.                                                                                      |
-| `probePathNames`          | function | Probes PATH (`which`/`where`) for every resolvable command name, in the given order.                                                                       |
-| `readFirstLine`           | function | Returns the first non-empty line of a command's output, without its surrounding whitespace.                                                                |
-| `buildStoreBases`         | function | Builds the default Playwright browser store base directories to search for a managed Chromium.                                                             |
-| `findStorePaths`          | function | Searches one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first.                                          |
-| `launchBrowserProcess`    | function | Launches a browser process with raw-CDP debugging flags.                                                                                                   |
-| `readBrowserEndpoint`     | function | Reads the CDP endpoint a launched browser announces on its standard error.                                                                                 |
-| `fetchCDPTargets`         | function | Fetches the current CDP target list from a browser's `/json/list` endpoint, as a `Result` carrying either the targets or a coded `BrowserConnectionError`. |
+| API                         | Kind     | Summary                                                                                                                                                    |
+| --------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `findSystemBrowsers`        | function | Enumerates every Chrome/Chromium/Edge executable discoverable on this machine, deduplicated by normalized absolute path.                                   |
+| `findSystemBrowser`         | function | Locates a Chrome/Chromium/Edge executable on this machine — the first entry of `findSystemBrowsers`.                                                       |
+| `formatBrowserLockEntry`    | function | Formats a process identifier and UUID token as a lock entry name.                                                                                          |
+| `probeProcess`              | function | Probes whether a process has not been confirmed absent.                                                                                                    |
+| `parseBrowserProfileRecord` | function | Parses a profile record naming a positive process identifier and a loopback DevTools endpoint.                                                             |
+| `describeBrowserServerLoss` | function | Describes a browser loss with its code, cause, and the session state it invalidates.                                                                       |
+| `parseBrowserLockEntry`     | function | Parses the holder process identifier from a lock entry name.                                                                                               |
+| `parseBrowserEngine`        | function | Classifies an executable path/name into a `BrowserEngine` by case-insensitive hint, checked in the order edge → chromium → chrome.                         |
+| `normalizeExecutablePath`   | function | Normalizes an executable path for cross-source deduplication (case-insensitive on Windows).                                                                |
+| `browserToEngine`           | function | Classifies a `/json/version` `Browser` string into a `BrowserEngine` (`Edg/` → edge, `Chrome/` → chrome, else chromium).                                   |
+| `createBrowserProfile`      | function | Resolves a persistent caller profile or creates an isolated temporary one.                                                                                 |
+| `removeBrowserProfile`      | function | Removes a library-owned isolated browser profile.                                                                                                          |
+| `findEnvOverrides`          | function | Checks the env-override keys (`PLAYWRIGHT_EXECUTABLE_PATH`, `CHROME_PATH`) in order and returns every one that exists.                                     |
+| `buildInstallPaths`         | function | Builds the default well-known install-path candidates for a platform, deriving Windows roots from env vars.                                                |
+| `buildWindowsRoots`         | function | Derives Windows install roots from env vars, falling back to well-known literals when absent.                                                              |
+| `findInstallPaths`          | function | Returns every candidate path that exists on disk, in the given order.                                                                                      |
+| `probePathNames`            | function | Probes PATH (`which`/`where`) for every resolvable command name, in the given order.                                                                       |
+| `readFirstLine`             | function | Returns the first non-empty line of a command's output, without its surrounding whitespace.                                                                |
+| `buildStoreBases`           | function | Builds the default Playwright browser store base directories to search for a managed Chromium.                                                             |
+| `findStorePaths`            | function | Searches one store base for the top-level `chromium` link and every `chromium-*` install, highest revision first.                                          |
+| `launchBrowserProcess`      | function | Launches a browser process with raw-CDP debugging flags.                                                                                                   |
+| `readBrowserEndpoint`       | function | Reads the CDP endpoint a launched browser announces on its standard error.                                                                                 |
+| `fetchCDPTargets`           | function | Fetches the current CDP target list from a browser's `/json/list` endpoint, as a `Result` carrying either the targets or a coded `BrowserConnectionError`. |
 
 The following fence composes system-browser discovery, a launch, and the endpoint read that replaces HTTP readiness polling.
 
@@ -1364,6 +1370,7 @@ The following table lists the server types.
 | `BrowserDiscoveryResult`       | interface | Describes the result of passive browser discovery.                                              |
 | `SystemBrowserOptions`         | interface | Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources. |
 | `SystemBrowser`                | type      | Represents one discovered browser executable on this machine.                                   |
+| `BrowserProfileRecord`         | interface | Names the browser a browse profile serves, which a later start's sweep reads.                   |
 | `BrowserProfileResult`         | interface | Describes the resolved browser profile directory used for a Chromium-family launch.             |
 | `BrowserCDPOptions`            | interface | Configures the CDP (Chrome DevTools Protocol) connection.                                       |
 | `BrowserEventMap`              | type      | Maps the events a `BrowserInterface` emits.                                                     |

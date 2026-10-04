@@ -4,6 +4,7 @@ import type { CDPTarget } from '@src/core'
 import type { Result } from '@orkestrel/contract'
 import type {
 	BrowserEngine,
+	BrowserProfileRecord,
 	BrowserProfileResult,
 	SystemBrowser,
 	SystemBrowserOptions,
@@ -13,8 +14,8 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join, resolve, win32 as pathWin32, posix as pathPosix } from 'node:path'
 import { spawn, spawnSync } from 'node:child_process'
-import { isArray, isRecord, isString } from '@orkestrel/contract'
-import { BrowserConnectionError, BrowserError } from '@src/core'
+import { isArray, isError, isNumber, isRecord, isString, parseJSON } from '@orkestrel/contract'
+import { BrowserConnectionError, BrowserError, isBrowserError } from '@src/core'
 import {
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_CDP_LIST_PATH,
@@ -34,7 +35,67 @@ import {
 	BROWSER_HEADLESS_ARG,
 	BROWSER_DEFAULT_HOST,
 	BROWSER_PROFILE_PREFIX,
+	BROWSER_SERVER_CRASH,
+	BROWSER_SERVER_UNRESOLVED,
+	BROWSER_SERVER_UNAVAILABLE,
 } from './constants.js'
+
+/**
+ * Probes whether a process has not been confirmed absent.
+ * @param pid - Process identifier to probe with signal zero
+ * @returns True unless the host reports ESRCH; false when that process is absent
+ * @example
+ * probeProcess(process.pid) // true
+ */
+export function probeProcess(pid: number): boolean {
+	try {
+		process.kill(pid, 0)
+		return true
+	} catch (error) {
+		return !(isError(error) && 'code' in error && error.code === 'ESRCH')
+	}
+}
+
+/**
+ * Parses a profile record naming a positive process identifier and a loopback DevTools endpoint.
+ * @param text - JSON record read from a browse profile
+ * @returns The record, or undefined when its shape or endpoint is refused
+ * @example
+ * parseBrowserProfileRecord('{"pid":123,"endpoint":"ws://127.0.0.1:9222/devtools/browser/session"}')
+ */
+export function parseBrowserProfileRecord(text: string): BrowserProfileRecord | undefined {
+	const record = parseJSON(text)
+	if (!isRecord(record)) return undefined
+	const pid = record['pid']
+	const endpoint = record['endpoint']
+	if (!isNumber(pid) || !Number.isSafeInteger(pid) || pid <= 0 || !isString(endpoint))
+		return undefined
+	const match = /^ws:\/\/127\.0\.0\.1:([1-9]\d*)\/devtools\/browser\/[^/?#\s\\]+$/.exec(endpoint)
+	if (match === null || Number(match[1]) > 65535) return undefined
+	return { pid, endpoint }
+}
+
+/**
+ * Describes a browser loss with its code, cause, and the session state it invalidates.
+ * @param code - Browser server diagnostic code
+ * @param cause - The loss or refusal, including its process context when present
+ * @param url - The lost page's last URL, when known
+ * @returns The coded diagnostic and any operation-lifecycle guidance
+ * @example
+ * describeBrowserServerLoss('BROWSER_SERVER_UNAVAILABLE', new Error('Browser exited'))
+ */
+export function describeBrowserServerLoss(code: string, cause: unknown, url?: string): string {
+	const pid = isBrowserError(cause) ? cause.context?.['pid'] : undefined
+	const detail =
+		cause === undefined ? 'Browser session lost' : isError(cause) ? cause.message : String(cause)
+	const message = `${code}: ${detail}${isNumber(pid) ? ` (pid ${pid})` : ''}.`
+	if (code !== BROWSER_SERVER_CRASH && code !== BROWSER_SERVER_UNRESOLVED) return message
+	const lost = `Lost the page${url === undefined ? '' : ` at ${url}`}, its tabs, every element reference, the retained reading, dialogs, holds, an unsaved recording, the active replay, and the isolated context's cookies.`
+	const next = `The next call acquires a browser that starts at about:blank, or answers ${BROWSER_SERVER_UNAVAILABLE} when none can serve.`
+	return code === BROWSER_SERVER_UNRESOLVED
+		? `${message} The outcome is unknown. ${lost} Browse did not repeat the call. ${next}`
+		: `${message} ${lost} ${next}`
+}
 
 /**
  * Formats a process identifier and UUID token as a lock entry name.

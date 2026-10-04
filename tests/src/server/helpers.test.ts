@@ -34,12 +34,92 @@ import {
 	fetchCDPTargets,
 	formatBrowserLockEntry,
 	parseBrowserLockEntry,
+	probeProcess,
+	parseBrowserProfileRecord,
+	describeBrowserServerLoss,
+	BROWSER_SERVER_CRASH,
+	BROWSER_SERVER_UNAVAILABLE,
+	BROWSER_SERVER_UNRESOLVED,
 } from '@src/server'
-import { isBrowserConnectionError } from '@src/core'
-import { createCDPTestServer } from '../../setupServer.js'
+import { BrowserConnectionError, isBrowserConnectionError } from '@src/core'
+import { createCDPTestServer, readExitedProcessId } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 let server: CDPTestServerInterface | undefined
+
+describe('eager U4 profile and loss helpers', () => {
+	it('distinguishes the live process from an exited child', async () => {
+		expect(probeProcess(process.pid)).toBe(true)
+		expect(probeProcess(await readExitedProcessId())).toBe(false)
+	})
+
+	it('round-trips a profile and refuses malformed or remote records', () => {
+		const record = { pid: process.pid, endpoint: 'ws://127.0.0.1:9222/devtools/browser/session' }
+		expect(parseBrowserProfileRecord(JSON.stringify(record))).toEqual(record)
+		expect(parseBrowserProfileRecord('broken')).toBeUndefined()
+		expect(parseBrowserProfileRecord('null')).toBeUndefined()
+		expect(parseBrowserProfileRecord(JSON.stringify({ pid: record.pid }))).toBeUndefined()
+		expect(parseBrowserProfileRecord(JSON.stringify({ endpoint: record.endpoint }))).toBeUndefined()
+		for (const pid of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, '123', null])
+			expect(parseBrowserProfileRecord(JSON.stringify({ ...record, pid }))).toBeUndefined()
+		for (const endpoint of [
+			'ws://localhost:9222/devtools/browser/session',
+			'ws://192.0.2.1:9222/devtools/browser/session',
+			'ws://127.0.0.1:9222/cdp',
+			'ws://127.0.0.1:9222/devtools/browser/',
+			'wss://127.0.0.1:9222/devtools/browser/session',
+			'ws://127.0.0.1:0/devtools/browser/session',
+			'ws://127.0.0.1:65536/devtools/browser/session',
+			'ws://127.0.0.1/devtools/browser/session',
+			'ws://127.0.0.1:9222/devtools/browser/session?redirect=remote',
+		])
+			expect(parseBrowserProfileRecord(JSON.stringify({ ...record, endpoint }))).toBeUndefined()
+	})
+
+	it('codes loss messages and names the unknown outcome, lost state, and conditional recovery', () => {
+		const cause = new BrowserConnectionError('Browser process did not exit after SIGKILL', {
+			pid: 4242,
+		})
+		for (const code of [
+			BROWSER_SERVER_CRASH,
+			BROWSER_SERVER_UNAVAILABLE,
+			BROWSER_SERVER_UNRESOLVED,
+		]) {
+			const text = describeBrowserServerLoss(code, cause, 'https://example.test/cart')
+			expect(text.startsWith(`${code}:`)).toBe(true)
+			expect(text).toContain('4242')
+			expect(text).toContain(cause.message)
+		}
+		const text = describeBrowserServerLoss(
+			BROWSER_SERVER_UNRESOLVED,
+			cause,
+			'https://example.test/cart',
+		)
+		expect(text).toContain('The outcome is unknown')
+		expect(text).toContain('Browse did not repeat the call')
+		expect(text).toContain(
+			'The next call acquires a browser that starts at about:blank, or answers BROWSER_SERVER_UNAVAILABLE when none can serve',
+		)
+		for (const state of [
+			'https://example.test/cart',
+			'tabs',
+			'every element reference',
+			'retained reading',
+			'dialogs',
+			'holds',
+			'unsaved recording',
+			'active replay',
+			"isolated context's cookies",
+		])
+			expect(text).toContain(state)
+		expect(describeBrowserServerLoss(BROWSER_SERVER_CRASH, undefined)).toContain(
+			'Browser session lost',
+		)
+		expect(describeBrowserServerLoss(BROWSER_SERVER_UNAVAILABLE, 'endpoint refused')).toContain(
+			'endpoint refused',
+		)
+	})
+})
 
 describe('formatBrowserLockEntry', () => {
 	it('joins the holder pid and acquisition token in the persisted format', () => {

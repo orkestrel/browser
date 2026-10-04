@@ -224,3 +224,10 @@ export const BROWSER_RUN_FILE = 'run.json'
 export const BROWSER_RUN_DIRECTORY = 'runs'
 /** Bounds a file-store listing page by default. */
 export const BROWSER_FILE_STORE_LIMIT = 100
+
+/** Names the refusal when no browser can serve a call. */
+export const BROWSER_SERVER_UNAVAILABLE = 'BROWSER_SERVER_UNAVAILABLE'
+/** Names the notice that a browser and its session state were lost. */
+export const BROWSER_SERVER_CRASH = 'BROWSER_SERVER_CRASH'
+/** Names an interrupted call whose outcome is unknown. */
+export const BROWSER_SERVER_UNRESOLVED = 'BROWSER_SERVER_UNRESOLVED'

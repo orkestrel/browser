@@ -11,7 +11,7 @@ import {
 	validateBrowserStorePage,
 } from '@src/core'
 import { BROWSER_FILE_STORE_LIMIT, BROWSER_JOURNEY_LOCK_ATTEMPTS } from '../constants.js'
-import { formatBrowserLockEntry, parseBrowserLockEntry } from '../helpers.js'
+import { formatBrowserLockEntry, parseBrowserLockEntry, probeProcess } from '../helpers.js'
 
 /**
  * Shares confined filesystem operations between the journey and run stores.
@@ -213,13 +213,7 @@ export class FileBrowserStore {
 				const holder = entries[0]
 				if (holder !== undefined) {
 					const pid = parseBrowserLockEntry(holder)
-					if (pid === undefined) break
-					try {
-						process.kill(pid, 0)
-						break
-					} catch (cause) {
-						if (!(cause instanceof Error && 'code' in cause && cause.code === 'ESRCH')) break
-					}
+					if (pid === undefined || probeProcess(pid)) break
 					if (!(await this.#unlinkLock(this.resolvePath(path, holder)))) continue
 				}
 				await this.#removeLock(path)
