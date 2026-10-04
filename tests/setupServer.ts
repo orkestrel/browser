@@ -1530,6 +1530,10 @@ export const SOURCE_HOOK = `registerHooks({
  * - `version` — receives each double's ping count, starting at 1
  */
 export interface BrowserLauncherOptions {
+	/** Counts initial doubles whose teardown refuses to confirm termination. */
+	readonly survivors?: number
+	/** Counts initial doubles whose isolation fails. */
+	readonly broken?: number
 	/** Fails teardown after the double released its transport. */
 	readonly cleanup?: Error
 	readonly silent?: number

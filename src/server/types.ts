@@ -368,6 +368,15 @@ export interface BrowserSlot {
 	readonly toolset: BrowserToolsetInterface
 }
 
+/** Holds the listeners and resolver of one browser slot's loss watch. */
+export interface BrowserSlotWatch {
+	readonly resolve: (cause: unknown) => void
+	readonly disconnect: () => void
+	readonly page: (page: BrowserPageInterface) => void
+	readonly crashes: ReadonlyMap<BrowserPageInterface, () => void>
+	readonly subscription: Disposable
+}
+
 /**
  * Configures the browse server.
  *

@@ -1388,6 +1388,7 @@ The following table lists the server types.
 | `FileBrowserStoreOptions`      | interface | Configures a file store: its root under the checkout and the listing cap.                                             |
 | `BrowserLaunchFunction`        | type      | Creates a browser a browse server connects while warming its pool.                                                    |
 | `BrowserSlot`                  | interface | Holds one warm browser a browse server owns: the browser, its profile, its isolated context, and its started toolset. |
+| `BrowserSlotWatch`             | interface | Holds the listeners and resolver of one browser slot's loss watch. |
 | `BrowserMCPServerOptions`      | interface | Configures the browse server.                                                                                         |
 | `BrowserMCPServerInterface`    | interface | Serves the browser vocabulary and the journey tools over MCP on stdio.                                                |
 
