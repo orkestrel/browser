@@ -214,6 +214,7 @@ describe('BrowserLauncher eager U2', () => {
 			'edit',
 			'replay',
 			'forget',
+			'capture',
 			'acquire',
 			'execute',
 			'tools',

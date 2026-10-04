@@ -2102,6 +2102,7 @@ export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
 	'edit',
 	'replay',
 	'forget',
+	'capture',
 	'acquire',
 	'execute',
 	'tools',
