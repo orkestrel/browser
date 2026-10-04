@@ -94,6 +94,55 @@ import {
 const WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
 
 describe('BrowserLauncher eager U2', () => {
+	it('retains isolated contexts and reports kill synchronously and drop later', async () => {
+		const launcher = new BrowserLauncher()
+		const first = launcher.launch({})
+		const second = launcher.launch({})
+		try {
+			await first.connect()
+			const context = await first.isolate()
+			expect(first.contexts()).toEqual([context])
+			expect(first.context()).toBe(context)
+			const killed = createRecorder<readonly []>()
+			first.emitter.on('disconnect', killed.handler)
+			requireValue(launcher.browsers[0], 'first double').kill()
+			expect(killed.count).toBe(1)
+			await expect(first.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+			await second.connect()
+			const dropped = createRecorder<readonly []>()
+			second.emitter.on('disconnect', dropped.handler)
+			requireValue(launcher.browsers[1], 'second double').drop()
+			expect(dropped.count).toBe(0)
+			await expect(second.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+			await waitForCondition('deferred disconnect', () => dropped.count === 1)
+		} finally {
+			await Promise.all(launcher.browsers.map((browser) => browser.destroy()))
+		}
+	})
+
+	it('defers teardown and limits isolation and survivor refusals to the requested doubles', async () => {
+		const launcher = new BrowserLauncher({ broken: 1, survivors: 1 })
+		const first = launcher.launch({})
+		const second = launcher.launch({})
+		try {
+			await first.connect()
+			await expect(first.isolate()).rejects.toThrow('refused isolation')
+			const double = requireValue(launcher.browsers[0], 'first double')
+			double.defer()
+			const ending = double.destroy()
+			expect(double.destroyed).toBe(false)
+			double.resume()
+			await expect(ending).rejects.toThrow('termination is unconfirmed')
+			await second.connect()
+			await expect(second.isolate()).resolves.toBeDefined()
+			await second.destroy()
+		} finally {
+			for (const browser of launcher.browsers) {
+				browser.resume()
+				await browser.destroy().catch(() => undefined)
+			}
+		}
+	})
 	it('holds from an index and refuses only the requested launch count', async () => {
 		const launcher = new BrowserLauncher()
 		launcher.hold(1)

@@ -1,8 +1,19 @@
-import { existsSync, readdirSync, readFileSync, mkdirSync, writeFileSync } from 'node:fs'
+import {
+	existsSync,
+	readdirSync,
+	readFileSync,
+	mkdirSync,
+	writeFileSync,
+	symlinkSync,
+	unlinkSync,
+} from 'node:fs'
+import { createServer } from 'node:http'
 import { randomUUID } from 'node:crypto'
-import { join } from 'node:path'
-import { createTeardown, requireValue, waitForCondition } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { join, dirname, basename } from 'node:path'
+import { createTeardown, createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
+import { createScratch, createLoopback, readErrorCode } from '@orkestrel/test/server'
+import { isRecord, isString } from '@orkestrel/contract'
+import { createCDPClient } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	createBrowserMCPServer,
@@ -10,6 +21,7 @@ import {
 	probeProcess,
 	parseBrowserProfileRecord,
 	formatBrowserLockEntry,
+	createCDPTransport,
 } from '@src/server'
 import {
 	BrowseLauncher,
@@ -23,7 +35,245 @@ import {
 	createFixtureServer,
 	waitForProcessExit,
 	readExitedProcessId,
+	createBrowseFixture,
 } from '../setupServer.js'
+
+describe('eager U7 real browse', () => {
+	for (const size of [1, 2]) {
+		it(`replaces a killed lease at size ${size} and refuses a stale reference`, async () => {
+			const launcher = new BrowseLauncher()
+			const fixture = createBrowseFixture({
+				executable: requireSystemBrowser().executable,
+				pool: { size },
+				launch: launcher.launch,
+			})
+			const pages = await createFixtureServer()
+			try {
+				await fixture.server.start()
+				const url = pages.url('/form')
+				const navigated = await fixture.pair.call(2, 'navigate', { url })
+				expect(navigated.error).toBe(false)
+				const reading = await fixture.pair.call(3, 'look', { search: 'button' })
+				const reference = requireValue(reading.text.match(/\be[1-9]\d*\b/)?.[0], 'old reference')
+				await waitForCondition('warm floor', () => launcher.connections.length === size, {
+					budget: 15000,
+				})
+				const pid = requireValue(launcher.browsers[0]?.pid, 'lease pid')
+				process.kill(pid, 'SIGKILL')
+				await waitForProcessExit(pid)
+				const answer = await fixture.pair.call(4, 'look', { search: 'page' })
+				expect(answer.error).toBe(false)
+				expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+				expect(answer.text).toContain(url)
+				await waitForCondition(
+					'exactly one replacement',
+					() => launcher.connections.length === size + 1,
+					{ budget: 15000 },
+				)
+				expect(launcher.browsers).toHaveLength(size + 1)
+				const successor = requireValue(launcher.browsers[1], 'successor')
+				expect(successor.pid).not.toBe(pid)
+				expect(
+					successor
+						.contexts()
+						.find((context) => context.id !== undefined)
+						?.pages()[0]?.url,
+				).toBe('about:blank')
+				expect((await fixture.pair.call(5, 'navigate', { url })).error).toBe(false)
+				const stale = await fixture.pair.call(6, 'click', { ref: reference })
+				expect(stale.error).toBe(true)
+				expect(stale.text).not.toContain('BROWSER_SERVER_')
+			} finally {
+				await fixture.teardown.destroy()
+				await pages.destroy()
+			}
+		})
+	}
+
+	it('keeps the lease when a spare is killed and launches one replacement', async () => {
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			executable: requireSystemBrowser().executable,
+			pool: { size: 2 },
+			launch: launcher.launch,
+		})
+		try {
+			await fixture.server.start()
+			await waitForCondition(
+				'spare is warmed',
+				() =>
+					launcher.browsers[1]
+						?.contexts()
+						.some((context) => context.id !== undefined && context.pages().length > 0) === true,
+				{ budget: 15000 },
+			)
+			const lease = requireValue(launcher.browsers[0]?.pid, 'lease pid')
+			process.kill(requireValue(launcher.browsers[1]?.pid, 'spare pid'), 'SIGKILL')
+			await waitForCondition('spare replaced', () => launcher.connections.length === 3, {
+				budget: 15000,
+			})
+			const answer = await fixture.pair.call(2, 'look', { search: 'page' })
+			expect(answer.error).toBe(false)
+			expect(answer.text).not.toContain('BROWSER_SERVER_CRASH')
+			expect(launcher.browsers[0]?.pid).toBe(lease)
+			expect(launcher.browsers).toHaveLength(3)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('reports an unknown navigation outcome after exactly one held route request', async () => {
+		let requests = 0
+		const route = await createLoopback(
+			createServer(() => {
+				requests += 1
+			}),
+		)
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			executable: requireSystemBrowser().executable,
+			pool: { size: 2 },
+			launch: launcher.launch,
+		})
+		try {
+			await fixture.server.start()
+			const pending = fixture.pair.call(2, 'navigate', { url: `${route.url}/held` })
+			await waitForCondition('held route request', () => requests === 1, { budget: 5000 })
+			process.kill(requireValue(launcher.browsers[0]?.pid, 'lease pid'), 'SIGKILL')
+			const answer = await pending
+			expect(answer.error).toBe(true)
+			expect(answer.text).toMatch(/^BROWSER_SERVER_UNRESOLVED:/)
+			expect(answer.text).toContain('Browse did not repeat the call')
+			expect((await fixture.pair.call(3, 'look', { search: 'page' })).text).toMatch(
+				/^BROWSER_SERVER_CRASH:/,
+			)
+			expect(requests).toBe(1)
+		} finally {
+			await fixture.teardown.destroy()
+			await route.destroy()
+		}
+	})
+
+	it('notes a current renderer crash but ignores a background renderer crash', async () => {
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			executable: requireSystemBrowser().executable,
+			pool: { size: 2 },
+			launch: (options) => launcher.launch({ ...options, timeout: 5000 }),
+		})
+		let client: ReturnType<typeof createCDPClient> | undefined
+		try {
+			await fixture.server.start()
+			const browser = requireValue(launcher.browsers[0], 'lease')
+			const context = requireValue(
+				browser.contexts().find((entry) => entry.id !== undefined),
+				'isolated context',
+			)
+			const view = requireValue(context.pages()[0], 'view')
+			const background = await context.create()
+			client = createCDPClient({
+				transport: createCDPTransport({ url: requireValue(browser.endpoint, 'endpoint') }),
+			})
+			await client.connect()
+			for (const page of [background, view]) {
+				const crashed = createRecorder<readonly []>()
+				page.emitter.on('crash', crashed.handler)
+				const attached: unknown = await client.send('Target.attachToTarget', {
+					targetId: page.id,
+					flatten: true,
+				})
+				if (!isRecord(attached) || !isString(attached['sessionId']))
+					throw new Error('Missing crash session')
+				await client
+					.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
+					.catch(() => undefined)
+				await waitForCondition(
+					'renderer crash event without Inspector.enable',
+					() => crashed.count === 1,
+				)
+				const answer = await fixture.pair.call(page === background ? 2 : 3, 'look', {
+					search: 'page',
+				})
+				expect(answer.error).toBe(false)
+				expect(answer.text.startsWith('BROWSER_SERVER_CRASH:')).toBe(page === view)
+			}
+		} finally {
+			await client?.close()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('reports ENOENT after its executable path disappears at size one', async () => {
+		const scratch = createScratch()
+		const executable = requireSystemBrowser().executable
+		const link = join(scratch.path, 'installation')
+		// A directory junction on Windows and a directory symlink on POSIX retain adjacent resources.
+		symlinkSync(dirname(executable), link, 'junction')
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			executable: join(link, basename(executable)),
+			pool: { size: 1 },
+			launch: launcher.launch,
+		})
+		try {
+			await fixture.server.start()
+			const pid = requireValue(launcher.browsers[0]?.pid, 'lease pid')
+			unlinkSync(link)
+			expect(existsSync(join(link, basename(executable)))).toBe(false)
+			process.kill(pid, 'SIGKILL')
+			const answer = await fixture.pair.call(2, 'look', { search: 'page' })
+			expect(answer.error).toBe(true)
+			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+			expect(answer.text).toMatch(/\nBROWSER_SERVER_UNAVAILABLE:.*ENOENT/)
+			expect(launcher.browsers).toHaveLength(3)
+		} finally {
+			await fixture.teardown.destroy()
+			if (existsSync(link)) unlinkSync(link)
+			scratch.destroy()
+		}
+	})
+
+	it('probes SIGSTOP support and recovers a stopped lease within its ping deadlines', async () => {
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			executable: requireSystemBrowser().executable,
+			pool: { size: 2 },
+			launch: (options) => launcher.launch({ ...options, timeout: 3000 }),
+		})
+		try {
+			await fixture.server.start()
+			await waitForCondition('warm spare', () => launcher.connections.length === 2, {
+				budget: 15000,
+			})
+			const pid = requireValue(launcher.browsers[0]?.pid, 'lease pid')
+			let refusal: unknown
+			try {
+				process.kill(pid, 'SIGSTOP')
+			} catch (error) {
+				refusal = error
+			}
+			expect(readErrorCode(refusal)).toBe(refusal === undefined ? undefined : 'ERR_UNKNOWN_SIGNAL')
+			if (refusal !== undefined) {
+				console.log('NOT-EVIDENCED: SIGSTOP is refused by the runtime with ERR_UNKNOWN_SIGNAL')
+				return
+			}
+			const began = performance.now()
+			const answer = await fixture.pair.call(2, 'look', { search: 'page' })
+			expect(answer.error).toBe(false)
+			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+			await waitForProcessExit(pid)
+			expect(probeProcess(pid)).toBe(false)
+			await waitForCondition(
+				'replacement after ping deadline',
+				() => launcher.browsers.length === 3,
+				{ budget: 3000 },
+			)
+			expect(performance.now() - began).toBeLessThan(6000)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+})
 
 describe('eager U6 real browse', () => {
 	it('sweeps a killed server according to the launch process model', async () => {

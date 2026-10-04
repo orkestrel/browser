@@ -1565,6 +1565,8 @@ export type BrowserLaunchHandler = (
  * failure for it.
  */
 export class BrowserLaunchDouble implements BrowserInterface {
+	readonly #contexts: BrowserContextInterface[] = []
+	#deferred: PromiseWithResolvers<void> | undefined
 	readonly #options: BrowserOptions
 	readonly #gate: Promise<void>
 	readonly #failure: BrowserError | undefined
@@ -1573,6 +1575,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	#fixture: BrowserElementFixture | undefined
 	#connects = 0
 	#pings = 0
+	#targets = 0
 	#destroyed = false
 
 	constructor(
@@ -1596,7 +1599,11 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	}
 
 	get status(): BrowserStatus {
-		return this.#fixture === undefined ? 'idle' : 'connected'
+		return this.#fixture === undefined
+			? 'idle'
+			: this.#fixture.client.connected
+				? 'connected'
+				: 'disconnected'
 	}
 
 	get connection(): BrowserConnection | undefined {
@@ -1690,11 +1697,14 @@ export class BrowserLaunchDouble implements BrowserInterface {
 						transport.fail(message.id, isError(error) ? error.message : String(error)),
 				)
 		})
-		transport.onSend('Target.createTarget', (message) =>
-			transport.reply(message.id, { targetId: 'main' }),
-		)
+		transport.onSend('Target.createTarget', (message) => {
+			this.#targets += 1
+			transport.reply(message.id, {
+				targetId: this.#targets === 1 ? 'main' : `page-${this.#targets}`,
+			})
+		})
 		transport.onSend('Target.attachToTarget', (message) =>
-			transport.reply(message.id, { sessionId: 'session-main' }),
+			transport.reply(message.id, { sessionId: `session-${String(message.params?.['targetId'])}` }),
 		)
 		for (const method of [
 			'Page.setInterceptFileChooserDialog',
@@ -1712,18 +1722,45 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		await this.#fixture?.client.close()
 	}
 
-	context(): BrowserContextInterface | undefined {
-		return undefined
+	/** Emits process loss before closing the fixture transport. */
+	kill(): void {
+		this.#emitter.emit('disconnect')
+		this.#fixture?.transport.closeRemote()
+	}
+
+	/** Closes the transport before reporting browser loss on the following macrotask. */
+	drop(): void {
+		this.#fixture?.transport.closeRemote()
+		setImmediate(() => this.#emitter.emit('disconnect'))
+	}
+
+	/** Parks teardown until resume, while keeping the lost slot counted. */
+	defer(): void {
+		this.#deferred = Promise.withResolvers<void>()
+	}
+
+	/** Releases a deferred teardown. */
+	resume(): void {
+		this.#deferred?.resolve()
+		this.#deferred = undefined
+	}
+
+	context(index = 0): BrowserContextInterface | undefined {
+		return this.#contexts[index]
 	}
 
 	contexts(): readonly BrowserContextInterface[] {
-		return []
+		return this.#contexts
 	}
 
 	async isolate(): Promise<BrowserContextInterface> {
+		if ((this.#handlers.broken ?? 0) > 0)
+			throw new BrowserError('The fixture refused isolation', 'BROWSER_FIXTURE_ISOLATE')
 		const fixture = this.#fixture
 		if (fixture === undefined) throw new BrowserError('The double is not connected')
-		return new BrowserContext(fixture.client)
+		const context = new BrowserContext(fixture.client)
+		this.#contexts.push(context)
+		return context
 	}
 
 	async create(): Promise<BrowserPageInterface> {
@@ -1732,9 +1769,12 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	}
 
 	async destroy(): Promise<void> {
+		await this.#deferred?.promise
 		this.#destroyed = true
 		await this.#fixture?.client.close()
 		if (this.#handlers.cleanup !== undefined) throw this.#handlers.cleanup
+		if ((this.#handlers.survivors ?? 0) > 0)
+			throw new BrowserError('The fixture termination is unconfirmed', 'BROWSER_FIXTURE_TEARDOWN')
 	}
 
 	async close(): Promise<void> {
@@ -1788,6 +1828,8 @@ export class BrowserLauncher {
 				{
 					...this.#handlers,
 					silent: this.#browsers.length < (this.#handlers.silent ?? 0) ? 1 : 0,
+					survivors: this.#browsers.length < (this.#handlers.survivors ?? 0) ? 1 : 0,
+					broken: this.#browsers.length < (this.#handlers.broken ?? 0) ? 1 : 0,
 				},
 			)
 			this.#browsers.push(browser)
