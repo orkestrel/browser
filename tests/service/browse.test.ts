@@ -29,6 +29,7 @@ import {
 	createEagerBrowseChild,
 	requireSystemBrowser,
 	BROWSE_RECORD_BLOCKS,
+	BROWSE_SIGSTOP_REASON,
 } from '../setupService.js'
 import {
 	BrowseLog,
@@ -355,7 +356,7 @@ describe('eager U7 real browse', () => {
 		}
 	})
 
-	it('probes SIGSTOP support and recovers a stopped lease within its ping deadlines', async () => {
+	it('probes SIGSTOP support and recovers a stopped lease within its ping deadlines', async (context) => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
 			executable: requireSystemBrowser().executable,
@@ -376,9 +377,9 @@ describe('eager U7 real browse', () => {
 			}
 			expect(readErrorCode(refusal)).toBe(refusal === undefined ? undefined : 'ERR_UNKNOWN_SIGNAL')
 			if (refusal !== undefined) {
-				console.log('NOT-EVIDENCED: SIGSTOP is refused by the runtime with ERR_UNKNOWN_SIGNAL')
-				return
 			}
+			const supported = refusal === undefined
+			context.skip(!supported, BROWSE_SIGSTOP_REASON)
 			const began = performance.now()
 			const answer = await fixture.pair.call(2, 'look', { search: 'page' })
 			expect(answer.error).toBe(false)

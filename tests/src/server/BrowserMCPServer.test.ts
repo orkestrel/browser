@@ -2,7 +2,7 @@ import type { CDPSentMessage } from '../../setup.js'
 import { existsSync, readdirSync, mkdirSync, writeFileSync, chmodSync } from 'node:fs'
 import { spawn } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdir } from 'node:fs/promises'
+import { mkdir, rm } from 'node:fs/promises'
 import { Writable } from 'node:stream'
 import { basename, dirname, join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
@@ -32,15 +32,11 @@ import {
 	createBrowserToolset,
 	BrowserError,
 } from '@src/core'
-import {
-	BrowserMCPServer,
-	createBrowserMCPServer,
-	formatBrowserLockEntry,
-	BROWSER_SERVER_RECORD,
-} from '@src/server'
+import { createBrowserMCPServer, formatBrowserLockEntry, BROWSER_SERVER_RECORD } from '@src/server'
 import {
 	BROWSE_VOCABULARY,
 	BrowserLauncher,
+	BrowserPromiseObserver,
 	COOPERATIVE_SIGTERM,
 	MCPStdioPair,
 	openBrowseSession,
@@ -54,85 +50,162 @@ import {
 const PROFILE_PATTERN = /^[1-9]\d*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
 
 describe('eager U7', () => {
-	it('refuses a recorded loss in the version continuation before hold', async () => {
-		let sent = false
-		const fixture = createBrowseFixture(undefined, {
-			version: () => {
-				if (sent) return
-				sent = true
-				// Synthetic microtasks enter the gap between pool commit and the server's hold.
-				void Promise.resolve()
-					.then(() => undefined)
-					.then(() => undefined)
-					.then(() => undefined)
-					.then(() => undefined)
-					.then(() => fixture.launcher.browsers[0]?.kill())
-			},
-		})
-		try {
-			await expect(fixture.server.start()).rejects.toMatchObject({
-				code: 'BROWSER_SERVER_UNAVAILABLE',
+	for (const loss of ['drop', 'kill'] as const) {
+		it(`reports the ${loss} cause using a test-owned live pid`, async () => {
+			const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+				stdio: ['pipe', 'ignore', 'ignore'],
+				windowsHide: true,
 			})
-			expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(true)
-		} finally {
-			await fixture.teardown.destroy()
-		}
-	})
-
-	it('carries every pending loss when a successor dies before its first outcome', async () => {
-		let pings = 0
+			const pid = requireValue(child.pid, 'owned process')
+			const fixture = createBrowseFixture(undefined, { pid })
+			try {
+				await fixture.server.start()
+				const browser = requireValue(fixture.launcher.browsers[0], 'lease')
+				expect(browser.pid).toBe(pid)
+				if (loss === 'kill') {
+					child.kill()
+					await waitForProcessExit(pid)
+				}
+				browser[loss]()
+				await waitForCondition(
+					'loss watch settled',
+					() => browser.emitter.count('disconnect') === 0,
+				)
+				const answer = await fixture.pair.call(2, 'look', { search: 'cart' })
+				expect(answer.text).toContain(
+					loss === 'drop'
+						? 'BROWSER_SERVER_CRASH: The browser transport disconnected.'
+						: 'BROWSER_SERVER_CRASH: The browser process exited.',
+				)
+			} finally {
+				child.kill()
+				await waitForProcessExit(pid)
+				await fixture.teardown.destroy()
+			}
+		})
+	}
+	it('preserves a pending note when a call is cancelled inside the toolset', async () => {
+		const held = createRecorder<[CDPSentMessage]>()
 		const fixture = createBrowseFixture(
 			{ pool: { size: 2 } },
 			{
-				version: () => {
-					if (++pings !== 2) return
-					void Promise.resolve()
-						.then(() => undefined)
-						.then(() => undefined)
-						.then(() => undefined)
-						.then(() => undefined)
-						.then(() => undefined)
-						.then(() => undefined)
-						.then(() => fixture.launcher.browsers[1]?.kill())
+				evaluation: (message, transport) => {
+					if (message.params?.['awaitPromise'] === true) held.handler(message)
+					else transport.reply(message.id, { result: { value: true } })
 				},
 			},
 		)
 		try {
 			await fixture.server.start()
-			requireValue(fixture.launcher.browsers[0], 'first lease').kill()
-			const answer = await fixture.pair.call(2, 'look', { search: 'cart' })
-			expect(answer.error).toBe(true)
-			expect(answer.text.match(/BROWSER_SERVER_CRASH:/g)).toHaveLength(2)
-			expect(answer.text).toMatch(/\nBROWSER_SERVER_UNAVAILABLE:/)
-			expect((await fixture.pair.call(3, 'look', { search: 'cart' })).text).not.toContain(
-				'BROWSER_SERVER_CRASH',
+			requireValue(fixture.launcher.browsers[0], 'lease').kill()
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				id: 2,
+				method: 'tools/call',
+				params: { name: 'wait', arguments: { text: 'held text' } },
+			})
+			await waitForCondition('cancelled call reached the toolset', () => held.count === 1)
+			fixture.pair.send({
+				jsonrpc: '2.0',
+				method: 'notifications/cancelled',
+				params: { requestId: 2 },
+			})
+			const transport = requireValue(
+				fixture.launcher.browsers[1]?.fixture?.transport,
+				'successor transport',
 			)
+			await waitForCondition('cancelled tool released its page script', () =>
+				transport.sent.some(
+					(message) =>
+						isString(message.params?.['expression']) &&
+						/^globalThis\["__browserTextWait\d+"\]\?\.\(\)$/u.test(message.params['expression']),
+				),
+			)
+			const answer = await fixture.pair.call(3, 'look', { search: 'cart' })
+			expect(answer.error).toBe(false)
+			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+			expect(fixture.pair.answered).not.toContain(2)
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('refuses a recorded loss in the version continuation before hold', async () => {
+		let pinged = false
+		const fixture = createBrowseFixture(undefined, {
+			version: () => {
+				pinged = true
+			},
+		})
+		const commit = new BrowserPromiseObserver(/at Pool\.acquire/, () =>
+			fixture.launcher.browsers[0]?.kill(),
+		)
+		try {
+			await expect(fixture.server.start()).rejects.toMatchObject({
+				code: 'BROWSER_SERVER_UNAVAILABLE',
+				message: 'The browser process exited.',
+			})
+			expect(pinged).toBe(true)
+			expect(commit.resolved).toContain('Pool.#commit')
+			expect(await fixture.pair.initialize()).toMatchObject({
+				message: 'BROWSER_SERVER_UNAVAILABLE: The browser process exited.',
+			})
+			expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(true)
+		} finally {
+			commit.destroy()
+			await fixture.teardown.destroy()
+		}
+	})
+
+	it('carries every pending loss when a successor dies before its first outcome', async () => {
+		const fixture = createBrowseFixture({ pool: { size: 2 } })
+		try {
+			await fixture.server.start()
+			const grant = new BrowserPromiseObserver(/at BrowserMCPServer\.#grant/, () =>
+				fixture.launcher.browsers[1]?.kill(),
+			)
+			try {
+				requireValue(fixture.launcher.browsers[0], 'first lease').kill()
+				const answer = await fixture.pair.call(2, 'look', { search: 'cart' })
+				expect(grant.resolved).toContain('BrowserMCPServer.#grant')
+				expect(answer.error).toBe(true)
+				expect(answer.text.match(/BROWSER_SERVER_CRASH:/g)).toHaveLength(2)
+				expect(answer.text).toMatch(/\nBROWSER_SERVER_UNAVAILABLE:/)
+				expect((await fixture.pair.call(3, 'look', { search: 'cart' })).text).not.toContain(
+					'BROWSER_SERVER_CRASH',
+				)
+			} finally {
+				grant.destroy()
+			}
 		} finally {
 			await fixture.teardown.destroy()
 		}
 	})
 
 	it('keeps a completed click successful and notes the later loss', async () => {
-		const fixture = createBrowseFixture(undefined, {
-			released: (message, transport) => {
-				transport.reply(message.id, {})
-				// Enter the promise continuation after the click receipt is complete, before delivery.
-				let continuation = Promise.resolve()
-				for (let step = 0; step < 70; step++) continuation = continuation.then(() => undefined)
-				void continuation.then(() => fixture.launcher.browsers[0]?.kill())
-			},
-		})
+		const fixture = createBrowseFixture()
 		try {
 			await fixture.server.start()
 			await fixture.pair.call(2, 'look', { search: 'cart' })
-			const clicked = await fixture.pair.call(3, 'click', { ref: 'e4' })
-			expect(clicked.error).toBe(false)
-			expect(clicked.text).toContain('Clicked e4')
-			expect(fixture.launcher.browsers[0]?.destroyed).toBe(true)
-			expect(clicked.text).not.toContain('UNRESOLVED')
-			expect((await fixture.pair.call(4, 'look', { search: 'cart' })).text).toMatch(
-				/^BROWSER_SERVER_CRASH:/,
-			)
+			let delivered: boolean | undefined
+			const result = new BrowserPromiseObserver(/at BrowserToolset\.#performManaged/, () => {
+				delivered = fixture.pair.answered.includes(3)
+				fixture.launcher.browsers[0]?.kill()
+			})
+			try {
+				const clicked = await fixture.pair.call(3, 'click', { ref: 'e4' })
+				expect(result.resolved).toContain('BrowserToolset.#performManaged')
+				expect(delivered).toBe(false)
+				expect(clicked.error).toBe(false)
+				expect(clicked.text).toContain('Clicked e4')
+				expect(fixture.launcher.browsers[0]?.destroyed).toBe(true)
+				expect(clicked.text).not.toContain('UNRESOLVED')
+				expect((await fixture.pair.call(4, 'look', { search: 'cart' })).text).toMatch(
+					/^BROWSER_SERVER_CRASH:/,
+				)
+			} finally {
+				result.destroy()
+			}
 		} finally {
 			await fixture.teardown.destroy()
 		}
@@ -294,6 +367,8 @@ describe('eager U7', () => {
 			expect(context.pages()).toContain(late)
 			expect(late.emitter.count('crash')).toBe(1)
 			late.emitter.emit('crash')
+			const answer = await fixture.pair.call(2, 'look', { search: 'cart' })
+			expect(answer.text).not.toContain('BROWSER_SERVER_CRASH:')
 			expect(browser.destroyed).toBe(false)
 			browser.kill()
 			expect(late.emitter.count('crash')).toBe(0)
@@ -320,6 +395,15 @@ describe('eager U7', () => {
 				'spent spare disposal',
 				() => fixture.launcher.browsers[2]?.destroyed === true,
 			)
+			await waitForCondition(
+				'spent spare profile removed',
+				() =>
+					!existsSync(
+						requireValue(fixture.launcher.browsers[2]?.options.profile, 'spent spare profile'),
+					),
+			)
+			await fixture.pair.request(10, 'ping')
+			expect(fixture.launcher.browsers).toHaveLength(3)
 			fixture.launcher.hold()
 			requireValue(fixture.launcher.browsers[0], 'lease').kill()
 			const call = fixture.pair.call(2, 'look', { search: 'cart' })
@@ -392,7 +476,11 @@ describe('eager U7', () => {
 		try {
 			await expect(fixture.server.start()).rejects.toMatchObject({
 				code: 'BROWSER_SERVER_UNAVAILABLE',
-				message: expect.stringContaining('BROWSER_SERVER_TEARDOWN'),
+				message: 'The fixture termination is unconfirmed.',
+			})
+			const initialized = await fixture.pair.initialize()
+			expect(initialized).toMatchObject({
+				message: 'BROWSER_SERVER_UNAVAILABLE: The fixture termination is unconfirmed.',
 			})
 			expect(fixture.launcher.browsers).toHaveLength(1)
 			await expect(fixture.server.destroy()).rejects.toMatchObject({
@@ -646,18 +734,12 @@ describe('eager U6', () => {
 				() => fixture.launcher.browsers[2]?.fixture !== undefined,
 			)
 			const spare = requireValue(fixture.launcher.browsers[1]?.fixture, 'adopted spare')
-			const refill = requireValue(fixture.launcher.browsers[2]?.fixture, 'refill')
+			const refill = requireValue(fixture.launcher.browsers[2], 'refill')
 			expect(
 				spare.transport.sent.some((message) => message.method === 'Accessibility.getFullAXTree'),
 			).toBe(true)
-			expect(refill.transport.sent.some((message) => message.method === 'Page.navigate')).toBe(
-				false,
-			)
-			expect(
-				refill.transport.sent.find((message) => message.method === 'Target.createTarget')?.params?.[
-					'url'
-				],
-			).toBe('about:blank')
+			await waitForCondition('refill page published', () => refill.context()?.pages().length === 1)
+			expect(refill.context()?.pages()[0]?.url).toBe('about:blank')
 			expect(fixture.launcher.browsers).toHaveLength(3)
 		} finally {
 			await fixture.teardown.destroy()
@@ -682,6 +764,7 @@ describe('eager U6', () => {
 			await fixture.server.destroy()
 			await starting
 			expect(fixture.pair.answered).toEqual([])
+			expect(fixture.log.lines).toEqual([])
 			expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])
 		} finally {
 			await fixture.teardown.destroy()
@@ -713,7 +796,9 @@ describe('eager U6', () => {
 	it('closes in one turn without sweeping an exited owner or attaching listeners', async () => {
 		const fixture = createBrowseFixture()
 		const owner = readExitedProcessId()
-		const folder = fixture.scratch.ensure(`browsers/.profiles/${owner}`)
+		const folder = fixture.scratch.ensure(
+			join('browsers', '.profiles', formatBrowserLockEntry(owner, randomUUID())),
+		)
 		const listeners = process.listenerCount('SIGTERM')
 		try {
 			await Promise.all([fixture.server.start(), fixture.server.destroy()])
@@ -837,44 +922,75 @@ describe('eager U6', () => {
 		}
 	})
 	it('reports only a persistent folder removal failure at shutdown', async (context) => {
+		const probe = createScratch()
+		const directory = probe.ensure('held')
+		const holder = spawn(process.execPath, ['-e', 'console.log("ready");process.stdin.resume()'], {
+			cwd: directory,
+			stdio: ['pipe', 'pipe', 'ignore'],
+			windowsHide: true,
+		})
+		const owner = requireValue(holder.pid, 'probe owner')
+		let code: string | undefined
+		try {
+			await waitForEvent<[Buffer]>((listener) => {
+				holder.stdout?.once('data', listener)
+				return () => holder.stdout?.off('data', listener)
+			}, 'probe holds its current directory')
+			try {
+				await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+			} catch (error) {
+				code = readErrorCode(error)
+			}
+		} finally {
+			holder.kill()
+			await waitForProcessExit(owner)
+			probe.destroy()
+		}
 		context.skip(
-			process.platform !== 'win32',
-			'Windows holds a child current-directory handle against rm; POSIX permits unlinking that directory',
+			code === undefined,
+			'NOT-EVIDENCED: the host permits removal of a live child current directory',
 		)
 		for (const persistent of [false, true]) {
 			const fixture = createBrowseFixture()
-			await fixture.server.start()
-			const browser = requireValue(fixture.launcher.browsers[0], 'lease')
-			const folder = requireValue(browser.options.profile, 'profile')
-			const child = spawn(process.execPath, ['-e', 'console.log("ready");process.stdin.resume()'], {
-				cwd: folder,
-				stdio: ['pipe', 'pipe', 'ignore'],
-			})
-			const pid = requireValue(child.pid, 'folder holder')
 			try {
-				await waitForEvent<[Buffer]>((listener) => {
-					child.stdout?.once('data', listener)
-					return () => child.stdout?.off('data', listener)
-				}, 'child holds profile directory')
-				await browser.disconnect()
-				expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(false)
-				expect(existsSync(folder)).toBe(true)
-				if (!persistent) {
-					child.stdin?.end()
+				await fixture.server.start()
+				const browser = requireValue(fixture.launcher.browsers[0], 'lease')
+				const folder = requireValue(browser.options.profile, 'profile')
+				const child = spawn(
+					process.execPath,
+					['-e', 'console.log("ready");process.stdin.resume()'],
+					{
+						cwd: folder,
+						stdio: ['pipe', 'pipe', 'ignore'],
+					},
+				)
+				const pid = requireValue(child.pid, 'folder holder')
+				try {
+					await waitForEvent<[Buffer]>((listener) => {
+						child.stdout?.once('data', listener)
+						return () => child.stdout?.off('data', listener)
+					}, 'child holds profile directory')
+					await browser.disconnect()
+					expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(false)
+					expect(existsSync(folder)).toBe(true)
+					if (!persistent) {
+						child.stdin?.end()
+						await waitForProcessExit(pid)
+					}
+					const failure = await fixture.server.destroy().then(
+						() => undefined,
+						(error: unknown) => error,
+					)
+					const expected = expect.objectContaining({
+						errors: expect.arrayContaining([expect.objectContaining({ code })]),
+					})
+					expect(failure).toEqual(persistent ? expected : undefined)
+					expect(existsSync(folder)).toBe(persistent)
+				} finally {
+					child.kill()
 					await waitForProcessExit(pid)
 				}
-				const failure = await fixture.server.destroy().then(
-					() => undefined,
-					(error: unknown) => error,
-				)
-				const expected = expect.objectContaining({
-					errors: expect.arrayContaining([expect.objectContaining({ code: 'EBUSY' })]),
-				})
-				expect(failure).toEqual(persistent ? expected : undefined)
-				expect(existsSync(folder)).toBe(persistent)
 			} finally {
-				child.kill()
-				await waitForProcessExit(pid)
 				await fixture.teardown.destroy().catch(() => undefined)
 			}
 		}
@@ -929,7 +1045,9 @@ describe('eager U6', () => {
 		try {
 			await fixture.server.start()
 			expect(await fixture.pair.initialize()).toHaveProperty('serverInfo')
+			await waitForCondition('sweep attached to the stalled peer', () => stall.connections === 1)
 			await fixture.server.destroy()
+			await waitForCondition('destroy closed the stalled attach', () => stall.connections === 0)
 			expect(existsSync(folder)).toBe(true)
 		} finally {
 			await fixture.teardown.destroy()
@@ -1114,57 +1232,6 @@ describe('BrowserMCPServer', () => {
 			}
 			expect(launcher.browsers).toHaveLength(1)
 			expect(existsSync(root)).toBe(true)
-		} finally {
-			await teardown.destroy()
-		}
-	})
-
-	it('launches one time under two concurrent first calls', async () => {
-		const scratch = createScratch()
-		const launcher = new BrowserLauncher()
-		const pair = new MCPStdioPair()
-		const server = new BrowserMCPServer({
-			root: join(scratch.path, 'tmp/browsers'),
-			launch: launcher.launch,
-			stdio: pair,
-		})
-		const teardown = createTeardown()
-		teardown.add(() => scratch.destroy())
-		teardown.add(() => server.destroy())
-		try {
-			await server.start()
-			await pair.initialize()
-			launcher.hold()
-			// One chunk carries both calls, so both reach their dispatchers before the launch settles.
-			pair.send(
-				{
-					jsonrpc: '2.0',
-					id: 2,
-					method: 'tools/call',
-					params: { name: 'look', arguments: { search: 'the cart' } },
-				},
-				{
-					jsonrpc: '2.0',
-					id: 3,
-					method: 'tools/call',
-					params: { name: 'tabs', arguments: { search: 'the tabs' } },
-				},
-			)
-			await waitForCondition(
-				'the first launch to park at connect',
-				() => launcher.browsers[0]?.connects === 1,
-				{
-					budget: 3000,
-					interval: 10,
-				},
-			)
-			await waitForDelay()
-			launcher.release()
-			const [look, tabs] = await Promise.all([pair.answer(2), pair.answer(3)])
-			expect(look['isError']).toBeUndefined()
-			expect(tabs['isError']).toBeUndefined()
-			expect(launcher.browsers).toHaveLength(1)
-			expect(launcher.browsers[0]?.connects).toBe(1)
 		} finally {
 			await teardown.destroy()
 		}
@@ -1549,13 +1616,17 @@ describe('BrowserMCPServer', () => {
 			const teardown = createTeardown()
 			teardown.add(() => scratch.destroy())
 			teardown.add(() => server.destroy())
+			let admission: BrowserPromiseObserver | undefined
+			let dispatcher: BrowserPromiseObserver | undefined
 			try {
 				await server.start()
 				await pair.initialize()
-				// This listener runs after the transport's own, so the transport has read the call and
-				// begun its dispatch when destroy begins.
+				admission = new BrowserPromiseObserver(
+					/at BrowserMCPServer\.#race[^\n]+\n\s+at BrowserMCPServer\.#serve/u,
+				)
 				let destroying: Promise<void> | undefined
-				pair.input.once('data', () => {
+				// Promise initialization precedes the async body, pinning closing before admission.
+				dispatcher = new BrowserPromiseObserver(/at BrowserMCPServer\.#forward/u, undefined, () => {
 					destroying = server.destroy()
 				})
 				pair.send({
@@ -1569,11 +1640,17 @@ describe('BrowserMCPServer', () => {
 					interval: 10,
 				})
 				await destroying
-				await waitForDelay(50)
+				await waitForCondition(
+					'rejected dispatcher settled',
+					() => dispatcher?.resolved !== undefined,
+				)
+				expect(admission.created).toBeUndefined()
 				expect(launcher.browsers).toHaveLength(1)
 				expect(readdirSync(join(root, '.profiles'))).toEqual([])
 				expect(pair.answered).not.toContain(2)
 			} finally {
+				admission?.destroy()
+				dispatcher?.destroy()
 				await teardown.destroy()
 			}
 		})

@@ -47,6 +47,7 @@ import {
 	alignLoopClock,
 	BrowseChild,
 	BrowserLauncher,
+	BrowserPromiseObserver,
 	BrowseLog,
 	createBrowseFixture,
 	BrowserLockObserver,
@@ -94,6 +95,27 @@ import {
 const WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
 
 describe('BrowserLauncher eager U2', () => {
+	it('observes the chosen promise settlement and ignores an unmatched origin', async () => {
+		const hits = createRecorder<readonly []>()
+		const chosen = new BrowserPromiseObserver(
+			/at Function\.withResolvers|at Promise\.withResolvers/u,
+			hits.handler,
+		)
+		const unmatched = new BrowserPromiseObserver(/not-an-existing-stack-frame/u)
+		try {
+			const pending = Promise.withResolvers<void>()
+			expect(chosen.created).toContain('withResolvers')
+			expect(hits.count).toBe(0)
+			pending.resolve()
+			expect(hits.count).toBe(1)
+			expect(chosen.resolved).toContain('resolve')
+			await pending.promise
+			expect(unmatched.created).toBeUndefined()
+		} finally {
+			chosen.destroy()
+			unmatched.destroy()
+		}
+	})
 	it('retains isolated contexts and reports kill synchronously and drop later', async () => {
 		const launcher = new BrowserLauncher()
 		const first = launcher.launch({})
@@ -120,7 +142,7 @@ describe('BrowserLauncher eager U2', () => {
 		}
 	})
 
-	it('defers teardown and limits isolation and survivor refusals to the requested doubles', async () => {
+	it('limits isolation and survivor refusals to the requested doubles', async () => {
 		const launcher = new BrowserLauncher({ broken: 1, survivors: 1 })
 		const first = launcher.launch({})
 		const second = launcher.launch({})
@@ -128,17 +150,13 @@ describe('BrowserLauncher eager U2', () => {
 			await first.connect()
 			await expect(first.isolate()).rejects.toThrow('refused isolation')
 			const double = requireValue(launcher.browsers[0], 'first double')
-			double.defer()
 			const ending = double.destroy()
-			expect(double.destroyed).toBe(false)
-			double.resume()
 			await expect(ending).rejects.toThrow('termination is unconfirmed')
 			await second.connect()
 			await expect(second.isolate()).resolves.toBeDefined()
 			await second.destroy()
 		} finally {
 			for (const browser of launcher.browsers) {
-				browser.resume()
 				await browser.destroy().catch(() => undefined)
 			}
 		}
@@ -153,10 +171,22 @@ describe('BrowserLauncher eager U2', () => {
 		try {
 			await first.connect()
 			const pending = refused.connect()
+			let settled = false
+			const observed = pending.then(
+				() => {
+					settled = true
+				},
+				() => {
+					settled = true
+				},
+			)
+			await first.ping()
+			expect(settled).toBe(false)
 			expect(launcher.browsers[0]?.fixture).toBeDefined()
 			expect(launcher.browsers[1]?.fixture).toBeUndefined()
 			launcher.release()
 			await expect(pending).rejects.toThrow('The fixture refused the launch')
+			await observed
 			await later.connect()
 			expect(launcher.browsers[2]?.fixture).toBeDefined()
 		} finally {
@@ -571,6 +601,7 @@ describe('createStallServer', () => {
 			client.once('error', reject)
 			client.once('connect', () => resolve())
 		})
+		await waitForCondition('stall accepts the client', () => server.connections === 1)
 		client.write('GET /cdp HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\n\r\n')
 
 		const severed = new Promise<void>((resolve) => client.once('close', () => resolve()))

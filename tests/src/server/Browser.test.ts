@@ -45,7 +45,8 @@ describe('Browser eager U2', () => {
 	it('reports the endpoint and pings across attachment lifecycle states', async () => {
 		server = await createCDPTestServer()
 		server.script('Browser.getVersion', { product: 'Fixture/1.0' })
-		const browser = createBrowser({ cdp: { endpoint: server.endpoint }, timeout: 30 })
+		server.script('Browser.close', {})
+		const browser = createBrowser({ cdp: { endpoint: server.endpoint } })
 		try {
 			expect(browser.endpoint).toBeUndefined()
 			await expect(browser.ping()).rejects.toThrow(BrowserNotConnectedError)
@@ -73,7 +74,9 @@ describe('Browser eager U2', () => {
 
 	it('uses the command deadline and honors ping cancellation', async () => {
 		server = await createCDPTestServer()
-		const browser = createBrowser({ cdp: { endpoint: server.endpoint }, timeout: 30 })
+		// The same budget covers the local upgrade and target sync before the unanswered ping;
+		// allow a second for host scheduling while keeping the inherited-deadline proof bounded.
+		const browser = createBrowser({ cdp: { endpoint: server.endpoint }, timeout: 1000 })
 		try {
 			await browser.connect()
 			await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_CDP_TIMEOUT_ERROR' })

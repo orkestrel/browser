@@ -19,7 +19,7 @@ import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { join, dirname, delimiter } from 'node:path'
 import { requireValue } from '@orkestrel/test'
-import { createScratch } from '@orkestrel/test/server'
+import { createScratch, readErrorCode } from '@orkestrel/test/server'
 import {
 	createBrowserProfile,
 	findSystemBrowsers,
@@ -49,6 +49,38 @@ import type { CDPTestServerInterface } from '../../setupServer.js'
 let server: CDPTestServerInterface | undefined
 
 describe('eager U4 profile and loss helpers', () => {
+	it('treats a runtime-proven EPERM process as present', (context) => {
+		// Init and the Windows system process are candidates only; signal zero decides applicability.
+		const denied = [1, 4].find((pid) => {
+			try {
+				process.kill(pid, 0)
+				return false
+			} catch (error) {
+				return readErrorCode(error) === 'EPERM'
+			}
+		})
+		context.skip(
+			denied === undefined,
+			'NOT-EVIDENCED: signal zero on pid 1 and pid 4 produced no EPERM',
+		)
+		expect(probeProcess(requireValue(denied, 'runtime EPERM pid'))).toBe(true)
+	})
+	it('keeps recovery guidance on unresolved outcomes alone', () => {
+		const crash = describeBrowserServerLoss(BROWSER_SERVER_CRASH, new Error('Browser exited'))
+		expect(crash).toContain('Lost the page')
+		expect(crash).not.toContain('The next call')
+		expect(
+			describeBrowserServerLoss(BROWSER_SERVER_UNRESOLVED, new Error('Browser exited')),
+		).toContain('The next call acquires a browser that starts at about:blank')
+	})
+	it('renders a cause with one terminal period', () => {
+		expect(
+			describeBrowserServerLoss(
+				BROWSER_SERVER_UNAVAILABLE,
+				new Error('No Chromium browser found.'),
+			),
+		).toBe('BROWSER_SERVER_UNAVAILABLE: No Chromium browser found.')
+	})
 	it('distinguishes the live process from an exited child', async () => {
 		expect(probeProcess(process.pid)).toBe(true)
 		expect(probeProcess(await readExitedProcessId())).toBe(false)

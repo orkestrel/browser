@@ -17,7 +17,8 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { readdirSync, readFileSync } from 'node:fs'
+import { spawn } from 'node:child_process'
+import { readdirSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { BrowserOutlineNode } from '@src/core'
@@ -25,7 +26,9 @@ import { BROWSER_TOOL_DEADLINE_NOTE, renderBrowserOutline } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createScratch } from '@orkestrel/test/server'
-import { createCDPTestServer } from './setupServer.js'
+import { createCDPTestServer, createBrowseFixture, waitForProcessExit } from './setupServer.js'
+import { BROWSER_SERVER_RECORD } from '@src/server'
+import { requireValue } from '@orkestrel/test'
 import * as setupService from './setupService.js'
 import {
 	collectOutlinePairs,
@@ -76,12 +79,41 @@ describe('eager browse service fixtures', () => {
 			await child.ending
 			expect(child.stderr).toContain('ENOENT')
 			expect(child.lines).not.toContain('ready')
-			expect(BROWSE_RECORD_BLOCKS).toEqual(['browse.json', 'browse.json.tmp'])
 		} finally {
 			await child.destroy()
 			scratch.destroy()
 		}
 	})
+	for (const blocked of BROWSE_RECORD_BLOCKS) {
+		it(`makes record obstruction ${blocked} refuse a warm`, async () => {
+			const child = spawn(process.execPath, ['-e', 'process.stdin.resume()'], {
+				stdio: ['pipe', 'ignore', 'ignore'],
+				windowsHide: true,
+			})
+			const pid = requireValue(child.pid, 'owned record process')
+			const fixture = createBrowseFixture(
+				{
+					launch: (options) => {
+						mkdirSync(join(requireValue(options.profile, 'profile'), blocked))
+						return fixture.launcher.launch(options)
+					},
+				},
+				{ pid },
+			)
+			try {
+				await expect(fixture.server.start()).rejects.toMatchObject({
+					code: 'BROWSER_SERVER_UNAVAILABLE',
+				})
+				expect(fixture.launcher.browsers.every((browser) => browser.destroyed)).toBe(true)
+				expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])
+				expect([BROWSER_SERVER_RECORD, `${BROWSER_SERVER_RECORD}.tmp`]).toContain(blocked)
+			} finally {
+				child.kill()
+				await waitForProcessExit(pid)
+				await fixture.teardown.destroy()
+			}
+		})
+	}
 })
 
 describe('collectOutlineEntries', () => {

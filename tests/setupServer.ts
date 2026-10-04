@@ -183,6 +183,7 @@ export function destroyTempDirectories(): Promise<void> {
 /** Accepts raw TCP connections without completing a handshake. */
 export interface StallServerInterface {
 	readonly endpoint: string
+	readonly connections: number
 	close(): Promise<void>
 }
 
@@ -203,6 +204,7 @@ export class StallServer implements StallServerInterface {
 	constructor() {
 		this.#server = createNetServer((socket) => {
 			this.#sockets.add(socket)
+			socket.resume()
 			socket.on('error', () => undefined)
 			socket.on('close', () => this.#sockets.delete(socket))
 		})
@@ -211,6 +213,10 @@ export class StallServer implements StallServerInterface {
 	get endpoint(): string {
 		if (this.#port === undefined) throw new Error('Stall server has not started')
 		return `ws://127.0.0.1:${this.#port}/cdp`
+	}
+
+	get connections(): number {
+		return this.#sockets.size
 	}
 
 	async start(): Promise<void> {
@@ -1516,6 +1522,47 @@ export const SOURCE_HOOK = `registerHooks({
 
 // === Browse server fixtures
 
+/** Observes the first promise created by a named stack and its settlement without replacing it. */
+export class BrowserPromiseObserver {
+	readonly #hook: AsyncHook
+	#id: number | undefined
+	#created: string | undefined
+	#resolved: string | undefined
+
+	constructor(origin: RegExp, settled?: () => void, created?: () => void) {
+		this.#hook = createHook({
+			init: (id, category) => {
+				if (category !== 'PROMISE' || this.#id !== undefined) return
+				const stack = new Error().stack ?? ''
+				if (!origin.test(stack)) return
+				this.#id = id
+				this.#created = stack
+				created?.()
+			},
+			promiseResolve: (id) => {
+				if (id !== this.#id) return
+				this.#resolved = new Error().stack ?? ''
+				this.#hook.disable()
+				settled?.()
+			},
+		})
+		this.#hook.enable()
+	}
+
+	/** Holds the actual promise creation stack, or absence when the operation never began. */
+	get created(): string | undefined {
+		return this.#created
+	}
+	/** Holds the actual settlement stack, before the awaiting continuation runs. */
+	get resolved(): string | undefined {
+		return this.#resolved
+	}
+	/** Removes the runtime observer, including after an assertion fails. */
+	destroy(): void {
+		this.#hook.disable()
+	}
+}
+
 /**
  * Configures a {@link BrowserLauncher}.
  *
@@ -1530,6 +1577,8 @@ export const SOURCE_HOOK = `registerHooks({
  * - `version` — receives each double's ping count, starting at 1
  */
 export interface BrowserLauncherOptions {
+	/** Reports a live process that the calling test spawned and owns. */
+	readonly pid?: number
 	/** Counts initial doubles whose teardown refuses to confirm termination. */
 	readonly survivors?: number
 	/** Counts initial doubles whose isolation fails. */
@@ -1566,7 +1615,7 @@ export type BrowserLaunchHandler = (
  */
 export class BrowserLaunchDouble implements BrowserInterface {
 	readonly #contexts: BrowserContextInterface[] = []
-	#deferred: PromiseWithResolvers<void> | undefined
+	#pid: number | undefined
 	readonly #options: BrowserOptions
 	readonly #gate: Promise<void>
 	readonly #failure: BrowserError | undefined
@@ -1588,6 +1637,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		this.#gate = gate
 		this.#failure = failure
 		this.#handlers = handlers
+		this.#pid = handlers.pid
 	}
 
 	get emitter(): Emitter<BrowserEventMap> {
@@ -1615,7 +1665,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	}
 
 	get pid(): number | undefined {
-		return undefined
+		return this.#pid
 	}
 
 	get endpoint(): string | undefined {
@@ -1724,6 +1774,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 
 	/** Emits process loss before closing the fixture transport. */
 	kill(): void {
+		this.#pid = undefined
 		this.#emitter.emit('disconnect')
 		this.#fixture?.transport.closeRemote()
 	}
@@ -1732,17 +1783,6 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	drop(): void {
 		this.#fixture?.transport.closeRemote()
 		setImmediate(() => this.#emitter.emit('disconnect'))
-	}
-
-	/** Parks teardown until resume, while keeping the lost slot counted. */
-	defer(): void {
-		this.#deferred = Promise.withResolvers<void>()
-	}
-
-	/** Releases a deferred teardown. */
-	resume(): void {
-		this.#deferred?.resolve()
-		this.#deferred = undefined
 	}
 
 	context(index = 0): BrowserContextInterface | undefined {
@@ -1769,7 +1809,6 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	}
 
 	async destroy(): Promise<void> {
-		await this.#deferred?.promise
 		this.#destroyed = true
 		await this.#fixture?.client.close()
 		if (this.#handlers.cleanup !== undefined) throw this.#handlers.cleanup
@@ -2136,6 +2175,11 @@ export class BrowseChild {
 	/** Ends the child's standard input. */
 	end(): void {
 		this.#child.stdin?.end()
+	}
+
+	/** Closes the reader so the child's next diagnostic meets a broken pipe. */
+	close(): void {
+		this.#child.stderr?.destroy()
 	}
 
 	/**

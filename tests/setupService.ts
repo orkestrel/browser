@@ -36,6 +36,10 @@ export const BROWSE_RECORD_BLOCKS: readonly string[] = Object.freeze([
 	'browse.json.tmp',
 ])
 
+/** Explains why a runtime refusing SIGSTOP cannot prove stopped-process recovery. */
+export const BROWSE_SIGSTOP_REASON =
+	'NOT-EVIDENCED: SIGSTOP is refused by the runtime with ERR_UNKNOWN_SIGNAL'
+
 /** Records the process and endpoint a real browser announced when it connected. */
 export interface BrowseConnection {
 	readonly pid: number | undefined

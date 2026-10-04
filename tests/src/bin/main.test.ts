@@ -1,13 +1,20 @@
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, pathToFileURL } from 'node:url'
 import { isRecord } from '@orkestrel/contract'
 import { createMCPClient } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
-import { createTeardown, waitForCondition } from '@orkestrel/test'
+import { createTeardown, requireValue, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
-import { BROWSE_VOCABULARY, BrowseChild } from '../../setupServer.js'
+import {
+	BROWSE_VOCABULARY,
+	BrowseChild,
+	COOPERATIVE_SIGTERM,
+	readProfiles,
+	waitForProcessExit,
+} from '../../setupServer.js'
+import { findSystemBrowser, parseBrowserProfileRecord, probeProcess } from '@src/server'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
@@ -24,6 +31,79 @@ const INITIALIZE = {
 const LIST = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
 
 describe('bin entry', () => {
+	it('completes teardown after the stderr reader closes', async (context) => {
+		const scratch = createScratch()
+		const marker = join(scratch.path, 'write-result.json')
+		const entry = scratch.write(
+			'entry.ts',
+			`import { writeFileSync } from 'node:fs'\nawait import(${JSON.stringify(pathToFileURL(BUILT_ENTRY).href)})\nprocess.stdin.once('end', () => process.stderr.write('closed-reader probe\\n', error => writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ code: error?.code ?? null }))))\n`,
+		)
+		const child = new BrowseChild(entry, scratch.path, {
+			BROWSE_EXECUTABLE: requireValue(findSystemBrowser(), 'Chromium executable').executable,
+		})
+		const profiles = join(scratch.path, 'tmp/browsers/.profiles')
+		const pids: number[] = []
+		try {
+			child.send(INITIALIZE)
+			await waitForCondition(
+				'built handshake before closing stderr',
+				() => child.lines.length === 1,
+				{ budget: 15000 },
+			)
+			expect(JSON.parse(child.lines[0] ?? '')).toHaveProperty('result.serverInfo')
+			for (const folder of readProfiles(profiles))
+				pids.push(
+					requireValue(
+						parseBrowserProfileRecord(readFileSync(join(folder, 'browse.json'), 'utf8')),
+						'browser record',
+					).pid,
+				)
+			expect(pids.length).toBeGreaterThan(0)
+			expect(pids.every(probeProcess)).toBe(true)
+			child.close()
+			child.end()
+			const ending = await child.ending
+			await waitForCondition('stderr write callback', () => existsSync(marker))
+			const write: unknown = JSON.parse(readFileSync(marker, 'utf8'))
+			context.skip(
+				isRecord(write) && write['code'] === null,
+				`NOT-EVIDENCED: closed stderr write succeeded: ${JSON.stringify(write)}`,
+			)
+			expect(write).toMatchObject({
+				code: expect.stringMatching(/^(EPIPE|ECONNRESET|ERR_STREAM_DESTROYED)$/u),
+			})
+			expect(ending.signal).toBeNull()
+			for (const pid of pids) await waitForProcessExit(pid)
+			expect(readProfiles(profiles)).toEqual([])
+		} finally {
+			await child.destroy()
+			for (const pid of pids) if (probeProcess(pid)) process.kill(pid, 'SIGKILL')
+			for (const pid of pids) await waitForProcessExit(pid)
+			scratch.destroy()
+		}
+	}, 30000)
+
+	it('exits after SIGTERM with the cooperative host handler', async (context) => {
+		context.skip(
+			!COOPERATIVE_SIGTERM,
+			'Node terminates Windows children directly on SIGTERM; no cooperative handler runs',
+		)
+		const scratch = createScratch()
+		const child = new BrowseChild(BUILT_ENTRY, scratch.path, {
+			BROWSE_EXECUTABLE: join(scratch.path, 'missing/chrome'),
+		})
+		try {
+			child.send(INITIALIZE)
+			await waitForCondition('refused handshake before SIGTERM', () => child.lines.length === 1, {
+				budget: 15000,
+			})
+			child.kill('SIGTERM')
+			expect(await child.ending).toEqual({ code: 1, signal: null })
+		} finally {
+			await child.destroy()
+			scratch.destroy()
+		}
+	})
 	it('is the built file the manifest names as browse, with the shebang npm reads', () => {
 		const manifest: unknown = JSON.parse(readFileSync(join(ROOT, 'package.json'), 'utf8'))
 		const bin = isRecord(manifest) ? manifest['bin'] : undefined
