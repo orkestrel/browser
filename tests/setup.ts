@@ -2307,6 +2307,7 @@ export interface BrowserElementFixtureOptions {
 	readonly document?: CDPSentHandler
 	readonly query?: CDPSentHandler
 	readonly describe?: CDPSentHandler
+	readonly resolve?: CDPSentHandler
 	readonly metrics?: Readonly<Record<string, unknown>>
 	readonly failure?: { readonly method: string; readonly message: string }
 	readonly accessibility?: CDPSentHandler
@@ -2436,7 +2437,8 @@ export function scriptBrowserElements(
 		else transport.reply(message.id, { nodeIds: [50] })
 	})
 	transport.onSend('DOM.resolveNode', (message) => {
-		if (options?.gone === true) transport.fail(message.id, 'No node with given id found')
+		if (options?.resolve !== undefined) options.resolve(message)
+		else if (options?.gone === true) transport.fail(message.id, 'No node with given id found')
 		else
 			transport.reply(message.id, {
 				object: { objectId: `object-${message.params?.['backendNodeId']}` },
