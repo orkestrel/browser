@@ -391,6 +391,61 @@ describe('eager U7 real browse', () => {
 			await fixture.teardown.destroy()
 		}
 	})
+	it('forces a hung stand-in process to exit at the ping deadline and serves its successor', async () => {
+		const scratch = createScratch()
+		const transcript = join(scratch.path, 'cdp.txt')
+		const launcher = new BrowseLauncher()
+		// The deadline covers Node startup and local CDP setup under service-suite contention.
+		// Exit must follow the ping within half a deadline, before graceful teardown's command waits.
+		const timeout = 2000
+		const fixture = createBrowseFixture({
+			launch: (options) =>
+				launcher.launch(
+					launcher.browsers.length === 0
+						? {
+								...options,
+								executable: process.execPath,
+								args: [
+									fileURLToPath(new URL('../fixtures/hung/main.ts', import.meta.url)),
+									transcript,
+								],
+								timeout,
+							}
+						: { ...options, executable: requireSystemBrowser().executable },
+				),
+		})
+		try {
+			await fixture.server.start()
+			const pid = requireValue(launcher.browsers[0]?.pid, 'stand-in pid')
+			expect(probeProcess(pid)).toBe(true)
+			const pending = fixture.pair.call(2, 'tabs', { search: 'page' })
+			await waitForCondition(
+				'withheld per-call ping',
+				() =>
+					readFileSync(transcript, 'utf8')
+						.split(/\r\n|\n/)
+						.filter((method) => method === 'Browser.getVersion').length === 2,
+			)
+			await waitForCondition('forced stand-in exit', () => !probeProcess(pid), {
+				budget: timeout * 1.5,
+			})
+			expect(probeProcess(pid)).toBe(false)
+			const answer = await pending
+			expect(answer.error).toBe(false)
+			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+			expect(answer.text).toContain('about:blank')
+			const successor = requireValue(launcher.browsers[1]?.pid, 'successor pid')
+			expect(successor).not.toBe(pid)
+			expect(probeProcess(successor)).toBe(true)
+			const next = await fixture.pair.call(3, 'tabs', { search: 'page' })
+			expect(next.error).toBe(false)
+			expect(next.text).not.toContain('BROWSER_SERVER_CRASH:')
+			expect(launcher.browsers[1]?.pid).toBe(successor)
+		} finally {
+			await fixture.teardown.destroy()
+			scratch.destroy()
+		}
+	})
 })
 
 describe('eager U6 real browse', () => {
