@@ -502,7 +502,10 @@ describe('eager U6', () => {
 				expect(JSON.stringify(modern).match(/BROWSER_SERVER_UNAVAILABLE/g)).toHaveLength(1)
 				expect(JSON.stringify(modern).match(/The fixture refused the launch/g)).toHaveLength(1)
 				expect(fixture.launcher.browsers).toHaveLength(2)
-				expect(fixture.log.lines.filter((line) => line.includes('UNAVAILABLE'))).toHaveLength(2)
+				expect(fixture.log.lines).toEqual([
+					'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+					'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+				])
 			} finally {
 				await fixture.teardown.destroy()
 			}
@@ -521,6 +524,13 @@ describe('eager U6', () => {
 			)
 			expect(fixture.launcher.browsers).toHaveLength(3)
 			expect(fixture.log.lines.filter((line) => line.includes('EXHAUSTED'))).toHaveLength(1)
+			expect(fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:'))).toEqual([
+				'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+				'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+			])
+			expect(fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_UNAVAILABLE:'))).toBe(
+				false,
+			)
 			expect((await fixture.pair.call(2, 'look', { search: 'cart' })).error).toBe(false)
 			expect(fixture.launcher.browsers[0]?.destroyed).toBe(false)
 		} finally {
@@ -554,7 +564,8 @@ describe('eager U6', () => {
 		try {
 			await waitForCondition(
 				'both spare refusals',
-				() => fixture.log.lines.filter((line) => line.includes('UNAVAILABLE')).length === 2,
+				() =>
+					fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:')).length === 2,
 			)
 			expect(fixture.launcher.browsers).toHaveLength(3)
 			version.resolve()
@@ -567,6 +578,12 @@ describe('eager U6', () => {
 				fixture.log.lines.some((line) => line.includes('EXHAUSTED')),
 			)
 			expect(fixture.log.lines.filter((line) => line.includes('EXHAUSTED'))).toHaveLength(1)
+			expect(
+				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:')),
+			).toHaveLength(4)
+			expect(fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_UNAVAILABLE:'))).toBe(
+				false,
+			)
 		} finally {
 			version.resolve()
 			await fixture.teardown.destroy()

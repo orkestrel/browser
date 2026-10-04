@@ -39,6 +39,7 @@ import {
 } from './factories.js'
 import {
 	BROWSER_SERVER_EXHAUSTED,
+	BROWSER_SERVER_LAUNCH,
 	BROWSER_SERVER_OPTIONS,
 	BROWSER_SERVER_POOL_LIMIT,
 	BROWSER_SERVER_POOL_SIZE,
@@ -569,7 +570,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				await this.#destroySlot(profile, browser, toolset).catch((failure: unknown) => {
 					this.#stranded = failure
 				})
-			this.#write(`browse: ${describeBrowserServerLoss(BROWSER_SERVER_UNAVAILABLE, error)}`)
+			this.#write(`browse: ${describeBrowserServerLoss(BROWSER_SERVER_LAUNCH, error)}`)
 			throw error
 		}
 	}

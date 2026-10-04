@@ -227,6 +227,8 @@ export const BROWSER_FILE_STORE_LIMIT = 100
 
 /** Names the refusal when no browser can serve a call. */
 export const BROWSER_SERVER_UNAVAILABLE = 'BROWSER_SERVER_UNAVAILABLE'
+/** Names a failed attempt to warm a browser. */
+export const BROWSER_SERVER_LAUNCH = 'BROWSER_SERVER_LAUNCH'
 /** Sets the default number of warm browsers to 1. */
 export const BROWSER_SERVER_POOL_SIZE = 1
 /** Limits the number of warm browsers to 3. */

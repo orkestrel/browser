@@ -226,6 +226,15 @@ describe('eager U7 real browse', () => {
 			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
 			expect(answer.text).toMatch(/\nBROWSER_SERVER_UNAVAILABLE:.*ENOENT/)
 			expect(launcher.browsers).toHaveLength(3)
+			expect(
+				fixture.log.lines.filter((line) => line.startsWith('browse: BROWSER_SERVER_LAUNCH:')),
+			).toEqual([
+				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
+				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
+			])
+			expect(fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_UNAVAILABLE:'))).toBe(
+				false,
+			)
 		} finally {
 			await fixture.teardown.destroy()
 			if (existsSync(link)) unlinkSync(link)
@@ -451,12 +460,13 @@ describe('eager U6 real browse', () => {
 		const scratch = createScratch()
 		const launcher = new BrowseLauncher()
 		const pair = new MCPStdioPair()
+		const log = new BrowseLog()
 		const server = createBrowserMCPServer({
 			root: scratch.path,
 			executable: join(scratch.path, 'missing.exe'),
 			launch: launcher.launch,
 			stdio: pair,
-			log: new BrowseLog(),
+			log,
 		})
 		try {
 			await expect(server.start()).rejects.toThrow('ENOENT')
@@ -465,6 +475,10 @@ describe('eager U6 real browse', () => {
 				data: { code: 'BROWSER_SERVER_UNAVAILABLE' },
 			})
 			expect(launcher.browsers).toHaveLength(2)
+			expect(log.lines).toEqual([
+				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
+				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
+			])
 			expect(readdirSync(join(scratch.path, '.profiles'))).toEqual([])
 		} finally {
 			await server.destroy()

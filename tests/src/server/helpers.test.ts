@@ -38,6 +38,7 @@ import {
 	parseBrowserProfileRecord,
 	describeBrowserServerLoss,
 	BROWSER_SERVER_CRASH,
+	BROWSER_SERVER_LAUNCH,
 	BROWSER_SERVER_UNAVAILABLE,
 	BROWSER_SERVER_UNRESOLVED,
 } from '@src/server'
@@ -82,6 +83,7 @@ describe('eager U4 profile and loss helpers', () => {
 		})
 		for (const code of [
 			BROWSER_SERVER_CRASH,
+			BROWSER_SERVER_LAUNCH,
 			BROWSER_SERVER_UNAVAILABLE,
 			BROWSER_SERVER_UNRESOLVED,
 		]) {
