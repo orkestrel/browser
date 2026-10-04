@@ -10,7 +10,7 @@ import type {
 	BrowserScreenshotResult,
 } from '../types.js'
 import { BrowserReading } from '../BrowserReading.js'
-import { BrowserElementError, isBrowserElementError } from '../errors.js'
+import { BrowserElementError, isBrowserElementError, isCDPError } from '../errors.js'
 import { BROWSER_ELEMENT_REFUSALS, BROWSER_RESULT_LIMIT } from '../constants.js'
 import {
 	compileActionabilityFunction,
@@ -369,18 +369,38 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			)
 			.catch(this.#failure.bind(this, options))
 		await this.#call(
-			compileActionabilityFunction({ visible: true, enabled: true, stable: true }),
+			`async function() {
+		await (${compileActionabilityFunction({ visible: true, enabled: true, stable: true })}).call(this)
+		let previous
+		for (;;) {
+			await new Promise((resolve) => requestAnimationFrame(resolve))
+			const current = [window.scrollX, window.scrollY]
+			if (previous && current.every((value, index) => value === previous[index])) return true
+			previous = current
+		}
+	}`,
 			options,
 		)
 		const geometry = await this.#geometry(options)
 		const point = geometry.page.center
 		const local = geometry.local.center
 		const scroll = await this.#scroll(this.#input.node.session, options)
-		const hit = await this.#input.client.send(
-			'DOM.getNodeForLocation',
-			{ x: Math.round(local.x + scroll.x), y: Math.round(local.y + scroll.y) },
-			{ session: this.#input.node.session, ...options },
-		)
+		const hit = await this.#input.client
+			.send(
+				'DOM.getNodeForLocation',
+				{ x: Math.round(local.x + scroll.x), y: Math.round(local.y + scroll.y) },
+				{ session: this.#input.node.session, ...options },
+			)
+			.catch((error: unknown) => {
+				options?.signal?.throwIfAborted()
+				if (isCDPError(error) && error.context?.['message'] === 'No node found at given location')
+					throw new BrowserElementError(
+						this.reference,
+						'OCCLUDED',
+						'hit-test location held no node',
+					)
+				throw error
+			})
 		if (
 			!isRecord(hit) ||
 			!isInteger(hit['backendNodeId']) ||

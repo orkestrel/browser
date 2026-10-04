@@ -1,7 +1,86 @@
-import { describe, expect, it } from 'vitest'
+import type { BrowserPageInterface } from '@src/core'
+import type { BrowserInterface } from '@src/server'
+import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BrowserElementError, isBrowserElementError, isCDPError } from '@src/core'
-import { requireValue } from '@orkestrel/test'
+import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createBrowserElementFixture } from '../../../setup.js'
+import { readFileSync } from 'node:fs'
+import { createBrowser } from '@src/server'
+import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../../../setupService.js'
+
+describe('real Chromium pointer settling', () => {
+	let browser: BrowserInterface
+	let page: BrowserPageInterface
+
+	beforeEach(async () => {
+		browser = createBrowser({
+			executable: requireSystemBrowser().executable,
+			headless: true,
+			args: [...SERVICE_BROWSER_ARGS],
+		})
+		await browser.connect()
+		page = await browser.create()
+		await page.evaluate(
+			`(document.write(${JSON.stringify(readFileSync(new URL('../../../fixtures/smooth-scroll.html', import.meta.url), 'utf8'))}), document.close())`,
+		)
+	})
+
+	afterEach(async () => {
+		await browser?.destroy()
+	})
+
+	it('lands a scrolling click and the immediately following distant click', async () => {
+		const start = requireValue(
+			(await page.elements.find({ role: 'link', name: 'Scroll to top' }))[0],
+		)
+		const finish = requireValue((await page.elements.find({ role: 'button', name: 'Finish' }))[0])
+		await start.click()
+		await finish.click()
+		expect(await page.evaluate("document.getElementById('start').dataset.clicked")).toBe('true')
+		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBe('true')
+		expect(await page.evaluate("document.getElementById('finish').dataset.scroll")).toBe('0')
+	})
+
+	it('codes a real protocol location refusal as OCCLUDED', async () => {
+		const element = requireValue(
+			(await page.elements.find({ role: 'button', name: 'Outside the viewport' }))[0],
+		)
+		await expect(element.click()).rejects.toMatchObject({
+			code: 'BROWSER_ELEMENT_ERROR',
+			context: { reference: element.reference, reason: 'OCCLUDED' },
+			message: expect.stringContaining('location held no node'),
+		})
+	})
+
+	it('bounds a continuously scrolling document by the existing call timeout', async () => {
+		const element = requireValue((await page.elements.find({ role: 'button', name: 'Finish' }))[0])
+		await page.evaluate(
+			"requestAnimationFrame(function move() { window.scrollTo({ top: window.scrollY === 0 ? 500 : 0, behavior: 'instant' }); requestAnimationFrame(move) })",
+		)
+		await expect(element.click({ timeout: 100 })).rejects.toMatchObject({
+			code: 'BROWSER_CDP_TIMEOUT_ERROR',
+			context: { method: 'Runtime.callFunctionOn', timeout: 100 },
+		})
+		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBeUndefined()
+	})
+
+	it('aborts a scroll settle through the existing call signal', async () => {
+		const element = requireValue((await page.elements.find({ role: 'button', name: 'Finish' }))[0])
+		await page.evaluate(
+			"requestAnimationFrame(function move() { window.scrollTo({ top: window.scrollY === 0 ? 500 : 0, behavior: 'instant' }); document.body.dataset.frames = String(Number(document.body.dataset.frames ?? 0) + 1); requestAnimationFrame(move) })",
+		)
+		const controller = new AbortController()
+		const reason = new Error('Stop scroll settling')
+		const clicking = element.click({ signal: controller.signal }).catch((error: unknown) => error)
+		await waitForCondition(
+			'scroll frames during the pending click',
+			async () => Number(await page.evaluate('document.body.dataset.frames')) >= 10,
+		)
+		controller.abort(reason)
+		expect(await clicking).toBe(reason)
+		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBeUndefined()
+	})
+})
 
 describe('trusted element actions', () => {
 	it.each([
