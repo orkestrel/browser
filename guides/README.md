@@ -39,6 +39,12 @@ here for the same reason.
 `renderText` pipeline for the reader-facing prose of an HTML document. It documents **that package's** surface, not anything sourced in
 this repo; it is kept here for the same reason.
 
+[`pool.md`](pool.md) is a byte-identical mirror of the guide for
+`@orkestrel/pool` — a runtime dependency, the warm floor, loss watch, restart
+bound, and token lifecycle the `browse` server's `BrowserMCPServer` composes
+for its browsers. It documents **that package's** surface, not anything
+sourced in this repo; it is kept here for the same reason.
+
 [`guide.md`](guide.md) is a byte-identical mirror of the guide for
 `@orkestrel/guide` — the devDependency powering this repo's guides-parity
 test suite (`tests/guides.test.ts`). It documents **that
