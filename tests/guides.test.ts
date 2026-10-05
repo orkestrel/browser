@@ -68,6 +68,8 @@ const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 /** The receipt the guide's Tools section quotes for a `look` call that carries `ref`. */
 const UNADVERTISED_RECEIPT =
 	'The look tool takes no ref parameter; call look with search and offset.'
+/** The failure a page command reports when its renderer hangs past the command deadline. */
+const HUNG_FAILURE = 'Runtime.evaluate timed out'
 /** The headings that open and close the guide's Tools table. */
 const TOOLS_SECTION = Object.freeze(['\n### Tools\n', '\n### Receipts\n'])
 /** The heading of the fence that shows the `add-kettle` listing. */
@@ -289,6 +291,39 @@ await new GuideCommand({
 			await toolset.destroy()
 		} finally {
 			await client.close()
+		}
+	})
+
+	// The guide's holder limits state that a renderer that hangs without crashing raises no loss:
+	// while the browser answers its ping, a call that fails on the page answers its plain failure,
+	// launches nothing, and leaves the holder in the same context. The fixture fails the page's
+	// awaited evaluation the way a hung renderer's command deadline does and keeps the ping
+	// answering.
+	it('answers a hung page plainly and keeps the context while the browser answers its ping', async () => {
+		const { createBrowseFixture } = await import('./setupServer.js')
+		const fixture = createBrowseFixture(undefined, {
+			evaluation: (message, transport) => {
+				if (message.params?.['awaitPromise'] === true) transport.fail(message.id, HUNG_FAILURE)
+				else transport.reply(message.id, { result: { value: true } })
+			},
+		})
+		try {
+			await fixture.server.start()
+			const browser = requireValue(fixture.launcher.browsers[0])
+			const page = requireValue(browser.context()?.page())
+			const answer = await fixture.pair.call(2, 'wait', { text: 'Order confirmed' })
+			expect(answer.error).toBe(true)
+			expect(answer.text).not.toContain('BROWSER_SERVER_')
+			expect((await fixture.pair.call(3, 'look', { search: 'cart' })).text).not.toContain(
+				'BROWSER_SERVER_CRASH',
+			)
+			expect(fixture.launcher.browsers).toHaveLength(1)
+			expect(browser.destroyed).toBe(false)
+			expect(browser.contexts()).toHaveLength(1)
+			expect(browser.context()?.page()).toBe(page)
+			expect(page.closed).toBe(false)
+		} finally {
+			await fixture.teardown.destroy()
 		}
 	})
 
