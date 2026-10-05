@@ -34,6 +34,7 @@ import {
 	requireValue,
 	waitForCondition,
 	waitForDelay,
+	waitForEvent,
 } from '@orkestrel/test'
 import {
 	createAttachedPage,
@@ -2104,6 +2105,107 @@ describe('BrowserPage events', () => {
 			'session-1',
 		)
 		await expect(workers.calls[0]?.[0].evaluate('1')).rejects.toThrow('Browser worker is closed')
+	})
+
+	it('releases a non-frame target reported by a frame session before detaching it', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Page.enable')
+		replyOk(transport, 'Runtime.enable')
+		replyOk(transport, 'Page.setLifecycleEventsEnabled')
+		replyOk(transport, 'Target.setAutoAttach')
+		const resumes: CDPSentMessage[] = []
+		transport.onSend('Runtime.runIfWaitingForDebugger', (message) => resumes.push(message))
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const workers = createRecorder<[worker: BrowserWorkerInterface]>()
+		page.emitter.on('worker', workers.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'frame-session',
+					targetInfo: { targetId: 'frame-1', type: 'iframe', parentFrameId: 'target-1' },
+				},
+				'session-1',
+			)
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'nested-worker',
+					waitingForDebugger: true,
+					targetInfo: { targetId: 'service-1', type: 'service_worker' },
+				},
+				'frame-session',
+			)
+			expect(readCDPSessionMethods(transport, 'nested-worker')).toEqual([
+				'Runtime.runIfWaitingForDebugger',
+			])
+			expect(
+				transport.sent.filter((message) => message.method === 'Target.detachFromTarget'),
+			).toEqual([])
+			const detached = waitForEvent<readonly [CDPSentMessage]>((deliver) => {
+				transport.onSend('Target.detachFromTarget', (message) => {
+					transport.reply(message.id, {})
+					deliver(message)
+				})
+				return () => undefined
+			}, 'the frame session detaches the released non-frame target')
+			transport.reply(
+				requireValue(resumes.find((message) => message.sessionId === 'nested-worker')).id,
+				{},
+			)
+			const [message] = await detached
+			expect(message).toMatchObject({
+				sessionId: 'frame-session',
+				params: { sessionId: 'nested-worker' },
+			})
+			expect(workers.count).toBe(0)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('resumes a service worker while Runtime.enable awaits worker startup, then publishes it', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const enabling: CDPSentMessage[] = []
+		transport.onSend('Runtime.enable', (message) => enabling.push(message))
+		replyOk(transport, 'Runtime.runIfWaitingForDebugger')
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const workers = createRecorder<[worker: BrowserWorkerInterface]>()
+		page.emitter.on('worker', workers.handler)
+		try {
+			transport.event(
+				'Target.attachedToTarget',
+				{
+					sessionId: 'service-session',
+					waitingForDebugger: true,
+					targetInfo: {
+						targetId: 'service-1',
+						type: 'service_worker',
+						url: 'https://example.com/service.js',
+					},
+				},
+				'session-1',
+			)
+			expect(readCDPSessionMethods(transport, 'service-session')).toEqual([
+				'Runtime.enable',
+				'Runtime.runIfWaitingForDebugger',
+			])
+			expect(workers.count).toBe(0)
+			const published = waitForEvent<readonly [BrowserWorkerInterface]>((deliver) => {
+				page.emitter.on('worker', deliver)
+				return () => page.emitter.off('worker', deliver)
+			}, 'the enabled service worker is published')
+			transport.reply(requireValue(enabling[0]).id, {})
+			await published
+			expect(workers.count).toBe(1)
+			expect(workers.calls[0]?.[0]).toMatchObject({
+				id: 'service-1',
+				category: 'service_worker',
+				url: 'https://example.com/service.js',
+			})
+		} finally {
+			await client.close()
+		}
 	})
 
 	it('creates popup pages with opener identity and initialized protocol domains, and resumes them after the domains', async () => {

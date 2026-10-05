@@ -1400,12 +1400,15 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		category: BrowserWorkerCategory,
 	): Promise<void> {
 		try {
-			await this.#client.send('Runtime.enable', undefined, { session })
+			const enabling = this.#client.send('Runtime.enable', undefined, { session })
+			// Service-worker startup cannot answer Runtime.enable until the debugger wait is released.
+			if (category === 'service_worker') this.#resumeTarget(session)
+			await enabling
 			if (this.#closed) {
 				await this.#detachChild(session, this.#sessionId)
 				return
 			}
-			this.#resumeTarget(session)
+			if (category !== 'service_worker') this.#resumeTarget(session)
 			const worker = new BrowserWorker(this.#client, session, id, url, category)
 			this.#workers.set(id, worker)
 			this.#emitter.emit('worker', worker)
@@ -2049,7 +2052,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 
 		const category = target['type']
-		if (owner !== this.#sessionId && category !== 'iframe') return
+		if (owner !== this.#sessionId && category !== 'iframe') {
+			void this.#detachChild(session, owner)
+			return
+		}
 		if (category === 'worker' || category === 'service_worker' || category === 'shared_worker') {
 			void this.#attachWorker(
 				session,

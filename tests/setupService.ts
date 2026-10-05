@@ -20,6 +20,7 @@ import type {
 	SystemBrowser,
 	SystemBrowserOptions,
 } from '@src/server'
+import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { MCPClientInterface } from '@orkestrel/mcp'
 import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, createCDPClient } from '@src/core'
 import {
@@ -37,6 +38,39 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BrowseChild, SOURCE_HOOK } from './setupServer.js'
 export { reservePort } from './setupServer.js'
+
+/** Serves worker scripts and a page for worker startup proofs.
+ * @param request - The fixture HTTP request
+ * @param response - The fixture HTTP response
+ */
+export function handleServiceWorkerFixture(
+	request: IncomingMessage,
+	response: ServerResponse,
+): void {
+	if (request.url === '/service-worker.js') {
+		response.writeHead(200, { 'content-type': 'text/javascript' })
+		response.end("self.addEventListener('install', () => self.skipWaiting())")
+		return
+	}
+	if (request.url === '/dedicated-worker.js') {
+		response.writeHead(200, { 'content-type': 'text/javascript' })
+		response.end(
+			"self.addEventListener('message', event => self.postMessage('dedicated:' + event.data))",
+		)
+		return
+	}
+	if (request.url === '/shared-worker.js') {
+		response.writeHead(200, { 'content-type': 'text/javascript' })
+		response.end(`self.addEventListener('connect', event => {
+			const port = event.ports[0]
+			port.addEventListener('message', message => port.postMessage('shared:' + message.data))
+			port.start()
+		})`)
+		return
+	}
+	response.writeHead(200, { 'content-type': 'text/html' })
+	response.end('<title>Service worker activation</title>')
+}
 
 /** Starts the built browse server with a real browser and a bounded holder pool.
  * @param root - Owned journey and profile directory

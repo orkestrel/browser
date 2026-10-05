@@ -14,6 +14,7 @@ import type {
 	BrowserPageInterface,
 	BrowserPoint,
 	BrowserReadResult,
+	BrowserWorkerInterface,
 	CDPClientInterface,
 } from '@src/core'
 import type { FixtureServerInterface } from '../setupServer.js'
@@ -37,6 +38,7 @@ import {
 	requireValue,
 	retryUntil,
 	waitForCondition,
+	waitForEvent,
 } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
@@ -52,6 +54,7 @@ import {
 } from '../setupServer.js'
 import {
 	extractOutlineReferences,
+	handleServiceWorkerFixture,
 	parseProtocolDomains,
 	REGISTRY_ABSENT_REASON,
 	requireCacheRestore,
@@ -136,6 +139,100 @@ describe('Browser real launch', () => {
 			expect(reading.text().text).toContain('Hello')
 		} finally {
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
+		}
+	})
+
+	it('registers and activates a service worker in a library-opened page', async () => {
+		const fixture = createServer(handleServiceWorkerFixture)
+		await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve))
+		try {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 0, discover: false },
+			})
+			await browser.connect()
+			const url = `http://127.0.0.1:${readServerPort(fixture)}/`
+			const page = await browser.create({ url })
+			const published = waitForEvent<readonly [BrowserWorkerInterface]>(
+				(deliver) => {
+					page.emitter.on('worker', deliver)
+					return () => page.emitter.off('worker', deliver)
+				},
+				'the page publishes its service worker',
+				{ budget: 5000 },
+			)
+			const [state, [worker]] = await Promise.all([
+				page.evaluate(
+					`navigator.serviceWorker.register('/service-worker.js').then(registration =>
+						new Promise((resolve, reject) => {
+							const worker = registration.installing || registration.waiting || registration.active
+							if (!worker) throw new Error('Registration has no worker')
+							if (worker.state === 'activated') resolve(worker.state)
+							else worker.addEventListener('statechange', () => {
+								if (worker.state === 'activated') resolve(worker.state)
+								if (worker.state === 'redundant') reject(new Error('Worker became redundant'))
+							})
+						}))`,
+					{ timeout: 5000 },
+				),
+				published,
+			])
+			expect(state).toBe('activated')
+			expect(worker.category).toBe('service_worker')
+			expect(worker.url).toBe(`${url}service-worker.js`)
+			await expect(worker.evaluate('self.location.href', { timeout: 5000 })).resolves.toBe(
+				worker.url,
+			)
+		} finally {
+			await browser?.destroy()
+			await new Promise<void>((resolve) => fixture.close(() => resolve()))
+		}
+	})
+
+	it('starts dedicated and shared workers that answer messages in a library-opened page', async () => {
+		const fixture = createServer(handleServiceWorkerFixture)
+		await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve))
+		try {
+			browser = createBrowser({
+				executable: REAL_BROWSER_EXECUTABLE,
+				headless: true,
+				args: REAL_BROWSER_ARGS,
+				cdp: { port: 0, discover: false },
+			})
+			await browser.connect()
+			const url = `http://127.0.0.1:${readServerPort(fixture)}/`
+			const page = await browser.create({ url })
+			await expect(
+				page.evaluate(
+					`Promise.all([
+				new Promise((resolve, reject) => {
+					const worker = new Worker('/dedicated-worker.js')
+					worker.addEventListener('error', reject)
+					worker.addEventListener('message', event => {
+						worker.terminate()
+						resolve(event.data)
+					})
+					worker.postMessage('ping')
+				}),
+				new Promise((resolve, reject) => {
+					const worker = new SharedWorker('/shared-worker.js')
+					worker.addEventListener('error', reject)
+					worker.port.addEventListener('message', event => {
+						worker.port.close()
+						resolve(event.data)
+					})
+					worker.port.start()
+					worker.port.postMessage('ping')
+				})
+			])`,
+					{ timeout: 5000 },
+				),
+			).resolves.toEqual(['dedicated:ping', 'shared:ping'])
+		} finally {
+			await browser?.destroy()
+			await new Promise<void>((resolve) => fixture.close(() => resolve()))
 		}
 	})
 
