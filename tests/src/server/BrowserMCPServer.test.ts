@@ -1664,7 +1664,8 @@ describe('eager U6', () => {
 		}
 	})
 
-	it('resets strikes when the first grant follows both spare refusals', async () => {
+	it('keeps the floor spent when the first grant follows both spare refusals', async () => {
+		// The first browser was created before both refusals, so its grant does not reopen the bound.
 		const version = Promise.withResolvers<void>()
 		const fixture = createBrowseFixture({ pool: { size: 2 } }, { version: () => version.promise })
 		fixture.launcher.refuse(1)
@@ -1678,17 +1679,15 @@ describe('eager U6', () => {
 			expect(fixture.launcher.browsers).toHaveLength(3)
 			version.resolve()
 			await starting
-			await waitForCondition(
-				'refills after grant reset',
-				() => fixture.launcher.browsers.length === 5,
-			)
 			await waitForCondition('exhausted report', () =>
 				fixture.log.lines.some((line) => line.includes('EXHAUSTED')),
 			)
+			await fixture.pair.request(10, 'ping')
+			expect(fixture.launcher.browsers).toHaveLength(3)
 			expect(fixture.log.lines.filter((line) => line.includes('EXHAUSTED'))).toHaveLength(1)
 			expect(
 				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:')),
-			).toHaveLength(4)
+			).toHaveLength(2)
 			expect(fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_UNAVAILABLE:'))).toBe(
 				false,
 			)
