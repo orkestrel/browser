@@ -52,6 +52,12 @@ import {
 	findHolderProfile,
 	requireOutlineReference,
 	recordHolderJourney,
+	ContextFixture,
+	CONTEXT_STORES,
+	inspectHolderContext,
+	callContextTool,
+	downloadContextFile,
+	readContextFolders,
 } from '../setupService.js'
 import { createBrowserJourneyFixture } from '../setup.js'
 import {
@@ -67,6 +73,275 @@ import {
 	COOPERATIVE_SIGTERM,
 	endBrowseChild,
 } from '../setupServer.js'
+
+describe('contexts C2 built browse on one browser', () => {
+	let scratch: ReturnType<typeof createScratch>
+	let server: Awaited<ReturnType<typeof openHolderServer>>
+	let pages: ContextFixture
+	let holder: string
+	beforeAll(async () => {
+		scratch = createScratch()
+		pages = new ContextFixture()
+		await pages.start()
+		server = await openHolderServer(scratch.path, 1)
+		holder = await acquireHolder(server.client, 'C2 source context')
+	})
+	afterAll(async () => {
+		await server?.client.disconnect()
+		await pages?.destroy()
+		scratch?.destroy()
+	})
+
+	it('isolates every web store between simultaneous holders on one browser', async () => {
+		expect(await server.client.call('tools', { holder })).toMatchObject({
+			resultType: 'complete',
+			value: {
+				holder,
+				tools: expect.arrayContaining([expect.objectContaining({ name: 'navigate' })]),
+			},
+		})
+		const source = await pages.read(server.client, holder, 'seed&cache=simultaneous')
+		const observer = await inspectHolderContext(scratch.path, source.url)
+		try {
+			await observer.client.send('Browser.setPermission', {
+				permission: { name: 'geolocation' },
+				setting: 'granted',
+				origin: pages.url,
+				browserContextId: observer.context,
+			})
+			const control = await pages.read(server.client, holder, 'cache=simultaneous')
+			expect(pages.count('/cached/simultaneous'), 'source HTTP cache readback').toBe(1)
+			const sibling = await pages.read(server.client, undefined, 'cache=simultaneous')
+			const other = await inspectHolderContext(scratch.path, sibling.url)
+			try {
+				expect(other.pid, 'both holders share the real browser process').toBe(observer.pid)
+			} finally {
+				await other.client.close()
+			}
+			for (const store of CONTEXT_STORES) {
+				expect(control.state[store.name], `${store.name}: source write/read control`).toEqual(
+					store.source,
+				)
+				expect(sibling.state[store.name], `${store.name}: sibling isolation`).toEqual(store.empty)
+			}
+			expect(other.context).not.toBe(observer.context)
+			expect(pages.count('/cached/simultaneous'), 'sibling HTTP cache is separate').toBe(2)
+			const sourceFile = await downloadContextFile(
+				server.client,
+				holder,
+				observer.profile,
+				'source',
+				observer.target,
+			)
+			const download = await pages.read(server.client, undefined, 'marker=sibling')
+			const target = await inspectHolderContext(scratch.path, download.url)
+			await target.client.close()
+			const siblingFile = await downloadContextFile(
+				server.client,
+				undefined,
+				observer.profile,
+				'sibling',
+				target.target,
+			)
+			expect(basename(sourceFile)).toBe(basename(siblingFile))
+			expect(dirname(sourceFile), 'downloads have separate generation folders').not.toBe(
+				dirname(siblingFile),
+			)
+			expect(readFileSync(sourceFile, 'utf8'), 'source download readback').toBe('source')
+			expect(readFileSync(siblingFile, 'utf8'), 'sibling download readback').toBe('sibling')
+		} finally {
+			await observer.client.close()
+		}
+	})
+
+	it('replaces a destroyed holder with empty web stores and an empty downloads folder', async () => {
+		await callHolderServer(server.client, 'destroy', { holder })
+		holder = await acquireHolder(server.client, 'C2 replacement source')
+		const source = await pages.read(server.client, holder, 'seed&cache=replacement')
+		const observer = await inspectHolderContext(scratch.path, source.url)
+		try {
+			await observer.client.send('Browser.setPermission', {
+				permission: { name: 'geolocation' },
+				setting: 'granted',
+				origin: pages.url,
+				browserContextId: observer.context,
+			})
+			const control = await pages.read(server.client, holder, 'cache=replacement')
+			for (const store of CONTEXT_STORES)
+				expect(
+					control.state[store.name],
+					`${store.name}: destroyed holder write/read control`,
+				).toEqual(store.source)
+			expect(pages.count('/cached/replacement'), 'old HTTP cache control').toBe(1)
+			const old = dirname(
+				await downloadContextFile(
+					server.client,
+					holder,
+					observer.profile,
+					'source',
+					observer.target,
+				),
+			)
+			await callHolderServer(server.client, 'destroy', { holder })
+			expect(existsSync(old), 'destroy removes the old downloads folder').toBe(false)
+			const sibling = await callContextTool(server.client, undefined, 'look', { search: '' })
+			expect(sibling, 'destroy keeps the sibling context alive').not.toContain(
+				'BROWSER_SERVER_CRASH',
+			)
+			expect(
+				probeProcess(observer.pid),
+				`destroy retains the sibling browser; ${server.transport.evidence ?? ''}`,
+			).toBe(true)
+			const retained = readContextFolders(observer.profile)
+			holder = await acquireHolder(server.client, 'C2 replacement')
+			const folders = readContextFolders(observer.profile).filter(
+				(folder) => !retained.includes(folder),
+			)
+			expect(folders, 'one fresh download folder').toHaveLength(1)
+			expect(readdirSync(requireValue(folders[0])), 'replacement downloads start empty').toEqual([])
+			const replacement = await pages.read(server.client, holder, 'cache=replacement')
+			for (const store of CONTEXT_STORES)
+				expect(replacement.state[store.name], `${store.name}: replacement isolation`).toEqual(
+					store.empty,
+				)
+			expect(pages.count('/cached/replacement'), 'replacement HTTP cache is empty').toBe(2)
+		} finally {
+			await observer.client.close()
+		}
+	})
+
+	it('removes the destroyed context from Target.getBrowserContexts', async () => {
+		const source = await pages.read(server.client, holder)
+		const observer = await inspectHolderContext(scratch.path, source.url)
+		try {
+			expect(await observer.client.send('Target.getBrowserContexts')).toHaveProperty(
+				'browserContextIds',
+				expect.arrayContaining([observer.context]),
+			)
+			await callHolderServer(server.client, 'destroy', { holder })
+			expect(await observer.client.send('Target.getBrowserContexts')).toHaveProperty(
+				'browserContextIds',
+				expect.not.arrayContaining([observer.context]),
+			)
+			holder = await acquireHolder(server.client, 'C2 after disposal')
+		} finally {
+			await observer.client.close()
+		}
+	})
+
+	it('ends every holder on a killed browser with its own URL notice and a fresh blank context', async () => {
+		const named = await pages.read(server.client, holder)
+		const shared = await pages.read(server.client)
+		const victim = await findHolderProfile(scratch.path, named.url)
+		expect((await findHolderProfile(scratch.path, shared.url)).pid).toBe(victim.pid)
+		process.kill(victim.pid, 'SIGKILL')
+		await waitForProcessExit(victim.pid)
+		for (const entry of [
+			{ holder, url: named.url },
+			{ holder: undefined, url: shared.url },
+		]) {
+			const answer = await callContextTool(server.client, entry.holder, 'look', { search: '' })
+			expect(answer, 'each affected holder receives a crash notice').toMatch(
+				/^BROWSER_SERVER_CRASH:/,
+			)
+			expect(answer, 'each notice keeps its own last URL').toContain(entry.url)
+			expect(answer, 'recovery has a blank active page').toContain('about:blank')
+			expect(
+				await callContextTool(server.client, entry.holder, 'look', { search: '' }),
+				'notice is delivered once',
+			).not.toContain('BROWSER_SERVER_CRASH')
+		}
+	})
+
+	it('contains an active renderer crash to its holder context', async () => {
+		const named = await pages.read(server.client, holder)
+		const shared = await pages.read(server.client, undefined, 'seed')
+		const victim = await inspectHolderContext(scratch.path, named.url)
+		try {
+			expect((await findHolderProfile(scratch.path, shared.url)).pid).toBe(victim.pid)
+			const attached: unknown = await victim.client.send('Target.attachToTarget', {
+				targetId: victim.target,
+				flatten: true,
+			})
+			if (!isRecord(attached) || !isString(attached['sessionId']))
+				throw new Error('Missing crash session')
+			await victim.client
+				.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
+				.catch(() => undefined)
+			const recovered = await callContextTool(server.client, holder, 'look', { search: '' })
+			expect(recovered).toMatch(/^BROWSER_SERVER_CRASH:/)
+			expect(recovered).toContain(named.url)
+			expect(recovered).toContain('about:blank')
+			const sibling = await callContextTool(server.client, undefined, 'plain', { search: '' })
+			expect(sibling).not.toContain('BROWSER_SERVER_CRASH')
+			expect(sibling).toContain('"local":"source"')
+			expect((await findHolderProfile(scratch.path, shared.url)).pid).toBe(victim.pid)
+			expect(await victim.client.send('Target.getBrowserContexts')).toHaveProperty(
+				'browserContextIds',
+				expect.not.arrayContaining([victim.context]),
+			)
+		} finally {
+			await victim.client.close()
+		}
+	})
+
+	it('keeps all busy headless holders visible with advancing timers and animation frames', async () => {
+		const group = randomUUID()
+		const readings = await Promise.all([
+			pages.read(server.client, holder, `busy=${group}`),
+			pages.read(server.client, undefined, `busy=${group}`),
+		])
+		for (const reading of readings) {
+			expect(reading.state['visibility'], `${reading.url}: active page visibility`).toBe('visible')
+			expect(reading.state['ticks'], `${reading.url}: timer advances`).toBeGreaterThan(0)
+			expect(reading.state['frames'], `${reading.url}: animation advances`).toBeGreaterThan(0)
+		}
+	})
+})
+
+describe('contexts C2 built browse on two browsers', () => {
+	let scratch: ReturnType<typeof createScratch>
+	let server: Awaited<ReturnType<typeof openHolderServer>>
+	let pages: ContextFixture
+	beforeAll(async () => {
+		scratch = createScratch()
+		pages = new ContextFixture()
+		await pages.start()
+		server = await openHolderServer(scratch.path, 2)
+	})
+	afterAll(async () => {
+		await server?.client.disconnect()
+		await pages?.destroy()
+		scratch?.destroy()
+	})
+	it('keeps every holder on the other browser free of a crash notice', async () => {
+		const holders: Array<string | undefined> = [undefined]
+		for (let index = 0; index < 3; index++)
+			holders.push(await acquireHolder(server.client, `C2 browser boundary ${index}`))
+		const owners = await Promise.all(
+			holders.map(async (holder) => {
+				const page = await pages.read(server.client, holder, 'seed')
+				return { holder, url: page.url, ...(await findHolderProfile(scratch.path, page.url)) }
+			}),
+		)
+		const victim = requireValue(owners[0])
+		expect(new Set(owners.map((owner) => owner.pid)).size).toBe(2)
+		expect(owners.filter((owner) => owner.pid !== victim.pid)).toHaveLength(2)
+		process.kill(victim.pid, 'SIGKILL')
+		await waitForProcessExit(victim.pid)
+		for (const owner of owners.filter((entry) => entry.pid === victim.pid)) {
+			const answer = await callContextTool(server.client, owner.holder, 'plain', { search: '' })
+			expect(answer).toMatch(/^BROWSER_SERVER_CRASH:/)
+			expect(answer).toContain(owner.url)
+		}
+		for (const owner of owners.filter((entry) => entry.pid !== victim.pid)) {
+			const answer = await callContextTool(server.client, owner.holder, 'plain', { search: '' })
+			expect(answer, 'other browser holder has no notice').not.toContain('BROWSER_SERVER_CRASH')
+			expect(answer, 'other browser holder keeps state').toContain('"local":"source"')
+			expect((await findHolderProfile(scratch.path, owner.url)).pid).toBe(owner.pid)
+		}
+	})
+})
 
 describe('holders H3 built browse', () => {
 	let scratch: ReturnType<typeof createScratch>

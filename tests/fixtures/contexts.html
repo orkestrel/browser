@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<title>Context isolation</title>
+	</head>
+	<body>
+		<pre id="result">Pending</pre>
+		<a id="download" download="context.txt">Download context file</a>
+		<script type="module">
+			const query = new URLSearchParams(location.search)
+			const marker = query.get('marker') || 'source'
+			document.querySelector('#download').href = '/download/' + marker
+			try {
+				if (query.has('seed')) {
+					document.cookie = 'marker=' + marker + ';path=/'
+					localStorage.setItem('marker', marker)
+					sessionStorage.setItem('marker', marker)
+					const database = await new Promise((resolve, reject) => {
+						const request = indexedDB.open('marker', 1)
+						request.onupgradeneeded = () => request.result.createObjectStore('values')
+						request.onsuccess = () => resolve(request.result)
+						request.onerror = () => reject(request.error)
+					})
+					await new Promise((resolve, reject) => {
+						const transaction = database.transaction('values', 'readwrite')
+						transaction.objectStore('values').put(marker, 'marker')
+						transaction.oncomplete = resolve
+						transaction.onerror = () => reject(transaction.error)
+					})
+					database.close()
+					await (await caches.open('marker')).put('/stored-marker', new Response(marker))
+					await navigator.serviceWorker.register('/worker.js')
+					await navigator.serviceWorker.ready
+				}
+				let indexed = null
+				if ((await indexedDB.databases()).some((database) => database.name === 'marker')) {
+					const database = await new Promise((resolve, reject) => {
+						const request = indexedDB.open('marker', 1)
+						request.onsuccess = () => resolve(request.result)
+						request.onerror = () => reject(request.error)
+					})
+					indexed = await new Promise((resolve, reject) => {
+						const request = database.transaction('values').objectStore('values').get('marker')
+						request.onsuccess = () => resolve(request.result ?? null)
+						request.onerror = () => reject(request.error)
+					})
+					database.close()
+				}
+				const cached = await caches.match('/stored-marker')
+				const state = {
+					cookie: document.cookie,
+					local: localStorage.getItem('marker'),
+					session: sessionStorage.getItem('marker'),
+					indexed,
+					cache: cached ? await cached.text() : null,
+					worker: (await navigator.serviceWorker.getRegistrations()).map(
+						(entry) => entry.active?.state,
+					),
+					permission: (await navigator.permissions.query({ name: 'geolocation' })).state,
+				}
+				if (query.has('busy')) {
+					let ticks = 0
+					let frames = 0
+					const timer = setInterval(() => ticks++, 10)
+					let frame
+					function advanceFrame() {
+						frames++
+						frame = requestAnimationFrame(advanceFrame)
+					}
+					frame = requestAnimationFrame(advanceFrame)
+					await fetch('/barrier/' + query.get('busy'))
+					const before = { ticks, frames }
+					await new Promise((resolve) => setTimeout(resolve, 100))
+					state.visibility = document.visibilityState
+					state.ticks = ticks - before.ticks
+					state.frames = frames - before.frames
+					clearInterval(timer)
+					cancelAnimationFrame(frame)
+				}
+				if (query.has('cache')) {
+					await (await fetch('/cached/' + query.get('cache'))).text()
+				}
+				document.querySelector('#result').textContent = JSON.stringify(state)
+			} catch (error) {
+				document.querySelector('#result').textContent = JSON.stringify({ failure: String(error) })
+			}
+			await fetch('/ready/' + query.get('ticket'), { method: 'POST' })
+		</script>
+	</body>
+</html>

@@ -32,8 +32,12 @@ import {
 import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createMCPClient } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
-import { waitForCondition } from '@orkestrel/test'
-import { readFileSync, readdirSync, writeFileSync } from 'node:fs'
+import { requireValue, waitForCondition, waitForEvent } from '@orkestrel/test'
+import { createLoopback } from '@orkestrel/test/server'
+import { createServer } from 'node:http'
+import { EventEmitter } from 'node:events'
+import { randomUUID } from 'node:crypto'
+import { existsSync, readFileSync, readdirSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BrowseChild, SOURCE_HOOK } from './setupServer.js'
@@ -76,14 +80,15 @@ export function handleServiceWorkerFixture(
  * @param root - Owned journey and profile directory
  * @returns The connected protocol client and its supervised transport
  */
-export async function openHolderServer(root: string) {
+export async function openHolderServer(root: string, pool = 3) {
 	const transport = createStdioClientTransport({
 		command: process.execPath,
 		args: [resolve('dist/bin/main.js')],
 		env: {
 			BROWSE_ROOT: root,
 			BROWSE_EXECUTABLE: requireSystemBrowser().executable,
-			BROWSE_POOL: '3',
+			BROWSE_POOL: String(pool),
+			BROWSE_CONTEXTS: '',
 			BROWSE_HEADLESS: 'true',
 			BROWSE_READONLY: 'false',
 			BROWSE_VIEWPORT: '',
@@ -182,6 +187,217 @@ export async function findHolderProfile(root: string, url: string) {
 		}
 	}
 	throw new Error(`No holder has reached ${url}`)
+}
+
+/** Owns the HTTP witness for context state exercised through the built server. */
+export class ContextFixture {
+	readonly #events = new EventEmitter()
+	readonly #counts = new Map<string, number>()
+	readonly #barriers = new Map<string, ServerResponse[]>()
+	#server: Awaited<ReturnType<typeof createLoopback>> | undefined
+
+	get url(): string {
+		return requireValue(this.#server, 'context origin').url
+	}
+
+	async start(): Promise<void> {
+		this.#server = await createLoopback(createServer(this.#respond.bind(this)))
+	}
+
+	count(path: string): number {
+		return this.#counts.get(path) ?? 0
+	}
+
+	async read(client: MCPClientInterface, holder?: string, query = '') {
+		const ticket = randomUUID()
+		const url = `${this.url}/state?ticket=${ticket}&${query}`
+		const abort = new AbortController()
+		const ready = waitForEvent(
+			(listener) => {
+				this.#events.once(ticket, listener)
+				return () => this.#events.off(ticket, listener)
+			},
+			'context fixture finished its web-state operations',
+			{ budget: 5000, signal: abort.signal },
+		)
+		try {
+			await Promise.all([callContextTool(client, holder, 'navigate', { url }), ready])
+		} finally {
+			abort.abort()
+		}
+		const text = await callContextTool(client, holder, 'plain', { search: '' })
+		const json = requireValue(text.match(/\{"cookie":.*\}/)?.[0], `context state in ${text}`)
+		const state: unknown = JSON.parse(json)
+		if (!isRecord(state)) throw new Error('Invalid context state')
+		return Object.freeze({ url, state })
+	}
+
+	async destroy(): Promise<void> {
+		for (const waiting of this.#barriers.values())
+			for (const response of waiting) response.end('Fixture ended')
+		this.#barriers.clear()
+		await this.#server?.destroy()
+		this.#events.removeAllListeners()
+	}
+
+	#respond(request: IncomingMessage, response: ServerResponse): void {
+		const path = (request.url ?? '/').split('?')[0] ?? '/'
+		if (path.startsWith('/barrier/')) {
+			const waiting = this.#barriers.get(path) ?? []
+			waiting.push(response)
+			this.#barriers.set(path, waiting)
+			if (waiting.length === 2) {
+				for (const pending of waiting) pending.end('Both holders are busy')
+				this.#barriers.delete(path)
+			}
+		} else if (path.startsWith('/ready/')) {
+			response.end('ready')
+			this.#events.emit(path.slice('/ready/'.length))
+		} else if (path === '/worker.js') {
+			response.writeHead(200, { 'Content-Type': 'text/javascript' })
+			response.end("self.addEventListener('install', () => self.skipWaiting())")
+		} else if (path.startsWith('/cached/')) {
+			this.#counts.set(path, this.count(path) + 1)
+			response.writeHead(200, { 'Cache-Control': 'public, max-age=3600' })
+			response.end('Cached context response')
+		} else if (path.startsWith('/download/')) {
+			response.writeHead(200, {
+				'Content-Type': 'application/octet-stream',
+				'Content-Disposition': 'attachment; filename="context.txt"',
+			})
+			response.end(path.slice('/download/'.length))
+		} else {
+			response.writeHead(200, { 'Content-Type': 'text/html', 'Cache-Control': 'no-store' })
+			response.end(readFileSync(new URL('./fixtures/contexts.html', import.meta.url)))
+		}
+	}
+}
+
+/** Selects the shared or named holder's real transport entry.
+ * @param client - Connected built server
+ * @param holder - Named holder, or the shared holder when omitted
+ * @param name - Browser tool name
+ * @param args - Browser tool arguments
+ * @returns The transport's textual receipt
+ */
+export async function callContextTool(
+	client: MCPClientInterface,
+	holder: string | undefined,
+	name: string,
+	args: Readonly<Record<string, unknown>>,
+): Promise<string> {
+	return callHolderServer(
+		client,
+		holder === undefined ? name : 'execute',
+		holder === undefined ? args : { holder, name, arguments: args },
+	)
+}
+
+/** Attaches an independent CDP observer to a holder reached through MCP.
+ * @param root - Built server's owned root
+ * @param url - Holder's unique fixture URL
+ * @returns The observer, context identity, target identity and browser record
+ */
+export async function inspectHolderContext(root: string, url: string) {
+	const profile = await findHolderProfile(root, url)
+	const client = createCDPClient({ transport: createCDPTransport({ url: profile.endpoint }) })
+	await client.connect()
+	try {
+		const result: unknown = await client.send('Target.getTargets')
+		if (!isRecord(result) || !isArray(result['targetInfos'])) throw new Error('Missing targets')
+		const target = result['targetInfos'].find((entry) => isRecord(entry) && entry['url'] === url)
+		if (!isRecord(target) || !isString(target['targetId']) || !isString(target['browserContextId']))
+			throw new Error('Missing isolated holder target')
+		return Object.freeze({
+			...profile,
+			client,
+			context: target['browserContextId'],
+			target: target['targetId'],
+		})
+	} catch (error) {
+		await client.close()
+		throw error
+	}
+}
+
+/** Declares source readbacks and clean-context values for the C2 isolation matrix. */
+export const CONTEXT_STORES = Object.freeze([
+	{ name: 'cookie', source: 'marker=source', empty: '' },
+	{ name: 'local', source: 'source', empty: null },
+	{ name: 'session', source: 'source', empty: null },
+	{ name: 'indexed', source: 'source', empty: null },
+	{ name: 'cache', source: 'source', empty: null },
+	{ name: 'worker', source: ['activated'], empty: [] },
+	{ name: 'permission', source: 'granted', empty: 'prompt' },
+])
+
+/** Downloads a marker through the holder tool and observes its completed file without polling.
+ * @param client - Connected built server
+ * @param holder - Named or shared holder
+ * @param profile - Observed browser profile
+ * @param marker - Expected content of the fixture download
+ * @param target - Holder's independently observed page target
+ * @returns The completed file's path
+ */
+export async function downloadContextFile(
+	client: MCPClientInterface,
+	holder: string | undefined,
+	profile: string,
+	marker: string,
+	target: string,
+): Promise<string> {
+	const outline = await callContextTool(client, holder, 'look', { search: '' })
+	const ref = requireOutlineReference(outline, 'link', 'Download context file')
+	const record = requireValue(
+		parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8')),
+	)
+	const observer = createCDPClient({ transport: createCDPTransport({ url: record.endpoint }) })
+	await observer.connect()
+	const abort = new AbortController()
+	try {
+		const attached: unknown = await observer.send('Target.attachToTarget', {
+			targetId: target,
+			flatten: true,
+		})
+		if (!isRecord(attached) || !isString(attached['sessionId']))
+			throw new Error('Missing download session')
+		const session = attached['sessionId']
+		await observer.send('Page.enable', undefined, { session })
+		const progress = waitForEvent(
+			(listener) => {
+				observer.subscribe(
+					'Page.downloadProgress',
+					(params) => {
+						if (params['state'] === 'completed') listener()
+					},
+					session,
+				)
+				return () => undefined
+			},
+			'Chromium completed the download',
+			{ budget: 5000, signal: abort.signal },
+		)
+		await Promise.all([callContextTool(client, holder, 'click', { ref }), progress])
+		return requireValue(
+			readContextFolders(profile)
+				.map((folder) => join(folder, 'context.txt'))
+				.find((path) => existsSync(path) && readFileSync(path, 'utf8') === marker),
+			`completed ${marker} file`,
+		)
+	} finally {
+		abort.abort()
+		await observer.close()
+	}
+}
+
+/** Reads the live context download folders from a real browser profile.
+ * @param profile - Browser's recorded profile
+ * @returns Existing download directories
+ */
+export function readContextFolders(profile: string): readonly string[] {
+	return readdirSync(join(profile, 'contexts'))
+		.map((entry) => join(profile, 'contexts', entry, 'downloads'))
+		.filter((path) => existsSync(path))
 }
 
 /** Names both atomic record paths whose obstruction must fail a warm. */
