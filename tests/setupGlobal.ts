@@ -122,7 +122,8 @@ export async function createBrowserLauncher(
 				'@src/server': fileURLToPath(new URL('../src/server/index.ts', import.meta.url)),
 			},
 		},
-		server: { middlewareMode: true, ws: false },
+		// The watcher scans its tree at startup; scratch under tmp/ can hold tens of thousands of files.
+		server: { middlewareMode: true, ws: false, watch: { ignored: ['**/tmp/**'] } },
 	})
 	try {
 		const server: unknown = await runner.ssrLoadModule('/src/server/index.ts')
