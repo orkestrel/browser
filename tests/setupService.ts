@@ -98,6 +98,31 @@ export async function acquireHolder(client: MCPClientInterface, purpose: string)
 	return result.value['holder']
 }
 
+/** Records and saves a navigation through a built server's journey tools.
+ * @param client - Connected server client
+ * @param journey - Unused journey name
+ * @param url - Destination to record
+ * @param holder - Named holder, or the shared browser when omitted
+ */
+export async function recordHolderJourney(
+	client: MCPClientInterface,
+	journey: string,
+	url: string,
+	holder?: string,
+): Promise<void> {
+	for (const call of [
+		{ name: 'record', arguments: { journey } },
+		{ name: 'navigate', arguments: { url } },
+		{ name: 'save', arguments: { description: `Navigate to ${journey}` } },
+	]) {
+		await callHolderServer(
+			client,
+			holder === undefined ? call.name : 'execute',
+			holder === undefined ? call.arguments : { holder, ...call },
+		)
+	}
+}
+
 /** Locates a real holder's process and profile by its observable page URL.
  * @param root - Server's profile root
  * @param url - URL reached through that holder's navigation

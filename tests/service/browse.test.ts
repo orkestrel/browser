@@ -34,6 +34,7 @@ import {
 	formatBrowserLockEntry,
 	createCDPTransport,
 	createFileBrowserJourneyStore,
+	createFileBrowserRunStore,
 	BROWSER_KILL_GRACE_MS,
 	BROWSER_PROCESS_EXIT_CAUSE,
 } from '@src/server'
@@ -50,6 +51,7 @@ import {
 	acquireHolder,
 	findHolderProfile,
 	requireOutlineReference,
+	recordHolderJourney,
 } from '../setupService.js'
 import { createBrowserJourneyFixture } from '../setup.js'
 import {
@@ -280,6 +282,59 @@ describe('holders H3 built browse', () => {
 		}
 		expect(await replay).toContain('Replayed check-ready: 1 of 1 steps.')
 		expect(readdirSync(join(scratch.path, 'check-ready', 'runs'))).toHaveLength(1)
+	})
+
+	it('completes simultaneous replays of one recorded journey on two holders repeatedly', async () => {
+		await recordHolderJourney(server.client, 'replay-race', `${pages.url}/replay-race`)
+		for (let repetition = 0; repetition < 4; repetition += 1) {
+			const peer =
+				repetition % 2 === 0
+					? callHolderServer(server.client, 'replay', { journey: 'replay-race' })
+					: callHolderServer(server.client, 'execute', {
+							holder: second,
+							name: 'replay',
+							arguments: { journey: 'replay-race' },
+						})
+			const named = callHolderServer(server.client, 'execute', {
+				holder: first,
+				name: 'replay',
+				arguments: { journey: 'replay-race' },
+			})
+			const results = await Promise.all([peer, named])
+			for (const result of results) {
+				expect(result, `repetition ${repetition + 1}`).toContain(
+					'Replayed replay-race: 1 of 1 steps.',
+				)
+				expect(result).toContain(`${pages.url}/replay-race`)
+			}
+		}
+		expect(readdirSync(join(scratch.path, 'replay-race', 'runs'))).toHaveLength(8)
+		const runs = await createFileBrowserRunStore({ root: scratch.path }).list('replay-race')
+		expect(runs.entries).toHaveLength(8)
+		expect(runs.faults).toEqual([])
+		for (const run of runs.entries) {
+			expect(run.outcome).toBe('complete')
+			expect(run.fault).toBeUndefined()
+			expect(run.steps).toMatchObject([{ id: 's1', action: 'navigate', outcome: 'done' }])
+		}
+	})
+
+	it('replays another journey after the holder finishes recording', async () => {
+		await recordHolderJourney(server.client, 'replay-other', `${pages.url}/replay-other`)
+		await recordHolderJourney(
+			server.client,
+			'recorded-holder',
+			`${pages.url}/recorded-holder`,
+			second,
+		)
+		const result = await callHolderServer(server.client, 'execute', {
+			holder: second,
+			name: 'replay',
+			arguments: { journey: 'replay-other' },
+		})
+		expect(result).toContain('Replayed replay-other: 1 of 1 steps.')
+		expect(result).toContain(`${pages.url}/replay-other`)
+		expect(result).not.toContain(`${pages.url}/recorded-holder`)
 	})
 
 	it('tears down every live lease process and profile', async () => {

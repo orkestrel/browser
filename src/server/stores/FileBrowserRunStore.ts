@@ -24,11 +24,14 @@ import { FileBrowserStore } from './FileBrowserStore.js'
 /**
  * Persists runs and captures only in directories allocated by this instance.
  * @remarks Requires an existing root. Reopened stores can read and delete saved runs.
+ * Allocations of one journey share a process-local queue across instances; the filesystem lock
+ * still refuses conflicting mutations and allocations from another process.
  * @example
  * const store = new FileBrowserRunStore({ root: directory })
  * const slot = await store.open('check-ready')
  */
 export class FileBrowserRunStore implements BrowserRunStoreInterface {
+	static readonly #allocations = new Map<string, Promise<void>>()
 	readonly #files: FileBrowserStore
 	readonly #slots = new WeakMap<BrowserRunSlot, string>()
 	readonly #directories = new Set<string>()
@@ -60,21 +63,33 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)
-		return this.#files.lock(
-			this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_DIRECTORY),
-			async () => {
-				const directory = await this.#files.allocate(
-					this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY),
-					generateBrowserRunId,
-					options,
-				)
-				const slot = Object.freeze({ id: directory.id, directory: directory.path })
-				this.#directories.add(directory.path)
-				this.#slots.set(slot, directory.path)
-				return slot
-			},
-			options,
-		)
+		const path = this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_DIRECTORY)
+		const previous = FileBrowserRunStore.#allocations.get(path)
+		const allocation = Promise.withResolvers<void>()
+		FileBrowserRunStore.#allocations.set(path, allocation.promise)
+		try {
+			await previous
+			options?.signal?.throwIfAborted()
+			return await this.#files.lock(
+				path,
+				async () => {
+					const directory = await this.#files.allocate(
+						this.#files.resolvePath(name, BROWSER_RUN_DIRECTORY),
+						generateBrowserRunId,
+						options,
+					)
+					const slot = Object.freeze({ id: directory.id, directory: directory.path })
+					this.#directories.add(directory.path)
+					this.#slots.set(slot, directory.path)
+					return slot
+				},
+				options,
+			)
+		} finally {
+			allocation.resolve()
+			if (FileBrowserRunStore.#allocations.get(path) === allocation.promise)
+				FileBrowserRunStore.#allocations.delete(path)
+		}
 	}
 
 	async get(

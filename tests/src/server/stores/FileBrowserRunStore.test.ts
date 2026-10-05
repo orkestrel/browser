@@ -190,6 +190,59 @@ describe('FileBrowserRunStore captures', () => {
 })
 
 describe('FileBrowserRunStore persisted files', () => {
+	it('allocates concurrent runs of one name across store instances without refusing', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const first = new FileBrowserRunStore({ root: scratch.path })
+		const second = new FileBrowserRunStore({ root: join(scratch.path, '.') })
+		const results = await Promise.allSettled([
+			first.open('same-journey'),
+			second.open('same-journey'),
+		])
+		expect(results).toMatchObject([{ status: 'fulfilled' }, { status: 'fulfilled' }])
+		expect(await readdir(join(scratch.path, 'same-journey', 'runs'))).toHaveLength(2)
+	})
+
+	it('releases an aborted queued allocation without creating a slot or blocking its successor', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const store = new FileBrowserRunStore({ root: scratch.path })
+		const controller = new AbortController()
+		const reason = new Error('Queued allocation aborted')
+		const first = store.open('same-journey')
+		const aborted = store.open('same-journey', { signal: controller.signal })
+		const successor = store.open('same-journey')
+		controller.abort(reason)
+		const results = await Promise.allSettled([first, aborted, successor])
+		expect(results.map((result) => result.status)).toEqual(['fulfilled', 'rejected', 'fulfilled'])
+		expect(results[1]).toEqual({ status: 'rejected', reason })
+		expect(await readdir(join(scratch.path, 'same-journey', 'runs'))).toHaveLength(2)
+	})
+
+	it('preserves live-lock refusals for queued allocations and releases the queue after failure', async () => {
+		const scratch = createScratch()
+		scratches.push(scratch)
+		const store = new FileBrowserRunStore({ root: scratch.path })
+		const files = new FileBrowserStore({ root: scratch.path })
+		await files.lock(join(scratch.path, 'same-journey', 'journey.lock'), async () => {
+			const results = await Promise.allSettled([
+				store.open('same-journey'),
+				store.open('same-journey'),
+			])
+			for (const result of results)
+				expect(result).toMatchObject({
+					status: 'rejected',
+					reason: { code: 'BROWSER_JOURNEY_LOCKED' },
+				})
+		})
+		const results = await Promise.allSettled([
+			store.open('same-journey'),
+			store.open('same-journey'),
+		])
+		expect(results.map((result) => result.status)).toEqual(['fulfilled', 'fulfilled'])
+		expect(await readdir(join(scratch.path, 'same-journey', 'runs'))).toHaveLength(2)
+	})
+
 	it('clear removes unsaved and malformed runs from a reopened store beyond its listing limit', async () => {
 		const scratch = createScratch()
 		scratches.push(scratch)
