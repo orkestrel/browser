@@ -720,16 +720,18 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			const toolset = createBrowserToolset(page)
 			toolsets.push(toolset)
 			await toolset.start()
-			const direct = requireToolText(
-				await toolset.tools.execute({
+			// Both observations wait for text the fixture never inserts; their deadlines can overlap.
+			const [directResult, run] = await Promise.all([
+				toolset.tools.execute({
 					id: 'direct',
 					name: 'wait',
 					arguments: { text: 'Order shipped' },
 				}),
-			)
-			const run = await createBrowserReplay(toolset, {
-				journey: BROWSER_JOURNEY_TIMEOUT_JOURNEY,
-			}).execute()
+				createBrowserReplay(toolset, {
+					journey: BROWSER_JOURNEY_TIMEOUT_JOURNEY,
+				}).execute(),
+			])
+			const direct = requireToolText(directResult)
 			const control = await context.create({ url: fixtures.url('/form') })
 			pages.push(control)
 			const controlled = createBrowserToolset(control)
