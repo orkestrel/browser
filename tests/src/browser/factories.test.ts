@@ -1,7 +1,12 @@
 import type { BrowserViewInterface } from '@src/core'
 import type { ToolInterface } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
-import { createMemoryBrowserJourneyStore, isBrowserElementError, isBrowserError } from '@src/core'
+import {
+	BROWSER_JOURNEY_TOOL_NAMES,
+	createMemoryBrowserJourneyStore,
+	isBrowserElementError,
+	isBrowserError,
+} from '@src/core'
 import {
 	BrowserDOMView,
 	createBrowserDOMView,
@@ -263,14 +268,8 @@ describe('createDocumentToolset', () => {
 		probe.save.addEventListener('click', (event) => clicks.handler(event.isTrusted))
 		const store = createMemoryBrowserJourneyStore()
 		const toolset = createDocumentToolset({ document: probe.document, journeys: { store } })
-		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
-			'record',
-			'save',
-			'journeys',
-			'edit',
-			'replay',
-			'forget',
-		])
+		// The core toolset suite pins the journey vocabulary's members and order.
+		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(BROWSER_JOURNEY_TOOL_NAMES)
 		await toolset.start()
 		try {
 			await toolset.tools.execute({ id: '1', name: 'record', arguments: { journey: 'save-draft' } })
