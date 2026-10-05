@@ -37,6 +37,7 @@ import {
 	BROWSER_TOOL_COPY,
 	createBrowserToolset,
 	BrowserError,
+	CDPError,
 } from '@src/core'
 import {
 	createBrowser,
@@ -2979,6 +2980,185 @@ describe('C1 context ownership', () => {
 			await fixture.teardown.destroy().catch(() => undefined)
 		}
 	})
+	it('reports a construction disposal protocol failure on a healthy connected browser', async () => {
+		const peer = await createCDPTestServer()
+		const browser = createBrowser({ cdp: { endpoint: peer.endpoint, discover: false } })
+		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
+		const fixture = createBrowseFixture({ launch: () => browser })
+		const starting = fixture.server.start().catch((error: unknown) => error)
+		try {
+			await waitForCondition('construction reached target creation', () =>
+				peer.received.some((message) => message.method === 'Target.createTarget'),
+			)
+			const context = requireValue(browser.contexts().find((entry) => entry.id === 'constructing'))
+			peer.fail(
+				requireValue(peer.received.find((message) => message.method === 'Target.createTarget')).id,
+				'construction refused',
+			)
+			await waitForCondition('failed construction reached disposal', () =>
+				peer.received.some((message) => message.method === 'Target.disposeBrowserContext'),
+			)
+			expect(browser.status).toBe('connected')
+			peer.fail(
+				requireValue(
+					peer.received.find((message) => message.method === 'Target.disposeBrowserContext'),
+				).id,
+				'healthy disposal refused',
+			)
+			expect(await starting).toBeInstanceOf(Error)
+			const outcome = requireValue(context.disposal)
+			if (outcome.confirmed) throw new Error('Expected disposal refusal')
+			expect(outcome.error).toBeInstanceOf(CDPError)
+			await expect(fixture.server.destroy()).rejects.toMatchObject({
+				message: 'The browse server teardown failed',
+				errors: expect.arrayContaining([outcome.error]),
+			})
+		} finally {
+			await peer.close()
+			await starting
+			await fixture.teardown.destroy().catch(() => undefined)
+		}
+	})
+
+	it('suppresses a construction disposal protocol failure after the connected browser is lost', async () => {
+		const peer = await createCDPTestServer()
+		const browser = createBrowser({ cdp: { endpoint: peer.endpoint, discover: false } })
+		for (const method of [
+			'Browser.getVersion',
+			'Page.enable',
+			'Runtime.enable',
+			'WebMCP.enable',
+			'WebMCP.disable',
+			'Target.detachFromTarget',
+			'Target.closeTarget',
+		])
+			peer.script(method, {})
+		peer.script('Target.createBrowserContext', { browserContextId: 'shared' })
+		peer.script('Target.createTarget', { targetId: 'page' })
+		peer.script('Target.attachToTarget', { sessionId: 'session' })
+		const fixture = createBrowseFixture({ launch: () => browser })
+		try {
+			await fixture.server.start()
+			peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
+			// The malformed creation reply loses the slot while its transport remains connected.
+			peer.script('Target.createTarget', {})
+			const acquiring = fixture.pair.call(2, 'acquire', { purpose: 'failed construction' })
+			await waitForCondition('lost construction reached disposal', () =>
+				peer.received.some(
+					(message) =>
+						message.method === 'Target.disposeBrowserContext' &&
+						message.params?.['browserContextId'] === 'constructing',
+				),
+			)
+			const context = requireValue(browser.contexts().find((entry) => entry.id === 'constructing'))
+			expect(browser.status).toBe('connected')
+			const disposal = requireValue(
+				peer.received.find(
+					(message) =>
+						message.method === 'Target.disposeBrowserContext' &&
+						message.params?.['browserContextId'] === 'constructing',
+				),
+			)
+			peer.script('Target.disposeBrowserContext', {})
+			peer.fail(disposal.id, 'lost disposal refused')
+			expect((await acquiring).error).toBe(true)
+			const outcome = requireValue(context.disposal)
+			if (outcome.confirmed) throw new Error('Expected disposal refusal')
+			expect(outcome.error).toBeInstanceOf(CDPError)
+			await expect(fixture.server.destroy()).resolves.toBeUndefined()
+		} finally {
+			await peer.close()
+			await fixture.teardown.destroy().catch(() => undefined)
+		}
+	})
+
+	it('does not report remote disposal after a constructing browser disconnects before shutdown', async () => {
+		const peer = await createCDPTestServer()
+		const browser = createBrowser({ cdp: { endpoint: peer.endpoint, discover: false } })
+		await browser.connect()
+		// Loss also releases earlier contexts; construction cleanup can run before that drain ends.
+		peer.script('Target.createBrowserContext', { browserContextId: 'earlier' })
+		await browser.isolate()
+		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
+		const fixture = createBrowseFixture({
+			launch: () => browser,
+		})
+		const starting = fixture.server.start().catch((error: unknown) => error)
+		try {
+			await waitForCondition('context construction reached the remote page request', () =>
+				peer.received.some((message) => message.method === 'Target.createTarget'),
+			)
+			await peer.close()
+			expect(await starting).toBeInstanceOf(Error)
+			await expect(fixture.server.destroy()).resolves.toBeUndefined()
+			expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])
+		} finally {
+			await peer.close()
+			await starting
+			await fixture.teardown.destroy().catch(() => undefined)
+		}
+	})
+
+	it('does not report remote disposal during a launched browser transport-loss defer', async () => {
+		const peer = await createCDPTestServer()
+		const scratch = createScratch()
+		const entry = scratch.write(
+			'peer.ts',
+			"import { createServer } from 'node:http'\n" +
+				"createServer().listen(0, '127.0.0.1')\n" +
+				"process.stderr.write('DevTools listening on ' + process.argv[2] + '\\n')\n",
+		)
+		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
+		const fixture = createBrowseFixture({
+			launch: (options) =>
+				createBrowser({ ...options, executable: process.execPath, args: [entry, peer.endpoint] }),
+		})
+		const starting = fixture.server.start().catch((error: unknown) => error)
+		try {
+			await waitForCondition('launched context construction reached the remote page request', () =>
+				peer.received.some((message) => message.method === 'Target.createTarget'),
+			)
+			await peer.close()
+			expect(await starting).toBeInstanceOf(Error)
+			await expect(fixture.server.destroy()).resolves.toBeUndefined()
+			expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])
+		} finally {
+			await peer.close()
+			await starting
+			await fixture.teardown.destroy().catch(() => undefined)
+			scratch.destroy()
+		}
+	})
+
+	it('does not report remote disposal after shutdown disconnects a constructing browser', async () => {
+		const peer = await createCDPTestServer()
+		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
+		const fixture = createBrowseFixture({
+			launch: (options) => createBrowser({ ...options, cdp: { endpoint: peer.endpoint } }),
+		})
+		const starting = fixture.server.start().catch((error: unknown) => error)
+		try {
+			await waitForCondition('context construction reached the remote page request', () =>
+				peer.received.some((message) => message.method === 'Target.createTarget'),
+			)
+			const creation = requireValue(
+				peer.received.find((message) => message.method === 'Target.createTarget'),
+			)
+			peer.fail(creation.id, 'construction refused')
+			await waitForCondition('failed construction reached context disposal', () =>
+				peer.received.some((message) => message.method === 'Target.disposeBrowserContext'),
+			)
+			const ending = fixture.server.destroy()
+			await expect(Promise.all([ending, peer.close()])).resolves.toEqual([undefined, undefined])
+			await starting
+			expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])
+		} finally {
+			await peer.close()
+			await starting
+			await fixture.teardown.destroy().catch(() => undefined)
+		}
+	})
+
 	it('consumes prepared contexts without leasing the idle warm browser', async () => {
 		const fixture = createBrowseFixture({ pool: { size: 2, contexts: 2 } })
 		try {

@@ -78,9 +78,11 @@ export function handleServiceWorkerFixture(
 
 /** Starts the built browse server with a real browser and a bounded holder pool.
  * @param root - Owned journey and profile directory
+ * @param pool - Number of pooled browsers
+ * @param contexts - Per-browser holder bound, or the server default when omitted
  * @returns The connected protocol client and its supervised transport
  */
-export async function openHolderServer(root: string, pool = 3) {
+export async function openHolderServer(root: string, pool = 3, contexts?: number) {
 	const transport = createStdioClientTransport({
 		command: process.execPath,
 		args: [resolve('dist/bin/main.js')],
@@ -88,7 +90,7 @@ export async function openHolderServer(root: string, pool = 3) {
 			BROWSE_ROOT: root,
 			BROWSE_EXECUTABLE: requireSystemBrowser().executable,
 			BROWSE_POOL: String(pool),
-			BROWSE_CONTEXTS: '',
+			BROWSE_CONTEXTS: contexts === undefined ? '' : String(contexts),
 			BROWSE_HEADLESS: 'true',
 			BROWSE_READONLY: 'false',
 			BROWSE_VIEWPORT: '',
@@ -337,6 +339,8 @@ export const CONTEXT_STORES = Object.freeze([
  * @param profile - Observed browser profile
  * @param marker - Expected content of the fixture download
  * @param target - Holder's independently observed page target
+ * @param link - Accessible name of the fixture's download link
+ * @param filename - Filename declared by the fixture's download response
  * @returns The completed file's path
  */
 export async function downloadContextFile(
@@ -345,9 +349,11 @@ export async function downloadContextFile(
 	profile: string,
 	marker: string,
 	target: string,
+	link = 'Download context file',
+	filename = 'context.txt',
 ): Promise<string> {
 	const outline = await callContextTool(client, holder, 'look', { search: '' })
-	const ref = requireOutlineReference(outline, 'link', 'Download context file')
+	const ref = requireOutlineReference(outline, 'link', link)
 	const record = requireValue(
 		parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8')),
 	)
@@ -380,7 +386,7 @@ export async function downloadContextFile(
 		await Promise.all([callContextTool(client, holder, 'click', { ref }), progress])
 		return requireValue(
 			readContextFolders(profile)
-				.map((folder) => join(folder, 'context.txt'))
+				.map((folder) => join(folder, filename))
 				.find((path) => existsSync(path) && readFileSync(path, 'utf8') === marker),
 			`completed ${marker} file`,
 		)

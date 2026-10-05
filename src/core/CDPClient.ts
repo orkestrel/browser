@@ -46,6 +46,7 @@ export class CDPClient implements CDPClientInterface {
 		number,
 		{
 			method: string
+			session: string | undefined
 			resolve: (value: unknown) => void
 			reject: (reason: unknown) => void
 			timer: ReturnType<typeof setTimeout>
@@ -144,7 +145,15 @@ export class CDPClient implements CDPClientInterface {
 				)
 			}, effectiveTimeout)
 			const listener = signal === undefined ? undefined : this.#abort(id, signal)
-			this.#pending.set(id, { method, resolve, reject, timer, signal, listener })
+			this.#pending.set(id, {
+				method,
+				session: options?.session,
+				resolve,
+				reject,
+				timer,
+				signal,
+				listener,
+			})
 			if (listener !== undefined) signal?.addEventListener('abort', listener, { once: true })
 
 			this.#transport.send(serialized).catch((thrown: unknown) => {
@@ -342,6 +351,19 @@ export class CDPClient implements CDPClientInterface {
 			const params: Readonly<Record<string, unknown>> = isRecord(rawParams)
 				? rawParams
 				: Object.freeze({})
+
+			if (method === 'Target.detachedFromTarget' && isString(params['sessionId'])) {
+				const detached = params['sessionId']
+				for (const [id, entry] of this.#pending) {
+					if (entry.session !== detached) continue
+					this.#settle(id)?.reject(
+						new CDPConnectionError('CDP session detached', {
+							method: entry.method,
+							session: detached,
+						}),
+					)
+				}
+			}
 
 			const global = this.#subscriptions.get(undefined)?.get(method)
 			if (global !== undefined) this.#dispatch(global, method, params)

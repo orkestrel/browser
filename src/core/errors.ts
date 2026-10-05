@@ -111,9 +111,7 @@ export class CDPError extends BrowserError {
 }
 
 /**
- * Reports that a CDP request could not be sent or completed because the client was not in a
- * connectable state — not connected, closed while connecting, or the connection dropped
- * mid-request — under the code `BROWSER_CDP_CONNECTION_ERROR`.
+ * Reports that a CDP request could not be sent or completed because the client was not connected, closed while connecting, lost its connection, or lost the request's target session, under the code `BROWSER_CDP_CONNECTION_ERROR`.
  */
 export class CDPConnectionError extends BrowserError {
 	constructor(message: string, context?: Readonly<Record<string, unknown>>) {

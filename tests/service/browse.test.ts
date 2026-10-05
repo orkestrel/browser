@@ -368,7 +368,7 @@ describe('holders H3 built browse', () => {
 				}
 			}),
 		)
-		server = await openHolderServer(scratch.path)
+		server = await openHolderServer(scratch.path, 3, 1)
 		first = await acquireHolder(server.client, 'first holder')
 		second = await acquireHolder(server.client, 'second holder')
 	})
@@ -493,27 +493,32 @@ describe('holders H3 built browse', () => {
 		).not.toContain('BROWSER_SERVER_CRASH')
 	})
 
-	it('contains downloads and destroys their process and profile before capacity is reused cleanly', async () => {
+	it('contains downloads and removes them before holder capacity is reused cleanly', async () => {
 		await expect(acquireHolder(server.client, 'overflow')).rejects.toThrow('BROWSER_SERVER_BUSY')
-		const view = await callHolderServer(server.client, 'execute', {
+		await callHolderServer(server.client, 'execute', {
 			holder: first,
 			name: 'navigate',
 			arguments: { url: `${pages.url}/download-owner` },
 		})
-		const owner = await findHolderProfile(scratch.path, `${pages.url}/download-owner`)
-		await callHolderServer(server.client, 'execute', {
-			holder: first,
-			name: 'click',
-			arguments: { ref: requireOutlineReference(view, 'link', 'Download holder file') },
-		})
-		const download = join(owner.profile, 'downloads', 'holders-h3-fixture.txt')
-		await waitForCondition(
-			'completed holder download',
-			() => existsSync(download) && readFileSync(download, 'utf8') === 'Owned holder download',
-		)
+		const owner = await inspectHolderContext(scratch.path, `${pages.url}/download-owner`)
+		let download: string
+		try {
+			download = await downloadContextFile(
+				server.client,
+				first,
+				owner.profile,
+				'Owned holder download',
+				owner.target,
+				'Download holder file',
+				'holders-h3-fixture.txt',
+			)
+		} finally {
+			await owner.client.close()
+		}
 		await callHolderServer(server.client, 'destroy', { holder: first })
-		expect(probeProcess(owner.pid)).toBe(false)
-		expect(existsSync(owner.profile)).toBe(false)
+		expect(existsSync(dirname(download))).toBe(false)
+		expect(probeProcess(owner.pid)).toBe(true)
+		expect(existsSync(owner.profile)).toBe(true)
 		first = await acquireHolder(server.client, 'clean replacement')
 		expect(
 			await callHolderServer(server.client, 'execute', {
@@ -529,8 +534,8 @@ describe('holders H3 built browse', () => {
 		})
 		expect(clean).toContain('Cookie: empty; Storage: empty')
 		const replacement = await findHolderProfile(scratch.path, `${pages.url}/clean`)
-		expect(replacement.pid).not.toBe(owner.pid)
-		expect(replacement.profile).not.toBe(owner.profile)
+		expect(replacement.pid).toBe(owner.pid)
+		expect(replacement.profile).toBe(owner.profile)
 	})
 
 	it('persists a holder replay beside shared-browser navigation', { timeout: 5000 }, async () => {
@@ -647,6 +652,7 @@ describe('holders H3 built cleanup refusal', () => {
 				BROWSE_ROOT: scratch.ensure('server'),
 				BROWSE_EXECUTABLE: requireSystemBrowser().executable,
 				BROWSE_POOL: '3',
+				BROWSE_CONTEXTS: '1',
 			},
 		)
 		const pids: number[] = []
@@ -1210,18 +1216,19 @@ describe('eager U7 real browse', () => {
 			const pid = requireValue(launcher.browsers[0]?.pid, 'stand-in pid')
 			expect(probeProcess(pid)).toBe(true)
 			const pending = fixture.pair.call(2, 'tabs', { search: 'page' })
-			await waitForCondition(
+			const exited = waitForCondition(
 				'withheld per-call ping',
 				() =>
 					readFileSync(transcript, 'utf8')
 						.split(/\r\n|\n/)
 						.filter((method) => method === 'Browser.getVersion').length === 2,
+			).then(() =>
+				waitForCondition('forced stand-in exit', () => !probeProcess(pid), {
+					budget: timeout * 1.5,
+				}),
 			)
-			await waitForCondition('forced stand-in exit', () => !probeProcess(pid), {
-				budget: timeout * 1.5,
-			})
+			const [answer] = await Promise.all([pending, exited])
 			expect(probeProcess(pid)).toBe(false)
-			const answer = await pending
 			expect(answer.error).toBe(false)
 			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
 			expect(answer.text).toContain('about:blank')

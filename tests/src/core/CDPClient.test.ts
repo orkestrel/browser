@@ -10,7 +10,7 @@ import {
 	CDPTimeoutError,
 } from '@src/core'
 import { getEventListeners } from 'node:events'
-import { createRecorder, waitForDelay } from '@orkestrel/test'
+import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createCDPTestTransport, replyOk } from '../../setup.js'
 import type { CDPTestTransportInterface } from '../../setup.js'
 
@@ -41,6 +41,81 @@ describe('CDPClient', () => {
 	})
 
 	describe('send()', () => {
+		it('rejects only the detached session pending commands and preserves other sessions and root', async () => {
+			await client.connect()
+			const controller = new AbortController()
+			const detached = createRecorder<[unknown]>()
+			const other = createRecorder<[unknown]>()
+			const root = createRecorder<[unknown]>()
+			const pending = client
+				.send('WebMCP.disable', undefined, { session: 'session-1', signal: controller.signal })
+				.catch(detached.handler)
+			const surviving = client
+				.send('Runtime.evaluate', { expression: '1' }, { session: 'session-2' })
+				.then(other.handler, other.handler)
+			const browser = client.send('Browser.getVersion').then(root.handler, root.handler)
+			try {
+				expect(getEventListeners(controller.signal, 'abort')).toHaveLength(1)
+				transport.event('Target.detachedFromTarget', { sessionId: 'session-1' })
+				await waitForCondition('detached session command rejects', () => detached.count === 1, {
+					budget: 1000,
+				})
+				await pending
+				expect(detached.calls[0]?.[0]).toBeInstanceOf(CDPConnectionError)
+				expect(detached.calls[0]?.[0]).toMatchObject({
+					code: 'BROWSER_CDP_CONNECTION_ERROR',
+					context: { method: 'WebMCP.disable', session: 'session-1' },
+				})
+				expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
+				expect(client.connected).toBe(true)
+				expect(other.calls).toEqual([])
+				expect(root.calls).toEqual([])
+				transport.reply(transport.sent[0]?.id ?? 0, { late: true })
+				transport.reply(transport.sent[1]?.id ?? 0, { result: 1 })
+				transport.reply(transport.sent[2]?.id ?? 0, { product: 'fixture' })
+				await Promise.all([surviving, browser])
+				expect(other.calls).toEqual([[{ result: 1 }]])
+				expect(root.calls).toEqual([[{ product: 'fixture' }]])
+				expect(detached.count).toBe(1)
+			} finally {
+				await client.close()
+				await Promise.all([pending, surviving, browser])
+			}
+		})
+
+		it('rejects a child session command when its detach arrives on the parent session', async () => {
+			await client.connect()
+			const detached = createRecorder<[unknown]>()
+			const parent = createRecorder<[unknown]>()
+			const child = client
+				.send('WebMCP.disable', undefined, { session: 'child' })
+				.catch(detached.handler)
+			const surviving = client
+				.send('Runtime.evaluate', { expression: '1' }, { session: 'parent' })
+				.then(parent.handler, parent.handler)
+			try {
+				transport.event('Target.detachedFromTarget', { sessionId: 'child' }, 'parent')
+				await waitForCondition(
+					'child command rejects after parent reports detach',
+					() => detached.count === 1,
+					{ budget: 1000 },
+				)
+				await child
+				expect(detached.calls[0]?.[0]).toBeInstanceOf(CDPConnectionError)
+				expect(detached.calls[0]?.[0]).toMatchObject({
+					context: { method: 'WebMCP.disable', session: 'child' },
+				})
+				expect(client.connected).toBe(true)
+				expect(parent.calls).toEqual([])
+				transport.reply(transport.sent[1]?.id ?? 0, { result: 1 })
+				await surviving
+				expect(parent.calls).toEqual([[{ result: 1 }]])
+			} finally {
+				await client.close()
+				await Promise.all([child, surviving])
+			}
+		})
+
 		it('resolves with the scripted result', async () => {
 			await client.connect()
 			replyOk(transport, 'Target.getTargets', { targetInfos: [] })

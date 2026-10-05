@@ -1704,6 +1704,167 @@ describe('BrowserPage', () => {
 	})
 
 	describe('close()', () => {
+		it('settles page close when the close reply precedes a detach that interrupts registry disable', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			let disabling = false
+			let settled = false
+			replyOk(transport, 'WebMCP.enable')
+			replyOk(transport, 'Target.closeTarget')
+			replyOk(transport, 'Browser.getVersion')
+			transport.onSend('WebMCP.disable', () => {
+				disabling = true
+				transport.event('Target.detachedFromTarget', {
+					sessionId: 'session-1',
+					targetId: 'target-1',
+				})
+				transport.event('Target.targetDestroyed', { targetId: 'target-1' })
+			})
+			try {
+				expect(await page.registry.start()).toBe(true)
+				const closing = page.close().then(() => {
+					settled = true
+				})
+				await waitForCondition('registry disable was sent before the detach', () => disabling)
+				await expect(client.send('Browser.getVersion')).resolves.toEqual({})
+				await waitForCondition('page close settles after session detach', () => settled, {
+					budget: 1000,
+				})
+				await closing
+			} finally {
+				await client.close()
+				await page.close()
+			}
+		})
+
+		it('closes a page whose renderer stopped answering when detach precedes the close reply', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			const registry = page.registry
+			let destroyed = false
+			let settled = false
+			replyOk(transport, 'WebMCP.enable')
+			transport.onSend('Target.closeTarget', (message) => {
+				destroyed = true
+				transport.event('Target.detachedFromTarget', { sessionId: 'session-1' })
+				transport.event('Target.targetDestroyed', { targetId: 'target-1' })
+				transport.reply(message.id, { success: true })
+			})
+			// A crashed renderer cannot reply; the browser rejects a gone session without it.
+			transport.onSend('WebMCP.disable', (message) => {
+				if (destroyed) transport.fail(message.id, 'Session with given id not found.')
+			})
+			try {
+				expect(await registry.start()).toBe(true)
+				transport.event('Inspector.targetCrashed', {}, 'session-1')
+				const closing = page.close().then(() => {
+					settled = true
+				})
+				expect(page.closed).toBe(true)
+				await waitForCondition('the crashed page close settles', () => settled, { budget: 1000 })
+				await closing
+				expect(destroyed).toBe(true)
+				expect(registry.emitter.destroyed).toBe(true)
+				expect(page.emitter.destroyed).toBe(true)
+				expect(transport.sent.map((message) => message.method)).toEqual([
+					'WebMCP.enable',
+					'Target.closeTarget',
+					'WebMCP.disable',
+				])
+			} finally {
+				await client.close()
+				await page.close()
+			}
+		})
+
+		it('emits no frame detach after close starts while the target closure reply is pending', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+			const attached = createRecorder<[frame: BrowserFrameInterface]>()
+			const detached = createRecorder<[frame: string]>()
+			page.emitter.on('attach', attached.handler)
+			page.emitter.on('detach', detached.handler)
+			transport.event(
+				'Page.frameAttached',
+				{ frameId: 'frame-2', parentFrameId: 'frame-1' },
+				'session-1',
+			)
+			try {
+				expect(attached.calls[0]?.[0]).toMatchObject({ id: 'frame-2', parent: 'frame-1' })
+				const closing = page.close()
+				expect(page.closed).toBe(true)
+				const request = requireValue(
+					transport.sent.find((message) => message.method === 'Target.closeTarget'),
+				)
+				transport.event('Page.frameDetached', { frameId: 'frame-2', reason: 'remove' }, 'session-1')
+				expect(detached.calls).toEqual([])
+				transport.reply(request.id, { success: true })
+				await closing
+				expect(detached.calls).toEqual([])
+			} finally {
+				await client.close()
+				await page.close()
+			}
+		})
+
+		it('emits no registry change after close starts while the target closure reply is pending', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
+			const registry = page.registry
+			const changes = createRecorder<[]>()
+			replyOk(transport, 'WebMCP.enable')
+			replyOk(transport, 'WebMCP.disable')
+			try {
+				await registry.start()
+				transport.event(
+					'Page.frameAttached',
+					{ frameId: 'frame-2', parentFrameId: 'frame-1' },
+					'session-1',
+				)
+				transport.event(
+					'WebMCP.toolsAdded',
+					{
+						tools: [{ name: 'search', description: 'Search', frameId: 'frame-2' }],
+					},
+					'session-1',
+				)
+				expect(registry.tool('search', 'frame-2')).toBeDefined()
+				registry.emitter.on('change', changes.handler)
+				const closing = page.close()
+				expect(page.closed).toBe(true)
+				const request = requireValue(
+					transport.sent.find((message) => message.method === 'Target.closeTarget'),
+				)
+				transport.event('Page.frameDetached', { frameId: 'frame-2', reason: 'remove' }, 'session-1')
+				expect(changes.calls).toEqual([])
+				transport.event(
+					'Page.frameNavigated',
+					{ frame: { id: 'frame-2', url: 'about:blank' } },
+					'session-1',
+				)
+				transport.event(
+					'WebMCP.toolsAdded',
+					{ tools: [{ name: 'late', description: 'Late', frameId: 'frame-2' }] },
+					'session-1',
+				)
+				transport.event(
+					'WebMCP.toolsRemoved',
+					{ tools: [{ name: 'search', frameId: 'frame-2' }] },
+					'session-1',
+				)
+				expect(changes.calls).toEqual([])
+				expect(registry.tool('search', 'frame-2')).toBeDefined()
+				expect(registry.tool('late', 'frame-2')).toBeUndefined()
+				transport.reply(request.id, { success: true })
+				await closing
+				expect(changes.calls).toEqual([])
+				expect(registry.tools()).toEqual([])
+			} finally {
+				await client.close()
+				await page.close()
+			}
+		})
+
 		it('marks the page closed and requests target closure', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.closeTarget')
@@ -1747,7 +1908,7 @@ describe('BrowserPage', () => {
 			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(false)
 		})
 
-		it('tears down an active codegen recorder before closing', async () => {
+		it('tears down an active codegen recorder before close resolves', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptFrameTree(transport)
 			replyOk(transport, 'Runtime.enable')

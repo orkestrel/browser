@@ -959,12 +959,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async #close(): Promise<void> {
-		await this.#release()
 		try {
 			await this.#client.send('Target.closeTarget', { targetId: this.#targetId })
 		} catch {
 			// The target may already be closed.
 		}
+		await this.#release()
 	}
 
 	#release(): Promise<void> {
@@ -1894,6 +1894,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	#handleFrameDetached(session: string, params: Readonly<Record<string, unknown>>): void {
+		if (this.#closed) return
 		const frame = params['frameId']
 		// The page session is entitled to report any frame's swap or removal, which `#accepts` grants
 		// it; a frame session reports only a frame it owns.

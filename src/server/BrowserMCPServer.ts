@@ -40,6 +40,7 @@ import {
 	createBrowserToolset,
 	createCDPClient,
 	isBrowserError,
+	isCDPConnectionError,
 	isCDPTimeoutError,
 } from '@src/core'
 import { version } from '../../package.json' with { type: 'json' }
@@ -947,13 +948,30 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			return generation
 		} catch (error) {
 			await toolset?.destroy().catch(this.#fault.bind(this))
-			await context?.close().catch(this.#fault.bind(this))
+			await context?.close().catch((failure: unknown) => {
+				// A launched browser defers its loss event; CDP can already report the disconnection.
+				if (
+					!this.#losses.has(slot) &&
+					slot.browser.status === 'connected' &&
+					this.#closing === undefined &&
+					!isCDPConnectionError(failure)
+				)
+					this.#fault(failure)
+			})
 			await rm(directory, { recursive: true, force: true }).catch(this.#fault.bind(this))
 			throw error
 		}
 	}
 
 	async #destroyRecord(slot: BrowserSlot): Promise<void> {
+		// A timed-out browser cannot answer context cleanup; kill before awaiting that cleanup.
+		if (isCDPTimeoutError(this.#losses.get(slot)?.cause) && slot.browser.pid !== undefined) {
+			try {
+				process.kill(slot.browser.pid, 'SIGKILL')
+			} catch (error) {
+				if (!isError(error) || !('code' in error) || error.code !== 'ESRCH') this.#faults.add(error)
+			}
+		}
 		try {
 			await Promise.allSettled(this.#building.get(slot) ?? [])
 			const prepared = this.#prepared.get(slot)
@@ -962,7 +980,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			await Promise.all(
 				[...(this.#owned.get(slot) ?? [])].map((generation) => this.#clean(slot, generation)),
 			)
-			await this.#destroySlot(slot.profile, slot.browser, this.#losses.get(slot)?.cause)
+			await this.#destroySlot(slot.profile, slot.browser)
 			this.#owned.delete(slot)
 			this.#building.delete(slot)
 			this.#endings.get(slot)?.resolve()
@@ -1032,14 +1050,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	async #destroySlot(profile: string, browser?: BrowserInterface, cause?: unknown): Promise<void> {
-		if (isCDPTimeoutError(cause) && browser?.pid !== undefined) {
-			try {
-				process.kill(browser.pid, 'SIGKILL')
-			} catch (error) {
-				if (!isError(error) || !('code' in error) || error.code !== 'ESRCH') this.#faults.add(error)
-			}
-		}
+	async #destroySlot(profile: string, browser?: BrowserInterface): Promise<void> {
 		try {
 			await browser?.destroy()
 		} catch (error) {

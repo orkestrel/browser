@@ -273,11 +273,13 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}
 
 	#navigated(params: Readonly<Record<string, unknown>>): void {
+		if (this.#page.closed || this.#destroying !== undefined) return
 		const frame = params['frame']
 		if (isRecord(frame) && isString(frame['id'])) this.#invalidate(frame['id'])
 	}
 
 	#detached(params: Readonly<Record<string, unknown>>): void {
+		if (this.#page.closed || this.#destroying !== undefined) return
 		if (isString(params['frameId'])) this.#invalidate(params['frameId'])
 	}
 
@@ -298,6 +300,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}
 
 	#add(session: string, params: Readonly<Record<string, unknown>>): void {
+		if (this.#page.closed || this.#destroying !== undefined) return
 		if (!isArray(params['tools'])) return
 		for (const value of params['tools']) {
 			const tool = parseBrowserTool(value)
@@ -309,6 +312,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}
 
 	#remove(params: Readonly<Record<string, unknown>>): void {
+		if (this.#page.closed || this.#destroying !== undefined) return
 		if (!isArray(params['tools'])) return
 		for (const value of params['tools']) {
 			const key = parseBrowserRemoval(value)
