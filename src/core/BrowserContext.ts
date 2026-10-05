@@ -1,4 +1,5 @@
 import type {
+	BrowserContextDisposal,
 	BrowserContextEventMap,
 	BrowserContextInterface,
 	BrowserContextOptions,
@@ -70,6 +71,7 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #publishing: Map<string, Promise<void>> = new Map()
 	readonly #observed: WeakSet<BrowserPage> = new WeakSet()
 	#shutdown: Promise<void> | undefined
+	#disposal: BrowserContextDisposal | undefined
 	#reference = 0
 
 	constructor(
@@ -104,6 +106,10 @@ export class BrowserContext implements BrowserContextInterface {
 
 	get id(): string | undefined {
 		return this.#id
+	}
+
+	get disposal(): BrowserContextDisposal | undefined {
+		return this.#disposal
 	}
 
 	get cookies(): BrowserCookieManagerInterface {
@@ -161,7 +167,7 @@ export class BrowserContext implements BrowserContextInterface {
 		const active = this.#shutdown
 		if (active !== undefined) return active
 
-		const shutdown = this.#destroyResources()
+		const shutdown = Promise.resolve().then(() => this.#destroyResources())
 		this.#shutdown = shutdown
 		return shutdown
 	}
@@ -170,7 +176,7 @@ export class BrowserContext implements BrowserContextInterface {
 		const active = this.#shutdown
 		if (active !== undefined) return active
 
-		const shutdown = this.#closeResources()
+		const shutdown = Promise.resolve().then(() => this.#closeResources())
 		this.#shutdown = shutdown
 		return shutdown
 	}
@@ -375,10 +381,13 @@ export class BrowserContext implements BrowserContextInterface {
 
 			const id = this.#id
 			if (id !== undefined) {
-				const settled = await settleBrowserTeardown(() =>
-					this.#client.send('Target.disposeBrowserContext', { browserContextId: id }),
-				)
-				failure ??= settled
+				try {
+					await this.#client.send('Target.disposeBrowserContext', { browserContextId: id })
+					this.#disposal = { confirmed: true }
+				} catch (error) {
+					this.#disposal = { confirmed: false, error }
+					failure ??= error
+				}
 			}
 			if (failure !== undefined) throw failure
 		} finally {

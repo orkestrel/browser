@@ -11,6 +11,7 @@ import type { MCPTransportInterface } from '@orkestrel/mcp'
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
+	BrowserContextOptions,
 	BrowserPageInterface,
 	BrowserStoreOptions,
 } from '@src/core'
@@ -1501,16 +1502,17 @@ async function serveFixtureRequest(
 
 /**
  * Holds the module hook a child script registers to load this workspace's TypeScript source under
- * Node: `@src/core` resolves to the core barrel's source, and a relative `.js` specifier that
+ * Node: `@src/core` and `@src/server` resolve to their source barrels, and a relative `.js` specifier that
  * resolves nothing falls back to its `.ts` source.
  *
  * @remarks
- * The script imports `registerHooks` from `node:module`, `pathToFileURL` from `node:url`, and
- * `resolve` from `node:path`, and runs from the workspace root, against which `resolve` reads.
+ * The script imports `registerHooks` from `node:module`. Absolute barrel URLs keep resolution
+ * independent of the child's working directory.
  */
 export const SOURCE_HOOK = `registerHooks({
 	resolve(specifier, context, next) {
-		if (specifier === '@src/core') return next(pathToFileURL(resolve('src/core/index.ts')).href, context)
+		if (specifier === '@src/core') return next(${JSON.stringify(new URL('../src/core/index.ts', import.meta.url).href)}, context)
+		if (specifier === '@src/server') return next(${JSON.stringify(new URL('../src/server/index.ts', import.meta.url).href)}, context)
 		try { return next(specifier, context) }
 		catch (error) {
 			if (specifier.endsWith('.js') && (specifier.startsWith('.') || specifier.startsWith('file:')))
@@ -1519,6 +1521,21 @@ export const SOURCE_HOOK = `registerHooks({
 		}
 	}
 })`
+
+/** Loads the browse source entry in a child process without rebuilding the published bundle. */
+export const BROWSE_SOURCE_ENTRY = `
+import { registerHooks } from 'node:module'
+import { readFileSync } from 'node:fs'
+${SOURCE_HOOK}
+registerHooks({
+	load(url, context, next) {
+		if (url === ${JSON.stringify(new URL('../package.json', import.meta.url).href)})
+			return { format: 'module', source: 'const manifest = ' + readFileSync(new URL(url), 'utf8') + '; export const version = manifest.version', shortCircuit: true }
+		return next(url, context)
+	}
+})
+await import(${JSON.stringify(new URL('../src/bin/main.ts', import.meta.url).href)})
+`
 
 // === Browse server fixtures
 
@@ -1577,6 +1594,10 @@ export class BrowserPromiseObserver {
  * - `version` — receives each double's ping count, starting at 1
  */
 export interface BrowserLauncherOptions {
+	/** Answers context creation at the protocol boundary when a test holds or refuses it. */
+	readonly isolation?: BrowserLaunchHandler
+	/** Answers context disposal at the protocol boundary when a test holds or refuses it. */
+	readonly disposal?: BrowserLaunchHandler
 	/** Reports a live process that the calling test spawned and owns. */
 	readonly pid?: number
 	/** Counts initial doubles whose teardown refuses to confirm termination. */
@@ -1625,7 +1646,11 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	#connects = 0
 	#pings = 0
 	#targets = 0
+	#isolations = 0
+	readonly #remote = new Set<string>()
+	readonly #scripts = new Map<string, BrowserLaunchHandler>()
 	#destroyed = false
+	#destroys = 0
 
 	constructor(
 		options: BrowserOptions,
@@ -1689,6 +1714,16 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		return this.#destroyed
 	}
 
+	/** Counts owner-side browser disposal calls. */
+	get destroys(): number {
+		return this.#destroys
+	}
+
+	/** Scripts a context protocol reply while retaining the real context and client. */
+	script(method: string, handler: BrowserLaunchHandler): void {
+		this.#scripts.set(method, handler)
+	}
+
 	/** Holds the in-memory CDP fixture a connect opened. */
 	get fixture(): BrowserElementFixture | undefined {
 		return this.#fixture
@@ -1737,6 +1772,11 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		})
 		const { transport } = fixture
 		transport.onSend('Browser.getVersion', (message) => {
+			const handler = this.#scripts.get(message.method)
+			if (handler !== undefined) {
+				handler(message, transport)
+				return
+			}
 			const call = ++this.#pings
 			if ((this.#handlers.silent ?? 0) > 0) return
 			void Promise.resolve()
@@ -1753,6 +1793,28 @@ export class BrowserLaunchDouble implements BrowserInterface {
 				targetId: this.#targets === 1 ? 'main' : `page-${this.#targets}`,
 			})
 		})
+		transport.onSend('Target.createBrowserContext', (message) => {
+			const handler = this.#scripts.get(message.method) ?? this.#handlers.isolation
+			if (handler !== undefined) {
+				handler(message, transport)
+				return
+			}
+			const id = `context-${++this.#isolations}`
+			this.#remote.add(id)
+			transport.reply(message.id, { browserContextId: id })
+		})
+		transport.onSend('Target.disposeBrowserContext', (message) => {
+			const handler = this.#scripts.get(message.method) ?? this.#handlers.disposal
+			if (handler !== undefined) {
+				handler(message, transport)
+				return
+			}
+			this.#remote.delete(String(message.params?.['browserContextId']))
+			transport.reply(message.id, {})
+		})
+		transport.onSend('Target.getBrowserContexts', (message) =>
+			transport.reply(message.id, { browserContextIds: [...this.#remote] }),
+		)
 		transport.onSend('Target.attachToTarget', (message) =>
 			transport.reply(message.id, { sessionId: `session-${String(message.params?.['targetId'])}` }),
 		)
@@ -1761,6 +1823,11 @@ export class BrowserLaunchDouble implements BrowserInterface {
 			'Browser.setDownloadBehavior',
 			'Network.enable',
 			'Page.bringToFront',
+			'Target.closeTarget',
+			'Target.detachFromTarget',
+			'WebMCP.disable',
+			'Emulation.setDeviceMetricsOverride',
+			'Emulation.setTouchEmulationEnabled',
 		])
 			replyOk(transport, method)
 		this.#fixture = fixture
@@ -1793,12 +1860,23 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		return this.#contexts
 	}
 
-	async isolate(): Promise<BrowserContextInterface> {
+	async isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
 		if ((this.#handlers.broken ?? 0) > 0)
 			throw new BrowserError('The fixture refused isolation', 'BROWSER_FIXTURE_ISOLATE')
 		const fixture = this.#fixture
 		if (fixture === undefined) throw new BrowserError('The double is not connected')
-		const context = new BrowserContext(fixture.client)
+		const result: unknown = await fixture.client.send('Target.createBrowserContext', {})
+		if (!isRecord(result) || !isString(result['browserContextId']))
+			throw new BrowserError('The fixture returned no context id')
+		const context = new BrowserContext(
+			fixture.client,
+			result['browserContextId'],
+			undefined,
+			undefined,
+			options?.emulation,
+			options?.downloads,
+			options,
+		)
 		this.#contexts.push(context)
 		return context
 	}
@@ -1810,6 +1888,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 
 	async destroy(): Promise<void> {
 		this.#destroyed = true
+		this.#destroys += 1
 		await this.#fixture?.client.close()
 		if (this.#handlers.cleanup !== undefined) throw this.#handlers.cleanup
 		if ((this.#handlers.survivors ?? 0) > 0)

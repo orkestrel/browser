@@ -362,21 +362,42 @@ export interface FileBrowserStoreOptions {
  */
 export type BrowserLaunchFunction = (options: BrowserOptions) => BrowserInterface
 
-/** Holds one warm browser a browse server owns: the browser, its profile, its isolated context, and its started toolset. */
+/** Holds one pooled browser and its exclusively owned profile. */
 export interface BrowserSlot {
 	readonly browser: BrowserInterface
 	readonly profile: string
+}
+
+/** Holds one prepared or assigned context generation and its downloads directory. */
+export interface BrowserServerContext {
 	readonly context: BrowserContextInterface
 	readonly toolset: BrowserToolsetInterface
+	readonly directory: string
+}
+
+/** Binds a holder generation to the exact browser lease reserved for its lifetime. */
+export interface BrowserServerLease {
+	readonly token: PoolToken<BrowserSlot>
+	readonly generation: BrowserServerContext
+}
+
+/** Records a lost generation's cause and its own last URL. */
+export interface BrowserServerLoss {
+	readonly cause: unknown
+	readonly url: string
 }
 
 /** Holds the listeners and resolver of one browser slot's loss watch. */
 export interface BrowserSlotWatch {
 	readonly resolve: (cause: unknown) => void
 	readonly disconnect: () => void
+	readonly subscription: Disposable
+}
+
+/** Holds page subscriptions for one prepared or assigned context generation. */
+export interface BrowserServerWatch {
 	readonly page: (page: BrowserPageInterface) => void
 	readonly crashes: ReadonlyMap<BrowserPageInterface, () => void>
-	readonly subscription: Disposable
 }
 
 /**
@@ -398,8 +419,10 @@ export interface BrowserSlotWatch {
  *   `input` destroys the server. Default: `process.stdin` and `process.stdout`
  * - `pool.size` — the integer number of browsers kept warm, from 1 through
  *   `BROWSER_SERVER_POOL_LIMIT`. Default: `BROWSER_SERVER_POOL_SIZE`.
+ * - `pool.contexts` — the integer context capacity per browser, shared holder included, from 1
+ *   through `BROWSER_SERVER_CONTEXTS_LIMIT`. Default: `BROWSER_SERVER_CONTEXTS`.
  * - `log` — receives diagnostic lines. Default: `process.stderr`
- * @throws Thrown when `pool.size` is outside that range or is not an integer, with `BROWSER_SERVER_OPTIONS`
+ * @throws Thrown when `pool.size` or `pool.contexts` is outside its range or is not an integer, with `BROWSER_SERVER_OPTIONS`
  */
 export interface BrowserMCPServerOptions {
 	readonly root?: string
@@ -409,7 +432,7 @@ export interface BrowserMCPServerOptions {
 	readonly readonly?: boolean
 	readonly launch?: BrowserLaunchFunction
 	readonly stdio?: StdioServerOptions
-	readonly pool?: { readonly size?: number }
+	readonly pool?: { readonly size?: number; readonly contexts?: number }
 	readonly log?: NodeJS.WritableStream
 }
 
@@ -429,9 +452,9 @@ export interface BrowserServerCatalog {
 	readonly tools: readonly ToolDefinition[]
 }
 
-/** Binds shared catalog subscriptions to the exact token that published them. */
+/** Binds shared catalog subscriptions to the exact generation that published them. */
 export interface BrowserServerMirror {
-	readonly token: PoolToken<BrowserSlot>
+	readonly lease: BrowserServerLease
 	readonly added: (tool: ToolInterface) => void
 	readonly removed: (tool: ToolInterface) => void
 	readonly cleared: (tools: readonly ToolInterface[]) => void
@@ -441,7 +464,7 @@ export interface BrowserServerMirror {
 export interface BrowserMCPServerInterface {
 	/**
 	 * Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the
-	 * shared holder leases a warm browser; the legacy handshake and every tool call await the same setup.
+	 * shared holder consumes a prepared context on a warm browser; the legacy handshake and every tool call await the same setup.
 	 * Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with
 	 * `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup.
 	 */

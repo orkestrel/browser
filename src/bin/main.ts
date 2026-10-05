@@ -14,11 +14,13 @@ try {
 		BROWSE_EXECUTABLE,
 		BROWSE_READONLY,
 		BROWSE_POOL,
+		BROWSE_CONTEXTS,
 		BROWSE_VIEWPORT,
 	} = process.env
 	const headless = parseBoolean(BROWSE_HEADLESS)
 	const readonly = parseBoolean(BROWSE_READONLY)
 	const size = parseInteger(BROWSE_POOL)
+	const contexts = parseInteger(BROWSE_CONTEXTS)
 	const viewport = parseBrowserViewport(BROWSE_VIEWPORT)
 	// An empty variable counts as unset, as a shell's `NAME=` leaves it.
 	for (const [name, value, parsed] of [
@@ -45,6 +47,12 @@ try {
 			'BROWSER_SERVER_ENVIRONMENT',
 			{ name: 'BROWSE_VIEWPORT', value: BROWSE_VIEWPORT },
 		)
+	if (BROWSE_CONTEXTS !== undefined && BROWSE_CONTEXTS !== '' && contexts === undefined)
+		throw new BrowserError(
+			`BROWSE_CONTEXTS must be an integer, not ${JSON.stringify(BROWSE_CONTEXTS)}`,
+			'BROWSER_SERVER_ENVIRONMENT',
+			{ name: 'BROWSE_CONTEXTS', value: BROWSE_CONTEXTS },
+		)
 	await createBrowserMCPServer({
 		...(BROWSE_ROOT === undefined || BROWSE_ROOT === '' ? {} : { root: BROWSE_ROOT }),
 		...(headless === undefined ? {} : { headless }),
@@ -52,7 +60,10 @@ try {
 			? {}
 			: { executable: BROWSE_EXECUTABLE }),
 		...(readonly === undefined ? {} : { readonly }),
-		...(size === undefined ? {} : { pool: { size } }),
+		pool: {
+			...(size === undefined ? {} : { size }),
+			...(contexts === undefined ? {} : { contexts }),
+		},
 		...(viewport === undefined ? {} : { viewport }),
 	}).start()
 } catch (error) {

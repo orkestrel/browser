@@ -89,6 +89,7 @@ export class Browser implements BrowserInterface {
 	#servingPid: number | undefined
 	#profile: BrowserProfileResult | undefined
 	#contexts: BrowserContext[] = []
+	readonly #isolating = new Set<Promise<BrowserContextInterface>>()
 	#destroyed = false
 	readonly #connecting: BrowserTransition = new BrowserTransition()
 	readonly #disconnecting: BrowserTransition = new BrowserTransition()
@@ -208,53 +209,13 @@ export class Browser implements BrowserInterface {
 	}
 
 	async isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
-		if (this.#destroyed) throw new BrowserDestroyedError()
-		const client = this.#client
-		if (this.#status !== 'connected' || client === undefined) {
-			throw new BrowserNotConnectedError()
-		}
-		validateBrowserContextOptions(options)
-		const params: Record<string, unknown> = { disposeOnDetach: false }
-		if (options?.proxy !== undefined) {
-			params['proxyServer'] = options.proxy.server
-			if (options.proxy.bypass !== undefined) {
-				params['proxyBypassList'] = options.proxy.bypass.join(',')
-			}
-		}
-		if (options?.origins !== undefined) {
-			params['originsWithUniversalNetworkAccess'] = [...options.origins]
-		}
-		const result = await client.send('Target.createBrowserContext', params)
-		if (!isRecord(result) || !isString(result['browserContextId'])) {
-			throw new BrowserConnectionError('Failed to create isolated browser context')
-		}
-		const id = result['browserContextId']
-		const context = new BrowserContext(
-			client,
-			id,
-			options?.emulation?.viewport ?? this.#options.viewport,
-			createBrowserWriter(),
-			options?.emulation,
-			options?.downloads,
-			options,
-		)
-
+		const attempt = this.#isolate(options)
+		this.#isolating.add(attempt)
 		try {
-			if (options?.downloads !== undefined) {
-				await client.send('Browser.setDownloadBehavior', {
-					behavior: options.downloads.named === true ? 'allowAndName' : 'allow',
-					browserContextId: id,
-					downloadPath: options.downloads.path,
-					eventsEnabled: true,
-				})
-			}
-		} catch (error) {
-			await context.close().catch(() => undefined)
-			throw error
+			return await attempt
+		} finally {
+			this.#isolating.delete(attempt)
 		}
-
-		this.#registerContext(context)
-		return context
 	}
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
@@ -300,6 +261,58 @@ export class Browser implements BrowserInterface {
 	}
 
 	// === Private helpers
+
+	async #isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
+		if (this.#destroyed) throw new BrowserDestroyedError()
+		const client = this.#client
+		if (this.#status !== 'connected' || client === undefined) {
+			throw new BrowserNotConnectedError()
+		}
+		validateBrowserContextOptions(options)
+		const params: Record<string, unknown> = { disposeOnDetach: false }
+		if (options?.proxy !== undefined) {
+			params['proxyServer'] = options.proxy.server
+			if (options.proxy.bypass !== undefined) {
+				params['proxyBypassList'] = options.proxy.bypass.join(',')
+			}
+		}
+		if (options?.origins !== undefined) {
+			params['originsWithUniversalNetworkAccess'] = [...options.origins]
+		}
+		const result = await client.send('Target.createBrowserContext', params)
+		if (!isRecord(result) || !isString(result['browserContextId'])) {
+			throw new BrowserConnectionError('Failed to create isolated browser context')
+		}
+		const id = result['browserContextId']
+		const context = new BrowserContext(
+			client,
+			id,
+			options?.emulation?.viewport ?? this.#options.viewport,
+			createBrowserWriter(),
+			options?.emulation,
+			options?.downloads,
+			options,
+		)
+
+		try {
+			if (this.#destroyed || this.#client !== client) throw new BrowserDestroyedError()
+			if (options?.downloads !== undefined) {
+				await client.send('Browser.setDownloadBehavior', {
+					behavior: options.downloads.named === true ? 'allowAndName' : 'allow',
+					browserContextId: id,
+					downloadPath: options.downloads.path,
+					eventsEnabled: true,
+				})
+			}
+			if (this.#destroyed || this.#client !== client) throw new BrowserDestroyedError()
+		} catch (error) {
+			await context.close().catch(() => undefined)
+			throw error
+		}
+
+		this.#registerContext(context)
+		return context
+	}
 
 	async #establish(): Promise<void> {
 		const disconnecting = this.#disconnecting.pending
@@ -921,6 +934,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #settle(): Promise<void> {
+		await Promise.allSettled(this.#isolating)
 		await this.#connecting.pending?.catch(() => undefined)
 		await this.#disconnecting.pending?.catch(() => undefined)
 		await this.#settleExit()

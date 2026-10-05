@@ -3437,6 +3437,8 @@ export interface BrowserPageInterface
 export interface BrowserContextInterface {
 	readonly emitter: EmitterInterface<BrowserContextEventMap>
 	readonly id: string | undefined
+	/** Holds the remote disposal receipt after `close()` attempts disposal; wrapper destruction has none. */
+	readonly disposal: BrowserContextDisposal | undefined
 	readonly cookies: BrowserCookieManagerInterface
 	readonly permissions: BrowserPermissionManagerInterface
 	readonly storage: BrowserStorageManagerInterface
@@ -3464,3 +3466,8 @@ export interface BrowserContextInterface {
 	 */
 	close(): Promise<void>
 }
+
+/** Records Chromium's disposal acknowledgement or the failure that left disposal unconfirmed. */
+export type BrowserContextDisposal =
+	| { readonly confirmed: true }
+	| { readonly confirmed: false; readonly error: unknown }

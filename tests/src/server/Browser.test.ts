@@ -564,6 +564,41 @@ describe('Browser create()', () => {
 })
 
 describe('Browser isolate()', () => {
+	it('C1 disposes a late context before browser teardown settles', async () => {
+		server = await createCDPTestServer()
+		server.list([])
+		server.script('Target.disposeBrowserContext', {})
+		const browser = createBrowser({ cdp: { endpoint: server.endpoint } })
+		await browser.connect()
+		const events = createRecorder<[BrowserContextInterface]>()
+		browser.emitter.on('context', events.handler)
+		const creating = browser.isolate().catch((error: unknown) => error)
+		try {
+			await waitForCondition(
+				'context creation reached CDP',
+				() =>
+					server?.received.some((message) => message.method === 'Target.createBrowserContext') ===
+					true,
+			)
+			const request = server.received.find(
+				(message) => message.method === 'Target.createBrowserContext',
+			)
+			if (request === undefined) throw new Error('Missing creation')
+			const ending = browser.destroy()
+			server.reply(request.id, { browserContextId: 'late-context' })
+			expect(await creating).toBeInstanceOf(BrowserDestroyedError)
+			await ending
+			expect(events.count).toBe(0)
+			expect(browser.contexts()).toEqual([])
+			expect(
+				server.received
+					.filter((message) => message.method === 'Target.disposeBrowserContext')
+					.map((message) => message.params?.['browserContextId']),
+			).toEqual(['late-context'])
+		} finally {
+			await browser.destroy()
+		}
+	})
 	it('creates and emits a configured incognito CDP context', async () => {
 		server = await createCDPTestServer()
 		server.list([])

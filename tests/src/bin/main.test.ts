@@ -9,6 +9,7 @@ import { createScratch } from '@orkestrel/test/server'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSE_VOCABULARY,
+	BROWSE_SOURCE_ENTRY,
 	BrowseChild,
 	COOPERATIVE_SIGTERM,
 	readProfiles,
@@ -31,6 +32,28 @@ const INITIALIZE = {
 const LIST = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
 
 describe('bin entry', () => {
+	it('C1 validates BROWSE_CONTEXTS in the source entry like BROWSE_POOL', async () => {
+		const scratch = createScratch()
+		const entry = scratch.write('browse.ts', BROWSE_SOURCE_ENTRY)
+		try {
+			for (const value of ['1.5', '5']) {
+				const child = new BrowseChild(entry, scratch.path, { BROWSE_CONTEXTS: value })
+				try {
+					expect(await child.ending).toEqual({ code: 1, signal: null })
+					expect(child.lines).toEqual([])
+					expect(child.stderr).toBe(
+						value === '5'
+							? 'browse: BROWSER_SERVER_OPTIONS: pool.contexts must be an integer from 1 through 4\n'
+							: `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_CONTEXTS must be an integer, not "${value}"\n`,
+					)
+				} finally {
+					await child.destroy()
+				}
+			}
+		} finally {
+			scratch.destroy()
+		}
+	})
 	it('completes teardown after the stderr reader closes', async (context) => {
 		const scratch = createScratch()
 		const marker = join(scratch.path, 'write-result.json')

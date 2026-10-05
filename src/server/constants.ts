@@ -232,6 +232,10 @@ export const BROWSER_SERVER_UNAVAILABLE = 'BROWSER_SERVER_UNAVAILABLE'
 export const BROWSER_SERVER_LAUNCH = 'BROWSER_SERVER_LAUNCH'
 /** Sets the default number of warm browsers to 1. */
 export const BROWSER_SERVER_POOL_SIZE = 1
+/** Sets the default context capacity per browser, including the shared holder. */
+export const BROWSER_SERVER_CONTEXTS = 2
+/** Limits context capacity to the largest measured per-browser count. */
+export const BROWSER_SERVER_CONTEXTS_LIMIT = 4
 /** Limits the number of warm browsers to 3. */
 export const BROWSER_SERVER_POOL_LIMIT = 3
 /** Permits one failed refill before the next failure spends the bound. */

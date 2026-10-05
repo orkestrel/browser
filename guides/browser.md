@@ -1053,6 +1053,7 @@ The following table lists the core types.
 | `BrowserProxy`                      | interface | Describes proxy settings used when creating an isolated browser context.                                                                                                                                                                                                |
 | `BrowserDownloadOptions`            | interface | Describes the download policy for a browser context.                                                                                                                                                                                                                    |
 | `BrowserContextOptions`             | interface | Describes the options for creating and configuring an isolated browser context.                                                                                                                                                                                         |
+| `BrowserContextDisposal`            | type      | Records Chromium's disposal acknowledgement or the failure that left disposal unconfirmed.                                                                                                                                                                              |
 | `BrowserContextEventMap`            | type      | Maps the browser-context lifecycle events.                                                                                                                                                                                                                              |
 | `BrowserJourneyBinding`             | type      | Binds a native action's string argument to a literal or to one declared parameter by name.                                                                                                                                                                              |
 | `BrowserJourneyParameter`           | interface | Declares one parameter a journey takes: its default, or none when it is a secret.                                                                                                                                                                                       |
@@ -1249,6 +1250,8 @@ The following table lists the server constants.
 | `BROWSER_RUN_FILE`                | const | Names the persisted run snapshot.                                                                                                                                                                                             |
 | `BROWSER_RUN_DIRECTORY`           | const | Names the journey directory holding its runs.                                                                                                                                                                                 |
 | `BROWSER_SERVER_POOL_SIZE`        | const | Sets the default number of warm browsers to 1.                                                                                                                                                                                |
+| `BROWSER_SERVER_CONTEXTS`         | const | Sets the default context capacity per browser, including the shared holder.                                                                                                                                                   |
+| `BROWSER_SERVER_CONTEXTS_LIMIT`   | const | Limits context capacity to the largest measured per-browser count.                                                                                                                                                            |
 | `BROWSER_SERVER_POOL_LIMIT`       | const | Limits the number of warm browsers to 3.                                                                                                                                                                                      |
 | `BROWSER_SERVER_RESTARTS`         | const | Permits one failed refill before the next failure spends the bound.                                                                                                                                                           |
 | `BROWSER_SERVER_RECORD`           | const | Names the browser process record in each profile.                                                                                                                                                                             |
@@ -1377,31 +1380,35 @@ if (found !== undefined) {
 
 The following table lists the server types.
 
-| API                            | Kind      | Summary                                                                                                               |
-| ------------------------------ | --------- | --------------------------------------------------------------------------------------------------------------------- |
-| `BrowserEngine`                | type      | Names a supported browser engine (raw CDP targets Chromium-family browsers only).                                     |
-| `BrowserConnection`            | type      | Names how the browser connection was established.                                                                     |
-| `BrowserStatus`                | type      | Names the lifecycle status of a browser wrapper.                                                                      |
-| `BrowserDiscoveryResult`       | interface | Describes the result of passive browser discovery.                                                                    |
-| `SystemBrowserOptions`         | interface | Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources.                       |
-| `SystemBrowser`                | type      | Represents one discovered browser executable on this machine.                                                         |
-| `BrowserProfileRecord`         | interface | Names the browser a browse profile serves, which a later start's sweep reads.                                         |
-| `BrowserProfileResult`         | interface | Describes the resolved browser profile directory used for a Chromium-family launch.                                   |
-| `BrowserCDPOptions`            | interface | Configures the CDP (Chrome DevTools Protocol) connection.                                                             |
-| `BrowserEventMap`              | type      | Maps the events a `BrowserInterface` emits.                                                                           |
-| `BrowserOptions`               | interface | Describes the options for creating a `Browser` instance.                                                              |
-| `BrowserInterface`             | interface | Wraps a browser with discovery, connection management, and lifecycle control.                                         |
-| `WebSocketCDPTransportOptions` | interface | Describes the options for creating a `WebSocketCDPTransport` instance.                                                |
-| `FileBrowserStoreOptions`      | interface | Configures a file store: its root under the checkout and the listing cap.                                             |
-| `BrowserLaunchFunction`        | type      | Creates a browser a browse server connects while warming its pool.                                                    |
-| `BrowserSlot`                  | interface | Holds one warm browser a browse server owns: the browser, its profile, its isolated context, and its started toolset. |
-| `BrowserSlotWatch`             | interface | Holds the listeners and resolver of one browser slot's loss watch.                                                    |
-| `BrowserMCPServerOptions`      | interface | Configures the browse server.                                                                                         |
-| `BrowserServerToolName`        | type      | Names the server tools that manage independent browser holders.                                                       |
-| `BrowserServerHolder`          | interface | Identifies one admitted browser lifetime independently of its current pool token.                                     |
-| `BrowserServerCatalog`         | interface | Describes the JSON catalog returned by the holder tools.                                                              |
-| `BrowserServerMirror`          | interface | Binds shared catalog subscriptions to the exact token that published them.                                            |
-| `BrowserMCPServerInterface`    | interface | Serves the browser vocabulary and the journey tools over MCP on stdio.                                                |
+| API                            | Kind      | Summary                                                                                         |
+| ------------------------------ | --------- | ----------------------------------------------------------------------------------------------- |
+| `BrowserEngine`                | type      | Names a supported browser engine (raw CDP targets Chromium-family browsers only).               |
+| `BrowserConnection`            | type      | Names how the browser connection was established.                                               |
+| `BrowserStatus`                | type      | Names the lifecycle status of a browser wrapper.                                                |
+| `BrowserDiscoveryResult`       | interface | Describes the result of passive browser discovery.                                              |
+| `SystemBrowserOptions`         | interface | Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources. |
+| `SystemBrowser`                | type      | Represents one discovered browser executable on this machine.                                   |
+| `BrowserProfileRecord`         | interface | Names the browser a browse profile serves, which a later start's sweep reads.                   |
+| `BrowserProfileResult`         | interface | Describes the resolved browser profile directory used for a Chromium-family launch.             |
+| `BrowserCDPOptions`            | interface | Configures the CDP (Chrome DevTools Protocol) connection.                                       |
+| `BrowserEventMap`              | type      | Maps the events a `BrowserInterface` emits.                                                     |
+| `BrowserOptions`               | interface | Describes the options for creating a `Browser` instance.                                        |
+| `BrowserInterface`             | interface | Wraps a browser with discovery, connection management, and lifecycle control.                   |
+| `WebSocketCDPTransportOptions` | interface | Describes the options for creating a `WebSocketCDPTransport` instance.                          |
+| `FileBrowserStoreOptions`      | interface | Configures a file store: its root under the checkout and the listing cap.                       |
+| `BrowserLaunchFunction`        | type      | Creates a browser a browse server connects while warming its pool.                              |
+| `BrowserSlot`                  | interface | Holds one pooled browser and its exclusively owned profile.                                     |
+| `BrowserSlotWatch`             | interface | Holds the listeners and resolver of one browser slot's loss watch.                              |
+| `BrowserServerContext`         | interface | Holds one prepared or assigned context generation and its downloads directory.                  |
+| `BrowserServerLease`           | interface | Binds a holder generation to the exact browser lease reserved for its lifetime.                 |
+| `BrowserServerLoss`            | interface | Records a lost generation's cause and its own last URL.                                         |
+| `BrowserServerWatch`           | interface | Holds page subscriptions for one prepared or assigned context generation.                       |
+| `BrowserMCPServerOptions`      | interface | Configures the browse server.                                                                   |
+| `BrowserServerToolName`        | type      | Names the server tools that manage independent browser holders.                                 |
+| `BrowserServerHolder`          | interface | Identifies one admitted browser lifetime independently of its current pool token.               |
+| `BrowserServerCatalog`         | interface | Describes the JSON catalog returned by the holder tools.                                        |
+| `BrowserServerMirror`          | interface | Binds shared catalog subscriptions to the exact generation that published them.                 |
+| `BrowserMCPServerInterface`    | interface | Serves the browser vocabulary and the journey tools over MCP on stdio.                          |
 
 ### Browser
 
@@ -2347,10 +2354,10 @@ A disconnect or a crash of the current page retires its slot; a background-page 
 
 The end of input, `SIGINT`, and `SIGTERM` stop admission and destroy the pool. Teardown releases watch listeners, destroys each toolset before its browser, and rechecks recorded folders. Unconfirmed termination retains its slot; a stranded launch prevents further launches. A timed-out ping forces termination before teardown. On Linux, a root process launches with `--no-sandbox`; other launches keep the sandbox.
 
-| Method    | Returns         | Summary                                                                                                                                                                                                                                                                                                                                                                  |
-| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `start`   | `Promise<void>` | Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the shared holder leases a warm browser; the legacy handshake and every tool call await the same setup. Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup. |
-| `destroy` | `Promise<void>` | Stops admission, tears down every browser, its toolset, and its profile, then rechecks the folders it answers for.                                                                                                                                                                                                                                                       |
+| Method    | Returns         | Summary                                                                                                                                                                                                                                                                                                                                                                                          |
+| --------- | --------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `start`   | `Promise<void>` | Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the shared holder consumes a prepared context on a warm browser; the legacy handshake and every tool call await the same setup. Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup. |
+| `destroy` | `Promise<void>` | Stops admission, tears down every browser, its toolset, and its profile, then rechecks the folders it answers for.                                                                                                                                                                                                                                                                               |
 
 The viewport option applies to every warmed browser, including spares and refills, and to every page and popup in its isolated context.
 
@@ -3591,7 +3598,7 @@ The `browse` binary serves the vocabulary and the journey tools over MCP on stdi
 - `BROWSE_HEADLESS`: `true`, `false`, `1`, or `0`. Default: `true`.
 - `BROWSE_EXECUTABLE`: the path of the Chromium executable. Default: the browser `findSystemBrowser` finds.
 - `BROWSE_READONLY`: `true`, `false`, `1`, or `0`; `true` refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs. Default: `false`.
-- `BROWSE_POOL`: an integer from `1` through `3` setting the number of browsers the server keeps, and so the most holders at the same time, the shared browser included; see [Run work in parallel](#run-work-in-parallel). Default: `1`.
+- `BROWSE_POOL`: an integer from `1` through `3` setting the number of browsers the server keeps, with holder admission bounded separately by `BROWSE_CONTEXTS`; see [Run work in parallel](#run-work-in-parallel). Default: `1`.
 - `BROWSE_VIEWPORT`: positive integer dimensions in `WIDTHxHEIGHT` form, such as `390x844`. Applies to every page and popup, including those in spares and refills. Default: the browser's launch default.
 
 A malformed value ends the process with exit code 1 and one line on standard error. Any other value of `BROWSE_HEADLESS` or `BROWSE_READONLY`, a `BROWSE_POOL` that is not an integer, and a malformed `BROWSE_VIEWPORT` write a `BROWSER_SERVER_ENVIRONMENT` line, such as `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"`. Viewport dimensions must be positive safe integers written as decimal digits with a lowercase `x` separator and no whitespace. An integer `BROWSE_POOL` outside `1` through `3` writes `browse: BROWSER_SERVER_OPTIONS: pool.size must be an integer from 1 through 3`. On Linux a server running as root launches Chromium with `--no-sandbox`, because Chromium refuses to start as root with its sandbox on.
@@ -3602,9 +3609,9 @@ A client gives a server a limited time to answer `initialize`. On 2026-10-03, Cl
 
 Set `BROWSE_POOL` to `2` or `3` to keep warm browsers beyond the shared one. A browser no holder leases is a spare: it waits idle until `acquire` admits a holder on it or a holder's browser is lost. After a loss, the holder's next call runs on a spare while a replacement warms, and concurrent calls on that holder share its one replacement. At `1`, the next call after a loss waits for a replacement launch. In the 2026-10-04 run, the next successful call after a kill of the session's browser took a median 1.92 s at `1` and 0.40 s at `2`. On Windows 11 with Edge 154 on 2026-10-04, an idle spare's process tree used about 130% of one core in the first 20 s, then a median near 10%, and its summed working set grew from 1.22 GB to 1.78 GB over 2 minutes, with shared pages counted in every process that maps them. With `BROWSE_HEADLESS=false`, each spare opens its own window.
 
-When a holder's browser is lost, the shared browser's included, browse never repeats a call. A loss is the browser process exiting, its CDP connection dropping, the renderer of its current page crashing, or a CDP ping it fails before a call or after a failed one; a crashed background tab is not a loss. The following list gives what each call answers around a loss:
+When a holder's browser is lost, the shared browser's included, browse never repeats a call. A loss is the browser process exiting, its CDP connection dropping, or a CDP ping it fails before a call or after a failed one; a current-page renderer crash replaces only its holder's context, and a crashed background tab leaves the holder attached. The following list gives what each call answers around a loss:
 
-- A call after the loss runs on a fresh browser that starts at `about:blank`, and its text opens with a `BROWSER_SERVER_CRASH:` note that names the cause and the lost page's URL. An element reference from the lost page is refused.
+- A call after the loss runs in a fresh context that starts at `about:blank`, and its text opens with a `BROWSER_SERVER_CRASH:` note that names the cause and the lost page's URL. An element reference from the lost page is refused.
 - A call the loss interrupts answers `BROWSER_SERVER_UNRESOLVED:`: its outcome is unknown, and browse did not repeat it. Read the page before you repeat the call.
 - A call that completed before the loss keeps its result, and the next call carries the note.
 - A call that fails for its own reason on a live browser answers its plain failure, with no note.
@@ -3689,14 +3696,14 @@ On 2026-10-04, Claude Code 2.1.285 under `claude -p --mcp-config FILE --strict-m
 
 ### Run work in parallel
 
-Acquire a holder when work needs a browser of its own beside the shared one, such as a subagent that checks a page while you drive another through the named tools. Each holder runs on its own pooled browser, with its own profile, isolated context, pages, cookies, storage, and downloads, so its calls run beside the shared browser's calls and beside every other holder's. The named tools, such as `navigate` and `look`, keep serving the shared browser unchanged.
+Acquire a holder when work needs a context of its own beside the shared one, such as a subagent that checks a page while you drive another through the named tools. Each holder runs in its own isolated context on a pooled browser, with its own pages and downloads directory, so its calls run beside the shared holder's calls and beside every other holder's. The named tools, such as `navigate` and `look`, keep serving the shared browser unchanged.
 
 The following list gives the holder tools that `BROWSER_SERVER_COPY` defines:
 
 - `acquire { purpose }`: admits a holder and answers JSON with the server-minted `holder` id and its browser's `tools` catalog. The `purpose` text describes the work and names the holder in a capacity refusal. Hand the id to the agent that does the work.
 - `execute { holder, name, arguments }`: runs the tool `name` from the holder's catalog with that tool's own arguments inside `arguments`, and answers what the tool answers.
 - `tools { holder }`: lists the holder's catalog, including the page tools its current page registers.
-- `destroy { holder }`: ends the holder and destroys its browser. A call still running on that holder answers `BROWSER_SERVER_UNRESOLVED:`, and a repeated `destroy` of the same holder succeeds again.
+- `destroy { holder }`: ends the holder and closes its context. A call still running on that holder answers `BROWSER_SERVER_UNRESOLVED:`, and a repeated `destroy` of the same holder succeeds again.
 
 The following fence shows one holder from `acquire` to `destroy`, one request and the text of its answer per line, with the view after the receipt left out; `HOLDER_ID` stands for the id that `acquire` returns.
 
@@ -3711,17 +3718,17 @@ The following fence shows one holder from `acquire` to `destroy`, one request an
 // <- Holder destroyed.
 ```
 
-`destroy` ends the holder's browser process and removes its profile folder, so the holder's pages, cookies, storage, and downloads are gone, and the next holder starts on a fresh browser with a fresh profile. Each browser saves downloads in its own profile, under `ROOT/.profiles/PID-UUID/downloads/`, so copy a file out before you destroy its holder; the end of the server removes the shared browser's downloads the same way. The `contains downloads and destroys their process and profile before capacity is reused cleanly` case of [`tests/service/browse.test.ts`](../tests/service/browse.test.ts) asserts the download path, the exited process, the removed profile, and a clean replacement against a real Chromium.
+`destroy` closes the holder's context and removes its downloads directory, under `ROOT/.profiles/PID-UUID/contexts/GENERATION-UUID/downloads/`. Copy a file out before destroying its holder. The end of the server closes the shared holder's context and removes its downloads too.
 
-`BROWSE_POOL`, or `pool.size` for `BrowserMCPServer`, counts every browser, the shared browser included, so a size of `3` admits two holders. At capacity, `acquire` answers immediately with `BROWSER_SERVER_BUSY:` and launches nothing; its text lists each holder by id and purpose, the shared browser as `shared (Shared browser)`, and tells the agent to destroy a holder it no longer needs or to call the named tools to share the shared browser. A holder that `destroy` is ending counts until its browser is gone. An unknown or ended id answers `BROWSER_SERVER_HOLDER:` and never falls back to the shared browser.
+`BROWSE_POOL`, or `pool.size` for `BrowserMCPServer`, counts browsers. `BROWSE_CONTEXTS`, or `pool.contexts`, bounds contexts per browser. Admission is their product, with the shared holder counted; the defaults admit one named holder beside the shared holder. With `contexts: 1`, a size of `3` admits two named holders. At capacity, `acquire` answers immediately with `BROWSER_SERVER_BUSY:` and launches nothing; its text lists each holder by id and purpose, the shared browser as `shared (Shared browser)`, and tells the agent to destroy a holder it no longer needs or to call the named tools to share the shared browser. A holder that `destroy` is ending counts until its context disposal settles. An unknown or ended id answers `BROWSER_SERVER_HOLDER:` and never falls back to the shared browser.
 
-A holder whose browser is lost waits for a spare or a replacement launch, and the `BROWSER_SERVER_CRASH:` note reaches that holder's next call only. Replays of one journey run together across holders, each writing its own run. While a replay of a journey persists its run on any holder, `forget` of that journey answers `BROWSER_JOURNEY_LOCKED: Journey NAME is locked; call forget again.`, where `NAME` is the journey's name, and a replay that starts while `forget` runs answers the same refusal for `replay`.
+A browser loss affects each holder on that browser. Each waits for free context capacity or a replacement launch and receives its own `BROWSER_SERVER_CRASH:` note on its next call. Replays of one journey run together across holders, each writing its own run. While a replay of a journey persists its run on any holder, `forget` of that journey answers `BROWSER_JOURNEY_LOCKED: Journey NAME is locked; call forget again.`, where `NAME` is the journey's name, and a replay that starts while `forget` runs answers the same refusal for `replay`.
 
 The following list gives the limits of holders:
 
-- The default `BROWSE_POOL` of `1` keeps only the shared browser, so `acquire` always answers `BROWSER_SERVER_BUSY:` and the named tools always work. [ROADMAP item 14](../ROADMAP.md) holds the contention measurement that rules the default.
+- The default `BROWSE_POOL` of `1` and `BROWSE_CONTEXTS` of `2` admit one named holder beside the shared holder. [ROADMAP item 14](../ROADMAP.md) holds the contention measurement.
 - `tools/list` mirrors only the shared browser's page tools. A holder's page tools appear only in the catalog that `acquire` and `tools` return, and run through `execute`.
-- A holder keeps its browser until `destroy` or the end of the server, with no idle timeout. An abandoned holder costs one warm browser and one place of capacity, and the `BROWSER_SERVER_BUSY:` text names it.
+- A holder keeps its context until `destroy` or the end of the server, with no idle timeout. An abandoned holder costs one context and one place of capacity, and the `BROWSER_SERVER_BUSY:` text names it.
 - Journey admission covers the holders of one server. A second `browse` process on the same root can still race a replay against `forget`.
 - Codex asks approval for `execute` and `destroy`, because neither is advertised read-only, so under an approval policy that asks, every call a holder makes through `execute` prompts. `acquire` carries no read-only annotation either, and `tools` is advertised read-only.
 

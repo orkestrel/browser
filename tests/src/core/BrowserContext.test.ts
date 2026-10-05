@@ -1638,6 +1638,51 @@ describe('BrowserContext', () => {
 	})
 
 	describe('close()', () => {
+		it('C1 resolves close and confirms disposal after a refused page target close', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Target.createTarget', { targetId: 'target-disposal' })
+			replyOk(transport, 'Target.disposeBrowserContext')
+			transport.onSend('Target.closeTarget', (message) =>
+				transport.fail(message.id, 'page close refused'),
+			)
+			const context = new BrowserContext(client, 'context-disposal')
+			try {
+				await context.create()
+				await expect(context.close()).resolves.toBeUndefined()
+				expect(context.disposal).toEqual({ confirmed: true })
+				expect(
+					transport.sent.filter((message) => message.method === 'Target.closeTarget'),
+				).toHaveLength(1)
+				expect(
+					transport.sent.filter((message) => message.method === 'Target.disposeBrowserContext'),
+				).toHaveLength(1)
+			} finally {
+				await client.close()
+			}
+		})
+
+		it('C1 distinguishes unconfirmed disposal from wrapper-only destruction', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			transport.onSend('Target.disposeBrowserContext', (message) =>
+				transport.fail(message.id, 'disposal refused'),
+			)
+			const closing = new BrowserContext(client, 'refused')
+			const wrapper = new BrowserContext(client, 'wrapper')
+			try {
+				await expect(closing.close()).rejects.toThrow('disposal refused')
+				expect(closing.disposal?.confirmed).toBe(false)
+				await wrapper.destroy()
+				expect(wrapper.disposal).toBeUndefined()
+				expect(
+					transport.sent
+						.filter((message) => message.method === 'Target.disposeBrowserContext')
+						.map((message) => message.params?.['browserContextId']),
+				).toEqual(['refused'])
+			} finally {
+				await client.close()
+			}
+		})
 		it('closes all pages and clears the list', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptCDPAttach(transport)

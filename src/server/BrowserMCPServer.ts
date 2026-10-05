@@ -1,4 +1,9 @@
-import type { BrowserPageInterface, BrowserToolsetInterface, BrowserViewport } from '@src/core'
+import type {
+	BrowserContextInterface,
+	BrowserPageInterface,
+	BrowserToolsetInterface,
+	BrowserViewport,
+} from '@src/core'
 import type { MCPCallResult, MCPExecutionContext, MCPMethodOptions } from '@orkestrel/mcp'
 import type { PoolInterface, PoolToken } from '@orkestrel/pool'
 import type { StdioServerInterface } from '@orkestrel/mcp/server'
@@ -13,6 +18,10 @@ import type {
 	BrowserServerMirror,
 	BrowserSlot,
 	BrowserSlotWatch,
+	BrowserServerContext,
+	BrowserServerLease,
+	BrowserServerLoss,
+	BrowserServerWatch,
 } from './types.js'
 import { randomUUID } from 'node:crypto'
 import { addAbortListener } from 'node:events'
@@ -49,6 +58,8 @@ import {
 	BROWSER_SERVER_OPTIONS,
 	BROWSER_SERVER_POOL_LIMIT,
 	BROWSER_SERVER_POOL_SIZE,
+	BROWSER_SERVER_CONTEXTS,
+	BROWSER_SERVER_CONTEXTS_LIMIT,
 	BROWSER_SERVER_RECORD,
 	BROWSER_SERVER_RESTARTS,
 	BROWSER_SERVER_SWEEP,
@@ -78,17 +89,18 @@ import {
  * tool it adopts, is mirrored as a dispatcher with that tool's definition, and the mirror is
  * removed when the toolset withdraws the tool, so the server's tool list changes and a subscribed
  * client is notified. The server also advertises `acquire`, `execute`, `tools`, and `destroy` with
- * `BROWSER_SERVER_COPY`. Startup warms the pool and leases the shared browser. The legacy
+ * `BROWSER_SERVER_COPY`. Startup warms the pool and assigns a prepared context to the shared holder. The legacy
  * handshake and browser calls await that setup. Named holders each own a lease, a pending grant,
  * and loss notices; concurrent calls on a holder share its replacement grant. Ending a holder
- * destroys its token, and admission counts that holder until disposal settles.
+ * closes its context and releases its lease, and admission counts that holder until disposal settles.
  * A launch creates `ROOT/.profiles/PID-UUID/` exclusively, connects a browser that never attaches to an
  * existing endpoint, opens one page in an isolated context, and constructs the page toolset with
  * that context and the file journey and run stores under the root, on a manager the toolset owns.
  * A dispatcher forwards its arguments and the call's context, signal included, to the toolset's
  * manager and returns that manager's value, or rejects with its failure message; a text value
  * reaches the client as one text block rather than as its JSON text.
- * A disconnect or current-page crash retires its slot. A failed call receives a liveness ping;
+ * A disconnect retires its browser and every hosted generation. A current-page crash retires only
+ * that holder's context. A failed call receives a liveness ping;
  * loss makes its outcome unresolved, while a known success remains successful. Pending losses
  * prefix the next outcome on a successor, or a refusal, and calls are never repeated.
  * Concurrent checks share one ping per slot. Cancelling a call ends only its wait; the ping keeps
@@ -96,7 +108,8 @@ import {
  *
  * `start()` serves stdio and destroys the server at the end of its input, on `SIGINT`, and on
  * `SIGTERM`. `destroy()` stops reading requests and removes every dispatcher, then destroys every
- * slot through the pool — its toolset, which aborts the active replay, then its browser, then its
+ * slot through the pool — each toolset, which aborts its active replay, then its context and downloads,
+ * then its browser and its
  * profile — and rechecks the profile folders this server made or kept.
  *
  * Chromium on Linux refuses to start as the root user unless its sandbox is disabled, so a server
@@ -130,23 +143,31 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #log: NodeJS.WritableStream
 	readonly #folders = new Set<string>()
 	readonly #faults = new Set<unknown>()
-	readonly #losses = new WeakMap<BrowserSlot, { readonly cause: unknown; readonly url: string }>()
+	readonly #losses = new WeakMap<BrowserSlot, { readonly cause: unknown }>()
+	readonly #departures = new WeakMap<BrowserServerLease, BrowserServerLoss>()
 	readonly #pings = new WeakMap<BrowserSlot, Promise<void>>()
 	readonly #watches = new Map<BrowserSlot, BrowserSlotWatch>()
+	readonly #observed = new Map<BrowserServerContext, BrowserServerWatch>()
+	readonly #prepared = new Map<BrowserSlot, BrowserServerContext>()
+	readonly #owned = new Map<BrowserSlot, Set<BrowserServerContext>>()
+	readonly #building = new Map<BrowserSlot, Set<Promise<BrowserServerContext>>>()
+	readonly #cleaning = new WeakMap<BrowserServerContext, Promise<boolean>>()
+	readonly #endings = new WeakMap<BrowserSlot, PromiseWithResolvers<void>>()
+	readonly #retentions = new Map<BrowserServerHolder, unknown>()
 	readonly #shared: BrowserServerHolder = {
 		id: 'shared',
 		purpose: 'Shared browser',
 		abort: this.#abort,
 	}
 	readonly #holders = new Map<string, BrowserServerHolder>([[this.#shared.id, this.#shared]])
-	readonly #leases = new Map<BrowserServerHolder, PoolToken<BrowserSlot>>()
-	readonly #grants = new Map<BrowserServerHolder, Promise<PoolToken<BrowserSlot>>>()
-	readonly #notices = new Map<BrowserServerHolder, Set<BrowserSlot>>()
+	readonly #leases = new Map<BrowserServerHolder, BrowserServerLease>()
+	readonly #grants = new Map<BrowserServerHolder, Promise<BrowserServerLease>>()
+	readonly #notices = new Map<BrowserServerHolder, Set<BrowserServerLease>>()
 	readonly #disposals = new Map<string, Promise<void>>()
 	readonly #drains = new Map<BrowserServerHolder, Set<Promise<void>>>()
 	readonly #readers = new Map<string, Set<symbol>>()
 	readonly #writers = new Set<string>()
-	readonly #size: number
+	readonly #admission: number
 	readonly #reference: () => string
 	#references = 0
 	#failure: unknown
@@ -162,22 +183,28 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	 */
 	constructor(options?: BrowserMCPServerOptions) {
 		const size = options?.pool?.size ?? BROWSER_SERVER_POOL_SIZE
+		const contexts = options?.pool?.contexts ?? BROWSER_SERVER_CONTEXTS
 		if (!isInteger(size) || size < 1 || size > BROWSER_SERVER_POOL_LIMIT)
 			throw new BrowserError(
 				`pool.size must be an integer from 1 through ${BROWSER_SERVER_POOL_LIMIT}`,
 				BROWSER_SERVER_OPTIONS,
 			)
-		this.#size = size
+		if (!isInteger(contexts) || contexts < 1 || contexts > BROWSER_SERVER_CONTEXTS_LIMIT)
+			throw new BrowserError(
+				`pool.contexts must be an integer from 1 through ${BROWSER_SERVER_CONTEXTS_LIMIT}`,
+				BROWSER_SERVER_OPTIONS,
+			)
+		this.#admission = size * contexts
 		this.#log = options?.log ?? process.stderr
 		this.#reference = this.#issue.bind(this)
 		this.#pool = createPool<BrowserSlot>({
 			create: this.#warm.bind(this),
-			destroy: (slot) =>
-				this.#destroySlot(slot.profile, slot.browser, slot.toolset, this.#losses.get(slot)?.cause),
+			destroy: this.#destroyRecord.bind(this),
 			validate: this.#validate.bind(this),
 			watch: this.#watch.bind(this),
 			error: this.#fault.bind(this),
 			min: size,
+			capacity: contexts,
 			restarts: BROWSER_SERVER_RESTARTS,
 		})
 		this.#root = resolve(options?.root ?? 'tmp/browsers')
@@ -262,6 +289,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#transport.stop()
 		for (const tool of this.#tools.tools()) this.#tools.remove(tool.name)
 		this.#unmirror()
+		for (const generation of this.#observed.keys()) this.#untrack(generation)
 		this.#leases.clear()
 		for (const holder of this.#holders.values()) holder.abort.abort()
 		this.#abort.abort()
@@ -271,6 +299,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		})
 		await this.#starting?.catch(() => undefined)
 		await barrier
+		await Promise.allSettled(this.#grants.values())
 		await Promise.allSettled(this.#disposals.values())
 		this.#holders.clear()
 		await this.#sweeping
@@ -323,7 +352,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const purpose = args['purpose']
 		if (!isString(purpose) || purpose.trim().length === 0)
 			throw new BrowserError('purpose must describe the work', 'BROWSER_TOOLSET_ARGUMENT')
-		if (this.#holders.size >= this.#size)
+		if (this.#holders.size >= this.#admission)
 			throw new BrowserError(
 				`${BROWSER_SERVER_BUSY}: ${[...this.#holders.values()].map((holder) => `${holder.id} (${holder.purpose})`).join(', ')}. Call destroy for a holder no longer needed or call the named tools to share the shared browser.`,
 				BROWSER_SERVER_BUSY,
@@ -334,15 +363,15 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			holder.abort.abort(context.signal.reason),
 		)
 		try {
-			const slot = await this.#serve(holder, context.signal)
+			const lease = await this.#serve(holder, context.signal)
 			context.signal.throwIfAborted()
 			if (holder.abort.signal.aborted || this.#holders.get(holder.id) !== holder)
 				throw this.#ended()
-			if (this.#leases.get(holder)?.value !== slot)
-				throw this.#unavailable(this.#losses.get(slot)?.cause)
+			if (this.#leases.get(holder) !== lease)
+				throw this.#unavailable(this.#departures.get(lease)?.cause)
 			const catalog: BrowserServerCatalog = {
 				holder: holder.id,
-				tools: slot.toolset.tools.definitions(),
+				tools: lease.generation.toolset.tools.definitions(),
 			}
 			return JSON.stringify(catalog)
 		} catch (error) {
@@ -376,13 +405,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const holder = this.#holder(args['holder'])
 		const signal = AbortSignal.any([context.signal, holder.abort.signal])
 		try {
-			const slot = await this.#serve(holder, signal)
+			const lease = await this.#serve(holder, signal)
 			signal.throwIfAborted()
-			if (this.#leases.get(holder)?.value !== slot)
-				throw this.#unavailable(this.#losses.get(slot)?.cause)
+			if (this.#leases.get(holder) !== lease)
+				throw this.#unavailable(this.#departures.get(lease)?.cause)
 			const catalog: BrowserServerCatalog = {
 				holder: holder.id,
-				tools: slot.toolset.tools.definitions(),
+				tools: lease.generation.toolset.tools.definitions(),
 			}
 			return this.#annotate(holder, JSON.stringify(catalog))
 		} catch (error) {
@@ -412,17 +441,24 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const pending = this.#disposals.get(holder.id)
 		if (pending !== undefined) return pending
 		holder.abort.abort()
-		const token = this.#leases.get(holder)
+		const lease = this.#leases.get(holder)
 		this.#leases.delete(holder)
+		if (lease !== undefined) this.#untrack(lease.generation)
 		const disposal = Promise.resolve().then(async () => {
 			try {
 				await this.#grants.get(holder)?.catch(() => undefined)
-				await token?.destroy()
+				if (lease !== undefined) await this.#release(holder, lease)
 				await Promise.all(this.#drains.get(holder) ?? [])
+				await Promise.all(
+					[...(this.#notices.get(holder) ?? [])]
+						.filter((lost) => this.#losses.has(lost.token.value))
+						.map((lost) => this.#endings.get(lost.token.value)?.promise),
+				)
 			} catch (error) {
 				this.#faults.add(error)
 			} finally {
-				if (this.#holders.get(holder.id) === holder) this.#holders.delete(holder.id)
+				if (this.#holders.get(holder.id) === holder && !this.#retentions.has(holder))
+					this.#holders.delete(holder.id)
 				this.#notices.delete(holder)
 				this.#drains.delete(holder)
 			}
@@ -476,9 +512,9 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			holder === this.#shared
 				? context.signal
 				: AbortSignal.any([context.signal, holder.abort.signal])
-		let slot: BrowserSlot
+		let lease: BrowserServerLease
 		try {
-			slot = await this.#serve(holder, signal)
+			lease = await this.#serve(holder, signal)
 		} catch (error) {
 			context.signal.throwIfAborted()
 			if (holder !== this.#shared && holder.abort.signal.aborted)
@@ -495,7 +531,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 		let result: ToolResult
 		try {
-			const execution = slot.toolset.tools.execute(
+			const execution = lease.generation.toolset.tools.execute(
 				{ id: name, name, arguments: args },
 				{ ...context, signal },
 			)
@@ -520,37 +556,37 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				BROWSER_SERVER_UNRESOLVED,
 			)
 		if (!result.success) {
-			if (this.#leases.get(holder)?.value === slot && !context.signal.aborted) {
+			if (this.#leases.get(holder) === lease && !context.signal.aborted) {
 				try {
-					await this.#race(this.#ping(slot), context.signal)
+					await this.#race(this.#ping(lease.token.value), context.signal)
 				} catch {
 					// The shared ping records loss even when this caller stops waiting.
 				}
 			}
 			context.signal.throwIfAborted()
-			if (this.#leases.get(holder)?.value !== slot) {
-				const loss = this.#losses.get(slot)
+			if (this.#leases.get(holder) !== lease) {
+				const loss = this.#departures.get(lease)
 				throw new BrowserError(
 					this.#annotate(
 						holder,
 						describeBrowserServerLoss(BROWSER_SERVER_UNRESOLVED, loss?.cause, loss?.url),
-						slot,
+						lease,
 					),
 					BROWSER_SERVER_UNRESOLVED,
 				)
 			}
-			throw new BrowserError(this.#annotate(holder, result.error, slot))
+			throw new BrowserError(this.#annotate(holder, result.error, lease))
 		}
 		return typeof result.value === 'string'
-			? this.#annotate(holder, result.value, slot)
+			? this.#annotate(holder, result.value, lease)
 			: result.value
 	}
 
-	#annotate(holder: BrowserServerHolder, value: string, slot?: BrowserSlot): string {
+	#annotate(holder: BrowserServerHolder, value: string, lease?: BrowserServerLease): string {
 		const notes: string[] = []
 		for (const lost of this.#notices.get(holder) ?? []) {
-			if (lost === slot) continue
-			const loss = this.#losses.get(lost)
+			if (lost === lease) continue
+			const loss = this.#departures.get(lost)
 			notes.push(describeBrowserServerLoss(BROWSER_SERVER_CRASH, loss?.cause, loss?.url))
 			this.#notices.get(holder)?.delete(lost)
 		}
@@ -582,12 +618,17 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	async #grant(holder: BrowserServerHolder, signal: AbortSignal): Promise<PoolToken<BrowserSlot>> {
+	async #grant(holder: BrowserServerHolder, signal: AbortSignal): Promise<BrowserServerLease> {
 		const held = this.#leases.get(holder)
 		if (held !== undefined) return held
 		let granting = this.#grants.get(holder)
 		if (granting === undefined) {
-			granting = this.#pool.acquire(holder.abort.signal).then(this.#hold.bind(this, holder))
+			granting = Promise.resolve().then(async () => {
+				await Promise.allSettled(this.#drains.get(holder) ?? [])
+				if (this.#retentions.has(holder)) throw this.#unavailable(this.#retentions.get(holder))
+				const token = await this.#pool.acquire(holder.abort.signal)
+				return this.#hold(holder, token)
+			})
 			this.#grants.set(holder, granting)
 			void granting
 				.finally(() => {
@@ -595,65 +636,90 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				})
 				.catch(() => undefined)
 		}
-		const token = await this.#race(granting, signal)
-		if (token === undefined) throw this.#ended()
-		return token
+		const lease = await this.#race(granting, signal)
+		if (lease === undefined) throw this.#ended()
+		return lease
 	}
 
 	async #hold(
 		holder: BrowserServerHolder,
 		token: PoolToken<BrowserSlot>,
-	): Promise<PoolToken<BrowserSlot>> {
+	): Promise<BrowserServerLease> {
+		const slot = token.value
 		if (
 			this.#closing !== undefined ||
 			this.#holders.get(holder.id) !== holder ||
 			holder.abort.signal.aborted
 		) {
-			await token.destroy()
+			token.release()
 			throw this.#ended()
 		}
-		// A pool commit can settle after the watch recorded a loss.
-		if (this.#losses.has(token.value)) {
-			await token.destroy().catch(() => undefined)
-			throw this.#unavailable(this.#losses.get(token.value)?.cause)
+		if (!this.#prepared.has(slot)) await this.#ping(slot)
+		if (this.#closing !== undefined || holder.abort.signal.aborted) {
+			token.release()
+			throw this.#ended()
 		}
-		this.#leases.set(holder, token)
+		if (this.#losses.has(slot)) {
+			token.release()
+			throw this.#unavailable(this.#losses.get(slot)?.cause)
+		}
+		let generation = this.#prepared.get(slot)
+		this.#prepared.delete(slot)
+		try {
+			generation ??= await this.#build(slot, token)
+		} catch (error) {
+			if (this.#losses.has(slot)) await this.#endings.get(slot)?.promise
+			else token.release()
+			throw this.#unavailable(error)
+		}
+		const lease: BrowserServerLease = { token, generation }
+		if (
+			this.#closing !== undefined ||
+			this.#holders.get(holder.id) !== holder ||
+			holder.abort.signal.aborted ||
+			this.#losses.has(slot)
+		) {
+			await this.#release(holder, lease)
+			throw this.#ended()
+		}
+		this.#leases.set(holder, lease)
+		this.#observe(slot, generation)
 		if (holder === this.#shared) {
-			const tools = token.value.toolset.tools
+			const tools = generation.toolset.tools
 			const mirrored: BrowserServerMirror = {
-				token,
-				added: this.#mirror.bind(this, token),
-				removed: this.#withdraw.bind(this, token),
-				cleared: this.#clear.bind(this, token),
+				lease,
+				added: this.#mirror.bind(this, lease),
+				removed: this.#withdraw.bind(this, lease),
+				cleared: this.#clear.bind(this, lease),
 			}
 			this.#mirrored = mirrored
-			for (const tool of tools.tools()) this.#mirror(token, tool)
+			for (const tool of tools.tools()) this.#mirror(lease, tool)
 			tools.emitter.on('add', mirrored.added)
 			tools.emitter.on('remove', mirrored.removed)
 			tools.emitter.on('clear', mirrored.cleared)
 		}
-		return token
+		return lease
 	}
 
-	async #serve(holder: BrowserServerHolder, signal: AbortSignal): Promise<BrowserSlot> {
+	async #serve(holder: BrowserServerHolder, signal: AbortSignal): Promise<BrowserServerLease> {
 		if (this.#closing !== undefined || holder.abort.signal.aborted) throw this.#ended()
 		await this.#race(this.#starting, signal)
 		if (this.#closing !== undefined || holder.abort.signal.aborted) throw this.#ended()
 		const held = this.#leases.get(holder)
 		if (held !== undefined) {
 			try {
-				await this.#race(this.#ping(held.value), signal)
-				if (this.#leases.get(holder) === held) return held.value
+				await this.#race(this.#ping(held.token.value), signal)
+				if (this.#leases.get(holder) === held) return held
 			} catch {
 				signal.throwIfAborted()
 				if (holder.abort.signal.aborted) throw this.#ended()
 			}
 		}
 		try {
-			const token = await this.#grant(holder, signal)
-			if (this.#leases.get(holder) !== token)
-				throw this.#unavailable(this.#losses.get(token.value)?.cause)
-			return token.value
+			const lease = await this.#grant(holder, signal)
+			if (this.#leases.get(holder) !== lease)
+				throw this.#unavailable(this.#departures.get(lease)?.cause)
+			return lease
 		} catch (error) {
 			signal.throwIfAborted()
 			if (holder.abort.signal.aborted || (isPoolError(error) && error.code === 'destroyed'))
@@ -691,60 +757,86 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 
 	#lose(slot: BrowserSlot, cause: unknown): void {
 		if (this.#closing !== undefined || this.#losses.has(slot)) return
-		this.#losses.set(slot, { cause, url: slot.toolset.view.url })
+		this.#losses.set(slot, { cause })
 		this.#failure = cause
-		for (const [holder, token] of this.#leases) {
-			if (token.value !== slot || this.#holders.get(holder.id) !== holder) continue
-			if (holder === this.#shared) this.#unmirror()
-			this.#leases.delete(holder)
-			const notices = this.#notices.get(holder) ?? new Set<BrowserSlot>()
-			notices.add(slot)
-			this.#notices.set(holder, notices)
-			const drain = token.destroy()
-			const drains = this.#drains.get(holder) ?? new Set<Promise<void>>()
-			drains.add(drain)
-			this.#drains.set(holder, drains)
-			void drain.finally(() => drains.delete(drain)).catch(() => undefined)
+		for (const [holder, lease] of this.#leases) {
+			if (lease.token.value !== slot) continue
+			this.#detach(holder, lease, cause)
 		}
+		const watch = this.#watches.get(slot)
+		this.#unwatch(slot)
+		watch?.resolve(cause)
+	}
+
+	#detach(holder: BrowserServerHolder, lease: BrowserServerLease, cause: unknown): void {
+		if (this.#leases.get(holder) !== lease || this.#holders.get(holder.id) !== holder) return
+		this.#departures.set(lease, { cause, url: lease.generation.toolset.view.url })
+		if (holder === this.#shared) this.#unmirror()
+		this.#leases.delete(holder)
+		this.#untrack(lease.generation)
+		const notices = this.#notices.get(holder) ?? new Set<BrowserServerLease>()
+		notices.add(lease)
+		this.#notices.set(holder, notices)
 	}
 
 	#watch(slot: BrowserSlot, signal: AbortSignal): Promise<unknown> {
 		const loss = Promise.withResolvers<unknown>()
 		const disconnect = this.#disconnect.bind(this, slot)
-		const page = this.#track.bind(this, slot)
 		const subscription = addAbortListener(signal, this.#unwatch.bind(this, slot))
-		this.#watches.set(slot, {
-			resolve: loss.resolve,
-			disconnect,
-			page,
-			subscription,
-			crashes: new Map(),
-		})
+		this.#watches.set(slot, { resolve: loss.resolve, disconnect, subscription })
 		slot.browser.emitter.on('disconnect', disconnect)
-		slot.context.emitter.on('page', page)
-		for (const current of slot.context.pages()) this.#track(slot, current)
 		if (signal.aborted) this.#unwatch(slot)
 		else if (slot.browser.status !== 'connected') this.#disconnect(slot)
 		return loss.promise
 	}
 
-	#track(slot: BrowserSlot, page: BrowserPageInterface): void {
-		const watch = this.#watches.get(slot)
-		if (watch === undefined || watch.crashes.has(page)) return
-		const crash = this.#createCrash(slot, page)
-		page.emitter.on('crash', crash)
-		this.#watches.set(slot, { ...watch, crashes: new Map([...watch.crashes, [page, crash]]) })
+	#observe(slot: BrowserSlot, generation: BrowserServerContext): void {
+		if (this.#observed.has(generation)) return
+		const page = this.#track.bind(this, slot, generation)
+		this.#observed.set(generation, { page, crashes: new Map() })
+		generation.context.emitter.on('page', page)
+		for (const current of generation.context.pages()) this.#track(slot, generation, current)
 	}
 
-	#createCrash(slot: BrowserSlot, page: BrowserPageInterface): () => void {
-		return () => {
-			if (page === slot.toolset.view)
-				this.#report(slot, new Error('The current page renderer crashed'))
+	#track(slot: BrowserSlot, generation: BrowserServerContext, page: BrowserPageInterface): void {
+		const watch = this.#observed.get(generation)
+		if (watch === undefined || watch.crashes.has(page)) return
+		const crash = this.#crash.bind(this, slot, generation, page)
+		page.emitter.on('crash', crash)
+		this.#observed.set(generation, {
+			...watch,
+			crashes: new Map([...watch.crashes, [page, crash]]),
+		})
+	}
+
+	#crash(slot: BrowserSlot, generation: BrowserServerContext, page: BrowserPageInterface): void {
+		if (this.#prepared.get(slot) === generation) {
+			this.#prepared.delete(slot)
+			this.#untrack(generation)
+			void this.#clean(slot, generation).catch(this.#fault.bind(this))
+			return
 		}
+		const held = [...this.#leases].find(([, lease]) => lease.generation === generation)
+		if (held === undefined || page !== generation.toolset.view) return
+		const [holder, lease] = held
+		this.#detach(holder, lease, new Error('The current page renderer crashed'))
+		const drain = this.#release(holder, lease)
+		const drains = this.#drains.get(holder) ?? new Set<Promise<void>>()
+		drains.add(drain)
+		this.#drains.set(holder, drains)
+		void drain.finally(() => drains.delete(drain)).catch(this.#fault.bind(this))
+	}
+
+	#untrack(generation: BrowserServerContext): void {
+		const watch = this.#observed.get(generation)
+		if (watch === undefined) return
+		this.#observed.delete(generation)
+		generation.context.emitter.off('page', watch.page)
+		for (const [page, crash] of watch.crashes) page.emitter.off('crash', crash)
 	}
 
 	#disconnect(slot: BrowserSlot): void {
-		this.#report(
+		this.#lose(
 			slot,
 			new Error(
 				slot.browser.pid === undefined
@@ -754,22 +846,130 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		)
 	}
 
-	#report(slot: BrowserSlot, cause: unknown): void {
-		const watch = this.#watches.get(slot)
-		if (watch === undefined) return
-		this.#unwatch(slot)
-		this.#lose(slot, cause)
-		watch.resolve(cause)
-	}
-
 	#unwatch(slot: BrowserSlot): void {
 		const watch = this.#watches.get(slot)
 		if (watch === undefined) return
 		this.#watches.delete(slot)
 		slot.browser.emitter.off('disconnect', watch.disconnect)
-		slot.context.emitter.off('page', watch.page)
-		for (const [page, crash] of watch.crashes) page.emitter.off('crash', crash)
 		watch.subscription[Symbol.dispose]()
+	}
+
+	async #release(holder: BrowserServerHolder, lease: BrowserServerLease): Promise<void> {
+		const slot = lease.token.value
+		const removed = await this.#clean(slot, lease.generation)
+		const disposal = lease.generation.context.disposal
+		if (!removed)
+			this.#retentions.set(holder, new Error('The context downloads directory remains owned'))
+		if (disposal?.confirmed !== true && !this.#losses.has(slot) && this.#closing === undefined) {
+			// Releasing into a FIFO waiter would publish capacity on the dying browser.
+			if (
+				![...this.#leases.values()].some((held) => held.token.value === slot && held !== lease) &&
+				(this.#building.get(slot)?.size ?? 0) === 0
+			)
+				lease.token.release()
+			this.#lose(slot, disposal?.error ?? new Error('The context disposal is unconfirmed'))
+			await this.#endings.get(slot)?.promise
+		} else if (removed) lease.token.release()
+	}
+
+	#clean(slot: BrowserSlot, generation: BrowserServerContext): Promise<boolean> {
+		let cleaning = this.#cleaning.get(generation)
+		if (cleaning !== undefined) return cleaning
+		cleaning = Promise.resolve().then(async () => {
+			await generation.toolset.destroy().catch(this.#fault.bind(this))
+			await generation.context.close().catch((error: unknown) => {
+				if (!this.#losses.has(slot) && slot.browser.status === 'connected') this.#fault(error)
+			})
+			try {
+				await rm(generation.directory, { recursive: true, force: true })
+				this.#owned.get(slot)?.delete(generation)
+				return true
+			} catch (error) {
+				this.#fault(error)
+				return false
+			}
+		})
+		this.#cleaning.set(generation, cleaning)
+		return cleaning
+	}
+
+	#build(slot: BrowserSlot, token?: PoolToken<BrowserSlot>): Promise<BrowserServerContext> {
+		const construction = this.#construct(slot, token)
+		const building = this.#building.get(slot) ?? new Set<Promise<BrowserServerContext>>()
+		building.add(construction)
+		this.#building.set(slot, building)
+		void construction.finally(() => building.delete(construction)).catch(() => undefined)
+		return construction
+	}
+
+	async #construct(
+		slot: BrowserSlot,
+		token?: PoolToken<BrowserSlot>,
+	): Promise<BrowserServerContext> {
+		const directory = join(slot.profile, 'contexts', randomUUID(), 'downloads')
+		let context: BrowserContextInterface | undefined
+		let toolset: BrowserToolsetInterface | undefined
+		try {
+			await mkdir(directory, { recursive: true })
+			let page: BrowserPageInterface
+			try {
+				context = await slot.browser.isolate({
+					reference: this.#reference,
+					downloads: { path: directory },
+					...(this.#viewport === undefined ? {} : { emulation: { viewport: this.#viewport } }),
+				})
+				page = await context.create()
+			} catch (error) {
+				if (token !== undefined) {
+					// This construction still occupies one entry until its rejection settles.
+					if (
+						![...this.#leases.values()].some((lease) => lease.token.value === slot) &&
+						(this.#building.get(slot)?.size ?? 0) === 1
+					)
+						token.release()
+					this.#lose(slot, error)
+				}
+				throw error
+			}
+			toolset = createBrowserToolset(page, {
+				context,
+				journeys: {
+					store: createFileBrowserJourneyStore({ root: this.#root }),
+					runs: createFileBrowserRunStore({ root: this.#root }),
+					readonly: this.#readonly,
+				},
+			})
+			await toolset.start()
+			const generation: BrowserServerContext = { context, toolset, directory }
+			const owned = this.#owned.get(slot) ?? new Set<BrowserServerContext>()
+			owned.add(generation)
+			this.#owned.set(slot, owned)
+			return generation
+		} catch (error) {
+			await toolset?.destroy().catch(this.#fault.bind(this))
+			await context?.close().catch(this.#fault.bind(this))
+			await rm(directory, { recursive: true, force: true }).catch(this.#fault.bind(this))
+			throw error
+		}
+	}
+
+	async #destroyRecord(slot: BrowserSlot): Promise<void> {
+		try {
+			await Promise.allSettled(this.#building.get(slot) ?? [])
+			const prepared = this.#prepared.get(slot)
+			if (prepared !== undefined) this.#untrack(prepared)
+			this.#prepared.delete(slot)
+			await Promise.all(
+				[...(this.#owned.get(slot) ?? [])].map((generation) => this.#clean(slot, generation)),
+			)
+			await this.#destroySlot(slot.profile, slot.browser, this.#losses.get(slot)?.cause)
+			this.#owned.delete(slot)
+			this.#building.delete(slot)
+			this.#endings.get(slot)?.resolve()
+		} catch (error) {
+			this.#endings.get(slot)?.reject(error)
+			throw error
+		}
 	}
 
 	#fault(error: unknown): void {
@@ -787,7 +987,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const profile = join(this.#root, '.profiles', formatBrowserLockEntry(process.pid, randomUUID()))
 		// Without `recursive`, an existing directory refuses with `EEXIST`, so no two launches share one.
 		let browser: BrowserInterface | undefined
-		let toolset: BrowserToolsetInterface | undefined
+		let slot: BrowserSlot | undefined
 		try {
 			await mkdir(profile)
 			this.#folders.add(profile)
@@ -811,25 +1011,19 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				)
 				await rename(`${record}.tmp`, record)
 			}
-			const context = await browser.isolate({
-				reference: this.#reference,
-				downloads: { path: join(profile, 'downloads') },
-				...(this.#viewport === undefined ? {} : { emulation: { viewport: this.#viewport } }),
-			})
-			const page = await context.create()
-			toolset = createBrowserToolset(page, {
-				context,
-				journeys: {
-					store: createFileBrowserJourneyStore({ root: this.#root }),
-					runs: createFileBrowserRunStore({ root: this.#root }),
-					readonly: this.#readonly,
-				},
-			})
-			await toolset.start()
-			return { browser, profile, context, toolset }
+			slot = { browser, profile }
+			const ending = Promise.withResolvers<void>()
+			void ending.promise.catch(() => undefined)
+			this.#endings.set(slot, ending)
+			const generation = await this.#build(slot)
+			this.#prepared.set(slot, generation)
+			this.#observe(slot, generation)
+			return slot
 		} catch (error) {
 			if (this.#folders.has(profile))
-				await this.#destroySlot(profile, browser, toolset).catch((failure: unknown) => {
+				await (
+					slot === undefined ? this.#destroySlot(profile, browser) : this.#destroyRecord(slot)
+				).catch((failure: unknown) => {
 					this.#stranded = failure
 				})
 			if (this.#closing === undefined)
@@ -838,12 +1032,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	async #destroySlot(
-		profile: string,
-		browser?: BrowserInterface,
-		toolset?: BrowserToolsetInterface,
-		cause?: unknown,
-	): Promise<void> {
+	async #destroySlot(profile: string, browser?: BrowserInterface, cause?: unknown): Promise<void> {
 		if (isCDPTimeoutError(cause) && browser?.pid !== undefined) {
 			try {
 				process.kill(browser.pid, 'SIGKILL')
@@ -851,7 +1040,6 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				if (!isError(error) || !('code' in error) || error.code !== 'ESRCH') this.#faults.add(error)
 			}
 		}
-		await toolset?.destroy().catch((error: unknown) => this.#faults.add(error))
 		try {
 			await browser?.destroy()
 		} catch (error) {
@@ -943,8 +1131,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	// Adds a dispatcher for a tool the toolset's manager added under a name outside the vocabulary.
-	#mirror(token: PoolToken<BrowserSlot>, tool: ToolInterface): void {
-		if (this.#leases.get(this.#shared) !== token || this.#vocabulary.has(tool.name)) return
+	#mirror(lease: BrowserServerLease, tool: ToolInterface): void {
+		if (this.#leases.get(this.#shared) !== lease || this.#vocabulary.has(tool.name)) return
 		this.#tools.add(
 			createTool({
 				...toolToDefinition(tool),
@@ -955,22 +1143,22 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 
 	// Removes the dispatcher of a withdrawn tool; a replacement publishes `remove` while it is
 	// installed, so the mirror follows the manager's current tool rather than the event.
-	#withdraw(token: PoolToken<BrowserSlot>, tool: ToolInterface): void {
-		if (this.#leases.get(this.#shared) !== token || this.#vocabulary.has(tool.name)) return
-		const current = token.value.toolset.tools.tool(tool.name)
+	#withdraw(lease: BrowserServerLease, tool: ToolInterface): void {
+		if (this.#leases.get(this.#shared) !== lease || this.#vocabulary.has(tool.name)) return
+		const current = lease.generation.toolset.tools.tool(tool.name)
 		if (current === undefined) this.#tools.remove(tool.name)
-		else this.#mirror(token, current)
+		else this.#mirror(lease, current)
 	}
 
-	#clear(token: PoolToken<BrowserSlot>, tools: readonly ToolInterface[]): void {
-		for (const tool of tools) this.#withdraw(token, tool)
+	#clear(lease: BrowserServerLease, tools: readonly ToolInterface[]): void {
+		for (const tool of tools) this.#withdraw(lease, tool)
 	}
 
 	#unmirror(): void {
 		const mirrored = this.#mirrored
 		if (mirrored === undefined) return
 		this.#mirrored = undefined
-		const tools = mirrored.token.value.toolset.tools
+		const tools = mirrored.lease.generation.toolset.tools
 		for (const tool of tools.tools())
 			if (!this.#vocabulary.has(tool.name)) this.#tools.remove(tool.name)
 		tools.emitter.off('add', mirrored.added)

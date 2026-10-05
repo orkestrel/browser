@@ -46,6 +46,7 @@ import { createScratch, isRunning } from '@orkestrel/test/server'
 import {
 	alignLoopClock,
 	BrowseChild,
+	BROWSE_SOURCE_ENTRY,
 	BrowserLauncher,
 	BrowserPromiseObserver,
 	BrowseLog,
@@ -95,6 +96,60 @@ import {
 const WORKSPACE = fileURLToPath(new URL('../', import.meta.url))
 
 describe('BrowserLauncher eager U2', () => {
+	it('C1 scripts distinct context identities, scoped downloads, disposal, and browser ownership', async () => {
+		const launcher = new BrowserLauncher()
+		launcher.launch({})
+		const browser = requireValue(launcher.browsers[0])
+		try {
+			await browser.connect()
+			browser.script('Browser.getVersion', (message, transport) =>
+				transport.fail(message.id, 'scripted ping'),
+			)
+			await expect(browser.ping()).rejects.toThrow('scripted ping')
+			const first = await browser.isolate({ downloads: { path: 'first-downloads' } })
+			const second = await browser.isolate({ downloads: { path: 'second-downloads' } })
+			await first.create()
+			await second.create()
+			expect(first.id).not.toBe(second.id)
+			const fixture = requireValue(browser.fixture)
+			expect(
+				fixture.transport.sent
+					.filter((message) => message.method === 'Browser.setDownloadBehavior')
+					.map((message) => message.params),
+			).toEqual([
+				expect.objectContaining({ browserContextId: first.id, downloadPath: 'first-downloads' }),
+				expect.objectContaining({ browserContextId: second.id, downloadPath: 'second-downloads' }),
+			])
+			await first.close()
+			expect(await fixture.client.send('Target.getBrowserContexts')).toEqual({
+				browserContextIds: [second.id],
+			})
+			browser.script('Target.disposeBrowserContext', (message, transport) =>
+				transport.fail(message.id, 'refused disposal'),
+			)
+			await expect(second.close()).rejects.toThrow('refused disposal')
+			expect(second.disposal?.confirmed).toBe(false)
+		} finally {
+			await browser.destroy()
+		}
+		expect(browser.destroys).toBe(1)
+	})
+
+	it('C1 source entry starts and validates without the built bundle', async () => {
+		const scratch = createScratch()
+		const child = new BrowseChild(scratch.write('browse.ts', BROWSE_SOURCE_ENTRY), scratch.path, {
+			BROWSE_CONTEXTS: '0',
+		})
+		try {
+			expect(await child.ending).toEqual({ code: 1, signal: null })
+			expect(child.stderr).toBe(
+				'browse: BROWSER_SERVER_OPTIONS: pool.contexts must be an integer from 1 through 4\n',
+			)
+		} finally {
+			await child.destroy()
+			scratch.destroy()
+		}
+	})
 	it('observes the chosen promise settlement and ignores an unmatched origin', async () => {
 		const hits = createRecorder<readonly []>()
 		const chosen = new BrowserPromiseObserver(
