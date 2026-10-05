@@ -262,26 +262,56 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects with the reason on a later abort, clears the timer, and ignores a late reply', async () => {
+			const { createHook } = await import('node:async_hooks')
 			await client.connect()
-			const countTimers = (): number =>
-				process.getActiveResourcesInfo().filter((name) => name === 'Timeout').length
-			const baseline = countTimers()
 			const reason = new Error('cancelled late')
 			const controller = new AbortController()
-			const caught = client
-				.send('Slow.call', undefined, { signal: controller.signal })
-				.catch((thrown: unknown) => thrown)
-			await waitForDelay(0)
-			const id = transport.sent[0]?.id
-			expect(id).toBeDefined()
-			expect(countTimers()).toBe(baseline + 1)
+			const timers = new Set<number>()
+			const fired = createRecorder<[number]>()
+			const destroyed = createRecorder<[number]>()
+			const errors = createRecorder<[unknown]>()
+			let recording = true
+			// Record only timers created by this synchronous send, excluding unrelated host timers.
+			const hook = createHook({
+				init(id, category) {
+					if (recording && category === 'Timeout') timers.add(id)
+				},
+				before(id) {
+					if (timers.has(id)) fired.handler(id)
+				},
+				destroy(id) {
+					if (timers.has(id)) destroyed.handler(id)
+				},
+			})
+			client.emitter.on('error', errors.handler)
+			hook.enable()
+			try {
+				const sent = client.send('Slow.call', undefined, {
+					signal: controller.signal,
+					timeout: 20,
+				})
+				recording = false
+				const caught = sent.catch((thrown: unknown) => thrown)
+				const id = transport.sent[0]?.id
+				expect(id).toBeDefined()
+				expect(timers.size).toBe(1)
+				controller.abort(reason)
+				expect(await caught).toBe(reason)
 
-			controller.abort(reason)
-
-			expect(await caught).toBe(reason)
-			expect(countTimers()).toBe(baseline)
-			transport.reply(id ?? 0, { late: true })
-			expect(await caught).toBe(reason)
+				// A leaked timer can fire silently after settlement; its callback must never run.
+				await waitForDelay(50)
+				expect(fired.calls).toEqual([])
+				expect(destroyed.calls).toEqual([...timers].map((timer) => [timer]))
+				await expect(sent).rejects.toBe(reason)
+				transport.reply(id ?? 0, { late: true })
+				await expect(sent).rejects.toBe(reason)
+				expect(isCDPTimeoutError(await caught)).toBe(false)
+				expect(errors.calls).toEqual([])
+			} finally {
+				hook.disable()
+				client.emitter.off('error', errors.handler)
+				await client.close()
+			}
 		})
 
 		it('releases the abort listener when the request settles by reply, so a reused signal holds none', async () => {

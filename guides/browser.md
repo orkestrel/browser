@@ -3738,7 +3738,7 @@ Replays of one journey run together across holders, each writing its own run. Wh
 
 The following list gives the limits of holders:
 
-- The default `BROWSE_POOL` of `1` and `BROWSE_CONTEXTS` of `2` admit one named holder beside the shared holder. [ROADMAP item 14](../ROADMAP.md) holds the confirmation of these defaults through the built server.
+- The confirmed defaults, `BROWSE_POOL` of `1` and `BROWSE_CONTEXTS` of `2`, admit one named holder beside the shared holder. The user confirmed them on 2026-10-05 from M1 (2026-10-05, library-level under a core-test load: 21.85 s at one context against 12.91 s at two) and M2 (2026-10-05, through the built binary on a quiet host: 49.73 s at one context against 29.72 s at two, with disjoint ranges). M2 did not establish a gain from two contexts to three.
 - Contexts isolate automation, not hostile tenants. Every holder on a browser runs in that browser's process, so drive pages that must not share a process from separate `browse` servers.
 - Browser relaunches have no bound while a holder uses the browser. A browser lost under a holder spends nothing from the launch bound, and the next grant of a browser restores the bound, so a browser that crashes under every holder's use relaunches at every call that meets the crash. At the default `BROWSE_POOL` of `1` the shared holder always uses the only browser, so a browser that fails every context creation or disposal relaunches the same way.
 - A renderer that hangs without crashing raises no loss. While its browser answers the CDP ping, a call that fails on the hung page answers its plain failure with no note and no launch, and the holder keeps that context until `destroy` or a later crash of its page.
