@@ -73,11 +73,11 @@ describe('BrowserRecorder', () => {
 		const recorder = new BrowserRecorder(toolset)
 		try {
 			await recorder.start()
-			toolset.emitter.emit('action', createBrowserActionFixture({ action: 'look' }))
+			toolset.emitter.emit('action', createBrowserActionFixture({ action: 'read' }))
 			expect.soft(recorder.steps(), 'recorder reads the non-step home').toEqual([])
 			expect
 				.soft(
-					() => validateBrowserJourneyStep({ id: 's1', action: 'look', arguments: {} }),
+					() => validateBrowserJourneyStep({ id: 's1', action: 'read', arguments: {} }),
 					'validator reads the non-step home',
 				)
 				.toThrow('uses an observation or journey tool as a step')
@@ -240,7 +240,7 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it.each(['look', 'read', 'tabs', 'record', 'save', 'journeys', 'edit', 'replay'])(
+	it.each(['read', 'record', 'save', 'journeys', 'edit', 'replay'])(
 		'never records %s',
 		async (action) => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
@@ -279,7 +279,7 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it.each(['click', 'look', 'refused', 'stop'])(
+	it.each(['click', 'read', 'refused', 'stop'])(
 		'turns interruption into a gap before %s',
 		async (next) => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())

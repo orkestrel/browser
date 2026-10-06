@@ -1,3 +1,4 @@
+import { renderBrowserLine } from '../../../../src/core/index.js'
 import type { BrowserAction } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
@@ -254,7 +255,9 @@ describe('BrowserDOMElement', () => {
 			probe.save.setAttribute('aria-label', 'Store')
 			expect([save.role, save.name]).toEqual(['button', 'Save'])
 			const outline = await view.elements.outline()
-			expect(outline.text).toContain(`${save.reference} button "Store"`)
+			expect(outline.lines.map(renderBrowserLine).join('\n')).toContain(
+				`${save.reference} button "Store"`,
+			)
 			expect([save.role, save.name]).toEqual(['button', 'Store'])
 			expect(view.elements.element(save.reference)?.name).toBe('Store')
 			probe.save.setAttribute('role', 'link')

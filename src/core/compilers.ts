@@ -134,7 +134,7 @@ export function compileHitFunction(): string {
  *
  * @remarks
  * The observer records every `submit` event the window sees from installation until
- * {@link compileSubmitReadExpression} with the same `token` reads and removes it, under
+ * {@link compileSubmitReadExpression} with the same `token` reads it without removing it, under
  * {@link BROWSER_SUBMIT_KEY}, and replaces an observer an earlier installation left in place,
  * whatever its token. A capture-phase `keydown` listener beside it records whether an Enter's
  * target is an `input` a form owns, before any handler of the page can move the focus. A listener
@@ -150,11 +150,37 @@ export function compileSubmitObserverExpression(token: number): string {
 	const token = ${JSON.stringify(token)}
 	const previous = globalThis[${key}]
 	if (previous !== undefined) {
-		removeEventListener('submit', previous.listener, true)
-		removeEventListener('keydown', previous.keys, true)
+		previous.release()
 	}
-	const state = { token, events: [], implicit: false, listener: undefined, keys: undefined }
-	state.listener = (event) => { state.events.push(event) }
+	const state = { token, events: [], implicit: false, changed: false, listener: undefined, keys: undefined, observer: undefined, baseline: undefined, resolve: undefined, timer: undefined }
+	state.read = () => JSON.stringify([
+		[...document.querySelectorAll('body,body *')].filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible' && element.closest('[aria-hidden="true"],[inert]') === null).flatMap((element) => [...element.childNodes].filter((node) => node.nodeType === Node.TEXT_NODE).map((node) => node.textContent.trim()).filter(Boolean)),
+		[...document.querySelectorAll('input,textarea,select,img,[aria-label],[aria-checked],[aria-expanded],[aria-pressed]')].filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility === 'visible' && element.closest('[aria-hidden="true"],[inert]') === null).map((element) => [element.localName, element.value ?? '', element.checked ?? false, element.disabled ?? false, element.getAttribute('aria-label'), element.getAttribute('alt'), element.getAttribute('aria-checked'), element.getAttribute('aria-expanded'), element.getAttribute('aria-pressed')]),
+	])
+	state.check = () => {
+		if (state.baseline === undefined || state.changed || state.read() === state.baseline) return
+		state.changed = true
+		state.resolve?.(true)
+	}
+	state.listener = (event) => {
+		state.events.push(event)
+		if (state.observer !== undefined) return
+		state.baseline = state.read()
+		state.observer = new MutationObserver(state.check)
+		state.observer.observe(document, { subtree: true, childList: true, characterData: true, attributes: true })
+		addEventListener('input', state.check, true)
+		addEventListener('change', state.check, true)
+	}
+	state.release = () => {
+		state.observer?.disconnect()
+		clearTimeout(state.timer)
+		state.resolve?.(false)
+		removeEventListener('submit', state.listener, true)
+		removeEventListener('keydown', state.keys, true)
+		removeEventListener('input', state.check, true)
+		removeEventListener('change', state.check, true)
+		if (globalThis[${key}] === state) delete globalThis[${key}]
+	}
 	state.keys = (event) => {
 		const target = event.target ?? null
 		if (event.key === 'Enter' && target?.localName === 'input' && (target.form ?? null) !== null) state.implicit = true
@@ -198,9 +224,6 @@ export function compileSubmitReadExpression(token: number): string {
 	const token = ${JSON.stringify(token)}
 	const state = globalThis[${key}]
 	if (state === undefined || state.token !== token) return null
-	delete globalThis[${key}]
-	removeEventListener('submit', state.listener, true)
-	removeEventListener('keydown', state.keys, true)
 	const destinations = { '': 'self', _self: 'self', _parent: 'parent', _top: 'top' }
 	const found = []
 	for (const event of state.events) {
@@ -219,6 +242,37 @@ export function compileSubmitReadExpression(token: number): string {
 		implicit: state.implicit,
 	}
 })()`
+}
+
+/** Compiles a bounded wait for the first rendered change after submission.
+ * @param token - Action owning the observation
+ * @param timeout - Remaining settle time in milliseconds
+ * @returns An expression resolving true for a rendered change and false at the deadline
+ */
+export function compileSubmitWaitExpression(token: number, timeout: number): string {
+	return `(() => {
+	const state = globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}]
+	if (state === undefined || state.token !== ${JSON.stringify(token)}) return false
+	state.check()
+	if (state.changed) return true
+	return new Promise((resolve) => {
+		state.resolve = resolve
+		state.timer = setTimeout(() => resolve(false), ${JSON.stringify(timeout)})
+	})
+	})()`
+}
+
+/** Compiles token-scoped cleanup of submission listeners and change observation.
+ * @param token - Action owning the observation
+ * @returns An expression releasing only that action's observation
+ */
+export function compileSubmitReleaseExpression(token: number): string {
+	return `(() => {
+	const state = globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}]
+	if (state === undefined || state.token !== ${JSON.stringify(token)}) return false
+	state.release()
+	return true
+	})()`
 }
 
 /**

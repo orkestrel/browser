@@ -8,13 +8,25 @@ import {
 	compileGuardedEvaluateExpression,
 	BROWSER_RESULT_LIMIT,
 } from '@src/core'
-import { isRecord, isString } from '@orkestrel/contract'
+import { isFunction, isRecord, isString } from '@orkestrel/contract'
 import { afterEach, inject } from 'vitest'
 import { createModelContext } from '@orkestrel/mcp/browser'
 import { createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
 import { installModelContext } from './fixtures/modelContext.js'
 
 const frames = new Set<HTMLIFrameElement>()
+
+/** Evaluates a compiler expression in the real window owning a fixture document.
+ * @param document - Real fixture document
+ * @param expression - Compiled JavaScript expression
+ * @returns The expression's value
+ */
+export function evaluateProbeDocument(document: Document, expression: string): unknown {
+	const view = requireValue(document.defaultView)
+	const evaluate: unknown = Reflect.get(view, 'eval')
+	if (!isFunction(evaluate)) throw new Error('The fixture has no evaluator')
+	return Reflect.apply(evaluate, view, [expression])
+}
 
 /**
  * Executes the CDP capture declaration against a real DOM root.

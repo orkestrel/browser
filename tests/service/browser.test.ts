@@ -1,3 +1,4 @@
+import { renderBrowserLine } from '../../src/core/index.js'
 /**
  * Live-browser proofs for the `Browser` façade.
  *
@@ -1227,7 +1228,9 @@ describe('Browser proofs against the fixture pages', () => {
 	it('navigate clears references: a stale element refuses GONE naming look, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
-		const previous = extractOutlineReferences((await page.elements.outline()).text)
+		const previous = extractOutlineReferences(
+			(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
+		)
 		const [name] = await page.elements.find({ role: 'textbox', name: 'Name' })
 		const stale = requireValue(name)
 		await stale.focus()
@@ -1239,9 +1242,11 @@ describe('Browser proofs against the fixture pages', () => {
 		await expect(stale.click()).rejects.toMatchObject({
 			code: 'BROWSER_ELEMENT_ERROR',
 			context: { reference: stale.reference, reason: 'GONE' },
-			message: `Element ${stale.reference} is gone because the page changed; call look for fresh refs.`,
+			message: `Element ${stale.reference} is gone because the page changed; call read for fresh refs.`,
 		})
-		const next = extractOutlineReferences((await page.elements.outline()).text)
+		const next = extractOutlineReferences(
+			(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
+		)
 		expect(previous.length).toBeGreaterThan(0)
 		expect(next.length).toBeGreaterThan(0)
 		expect(Math.min(...next)).toBeGreaterThan(Math.max(...previous))
@@ -1254,7 +1259,9 @@ describe('Browser proofs against the fixture pages', () => {
 			"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 50; index += 1) { const button = document.createElement('button'); button.textContent = 'Old ' + index; pool.append(button) } return pool.children.length })()",
 		)
 		const earlier = extractOutlineReferences(
-			(await page.elements.outline()).text
+			(await page.elements.outline()).lines
+				.map(renderBrowserLine)
+				.join('\n')
 				.split('\n')
 				.filter((row) => row.includes(' button "Old '))
 				.join('\n'),
@@ -1270,7 +1277,9 @@ describe('Browser proofs against the fixture pages', () => {
 			"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 50; index += 1) { const button = document.createElement('button'); button.textContent = 'Later ' + index; pool.append(button) } return pool.children.length })()",
 		)
 		const later = extractOutlineReferences(
-			(await page.elements.outline()).text
+			(await page.elements.outline()).lines
+				.map(renderBrowserLine)
+				.join('\n')
 				.split('\n')
 				.filter((row) => row.includes(' button "Later '))
 				.join('\n'),
@@ -1321,7 +1330,7 @@ describe('Browser proofs against the fixture pages', () => {
 			await expect(removed.click()).rejects.toMatchObject({
 				code: 'BROWSER_ELEMENT_ERROR',
 				context: { reference: removed.reference, reason: 'GONE' },
-				message: `Element ${removed.reference} is gone because the page changed; call look for fresh refs.`,
+				message: `Element ${removed.reference} is gone because the page changed; call read for fresh refs.`,
 			})
 		})
 	})
@@ -1372,7 +1381,7 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(page.url).toBe(fixtures.url('/form'))
 		expect(await page.evaluate('document.body.dataset.restored')).toBe('yes')
 		const outline = await page.elements.outline()
-		expect(outline.text).toContain('textbox "Name"')
+		expect(outline.lines.map(renderBrowserLine).join('\n')).toContain('textbox "Name"')
 		const [submit] = await page.elements.find({ role: 'button', name: 'Submit' })
 		await requireValue(submit).click()
 		expect(await page.evaluate('document.body.dataset.clicks')).toBe('submit:true')

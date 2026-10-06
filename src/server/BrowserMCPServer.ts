@@ -36,6 +36,9 @@ import {
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
 	BROWSER_TOOL_NAMES,
+	BROWSER_TOOL_LIMIT,
+	BROWSER_TOOL_CUT_FOOTER,
+	boundBrowserText,
 	BrowserError,
 	createBrowserToolset,
 	createCDPClient,
@@ -82,9 +85,9 @@ import {
  * the Model Context Protocol on stdio, and warms Chromium at server start.
  *
  * @remarks
- * The server's own manager holds one dispatcher per name of the vocabulary — `look`, `read`, `plain`,
- * `click`, `type`, `press`, `navigate`, `wait`, `dialog`, `tabs`, `switch`, `record`, `save`,
- * `journeys`, `edit`, `replay`, and `forget` — each carrying the description, parameters, and annotations
+ * The server's own manager holds one dispatcher per name of the vocabulary — `read`, `click`,
+ * `type`, `press`, `navigate`, `wait`, `dialog`, `switch`, `record`, `save`, `journeys`, `edit`,
+ * `replay`, `forget`, and `capture` — each carrying the description, parameters, and annotations
  * `BROWSER_TOOL_COPY` gives, so `tools/list` answers before Chromium starts and with Chromium
  * absent. After the launch, a tool the toolset's manager adds under another name, such as a page
  * tool it adopts, is mirrored as a dispatcher with that tool's definition, and the mirror is
@@ -332,7 +335,12 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			signal: context.signal,
 			...(context.caller === undefined ? {} : { caller: context.caller }),
 		})
-		if (!result.success || typeof result.value !== 'string') return result
+		if (!result.success)
+			return {
+				...result,
+				error: boundBrowserText(result.error, BROWSER_TOOL_LIMIT, BROWSER_TOOL_CUT_FOOTER),
+			}
+		if (typeof result.value !== 'string') return result
 		return { resultType: 'complete', content: [{ type: 'text', text: result.value }] }
 	}
 
@@ -576,7 +584,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 					BROWSER_SERVER_UNRESOLVED,
 				)
 			}
-			throw new BrowserError(this.#annotate(holder, result.error, lease))
+			throw new BrowserError(
+				boundBrowserText(
+					this.#annotate(holder, result.error, lease),
+					BROWSER_TOOL_LIMIT,
+					BROWSER_TOOL_CUT_FOOTER,
+				),
+			)
 		}
 		return typeof result.value === 'string'
 			? this.#annotate(holder, result.value, lease)
@@ -592,6 +606,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			this.#notices.get(holder)?.delete(lost)
 		}
 		return [...notes, value].join('\n')
+	}
+
+	#notice(context: BrowserContextInterface): string {
+		const entry = [...this.#leases].find(([, lease]) => lease.generation.context === context)
+		return entry === undefined ? '' : this.#annotate(entry[0], '')
 	}
 
 	async #handshake(options: MCPMethodOptions): Promise<void> {
@@ -934,6 +953,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			}
 			toolset = createBrowserToolset(page, {
 				context,
+				notes: this.#notice.bind(this, context),
 				journeys: {
 					store: createFileBrowserJourneyStore({ root: this.#root }),
 					runs: createFileBrowserRunStore({ root: this.#root }),

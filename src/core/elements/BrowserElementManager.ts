@@ -92,12 +92,13 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				{ session: this.#input.session, ...options },
 			)
 			this.#assertCapture(this.#input.page.id, epoch)
+			if (this.#changes !== changes) throw new BrowserElementError({ subject: 'outline' }, 'GONE')
 			return renderBrowserOutline(
 				this.#input.page.url,
 				requireBrowserString(readEvaluationResult(result), 'Document title'),
 				this.#within(rows, options?.within),
 				limit,
-				options?.search,
+				options?.secrets,
 			)
 		} catch (error) {
 			// A navigation destroys the contexts, nodes, and sessions the capture was reading, so a

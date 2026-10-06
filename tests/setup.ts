@@ -49,7 +49,7 @@ import {
 	createCDPClient,
 } from '@src/core'
 import { BrowserNavigationRecord } from '../src/core/BrowserNavigationRecord.js'
-import { isFunction, isNumber, isRecord, isString } from '@orkestrel/contract'
+import { isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import { createRecorder, waitForEvent } from '@orkestrel/test'
@@ -773,7 +773,7 @@ export const BROWSER_SUBMIT_FOCUS_STEPS: ReadonlyArray<
 ]
 
 /**
- * Pairs each key a {@link BrowserSubmitWindow} dispatches to its focused element with whether the
+ * Pairs each key a real document dispatches to its focused element with whether the
  * submit observer's read reports it `implicit`: true only for an Enter an `input` a form owns
  * received, whichever element its handler focuses afterwards.
  */
@@ -1245,195 +1245,10 @@ export const BROWSER_CHILD_ARRANGEMENTS = [
 ] as const
 
 /** Answers `getAttribute` over an inert attribute record, as a submit-observer form does. */
-export class BrowserSubmitElement {
-	readonly #attributes: Readonly<Record<string, string>>
-
-	constructor(attributes: Readonly<Record<string, string>>) {
-		this.#attributes = attributes
-	}
-
-	getAttribute(name: string): string | null {
-		return this.#attributes[name] ?? null
-	}
-}
-
-/**
- * Describes the element a {@link BrowserSubmitWindow} holds the focus on.
- *
- * @remarks
- * - `name` — the element's local name, such as `input`
- * - `form` — the attributes of the form that owns the element; absent for an element no form owns
- * - `moves` — the element the focused element's own `keydown` handler focuses after the window's
- *   capture listeners ran; absent for an element whose handler keeps the focus
- */
 export interface BrowserSubmitFocus {
 	readonly name: string
 	readonly form?: Readonly<Record<string, string>>
 	readonly moves?: BrowserSubmitFocus
-}
-
-/**
- * Stands in for the window, document, and global scope of one execution world the submit
- * observer runs in: it registers `submit` and `keydown` listeners with their capture flag, honours
- * `once`, dispatches inert events to them, answers the `base[target]` query, and evaluates an
- * expression against itself. An event reaches the window's capture listeners in registration
- * order, then its target, then the bubbling listeners, as the DOM sends it: a key goes to the
- * focused element, whose own handler runs between the two phases and can move the focus.
- * `removeEventListener` removes the registration of the same type, listener, and capture flag.
- */
-export class BrowserSubmitWindow {
-	readonly #listeners: Array<{
-		readonly type: string
-		readonly listener: unknown
-		readonly capture: boolean
-		readonly once: boolean
-	}> = []
-	readonly #globals: Record<string, unknown> = {}
-	readonly #base: string | undefined
-	#focused: BrowserSubmitFocus | undefined
-
-	constructor(base?: string) {
-		this.#base = base
-	}
-
-	get listeners(): number {
-		return this.#listeners.length
-	}
-
-	// Answers the focus in the shape `document.activeElement` has, so a proof reads where a key
-	// handler moved it.
-	get activeElement(): {
-		readonly localName: string
-		readonly form: BrowserSubmitElement | null
-	} | null {
-		const focused = this.#focused
-		if (focused === undefined) return null
-		return {
-			localName: focused.name,
-			form: focused.form === undefined ? null : new BrowserSubmitElement(focused.form),
-		}
-	}
-
-	focus(element?: BrowserSubmitFocus): void {
-		this.#focused = element
-	}
-
-	// A document whose focus sits on an iframe hands its keys to the framed document, so it
-	// dispatches none itself.
-	press(key: string): void {
-		const focused = this.#focused
-		if (focused === undefined || focused.name === 'iframe') return
-		const target = {
-			localName: focused.name,
-			form: focused.form === undefined ? null : new BrowserSubmitElement(focused.form),
-		}
-		const event = { key, target }
-		this.#emit('keydown', event, true)
-		if (focused.moves !== undefined) this.#focused = focused.moves
-		this.#emit('keydown', event, false)
-	}
-
-	addEventListener(type: string, listener: unknown, options?: unknown): void {
-		if (type !== 'submit' && type !== 'keydown') return
-		const capture = options === true || (isRecord(options) && options['capture'] === true)
-		if (this.#find(type, listener, capture) >= 0) return
-		this.#listeners.push({
-			type,
-			listener,
-			capture,
-			once: isRecord(options) && options['once'] === true,
-		})
-	}
-
-	removeEventListener(type: string, listener: unknown, options?: unknown): void {
-		const capture = options === true || (isRecord(options) && options['capture'] === true)
-		const index = this.#find(type, listener, capture)
-		if (index >= 0) this.#listeners.splice(index, 1)
-	}
-
-	querySelector(selector: string): BrowserSubmitElement | null {
-		return selector === 'base[target]' && this.#base !== undefined
-			? new BrowserSubmitElement({ target: this.#base })
-			: null
-	}
-
-	dispatch(submit: BrowserSubmitCase): void {
-		const event = {
-			defaultPrevented: submit.prevented,
-			target: new BrowserSubmitElement(submit.form),
-			submitter: submit.submitter === undefined ? null : new BrowserSubmitElement(submit.submitter),
-		}
-		this.#emit('submit', event, true)
-		this.#emit('submit', event, false)
-	}
-
-	evaluate(expression: string): unknown {
-		const evaluator = new Function(
-			'addEventListener',
-			'removeEventListener',
-			'document',
-			'globalThis',
-			`return (${expression})`,
-		)
-		return Reflect.apply(evaluator, undefined, [
-			this.addEventListener.bind(this),
-			this.removeEventListener.bind(this),
-			this,
-			this.#globals,
-		])
-	}
-
-	#emit(type: string, event: unknown, capture: boolean): void {
-		for (const registration of [...this.#listeners]) {
-			if (registration.type !== type || registration.capture !== capture) continue
-			if (registration.once) this.#listeners.splice(this.#listeners.indexOf(registration), 1)
-			if (isFunction(registration.listener))
-				Reflect.apply(registration.listener, undefined, [event])
-		}
-	}
-
-	#find(type: string, listener: unknown, capture: boolean): number {
-		return this.#listeners.findIndex(
-			(registration) =>
-				registration.type === type &&
-				registration.listener === listener &&
-				registration.capture === capture,
-		)
-	}
-}
-
-/**
- * Holds one {@link BrowserSubmitWindow} per execution world of a scripted page, keyed by the
- * session and the execution context an evaluation names.
- */
-export class BrowserSubmitWindows {
-	readonly #windows = new Map<string, BrowserSubmitWindow>()
-
-	get listeners(): number {
-		return [...this.#windows.values()].reduce((total, window) => total + window.listeners, 0)
-	}
-
-	window(session: string, context: number): BrowserSubmitWindow {
-		const key = `${session}:${context}`
-		const held = this.#windows.get(key)
-		if (held !== undefined) return held
-		const created = new BrowserSubmitWindow()
-		this.#windows.set(key, created)
-		return created
-	}
-
-	// Every window receives the key, and each one whose focus sits on an element it holds
-	// dispatches it, so a key reaches the focused document of a scripted frame tree.
-	press(key: string): void {
-		for (const window of this.#windows.values()) window.press(key)
-	}
-
-	evaluate(message: CDPSentMessage): unknown {
-		const context = message.params?.['contextId']
-		return this.window(message.sessionId ?? '', isNumber(context) ? context : 0).evaluate(
-			readCDPExpression(message) ?? 'undefined',
-		)
-	}
 }
 
 /**
@@ -1464,28 +1279,6 @@ export function matchesBrowserSubmitObserver(expression: string): boolean {
 export function matchesBrowserSubmitRead(expression: string): boolean {
 	const token = readBrowserSubmitToken(expression)
 	return token !== undefined && expression.includes(compileSubmitReadExpression(token))
-}
-
-/**
- * Evaluates the submit observer and its read in a {@link BrowserSubmitWindow}: installs the
- * observer, dispatches the submissions in order, and reads it.
- *
- * @param observer - The observer expression source
- * @param read - The read expression source
- * @param submits - The submissions to dispatch. Default: none
- * @param installs - How many times the observer is installed before the dispatch. Default: 1
- * @returns The read's value and the count of `submit` listeners registered after the read
- */
-export function evaluateBrowserSubmit(
-	observer: string,
-	read: string,
-	submits: readonly BrowserSubmitCase[] = [],
-	installs = 1,
-): readonly [value: unknown, listeners: number] {
-	const realm = new BrowserSubmitWindow(submits.find((submit) => submit.base !== undefined)?.base)
-	for (let index = 0; index < installs; index += 1) realm.evaluate(observer)
-	for (const submit of submits) realm.dispatch(submit)
-	return [realm.evaluate(read), realm.listeners]
 }
 
 // === Fake CDP transport
@@ -2165,18 +1958,17 @@ export interface BrowserPageFixture {
  * next offset
  */
 export function extractBrowserPage(result: string): BrowserPageFixture {
-	const footer =
-		/\n\n\[characters (\d+)–(\d+) of (\d+)(?:; call (?:look|read|plain) with offset (\d+) for more)?\]$/.exec(
-			result,
-		)
+	const footer = /\n\[lines (\d+)–(\d+) of (\d+);[^\]]*\]$/.exec(result)
 	if (footer === null)
 		return { body: result, start: 0, end: result.length, total: result.length, next: undefined }
 	return {
-		body: result.slice(0, footer.index),
+		body: [...result.matchAll(/^\d+: (.*)$/gm)].map((match) => match[1]).join('\n'),
 		start: Number(footer[1]),
 		end: Number(footer[2]),
 		total: Number(footer[3]),
-		next: footer[4] === undefined ? undefined : Number(footer[4]),
+		next: /call read with from (\d+)/.test(footer[0])
+			? Number(/call read with from (\d+)/.exec(footer[0])?.[1])
+			: undefined,
 	}
 }
 
@@ -2298,7 +2090,6 @@ export interface BrowserElementFixtureOptions {
 	readonly nested?: boolean
 	readonly roots?: ReadonlyMap<string, Readonly<Record<string, unknown>>>
 	readonly tree?: CDPSentHandler
-	readonly windows?: BrowserSubmitWindows
 	readonly observe?: CDPSentHandler
 	readonly loaderless?: boolean
 	readonly readiness?: CDPSentHandler
@@ -2332,10 +2123,8 @@ export interface BrowserElementFixtureOptions {
  * `registry` answers it. `released` answers a `mouseReleased` dispatch in place of the reply,
  * `select` answers the select-option function call, and `text` answers the text-selection
  * function call, and `insert` answers `Input.insertText`, so a test can withhold or refuse any
- * of them. A key-down dispatch presses its key in every window of `windows` before the reply. The
- * toolset's submit observer and its read run in the {@link BrowserSubmitWindow} of the session and world they name, from
- * `windows`, unless `observe` answers the installation or `submit` answers the read; `nested` adds
- * a `nested` frame inside `child` to the frame tree. `roots` names
+ * of them. `observe` and `submit` can withhold or refuse their protocol replies; submission behavior
+ * is proved in real browser documents. `nested` adds a `nested` frame inside `child` to the frame tree. `roots` names
  * the root frame a session's `Page.getFrameTree` answers with in place of the page tree, unless
  * `tree` answers every frame tree read.
  * @param transport - In-memory CDP boundary
@@ -2345,7 +2134,6 @@ export function scriptBrowserElements(
 	transport: CDPTestTransportInterface,
 	options?: BrowserElementFixtureOptions,
 ): void {
-	const windows = options?.windows ?? new BrowserSubmitWindows()
 	replyOk(transport, 'Accessibility.enable')
 	replyOk(transport, 'Runtime.releaseObject')
 	for (const method of ['Page.bringToFront', 'DOM.focus', 'DOM.scrollIntoViewIfNeeded'])
@@ -2375,7 +2163,6 @@ export function scriptBrowserElements(
 		else transport.reply(message.id, {})
 	})
 	transport.onSend('Input.dispatchKeyEvent', (message) => {
-		if (message.params?.['type'] === 'keyDown') windows.press(String(message.params['key']))
 		transport.reply(message.id, {})
 	})
 	replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
@@ -2541,10 +2328,10 @@ export function scriptBrowserElements(
 			else transport.reply(message.id, { result: { value: 'Cart' } })
 		} else if (isString(expression) && matchesBrowserSubmitRead(expression)) {
 			if (options?.submit !== undefined) options.submit(message)
-			else transport.reply(message.id, { result: { value: windows.evaluate(message) } })
+			else transport.reply(message.id, { result: { value: null } })
 		} else if (isString(expression) && matchesBrowserSubmitObserver(expression)) {
 			if (options?.observe !== undefined) options.observe(message)
-			else transport.reply(message.id, { result: { value: windows.evaluate(message) } })
+			else transport.reply(message.id, { result: { value: null } })
 		} else if (options?.evaluation !== undefined) options.evaluation(message)
 		else transport.reply(message.id, { result: { value: true } })
 	})
@@ -2576,21 +2363,6 @@ export function buildBrowserElementTree(options?: BrowserElementFixtureOptions):
 			],
 		},
 	}
-}
-
-/**
- * Answers a `Runtime.evaluate` message with the value its expression returns in the
- * {@link BrowserSubmitWindow} of the session and world it names.
- * @param transport - The fake transport the message was sent on
- * @param windows - The windows the fixture's evaluations run in
- * @param message - The evaluation to answer
- */
-export function answerBrowserEvaluation(
-	transport: CDPTestTransportInterface,
-	windows: BrowserSubmitWindows,
-	message: CDPSentMessage,
-): void {
-	transport.reply(message.id, { result: { value: windows.evaluate(message) } })
 }
 
 /**
@@ -2685,7 +2457,6 @@ export async function attachBrowserElementChild(
  * the recording client the page runs over.
  */
 export interface BrowserElementFixture extends AttachedPageFixture {
-	readonly windows: BrowserSubmitWindows
 	readonly recording: RecordingCDPClient
 }
 
@@ -2701,8 +2472,7 @@ export async function createBrowserElementFixture(
 	options?: BrowserElementFixtureOptions,
 ): Promise<BrowserElementFixture> {
 	const { client, transport } = await createConnectedCDPClient()
-	const windows = options?.windows ?? new BrowserSubmitWindows()
-	scriptBrowserElements(transport, { ...options, windows })
+	scriptBrowserElements(transport, options)
 	const recording = new RecordingCDPClient(client)
 	if (options?.held === true) replyOk(transport, 'Target.setDiscoverTargets')
 	const page = new BrowserPage(
@@ -2718,7 +2488,7 @@ export async function createBrowserElementFixture(
 		options?.held === true ? createReferenceSequence() : undefined,
 	)
 	if (options?.local !== true) await attachBrowserElementChild(transport, page)
-	if (options?.loaderless === true) return { client, transport, page, windows, recording }
+	if (options?.loaderless === true) return { client, transport, page, recording }
 	transport.event(
 		'Page.frameNavigated',
 		{ frame: { id: 'main', url: page.url, loaderId: 'loader-main' } },
@@ -2729,7 +2499,7 @@ export async function createBrowserElementFixture(
 		{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
 		'session-main',
 	)
-	return { client, transport, page, windows, recording }
+	return { client, transport, page, recording }
 }
 
 /**
@@ -3044,16 +2814,16 @@ export class BrowserElementManagerDouble implements BrowserElementManagerInterfa
 		return {
 			url: this.#url,
 			title: this.#title,
-			text: [
-				`page ${JSON.stringify(this.#title)} ${this.#url}`,
-				...this.#elements.map(
-					(element) => `${element.reference} ${element.role} ${JSON.stringify(element.name)}`,
-				),
-				`(${this.#elements.length} of ${this.#elements.length} elements)`,
-			].join('\n'),
+			lines: this.#elements.map((element) => ({
+				spans: [
+					{
+						category: 'text',
+						text: `${element.reference} ${element.role} ${JSON.stringify(element.name)}`,
+					},
+				],
+			})),
 			count: this.#elements.length,
 			total: this.#elements.length,
-			matches: [],
 			focus: undefined,
 		}
 	}
@@ -3796,7 +3566,7 @@ export const BROWSER_JOURNEY_INVALID_CASES: ReadonlyArray<{
 		value: {
 			...BROWSER_JOURNEY_FIXTURE,
 			parameters: {},
-			steps: [{ id: 's1', action: 'look', arguments: {} }],
+			steps: [{ id: 's1', action: 'read', arguments: {} }],
 		},
 		invariant: 7,
 	},
@@ -5047,3 +4817,11 @@ export const CAPTURE_INDEXED_WALK = `let elementIndex = live.children.length - 1
 				}
 				if (child.nodeType === 1) elementIndex -= 1
 			}`
+
+/** Supplies the real-page projection fixture, shared with the retained AX datum probe. */
+export const BROWSER_READING_HTML =
+	'<h3><a href="/tea?q=1#cup">Cedar Tea</a></h3><ul><li>A list entry</li></ul><table><tr><th>Product</th><th>Price</th></tr><tr><td>Cedar</td><td>41</td></tr></table><img alt="Named image"><label>Account<input type="password" value="sample"></label><label>Account<input type="text" value="••••••"></label>'
+
+/** Supplies heading, table-reference, image-escaping and hidden-content edge cases. */
+export const BROWSER_READING_STRUCTURE_HTML =
+	'<h2>Menu <a href="/tea">Tea</a> <a href="https://else.example/">Elsewhere</a></h2><div role="heading" aria-level="9">End</div><table><tr><td>Before <a href="/buy">Buy</a> after</td><td>9</td></tr></table><img alt="A &quot;quote&quot;"><img alt=""><p hidden>Hidden words</p>'

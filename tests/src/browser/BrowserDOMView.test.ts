@@ -1,3 +1,4 @@
+import { renderBrowserLine } from '../../../src/core/index.js'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_RESULT_LIMIT,
@@ -304,7 +305,7 @@ describe('BrowserDOMView', () => {
 			const refusal = await save.click().catch((error: unknown) => error)
 			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({ reason: 'GONE' })
 			const outline = await view.elements.outline()
-			expect(outline.text).toContain('e5 button "Next"')
+			expect(outline.lines.map(renderBrowserLine).join('\n')).toContain('e5 button "Next"')
 		})
 
 		it('stops following the window after destroy', async () => {

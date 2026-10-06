@@ -1,4 +1,7 @@
 import type {
+	BrowserLine,
+	BrowserLineSpan,
+	BrowserPassage,
 	BrowserJourney,
 	BrowserStoreFault,
 	BrowserJourneyEdit,
@@ -73,6 +76,11 @@ import {
 } from '@orkestrel/contract'
 import {
 	BROWSER_TOOL_COPY,
+	BROWSER_READ_WIDTH,
+	BROWSER_READ_LINES,
+	BROWSER_READ_MATCHES,
+	BROWSER_READ_CONTEXT,
+	BROWSER_READ_CHANGED_NOTE,
 	BROWSER_ACTION_OUTCOMES,
 	BROWSER_ACTION_STAGES,
 	BROWSER_NAVIGATION_REASONS,
@@ -360,50 +368,17 @@ export function renderBrowserMatches(
 	return count === 0 ? '' : `${text}\n`
 }
 
-/**
- * Renders document-order text and referenced elements with a bounded element count.
- *
- * @remarks
- * Each referenced row renders through `renderBrowserOutlineRow`, and the closing
- * `(COUNT of TOTAL elements)` line counts the rows included and available. `matches` holds the
- * rows `scanBrowserOutline` returns for `search`, and `focus` the last referenced row whose node
- * carries a `focused` property of `true`; both reach past `limit`.
- *
+/** Renders document-order accessibility lines with a bounded element count.
  * @param url - Document address
  * @param title - Document title
- * @param nodes - Ordered accessibility rows
- * @param limit - Maximum referenced rows to include
- * @param search - The words whose best-matching rows `matches` lists. Default: none, which lists
- * none
- * @returns Outline text, element counts, matching rows, and the focused row
- *
+ * @param nodes - Ordered accessibility nodes from one capture
+ * @param limit - Maximum referenced elements
+ * @param secrets - Registered text to redact before wrapping
+ * @returns Wrapped lines, element counts, and the focused element
  * @example
  * ```ts
- * import { renderBrowserOutline } from '@orkestrel/browser'
- *
- * const node = {
- * 	parent: undefined,
- * 	children: [],
- * 	backend: undefined,
- * 	frame: undefined,
- * 	ignored: false,
- * 	description: undefined,
- * 	value: undefined,
- * 	session: 'main',
- * }
- * const outline = renderBrowserOutline(
- * 	'https://shop.example/cart',
- * 	'Cart',
- * 	[
- * 		{ ...node, id: '1', role: 'button', name: 'Close', properties: {}, reference: 'e1' },
- * 		{ ...node, id: '2', role: 'button', name: 'Archive', properties: { focused: true }, reference: 'e2' },
- * 	],
- * 	1,
- * 	'archive button',
- * )
- * outline.text // 'page "Cart" https://shop.example/cart\ne1 button "Close"\n(1 of 2 elements)'
- * outline.matches // ['e2 button "Archive"']
- * outline.focus // 'e2 button "Archive"'
+ * const outline = renderBrowserOutline('https://shop.example/', 'Shop', [], 150)
+ * outline.lines // []
  * ```
  */
 export function renderBrowserOutline(
@@ -411,52 +386,459 @@ export function renderBrowserOutline(
 	title: string,
 	nodes: readonly BrowserOutlineNode[],
 	limit: number,
-	search?: string,
+	secrets: readonly string[] = [],
 ): BrowserOutline {
-	const rows = [`page ${JSON.stringify(title)} ${url}`]
-	const sessions = new Map<string, Map<string, BrowserOutlineNode>>()
-	for (const node of nodes) {
-		let parents = sessions.get(node.session)
-		if (parents === undefined) {
-			parents = new Map<string, BrowserOutlineNode>()
-			sessions.set(node.session, parents)
-		}
-		if (!parents.has(node.id)) parents.set(node.id, node)
-	}
+	const indexed = new Map<string, BrowserOutlineNode>()
+	for (const node of nodes)
+		if (!indexed.has(`${node.session}:${node.id}`)) indexed.set(`${node.session}:${node.id}`, node)
+	const omitted = new Set<BrowserOutlineNode>()
+	const rows: BrowserLine[] = []
 	let count = 0
 	let total = 0
-	let focus: BrowserOutlineNode | undefined
+	let focus: string | undefined
 	for (const node of nodes) {
-		if (node.ignored || BROWSER_OUTLINE_OMITTED_ROLES.has(node.role ?? '')) continue
+		if (node.ignored) continue
+		if (node.reference !== undefined) {
+			total += 1
+			if (node.properties['focused'] === true) focus = renderBrowserOutlineRow(node)
+		}
+		if (omitted.has(node)) continue
 		const name = normalizeBrowserName(node.name ?? '')
+		const parent = indexed.get(`${node.session}:${node.parent}`)
+		let spans: readonly BrowserLineSpan[] = []
 		if (node.role === 'heading') {
-			rows.push(`# ${name}`)
-			continue
+			const children = nodes.filter((candidate) => belongsBrowserOutline(candidate, node, indexed))
+			const references = children.filter((child) => child.reference !== undefined && !child.ignored)
+			const folded = references.length === 1 ? references[0] : undefined
+			const level = node.properties['level']
+			spans = [
+				{
+					category: 'syntax',
+					text: `${'#'.repeat(isInteger(level) && level > 0 ? Math.min(level, 6) : 1)} `,
+				},
+			]
+			if (
+				folded !== undefined &&
+				normalizeBrowserName(folded.name ?? '') === name &&
+				count < limit
+			) {
+				spans = [...spans, ...renderBrowserSpans(folded, url)]
+				count += 1
+				for (const child of children) omitted.add(child)
+			} else {
+				spans = [...spans, { category: 'text', text: name }]
+				for (const child of children) if (child.role === 'StaticText') omitted.add(child)
+			}
+		} else if (node.role === 'row' || node.role === 'LayoutTableRow') {
+			const children = nodes.filter((candidate) => belongsBrowserOutline(candidate, node, indexed))
+			const cells = children.filter((child) =>
+				['cell', 'gridcell', 'columnheader', 'rowheader', 'LayoutTableCell'].includes(
+					child.role ?? '',
+				),
+			)
+			const joined: BrowserLineSpan[] = []
+			for (const cell of cells) {
+				if (joined.length > 0) joined.push({ category: 'syntax', text: ' | ' })
+				const controls = children.filter(
+					(child) => child.reference !== undefined && belongsBrowserOutline(child, cell, indexed),
+				)
+				if (controls.length === 0)
+					joined.push({ category: 'text', text: normalizeBrowserName(cell.name ?? '') })
+				else {
+					const contents = children.filter(
+						(child) =>
+							belongsBrowserOutline(child, cell, indexed) &&
+							(child.reference !== undefined || child.role === 'StaticText'),
+					)
+					for (const control of contents) {
+						if (controls.some((owner) => belongsBrowserOutline(control, owner, indexed))) continue
+						if (control.reference === undefined) {
+							joined.push(
+								{ category: 'text', text: normalizeBrowserName(control.name ?? '') },
+								{ category: 'syntax', text: ' ' },
+							)
+							continue
+						}
+						if (count >= limit) continue
+						joined.push(...renderBrowserSpans(control, url))
+						joined.push({ category: 'syntax', text: ' ' })
+						count += 1
+					}
+					if (joined.at(-1)?.text === ' ') joined.pop()
+				}
+			}
+			spans = joined
+			for (const child of children) omitted.add(child)
+		} else if (node.role === 'image' || node.role === 'img') {
+			if (name !== '')
+				spans = [
+					{ category: 'syntax', text: 'image "' },
+					{ category: 'text', text: JSON.stringify(name).slice(1, -1) },
+					{ category: 'syntax', text: '"' },
+				]
+		} else if (node.role === 'StaticText') {
+			let owner = parent
+			const visited = new Set<string>()
+			while (owner !== undefined && owner.reference === undefined && !visited.has(owner.id)) {
+				visited.add(owner.id)
+				owner = indexed.get(`${owner.session}:${owner.parent}`)
+			}
+			if (
+				name !== '' &&
+				name !== normalizeBrowserName(parent?.name ?? '') &&
+				name !== normalizeBrowserName(String(owner?.value ?? ''))
+			)
+				spans = [{ category: 'text', text: name }]
+		} else if (node.reference !== undefined && count < limit) {
+			spans = renderBrowserSpans(node, url)
+			count += 1
 		}
-		if (node.role === 'StaticText') {
-			const parent =
-				node.parent === undefined ? undefined : sessions.get(node.session)?.get(node.parent)
-			if (name !== '' && name !== normalizeBrowserName(parent?.name ?? '')) rows.push(name)
-			continue
+		if (spans.length === 0) continue
+		const list = nodes.find(
+			(candidate) =>
+				candidate.role === 'listitem' && belongsBrowserOutline(node, candidate, indexed),
+		)
+		if (list !== undefined && !omitted.has(list) && node.role !== 'heading') {
+			spans = [{ category: 'syntax', text: '- ' }, ...spans]
+			omitted.add(list)
 		}
-		if (node.reference === undefined) continue
-		total += 1
-		if (node.properties['focused'] === true) focus = node
-		if (count >= limit) continue
-		count += 1
-		rows.push(renderBrowserOutlineRow(node))
+		rows.push(
+			...wrapBrowserLine({
+				spans: spans.map((span) => ({ ...span, text: redactBrowserText(span.text, secrets) })),
+			}),
+		)
 	}
-	rows.push(`(${count} of ${total} elements)`)
 	return {
-		url,
-		title,
-		text: rows.join('\n'),
+		url: redactBrowserText(url, secrets),
+		title: redactBrowserText(title, secrets),
+		lines: rows,
 		count,
 		total,
-		matches:
-			search === undefined ? [] : scanBrowserOutline(nodes, search).map(renderBrowserOutlineRow),
-		focus: focus === undefined ? undefined : renderBrowserOutlineRow(focus),
+		focus: focus === undefined ? undefined : redactBrowserText(focus, secrets),
 	}
+}
+
+/** Checks whether a node descends from another within one session's captured tree.
+ * @param node - Candidate descendant
+ * @param ancestor - Owning node
+ * @param indexed - Nodes indexed by session and accessibility identity
+ * @returns True if the node descends from the ancestor; false otherwise
+ */
+export function belongsBrowserOutline(
+	node: BrowserOutlineNode,
+	ancestor: BrowserOutlineNode,
+	indexed: ReadonlyMap<string, BrowserOutlineNode>,
+): boolean {
+	const seen = new Set<string>()
+	let parent = node.parent
+	while (parent !== undefined && !seen.has(parent)) {
+		if (node.session === ancestor.session && parent === ancestor.id) return true
+		seen.add(parent)
+		parent = indexed.get(`${node.session}:${parent}`)?.parent
+	}
+	return false
+}
+
+/** Renders an element as searchable text separated from references and syntax.
+ * @param node - Captured element
+ * @param url - Owning document address
+ * @returns Ordered row spans
+ */
+export function renderBrowserSpans(
+	node: BrowserOutlineNode,
+	url: string,
+): readonly BrowserLineSpan[] {
+	const spans: BrowserLineSpan[] = []
+	if (node.reference !== undefined)
+		spans.push({ category: 'reference', text: node.reference }, { category: 'syntax', text: ' ' })
+	spans.push(
+		{ category: 'text', text: node.role ?? 'unknown' },
+		{ category: 'syntax', text: ' "' },
+		{ category: 'text', text: JSON.stringify(normalizeBrowserName(node.name ?? '')).slice(1, -1) },
+		{ category: 'syntax', text: '"' },
+	)
+	const href = node.properties['url']
+	if (node.role === 'link' && isString(href)) {
+		const address = new URL(href, url)
+		spans.push(
+			{ category: 'syntax', text: ' ' },
+			{
+				category: 'text',
+				text:
+					address.origin === new URL(url).origin
+						? `${address.pathname}${address.search}${address.hash}`
+						: address.href,
+			},
+		)
+	}
+	if (node.value !== undefined && node.value !== '') {
+		spans.push(
+			{ category: 'syntax', text: ' value="' },
+			{
+				category: 'text',
+				text: JSON.stringify(normalizeBrowserName(String(node.value))).slice(1, -1),
+			},
+			{ category: 'syntax', text: '"' },
+		)
+	}
+	for (const key of ['pressed', 'expanded', 'selected']) {
+		const value = node.properties[key]
+		if (isString(value) || isBoolean(value))
+			spans.push(
+				{ category: 'syntax', text: ` ${key}=` },
+				{ category: 'text', text: String(value) },
+			)
+	}
+	if (node.properties['checked'] === true || node.properties['checked'] === 'true')
+		spans.push({ category: 'syntax', text: ' [checked]' })
+	if (node.properties['disabled'] === true) spans.push({ category: 'syntax', text: ' [disabled]' })
+	if (node.tool !== undefined)
+		spans.push(
+			{ category: 'syntax', text: ' [tool=' },
+			{ category: 'text', text: node.tool },
+			{ category: 'syntax', text: ']' },
+		)
+	return spans
+}
+
+/** Joins a projected line's spans without adding an address.
+ * @param line - Projected line
+ * @returns Rendered content
+ */
+export function renderBrowserLine(line: BrowserLine): string {
+	return line.spans.map((span) => span.text).join('')
+}
+
+/** Wraps spans before numbering, marking hard continuations with a leading ↳.
+ * @param line - Unwrapped semantic row
+ * @returns Lines no wider than the projection width, preserving code points and reference tokens
+ */
+export function wrapBrowserLine(line: BrowserLine): readonly BrowserLine[] {
+	const text = renderBrowserLine(line)
+	const lines: BrowserLine[] = []
+	let offset = 0
+	let continuation = false
+	while (offset < text.length) {
+		const room = BROWSER_READ_WIDTH - (continuation ? 1 : 0)
+		let end = Math.min(text.length, offset + room)
+		let hard = false
+		if (end < text.length) {
+			const whitespace = text.slice(offset, end + 1).search(/\s+\S*$/u)
+			if (whitespace > 0) end = offset + whitespace
+			else {
+				hard = true
+				if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end -= 1
+			}
+		}
+		const spans: BrowserLineSpan[] = continuation ? [{ category: 'syntax', text: '↳' }] : []
+		let position = 0
+		for (const span of line.spans) {
+			const last = position + span.text.length
+			if (last > offset && position < end)
+				spans.push({
+					category: span.category,
+					text: span.text.slice(Math.max(0, offset - position), end - position),
+				})
+			position = last
+		}
+		lines.push({ spans })
+		offset = end
+		if (!hard) while (offset < text.length && /\s/u.test(text.charAt(offset))) offset += 1
+		continuation = hard
+	}
+	return lines
+}
+
+/** Finds the highest-scoring text lines within an inclusive range using whole words and prefixes.
+ * @param lines - Complete wrapped projection
+ * @param search - Words to find
+ * @param from - First candidate line. Default: 1
+ * @param to - Last candidate line. Default: the end
+ * @returns One-based best-scoring line numbers
+ */
+export function scanBrowserLines(
+	lines: readonly BrowserLine[],
+	search: string,
+	from = 1,
+	to = lines.length,
+): readonly number[] {
+	const words = collectBrowserWords(search)
+	const matches: number[] = []
+	let best = 0
+	for (let index = from - 1; index < Math.min(to, lines.length); index += 1) {
+		const line = lines[index]
+		if (line === undefined) continue
+		const own = [
+			...collectBrowserWords(
+				line.spans
+					.filter((span) => span.category === 'text')
+					.map((span) => span.text)
+					.join(' '),
+			),
+		]
+		let score = 0
+		for (const word of words)
+			if (
+				own.some(
+					(candidate) =>
+						word === candidate ||
+						(Math.min(word.length, candidate.length) >= 4 &&
+							(word.startsWith(candidate) || candidate.startsWith(word))),
+				)
+			)
+				score += 1
+		if (score === 0 || score < best) continue
+		if (score > best) matches.length = 0
+		best = score
+		matches.push(index + 1)
+	}
+	return matches
+}
+
+/** Refuses invalid line coordinates before selecting content.
+ * @param from - Inclusive first line
+ * @param to - Optional inclusive last line
+ * @param total - Available lines, when captured
+ * @returns Nothing
+ */
+export function validateBrowserLines(from: number, to?: number, total?: number): void {
+	if (
+		!Number.isSafeInteger(from) ||
+		from < 1 ||
+		(to !== undefined && (!Number.isSafeInteger(to) || to < 1))
+	)
+		throw new BrowserError(
+			'The from and to parameters must be positive safe integers.',
+			'BROWSER_TOOLSET_ARGUMENT',
+		)
+	if (to !== undefined && to < from)
+		throw new BrowserError('The to parameter must not precede from.', 'BROWSER_TOOLSET_ARGUMENT')
+	if (total !== undefined && total > 0 && from > total)
+		throw new BrowserError(
+			`Line ${from} is past the end; the page has ${total} lines.`,
+			'BROWSER_TOOLSET_ARGUMENT',
+		)
+}
+
+/** Abbreviates displayed metadata without splitting a Unicode code point.
+ * @param text - Metadata text
+ * @param limit - Available UTF-16 units
+ * @returns Normalized text with an ellipsis when abbreviated
+ */
+export function abbreviateBrowserText(text: string, limit: number): string {
+	const normalized = normalizeBrowserName(text)
+	if (normalized.length <= limit) return normalized
+	let end = Math.max(0, limit - 1)
+	if (normalized.charCodeAt(end - 1) >= 0xd800 && normalized.charCodeAt(end - 1) <= 0xdbff) end -= 1
+	return `${normalized.slice(0, end)}…`
+}
+
+/** Renders an exact addressed-range footer, including the next line when content remains.
+ * @param from - First returned line
+ * @param to - Last returned line
+ * @param total - Total projected lines
+ * @param tool - Tool that serves the continuation. Default: read
+ * @returns Complete footer
+ */
+export function renderBrowserFooter(
+	from: number,
+	to: number,
+	total: number,
+	tool = 'read',
+): string {
+	if (total === 0) return '[empty page; the whole page]'
+	const above = from - 1
+	const below = total - to
+	const counts = [
+		above > 0 ? `${above} above` : undefined,
+		below > 0 ? `${below} below` : undefined,
+	].filter((value) => value !== undefined)
+	return `[lines ${from}–${to} of ${total}; ${counts.length > 0 ? `${counts.join(', ')}; ` : ''}${below > 0 ? `call ${tool} with from ${to + 1} for more` : above > 0 ? 'end of page' : 'the whole page'}]`
+}
+
+/** Renders a bounded window with numbered rows and an exact continuation.
+ * @param passage - Projection and contextual metadata
+ * @param limit - Whole-result character room
+ * @returns A complete window
+ * @throws Thrown when the range is invalid or room cannot hold metadata and a complete row
+ */
+export function renderBrowserPassage(passage: BrowserPassage, limit: number): string {
+	const total = passage.lines.length
+	validateBrowserLines(passage.from, passage.to, total)
+	const header = [
+		`page ${JSON.stringify(abbreviateBrowserText(passage.title, 120))} ${abbreviateBrowserText(passage.url, 160)} (${total} lines)`,
+	]
+	if (passage.tabs.length > 1) {
+		const tabs: string[] = []
+		for (const tab of passage.tabs) {
+			const entry = `${tab.id} ${JSON.stringify(abbreviateBrowserText(tab.title, 60))}${tab.current ? ' (current)' : ''}`
+			if (tabs.join(', ').length + entry.length > Math.min(400, Math.floor(limit / 8))) break
+			tabs.push(entry)
+		}
+		const left = passage.tabs.length - tabs.length
+		header.push(
+			`tabs: ${tabs.join(', ')}${left > 0 ? `${tabs.length > 0 ? '; ' : ''}${left} more tabs omitted` : ''}`,
+		)
+	}
+	if (passage.note !== undefined && passage.note !== '')
+		header.push(abbreviateBrowserText(passage.note, 200))
+	if (passage.changed && passage.from > 1) header.push(BROWSER_READ_CHANGED_NOTE)
+	let from = passage.from
+	if (passage.search !== undefined && passage.search !== '') {
+		const matches = scanBrowserLines(passage.lines, passage.search, from, passage.to)
+		const first = matches[0]
+		const query = JSON.stringify(abbreviateBrowserText(passage.search, 120))
+		if (first === undefined)
+			header.push(
+				from === 1 ? `No line matches ${query}.` : `No line from ${from} on matches ${query}.`,
+			)
+		else {
+			from = Math.max(passage.from, first - BROWSER_READ_CONTEXT)
+			header.push(
+				`${matches.length} ${matches.length === 1 ? 'line matches' : 'lines match'} ${query}: ${matches.slice(0, BROWSER_READ_MATCHES).join(', ')}${matches.length > BROWSER_READ_MATCHES ? `, … and ${matches.length - BROWSER_READ_MATCHES} more; add words to narrow` : ''}`,
+			)
+		}
+	}
+	return renderBrowserWindow(passage.lines, from, passage.to, header.join('\n'), limit)
+}
+
+/** Selects whole addressed rows after reserving the header and exact footer.
+ * @param lines - Complete projection
+ * @param from - Inclusive first line
+ * @param to - Inclusive last line, or the default window
+ * @param header - Bounded preceding text
+ * @param limit - Whole-result room
+ * @param tool - Continuation tool. Default: read
+ * @returns A complete bounded result
+ */
+export function renderBrowserWindow(
+	lines: readonly BrowserLine[],
+	from: number,
+	to: number | undefined,
+	header: string,
+	limit: number,
+	tool = 'read',
+): string {
+	validateBrowserLines(from, to, lines.length)
+	let body = header
+	let end = from - 1
+	const last = Math.min(to ?? lines.length, from + BROWSER_READ_LINES - 1, lines.length)
+	for (let index = from; index <= last; index += 1) {
+		const line = lines[index - 1]
+		if (line === undefined) break
+		const row = `${index}: ${renderBrowserLine(line)}`
+		const footer = renderBrowserFooter(from, index, lines.length, tool)
+		if (body.length + row.length + footer.length + 2 > limit) break
+		body += `${body === '' ? '' : '\n'}${row}`
+		end = index
+	}
+	const footer = renderBrowserFooter(from, end, lines.length, tool)
+	if ((lines.length > 0 && end < from) || body.length + footer.length + 1 > limit)
+		throw new BrowserError(
+			'The result limit cannot hold the header, footer, and next complete line.',
+			'BROWSER_TOOLSET_LIMIT',
+		)
+	return `${body}\n${footer}`
 }
 
 /**
@@ -589,7 +971,7 @@ export function deriveBrowserToolSchema(
  * nothing), followed by `\n[characters 0–END of TOTAL; FOOTER]`. The footer has no default, so
  * every caller states what the cut result's reader does next: the toolset passes
  * `BROWSER_TOOL_VIEW_FOOTER` for an action or `dialog` receipt that carries a view and
- * `BROWSER_TOOL_CUT_FOOTER` for any other result, including `look` and `read` results.
+ * `BROWSER_TOOL_CUT_FOOTER` for any other result, including bounded refusal results.
  *
  * @param text - The page-authored or composed string
  * @param limit - The most characters kept before the footer, a positive integer
@@ -610,9 +992,30 @@ export function boundBrowserText(text: string, limit: number, footer: string): s
 		throw new BrowserError('Browser tool limit must be a positive integer', undefined, { limit })
 	}
 	if (text.length <= limit) return text
-	const last = text.charCodeAt(limit - 1)
-	const end = last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit
-	return `${text.slice(0, end)}\n[characters 0–${end} of ${text.length}; ${footer}]`
+	let end = limit
+	for (;;) {
+		const suffix = `\n[characters 0–${end} of ${text.length}; ${footer}]`
+		if (suffix.length >= limit) return abbreviateBrowserText(text, limit)
+		if (end + suffix.length <= limit) return `${text.slice(0, end)}${suffix}`
+		end = Math.max(0, limit - suffix.length)
+		if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end -= 1
+	}
+}
+
+/** Redacts registered secrets before projection wrapping or output clipping.
+ * @param text - Unbounded text
+ * @param secrets - Registered secret values
+ * @returns Text with literal and JSON-escaped secret occurrences replaced
+ */
+export function redactBrowserText(text: string, secrets: readonly string[]): string {
+	for (const secret of [...secrets].sort((left, right) => right.length - left.length)) {
+		if (secret === '') continue
+		text = text
+			.replaceAll(JSON.stringify(secret), '[redacted]')
+			.replaceAll(JSON.stringify(secret).slice(1, -1), '[redacted]')
+			.replaceAll(secret, '[redacted]')
+	}
+	return text
 }
 
 /**
@@ -629,8 +1032,8 @@ export function boundBrowserText(text: string, limit: number, footer: string): s
  * ```ts
  * import { BROWSER_TOOL_COPY, validateBrowserToolArguments } from '@orkestrel/browser'
  *
- * validateBrowserToolArguments(BROWSER_TOOL_COPY.look, { search: 'cart', ref: 'e1' })
- * // throws 'The look tool takes no ref parameter; call look with search and offset.'
+ * validateBrowserToolArguments(BROWSER_TOOL_COPY.read, { search: 'cart', ref: 'e1' })
+ * // throws 'The read tool takes no ref parameter; call read with from, to, and search.'
  * ```
  */
 export function validateBrowserToolArguments(
@@ -674,7 +1077,7 @@ export function renderBrowserElement(element: BrowserElementInterface): string {
  * @param value - The argument a model supplied
  * @returns The canonical reference, such as `e12`
  * @throws Thrown as a `BrowserElementError` with reason `UNKNOWN` when the value is not a
- * reference, naming `look` as the next call.
+ * reference, naming `read` as the next call.
  *
  * @example
  * ```ts
@@ -689,7 +1092,7 @@ export function requireBrowserReference(value: unknown): string {
 		throw new BrowserElementError(
 			{ subject: `Reference ${JSON.stringify(value)}` },
 			'UNKNOWN',
-			'is not a reference such as e12; call look for fresh refs',
+			'is not a reference such as e12; call read for fresh refs',
 		)
 	return reference
 }

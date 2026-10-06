@@ -1,3 +1,4 @@
+import { renderBrowserLine } from '../src/core/index.js'
 /**
  * Proof for `tests/setupService.ts`.
  *
@@ -120,7 +121,7 @@ describe('collectOutlineEntries', () => {
 	it('retains suffixes and duplicate names, deduplicates references, and ignores nonrows', () => {
 		expect(
 			collectOutlineEntries(
-				'2 elements match "Toggle":\r\ne9 button "Toggle" pressed=false\r\npage "Title" url\r\ne2 button "Toggle" pressed=true [disabled]\r\ne9 button "Toggle" pressed=false\r\n# Heading\r\ne0 button "Invalid"\r\ne3 no-quoted-name\r\n(2 of 2 elements)',
+				'2 elements match "Toggle":\r\ne9 button "Toggle" pressed=false\r\npage "Title" url\r (5 lines)\n1: e2 button "Toggle" pressed=true [disabled]\r\n2: e9 button "Toggle" pressed=false\r\n3: # Heading\r\n4: e0 button "Invalid"\r\n5: e3 no-quoted-name\r\n[lines 1–5 of 5; the whole page]',
 			),
 		).toEqual(['button "Toggle" pressed=false', 'button "Toggle" pressed=true [disabled]'])
 		expect(collectOutlineEntries('page "Title" url\n(0 of 0 elements)')).toEqual([])
@@ -233,13 +234,15 @@ describe('extractOutlineReferences', () => {
 		}))
 		const outline = renderBrowserOutline('http://127.0.0.1/form', 'Delivery form', nodes, 150)
 
-		expect(extractOutlineReferences(outline.text)).toStrictEqual([3, 12])
+		expect(extractOutlineReferences(outline.lines.map(renderBrowserLine).join('\n'))).toStrictEqual(
+			[3, 12],
+		)
 	})
 
 	it('extracts nothing from heading, text, and summary rows or from an empty outline', () => {
 		expect(
 			extractOutlineReferences(
-				'page "Form" http://127.0.0.1/form\n# e5 heading\ne0 zero\nLeave e7 at the door\n(0 of 0 elements)',
+				'page "Form" http://127.0.0.1/form (3 lines)\n1: # e5 heading\n2: e0 zero\n3: Leave e7 at the door\n[lines 1–3 of 3; the whole page]',
 			),
 		).toStrictEqual([])
 		expect(extractOutlineReferences('')).toStrictEqual([])
@@ -270,7 +273,7 @@ describe('extractOutlineRows', () => {
 		}))
 		const outline = renderBrowserOutline('http://127.0.0.1/form', 'Delivery form', nodes, 150)
 
-		expect(extractOutlineRows(outline.text)).toStrictEqual([
+		expect(extractOutlineRows(outline.lines.map(renderBrowserLine).join('\n'))).toStrictEqual([
 			{ reference: 'e3', role: 'textbox', name: 'Name' },
 			{ reference: 'e12', role: 'button', name: 'Say "hi" \\ bye' },
 			{ reference: 'e13', role: 'Iframe', name: 'Voucher form' },
@@ -280,7 +283,7 @@ describe('extractOutlineRows', () => {
 	it('reads the rows of a receipt and nothing from heading, text, summary, or unquoted rows', () => {
 		expect(
 			extractOutlineRows(
-				'Clicked e2 button "Keep".\n\npage "Drafts" http://127.0.0.1/confirm\n# Drafts\ne1 button "Delete"\ne0 button "Zero"\ne4 option\nLeave e7 at the door\n(1 of 1 elements)',
+				'Clicked e2 button "Keep".\n\npage "Drafts" http://127.0.0.1/confirm (5 lines)\n1: # Drafts\n2: e1 button "Delete"\n3: e0 button "Zero"\n4: e4 option\n5: Leave e7 at the door\n[lines 1–5 of 5; the whole page]',
 			),
 		).toStrictEqual([{ reference: 'e1', role: 'button', name: 'Delete' }])
 		expect(extractOutlineRows('')).toStrictEqual([])
@@ -289,7 +292,7 @@ describe('extractOutlineRows', () => {
 	it('reads a look match row that repeats an outline row once, at its first occurrence', () => {
 		expect(
 			extractOutlineRows(
-				'1 element matches "the delete button":\ne1 button "Delete"\n\npage "Drafts" http://127.0.0.1/confirm\ne2 button "Keep"\ne1 button "Delete"\n(2 of 2 elements)',
+				'1 element matches "the delete button":\ne1 button "Delete"\n\npage "Drafts" http://127.0.0.1/confirm (2 lines)\n1: e2 button "Keep"\n2: e1 button "Delete"\n[lines 1–2 of 2; the whole page]',
 			),
 		).toStrictEqual([
 			{ reference: 'e1', role: 'button', name: 'Delete' },
@@ -301,9 +304,9 @@ describe('extractOutlineRows', () => {
 describe('collectOutlinePairs', () => {
 	it('collects equal sorted lists from two outlines listing the same elements in another order under other references', () => {
 		const cdp =
-			'page "Gift" u\ne1 link "Desk"\ne2 checkbox "Gift wrap"\ne3 button "Apply"\n(3 of 3 elements)'
+			'page "Gift" u (3 lines)\n1: e1 link "Desk"\n2: e2 checkbox "Gift wrap"\n3: e3 button "Apply"\n[lines 1–3 of 3; the whole page]'
 		const dom =
-			'page "Gift" u\ne9 button "Apply"\nGift wrap\ne7 checkbox "Gift wrap"\ne8 link "Desk"\n(3 of 3 elements)'
+			'page "Gift" u (4 lines)\n1: e9 button "Apply"\n2: Gift wrap\n3: e7 checkbox "Gift wrap"\n4: e8 link "Desk"\n[lines 1–4 of 4; the whole page]'
 
 		expect(collectOutlinePairs(cdp)).toStrictEqual([
 			'button "Apply"',
@@ -323,7 +326,7 @@ describe('collectOutlinePairs', () => {
 
 describe('requireOutlineReference', () => {
 	const text =
-		'page "Drafts" u\ne1 button "Delete"\ne2 button "Keep"\ne3 link "Keep"\n(3 of 3 elements)'
+		'page "Drafts" u (3 lines)\n1: e1 button "Delete"\n2: e2 button "Keep"\n3: e3 link "Keep"\n[lines 1–3 of 3; the whole page]'
 
 	it('returns the reference of the one row with the role and the name', () => {
 		expect(requireOutlineReference(text, 'button', 'Keep')).toBe('e2')
@@ -362,7 +365,7 @@ describe('requireToolText', () => {
 		tools.add(createTool({ name: 'count', execute: () => 7 }))
 
 		expect(() =>
-			requireToolText({ id: '1', name: 'look', success: false, error: 'A dialog is open' }),
+			requireToolText({ id: '1', name: 'read', success: false, error: 'A dialog is open' }),
 		).toThrow('The tool call failed: A dialog is open')
 		await expect(
 			tools.execute({ id: '2', name: 'missing', arguments: {} }).then(requireToolText),
@@ -376,11 +379,11 @@ describe('requireToolText', () => {
 
 describe('matchesToolReceipt', () => {
 	const view =
-		'page "Drafts" http://127.0.0.1/confirm\n# Drafts\ne2 button "Keep"\n(1 of 1 elements)'
+		'page "Drafts" http://127.0.0.1/confirm (2 lines)\n1: # Drafts\n2: e2 button "Keep"\n[lines 1–2 of 2; the whole page]'
 	const kept = { action: 'Clicked e2 button "Keep"', view }
 	const placed = {
 		action: 'Clicked e1 link "Next"',
-		view: 'page "Next note" http://127.0.0.1/next\n# Next note\n(0 of 0 elements)',
+		view: 'page "Next note" http://127.0.0.1/next (1 lines)\n1: # Next note\n[lines 1–1 of 1; the whole page]',
 		url: 'http://127.0.0.1/next',
 	}
 
@@ -400,7 +403,7 @@ describe('matchesToolReceipt', () => {
 			true,
 		)
 		expect(SERVICE_CHANGED_NOTE).toBe(
-			'(The page changed before the view could be read; call look.)',
+			'(The page changed before the view could be read; call read.)',
 		)
 	})
 
@@ -417,7 +420,7 @@ describe('matchesToolReceipt', () => {
 				'the page',
 				'page "" http://127.0.0.1/next\n(0 of 0 elements)',
 				view,
-				'(The view could not be read: gone; call look.)',
+				'(The view could not be read: gone; call read.)',
 				`${SERVICE_CHANGED_NOTE}\nextra`,
 			].map((suffix) => matchesToolReceipt(`${loading}${suffix}`, placed)),
 		).toEqual([false, false, false, false, false, false])
@@ -428,7 +431,7 @@ describe('matchesToolReceipt', () => {
 		expect(matchesToolReceipt(`Clicked e3 button "Keep".\n\n${view}`, kept)).toBe(false)
 		expect(
 			matchesToolReceipt(
-				'Clicked e2 button "Keep".\n\n(The view could not be read: gone; call look.)',
+				'Clicked e2 button "Keep".\n\n(The view could not be read: gone; call read.)',
 				kept,
 			),
 		).toBe(false)

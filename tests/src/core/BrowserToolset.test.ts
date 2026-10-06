@@ -10,7 +10,6 @@
 
 import type {
 	BrowserAction,
-	BrowserFrameInterface,
 	BrowserToolSourceEventMap,
 	BrowserToolSourceInterface,
 	BrowserToolsetReason,
@@ -33,12 +32,9 @@ import {
 import {
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
-	BROWSER_TOOL_HANDLED_STATUS,
 	BROWSER_TOOL_NAMES,
 	BrowserContext,
-	BrowserPage,
 	BrowserToolset,
-	createBrowserReading,
 	createBrowserToolset,
 	createMemoryBrowserJourneyStore,
 	createMemoryBrowserRunStore,
@@ -52,33 +48,13 @@ import {
 	BROWSER_JOURNEY_SECRET,
 	createBrowserSecretSelectFixture,
 	BROWSER_ELEMENT_AX_FIXTURE,
-	BROWSER_ELEMENT_APPLIED_FIXTURE,
 	BROWSER_ELEMENT_CHILD_FIXTURE,
-	BROWSER_ELEMENT_FRAMED_FIXTURE,
-	BROWSER_CHILD_ARRANGEMENTS,
-	BROWSER_ELEMENT_WORLDS,
-	buildBrowserButtonTree,
-	extractBrowserPage,
-	BROWSER_SESSION_MOVES,
-	answerBrowserEvaluation,
-	buildBrowserElementTree,
 	emitBrowserNavigation,
-	matchesBrowserSubmitObserver,
-	matchesBrowserSubmitRead,
-	BROWSER_SUBMIT_ACTIONS,
-	BROWSER_SUBMIT_EARLY_CASES,
-	BROWSER_SUBMIT_FOCUS_STEPS,
-	BROWSER_SUBMIT_MALFORMED_READS,
-	BROWSER_SUBMIT_NEGATIVE_CASES,
-	BROWSER_SUBMIT_UNREAD_CASES,
 	createBrowserElementFixture,
-	createBrowserPopupFixture,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
 	createBrowserPendingToolsetFixture,
-	createConnectedCDPClient,
 	ignoreCall,
-	readCDPExpression,
 	readBrowserCompiledTimers,
 	runBrowserCompiledTimers,
 	replyOk,
@@ -204,92 +180,19 @@ describe('BrowserToolset', () => {
 			await toolset.destroy()
 		}
 	})
-	it.each(['read', 'plain'])(
-		'reading search on %s jumps beyond 4000 and pages its projection',
-		async (name) => {
-			const html = `<nav>Navigation retained</nav><main>${'<p>Ordinary paragraph with a <a href="/catalog">catalog link</a>.</p>'.repeat(180)}<h2>Delivery schedule</h2><p>Arrives on Friday.</p></main>`
-			const fixture = await createBrowserElementFixture({
-				evaluation: (message) =>
-					fixture.transport.reply(message.id, {
-						result: {
-							value: String(message.params?.['expression']).includes('outerHTML')
-								? { url: 'https://example.test/cart', title: 'Cart', html }
-								: true,
-						},
-					}),
-			})
-			const toolset = createBrowserToolset(fixture.page)
-			try {
-				await toolset.start()
-				const tool = requireValue(toolset.tools.tool(name))
-				const context = { signal: new AbortController().signal }
-				const reading = createBrowserReading({
-					url: 'https://example.test/cart',
-					title: 'Cart',
-					html,
-				})
-				const whole = (name === 'read' ? reading.markdown() : reading.text()).text
-				const heading = name === 'read' ? '## Delivery schedule' : 'Delivery schedule'
-				const offset = whole.indexOf(heading)
-				expect(offset).toBeGreaterThan(4000)
-				const first = String(await tool.execute({ search: 'delivery schedule' }, context))
-				expect(
-					first.startsWith(`1 line matches "delivery schedule":\n[${offset}] ${heading}\n\n`),
-				).toBe(true)
-				expect(first).toContain('Navigation retained')
-				expect(tool.annotations).toEqual({ pure: true, untrusted: true })
-				const jumped = String(await tool.execute({ search: 'delivery schedule', offset }, context))
-				expect(jumped.startsWith(whole.slice(offset))).toBe(true)
-				expect(jumped).not.toContain('line matches')
-				const hold = await toolset.hold('replay')
-				try {
-					const actions = createRecorder<readonly [BrowserAction]>()
-					toolset.emitter.on('action', actions.handler)
-					let next = 0
-					let reconstructed = ''
-					do {
-						const slice = extractBrowserPage(
-							String(await tool.execute({ search: 'unmatchedword', offset: next }, context)),
-						)
-						expect(slice.body).not.toContain('matches')
-						reconstructed += slice.body
-						next = slice.next ?? whole.length
-					} while (next < whole.length)
-					expect(reconstructed).toBe(whole)
-					expect(actions.count).toBe(0)
-				} finally {
-					hold.destroy()
-				}
-				const before = fixture.transport.sent.filter((message) =>
-					String(message.params?.['expression']).includes('outerHTML'),
-				).length
-				const other = requireValue(toolset.tools.tool(name === 'read' ? 'plain' : 'read'))
-				const switched = String(await other.execute({ search: '', offset: 50 }, context))
-				expect(extractBrowserPage(switched).start).toBe(0)
-				expect(
-					fixture.transport.sent.filter((message) =>
-						String(message.params?.['expression']).includes('outerHTML'),
-					),
-				).toHaveLength(before + 1)
-			} finally {
-				await toolset.destroy()
-				await fixture.client.close()
-			}
-		},
-	)
 	it('refuses the former what argument and names search', async () => {
 		const fixture = await createBrowserElementFixture()
 		const toolset = createBrowserToolset(fixture.page)
 		try {
 			await toolset.start()
-			for (const name of ['look', 'read', 'plain']) {
+			for (const name of ['read']) {
 				await expect(
 					requireValue(toolset.tools.tool(name)).execute(
 						{ what: 'cart' },
 						{ signal: new AbortController().signal },
 					),
 				).rejects.toThrow(
-					`The ${name} tool takes no what parameter; call ${name} with search and offset.`,
+					`The ${name} tool takes no what parameter; call ${name} with from, to, and search.`,
 				)
 			}
 		} finally {
@@ -323,8 +226,8 @@ describe('BrowserToolset', () => {
 				expect(toolset.tools.count).toBe(manager.count)
 				expect(toolset.tools.tools()).toEqual(manager.tools())
 				expect(toolset.tools.definitions()).toEqual(manager.definitions())
-				expect(toolset.tools.tool('look')).toBe(manager.tool('look'))
-				const call = { id: 'look', name: 'look', arguments: { search: 'form' } }
+				expect(toolset.tools.tool('read')).toBe(manager.tool('read'))
+				const call = { id: 'look', name: 'read', arguments: { from: 1 } }
 				const missing = { id: 'missing', name: 'missing', arguments: {} }
 				expect(await toolset.tools.execute([call, missing])).toEqual([
 					await manager.execute(call),
@@ -614,7 +517,7 @@ describe('BrowserToolset', () => {
 				])
 				expect(pending, 'a closed dialog still leaves its input pending').toMatchObject({
 					code: 'BROWSER_TOOLSET_DIALOG',
-					message: 'An earlier input is still pending; call look.',
+					message: 'An earlier input is still pending; call read.',
 				})
 				fixture.transport.reply(requireValue(withheld[0]).id, {})
 				await waitForDelay()
@@ -653,8 +556,7 @@ describe('BrowserToolset', () => {
 				expect(direct).toEqual(first.result)
 				expect(actions.calls[2]?.[0].receipt).toBe(first.action?.receipt)
 				expect(
-					(await toolset.perform({ id: 'look', name: 'look', arguments: { search: 'form' } }))
-						.action,
+					(await toolset.perform({ id: 'look', name: 'read', arguments: { from: 1 } })).action,
 				).toBeUndefined()
 				expect(
 					(await toolset.perform({ id: 'missing', name: 'missing', arguments: {} })).action,
@@ -772,7 +674,7 @@ describe('BrowserToolset', () => {
 				})
 				expect(performed.result).toMatchObject({
 					success: true,
-					value: '"Added to cart" did not appear within 0.01 s.',
+					value: expect.stringContaining('"Added to cart" did not appear within 0.01 s.\n\npage '),
 				})
 				expect(performed.action).toMatchObject({
 					outcome: 'timeout',
@@ -807,7 +709,7 @@ describe('BrowserToolset', () => {
 				})
 				expect(refused.result).toMatchObject({
 					success: false,
-					error: 'The toolset is replaying add-kettle until it finishes; call look.',
+					error: 'The toolset is replaying add-kettle until it finishes; call read.',
 				})
 				expect(invoked.count).toBe(0)
 				const denied = await Promise.resolve(
@@ -818,9 +720,9 @@ describe('BrowserToolset', () => {
 				).catch((error: unknown) => error)
 				expect(readProperty(denied, 'code')).toBe('BROWSER_TOOLSET_BUSY')
 				for (const call of [
-					{ id: 'look', name: 'look', arguments: { search: 'form' } },
-					{ id: 'read', name: 'read', arguments: { search: 'form' } },
-					{ id: 'plain', name: 'plain', arguments: { search: 'form' } },
+					{ id: 'look', name: 'read', arguments: { from: 1 } },
+					{ id: 'read', name: 'read', arguments: { from: 1 } },
+					{ id: 'plain', name: 'read', arguments: { from: 1 } },
 					{ id: 'wait', name: 'wait', arguments: { text: 'Form' } },
 				])
 					expect((await toolset.perform(call)).result.success).toBe(true)
@@ -872,7 +774,7 @@ describe('BrowserToolset', () => {
 				const denied = await foreign
 				expect(denied).toMatchObject({
 					code: 'BROWSER_TOOLSET_BUSY',
-					message: 'The toolset is replaying add-kettle until it finishes; call look.',
+					message: 'The toolset is replaying add-kettle until it finishes; call read.',
 				})
 				expect(order).toEqual(['checkout', 'hold'])
 				expect(view.calls).not.toContain('click e1')
@@ -957,7 +859,7 @@ describe('BrowserToolset', () => {
 				})
 				expect(refused.result).toMatchObject({
 					success: false,
-					error: 'The toolset is replaying add-kettle until it finishes; call look.',
+					error: 'The toolset is replaying add-kettle until it finishes; call read.',
 				})
 				expect(
 					fixture.transport.sent.filter(
@@ -1001,13 +903,13 @@ describe('BrowserToolset', () => {
 					'secret',
 				),
 			}
-			// With capture, the measured full copy is 6,941 UTF-16 code units; 7,000 is the smallest
-			// multiple of 50 that holds it. The journey copy measures 3,356, giving the same bound rule 3,400.
+			// With capture, the measured full copy is 6,024 UTF-16 code units; 6,050 is the smallest
+			// multiple of 50 that holds it. The journey copy measures 3,347, giving the same bound rule 3,400.
 			// Include the secret property's name and schema without charging for the rest of type.
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
 				.toBeLessThanOrEqual(3400)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(7000)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6050)
 		})
 
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
@@ -1016,7 +918,7 @@ describe('BrowserToolset', () => {
 				const toolset = new BrowserToolset(page, { page })
 				expect(toolset.tools.count).toBe(0)
 				await toolset.start()
-				const names = ['look', 'read', 'plain', 'click', 'type', 'press', 'navigate', 'wait']
+				const names = ['read', 'click', 'type', 'press', 'navigate', 'wait']
 				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(names)
 				expect(toolset.native.map((tool) => tool.name)).toEqual(names)
 				expect(toolset.native).toEqual(toolset.tools.tools())
@@ -1024,9 +926,7 @@ describe('BrowserToolset', () => {
 				expect(
 					Object.fromEntries(toolset.native.map((tool) => [tool.name, tool.annotations])),
 				).toEqual({
-					look: { pure: true, untrusted: true },
 					read: { pure: true, untrusted: true },
-					plain: { pure: true, untrusted: true },
 					click: undefined,
 					type: undefined,
 					press: undefined,
@@ -1046,7 +946,7 @@ describe('BrowserToolset', () => {
 					for (const property of Object.values(properties))
 						expect(readProperty<string>(property, 'description').length).toBeLessThanOrEqual(100)
 				}
-				expect(BROWSER_TOOL_COPY.tabs.annotations).toEqual({ pure: true })
+				expect(BROWSER_TOOL_NAMES).not.toContain('tabs')
 				expect(BROWSER_TOOL_COPY.dialog.annotations).toBeUndefined()
 				expect(BROWSER_TOOL_COPY.switch.annotations).toBeUndefined()
 			} finally {
@@ -1064,18 +964,14 @@ describe('BrowserToolset', () => {
 					BROWSER_TOOL_NAMES.map((name) => [name, BROWSER_TOOL_COPY[name].description]),
 				),
 			).toEqual({
-				look: "Shows the page's text and the elements you can act on, each with a reference like e4. Call it first and after the page changes.",
-				read: 'Reads the page as Markdown, with headings, tables, and link addresses. Call it to learn a fact; continue with the offset a cut result names.',
-				plain:
-					'Reads the page as plain text, without Markdown, link addresses, or image text. Call it for words to pass to wait or type.',
-				click: 'Clicks the element with that reference.',
-				type: 'Types into the text control with that reference; set submit to true to submit its form.',
-				press: 'Presses that key or chord, such as Enter or Control+a.',
-				navigate: 'Opens that absolute web address in the current tab.',
-				wait: 'Waits for text to appear; set absent to true to wait for it to leave.',
-				dialog: 'Accepts or dismisses the open dialog.',
-				tabs: 'Lists the open tabs; the current one is marked.',
-				switch: 'Switches to a tab from tabs, such as t2.',
+				read: 'Shows numbered lines of the page, with references like e4 to act on. Call it to learn a fact or to find an element.',
+				click: 'Clicks the referenced element, settles its action, and returns the page.',
+				type: 'Fills the referenced control, optionally submits its form, settles the action, and returns the page.',
+				press: 'Presses a key or chord, settles its action, and returns the page.',
+				navigate: 'Opens an absolute web address in the current tab and returns the loaded page.',
+				wait: 'Waits for text to appear or leave, then returns the page.',
+				dialog: 'Answers the open dialog, settles the interrupted action, and returns the page.',
+				switch: 'Selects an open tab that read lists and returns its page.',
 			})
 			expect(
 				readProperty<object>(
@@ -1093,28 +989,28 @@ describe('BrowserToolset', () => {
 
 		it('catches a look or read that advertises or accepts ref, or a tool that runs with a parameter it does not advertise', async () => {
 			expect(
-				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.look.parameters, 'properties')),
-			).toEqual(['search', 'offset'])
+				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.read.parameters, 'properties')),
+			).toEqual(['from', 'to', 'search'])
 			expect(
 				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.read.parameters, 'properties')),
-			).toEqual(['search', 'offset'])
+			).toEqual(['from', 'to', 'search'])
 			const view = createBrowserViewDouble()
 			const toolset = new BrowserToolset(view)
 			await toolset.start()
 			const results = await toolset.tools.execute([
-				{ id: '1', name: 'look', arguments: { search: 'the cart', ref: 'e1' } },
-				{ id: '2', name: 'read', arguments: { search: 'the cart', ref: 'e1' } },
+				{ id: '1', name: 'read', arguments: { from: 1, search: 'the cart', ref: 'e1' } },
+				{ id: '2', name: 'read', arguments: { from: 1, search: 'the cart', ref: 'e1' } },
 				{ id: '3', name: 'type', arguments: { ref: 'e2', text: 'sam', search: 'the email' } },
 			])
 			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
-				'The look tool takes no ref parameter; call look with search and offset.',
-				'The read tool takes no ref parameter; call read with search and offset.',
+				'The read tool takes no ref parameter; call read with from, to, and search.',
+				'The read tool takes no ref parameter; call read with from, to, and search.',
 				'The type tool takes no search parameter; call type with ref, text, submit, and secret.',
 			])
 			expect(view.calls).toEqual([])
 			const refused = await Promise.resolve(
-				requireValue(toolset.tools.tool('look')).execute(
-					{ search: 'the cart', ref: 'e1' },
+				requireValue(toolset.tools.tool('read')).execute(
+					{ from: 1, search: 'the cart', ref: 'e1' },
 					{ signal: new AbortController().signal },
 				),
 			).catch((caught: unknown) => caught)
@@ -1174,7 +1070,10 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'order' }, { signal })
+				await requireValue(toolset.tools.tool('read')).execute(
+					{ from: 1, search: 'order' },
+					{ signal },
+				)
 				const click = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e4' }, { signal }),
 				)
@@ -1192,9 +1091,9 @@ describe('BrowserToolset', () => {
 				)
 				expect(toolset.tools.tool('dialog')?.name).toBe('dialog')
 				const refusals = await toolset.tools.execute([
-					{ id: '1', name: 'look', arguments: { search: 'cart' } },
-					{ id: '2', name: 'read', arguments: { search: 'cart' } },
-					{ id: 'plain', name: 'plain', arguments: { search: 'cart' } },
+					{ id: '1', name: 'read', arguments: { from: 1, search: 'cart' } },
+					{ id: '2', name: 'read', arguments: { from: 1, search: 'cart' } },
+					{ id: 'plain', name: 'read', arguments: { from: 1, search: 'cart' } },
 					{ id: '3', name: 'click', arguments: { ref: 'e1' } },
 					{ id: '4', name: 'type', arguments: { ref: 'e2', text: 'sam' } },
 					{ id: '5', name: 'press', arguments: { key: 'Enter' } },
@@ -1256,7 +1155,10 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'size' }, { signal })
+				await requireValue(toolset.tools.tool('read')).execute(
+					{ from: 1, search: 'size' },
+					{ signal },
+				)
 				const typed = Promise.resolve(
 					requireValue(toolset.tools.tool('type')).execute(
 						{ ref: 'e2', text: 'Large' },
@@ -1414,17 +1316,25 @@ describe('BrowserToolset', () => {
 				)
 				const staged = requireValue(toolset.tools.tool('dialog'))
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'cart' } }),
+					await toolset.tools.execute({
+						id: '1',
+						name: 'read',
+						arguments: { from: 1, search: 'cart' },
+					}),
 				).toMatchObject({ success: false, error: 'An alert dialog is open: "Saved"; call dialog.' })
 				transport.event('Page.javascriptDialogClosed', { result: true }, 'session-main')
 				expect(toolset.tools.tool('dialog')).toBeUndefined()
 				expect(
-					await toolset.tools.execute({ id: '2', name: 'look', arguments: { search: 'cart' } }),
+					await toolset.tools.execute({
+						id: '2',
+						name: 'read',
+						arguments: { from: 1, search: 'cart' },
+					}),
 				).toMatchObject({ success: true })
 				const refused = await Promise.resolve(
 					staged.execute({ accept: true }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
-				expect(readProperty(refused, 'message')).toBe('No dialog is open; call look.')
+				expect(readProperty(refused, 'message')).toBe('No dialog is open; call read.')
 				expect(readProperty(refused, 'code')).toBe('BROWSER_TOOLSET_DIALOG')
 			} finally {
 				await client.close()
@@ -1439,7 +1349,10 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'email' }, { signal })
+				await requireValue(toolset.tools.tool('read')).execute(
+					{ from: 1, search: 'email' },
+					{ signal },
+				)
 				const sent = transport.sent.length
 				const typed = String(
 					await requireValue(toolset.tools.tool('type')).execute(
@@ -1447,11 +1360,9 @@ describe('BrowserToolset', () => {
 						{ signal },
 					),
 				)
-				expect(
-					typed.startsWith(
-						'Typed "sam" into e2 textbox "Email" and pressed Enter; no form received the submission.\n\n',
-					),
-				).toBe(true)
+				expect(typed.startsWith('Typed "sam" into e2 textbox "Email" and pressed Enter.\n\n')).toBe(
+					true,
+				)
 				const methods = transport.sent.slice(sent).map((message) => message.method)
 				expect(methods).toContain('DOM.focus')
 				const selection = transport.sent
@@ -1527,13 +1438,13 @@ describe('BrowserToolset', () => {
 					await toolset.tools.execute({ id: '1', name: 'click', arguments: { ref: 'x12' } }),
 				).toMatchObject({
 					success: false,
-					error: 'Reference "x12" is not a reference such as e12; call look for fresh refs.',
+					error: 'Reference "x12" is not a reference such as e12; call read for fresh refs.',
 				})
 				expect(
 					await toolset.tools.execute({ id: '2', name: 'click', arguments: { ref: 'e99' } }),
 				).toMatchObject({
 					success: false,
-					error: 'Element e99 is not in the current view; call look for fresh refs.',
+					error: 'Element e99 is not in the current view; call read for fresh refs.',
 				})
 			} finally {
 				await client.close()
@@ -1550,7 +1461,7 @@ describe('BrowserToolset', () => {
 				const copy = { ...performed }
 				expect(copy.result).toMatchObject({
 					success: false,
-					error: 'Reference "x12" is not a reference such as e12; call look for fresh refs.',
+					error: 'Reference "x12" is not a reference such as e12; call read for fresh refs.',
 				})
 				expect(isBrowserElementError(copy.fault) && copy.fault.code).toBe('BROWSER_ELEMENT_ERROR')
 				expect(copy.fault).toBe(performed.fault)
@@ -1565,7 +1476,7 @@ describe('BrowserToolset', () => {
 					}),
 				).catch((error: unknown) => error)
 				expect(isBrowserElementError(rejected) && rejected.code).toBe('BROWSER_ELEMENT_ERROR')
-				const looked = await toolset.perform({ id: 'look', name: 'look', arguments: {} })
+				const looked = await toolset.perform({ id: 'look', name: 'read', arguments: { from: 1 } })
 				expect(looked.result.success).toBe(true)
 				expect(looked).not.toHaveProperty('fault')
 			} finally {
@@ -1615,7 +1526,10 @@ describe('BrowserToolset', () => {
 				const trusted = createBrowserToolset(page)
 				await trusted.start()
 				const signal = new AbortController().signal
-				await requireValue(trusted.tools.tool('look')).execute({ search: 'size' }, { signal })
+				await requireValue(trusted.tools.tool('read')).execute(
+					{ from: 1, search: 'size' },
+					{ signal },
+				)
 				const sent = transport.sent.length
 				expect(
 					await trusted.tools.execute({
@@ -1642,8 +1556,8 @@ describe('BrowserToolset', () => {
 			try {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
-				await requireValue(toolset.tools.tool('look')).execute(
-					{ search: 'email' },
+				await requireValue(toolset.tools.tool('read')).execute(
+					{ from: 1, search: 'email' },
 					{ signal: new AbortController().signal },
 				)
 				expect(
@@ -1692,7 +1606,10 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('read')).execute(
+						{ from: 1, search: 'home' },
+						{ signal },
+					)
 					capturing = true
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1704,11 +1621,11 @@ describe('BrowserToolset', () => {
 			}
 			const [[recovered = '', reads = 0] = [], changed] = outcomes
 			expect(recovered).toMatch(
-				/^Clicked e1 link "Home"\.\n\npage "Cart" https:\/\/example\.test\/next\n/,
+				/^Clicked e1 link "Home"\.\n\npage "Cart" https:\/\/example\.test\/next \(9 lines\)\n/,
 			)
 			expect(reads).toBe(1)
 			expect(changed).toEqual([
-				'Clicked e1 link "Home".\n\n(The page changed before the view could be read; call look.)',
+				'Clicked e1 link "Home".\n\n(The page changed before the view could be read; call read.)',
 				2,
 			])
 		})
@@ -1751,7 +1668,10 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('read')).execute(
+						{ from: 1, search: 'home' },
+						{ signal },
+					)
 					capturing = true
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1763,11 +1683,11 @@ describe('BrowserToolset', () => {
 			}
 			const [[recovered = '', reads = 0] = [], failed] = outcomes
 			expect(recovered).toMatch(
-				/^Clicked e1 link "Home"\.\n\npage "Next" https:\/\/example\.test\/next\n/,
+				/^Clicked e1 link "Home"\.\n\npage "Next" https:\/\/example\.test\/next \(9 lines\)\n/,
 			)
 			expect(reads).toBe(2)
 			expect(failed).toEqual([
-				'Clicked e1 link "Home".\n\n(The view could not be read: Cannot find context with specified id; call look.)',
+				'Clicked e1 link "Home".\n\n(The view could not be read: Cannot find context with specified id; call read.)',
 				1,
 			])
 		})
@@ -1825,7 +1745,7 @@ describe('BrowserToolset', () => {
 				const navigated = await navigating
 				expect(
 					String(readProperty(navigated, 'value')).startsWith(
-						'Navigated to https://example.test/next.\n\npage "Cart" https://example.test/next\n# Your cart',
+						'Navigated to https://example.test/next.\n\npage "Cart" https://example.test/next (9 lines)\n1: # Your cart',
 					),
 				).toBe(true)
 				expect(
@@ -1860,7 +1780,10 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('read')).execute(
+						{ from: 1, search: 'home' },
+						{ signal },
+					)
 					const started = performance.now()
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1870,7 +1793,7 @@ describe('BrowserToolset', () => {
 					expect(elapsed).toBeLessThan(6_000)
 					expect(
 						result.startsWith(
-							'Clicked e1 link "Home"; it requested https://example.test/next and the page did not change.\n\npage "Cart" https://example.test/cart\n# Your cart',
+							'Clicked e1 link "Home"; it requested https://example.test/next and the page did not change.\n\npage "Cart" https://example.test/cart (9 lines)\n1: # Your cart',
 						),
 					).toBe(true)
 				} finally {
@@ -1913,7 +1836,10 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('read')).execute(
+						{ from: 1, search: 'home' },
+						{ signal },
+					)
 					const started = performance.now()
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -1923,7 +1849,7 @@ describe('BrowserToolset', () => {
 					expect(elapsed).toBeLessThan(6_000)
 					expect(
 						result.startsWith(
-							'Clicked e1 link "Home"; the page is still loading https://example.test/next.\n\npage "Cart" https://example.test/next\n# Your cart',
+							'Clicked e1 link "Home"; the page is still loading https://example.test/next.\n\npage "Cart" https://example.test/next (9 lines)\n1: # Your cart',
 						),
 					).toBe(true)
 				} finally {
@@ -1961,7 +1887,10 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
+					await requireValue(toolset.tools.tool('read')).execute(
+						{ from: 1, search: 'home' },
+						{ signal },
+					)
 					// Setup helpers leave one-second budget timers behind; the baseline waits them out.
 					await waitForDelay(1_100)
 					const timers = process
@@ -1975,7 +1904,7 @@ describe('BrowserToolset', () => {
 					expect(elapsed).toBeGreaterThanOrEqual(4_900)
 					expect(elapsed).toBeLessThan(6_000)
 					expect(result).toBe(
-						'Clicked e1 link "Home"; the page is still loading https://example.test/next.\n\n(The view could not be read before the deadline; call look.)',
+						'Clicked e1 link "Home"; the page is still loading https://example.test/next.\n\n(The view could not be read before the deadline; call read.)',
 					)
 					// Settling the receipt aborted the capture's readiness wait with its timer.
 					expect(
@@ -2023,7 +1952,10 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('read')).execute(
+					{ from: 1, search: 'home' },
+					{ signal },
+				)
 				const settled = createRecorder<[]>()
 				const clicked = Promise.resolve(
 					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -2043,2428 +1975,13 @@ describe('BrowserToolset', () => {
 				expect(performance.now() - loaded).toBeLessThan(1_000)
 				expect(
 					result.startsWith(
-						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/next\n# Your cart',
+						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/next (9 lines)\n1: # Your cart',
 					),
 				).toBe(true)
 			} finally {
 				await client.close()
 			}
 		})
-	})
-
-	describe('navigation settlement', () => {
-		it.each(BROWSER_SUBMIT_ACTIONS)(
-			'waits for the navigation a %s submission starts after its input settles, with the observer installed before the first input',
-			async (name, args, action, input, observed) => {
-				const reads = createRecorder<[message: CDPSentMessage]>()
-				const fixture = await createBrowserElementFixture({
-					submit: (message) => {
-						if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['main'])
-							reads.handler(message)
-						else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-				})
-				const { client, page, transport, windows } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
-					const settled = createRecorder<[]>()
-					const acting = Promise.resolve(
-						requireValue(toolset.tools.tool(name)).execute(args, { signal }),
-					).finally(settled.handler)
-					await waitForCondition(
-						'the input settles and the main observer is read',
-						() => reads.count === 1,
-					)
-					windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-					answerBrowserEvaluation(transport, windows, requireValue(reads.calls[0])[0])
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-					for (const stages of [['request', 'start'], ['commit']] as const) {
-						emitBrowserNavigation(
-							transport,
-							'session-main',
-							'main',
-							'https://example.test/next',
-							'loader-next',
-							stages,
-						)
-						await waitForDelay(50)
-						expect(settled.count).toBe(0)
-					}
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						['load'],
-					)
-					expect(
-						String(await acting).startsWith(
-							`${action}.\n\npage "Cart" https://example.test/next\n# Your cart`,
-						),
-					).toBe(true)
-					const installs = transport.sent.filter((message) =>
-						matchesBrowserSubmitObserver(readCDPExpression(message) ?? ''),
-					)
-					expect(installs.map((message) => message.sessionId)).toEqual(observed)
-					expect(transport.sent.indexOf(requireValue(installs[0]))).toBeLessThan(
-						transport.sent.findIndex((message) => message.method === input),
-					)
-					expect(windows.listeners).toBe(0)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('follows a navigation that a handler of the inserted text starts, with the record opened before the edit', async () => {
-			const fixture = await createBrowserElementFixture({
-				insert: (message) => {
-					fixture.windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-					emitBrowserNavigation(
-						fixture.transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						['request', 'start'],
-					)
-					fixture.transport.reply(message.id, {})
-				},
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
-				const settled = createRecorder<[]>()
-				const typing = Promise.resolve(
-					requireValue(toolset.tools.tool('type')).execute(
-						{ ref: 'e2', text: 'sam', submit: true },
-						{ signal },
-					),
-				).finally(settled.handler)
-				await waitForCondition('the text is inserted', () =>
-					transport.sent.some((message) => message.method === 'Input.insertText'),
-				)
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-					['commit'],
-				)
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				const loaded = performance.now()
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-					['load'],
-				)
-				const receipt = String(await typing)
-				expect(receipt.slice(receipt.indexOf('\n\n'))).toMatch(
-					/^\n\npage "Cart" https:\/\/example\.test\/next\n/,
-				)
-				expect(performance.now() - loaded).toBeLessThan(1_000)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('settles a navigation the edit starts while its input is still pending, holding the edit as the queue barrier', async () => {
-			const held: CDPSentMessage[] = []
-			const fixture = await createBrowserElementFixture({
-				insert: (message) => {
-					held.push(message)
-					emitBrowserNavigation(
-						fixture.transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-					)
-				},
-			})
-			const { client, page, transport } = fixture
-			const answered = new Set<number>()
-			// Each outstanding action settles to its result or its error, so teardown can await it.
-			const actions: Array<Promise<unknown>> = []
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
-				const settled = createRecorder<[]>()
-				const typing = Promise.resolve(
-					requireValue(toolset.tools.tool('type')).execute(
-						{ ref: 'e2', text: 'sam', submit: true },
-						{ signal },
-					),
-				)
-					.catch((error: unknown) => error)
-					.finally(settled.handler)
-				actions.push(typing)
-				await waitForCondition(
-					'the receipt settles while the insertion is withheld',
-					() => settled.count === 1,
-					{ budget: 3_000 },
-				)
-				expect(held).toHaveLength(1)
-				expect(
-					String(await typing).startsWith(
-						'Typed "sam" into e2 textbox "Email".\n\npage "Cart" https://example.test/next\n',
-					),
-				).toBe(true)
-				expect(transport.sent.some((message) => message.method === 'Input.dispatchKeyEvent')).toBe(
-					false,
-				)
-				const pressed = createRecorder<[]>()
-				const pressing = Promise.resolve(
-					requireValue(toolset.tools.tool('press')).execute({ key: 'Escape' }, { signal }),
-				)
-					.catch((error: unknown) => error)
-					.finally(pressed.handler)
-				actions.push(pressing)
-				await waitForDelay(50)
-				expect(pressed.count).toBe(0)
-				answered.add(requireValue(held[0]).id)
-				transport.reply(requireValue(held[0]).id, {})
-				expect(String(await pressing).split('\n', 1)[0]).toBe('Pressed Escape.')
-			} finally {
-				for (const message of held) if (!answered.has(message.id)) transport.reply(message.id, {})
-				await Promise.all(actions)
-				await client.close()
-			}
-		})
-
-		it.each(BROWSER_CHILD_ARRANGEMENTS)(
-			'waits for an %s child frame navigation that its submission starts after the input settles',
-			async (_arrangement, local, session) => {
-				const reads = createRecorder<[message: CDPSentMessage]>()
-				let applied = false
-				const fixture = await createBrowserElementFixture({
-					local,
-					submit: (message) => {
-						if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['child'])
-							reads.handler(message)
-						else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-					accessibility: (message) =>
-						fixture.transport.reply(
-							message.id,
-							message.params?.['frameId'] !== 'child'
-								? BROWSER_ELEMENT_AX_FIXTURE
-								: applied
-									? BROWSER_ELEMENT_APPLIED_FIXTURE
-									: local
-										? BROWSER_ELEMENT_FRAMED_FIXTURE
-										: BROWSER_ELEMENT_CHILD_FIXTURE,
-						),
-				})
-				const { client, page, transport, windows } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					const look = String(
-						await requireValue(toolset.tools.tool('look')).execute(
-							{ search: 'the voucher' },
-							{ signal },
-						),
-					)
-					const save = requireValue(
-						/(e\d+) button "Save"/.exec(look)?.[1],
-						'the framed Save reference',
-					)
-					const settled = createRecorder<[]>()
-					const clicking = Promise.resolve(
-						requireValue(toolset.tools.tool('click')).execute({ ref: save }, { signal }),
-					).finally(settled.handler)
-					await waitForCondition(
-						'the input settles and the child observer is read',
-						() => reads.count === 1,
-					)
-					const read = requireValue(reads.calls[0])[0]
-					expect(read.sessionId).toBe(session)
-					windows.window(session, 92).dispatch({ prevented: false, form: {} })
-					answerBrowserEvaluation(transport, windows, read)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-					for (const stages of [['request', 'start'], ['commit']] as const) {
-						emitBrowserNavigation(
-							transport,
-							session,
-							'child',
-							'https://example.test/done',
-							'loader-done',
-							stages,
-						)
-						await waitForDelay(50)
-						expect(settled.count).toBe(0)
-					}
-					applied = true
-					emitBrowserNavigation(
-						transport,
-						session,
-						'child',
-						'https://example.test/done',
-						'loader-done',
-						['load'],
-					)
-					const result = String(await clicking)
-					expect(
-						result.startsWith(
-							`Clicked ${save} button "Save".\n\npage "Cart" https://example.test/cart\n`,
-						),
-					).toBe(true)
-					expect(result).toContain('# Voucher applied')
-					expect(result.slice(result.indexOf('\n\n'))).not.toContain('button "Save"')
-					expect(windows.listeners).toBe(0)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('waits for the main frame navigation when a child frame submits a form targeting _top', async () => {
-			const reads = createRecorder<[message: CDPSentMessage]>()
-			const fixture = await createBrowserElementFixture({
-				submit: (message) => {
-					if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['child'])
-						reads.handler(message)
-					else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-				},
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				const look = String(
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'the voucher' },
-						{ signal },
-					),
-				)
-				const save = requireValue(
-					/(e\d+) button "Save"/.exec(look)?.[1],
-					'the framed Save reference',
-				)
-				const settled = createRecorder<[]>()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: save }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition('the child observer is read', () => reads.count === 1)
-				windows.window('session-child', 92).dispatch({ prevented: false, form: { target: '_top' } })
-				answerBrowserEvaluation(transport, windows, requireValue(reads.calls[0])[0])
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				for (const stages of [['request', 'start'], ['commit']] as const) {
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						stages,
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-				}
-				const loaded = performance.now()
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-					['load'],
-				)
-				expect(
-					String(await clicking).startsWith(
-						`Clicked ${save} button "Save".\n\npage "Cart" https://example.test/next\n`,
-					),
-				).toBe(true)
-				expect(performance.now() - loaded).toBeLessThan(1_000)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('waits for the parent frame navigation when Enter submits a nested form targeting _parent', async () => {
-			const reads = createRecorder<[message: CDPSentMessage]>()
-			let applied = false
-			const fixture = await createBrowserElementFixture({
-				local: true,
-				nested: true,
-				submit: (message) => {
-					if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['nested'])
-						reads.handler(message)
-					else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-				},
-				accessibility: (message) =>
-					fixture.transport.reply(
-						message.id,
-						message.params?.['frameId'] !== 'child'
-							? BROWSER_ELEMENT_AX_FIXTURE
-							: applied
-								? BROWSER_ELEMENT_APPLIED_FIXTURE
-								: BROWSER_ELEMENT_CHILD_FIXTURE,
-					),
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute(
-					{ search: 'the voucher' },
-					{ signal },
-				)
-				const settled = createRecorder<[]>()
-				const pressing = Promise.resolve(
-					requireValue(toolset.tools.tool('press')).execute({ key: 'Enter' }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition('the nested observer is read', () => reads.count === 1)
-				windows
-					.window('session-main', 93)
-					.dispatch({ prevented: false, form: { target: '_parent' } })
-				answerBrowserEvaluation(transport, windows, requireValue(reads.calls[0])[0])
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				for (const stages of [['request', 'start'], ['commit']] as const) {
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'child',
-						'https://example.test/done',
-						'loader-done',
-						stages,
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-				}
-				applied = true
-				const loaded = performance.now()
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'child',
-					'https://example.test/done',
-					'loader-done',
-					['load'],
-				)
-				expect(String(await pressing)).toContain('# Voucher applied')
-				expect(performance.now() - loaded).toBeLessThan(1_000)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('refuses a click before any input when the document that receives it cannot be observed', async () => {
-			const fixture = await createBrowserElementFixture({
-				observe: (message) =>
-					fixture.transport.fail(message.id, 'Cannot find context with specified id', -32000),
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const refusal = await Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).catch((error: unknown) => error)
-				expect(isBrowserError(refusal) && [refusal.code, refusal.context]).toEqual([
-					'BROWSER_TOOLSET_OBSERVE',
-					{ frame: 'main' },
-				])
-				expect(
-					transport.sent.some((message) => message.method === 'Input.dispatchMouseEvent'),
-				).toBe(false)
-				expect(windows.listeners).toBe(0)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('presses the key when a child document installation fails', async () => {
-			const fixture = await createBrowserElementFixture({
-				observe: (message) => {
-					if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['child'])
-						fixture.transport.fail(message.id, 'Cannot find context with specified id', -32000)
-					else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-				},
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const result = String(
-					await requireValue(toolset.tools.tool('press')).execute({ key: 'Enter' }, { signal }),
-				)
-				expect(result.startsWith('Pressed Enter.\n\npage "Cart" https://example.test/cart')).toBe(
-					true,
-				)
-				expect(transport.sent.some((message) => message.method === 'Input.dispatchKeyEvent')).toBe(
-					true,
-				)
-				expect(windows.listeners).toBe(0)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('installs in no frame attached after the census for a click in the main frame', async () => {
-			const fixture = await createBrowserElementFixture({
-				observe: (message) => {
-					if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['main'])
-						fixture.transport.event(
-							'Page.frameAttached',
-							{ frameId: 'late', parentFrameId: 'main' },
-							'session-main',
-						)
-					answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-				},
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal })
-				expect(
-					transport.sent
-						.filter((message) => matchesBrowserSubmitObserver(readCDPExpression(message) ?? ''))
-						.map((message) => [message.sessionId, message.params?.['contextId']]),
-				).toEqual([['session-main', BROWSER_ELEMENT_WORLDS['main']]])
-			} finally {
-				await client.close()
-			}
-		})
-		it.each(BROWSER_SESSION_MOVES)(
-			'settles a child navigation whose commit and load arrive after the frame moves %s, and leaves no registration behind',
-			async (_move, local, first, second) => {
-				const reads = createRecorder<[message: CDPSentMessage]>()
-				let applied = false
-				const fixture = await createBrowserElementFixture({
-					local,
-					submit: (message) => {
-						if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['child'])
-							reads.handler(message)
-						else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-					accessibility: (message) =>
-						fixture.transport.reply(
-							message.id,
-							message.params?.['frameId'] !== 'child'
-								? BROWSER_ELEMENT_AX_FIXTURE
-								: applied
-									? BROWSER_ELEMENT_APPLIED_FIXTURE
-									: local
-										? BROWSER_ELEMENT_FRAMED_FIXTURE
-										: BROWSER_ELEMENT_CHILD_FIXTURE,
-						),
-				})
-				const { client, page, transport, windows, recording } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					const look = String(
-						await requireValue(toolset.tools.tool('look')).execute(
-							{ search: 'the voucher' },
-							{ signal },
-						),
-					)
-					const save = requireValue(
-						/(e\d+) button "Save"/.exec(look)?.[1],
-						'the framed Save reference',
-					)
-					const held = recording.registrations(undefined, 'session-main')
-					const settled = createRecorder<[]>()
-					const clicking = Promise.resolve(
-						requireValue(toolset.tools.tool('click')).execute({ ref: save }, { signal }),
-					).finally(settled.handler)
-					await waitForCondition('the child observer is read', () => reads.count === 1)
-					const read = requireValue(reads.calls[0])[0]
-					windows.window(requireValue(read.sessionId), 92).dispatch({ prevented: false, form: {} })
-					answerBrowserEvaluation(transport, windows, read)
-					emitBrowserNavigation(
-						transport,
-						first,
-						'child',
-						'https://example.test/done',
-						'loader-done',
-						['request', 'start'],
-					)
-					if (local) {
-						const published = waitForEvent<readonly [BrowserFrameInterface]>((handler) => {
-							page.emitter.on('session', handler)
-							return () => page.emitter.off('session', handler)
-						}, 'the replacement session is published')
-						transport.event(
-							'Target.attachedToTarget',
-							{
-								sessionId: second,
-								targetInfo: {
-									targetId: 'child',
-									type: 'iframe',
-									url: 'https://example.test/done',
-									parentFrameId: 'main',
-								},
-							},
-							'session-main',
-						)
-						transport.event(
-							'Page.frameDetached',
-							{ frameId: 'child', reason: 'swap' },
-							'session-main',
-						)
-						await published
-					} else
-						transport.event(
-							'Target.detachedFromTarget',
-							{ sessionId: first, targetId: 'child' },
-							'session-main',
-						)
-					emitBrowserNavigation(
-						transport,
-						second,
-						'child',
-						'https://example.test/done',
-						'loader-done',
-						['commit'],
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-					applied = true
-					emitBrowserNavigation(
-						transport,
-						second,
-						'child',
-						'https://example.test/done',
-						'loader-done',
-						['load'],
-					)
-					const result = String(await clicking)
-					expect(result).toContain('# Voucher applied')
-					expect(result.split('\n', 1)[0]).toBe(`Clicked ${save} button "Save".`)
-					expect(recording.registrations(undefined, 'session-main')).toBe(held)
-					// The page holds one handler per step on a session it follows and none on a session
-					// the frame left; the action holds none on either.
-					const steps = [
-						'Page.frameRequestedNavigation',
-						'Page.frameStartedNavigating',
-						'Page.frameNavigated',
-						'Page.lifecycleEvent',
-						'Page.frameStoppedLoading',
-					]
-					expect(
-						local
-							? steps.map((method) => recording.registrations(method, second))
-							: [recording.registrations(undefined, first)],
-					).toEqual(local ? steps.map(() => 1) : [0])
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it(
-			'does not settle an action on its predecessor commit and load that arrive after its input',
-			{ timeout: 15_000 },
-			async () => {
-				const reads = createRecorder<[message: CDPSentMessage]>()
-				let pressing = false
-				const fixture = await createBrowserElementFixture({
-					released: (message) => {
-						emitBrowserNavigation(
-							fixture.transport,
-							'session-main',
-							'main',
-							'https://example.test/a',
-							'loader-a',
-							['request', 'start'],
-						)
-						fixture.transport.reply(message.id, {})
-					},
-					submit: (message) => {
-						if (pressing && message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['main'])
-							reads.handler(message)
-						else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-				})
-				const { client, page, transport, windows } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					const first = String(
-						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-					)
-					expect(first.split('\n', 1)[0]).toBe(
-						'Clicked e1 link "Home"; it requested https://example.test/a and the page did not change.',
-					)
-					pressing = true
-					const settled = createRecorder<[]>()
-					const pressed = Promise.resolve(
-						requireValue(toolset.tools.tool('press')).execute({ key: 'Enter' }, { signal }),
-					).finally(settled.handler)
-					await waitForCondition(
-						'the press settles and the main observer is read',
-						() => reads.count === 1,
-					)
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/a',
-						'loader-a',
-						['commit', 'load'],
-					)
-					windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-					answerBrowserEvaluation(transport, windows, requireValue(reads.calls[0])[0])
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/b',
-						'loader-b',
-						['request', 'start'],
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/b',
-						'loader-b',
-						['commit', 'load'],
-					)
-					expect(
-						String(await pressed).startsWith(
-							'Pressed Enter.\n\npage "Cart" https://example.test/b\n',
-						),
-					).toBe(true)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('does not select a predecessor request that arrives while the next action installs its observer', async () => {
-			const reads = createRecorder<[message: CDPSentMessage]>()
-			let installs = 0
-			const fixture = await createBrowserElementFixture({
-				observe: (message) => {
-					installs += 1
-					if (installs === 2)
-						emitBrowserNavigation(
-							fixture.transport,
-							'session-main',
-							'main',
-							'https://example.test/a',
-							'loader-a',
-							['request', 'start'],
-						)
-					answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-				},
-				submit: (message) => {
-					if (installs === 2) reads.handler(message)
-					else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-				},
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal })
-				const settled = createRecorder<[]>()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition('the second observer is read', () => reads.count === 1)
-				windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-				answerBrowserEvaluation(transport, windows, requireValue(reads.calls[0])[0])
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/b',
-					'loader-b',
-					['request', 'start'],
-				)
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/a',
-					'loader-a',
-					['commit', 'load'],
-				)
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/b',
-					'loader-b',
-					['commit', 'load'],
-				)
-				expect(
-					String(await clicking).startsWith(
-						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/b\n',
-					),
-				).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('returns the same-page receipt without a navigation wait when every listener prevented the submission', async () => {
-			const fixture = await createBrowserElementFixture({
-				pressed: () =>
-					fixture.windows.window('session-main', 91).dispatch({ prevented: true, form: {} }),
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const started = performance.now()
-				const result = String(
-					await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				)
-				expect(performance.now() - started).toBeLessThan(1_000)
-				expect(
-					result.startsWith(
-						'Clicked e1 link "Home"; the page handled the submission without navigating; call wait for the text you expect.\n\npage "Cart" https://example.test/cart\n',
-					),
-				).toBe(true)
-				expect(
-					transport.sent
-						.filter((message) => matchesBrowserSubmitRead(readCDPExpression(message) ?? ''))
-						.map((message) => message.sessionId),
-				).toEqual(['session-main'])
-				expect(windows.listeners).toBe(0)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it(
-			'bounds a submission that produces no navigation request without a still-loading claim',
-			{ timeout: 15_000 },
-			async () => {
-				const fixture = await createBrowserElementFixture({
-					pressed: () =>
-						fixture.windows.window('session-main', 91).dispatch({ prevented: false, form: {} }),
-				})
-				const { client, page } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					const started = performance.now()
-					const result = String(
-						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-					)
-					const elapsed = performance.now() - started
-					expect(elapsed).toBeGreaterThanOrEqual(3_900)
-					expect(elapsed).toBeLessThan(6_000)
-					expect(
-						result.startsWith('Clicked e1 link "Home".\n\npage "Cart" https://example.test/cart\n'),
-					).toBe(true)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('keeps the receipt pending until commit and load when the observer read fails after the input frame navigation started', async () => {
-			const failed = createRecorder<[]>()
-			const fixture = await createBrowserElementFixture({
-				submit: (message) => {
-					emitBrowserNavigation(
-						fixture.transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						['request', 'start'],
-					)
-					fixture.transport.fail(message.id, 'Execution context was destroyed.', -32000)
-					failed.handler()
-				},
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const settled = createRecorder<[]>()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition('the main observer read fails', () => failed.count === 1)
-				for (const stages of [[], ['commit']] as const) {
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						stages,
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-				}
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-					['load'],
-				)
-				expect(
-					String(await clicking).startsWith(
-						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/next\n',
-					),
-				).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it.each(['before the input command replies', 'between the input reply and the observer read'])(
-			'settles a submission whose navigation starts %s',
-			async (moment) => {
-				const early = moment === 'before the input command replies'
-				const fixture = await createBrowserElementFixture({
-					released: (message) => {
-						if (early)
-							emitBrowserNavigation(
-								fixture.transport,
-								'session-main',
-								'main',
-								'https://example.test/next',
-								'loader-next',
-								['request', 'start'],
-							)
-						fixture.transport.reply(message.id, {})
-					},
-					submit: (message) => {
-						if (!early)
-							emitBrowserNavigation(
-								fixture.transport,
-								'session-main',
-								'main',
-								'https://example.test/next',
-								'loader-next',
-								['request', 'start'],
-							)
-						answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-				})
-				const { client, page, transport } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					const settled = createRecorder<[]>()
-					const clicking = Promise.resolve(
-						requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-					).finally(settled.handler)
-					await waitForCondition('the navigation starts', () =>
-						transport.sent.some((message) => message.params?.['type'] === 'mouseReleased'),
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						['commit'],
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						['load'],
-					)
-					expect(
-						String(await clicking).startsWith(
-							'Clicked e1 link "Home".\n\npage "Cart" https://example.test/next\n',
-						),
-					).toBe(true)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('settles a submission whose navigation stays within the document without a load', async () => {
-			const reads = createRecorder<[message: CDPSentMessage]>()
-			const fixture = await createBrowserElementFixture({
-				submit: (message) => reads.handler(message),
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const settled = createRecorder<[]>()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition('the main observer is read', () => reads.count === 1)
-				windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-				answerBrowserEvaluation(transport, windows, requireValue(reads.calls[0])[0])
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/cart?q=1#placed',
-					'loader-main',
-					['request'],
-				)
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				const navigated = performance.now()
-				transport.event(
-					'Page.navigatedWithinDocument',
-					{
-						frameId: 'main',
-						url: 'https://example.test/cart?q=1#placed',
-						navigationType: 'fragment',
-					},
-					'session-main',
-				)
-				const result = String(await clicking)
-				expect(performance.now() - navigated).toBeLessThan(1_000)
-				expect(
-					result.startsWith(
-						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/cart?q=1#placed\n',
-					),
-				).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('ignores a noncandidate child frame navigation while the destination is pending', async () => {
-			const reads = createRecorder<[message: CDPSentMessage]>()
-			const fixture = await createBrowserElementFixture({
-				submit: (message) => reads.handler(message),
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const settled = createRecorder<[]>()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition('the main observer is read', () => reads.count === 1)
-				windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-				answerBrowserEvaluation(transport, windows, requireValue(reads.calls[0])[0])
-				emitBrowserNavigation(
-					transport,
-					'session-child',
-					'child',
-					'https://example.test/done',
-					'loader-done',
-				)
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-				)
-				expect(
-					String(await clicking).startsWith(
-						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/next\n',
-					),
-				).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('settles the one destination that requests among several positive ones', async () => {
-			let applied = false
-			const fixture = await createBrowserElementFixture({
-				accessibility: (message) =>
-					fixture.transport.reply(
-						message.id,
-						message.params?.['frameId'] !== 'child'
-							? BROWSER_ELEMENT_AX_FIXTURE
-							: applied
-								? BROWSER_ELEMENT_APPLIED_FIXTURE
-								: BROWSER_ELEMENT_CHILD_FIXTURE,
-					),
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				transport.onSend('Input.dispatchKeyEvent', (message) => {
-					if (message.params?.['type'] !== 'keyDown') return
-					windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-					windows.window('session-child', 92).dispatch({ prevented: false, form: {} })
-				})
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const settled = createRecorder<[]>()
-				const pressing = Promise.resolve(
-					requireValue(toolset.tools.tool('press')).execute({ key: 'Enter' }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition(
-					'both observers are read',
-					() =>
-						transport.sent.filter((message) =>
-							matchesBrowserSubmitRead(readCDPExpression(message) ?? ''),
-						).length === 2,
-				)
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				for (const stages of [['request', 'start'], ['commit']] as const) {
-					emitBrowserNavigation(
-						transport,
-						'session-child',
-						'child',
-						'https://example.test/done',
-						'loader-done',
-						stages,
-					)
-					await waitForDelay(50)
-					expect(settled.count).toBe(0)
-				}
-				applied = true
-				const loaded = performance.now()
-				emitBrowserNavigation(
-					transport,
-					'session-child',
-					'child',
-					'https://example.test/done',
-					'loader-done',
-					['load'],
-				)
-				expect(String(await pressing)).toContain('# Voucher applied')
-				expect(performance.now() - loaded).toBeLessThan(1_000)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('refuses a click whose document was replaced after the observer installed', async () => {
-			const fixture = await createBrowserElementFixture({
-				observe: (message) => {
-					if (message.params?.['contextId'] !== BROWSER_ELEMENT_WORLDS['child']) {
-						answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-						return
-					}
-					const published = waitForEvent<readonly [BrowserFrameInterface]>((handler) => {
-						fixture.page.emitter.on('session', handler)
-						return () => fixture.page.emitter.off('session', handler)
-					}, 'the replacement session is published')
-					fixture.transport.event(
-						'Target.attachedToTarget',
-						{
-							sessionId: 'session-child-again',
-							targetInfo: {
-								targetId: 'child',
-								type: 'iframe',
-								url: 'https://example.test/checkout',
-								parentFrameId: 'main',
-							},
-						},
-						'session-main',
-					)
-					void published.then(() => {
-						fixture.transport.event(
-							'Page.frameNavigated',
-							{
-								frame: {
-									id: 'child',
-									parentId: 'main',
-									url: 'https://example.test/checkout',
-									loaderId: 'loader-again',
-								},
-							},
-							'session-child-again',
-						)
-						answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					})
-				},
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				const look = String(
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'the voucher' },
-						{ signal },
-					),
-				)
-				const save = requireValue(
-					/(e\d+) button "Save"/.exec(look)?.[1],
-					'the framed Save reference',
-				)
-				const refusal = await Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: save }, { signal }),
-				).catch((error: unknown) => error)
-				expect(isBrowserElementError(refusal) && refusal.context?.['reason']).toBe('GONE')
-				expect(
-					transport.sent.some((message) => message.method === 'Input.dispatchMouseEvent'),
-				).toBe(false)
-			} finally {
-				await client.close()
-			}
-		})
-	})
-
-	describe('submission outcomes', () => {
-		it('names wait as the next call in the status of a submission the page handled', () => {
-			expect(BROWSER_TOOL_HANDLED_STATUS).toBe(
-				'the page handled the submission without navigating; call wait for the text you expect',
-			)
-			expect(BROWSER_TOOL_HANDLED_STATUS.endsWith('; call wait for the text you expect')).toBe(true)
-		})
-
-		it.each(BROWSER_SUBMIT_ACTIONS)(
-			'names the page handling of a %s submission a listener prevented, without a navigation wait',
-			async (name, args, action) => {
-				const fixture = await createBrowserElementFixture({
-					submit: (message) => {
-						if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['main'])
-							fixture.windows
-								.window('session-main', 91)
-								.dispatch({ prevented: true, form: { method: 'post' } })
-						answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-				})
-				const { client, page } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
-					const started = performance.now()
-					const result = String(
-						await requireValue(toolset.tools.tool(name)).execute(args, { signal }),
-					)
-					expect(performance.now() - started).toBeLessThan(1_000)
-					expect(result.split('\n\n', 1)[0]).toBe(
-						`${action}; the page handled the submission without navigating; call wait for the text you expect.`,
-					)
-					expect(result).toContain('\n\npage "Cart" https://example.test/cart\n')
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it.each(BROWSER_SUBMIT_FOCUS_STEPS)(
-			'returns the receipt line of %s when the observer records no submission',
-			async (_label, main, child, name, args, line) => {
-				const { client, page, windows } = await createBrowserElementFixture()
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'the form' }, { signal })
-					windows.window('session-main', 91).focus(main)
-					windows.window('session-child', 92).focus(child)
-					const result = String(
-						await requireValue(toolset.tools.tool(name)).execute(args, { signal }),
-					)
-					expect(result.split('\n\n', 1)[0]).toBe(line)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('keeps the destination view without a handled status when a surviving submission accompanies a prevented one', async () => {
-			const fixture = await createBrowserElementFixture({
-				submit: (message) => {
-					const window = fixture.windows.window('session-main', 91)
-					window.dispatch({ prevented: true, form: {} })
-					window.dispatch({ prevented: false, form: {} })
-					answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					emitBrowserNavigation(
-						fixture.transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-					)
-				},
-			})
-			const { client, page } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const result = String(
-					await requireValue(toolset.tools.tool('type')).execute(
-						{ ref: 'e2', text: 'sam', submit: true },
-						{ signal },
-					),
-				)
-				expect(
-					result.startsWith(
-						'Typed "sam" into e2 textbox "Email" and submitted the form.\n\npage "Cart" https://example.test/next\n',
-					),
-				).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it.each(BROWSER_SUBMIT_EARLY_CASES)(
-			'names the clause of a type whose Enter %s outran before any read by the reason, with the destination view',
-			async (_name, stages, reason, clause) => {
-				const fixture = await createBrowserElementFixture()
-				const { client, page, transport } = fixture
-				transport.onSend('Input.dispatchKeyEvent', (message) => {
-					if (message.params?.['type'] === 'keyDown')
-						emitBrowserNavigation(
-							transport,
-							'session-main',
-							'main',
-							'https://example.test/next',
-							'loader-next',
-							stages,
-							reason,
-						)
-				})
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					const typing = requireValue(toolset.tools.tool('type')).execute(
-						{ ref: 'e2', text: 'sam', submit: true },
-						{ signal },
-					)
-					await waitForCondition('the Enter is released', () =>
-						transport.sent.some(
-							(message) =>
-								message.method === 'Input.dispatchKeyEvent' && message.params?.['type'] === 'keyUp',
-						),
-					)
-					emitBrowserNavigation(
-						transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						['commit', 'load'],
-					)
-					expect(
-						String(await typing).startsWith(
-							`Typed "sam" into e2 textbox "Email" ${clause}.\n\npage "Cart" https://example.test/next\n`,
-						),
-					).toBe(true)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it.each(BROWSER_SUBMIT_NEGATIVE_CASES)(
-			'names the submitted form of a type whose read answered no submission, with %s under a form reason',
-			async (_name, first) => {
-				const answered = createRecorder<[]>()
-				const fixture = await createBrowserElementFixture({
-					submit: (message) => {
-						if (first)
-							emitBrowserNavigation(
-								fixture.transport,
-								'session-main',
-								'main',
-								'https://example.test/next',
-								'loader-next',
-							)
-						answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-						if (!first)
-							emitBrowserNavigation(
-								fixture.transport,
-								'session-main',
-								'main',
-								'https://example.test/next',
-								'loader-next',
-								['request', 'start'],
-							)
-						answered.handler()
-					},
-				})
-				const { client, page, transport, windows } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					windows.window('session-main', 91).focus({ name: 'input', form: { method: 'post' } })
-					const typing = requireValue(toolset.tools.tool('type')).execute(
-						{ ref: 'e2', text: 'sam', submit: true },
-						{ signal },
-					)
-					await waitForCondition('the observer read answered', () => answered.count === 1)
-					if (!first)
-						emitBrowserNavigation(
-							transport,
-							'session-main',
-							'main',
-							'https://example.test/next',
-							'loader-next',
-							['commit', 'load'],
-						)
-					expect(
-						String(await typing).startsWith(
-							'Typed "sam" into e2 textbox "Email" and submitted the form.\n\npage "Cart" https://example.test/next\n',
-						),
-					).toBe(true)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it.each(BROWSER_SUBMIT_UNREAD_CASES)(
-			'names the clause of a type whose observer read failed and %s by its reason, with the view it reached',
-			async (_name, stages, reason, url, clause) => {
-				const fixture = await createBrowserElementFixture({
-					submit: (message) => {
-						emitBrowserNavigation(
-							fixture.transport,
-							'session-main',
-							'main',
-							'https://example.test/next',
-							'loader-next',
-							stages,
-							reason,
-						)
-						fixture.transport.fail(message.id, 'Execution context was destroyed.', -32000)
-					},
-				})
-				const { client, page } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					const result = String(
-						await requireValue(toolset.tools.tool('type')).execute(
-							{ ref: 'e2', text: 'sam', submit: true },
-							{ signal },
-						),
-					)
-					expect(
-						result.startsWith(
-							`Typed "sam" into e2 textbox "Email" ${clause}.\n\npage "Cart" ${url}\n`,
-						),
-					).toBe(true)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it.each(BROWSER_SUBMIT_MALFORMED_READS)(
-			'takes %s from the observer read as an unknown outcome',
-			async (_name, value) => {
-				const fixture = await createBrowserElementFixture({
-					submit: (message) => fixture.transport.reply(message.id, { result: { value } }),
-				})
-				const { client, page } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					const result = String(
-						await requireValue(toolset.tools.tool('type')).execute(
-							{ ref: 'e2', text: 'sam', submit: true },
-							{ signal },
-						),
-					)
-					expect(result.split('\n\n', 1)[0]).toBe(
-						'Typed "sam" into e2 textbox "Email" and pressed Enter.',
-					)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-	})
-
-	describe('observer cleanup', () => {
-		it('removes the observer when the click refuses before the read', async () => {
-			const fixture = await createBrowserElementFixture({ actionability: 'Element is not visible' })
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const refusal = await Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).catch((error: unknown) => error)
-				expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_ELEMENT_ERROR')
-				expect(
-					transport.sent.filter((message) =>
-						matchesBrowserSubmitObserver(readCDPExpression(message) ?? ''),
-					),
-				).toHaveLength(1)
-				expect(windows.listeners).toBe(0)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('removes the observer when a navigation that won the input race is abandoned', async () => {
-			const fixture = await createBrowserElementFixture({
-				released: (message) => {
-					emitBrowserNavigation(
-						fixture.transport,
-						'session-main',
-						'main',
-						'https://example.test/next',
-						'loader-next',
-						['request', 'start'],
-					)
-					fixture.transport.reply(message.id, {})
-				},
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				await requireValue(toolset.tools.tool('look')).execute(
-					{ search: 'home' },
-					{ signal: new AbortController().signal },
-				)
-				const controller = new AbortController()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute(
-						{ ref: 'e1' },
-						{ signal: controller.signal },
-					),
-				).catch((error: unknown) => error)
-				await waitForCondition('the release is sent', () =>
-					transport.sent.some((message) => message.params?.['type'] === 'mouseReleased'),
-				)
-				await waitForDelay(50)
-				const reason = new Error('The caller left')
-				controller.abort(reason)
-				expect(await clicking).toBe(reason)
-				expect(windows.listeners).toBe(0)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it.each(['an abort', 'a dialog'])(
-			'releases a partial installation after %s',
-			async (interruption) => {
-				const held: CDPSentMessage[] = []
-				const fixture = await createBrowserElementFixture({
-					observe: (message) => {
-						if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['child'])
-							held.push(message)
-						else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-					submit: (message) => {
-						if (message.params?.['contextId'] === BROWSER_ELEMENT_WORLDS['child'])
-							held.push(message)
-						else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-				})
-				const { client, page, transport, windows } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'home' },
-						{ signal: new AbortController().signal },
-					)
-					const controller = new AbortController()
-					const pressing = Promise.resolve(
-						requireValue(toolset.tools.tool('press')).execute(
-							{ key: 'Enter' },
-							{ signal: controller.signal },
-						),
-					).catch((error: unknown) => error)
-					await waitForCondition('the child installation is withheld', () => held.length === 1)
-					await waitForCondition('the main observer installed', () => windows.listeners === 2)
-					const reason = new Error('The caller left')
-					if (interruption === 'an abort') controller.abort(reason)
-					else
-						transport.event(
-							'Page.javascriptDialogOpening',
-							{ type: 'alert', message: 'Coupon expired' },
-							'session-main',
-						)
-					expect(await pressing).toBe(
-						interruption === 'an abort'
-							? reason
-							: 'An alert dialog is open: "Coupon expired"; call dialog.',
-					)
-					expect(
-						transport.sent.some((message) => message.method === 'Input.dispatchKeyEvent'),
-					).toBe(false)
-					await waitForCondition('the child removal is sent', () => held.length === 2)
-					for (const message of held) answerBrowserEvaluation(transport, windows, message)
-					expect(windows.listeners).toBe(0)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('keeps a reinstalled observer when an earlier action removal lands after it', async () => {
-			const reads: CDPSentMessage[] = []
-			let releases = 0
-			const fixture = await createBrowserElementFixture({
-				released: (message) => {
-					releases += 1
-					if (releases === 1) fixture.transport.fail(message.id, 'Input was refused')
-					else fixture.transport.reply(message.id, {})
-				},
-				submit: (message) => reads.push(message),
-			})
-			const { client, page, transport, windows } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const refused = await Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).catch((error: unknown) => error)
-				expect(String(readProperty(refused, 'message'))).toContain('Input was refused')
-				expect(reads).toHaveLength(1)
-				const settled = createRecorder<[]>()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).finally(settled.handler)
-				await waitForCondition('the second action reads its observer', () => reads.length === 2)
-				const [removal, read] = reads
-				answerBrowserEvaluation(transport, windows, requireValue(removal))
-				expect(windows.listeners).toBe(2)
-				windows.window('session-main', 91).dispatch({ prevented: false, form: {} })
-				answerBrowserEvaluation(transport, windows, requireValue(read))
-				await waitForDelay(50)
-				expect(settled.count).toBe(0)
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-				)
-				expect(
-					String(await clicking).startsWith(
-						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/next\n',
-					),
-				).toBe(true)
-				expect(windows.listeners).toBe(0)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('returns the dialog receipt while the observer read is withheld', async () => {
-			const reads: CDPSentMessage[] = []
-			const fixture = await createBrowserElementFixture({
-				submit: (message) => reads.push(message),
-			})
-			const { client, page, transport } = fixture
-			try {
-				replyOk(transport, 'Page.handleJavaScriptDialog')
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				)
-				await waitForCondition('the observer read is withheld', () => reads.length === 1)
-				const opened = performance.now()
-				transport.event(
-					'Page.javascriptDialogOpening',
-					{ type: 'confirm', message: 'Leave the cart?' },
-					'session-main',
-				)
-				expect(await clicking).toBe(
-					'Clicked e1 link "Home". A confirm dialog is open: "Leave the cart?"; call dialog.',
-				)
-				expect(performance.now() - opened).toBeLessThan(1_000)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it(
-			'returns the receipt at its deadline while an observer removal is withheld',
-			{ timeout: 15_000 },
-			async () => {
-				const fixture = await createBrowserElementFixture({
-					released: (message) => {
-						emitBrowserNavigation(
-							fixture.transport,
-							'session-main',
-							'main',
-							'https://example.test/next',
-							'loader-next',
-						)
-						fixture.transport.reply(message.id, {})
-					},
-					submit: () => undefined,
-				})
-				const { client, page, transport } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
-					const started = performance.now()
-					const result = String(
-						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-					)
-					expect(performance.now() - started).toBeLessThan(6_000)
-					expect(
-						result.startsWith('Clicked e1 link "Home".\n\npage "Cart" https://example.test/next\n'),
-					).toBe(true)
-					expect(
-						transport.sent.filter((message) =>
-							matchesBrowserSubmitRead(readCDPExpression(message) ?? ''),
-						),
-					).toHaveLength(1)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it(
-			'rejects with the abort reason and releases the queue when the action aborts while it waits for a withheld observer removal',
-			{ timeout: 15_000 },
-			async () => {
-				const removals: CDPSentMessage[] = []
-				const fixture = await createBrowserElementFixture({
-					released: (message) => {
-						emitBrowserNavigation(
-							fixture.transport,
-							'session-main',
-							'main',
-							'https://example.test/next',
-							'loader-next',
-						)
-						fixture.transport.reply(message.id, {})
-					},
-					submit: (message) => {
-						if (removals.length === 0) removals.push(message)
-						else answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-				})
-				const { client, page } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'home' },
-						{ signal: new AbortController().signal },
-					)
-					const controller = new AbortController()
-					const clicking = Promise.resolve(
-						requireValue(toolset.tools.tool('click')).execute(
-							{ ref: 'e1' },
-							{ signal: controller.signal },
-						),
-					).catch((error: unknown) => error)
-					await waitForCondition('the observer removal is withheld', () => removals.length === 1, {
-						budget: 3_000,
-					})
-					const reason = new Error('The caller left')
-					const aborted = performance.now()
-					controller.abort(reason)
-					expect(await clicking).toBe(reason)
-					const pressed = String(
-						await requireValue(toolset.tools.tool('press')).execute(
-							{ key: 'Escape' },
-							{ signal: new AbortController().signal },
-						),
-					)
-					expect(pressed.split('\n', 1)[0]).toBe('Pressed Escape.')
-					// The withheld removal's own 1 000 ms command timeout would release an unabortable wait.
-					expect(performance.now() - aborted).toBeLessThan(500)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it.each(['census', 'installation', 'read'])(
-			'interrupts a withheld %s at an abort',
-			async (step) => {
-				let holding = false
-				const fixture = await createBrowserElementFixture({
-					tree: (message) => {
-						if (!holding) fixture.transport.reply(message.id, buildBrowserElementTree())
-					},
-					observe: (message) => {
-						if (step !== 'installation')
-							answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-					submit: (message) => {
-						if (step !== 'read')
-							answerBrowserEvaluation(fixture.transport, fixture.windows, message)
-					},
-				})
-				const { client, page, transport } = fixture
-				try {
-					const toolset = createBrowserToolset(page)
-					await toolset.start()
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'home' },
-						{ signal: new AbortController().signal },
-					)
-					const censuses = transport.sent.filter(
-						(message) => message.method === 'Page.getFrameTree',
-					).length
-					holding = step === 'census'
-					const controller = new AbortController()
-					const pressing = Promise.resolve(
-						requireValue(toolset.tools.tool('press')).execute(
-							{ key: 'Enter' },
-							{ signal: controller.signal },
-						),
-					).catch((error: unknown) => error)
-					await waitForCondition(`the ${step} is sent`, () =>
-						step === 'census'
-							? transport.sent.filter((message) => message.method === 'Page.getFrameTree').length >
-								censuses
-							: transport.sent.some((message) =>
-									(step === 'read' ? matchesBrowserSubmitRead : matchesBrowserSubmitObserver)(
-										readCDPExpression(message) ?? '',
-									),
-								),
-					)
-					const reason = new Error('The caller left')
-					const aborted = performance.now()
-					controller.abort(reason)
-					expect(await pressing).toBe(reason)
-					expect(performance.now() - aborted).toBeLessThan(1_100)
-				} finally {
-					await client.close()
-				}
-			},
-		)
-
-		it('honours a cancellation that lands in the same turn as the completing load', async () => {
-			const fixture = await createBrowserElementFixture({
-				pressed: () =>
-					fixture.windows.window('session-main', 91).dispatch({ prevented: false, form: {} }),
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				await requireValue(toolset.tools.tool('look')).execute(
-					{ search: 'home' },
-					{ signal: new AbortController().signal },
-				)
-				const controller = new AbortController()
-				const clicking = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute(
-						{ ref: 'e1' },
-						{ signal: controller.signal },
-					),
-				).catch((error: unknown) => error)
-				await waitForCondition('the observer is read', () =>
-					transport.sent.some((message) =>
-						matchesBrowserSubmitRead(readCDPExpression(message) ?? ''),
-					),
-				)
-				await waitForDelay(20)
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-					['request', 'start', 'commit'],
-				)
-				await waitForDelay(20)
-				const reason = new Error('The caller left')
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-					['load'],
-				)
-				controller.abort(reason)
-				expect(await clicking).toBe(reason)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('releases its navigation waits when the navigation completes and when the action aborts', async () => {
-			const fixture = await createBrowserElementFixture({
-				pressed: () =>
-					fixture.windows.window('session-main', 91).dispatch({ prevented: false, form: {} }),
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				await requireValue(toolset.tools.tool('look')).execute(
-					{ search: 'home' },
-					{ signal: new AbortController().signal },
-				)
-				// Setup helpers leave one-second budget timers behind; the baseline waits them out.
-				await waitForDelay(1_100)
-				const timers = process.getActiveResourcesInfo().filter((name) => name === 'Timeout').length
-				const completing = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute(
-						{ ref: 'e1' },
-						{ signal: new AbortController().signal },
-					),
-				)
-				await waitForCondition('the first observer is read', () =>
-					transport.sent.some((message) =>
-						matchesBrowserSubmitRead(readCDPExpression(message) ?? ''),
-					),
-				)
-				emitBrowserNavigation(
-					transport,
-					'session-main',
-					'main',
-					'https://example.test/next',
-					'loader-next',
-				)
-				await completing
-				expect(process.getActiveResourcesInfo().filter((name) => name === 'Timeout').length).toBe(
-					timers,
-				)
-				const look = String(
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'home' },
-						{ signal: new AbortController().signal },
-					),
-				)
-				const home = requireValue(/(e\d+) link "Home"/.exec(look)?.[1], 'the fresh Home reference')
-				const controller = new AbortController()
-				const reads = transport.sent.filter((message) =>
-					matchesBrowserSubmitRead(readCDPExpression(message) ?? ''),
-				).length
-				const aborting = Promise.resolve(
-					requireValue(toolset.tools.tool('click')).execute(
-						{ ref: home },
-						{ signal: controller.signal },
-					),
-				).catch((error: unknown) => error)
-				await waitForCondition(
-					'the second observer is read',
-					() =>
-						transport.sent.filter((message) =>
-							matchesBrowserSubmitRead(readCDPExpression(message) ?? ''),
-						).length > reads,
-				)
-				await waitForDelay(20)
-				controller.abort(new Error('The caller left'))
-				await aborting
-				expect(process.getActiveResourcesInfo().filter((name) => name === 'Timeout').length).toBe(
-					timers,
-				)
-			} finally {
-				await client.close()
-			}
-		})
-	})
-
-	describe('queue', () => {
-		it('catches concurrent clicks whose pointer pairs interleave', async () => {
-			const releases: CDPSentMessage[] = []
-			const { client, page, transport } = await createBrowserElementFixture({
-				released: (message) => releases.push(message),
-			})
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
-				const start = transport.sent.length
-				const batch = toolset.tools.execute([
-					{ id: 'a', name: 'click', arguments: { ref: 'e1' } },
-					{ id: 'b', name: 'click', arguments: { ref: 'e4' } },
-				])
-				await waitForCondition('the first release', () => releases.length === 1)
-				await waitForDelay(20)
-				expect(
-					transport.sent
-						.slice(start)
-						.filter((message) => message.method === 'Input.dispatchMouseEvent')
-						.map((message) => message.params?.['type']),
-				).toEqual(['mousePressed', 'mouseReleased'])
-				transport.reply(requireValue(releases[0]).id, {})
-				await waitForCondition('the second release', () => releases.length === 2)
-				transport.reply(requireValue(releases[1]).id, {})
-				expect((await batch).map((result) => result.success)).toEqual([true, true])
-				const mouse = transport.sent
-					.slice(start)
-					.filter(
-						(message) =>
-							message.method === 'Input.dispatchMouseEvent' ||
-							message.method === 'DOM.scrollIntoViewIfNeeded',
-					)
-					.map((message) => message.params?.['type'] ?? message.params?.['backendNodeId'])
-				expect(mouse).toEqual([
-					3,
-					'mousePressed',
-					'mouseReleased',
-					7,
-					'mousePressed',
-					'mouseReleased',
-				])
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a queued action that sends after its signal aborts', async () => {
-			const releases: CDPSentMessage[] = []
-			const { client, page, transport } = await createBrowserElementFixture({
-				released: (message) => releases.push(message),
-			})
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
-				const click = requireValue(toolset.tools.tool('click'))
-				const first = Promise.resolve(
-					click.execute({ ref: 'e1' }, { signal: new AbortController().signal }),
-				)
-				await waitForCondition('the first release', () => releases.length === 1)
-				const controller = new AbortController()
-				const queued = Promise.resolve(
-					click.execute({ ref: 'e4' }, { signal: controller.signal }),
-				).catch((caught: unknown) => caught)
-				await waitForDelay(10)
-				const sent = transport.sent.length
-				controller.abort('left the queue')
-				expect(await queued).toBe('left the queue')
-				transport.reply(requireValue(releases[0]).id, {})
-				expect(String(await first).startsWith('Clicked e1 link "Home".')).toBe(true)
-				expect(
-					transport.sent
-						.slice(sent)
-						.filter(
-							(message) =>
-								message.method === 'Input.dispatchMouseEvent' ||
-								message.params?.['backendNodeId'] === 7,
-						),
-				).toEqual([])
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches an abort after the press that skips the release or lets the next press overtake it', async () => {
-			const controller = new AbortController()
-			const releases: CDPSentMessage[] = []
-			const fixture = await createBrowserElementFixture({
-				pressed: () => controller.abort('stopped'),
-				released: (message) => {
-					if (releases.length === 0) releases.push(message)
-					else fixture.transport.reply(message.id, {})
-				},
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
-				const start = transport.sent.length
-				const click = requireValue(toolset.tools.tool('click'))
-				const aborted = Promise.resolve(
-					click.execute({ ref: 'e1' }, { signal: controller.signal }),
-				).catch((caught: unknown) => caught)
-				const next = Promise.resolve(
-					click.execute({ ref: 'e4' }, { signal: new AbortController().signal }),
-				)
-				await waitForCondition('the release is withheld', () => releases.length === 1)
-				await waitForDelay(20)
-				expect(
-					transport.sent
-						.slice(start)
-						.filter((message) => message.method === 'Input.dispatchMouseEvent')
-						.map((message) => message.params?.['type']),
-				).toEqual(['mousePressed', 'mouseReleased'])
-				transport.reply(requireValue(releases[0]).id, {})
-				expect(await aborted).toBe('stopped')
-				expect(String(await next).startsWith('Clicked e4 button "Place order".')).toBe(true)
-				expect(
-					transport.sent
-						.slice(start)
-						.filter((message) => message.method === 'Input.dispatchMouseEvent')
-						.map((message) => message.params?.['type']),
-				).toEqual(['mousePressed', 'mouseReleased', 'mousePressed', 'mouseReleased'])
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a tool signal that never reaches the protocol command', async () => {
-			const trees: CDPSentMessage[] = []
-			const { client, page, transport } = await createBrowserElementFixture({
-				accessibility: (message) => trees.push(message),
-			})
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const controller = new AbortController()
-				const reason = new Error('the model stopped')
-				const looked = Promise.resolve(
-					requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'cart' },
-						{ signal: controller.signal },
-					),
-				).catch((caught: unknown) => caught)
-				await waitForCondition('the tree request', () => trees.length === 1)
-				controller.abort(reason)
-				expect(await looked).toBe(reason)
-				// `look` does not race the signal itself, so the reason it rejects with is the one its
-				// pending protocol entry rejected with.
-				const tree = requireValue(trees[0])
-				expect(tree.sessionId).toBe('session-main')
-				// The aborted request's reply lands on no pending command, so the outline sends
-				// nothing after it; an outline that never received the signal would continue.
-				const sent = transport.sent.length
-				transport.reply(tree.id, BROWSER_ELEMENT_AX_FIXTURE)
-				await waitForDelay(20)
-				expect(transport.sent.slice(sent)).toEqual([])
-			} finally {
-				await client.close()
-			}
-		})
-	})
-
-	describe('views', () => {
-		it('catches tabs or switch advertised without a context, a switch that skips bringing the tab forward, or a tab list without the current mark', async () => {
-			const { client, page, transport } = await createBrowserElementFixture()
-			try {
-				let created = 0
-				transport.onSend('Target.createTarget', (message) => {
-					created += 1
-					transport.reply(message.id, { targetId: `tab-${created}` })
-				})
-				transport.onSend('Target.attachToTarget', (message) =>
-					transport.reply(message.id, {
-						sessionId: `session-${String(message.params?.['targetId'])}`,
-					}),
-				)
-				for (const method of [
-					'Page.setInterceptFileChooserDialog',
-					'Browser.setDownloadBehavior',
-					'Network.enable',
-					'Page.bringToFront',
-				])
-					replyOk(transport, method)
-				const context = new BrowserContext(client)
-				const first = await context.create()
-				const second = await context.create()
-				expect(
-					createBrowserToolset(page)
-						.tools.tools()
-						.map((tool) => tool.name),
-				).not.toContain('tabs')
-				const toolset = createBrowserToolset(first, { context })
-				await toolset.start()
-				const actions = createRecorder<readonly [BrowserAction]>()
-				toolset.emitter.on('action', actions.handler)
-				await expect(
-					toolset.follow('s3', {
-						action: 'switch',
-						arguments: {},
-						tab: { title: 'Cart', url: 'about:blank' },
-					}),
-				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_AMBIGUOUS' })
-				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
-					'look',
-					'read',
-					'plain',
-					'click',
-					'type',
-					'press',
-					'navigate',
-					'wait',
-					'tabs',
-					'switch',
-				])
-				expect(toolset.native.map((tool) => tool.name)).not.toContain('tabs')
-				const signal = new AbortController().signal
-				expect(
-					await requireValue(toolset.tools.tool('tabs')).execute({ search: 'tabs' }, { signal }),
-				).toBe('t1 "Cart" about:blank (current)\nt2 "Cart" about:blank')
-				expect(
-					await requireValue(toolset.tools.tool('tabs')).execute({ search: 'current' }, { signal }),
-				).toBe(
-					'1 tab matches "current":\nt1 "Cart" about:blank (current)\n\nt1 "Cart" about:blank (current)\nt2 "Cart" about:blank',
-				)
-				await expect(
-					requireValue(toolset.tools.tool('tabs')).execute({ what: 'cart' }, { signal }),
-				).rejects.toThrow('The tabs tool takes no what parameter; call tabs with search.')
-				const selected = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
-					toolset.emitter.on('select', handler)
-					return () => toolset.emitter.off('select', handler)
-				}, 'the switch selects the second tab')
-				const switched = String(
-					await requireValue(toolset.tools.tool('switch')).execute({ tab: 't2' }, { signal }),
-				)
-				expect((await selected)[0]).toBe(second)
-				expect(toolset.view).toBe(second)
-				expect(actions.calls[0]?.[0]).toMatchObject({
-					action: 'switch',
-					tab: { title: 'Cart', url: 'about:blank' },
-					outcome: 'done',
-					arguments: { tab: 't2' },
-				})
-				expect(switched.startsWith('Switched to t2 about:blank.\n\npage "Cart" about:blank')).toBe(
-					true,
-				)
-				expect(
-					transport.sent.find((message) => message.method === 'Page.bringToFront')?.sessionId,
-				).toBe('session-tab-2')
-				expect(
-					await requireValue(toolset.tools.tool('tabs')).execute({ search: 'tabs' }, { signal }),
-				).toBe('t1 "Cart" about:blank\nt2 "Cart" about:blank (current)')
-				expect(
-					await toolset.tools.execute({ id: 'nine', name: 'switch', arguments: { tab: 't9' } }),
-				).toMatchObject({ success: false, error: 'Tab "t9" is not open; call tabs.' })
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('keeps the view on the opener when a popup that already closed reaches it', async () => {
-			const { client, page } = await createBrowserElementFixture()
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const selected = createRecorder<[view: BrowserViewInterface]>()
-				toolset.emitter.on('select', selected.handler)
-				const closed = new BrowserPage(client, 'gone', 'session-gone')
-				void closed.destroy()
-
-				page.emitter.emit('popup', closed)
-				await waitForDelay(20)
-
-				expect(closed.closed).toBe(true)
-				expect(selected.count).toBe(0)
-				expect(toolset.view).toBe(page)
-				await toolset.destroy()
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a popup that leaves the view behind, a receipt that omits the move, a close that strands the view, or a continuation read across the move', async () => {
-			const html = `<main><h1>Guide</h1>${Array.from(
-				{ length: 12 },
-				(_, index) => `<p>Paragraph ${index} carries enough words to fill one line of text.</p>`,
-			).join('')}</main>`
-			const fixture = await createBrowserElementFixture({
-				evaluation: (message) =>
-					fixture.transport.reply(message.id, {
-						result: {
-							value: String(message.params?.['expression']).includes('outerHTML')
-								? {
-										url:
-											message.sessionId === 'popup-session'
-												? 'https://example.test/popup'
-												: 'https://example.test/cart',
-										title: 'Cart',
-										html,
-									}
-								: true,
-						},
-					}),
-			})
-			const { client, page, transport } = fixture
-			try {
-				for (const method of [
-					'Page.setInterceptFileChooserDialog',
-					'Network.enable',
-					'Network.disable',
-					'Target.detachFromTarget',
-				])
-					replyOk(transport, method)
-				const toolset = createBrowserToolset(page, { limit: 200 })
-				await toolset.start()
-				const signal = new AbortController().signal
-				const read = requireValue(toolset.tools.tool('read'))
-				const first = String(await read.execute({ search: 'guide' }, { signal }))
-				const end = Number(requireValue(/call read with offset (\d+) for more\]$/.exec(first))[1])
-				const moved = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
-					toolset.emitter.on('select', handler)
-					return () => toolset.emitter.off('select', handler)
-				}, 'the view follows the popup')
-				transport.event(
-					'Target.attachedToTarget',
-					{
-						sessionId: 'popup-session',
-						targetInfo: {
-							targetId: 'popup-1',
-							type: 'page',
-							url: 'https://example.test/popup',
-						},
-					},
-					'session-main',
-				)
-				const [popup] = await moved
-				expect(popup.url).toBe('https://example.test/popup')
-				expect(toolset.view).toBe(popup)
-				const looked = String(
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'popup' }, { signal }),
-				)
-				expect(
-					looked.startsWith(
-						'The view moved to a new tab: https://example.test/popup.\n\npage "Cart" https://example.test/popup',
-					),
-				).toBe(true)
-				const continued = String(await read.execute({ search: 'guide', offset: end }, { signal }))
-				expect(continued).toMatch(
-					/\n\n\[characters 0–\d+ of \d+; call read with offset \d+ for more\]$/,
-				)
-				const captures = transport.sent.filter((message) =>
-					String(message.params?.['expression']).includes('outerHTML'),
-				)
-				expect(captures.map((message) => message.sessionId)).toEqual([
-					'session-main',
-					'popup-session',
-				])
-				const returned = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
-					toolset.emitter.on('select', handler)
-					return () => toolset.emitter.off('select', handler)
-				}, 'the view returns to the opener')
-				transport.event(
-					'Target.detachedFromTarget',
-					{ sessionId: 'popup-session', targetId: 'popup-1' },
-					'session-main',
-				)
-				expect((await returned)[0]).toBe(page)
-				const back = String(
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'cart' }, { signal }),
-				)
-				expect(
-					back.startsWith(
-						'The tab https://example.test/popup closed; the view returned to https://example.test/cart.\n\npage "Cart" https://example.test/cart',
-					),
-				).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it.each(['tools.execute', 'perform'] as const)(
-			'settles a click that opens a popup on the popup through %s: the result carries the move and the popup view, and the action the popup as its tab',
-			async (path) => {
-				const { client, page } = await createBrowserPopupFixture()
-				const toolset = createBrowserToolset(page)
-				try {
-					await toolset.start()
-					await page.elements.outline()
-					const selected = createRecorder<[view: BrowserViewInterface]>()
-					toolset.emitter.on('select', selected.handler)
-					const actions = createRecorder<[action: BrowserAction]>()
-					toolset.emitter.on('action', actions.handler)
-					const call = { id: 's1', name: 'click', arguments: { ref: 'e4' } }
-					const result =
-						path === 'perform'
-							? (await toolset.perform(call)).result
-							: await toolset.tools.execute(call)
-
-					const text = result.success ? String(result.value) : result.error
-					expect(
-						text.startsWith(
-							'The view moved to a new tab: https://example.test/popup.\n\nClicked e4 button "Place order".\n\npage "Details" https://example.test/popup',
-						),
-					).toBe(true)
-					expect(toolset.view).not.toBe(page)
-					expect(toolset.view.url).toBe('https://example.test/popup')
-					expect(actions.calls.map(([action]) => action)).toMatchObject([
-						{
-							action: 'click',
-							outcome: 'done',
-							receipt: 'Clicked e4 button "Place order".',
-							tab: { url: 'https://example.test/popup', title: 'Details' },
-						},
-					])
-					// The popup event reached the toolset during the click, which moved the view once.
-					expect(selected.calls.map(([view]) => view)).toStrictEqual([toolset.view])
-					const looked = await toolset.tools.execute({
-						id: 'look',
-						name: 'look',
-						arguments: { search: 'the details' },
-					})
-					expect(
-						looked.success &&
-							String(looked.value).startsWith('page "Details" https://example.test/popup'),
-					).toBe(true)
-				} finally {
-					await toolset.destroy()
-					await client.close()
-				}
-			},
-		)
 	})
 
 	describe('page tools', () => {
@@ -4654,476 +2171,6 @@ describe('BrowserToolset', () => {
 		})
 	})
 
-	describe('look pages and matches', () => {
-		it('omits an oversized match header and cuts the first oversized row', async () => {
-			const fixture = await createBrowserElementFixture({
-				accessibility: (message) =>
-					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
-			})
-			try {
-				const toolset = createBrowserToolset(fixture.page, { limit: 500 })
-				await toolset.start()
-				const look = requireValue(toolset.tools.tool('look'))
-				const context = { signal: new AbortController().signal }
-				const plain = await look.execute({ search: 'tracking' }, context)
-				for (const length of [300, 600]) {
-					const result = String(
-						await look.execute({ search: `button ${'x'.repeat(length)}` }, context),
-					)
-					expect(result.startsWith('page "Cart" ')).toBe(true)
-					expect(result).not.toContain('match')
-					expect(result).toBe(plain)
-				}
-				const search = `button ${'x'.repeat(210)}`
-				const result = String(await look.execute({ search }, context))
-				expect(result.startsWith(`160 elements match "${search}":\n`)).toBe(true)
-				expect(result).toContain('…\n\npage "Cart" ')
-			} finally {
-				await fixture.client.close()
-			}
-		})
-
-		it('shares the look page room with the move note and counts only outline characters', async () => {
-			const fixture = await createBrowserElementFixture({
-				accessibility: (message) =>
-					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
-			})
-			const { client, page, transport } = fixture
-			try {
-				for (const method of ['Page.setInterceptFileChooserDialog', 'Network.enable'])
-					replyOk(transport, method)
-				const toolset = createBrowserToolset(page, { limit: 500 })
-				await toolset.start()
-				const moved = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
-					toolset.emitter.on('select', handler)
-					return () => toolset.emitter.off('select', handler)
-				}, 'the view follows the popup')
-				transport.event(
-					'Target.attachedToTarget',
-					{
-						sessionId: 'popup-session',
-						targetInfo: { targetId: 'popup-1', type: 'page', url: 'https://example.test/popup' },
-					},
-					'session-main',
-				)
-				const [popup] = await moved
-				const whole = (await popup.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text
-				const look = requireValue(toolset.tools.tool('look'))
-				const context = { signal: new AbortController().signal }
-				const note = 'The view moved to a new tab: https://example.test/popup.\n\n'
-				const first = extractBrowserPage(String(await look.execute({ search: '' }, context)))
-				expect(first.body.startsWith(note)).toBe(true)
-				expect(first.body.length).toBeLessThanOrEqual(500)
-				const body = first.body.slice(note.length)
-				expect(first.end).toBe(body.length)
-				const next = extractBrowserPage(
-					String(await look.execute({ search: '', offset: first.end }, context)),
-				)
-				expect(whole.startsWith(body + next.body)).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('places the focus clause after the submission status with a semicolon', async () => {
-			const fixture = await createBrowserElementFixture({
-				accessibility: (message) =>
-					fixture.transport.reply(message.id, {
-						nodes: [
-							{
-								nodeId: 'email',
-								backendDOMNodeId: 3,
-								role: { value: 'textbox' },
-								name: { value: 'Email' },
-								properties: [{ name: 'focused', value: { type: 'boolean', value: true } }],
-							},
-						],
-					}),
-			})
-			try {
-				const toolset = createBrowserToolset(fixture.page)
-				await toolset.start()
-				fixture.windows
-					.window('session-main', 91)
-					.focus({ name: 'input', form: { method: 'post' } })
-				const result = String(
-					await requireValue(toolset.tools.tool('press')).execute(
-						{ key: 'Enter' },
-						{ signal: new AbortController().signal },
-					),
-				)
-				expect(result.split('\n', 1)[0]).toBe(
-					'Pressed Enter; no form received the submission; focus is on e1 textbox "Email".',
-				)
-			} finally {
-				await fixture.client.close()
-			}
-		})
-
-		it('catches look pages that skip, repeat, or exceed the limit, or stop at the outline cap', async () => {
-			const fixture = await createBrowserElementFixture({
-				accessibility: (message) =>
-					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
-			})
-			const { client, page } = fixture
-			try {
-				const capped = await page.elements.outline()
-				expect([capped.count, capped.total]).toEqual([150, 160])
-				expect(capped.text).not.toContain('e160 ')
-				const whole = (await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text
-				const toolset = createBrowserToolset(page, { limit: 500 })
-				await toolset.start()
-				const look = requireValue(toolset.tools.tool('look'))
-				const signal = new AbortController().signal
-				const bodies: string[] = []
-				let offset: number | undefined = 0
-				while (offset !== undefined) {
-					const paged = extractBrowserPage(
-						String(await look.execute({ search: '', offset }, { signal })),
-					)
-					expect(paged.start).toBe(offset)
-					expect(paged.body.length).toBeLessThanOrEqual(500)
-					bodies.push(paged.body)
-					offset = paged.next
-				}
-				expect(bodies.length).toBeGreaterThan(2)
-				expect(bodies.join('')).toBe(whole)
-				expect(bodies.slice(0, -1).every((body) => body.endsWith('\n'))).toBe(true)
-				expect(bodies.at(-1)).toMatch(/\ne160 button "Button 160"\n\(160 of 160 elements\)$/)
-				const last = String(
-					await look.execute({ search: '', offset: whole.length - 10 }, { signal }),
-				)
-				expect(last).toMatch(/\[characters \d+–\d+ of \d+\]$/)
-				expect(last).not.toContain('for more')
-				expect(await look.execute({ search: '', offset: whole.length }, { signal })).toBe(
-					await look.execute({ search: '' }, { signal }),
-				)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a match block that pages, shifts the offsets, outgrows half the room, or appears unasked', async () => {
-			const fixture = await createBrowserElementFixture({
-				accessibility: (message) =>
-					fixture.transport.reply(message.id, buildBrowserButtonTree(160)),
-			})
-			const { client, page } = fixture
-			try {
-				const whole = (await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text
-				const toolset = createBrowserToolset(page, { limit: 500 })
-				await toolset.start()
-				const look = requireValue(toolset.tools.tool('look'))
-				const signal = new AbortController().signal
-				const first = extractBrowserPage(
-					String(await look.execute({ search: 'the button 155' }, { signal })),
-				)
-				const block = '1 element matches "the button 155":\ne155 button "Button 155"\n\n'
-				expect(first.body.startsWith(`${block}page "Cart" `)).toBe(true)
-				expect(first.start).toBe(0)
-				expect(whole.startsWith(first.body.slice(block.length))).toBe(true)
-				expect(first.end).toBe(first.body.length - block.length)
-				const next = requireValue(first.next)
-				const continued = await look.execute({ search: 'the button 155', offset: next }, { signal })
-				expect(continued).toBe(await look.execute({ search: 'tracking', offset: next }, { signal }))
-				expect(continued).not.toContain('match')
-				const all = extractBrowserPage(String(await look.execute({ search: 'button' }, { signal })))
-				const [listed = ''] = all.body.split('page "Cart" ')
-				expect(listed.startsWith('160 elements match "button":\ne1 button "Button 1"\n')).toBe(true)
-				expect(listed.endsWith('"\n\n')).toBe(true)
-				expect(listed.length).toBeLessThanOrEqual(250)
-				expect(listed.split('\n').length - 3).toBeLessThan(160)
-				const plain = await look.execute({ search: 'tracking' }, { signal })
-				expect(String(plain).startsWith('page "Cart" ')).toBe(true)
-				expect(await look.execute({ search: 155 }, { signal })).toBe(plain)
-				expect(await look.execute({ search: 'a to 1' }, { signal })).toBe(plain)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a look that captures before refusing a malformed offset', async () => {
-			const { client, page, transport } = await createBrowserElementFixture()
-			try {
-				const toolset = createBrowserToolset(page)
-				await toolset.start()
-				const look = requireValue(toolset.tools.tool('look'))
-				const signal = new AbortController().signal
-				const before = transport.sent.filter(
-					(message) => message.method === 'Accessibility.getFullAXTree',
-				).length
-				for (const offset of [-1, 1.5, '3']) {
-					const refused = await Promise.resolve(
-						look.execute({ search: 'save', offset }, { signal }),
-					).catch((caught: unknown) => caught)
-					expect(readProperty(refused, 'message')).toBe(
-						'The offset parameter must be a non-negative integer.',
-					)
-					expect(readProperty(refused, 'code')).toBe('BROWSER_TOOLSET_ARGUMENT')
-					expect(readProperty(refused, 'context')).toEqual({ key: 'offset' })
-				}
-				expect(
-					transport.sent.filter((message) => message.method === 'Accessibility.getFullAXTree'),
-				).toHaveLength(before)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a press receipt that omits the focused element past the cap or names an unreferenced one', async () => {
-			for (const [focused, line] of [
-				['button-180', 'Pressed Tab; focus is on e180 button "Button 180".'],
-				[undefined, 'Pressed Tab.'],
-				['root', 'Pressed Tab.'],
-			] as const) {
-				const fixture = await createBrowserElementFixture({
-					accessibility: (message) =>
-						fixture.transport.reply(message.id, buildBrowserButtonTree(200, focused)),
-				})
-				try {
-					const toolset = createBrowserToolset(fixture.page)
-					await toolset.start()
-					const pressed = String(
-						await requireValue(toolset.tools.tool('press')).execute(
-							{ key: 'Tab' },
-							{ signal: new AbortController().signal },
-						),
-					)
-					expect(pressed.split('\n', 1)[0]).toBe(line)
-					expect(pressed).toContain('\n(150 of 200 elements)')
-				} finally {
-					await fixture.client.close()
-				}
-			}
-		})
-	})
-
-	describe('bounds', () => {
-		it('catches a view, a slice, a page tool output or error, a dialog message, or a tab title that escapes the limit', async () => {
-			const huge = 'm'.repeat(1_000_000)
-			const html = `<main><h1>Guide</h1>${Array.from(
-				{ length: 12 },
-				(_, index) => `<p>Paragraph ${index} carries enough words to fill one line of text.</p>`,
-			).join('')}</main>`
-			const fixture = await createBrowserElementFixture({
-				registry: (message) => fixture.transport.reply(message.id, {}),
-				title: (message) =>
-					fixture.transport.reply(message.id, {
-						result: { value: message.sessionId === 'session-tab' ? huge : 'Cart' },
-					}),
-				evaluation: (message) =>
-					fixture.transport.reply(message.id, {
-						result: {
-							value: String(message.params?.['expression']).includes('outerHTML')
-								? { url: 'https://example.test/cart', title: 'Cart', html }
-								: true,
-						},
-					}),
-			})
-			const { client, page, transport } = fixture
-			try {
-				for (const method of [
-					'WebMCP.disable',
-					'Page.handleJavaScriptDialog',
-					'Page.setInterceptFileChooserDialog',
-					'Browser.setDownloadBehavior',
-					'Network.enable',
-					'Target.createTarget',
-				])
-					replyOk(transport, method, method === 'Target.createTarget' ? { targetId: 'tab-1' } : {})
-				replyOk(transport, 'Target.attachToTarget', { sessionId: 'session-tab' })
-				transport.onSend('WebMCP.invokeTool', (message) => {
-					const tool = String(message.params?.['toolName'])
-					transport.reply(message.id, { invocationId: tool })
-					transport.event(
-						'WebMCP.toolResponded',
-						tool === 'big'
-							? { invocationId: tool, status: 'Completed', output: huge }
-							: { invocationId: tool, status: 'Error', errorText: huge },
-						'session-main',
-					)
-				})
-				const context = new BrowserContext(client)
-				const tab = await context.create()
-				const cut = /^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut\]$/
-				const viewed =
-					/^[\s\S]{63,64}\n\[characters 0–6[34] of \d+; the rest was cut; call look with words to find\]$/
-				const refused = await Promise.resolve(
-					requireValue(
-						createBrowserToolset(page, { limit: 64, tools: createToolManager() }).native.find(
-							(tool) => tool.name === 'click',
-						),
-					).execute({ ref: huge }, { signal: new AbortController().signal }),
-				).catch((caught: unknown) => caught)
-				expect(readProperty(refused, 'message')).toMatch(cut)
-				expect(readProperty(refused, 'code')).toBe('BROWSER_ELEMENT_ERROR')
-				expect(readProperty(refused, 'context')).toEqual({
-					subject: `Reference ${JSON.stringify(huge)}`,
-					reason: 'UNKNOWN',
-				})
-				const toolset = createBrowserToolset(page, { limit: 64, context })
-				await toolset.start()
-				const signal = new AbortController().signal
-				const looked = String(
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'cart' }, { signal }),
-				)
-				const [view = '', range = ''] = looked.split('\n\n[characters ')
-				expect(view.length).toBeLessThanOrEqual(64)
-				expect(view.endsWith('\n')).toBe(true)
-				expect(range).toMatch(/^0–\d+ of \d+; call look with offset \d+ for more\]$/)
-				const slice = String(
-					await requireValue(toolset.tools.tool('read')).execute({ search: 'guide' }, { signal }),
-				)
-				const [body = '', footer = ''] = slice.split('\n\n[characters ')
-				expect(body.length).toBeLessThanOrEqual(64)
-				expect(footer).toMatch(/^0–\d+ of \d+; call read with offset \d+ for more\]$/)
-				transport.event(
-					'WebMCP.toolsAdded',
-					{
-						tools: [
-							{ name: 'big', description: 'Large output', frameId: 'main' },
-							{ name: 'broken', description: 'Large error', frameId: 'main' },
-						],
-					},
-					'session-main',
-				)
-				await waitForCondition(
-					'the page tools are adopted',
-					() => toolset.tools.tool('broken') !== undefined,
-				)
-				const [big, broken] = await toolset.tools.execute([
-					{ id: '1', name: 'big', arguments: { search: 'output' } },
-					{ id: '2', name: 'broken', arguments: { search: 'error' } },
-				])
-				expect(readProperty(big, 'value')).toMatch(cut)
-				expect(readProperty(broken, 'error')).toMatch(cut)
-				expect(String(readProperty(broken, 'error')).startsWith('Browser tool Error: mmm')).toBe(
-					true,
-				)
-				expect(tab.url).toBe('about:blank')
-				const tabs = await toolset.tools.execute({
-					id: 't',
-					name: 'tabs',
-					arguments: { search: 'x' },
-				})
-				expect(readProperty(tabs, 'value')).toMatch(cut)
-				transport.event(
-					'Page.javascriptDialogOpening',
-					{ type: 'prompt', message: huge },
-					'session-main',
-				)
-				const refusal = await toolset.tools.execute({
-					id: 'r',
-					name: 'look',
-					arguments: { search: 'x' },
-				})
-				expect(readProperty(refusal, 'error')).toMatch(cut)
-				expect(
-					await requireValue(toolset.tools.tool('dialog')).execute({ accept: false }, { signal }),
-				).toMatch(viewed)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a continuation read that recaptures a current reading or reuses a stale one', async () => {
-			const html = `<main><h1>Guide</h1>${Array.from(
-				{ length: 12 },
-				(_, index) => `<p>Paragraph ${index} carries enough words to fill one line of text.</p>`,
-			).join('')}</main>`
-			const fixture = await createBrowserElementFixture({
-				evaluation: (message) =>
-					fixture.transport.reply(message.id, {
-						result: {
-							value: String(message.params?.['expression']).includes('outerHTML')
-								? { url: 'https://example.test/cart', title: 'Cart', html }
-								: true,
-						},
-					}),
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page, { limit: 120 })
-				await toolset.start()
-				const signal = new AbortController().signal
-				const read = requireValue(toolset.tools.tool('read'))
-				const first = String(await read.execute({ search: 'guide' }, { signal }))
-				const end = Number(requireValue(/call read with offset (\d+) for more\]$/.exec(first))[1])
-				const second = String(await read.execute({ search: 'guide', offset: end }, { signal }))
-				expect(second).toMatch(new RegExp(`\\n\\n\\[characters ${end}–\\d+ of \\d+`))
-				expect(
-					transport.sent.filter((message) =>
-						String(message.params?.['expression']).includes('outerHTML'),
-					),
-				).toHaveLength(1)
-				transport.event(
-					'Page.navigatedWithinDocument',
-					{ frameId: 'main', url: 'https://example.test/cart#next' },
-					'session-main',
-				)
-				const stale = String(await read.execute({ search: 'guide', offset: end }, { signal }))
-				expect(stale).toMatch(
-					/\n\n\[characters 0–\d+ of \d+; call read with offset \d+ for more\]$/,
-				)
-				expect(
-					transport.sent.filter((message) =>
-						String(message.params?.['expression']).includes('outerHTML'),
-					),
-				).toHaveLength(2)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('restarts the retained reading at 0 for an offset at or past its end after a DOM edit without a navigation, and continues one inside it', async () => {
-			let html = `<main><h1>Guide</h1>${Array.from(
-				{ length: 12 },
-				(_, index) => `<p>Paragraph ${index} carries enough words to fill one line of text.</p>`,
-			).join('')}</main>`
-			const fixture = await createBrowserElementFixture({
-				evaluation: (message) =>
-					fixture.transport.reply(message.id, {
-						result: {
-							value: String(message.params?.['expression']).includes('outerHTML')
-								? { url: 'https://example.test/cart', title: 'Cart', html }
-								: true,
-						},
-					}),
-			})
-			const { client, page, transport } = fixture
-			try {
-				const toolset = createBrowserToolset(page, { limit: 120 })
-				await toolset.start()
-				const signal = new AbortController().signal
-				const read = requireValue(toolset.tools.tool('read'))
-				const first = String(await read.execute({ search: 'guide' }, { signal }))
-				const [, end = '', total = ''] = requireValue(
-					/\n\n\[characters 0–(\d+) of (\d+); call read with offset \d+ for more\]$/.exec(first),
-				)
-				expect(Number(end)).toBeLessThan(Number(total))
-				// The edit leaves the reading current, because only a navigation makes it stale.
-				html = '<main><h1>Edited</h1><p>The page changed its text in place.</p></main>'
-				for (const offset of [Number(total), Number(total) + 1_000]) {
-					expect(await read.execute({ search: 'guide', offset }, { signal })).toBe(first)
-				}
-				const last = Number(total) - 1
-				expect(await read.execute({ search: 'guide', offset: last }, { signal })).toMatch(
-					new RegExp(`^[\\s\\S]\\n\\n\\[characters ${last}–${total} of ${total}\\]$`),
-				)
-				expect(
-					transport.sent.filter((message) =>
-						String(message.params?.['expression']).includes('outerHTML'),
-					),
-				).toHaveLength(1)
-				expect(await read.execute({ search: 'guide' }, { signal })).toBe(
-					'# Edited\n\nThe page changed its text in place.',
-				)
-			} finally {
-				await client.close()
-			}
-		})
-	})
-
 	describe('destroy', () => {
 		it('catches a destroyed toolset that still runs a tool, keeps a queued action, or leaves its tools', async () => {
 			const releases: CDPSentMessage[] = []
@@ -5133,9 +2180,13 @@ describe('BrowserToolset', () => {
 			try {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'cart' } })
+				await toolset.tools.execute({
+					id: 'look',
+					name: 'read',
+					arguments: { from: 1, search: 'cart' },
+				})
 				const click = requireValue(toolset.tools.tool('click'))
-				const look = requireValue(toolset.tools.tool('look'))
+				const look = requireValue(toolset.tools.tool('read'))
 				const holding = Promise.resolve(
 					click.execute({ ref: 'e1' }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
@@ -5149,7 +2200,7 @@ describe('BrowserToolset', () => {
 				transport.reply(requireValue(releases[0]).id, {})
 				expect(readProperty(await holding, 'message')).toBe('the browser session ended')
 				const after = await Promise.resolve(
-					look.execute({ search: 'cart' }, { signal: new AbortController().signal }),
+					look.execute({ from: 1, search: 'cart' }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(after, 'message')).toBe('the browser session ended')
 				expect(readProperty(after, 'code')).toBe('BROWSER_TOOLSET_ENDED')
@@ -5242,82 +2293,6 @@ describe('BrowserToolset', () => {
 		})
 	})
 
-	describe('placements', () => {
-		it('catches a view-backed toolset that advertises page tools, subscribes a protocol, or skips the boundary', async () => {
-			const html = `<main><h1>Form</h1>${Array.from(
-				{ length: 8 },
-				(_, index) => `<p>Line ${index} of the form carries enough words to fill a line.</p>`,
-			).join('')}</main>`
-			const view = createBrowserViewDouble({ html })
-			const toolset = new BrowserToolset(view, { limit: 60 })
-			const names = ['look', 'read', 'plain', 'click', 'type', 'wait']
-			expect(toolset.native.map((tool) => tool.name)).toEqual(names)
-			await toolset.start()
-			expect(view.calls).toEqual([])
-			expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(names)
-			expect(toolset.view).toBe(view)
-			const signal = new AbortController().signal
-			expect(
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'form' }, { signal }),
-			).toMatch(/\n\n\[characters 0–\d+ of \d+; call look with offset \d+ for more\]$/)
-			const read = String(
-				await requireValue(toolset.tools.tool('read')).execute({ search: 'form' }, { signal }),
-			)
-			expect(read).toMatch(/\n\n\[characters 0–\d+ of \d+; call read with offset \d+ for more\]$/)
-			expect(
-				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-			).toMatch(/^Clicked e1 button "Save"\. \(untrusted event\)\n\npage "Form"/)
-			expect(
-				await requireValue(toolset.tools.tool('type')).execute(
-					{ ref: 'e2', text: 'sam' },
-					{ signal },
-				),
-			).toMatch(/^Typed "sam" into e2 textbox "Email"\. \(untrusted event\)\n\n/)
-			expect(
-				await requireValue(toolset.tools.tool('type')).execute(
-					{ ref: 'e3', text: 'Large' },
-					{ signal },
-				),
-			).toMatch(/^Selected "Large" in e3 combobox "Size" \(programmatic\)\. \(unt/)
-			expect(
-				await requireValue(toolset.tools.tool('type')).execute(
-					{ ref: 'e2', text: 'sam', submit: true },
-					{ signal },
-				),
-			).toMatch(/^Typed "sam" into e2 textbox "Email" and submitted the form\./)
-			expect(
-				await requireValue(toolset.tools.tool('wait')).execute({ text: 'Form' }, { signal }),
-			).toBe('"Form" is on the page.')
-			expect(view.calls).toEqual([
-				'outline',
-				'read',
-				'click e1',
-				'outline',
-				'fill e2 sam',
-				'outline',
-				'select e3 Large',
-				'outline',
-				'fill e2 sam',
-				'submit e2',
-				'outline',
-				'wait Form',
-			])
-			await toolset.destroy()
-			expect(toolset.tools.count).toBe(0)
-		})
-
-		it('catches a context accepted without the page it lists tabs for', async () => {
-			const { client } = await createConnectedCDPClient()
-			try {
-				const context = new BrowserContext(client)
-				const error = captureError(() => new BrowserToolset(createBrowserViewDouble(), { context }))
-				expect(readProperty(error, 'code')).toBe('BROWSER_TOOLSET_CONTEXT')
-			} finally {
-				await client.close()
-			}
-		})
-	})
-
 	describe('startup', () => {
 		it('catches a startup that registers after destroy() ran while the registry was enabling', async () => {
 			const enables: CDPSentMessage[] = []
@@ -5376,7 +2351,7 @@ describe('BrowserToolset', () => {
 				expect(toolset.tools.count).toBe(0)
 				transport.reply(requireValue(enables[0]).id, {})
 				await Promise.all(starts)
-				expect(toolset.tools.count).toBe(8)
+				expect(toolset.tools.count).toBe(6)
 			} finally {
 				await client.close()
 			}
@@ -5454,48 +2429,6 @@ describe('BrowserToolset', () => {
 				expect(await navigated).toBe('the model stopped')
 				expect(performance.now() - aborted).toBeLessThan(1_000)
 				expect(transport.sent.some((message) => message.method === 'Page.stopLoading')).toBe(true)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a tabs call whose pending title hides the dialog', async () => {
-			const titles: CDPSentMessage[] = []
-			const fixture = await createBrowserElementFixture({
-				title: (message) => {
-					if (message.sessionId === 'session-tab') titles.push(message)
-					else fixture.transport.reply(message.id, { result: { value: 'Cart' } })
-				},
-			})
-			const { client, page, transport } = fixture
-			try {
-				for (const method of [
-					'Page.setInterceptFileChooserDialog',
-					'Browser.setDownloadBehavior',
-					'Network.enable',
-				])
-					replyOk(transport, method)
-				replyOk(transport, 'Target.createTarget', { targetId: 'tab-1' })
-				replyOk(transport, 'Target.attachToTarget', { sessionId: 'session-tab' })
-				const context = new BrowserContext(client)
-				await context.create()
-				const toolset = createBrowserToolset(page, { context })
-				await toolset.start()
-				const listed = Promise.resolve(
-					requireValue(toolset.tools.tool('tabs')).execute(
-						{ search: 'tabs' },
-						{ signal: new AbortController().signal },
-					),
-				)
-				await waitForCondition('the title is withheld', () => titles.length === 1)
-				const opened = performance.now()
-				transport.event(
-					'Page.javascriptDialogOpening',
-					{ type: 'confirm', message: 'Stay?' },
-					'session-main',
-				)
-				expect(await listed).toBe('A confirm dialog is open: "Stay?"; call dialog.')
-				expect(performance.now() - opened).toBeLessThan(100)
 			} finally {
 				await client.close()
 			}
@@ -5740,7 +2673,10 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
 					const signal = new AbortController().signal
-					await requireValue(toolset.tools.tool('look')).execute({ search: 'size' }, { signal })
+					await requireValue(toolset.tools.tool('read')).execute(
+						{ from: 1, search: 'size' },
+						{ signal },
+					)
 					const typed = String(
 						await requireValue(toolset.tools.tool('type')).execute(
 							{ ref: 'e2', text: 'Large' },
@@ -5773,8 +2709,8 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const wait = requireValue(toolset.tools.tool('wait'))
-				expect(await wait.execute({ text: 'Done', timeout: 60 }, { signal })).toBe(
-					'"Done" is on the page.',
+				expect(await wait.execute({ text: 'Done', timeout: 60 }, { signal })).toContain(
+					'"Done" is on the page.\n\npage ',
 				)
 				await wait.execute({ text: 'Done' }, { signal })
 				const [capped, defaulted] = waits.map((expression) =>
@@ -5784,94 +2720,6 @@ describe('BrowserToolset', () => {
 				expect(capped).toBeLessThanOrEqual(30_000)
 				expect(defaulted).toBeGreaterThan(4_000)
 				expect(defaulted).toBeLessThanOrEqual(5_000)
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a tab list that fails when one tab does not answer its title', async () => {
-			const fixture = await createBrowserElementFixture({
-				title: (message) =>
-					message.sessionId === 'session-tab'
-						? fixture.transport.fail(message.id, 'Target closed')
-						: fixture.transport.reply(message.id, { result: { value: 'Cart' } }),
-			})
-			const { client, page, transport } = fixture
-			try {
-				for (const method of [
-					'Page.setInterceptFileChooserDialog',
-					'Browser.setDownloadBehavior',
-					'Network.enable',
-				])
-					replyOk(transport, method)
-				replyOk(transport, 'Target.createTarget', { targetId: 'tab-1' })
-				replyOk(transport, 'Target.attachToTarget', { sessionId: 'session-tab' })
-				const context = new BrowserContext(client)
-				await context.create()
-				const toolset = createBrowserToolset(page, { context })
-				await toolset.start()
-				expect(
-					await requireValue(toolset.tools.tool('tabs')).execute(
-						{ search: 'tabs' },
-						{ signal: new AbortController().signal },
-					),
-				).toBe('t1 "" about:blank')
-			} finally {
-				await client.close()
-			}
-		})
-
-		it('catches a continuation offset that counts the move note instead of the reading', async () => {
-			const html = `<main><h1>Guide</h1>${Array.from(
-				{ length: 12 },
-				(_, index) => `<p>Paragraph ${index} carries enough words to fill one line of text.</p>`,
-			).join('')}</main>`
-			const fixture = await createBrowserElementFixture({
-				evaluation: (message) =>
-					fixture.transport.reply(message.id, {
-						result: {
-							value: String(message.params?.['expression']).includes('outerHTML')
-								? { url: 'https://example.test/popup', title: 'Guide', html }
-								: true,
-						},
-					}),
-			})
-			const { client, page, transport } = fixture
-			try {
-				for (const method of ['Page.setInterceptFileChooserDialog', 'Network.enable'])
-					replyOk(transport, method)
-				const toolset = createBrowserToolset(page, { limit: 200 })
-				await toolset.start()
-				const moved = waitForEvent<readonly [BrowserViewInterface]>((handler) => {
-					toolset.emitter.on('select', handler)
-					return () => toolset.emitter.off('select', handler)
-				}, 'the view follows the popup')
-				transport.event(
-					'Target.attachedToTarget',
-					{
-						sessionId: 'popup-session',
-						targetInfo: { targetId: 'popup-1', type: 'page', url: 'https://example.test/popup' },
-					},
-					'session-main',
-				)
-				await moved
-				const signal = new AbortController().signal
-				const read = requireValue(toolset.tools.tool('read'))
-				const note = 'The view moved to a new tab: https://example.test/popup.\n\n'
-				const first = String(await read.execute({ search: '' }, { signal }))
-				expect(first.startsWith(note)).toBe(true)
-				const [head = '', tail = ''] = first.slice(note.length).split('\n\n[characters ')
-				const end = Number(requireValue(/call read with offset (\d+) for more\]$/.exec(tail))[1])
-				expect(end).toBe(head.length)
-				expect(first.length - tail.length - '\n\n[characters '.length).toBeLessThanOrEqual(200)
-				const second = String(await read.execute({ search: '', offset: end }, { signal }))
-				const [next = ''] = second.split('\n\n[characters ')
-				const whole = createBrowserReading({
-					url: 'https://example.test/popup',
-					title: 'Guide',
-					html,
-				}).markdown().text
-				expect(`${head}${next}`).toBe(whole.slice(0, head.length + next.length))
 			} finally {
 				await client.close()
 			}
@@ -5900,7 +2748,10 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const signal = new AbortController().signal
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'home' }, { signal })
+				await requireValue(toolset.tools.tool('read')).execute(
+					{ from: 1, search: 'home' },
+					{ signal },
+				)
 				// Setup helpers leave one-second budget timers behind; the baseline waits them out.
 				await waitForDelay(1_100)
 				const timers = process
@@ -5974,8 +2825,8 @@ describe('BrowserToolset', () => {
 				try {
 					const toolset = createBrowserToolset(page)
 					await toolset.start()
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'home' },
+					await requireValue(toolset.tools.tool('read')).execute(
+						{ from: 1, search: 'home' },
 						{ signal: new AbortController().signal },
 					)
 					holding = true
@@ -6013,55 +2864,18 @@ describe('BrowserToolset', () => {
 		)
 	})
 
-	describe('reading limits', () => {
-		it('catches a read that returns half a surrogate pair or never advances at a tiny limit', async () => {
-			const view = createBrowserViewDouble({ html: '<main><p>\u{1F600}\u{1F600}</p></main>' })
-			const whole = createBrowserReading({
-				url: view.url,
-				title: 'Form',
-				html: '<main><p>\u{1F600}\u{1F600}</p></main>',
-			}).markdown().text
-			expect(whole.startsWith('\u{1F600}\u{1F600}')).toBe(true)
-			const narrow = new BrowserToolset(view, { limit: 1 })
-			await narrow.start()
-			const refused = await Promise.resolve(
-				requireValue(narrow.tools.tool('read')).execute(
-					{ search: 'faces' },
-					{ signal: new AbortController().signal },
-				),
-			).catch((caught: unknown) => caught)
-			expect(readProperty(refused, 'code')).toBe('BROWSER_TOOLSET_LIMIT')
-			expect(readProperty(refused, 'context')).toEqual({ limit: 1, offset: 0 })
-			const pair = new BrowserToolset(view, { limit: 2 })
-			await pair.start()
-			expect(
-				await requireValue(pair.tools.tool('read')).execute(
-					{ search: 'faces' },
-					{ signal: new AbortController().signal },
-				),
-			).toBe(`\u{1F600}\n\n[characters 0–2 of ${whole.length}; call read with offset 2 for more]`)
-		})
-	})
-
 	describe('startup reentry', () => {
 		it('catches a start from an add listener that begins a second startup', async () => {
 			const tools = createToolManager()
 			const toolset = new BrowserToolset(createBrowserViewDouble(), { tools })
 			const nested: Array<Promise<void>> = []
 			tools.emitter.on('add', (tool) => {
-				if (tool.name === 'look' && nested.length === 0) nested.push(toolset.start())
+				if (tool.name === 'read' && nested.length === 0) nested.push(toolset.start())
 			})
 			const outer = toolset.start()
 			await outer
 			expect(nested[0]).toBe(outer)
-			expect(tools.tools().map((tool) => tool.name)).toEqual([
-				'look',
-				'read',
-				'plain',
-				'click',
-				'type',
-				'wait',
-			])
+			expect(tools.tools().map((tool) => tool.name)).toEqual(['read', 'click', 'type', 'wait'])
 			await toolset.destroy()
 			expect(tools.count).toBe(0)
 		})
@@ -6074,16 +2888,16 @@ describe('BrowserToolset', () => {
 			await toolset.start()
 			const signal = new AbortController().signal
 			const outline =
-				'page "Form" https://example.test/form\ne1 button "Save"\ne2 textbox "Email"\ne3 combobox "Size"\n(3 of 3 elements)'
-			expect(
-				await requireValue(toolset.tools.tool('look')).execute({ search: 'form' }, { signal }),
-			).toBe(outline)
-			expect(
-				await requireValue(toolset.tools.tool('read')).execute({ search: 'form' }, { signal }),
-			).toBe('1 line matches "form":\n[0] Form body\n\nForm body')
+				'page "Form" https://example.test/form (3 lines)\n1: e1 button "Save"\n2: e2 textbox "Email"\n3: e3 combobox "Size"\n[lines 1–3 of 3; the whole page]'
+			expect(await requireValue(toolset.tools.tool('read')).execute({ from: 1 }, { signal })).toBe(
+				outline,
+			)
+			expect(await requireValue(toolset.tools.tool('read')).execute({ from: 1 }, { signal })).toBe(
+				outline,
+			)
 			expect(
 				await requireValue(toolset.tools.tool('wait')).execute({ text: 'Form body' }, { signal }),
-			).toBe('"Form body" is on the page.')
+			).toBe(`"Form body" is on the page.\n\n${outline}`)
 			expect(
 				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 			).toBe(`Clicked e1 button "Save". (untrusted event)\n\n${outline}`)
@@ -6110,7 +2924,7 @@ describe('BrowserToolset', () => {
 			const signal = new AbortController().signal
 			const click = requireValue(toolset.tools.tool('click'))
 			const outline =
-				'page "Form" https://example.test/form\ne1 button "Save"\ne2 textbox "Email"\ne3 combobox "Size"\n(3 of 3 elements)'
+				'page "Form" https://example.test/form (3 lines)\n1: e1 button "Save"\n2: e2 textbox "Email"\n3: e3 combobox "Size"\n[lines 1–3 of 3; the whole page]'
 			expect(await click.execute({ ref: 'e2' }, { signal })).toBe(
 				`Clicked e2 textbox "Email"; call type with e2 to enter text. (untrusted event)\n\n${outline}`,
 			)
@@ -6127,10 +2941,7 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				const signal = new AbortController().signal
 				const outline = String(
-					await requireValue(toolset.tools.tool('look')).execute(
-						{ search: 'the cart' },
-						{ signal },
-					),
+					await requireValue(toolset.tools.tool('read')).execute({ from: 1 }, { signal }),
 				)
 				expect(
 					await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
@@ -6345,7 +3156,7 @@ describe('BrowserToolset', () => {
 					toolset.follow('s0', { action: 'press', arguments: { key: 'Escape' } }),
 				).rejects.toMatchObject({
 					code: 'BROWSER_STEP_ERROR',
-					message: 's0: The toolset is replaying add-kettle until it finishes; call look.',
+					message: 's0: The toolset is replaying add-kettle until it finishes; call read.',
 					action: { action: 'press', outcome: 'refused' },
 				})
 				const typing = toolset
@@ -6518,7 +3329,7 @@ describe('BrowserToolset', () => {
 						})
 						.then(() => toolset.follow('s4', { action: 'click', arguments: { ref: 'e1' } })),
 				).rejects.toThrow('s3: "Added to cart" did not appear within 0.01 s.')
-				expect(view.calls).toEqual(['wait Added to cart'])
+				expect(view.calls).toEqual(['wait Added to cart', 'outline'])
 			} finally {
 				await toolset.destroy()
 			}
@@ -6563,7 +3374,7 @@ describe('BrowserToolset', () => {
 				const fourth = await context.create()
 				// The limit cuts the tabs tool's text inside the second line, so a resolution that read
 				// the text back would find only the first tab.
-				const toolset = createBrowserToolset(first, { context, limit: 40 })
+				const toolset = createBrowserToolset(first, { context })
 				await toolset.start()
 				expect(await toolset.tabs()).toStrictEqual([
 					{ id: 't1', title: 'Cart', url: 'about:blank', current: true },
@@ -6571,15 +3382,7 @@ describe('BrowserToolset', () => {
 					{ id: 't3', title: 'Cart', url: 'about:blank', current: false },
 					{ id: 't4', title: 'Returns', url: 'about:blank', current: false },
 				])
-				const listing = String(
-					await requireValue(toolset.tools.tool('tabs')).execute(
-						{ search: 'tabs' },
-						{ signal: new AbortController().signal },
-					),
-				)
-				expect(listing).toBe(
-					't1 "Cart" about:blank (current)\nt2 "Orde\n[characters 0–40 of 102; the rest was cut]',
-				)
+				expect(await toolset.read()).toContain('tabs: t1')
 				const fronted = (): number =>
 					transport.sent.filter((message) => message.method === 'Page.bringToFront').length
 				await expect(
@@ -6590,7 +3393,7 @@ describe('BrowserToolset', () => {
 					}),
 				).rejects.toMatchObject({
 					code: 'BROWSER_JOURNEY_AMBIGUOUS',
-					message: 's3: The tab "Cart" at about:blank is ambiguous; call tabs.',
+					message: 's3: The tab "Cart" at about:blank is ambiguous; call read.',
 				})
 				for (const tab of [
 					{ title: 'Help', url: 'about:blank' },
@@ -6600,7 +3403,7 @@ describe('BrowserToolset', () => {
 						toolset.follow('s4', { action: 'switch', arguments: {}, tab }),
 					).rejects.toMatchObject({
 						code: 'BROWSER_JOURNEY_TARGET',
-						message: `s4: The tab ${JSON.stringify(tab.title)} at ${tab.url} is not open; call tabs.`,
+						message: `s4: The tab ${JSON.stringify(tab.title)} at ${tab.url} is not open; call read.`,
 					})
 				expect(fronted()).toBe(0)
 				const switched = await toolset.follow('s5', {
@@ -6698,9 +3501,7 @@ describe('BrowserToolset', () => {
 			await toolset.destroy()
 			expect(removed.calls.map(([tool]) => tool.name)).toEqual([
 				...BROWSER_JOURNEY_TOOL_NAMES,
-				'look',
 				'read',
-				'plain',
 				'click',
 				'type',
 				'wait',

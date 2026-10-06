@@ -227,7 +227,7 @@ export class ContextFixture {
 		} finally {
 			abort.abort()
 		}
-		const text = await callContextTool(client, holder, 'plain', { search: '' })
+		const text = await callContextTool(client, holder, 'read', { from: 1 })
 		const json = requireValue(text.match(/\{"cookie":.*\}/)?.[0], `context state in ${text}`)
 		const state: unknown = JSON.parse(json)
 		if (!isRecord(state)) throw new Error('Invalid context state')
@@ -352,7 +352,7 @@ export async function downloadContextFile(
 	link = 'Download context file',
 	filename = 'context.txt',
 ): Promise<string> {
-	const outline = await callContextTool(client, holder, 'look', { search: '' })
+	const outline = await callContextTool(client, holder, 'read', { from: 1, search: '' })
 	const ref = requireOutlineReference(outline, 'link', link)
 	const record = requireValue(
 		parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8')),
@@ -680,7 +680,9 @@ export interface ServiceOutlineRow {
  */
 export function extractOutlineRows(text: string): readonly ServiceOutlineRow[] {
 	const seen = new Set<string>()
-	return [...text.matchAll(/^(e[1-9]\d*) (\S+) ("(?:[^"\\\n]|\\.)*")/gm)].flatMap((match) => {
+	return [
+		...text.matchAll(/^(?:\d+: )?(?:#{1,6} |- )?(e[1-9]\d*) (\S+) ("(?:[^"\\\n]|\\.)*")/gm),
+	].flatMap((match) => {
 		const [, reference, role, quoted] = match
 		const name: unknown = JSON.parse(quoted ?? '""')
 		if (reference === undefined || role === undefined || !isString(name) || seen.has(reference))
@@ -715,7 +717,7 @@ export function collectOutlineEntries(text: string): readonly string[] {
 	return text
 		.split(/\r\n|\n/)
 		.flatMap((line) => {
-			const match = /^(e[1-9]\d*) (\S+ "(?:[^"\\]|\\.)*".*)$/.exec(line)
+			const match = /^(?:\d+: )?(?:#{1,6} |- )?(e[1-9]\d*) (\S+ "(?:[^"\\]|\\.)*".*)$/.exec(line)
 			const reference = match?.[1]
 			const entry = match?.[2]
 			if (reference === undefined || entry === undefined || seen.has(reference)) return []
@@ -728,6 +730,36 @@ export function collectOutlineEntries(text: string): readonly string[] {
 /** Supplies toggle, expansion, selection, and absent-state controls for both placements. */
 export const SERVICE_TOGGLE_HTML =
 	'<button aria-pressed="true">Toggle on</button><button aria-pressed="false">Toggle off</button><button aria-pressed="mixed">Toggle mixed</button><button aria-pressed="TRUE">Uppercase toggle</button><button aria-pressed="foo">Unknown toggle</button><button aria-pressed=" false ">Spaced toggle</button><button aria-pressed="">Empty toggle</button><button aria-pressed="undefined">Undefined toggle</button><button aria-expanded="mixed">Mixed expansion</button><button aria-expanded="foo">Unknown expansion</button><button>Plain toggle control</button><button aria-expanded="false">Disclosure</button><a href="#" aria-expanded="true">Expanded link</a><div role="tablist"><button role="tab" aria-selected="true">Selected tab</button><button role="tab" aria-selected="false">Unselected tab</button><button role="tab">Default tab</button></div><div role="tree"><div role="treeitem" aria-selected="true">Selected treeitem</div><div role="treeitem" aria-selected="false">Unselected treeitem</div><div role="treeitem">Default treeitem</div></div><div role="listbox" aria-label="ARIA choices"><div role="option" aria-selected="true">Selected option</div><div role="option" aria-selected="false">Unselected option</div><div role="option">Default option</div><div role="option" aria-selected="">Empty option</div><div role="option" aria-selected="undefined">Undefined option</div></div><select aria-label="Native"><option>Native first</option><option selected>Native chosen</option></select><select aria-label="Override" aria-expanded="true"><option selected aria-selected="false">Native false</option><option aria-selected="true">Native true</option></select>'
+
+/** Defines handled submissions with semantic and unrelated changes after the submit event. */
+export const SERVICE_READING_SUBMISSIONS = [
+	{
+		name: 'synchronous',
+		code: 'document.querySelector("output").textContent = "Order confirmed"',
+		changed: true,
+	},
+	{
+		name: 'delayed',
+		code: 'setTimeout(() => document.querySelector("output").textContent = "Order confirmed", 200)',
+		changed: true,
+	},
+	{
+		name: 'aria-hidden',
+		code: 'setTimeout(() => { const hidden=document.createElement("p"); hidden.setAttribute("aria-hidden","true"); hidden.textContent="Invisible update"; document.body.append(hidden) }, 200)',
+		changed: false,
+	},
+	{ name: 'unchanged', code: '', changed: false },
+	{
+		name: 'bookkeeping',
+		code: 'setTimeout(() => document.body.dataset.tick = "1", 200)',
+		changed: false,
+	},
+	{
+		name: 'hidden',
+		code: 'setTimeout(() => document.querySelector("aside").textContent = "hidden change", 200)',
+		changed: false,
+	},
+]
 
 /**
  * Returns the reference of the one outline row with a role and a name, or throws.
@@ -885,3 +917,57 @@ export async function requireDocumentToolset(
 	if (failed !== undefined)
 		throw new Error(`Precondition failed: the document toolset did not start: ${String(failed)}`)
 }
+
+/** Supplies ordinary catalogue and policy paragraphs copied from the ollama store fixture on 2026-10-06. */
+export const SERVICE_STORE_PARAGRAPHS: readonly string[] = [
+	'“The kettle has lived on our stove for three winters and still sings like the first morning.” — Maren, Tromsø',
+	'“The board arrived oiled and ready, wrapped in paper with a note from the maker who cut it.” — Idris, Leeds',
+	'“I ordered a mug for my father and the workshop wrote back to ask which glaze he would like.” — Paloma, Seville',
+	'“The apron softened after one wash and the pockets hold a notebook, a pencil, and a phone.” — Kenji, Sapporo',
+	'“Our cafe has used the trays for two years. Not one has warped, even on the terrace.” — Aoife, Galway',
+	'“The spice rack fitted the gap beside the window exactly, and the walnut glows in the evening.” — Tomas, Brno',
+	'“I asked how to restore an old board and the workshop sent a page of notes and a tin of wax.” — Lior, Haifa',
+	'“Every parcel comes in paper and card, and the card goes straight into our recycling.” — Nadia, Casablanca',
+	'“The kettle handle stays cool enough to hold without a cloth, which my hands appreciate.” — Rosa, Porto',
+	'“The mug holds exactly one pot of tea, so nobody in our house argues about the last cup.” — Emeka, Enugu',
+	'“We visited the workshop on the first Saturday and watched a kettle take shape in an hour.” — Sofie, Aarhus',
+	'“The tea tray drains into its hidden reservoir, so the table stays dry through a long afternoon.” — Ravi, Pune',
+	'“The board still looks new after a year of daily bread, onions, and one very sharp knife.” — Hanne, Bergen',
+	'“A replacement for a chipped mug arrived within the week, and they did not ask for the old one.” — Dario, Turin',
+	'“The copper has darkened to a warm brown, and I like it more each month it sits on the hob.” — Ines, Lisbon',
+	'Harbor Goods began as a market stall on the east pier, selling kettles and boards made by three families of makers who shared one workshop behind the fish market.',
+	'Every piece we sell is made in small batches. The kettles are spun and hammered by hand, the boards are cut from trees that fell in winter storms, and the mugs are thrown and glazed in a kiln that runs twice a week.',
+	'We test each kettle on gas, electric, and induction hobs before it leaves the workshop, and we oil each board three times over a week so that it arrives ready for a knife.',
+	'We pack every order in paper and card from the recycling yard down the road. No plastic leaves our workshop, and every box can go straight into your own recycling bin.',
+	'Gift wrapping is free on every order. Choose it at checkout and we will add a handwritten card with any message you like, up to forty words.',
+	'Prices include tax. We do not charge for returns, and we never add a fee at checkout that the product page did not show you first.',
+	'Our workshop opens to visitors on the first Saturday of each month. Come and watch a kettle being hammered, or bring an old board and we will show you how to restore it.',
+	'We donate one percent of every sale to the harbour trust, which keeps the pier, the lighthouse, and the tidal pool in repair for everyone who lives and works here.',
+	'Stock is small and batches sell out. When a piece is gone, the makers start the next batch within a fortnight, and the product page shows the date the batch is due.',
+	'We answer every message ourselves, usually within one working day. Tell us what you cook and how you cook it, and we will suggest the piece that suits your kitchen.',
+	'We ship to every address in the country, including islands and remote postcodes. Parcels to the islands travel by ferry and can take one extra working day. We do not ship to parcel lockers, because a kettle box is too large for most of them.',
+	'Every order is packed by hand in paper and card. Kettles travel in a moulded pulp cradle, boards travel wrapped in kraft paper, and mugs travel in a honeycomb sleeve that protects the glaze. We never use plastic fill.',
+	'Standard parcels travel with the national post. Heavy parcels, over ten kilograms, travel with a courier who books a delivery window by text message. Both carriers give you a tracking link on the day your parcel leaves the workshop.',
+	'Standard delivery takes two to four working days on the mainland. Express delivery takes one working day on the mainland and two to the islands. Delivery times start from the day the parcel leaves the workshop, not from the day you order.',
+	'Standard delivery is free on orders over sixty dollars and costs six dollars below that. Express delivery costs fourteen dollars on every order. Heavy parcels cost the same as standard parcels; the workshop pays the difference.',
+	'Parcels worth more than one hundred dollars need a signature. If nobody is home, the carrier leaves a card and holds the parcel at the nearest depot for ten days. You can name a neighbour at checkout who can sign on your behalf.',
+	'If a parcel returns to us after ten days at the depot, we write to you and send it again once, free of charge. A parcel that returns a second time is refunded in full, minus the delivery price of the second attempt.',
+	'Open your parcel within seven days and check every piece. If anything is damaged, photograph it with the box and write to us. We send a replacement or refund the full price, and you keep the damaged piece; we never ask for it back.',
+	'If tracking shows no movement for five working days, write to us. We open a claim with the carrier and send a replacement the same day, without waiting for the claim to finish. You do not need to contact the carrier yourself.',
+	'You can change the delivery address until the parcel leaves the workshop. After that, the carrier can redirect it for a fee that the carrier sets. Write to us with the order number and the new address and we will arrange it.',
+	'A gift order ships without a price list inside the box. Add the recipient address at checkout and your own address for the receipt. The handwritten card travels inside the box, sealed in its own envelope.',
+	'We do not ship abroad yet. Visitors from abroad can collect an order at the workshop on the first Saturday of each month; choose collection at checkout and bring the order number with you.',
+	'You can collect any order at the workshop on the east pier. Collection is free and the order is ready one working day after you place it. We hold a collection order for thirty days before we refund it.',
+	'To return an unwanted piece, write to us within thirty days. We send a prepaid label by email. Pack the piece in its original box if you still have it, and drop the parcel at any post office. We refund the full price when it reaches us.',
+	'During storms the ferry to the islands can stop for several days, and parcels wait at the harbour depot until it runs again. Between the last week of December and the first working day of January the workshop is closed and nothing ships.',
+	'The tracking link arrives by email on the day the parcel leaves the workshop. It shows each scan the carrier records: collection, the sorting depot, the local depot, and the delivery van. A parcel can go a day without a scan while it travels between depots.',
+	'You can send an order to a workplace. Add the company name on the address line and the floor or department on the second line, so the post room can find you. Most post rooms sign for parcels, so a workplace delivery rarely misses.',
+	'At checkout you can name a safe place, such as a porch or a shed, where the carrier may leave a parcel that needs no signature. The carrier photographs the parcel where it was left, and the photograph appears on the tracking page.',
+	'When part of an order is waiting for a new batch, we ship the pieces that are ready and send the rest when the batch is finished. You pay delivery once, and each parcel carries its own tracking link.',
+	'Cake stands, serving platters, and shelving travel with the courier because they need two people to carry or careful handling. The courier books a delivery window with you by text message the day before.',
+	'You can add or remove pieces until the order is packed. Write to us with the order number and the change. When a change lowers the price, we refund the difference; when it raises the price, we send a payment link for the difference.',
+	'You can cancel an order at any time before it leaves the workshop, and we refund the full price the same day. After it leaves, the returns section applies, and the prepaid return label is still free.',
+	'Refunds go back to the card or account you paid with. Most banks show a refund within three working days of the day we send it; some take up to ten. We write to you on the day we send each refund.',
+	'Every order ships from and to an address in this country, so no customs forms or duties apply. When we begin to ship abroad, this section will state the duties each destination charges.',
+	'Write to the workshop by email or through the contact form. We answer every message ourselves, usually within one working day. Include the order number when you have one, so we can find your order quickly.',
+]

@@ -1,3 +1,8 @@
+import { BROWSER_READING_HTML, BROWSER_READING_STRUCTURE_HTML } from '../setup.js'
+import { renderBrowserLine } from '../../src/core/index.js'
+import { writeFileSync } from 'node:fs'
+import { SERVICE_READING_SUBMISSIONS, SERVICE_STORE_PARAGRAPHS } from '../setupService.js'
+import { BROWSER_SUBMIT_KEY } from '@src/core'
 /**
  * Live-browser proofs for `BrowserToolset` over a real page, driven through `@orkestrel/tool`.
  *
@@ -316,17 +321,397 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}
 			const [first, second] = results.map((result) => maskBrowserReferences(result))
 			expect(second).toBe(first)
-			expect(
-				first?.startsWith(
-					`The view moved to a new tab: ${child}.\n\nClicked e# link "Open details".\n\npage "Details" ${child}\n# Details`,
-				),
-			).toBe(true)
+			expect(first).toContain(`The view moved to a new tab: ${child}.`)
+			expect(first).toContain(`Clicked e# link "Open details".\n\npage "Details" ${child}`)
 			expect(actions.map((action) => [action.outcome, action.tab])).toEqual([
 				['done', { url: child, title: 'Details' }],
 				['done', { url: child, title: 'Details' }],
 			])
 		})
 	})
+
+	it('reading campaign: projects controls, redacts typed secrets in the receipt and the following window', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(BROWSER_READING_HTML)}`)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const first = await toolset.read()
+		expect(first).toMatch(/1: ### e\d+ link "Cedar Tea" \/tea\?q=1#cup/)
+		expect(first).toContain('- A list entry')
+		expect(first).toContain('Product | Price')
+		expect(first).toContain('Cedar | 41')
+		expect(first).toContain('image "Named image"')
+		expect(first).not.toContain('sample')
+		expect(first.match(/value="••••••"/g)).toHaveLength(2)
+		expect(first).not.toMatch(/\d+: ••••••/)
+		const fields = await page.elements.find({ role: 'textbox', name: 'Account' })
+		const secret = 'rosewood-private-47291'
+		const receipt = requireToolText(
+			await toolset.tools.execute({
+				id: 'secret',
+				name: 'type',
+				arguments: { ref: requireValue(fields[1]).reference, text: secret, secret: true },
+			}),
+		)
+		expect(receipt).not.toContain(secret)
+		expect(receipt).toContain('[redacted]')
+		expect(await toolset.read()).not.toContain(secret)
+		expect(await page.evaluate('document.querySelector("input[type=text]").value')).toBe(secret)
+	})
+
+	it('reading campaign: keeps distinct heading links, table references, escaped images and clamped levels', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`document.body.innerHTML = ${JSON.stringify(BROWSER_READING_STRUCTURE_HTML)}`,
+		)
+		writeFileSync(
+			'tmp/codex/reading-structure-source.json',
+			JSON.stringify(await page.accessibility.snapshot(), null, 2),
+		)
+		const lines = (await page.elements.outline()).lines
+			.map(renderBrowserLine)
+			.map(maskBrowserReferences)
+		expect(lines).toEqual([
+			'## Menu Tea Elsewhere',
+			'e# link "Tea" /tea',
+			'e# link "Elsewhere" https://else.example/',
+			'###### End',
+			'Before e# link "Buy" /buy after | 9',
+			'image "A \\"quote\\""',
+		])
+	})
+
+	it('reading campaign: returns complete bounded numbered windows, continuation, search, and a changed continuation', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`(() => { document.title = 'Reading fixture'; document.body.innerHTML = ${JSON.stringify(BROWSER_READING_HTML + Array.from({ length: 140 }, (_, index) => `<p>Paragraph ${index + 1}. ${'Ordinary store description. '.repeat(8)}${index === 110 ? 'Delivery schedules tomorrow.' : ''}</p>`).join(''))} })()`,
+		)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const first = await toolset.read()
+		const from = Number(requireValue(/call read with from (\d+) for more/.exec(first))[1])
+		const continuation = await toolset.read({ from })
+		const search = await toolset.read({ from: 1, search: 'deliver schedule' })
+		writeFileSync(
+			'tmp/codex/reading-examples.json',
+			JSON.stringify({ first, continuation, search }, null, 2),
+		)
+		for (const result of [first, continuation, search]) {
+			expect(result.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			expect(result).toMatch(/\[lines \d+–\d+ of \d+;/)
+			expect(result.match(/^\d+: /gm)?.length).toBeLessThanOrEqual(100)
+		}
+		expect(continuation).toContain(`\n${from}: `)
+		expect(search).toContain('1 line matches "deliver schedule"')
+		expect(search).toContain('Delivery schedules tomorrow.')
+		expect(await toolset.read({ from: 1, to: 1 })).toMatch(/\[lines 1–1 of/)
+		await page.evaluate('document.querySelector("p").textContent = "Changed paragraph"')
+		expect(await toolset.read({ from })).toContain('changed')
+		for (const args of [{ from: 0 }, { from: 2, to: 1 }, { from: 1.5 }, { from: 99999 }])
+			await expect(toolset.read(args)).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ARGUMENT' })
+		for (const name of ['look', 'plain', 'tabs'])
+			expect((await toolset.tools.execute({ id: name, name, arguments: {} })).success).toBe(false)
+	})
+
+	it('reading campaign: budgets receipts exactly and opens wait at the matching line', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`document.body.innerHTML = ${JSON.stringify('<button>Observe</button>' + Array.from({ length: 150 }, (_, index) => `<p>Row ${index + 1}. ${'Ordinary prose. '.repeat(8)}${index === 120 ? 'Unique confirmation' : ''}</p>`).join(''))}`,
+		)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const button = requireValue((await page.elements.find({ role: 'button', name: 'Observe' }))[0])
+		const receipt = requireToolText(
+			await toolset.tools.execute({
+				id: 'click',
+				name: 'click',
+				arguments: { ref: button.reference },
+			}),
+		)
+		const boundary = receipt.indexOf('\n\n')
+		expect(receipt.slice(boundary + 2)).toBe(
+			await toolset.read({ limit: BROWSER_TOOL_LIMIT - boundary - 2 }),
+		)
+		expect(receipt.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		const waited = requireToolText(
+			await toolset.tools.execute({
+				id: 'wait',
+				name: 'wait',
+				arguments: { text: 'Unique confirmation' },
+			}),
+		)
+		expect(waited).toContain('\n122: Row 121.')
+		expect(waited).not.toMatch(/\n121: /)
+		expect(waited.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		const timeout = requireToolText(
+			await toolset.tools.execute({
+				id: 'timeout',
+				name: 'wait',
+				arguments: { text: 'Missing text', timeout: 0.01 },
+			}),
+		)
+		expect(timeout).toContain('\n1: ')
+		expect(timeout.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		await page.evaluate(
+			`document.querySelector('button').textContent = ${JSON.stringify('Long name '.repeat(600))}`,
+		)
+		const long = requireToolText(
+			await toolset.tools.execute({
+				id: 'long',
+				name: 'click',
+				arguments: { ref: button.reference },
+			}),
+		)
+		expect(long.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		expect(long).toMatch(/\[lines 1–\d+ of \d+;.*call read with from \d+ for more\]$/)
+	})
+
+	it.each(
+		['click', 'type', 'press'].flatMap((action) =>
+			['_self', '_parent', '_top'].map((target) => ({ action, target })),
+		),
+	)(
+		'reading campaign: $action settles a real frame form targeting $target exactly once',
+		async ({ action, target }) => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			const form = `<form action="${fixtures.url('/shop/cart')}" target="${target}"><label>Name<input name="name"></label><button>Submit</button></form><script>document.querySelector('form').onsubmit = () => sessionStorage.setItem('submissions', String(Number(sessionStorage.getItem('submissions') ?? 0) + 1))</script>`
+			await page.evaluate(
+				`(() => { document.body.innerHTML = '<h1>Outer page</h1>'; const frame=document.createElement('iframe'); frame.srcdoc=${JSON.stringify(form)}; document.body.append(frame) })()`,
+			)
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			await toolset.start()
+			const field = requireValue((await page.elements.wait({ role: 'textbox', name: 'Name' }))[0])
+			const button = requireValue((await page.elements.find({ role: 'button', name: 'Submit' }))[0])
+			await field.click()
+			const args =
+				action === 'click'
+					? { ref: button.reference }
+					: action === 'type'
+						? { ref: field.reference, text: 'Ada', submit: true }
+						: { key: 'Enter' }
+			const receipt = requireToolText(
+				await toolset.tools.execute({ id: 'submit', name: action, arguments: args }),
+			)
+			expect(receipt).toContain('Your cart holds')
+			expect(receipt).not.toContain('handled the submission')
+			expect(receipt.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			expect(await page.evaluate('sessionStorage.getItem("submissions")')).toBe('1')
+			for (const frame of await page.frames())
+				expect(
+					await frame.evaluate(`globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}] === undefined`),
+				).toBe(true)
+		},
+	)
+
+	it.each(['type', 'press'])(
+		'reading campaign: %s reports an Enter without a form and releases its observer',
+		async (action) => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			await page.evaluate('document.body.innerHTML = "<label>Loose<input></label>"')
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			await toolset.start()
+			const field = requireValue((await page.elements.find({ role: 'textbox', name: 'Loose' }))[0])
+			await field.click()
+			const receipt = requireToolText(
+				await toolset.tools.execute({
+					id: 'enter',
+					name: action,
+					arguments:
+						action === 'type'
+							? { ref: field.reference, text: 'Ada', submit: true }
+							: { key: 'Enter' },
+				}),
+			)
+			expect(receipt.includes('no form received the submission')).toBe(action === 'type')
+			expect(
+				await requireValue((await page.frames())[0]).evaluate(
+					`globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}] === undefined`,
+				),
+			).toBe(true)
+		},
+	)
+
+	it('reading campaign: keeps ordinary ollama store paragraphs whole and reconstructs every continued line', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`(() => { document.body.replaceChildren(); for(const text of ${JSON.stringify(SERVICE_STORE_PARAGRAPHS)}) { const p=document.createElement('p'); p.textContent=text; document.body.append(p) } })()`,
+		)
+		const outline = await page.elements.outline()
+		expect(outline.lines.map(renderBrowserLine)).toEqual(SERVICE_STORE_PARAGRAPHS)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const reconstructed: string[] = []
+		let from = 1
+		for (;;) {
+			const result = await toolset.read({ from })
+			expect(result.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			const rows = result.split('\n').filter((line) => /^\d+: /.test(line))
+			expect(rows[0]).toMatch(new RegExp('^' + from + ': '))
+			reconstructed.push(...rows.map((line) => line.replace(/^\d+: /, '')))
+			const next = /call read with from (\d+) for more/.exec(result)?.[1]
+			if (next === undefined) break
+			expect(Number(next)).toBe(from + rows.length)
+			from = Number(next)
+		}
+		expect(reconstructed).toEqual(SERVICE_STORE_PARAGRAPHS)
+	})
+
+	it.each(SERVICE_READING_SUBMISSIONS)(
+		'reading campaign: settles $name handled submission and releases the observer',
+		async ({ code, changed }) => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			await page.evaluate(
+				`(() => { document.body.innerHTML = '<form><label>Name<input></label><button>Submit</button></form><output></output><aside hidden></aside>'; document.querySelector('form').onsubmit = event => { event.preventDefault(); ${code} } })()`,
+			)
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			await toolset.start()
+			const button = requireValue((await page.elements.find({ role: 'button', name: 'Submit' }))[0])
+			const receipt = requireToolText(
+				await toolset.tools.execute({
+					id: 'submit',
+					name: 'click',
+					arguments: { ref: button.reference },
+				}),
+			)
+			expect(receipt.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			expect(receipt).toContain(
+				changed
+					? 'the page handled the submission and changed'
+					: 'the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect',
+			)
+			expect(receipt.includes('Order confirmed')).toBe(changed)
+			expect(
+				await requireValue((await page.frames())[0]).evaluate(
+					`globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}] === undefined`,
+				),
+			).toBe(true)
+		},
+	)
+
+	it.each(['click', 'type', 'press'])(
+		'reading campaign: %s observes the handled submission before synchronous handlers',
+		async (action) => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			await page.evaluate(
+				`(() => { document.body.innerHTML = '<form><label>Name<input></label><button>Submit</button></form><output></output>'; document.querySelector('form').onsubmit = event => { event.preventDefault(); document.querySelector('output').textContent = 'One confirmation' }; document.querySelector('input').focus() })()`,
+			)
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			await toolset.start()
+			const field = requireValue((await page.elements.find({ role: 'textbox', name: 'Name' }))[0])
+			const button = requireValue((await page.elements.find({ role: 'button', name: 'Submit' }))[0])
+			const args =
+				action === 'click'
+					? { ref: button.reference }
+					: action === 'type'
+						? { ref: field.reference, text: 'Ada', submit: true }
+						: { key: 'Enter' }
+			const receipt = requireToolText(
+				await toolset.tools.execute({ id: 'submit', name: action, arguments: args }),
+			)
+			expect(receipt).toContain('the page handled the submission and changed')
+			expect(receipt).toContain('One confirmation')
+			expect(
+				await requireValue((await page.frames())[0]).evaluate(
+					`globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}] === undefined`,
+				),
+			).toBe(true)
+		},
+	)
+
+	it.each(['navigation', 'dialog', 'abort', 'detach'])(
+		'reading campaign: releases submission observation on %s',
+		async (outcome) => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			const destination = fixtures.url('/shop/cart')
+			const code =
+				outcome === 'navigation'
+					? `setTimeout(() => location.href = ${JSON.stringify(destination)}, 200)`
+					: outcome === 'dialog'
+						? 'setTimeout(() => confirm("Continue?"), 200)'
+						: outcome === 'detach'
+							? 'setTimeout(() => frameElement.remove(), 200)'
+							: ''
+			const html = '<form><label>Name<input></label><button>Submit</button></form>'
+			if (outcome === 'detach')
+				await page.evaluate(
+					`(() => { document.body.innerHTML = '<h1>Frame removed</h1>'; const frame = document.createElement('iframe'); frame.srcdoc = ${JSON.stringify(html + `<script>document.querySelector('form').onsubmit = event => { event.preventDefault(); ${code} }</script>`)}; document.body.append(frame) })()`,
+				)
+			else
+				await page.evaluate(
+					`(() => { document.body.innerHTML = ${JSON.stringify(html)}; document.querySelector('form').onsubmit = event => { event.preventDefault(); ${code} } })()`,
+				)
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			await toolset.start()
+			const buttons = await page.elements.wait({ role: 'button', name: 'Submit' })
+			const controller = new AbortController()
+			const pending = toolset.tools.execute(
+				{ id: 'submit', name: 'click', arguments: { ref: requireValue(buttons[0]).reference } },
+				{ signal: controller.signal },
+			)
+			if (outcome === 'abort') {
+				await waitForCondition(
+					'submission reached the real observer',
+					async () =>
+						(await requireValue((await page.frames())[0]).evaluate(
+							`(globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}]?.events.length ?? 0) > 0`,
+						)) === true,
+				)
+				controller.abort(new Error('Stop this submission'))
+			}
+			const result = await pending
+			const content = expect.stringContaining(
+				outcome === 'navigation'
+					? 'Your cart holds'
+					: outcome === 'detach'
+						? 'Frame removed'
+						: 'A confirm dialog is open',
+			)
+			const expected =
+				outcome === 'abort'
+					? { success: false, error: 'Stop this submission' }
+					: { success: true, value: content }
+			expect(result).toMatchObject(expected)
+			expect((result.success ? requireToolText(result) : result.error).length).toBeLessThanOrEqual(
+				BROWSER_TOOL_LIMIT,
+			)
+			expect(page.url).toBe(outcome === 'navigation' ? destination : fixtures.url('/form'))
+			if (outcome === 'dialog')
+				requireToolText(
+					await toolset.tools.execute({
+						id: 'answer',
+						name: 'dialog',
+						arguments: { accept: true },
+					}),
+				)
+			await waitForCondition(
+				'the observer is released',
+				async () =>
+					(await requireValue((await page.frames())[0]).evaluate(
+						`globalThis[${JSON.stringify(BROWSER_SUBMIT_KEY)}] === undefined`,
+					)) === true,
+			)
+			expect(await toolset.read()).toContain('page ')
+		},
+	)
 
 	it('carries pressed and expanded CDP states into look with a plain-button control', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
@@ -336,7 +721,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'toggle' } }),
+			await toolset.tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		expect(collectOutlineEntries(look)).toEqual(
 			expect.arrayContaining([
@@ -344,12 +729,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				'button "Toggle off" pressed=false',
 				'button "Toggle mixed" pressed=mixed',
 				'button "Disclosure" expanded=false',
-				'link "Expanded link" expanded=true',
+				'link "Expanded link" /form expanded=true',
 				'button "Plain toggle control"',
 			]),
 		)
 		expect(collectOutlineEntries(look)).toEqual(
-			collectOutlineEntries((await page.elements.outline()).text),
+			collectOutlineEntries(
+				(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
+			),
 		)
 	})
 
@@ -362,31 +749,31 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await toolset.start()
 
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the delivery form' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const [name, notes, speed, standard, express, submit, save, review] = extractOutlineRows(
 			look,
 		).map((row) => row.reference)
 		const form = [
-			`page "Delivery form" ${fixtures.url('/form')}`,
-			'# Delivery form',
-			'Name',
-			`${name} textbox "Name" value="Ada"`,
-			'Ada',
-			'Notes',
-			`${notes} textbox "Notes" value="Leave at the door"`,
-			'Leave at the door',
-			'Speed',
-			`${speed} combobox "Speed" value="Standard" expanded=false`,
-			`${standard} option "Standard" selected=true`,
-			`${express} option "Express" selected=false`,
-			`${submit} button "Submit"`,
-			`${save} button "Save draft"`,
-			`${review} button "Review"`,
-			'(8 of 8 elements)',
+			`page "Delivery form" ${fixtures.url('/form')} (12 lines)`,
+			'1: # Delivery form',
+			'2: Name',
+			`3: ${name} textbox "Name" value="Ada"`,
+			'4: Notes',
+			`5: ${notes} textbox "Notes" value="Leave at the door"`,
+			'6: Speed',
+			`7: ${speed} combobox "Speed" value="Standard" expanded=false`,
+			`8: ${standard} option "Standard" selected=true`,
+			`9: ${express} option "Express" selected=false`,
+			`10: ${submit} button "Submit"`,
+			`11: ${save} button "Save draft"`,
+			`12: ${review} button "Review"`,
+			'[lines 1–12 of 12; the whole page]',
 		].join('\n')
 		expect(look).toBe(form)
-		expect(look).toBe((await page.elements.outline()).text)
+		expect(extractBrowserPage(look).body).toBe(
+			(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
+		)
 
 		const click = requireToolText(
 			await tools.execute({ id: 'click', name: 'click', arguments: { ref: name } }),
@@ -410,10 +797,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			'/form/placed?name=Grace+Hopper&notes=Leave+at+the+door&speed=Standard',
 		)
 		const result = [
-			`page "Order placed" ${placed}`,
-			'# Order placed',
-			'Delivery booked for Grace Hopper at Standard speed.',
-			'(0 of 0 elements)',
+			`page "Order placed" ${placed} (2 lines)`,
+			'1: # Order placed',
+			'2: Delivery booked for Grace Hopper at Standard speed.',
+			'[lines 1–2 of 2; the whole page]',
 		].join('\n')
 		expect(typed).toSatisfy((receipt: string) =>
 			matchesToolReceipt(receipt, {
@@ -424,18 +811,18 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		await waitForCondition(
 			'the submission committed and rendered the placed page',
-			async () => page.url === placed && (await page.elements.outline()).text === result,
+			async () => page.url === placed && (await toolset.read()) === result,
 			{ budget: 10_000, interval: 20 },
 		)
 
 		const read = requireToolText(
-			await tools.execute({ id: 'read', name: 'read', arguments: { search: 'the confirmation' } }),
+			await tools.execute({ id: 'read', name: 'read', arguments: { from: 1 } }),
 		)
-		expect(read).toBe('# Order placed\n\nDelivery booked for Grace Hopper at Standard speed.')
+		expect(read).toBe(result)
 		const plain = requireToolText(
-			await tools.execute({ id: 'plain', name: 'plain', arguments: { search: '' } }),
+			await tools.execute({ id: 'plain', name: 'read', arguments: { from: 1, search: '' } }),
 		)
-		expect(plain).toBe('Order placed\nDelivery booked for Grace Hopper at Standard speed.')
+		expect(plain).toBe(result)
 
 		expect(
 			[look, click, typed, read, plain].filter((receipt) => receipt.length > BROWSER_TOOL_LIMIT),
@@ -453,22 +840,19 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const toolset = createBrowserToolset(page, { tools })
 			toolsets.push(toolset)
 			await toolset.start()
-			const outline = (await page.elements.outline()).text
+			const outline = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			const tracking = requireOutlineReference(outline, 'textbox', 'Tracking number')
 			expect(outline.indexOf(`${tracking} textbox`)).toBeGreaterThan(BROWSER_TOOL_LIMIT)
 
 			const look = requireToolText(
 				await tools.execute({
 					id: 'look',
-					name: 'look',
-					arguments: { search: 'the Tracking number textbox' },
+					name: 'read',
+					arguments: { from: 1, search: 'the Tracking number textbox' },
 				}),
 			)
-			expect(
-				look.startsWith(
-					`1 element matches "the Tracking number textbox":\n${tracking} textbox "Tracking number"\n\npage "Delivery form" `,
-				),
-			).toBe(true)
+			expect(look).toContain(`1 line matches "the Tracking number textbox":`)
+			expect(look).toContain(`${tracking} textbox "Tracking number"`)
 			expect(extractBrowserPage(look).body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			expect(
 				await tools.execute({
@@ -484,8 +868,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const control = requireToolText(
 				await tools.execute({
 					id: 'control',
-					name: 'look',
-					arguments: { search: 'zebra crossing' },
+					name: 'read',
+					arguments: { from: 1, search: 'zebra crossing' },
 				}),
 			)
 			expect(control.startsWith('page "Delivery form" ')).toBe(true)
@@ -503,23 +887,22 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const bodies: string[] = []
-			let offset: number | undefined = 0
-			while (offset !== undefined) {
+			let from: number | undefined = 1
+			while (from !== undefined) {
 				const paged = extractBrowserPage(
-					requireToolText(
-						await tools.execute({ id: 'look', name: 'look', arguments: { search: '', offset } }),
-					),
+					requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from } })),
 				)
-				expect(paged.start).toBe(offset)
+				expect(paged.start).toBe(from)
 				expect(paged.body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 				bodies.push(paged.body)
-				offset = paged.next
+				from = paged.next
 			}
 			expect(bodies.length).toBeGreaterThan(1)
-			expect(bodies.join('')).toBe(
-				(await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).text,
+			expect(bodies.join('\n')).toBe(
+				(await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).lines
+					.map(renderBrowserLine)
+					.join('\n'),
 			)
-			expect(bodies.at(-1)).toMatch(/\n\(9 of 9 elements\)$/)
 		})
 
 		it('names the focused element in the receipt of each Tab press', async () => {
@@ -529,7 +912,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const toolset = createBrowserToolset(page, { tools })
 			toolsets.push(toolset)
 			await toolset.start()
-			const outline = (await page.elements.outline()).text
+			const outline = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			const name = requireOutlineReference(outline, 'textbox', 'Name')
 			const notes = requireOutlineReference(outline, 'textbox', 'Notes')
 			const first = requireToolText(
@@ -557,7 +940,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the tray' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const add = requireOutlineReference(look, 'button', 'Add to cart')
 		const hold = requireOutlineReference(look, 'button', 'Save for later')
@@ -566,7 +949,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'hold', name: 'click', arguments: { ref: hold } }),
 		)
 		expect(held).toBe(
-			`Clicked ${hold} button "Save for later"; the page handled the submission without navigating; call wait for the text you expect.\n\n${look}`,
+			`Clicked ${hold} button "Save for later"; the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect.\n\n${look}`,
 		)
 		expect(await page.evaluate('document.body.dataset.held')).toBe('yes')
 		expect(page.url).toBe(fixtures.url('/shop'))
@@ -578,15 +961,15 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			[
 				`Clicked ${add} button "Add to cart".`,
 				'',
-				`page "Cart" ${fixtures.url('/shop/cart')}`,
-				'# Cart',
-				'Your cart holds the Cedar Tea Tray.',
-				'(0 of 0 elements)',
+				`page "Cart" ${fixtures.url('/shop/cart')} (2 lines)`,
+				'1: # Cart',
+				'2: Your cart holds the Cedar Tea Tray.',
+				'[lines 1–2 of 2; the whole page]',
 			].join('\n'),
 		)
 	})
 
-	it('names the page handling of a type with submit whose submission the page script prevents and posts, returning the page before its confirmation, which a following wait finds (control: a form that navigates keeps the destination view)', async () => {
+	it('names the page handling of a type with submit whose submission the page script prevents and posts, returning its confirmation, which a following wait also finds (control: a form that navigates keeps the destination view)', async () => {
 		const page = await browser.create({ url: fixtures.url('/checkout') })
 		opened.push(page)
 		const tools = createToolManager()
@@ -594,7 +977,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the checkout' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const name = requireOutlineReference(look, 'textbox', 'Name')
 		const recipient = requireOutlineReference(look, 'textbox', 'Gift name')
@@ -608,18 +991,18 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		expect(typed.split('\n', 1)[0]).toBe(
-			`Typed "Ada Lovelace" into ${name} textbox "Name" and submitted the form; the page handled the submission without navigating; call wait for the text you expect.`,
+			`Typed "Ada Lovelace" into ${name} textbox "Name" and submitted the form; the page handled the submission and changed.`,
 		)
-		expect(typed).toContain(`\n\npage "Checkout" ${fixtures.url('/checkout')}\n`)
+		expect(typed).toContain(`\n\npage "Checkout" ${fixtures.url('/checkout')} (`)
 		expect(typed).toContain(`${name} textbox "Name" value="Ada Lovelace"`)
-		expect(typed).not.toContain(FIXTURE_CHECKOUT_CODE)
+		expect(typed).toContain(FIXTURE_CHECKOUT_CODE)
 		expect(page.url).toBe(fixtures.url('/checkout'))
 
 		expect(
 			requireToolText(
 				await tools.execute({ id: 'wait', name: 'wait', arguments: { text: confirmation } }),
 			),
-		).toBe(`${JSON.stringify(confirmation)} is on the page.`)
+		).toContain(`${JSON.stringify(confirmation)} is on the page.\n\npage `)
 
 		const gift = requireToolText(
 			await tools.execute({
@@ -630,10 +1013,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		const placed = fixtures.url('/form/placed?speed=Standard&name=Grace+Hopper')
 		const view = [
-			`page "Order placed" ${placed}`,
-			'# Order placed',
-			'Delivery booked for Grace Hopper at Standard speed.',
-			'(0 of 0 elements)',
+			`page "Order placed" ${placed} (2 lines)`,
+			'1: # Order placed',
+			'2: Delivery booked for Grace Hopper at Standard speed.',
+			'[lines 1–2 of 2; the whole page]',
 		].join('\n')
 		expect(gift).toSatisfy((receipt: string) =>
 			matchesToolReceipt(receipt, {
@@ -655,19 +1038,18 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the notes' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const notes = requireOutlineReference(look, 'textbox', 'Notes')
 		const bold = requireOutlineReference(look, 'button', 'Bold')
 		const coupon = requireOutlineReference(look, 'button', 'Coupon')
-		expect(look).toContain(
+		expect(extractBrowserPage(look).body).toContain(
 			[
 				'Plain notes',
 				`${notes} textbox "Notes"`,
 				'Draft',
 				`${bold} button "Bold"`,
 				`${coupon} button "Coupon"`,
-				'(7 of 7 elements)',
 			].join('\n'),
 		)
 		expect(extractOutlineRows(look).map((row) => row.name)).not.toContain('Plain notes')
@@ -706,16 +1088,16 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the drafts' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const remove = requireOutlineReference(look, 'button', 'Delete')
 		const keep = requireOutlineReference(look, 'button', 'Keep')
 		const drafts = [
-			`page "Drafts" ${fixtures.url('/confirm')}`,
-			'# Drafts',
-			`${remove} button "Delete"`,
-			`${keep} button "Keep"`,
-			'(2 of 2 elements)',
+			`page "Drafts" ${fixtures.url('/confirm')} (3 lines)`,
+			'1: # Drafts',
+			`2: ${remove} button "Delete"`,
+			`3: ${keep} button "Keep"`,
+			'[lines 1–3 of 3; the whole page]',
 		].join('\n')
 		expect(look).toBe(drafts)
 		const kept = { action: `Clicked ${keep} button "Keep"`, view: drafts }
@@ -766,9 +1148,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const next = requireOutlineReference(
-			requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the note' } }),
-			),
+			requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
 			'link',
 			'Next',
 		)
@@ -800,14 +1180,12 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		}
 		expect(page.url).toBe(fixtures.url('/beforeunload/next'))
 		const destination = [
-			`page "Next note" ${fixtures.url('/beforeunload/next')}`,
-			'# Next note',
-			'(0 of 0 elements)',
+			`page "Next note" ${fixtures.url('/beforeunload/next')} (1 lines)`,
+			'1: # Next note',
+			'[lines 1–1 of 1; the whole page]',
 		].join('\n')
 		expect(
-			requireToolText(
-				await tools.execute({ id: 'after', name: 'look', arguments: { search: 'the next note' } }),
-			),
+			requireToolText(await tools.execute({ id: 'after', name: 'read', arguments: { from: 1 } })),
 		).toBe(destination)
 
 		const plain = await browser.create({ url: fixtures.url('/beforeunload/plain') })
@@ -817,9 +1195,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(control)
 		await control.start()
 		const link = requireOutlineReference(
-			requireToolText(
-				await controls.execute({ id: 'look', name: 'look', arguments: { search: 'the note' } }),
-			),
+			requireToolText(await controls.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
 			'link',
 			'Next',
 		)
@@ -838,8 +1214,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await waitForCondition(
 			'the control link committed and rendered the next note',
 			async () =>
-				plain.url === fixtures.url('/beforeunload/next') &&
-				(await plain.elements.outline()).text === destination,
+				plain.url === fixtures.url('/beforeunload/next') && (await control.read()) === destination,
 			{ budget: 10_000, interval: 20 },
 		)
 	})
@@ -863,18 +1238,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await started.start()
 			toolset = started
 			const catalog = requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
+				await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 			)
 			const open = requireOutlineReference(catalog, 'button', 'Open details')
 			child = fixtures.url('/popup/child')
 			const clicked = requireToolText(
 				await tools.execute({ id: 'click', name: 'click', arguments: { ref: open } }),
 			)
-			if (
-				!clicked.startsWith(
-					`The view moved to a new tab: ${child}.\n\nClicked ${open} button "Open details".\n\n`,
-				)
-			)
+			if (!clicked.includes(`The view moved to a new tab: ${child}.`))
 				throw new Error(
 					`Precondition failed: the Open details click returned ${JSON.stringify(clicked)}`,
 				)
@@ -925,7 +1296,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const catalog = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const stay = requireOutlineReference(catalog, 'button', 'Stay')
 
@@ -938,10 +1309,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(await page.evaluate('document.body.dataset.stayed')).toBe('yes')
 		expect(
-			requireToolText(
-				await tools.execute({ id: 'tabs', name: 'tabs', arguments: { search: 'the open tabs' } }),
-			),
-		).toBe(`t1 "Catalog" ${fixtures.url('/popup')} (current)`)
+			requireToolText(await tools.execute({ id: 'tabs', name: 'read', arguments: { from: 1 } })),
+		).toBe(catalog)
 		expect(toolset.view).toBe(page)
 		expect(context.pages()).toStrictEqual([page])
 	})
@@ -968,7 +1337,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolset = createBrowserToolset(catalogPage, { tools, context })
 			await toolset.start()
 			catalog = requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
+				await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 			)
 		})
 
@@ -976,12 +1345,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const selected = createRecorder<[unknown]>()
 			toolset.emitter.on('select', selected.handler)
 			expect(
-				requireToolText(
-					await tools.execute({ id: 'tabs', name: 'tabs', arguments: { search: 'the open tabs' } }),
-				),
-			).toBe(
-				`t1 "Catalog" ${fixtures.url('/popup')} (current)\nt2 "Details" ${fixtures.url('/popup/child')}`,
-			)
+				requireToolText(await tools.execute({ id: 'tabs', name: 'read', arguments: { from: 1 } })),
+			).toContain('tabs: t1 "Catalog" (current), t2 "Details"')
 			expect(await toolset.tabs()).toStrictEqual([
 				{ id: 't1', title: 'Catalog', url: fixtures.url('/popup'), current: true },
 				{ id: 't2', title: 'Details', url: fixtures.url('/popup/child'), current: false },
@@ -991,7 +1356,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await tools.execute({ id: 'switch', name: 'switch', arguments: { tab: 't2' } }),
 			)
 			expect(toolset.view).toBe(detailsPage)
-			const details = (await detailsPage.elements.outline()).text
+			const details = await toolset.read()
 			expect(moved).toSatisfy((receipt: string) =>
 				matchesToolReceipt(receipt, {
 					action: `Switched to t2 ${fixtures.url('/popup/child')}`,
@@ -1036,12 +1401,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				},
 			)
 			expect(
-				requireToolText(
-					await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the catalog' } }),
-				),
-			).toBe(
-				`The tab ${closed} closed; the view returned to ${fixtures.url('/popup')}.\n\n${catalog}`,
-			)
+				requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
+			).toContain(`The tab ${closed} closed; the view returned to ${fixtures.url('/popup')}.`)
 		})
 	})
 
@@ -1069,14 +1430,18 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await toolset.start()
 		await waitForCondition(
 			'precondition: the outline lists the framed Code field',
-			async () => (await page.elements.outline()).text.includes('textbox "Code"'),
+			async () =>
+				(await page.elements.outline()).lines
+					.map(renderBrowserLine)
+					.join('\n')
+					.includes('textbox "Code"'),
 			{ budget: 10_000, interval: 20 },
 		)
 		expect((await page.frames()).map((frame) => frame.url)).toContain(
 			fixtures.url('/frame/field', 'localhost'),
 		)
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the voucher' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
 		const code = requireOutlineReference(look, 'textbox', 'Code')
@@ -1089,12 +1454,12 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		const applied = [
-			`page "Voucher" ${fixtures.url('/frame/voucher')}`,
-			'# Voucher',
-			`${frame} Iframe "Voucher form"`,
-			'# Voucher applied',
-			'Received key Enter',
-			'(1 of 1 elements)',
+			`page "Voucher" ${fixtures.url('/frame/voucher')} (4 lines)`,
+			'1: # Voucher',
+			`2: ${frame} Iframe "Voucher form"`,
+			'3: # Voucher applied',
+			'4: Received key Enter',
+			'[lines 1–4 of 4; the whole page]',
 		].join('\n')
 		expect(receipt).toBe(
 			`Typed "SPRING" into ${code} textbox "Code" and submitted the form.\n\n${applied}`,
@@ -1109,13 +1474,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		await waitForCondition(
 			'the committed frame rendered the key it received',
-			async () => (await page.elements.outline()).text === applied,
+			async () => (await toolset.read()) === applied,
 			{ budget: 10_000, interval: 20 },
 		)
 		expect(
-			requireToolText(
-				await tools.execute({ id: 'after', name: 'look', arguments: { search: 'what happened' } }),
-			),
+			requireToolText(await tools.execute({ id: 'after', name: 'read', arguments: { from: 1 } })),
 		).toBe(applied)
 	})
 
@@ -1128,11 +1491,15 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await toolset.start()
 		await waitForCondition(
 			'precondition: the outline lists the framed Code field',
-			async () => (await page.elements.outline()).text.includes('textbox "Code"'),
+			async () =>
+				(await page.elements.outline()).lines
+					.map(renderBrowserLine)
+					.join('\n')
+					.includes('textbox "Code"'),
 			{ budget: 10_000, interval: 20 },
 		)
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the voucher' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
 		const code = requireOutlineReference(look, 'textbox', 'Code')
@@ -1145,12 +1512,12 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		const applied = [
-			`page "Local voucher" ${fixtures.url('/frame/local')}`,
-			'# Local voucher',
-			`${frame} Iframe "Voucher form"`,
-			'# Voucher applied',
-			'Received key Enter',
-			'(1 of 1 elements)',
+			`page "Local voucher" ${fixtures.url('/frame/local')} (4 lines)`,
+			'1: # Local voucher',
+			`2: ${frame} Iframe "Voucher form"`,
+			'3: # Voucher applied',
+			'4: Received key Enter',
+			'[lines 1–4 of 4; the whole page]',
 		].join('\n')
 		expect(receipt).toBe(
 			`Typed "SPRING" into ${code} textbox "Code" and submitted the form.\n\n${applied}`,
@@ -1169,7 +1536,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await toolset.start()
 		await waitForCondition(
 			'precondition: the outline lists the Coupon field of the innermost frame',
-			async () => (await page.elements.outline()).text.includes('textbox "Coupon"'),
+			async () =>
+				(await page.elements.outline()).lines
+					.map(renderBrowserLine)
+					.join('\n')
+					.includes('textbox "Coupon"'),
 			{ budget: 10_000, interval: 20 },
 		)
 		const inner = (await page.frames()).find(
@@ -1180,7 +1551,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(inner?.parent).toBe(requireValue(middle).id)
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the coupon' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const coupon = requireOutlineReference(look, 'textbox', 'Coupon')
 
@@ -1210,7 +1581,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the search' } }),
+			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 		)
 		const find = requireOutlineReference(look, 'button', 'Find')
 		const started = performance.now()
@@ -1222,10 +1593,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			[
 				`Clicked ${find} button "Find".`,
 				'',
-				`page "Search" ${fixtures.url('/search?q=tray#found')}`,
-				'# Search',
-				`${find} button "Find"`,
-				'(1 of 1 elements)',
+				`page "Search" ${fixtures.url('/search?q=tray#found')} (2 lines)`,
+				'1: # Search',
+				`2: ${find} button "Find"`,
+				'[lines 1–2 of 2; the whole page]',
 			].join('\n'),
 		)
 		expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS - 1_000)
@@ -1245,9 +1616,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const name = requireOutlineReference(
-				requireToolText(
-					await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the form' } }),
-				),
+				requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
 				'textbox',
 				'Name',
 			)
@@ -1265,10 +1634,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				'/form/placed?name=Grace+Hopper&notes=Leave+at+the+door&speed=Standard',
 			)
 			const view = [
-				`page "Order placed" ${placed}`,
-				'# Order placed',
-				'Delivery booked for Grace Hopper at Standard speed.',
-				'(0 of 0 elements)',
+				`page "Order placed" ${placed} (2 lines)`,
+				'1: # Order placed',
+				'2: Delivery booked for Grace Hopper at Standard speed.',
+				'[lines 1–2 of 2; the whole page]',
 			].join('\n')
 			expect(typed).toBe(
 				`Typed "Grace Hopper" into ${name} textbox "Name" and submitted the form.\n\n${view}`,
@@ -1284,7 +1653,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const drafts = requireToolText(
-				await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the drafts' } }),
+				await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
 			)
 			const remove = requireOutlineReference(drafts, 'button', 'Delete')
 
@@ -1314,9 +1683,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const link = requireOutlineReference(
-				requireToolText(
-					await tools.execute({ id: 'look', name: 'look', arguments: { search: 'the note' } }),
-				),
+				requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
 				'link',
 				'Next',
 			)
@@ -1330,9 +1697,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				[
 					`Clicked ${link} link "Next".`,
 					'',
-					`page "Next note" ${fixtures.url('/beforeunload/next')}`,
-					'# Next note',
-					'(0 of 0 elements)',
+					`page "Next note" ${fixtures.url('/beforeunload/next')} (1 lines)`,
+					'1: # Next note',
+					'[lines 1–1 of 1; the whole page]',
 				].join('\n'),
 			)
 			expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
@@ -1347,13 +1714,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const toolset = createBrowserToolset(first, { tools, context })
 			toolsets.push(toolset)
 			await toolset.start()
-			const details = (await second.elements.outline()).text
 
 			const started = performance.now()
 			const moved = requireToolText(
 				await tools.execute({ id: 'switch', name: 'switch', arguments: { tab: 't2' } }),
 			)
 			const elapsed = performance.now() - started
+			expect(toolset.view).toBe(second)
+			const details = await toolset.read()
 			expect(moved).toBe(`Switched to t2 ${fixtures.url('/popup/child')}.\n\n${details}`)
 			expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
 		})

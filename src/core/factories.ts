@@ -107,7 +107,7 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
  *
  * const toolset = createBrowserToolset(page, { context })
  * await toolset.start()
- * const result = await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'cart' } })
+ * const result = await toolset.tools.execute({ id: '1', name: 'read', arguments: { from: 1, search: 'cart' } })
  * ```
  *
  * @example Drive a page with a small model
@@ -120,8 +120,8 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
  *
  * const system =
  * 	'You control a web browser with tools and must call a tool before you answer. ' +
- * 	'The first message shows the page as look returns it; references such as e4 name its elements. ' +
- * 	'To learn a fact, call read with search set to words from your question; when its result ends by naming an offset, call read again with that offset. ' +
+ * 	'The first message shows numbered page lines; references such as e4 name its elements. ' +
+ * 	'To learn a fact, call read with from 1 and search words from your question; follow a footer by calling read with its from line. ' +
  * 	"To use the site's search box, call type with its reference, the words, and submit true. " +
  * 	'To press a button or follow a link, call click with its reference from the latest result. Never invent a reference. ' +
  * 	'If text you expect has not appeared, call wait once. ' +
@@ -132,11 +132,11 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
  * const page = await browser.create({ url: 'https://shop.example.test/' })
  * const toolset = createBrowserToolset(page, { tools: createToolManager() })
  * await toolset.start()
- * toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'plain', 'click', 'type', 'press', 'navigate', 'wait']
+ * toolset.tools.tools().map((tool) => tool.name) // ['read', 'click', 'type', 'press', 'navigate', 'wait']
  * const seeded = await toolset.tools.execute({
  * 	id: 'seed',
- * 	name: 'look',
- * 	arguments: { search: '' },
+ * 	name: 'read',
+ * 	arguments: { from: 1 },
  * })
  * const view = seeded.success ? String(seeded.value) : seeded.error
  * const agent = createAgent(createOllama({ model: 'qwen3.5:2b-q4_K_M' }), {

@@ -1,3 +1,5 @@
+import { scanBrowserLines } from '@src/core'
+import { renderBrowserLine } from '../../../src/core/index.js'
 /**
  * src/core/helpers.ts tests.
  */
@@ -210,8 +212,8 @@ describe('element helpers', () => {
 				properties: { pressed: 0, expanded: null, selected: {} },
 			},
 		]).map((node) => (node.reference === 'e6' ? { ...node, value: 'V', tool: 'act' } : node))
-		const outline = renderBrowserOutline('url', 'title', nodes, 150, 'Mixed')
-		expect(outline.text.split('\n').slice(1, -1)).toEqual([
+		const outline = renderBrowserOutline('url', 'title', nodes, 150)
+		expect(outline.lines.map(renderBrowserLine)).toEqual([
 			'e1 button "Off" pressed=false',
 			'e2 button "Mixed" pressed=mixed expanded=false',
 			'e3 option "Chosen" selected=true',
@@ -220,7 +222,7 @@ describe('element helpers', () => {
 			'e6 button "All" value="V" pressed=true expanded=false selected=false [checked] [disabled] [tool=act]',
 			'e7 button "Invalid"',
 		])
-		expect(outline.matches).toEqual(['e2 button "Mixed" pressed=mixed expanded=false'])
+		expect(scanBrowserLines(outline.lines, 'Mixed')).toEqual([2])
 		expect(outline.focus).toBe('e2 button "Mixed" pressed=mixed expanded=false')
 	})
 
@@ -258,13 +260,13 @@ describe('element helpers', () => {
 				reference: node.id === 'link' ? 'e4' : undefined,
 			})),
 		]
-		expect(renderBrowserOutline('url', 'title', rows, 150)).toEqual({
+		const projected = renderBrowserOutline('url', 'title', rows, 150)
+		expect({ ...projected, lines: projected.lines.map(renderBrowserLine).join('\n') }).toEqual({
 			url: 'url',
 			title: 'title',
-			text: 'page "title" url\ne1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\ne4 link "Later"\n(4 of 4 elements)',
+			lines: 'e1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\ne4 link "Later"',
 			count: 4,
 			total: 4,
-			matches: [],
 			focus: undefined,
 		})
 	})
@@ -312,7 +314,6 @@ describe('element helpers', () => {
 		expect(renderBrowserOutline('url', 'title', rows, 0)).toMatchObject({
 			count: 0,
 			total: 1,
-			matches: [],
 			focus: undefined,
 		})
 	})
@@ -396,16 +397,18 @@ describe('outline search and focus helpers', () => {
 			{ role: 'button', name: 'Cancel', reference: 'e2' },
 			{ role: 'button', name: 'Archive', reference: 'e3', properties: { focused: true } },
 		])
-		expect(renderBrowserOutline('url', 'title', nodes, 1, 'archive button')).toEqual({
+		const projected = renderBrowserOutline('url', 'title', nodes, 1)
+		expect({ ...projected, lines: projected.lines.map(renderBrowserLine).join('\n') }).toEqual({
 			url: 'url',
 			title: 'title',
-			text: 'page "title" url\ne1 button "Close"\n(1 of 3 elements)',
+			lines: 'e1 button "Close"',
 			count: 1,
 			total: 3,
-			matches: ['e3 button "Archive"'],
 			focus: 'e3 button "Archive"',
 		})
-		expect(renderBrowserOutline('url', 'title', nodes, 1).matches).toEqual([])
+		expect(
+			scanBrowserLines(renderBrowserOutline('url', 'title', nodes, 150).lines, 'archive button'),
+		).toEqual([3])
 	})
 
 	it('names the last focused referenced row and none when only an unreferenced row has focus', () => {
@@ -494,18 +497,10 @@ describe('toolset helpers', () => {
 	it('catches a bound that cuts a string within the limit, keeps more than the limit, splits a surrogate pair, or drops the footer it is given', () => {
 		const footer = "the rest was cut; call read for the page's text"
 		expect(boundBrowserText('abc', 3, footer)).toBe('abc')
-		expect(boundBrowserText('abcdef', 4, footer)).toBe(
-			"abcd\n[characters 0–4 of 6; the rest was cut; call read for the page's text]",
-		)
-		expect(boundBrowserText('abcdef', 4, 'the rest was cut')).toBe(
-			'abcd\n[characters 0–4 of 6; the rest was cut]',
-		)
-		expect(boundBrowserText('ab\u{1F600}cd', 3, 'the rest was cut')).toBe(
-			'ab\n[characters 0–2 of 6; the rest was cut]',
-		)
-		expect(boundBrowserText('\u{1F600}\u{1F600}', 1, 'the rest was cut')).toBe(
-			'\n[characters 0–0 of 4; the rest was cut]',
-		)
+		expect(boundBrowserText('abcdef', 4, footer)).toBe('abc…')
+		expect(boundBrowserText('abcdef', 4, 'the rest was cut')).toBe('abc…')
+		expect(boundBrowserText('ab\u{1F600}cd', 3, 'the rest was cut')).toBe('ab…')
+		expect(boundBrowserText('\u{1F600}\u{1F600}', 1, 'the rest was cut')).toBe('…')
 		for (const limit of [0, -1, 1.5, Number.NaN])
 			expect(() => boundBrowserText('abc', limit, footer)).toThrow(
 				'Browser tool limit must be a positive integer',
@@ -582,7 +577,7 @@ describe('toolset helpers', () => {
 		const { client, page } = await createBrowserElementFixture()
 		try {
 			const outline = await page.elements.outline()
-			const rows = outline.text.split('\n')
+			const rows = outline.lines.map(renderBrowserLine).join('\n').split('\n')
 			for (const reference of ['e1', 'e2', 'e4']) {
 				const rendered = renderBrowserElement(requireValue(page.elements.element(reference)))
 				expect(rows.some((row) => row.startsWith(rendered))).toBe(true)
@@ -594,14 +589,14 @@ describe('toolset helpers', () => {
 	})
 
 	it('catches a reference reader that accepts a non-reference or names no next call', () => {
-		for (const value of ['e12', 'E12', '12', '[e12]', 'ref=e12', '[ref=e12]'])
+		for (const value of ['e12', 'E12', '[e12]', 'ref=e12', '[ref=e12]'])
 			expect(requireBrowserReference(value)).toBe('e12')
-		for (const value of ['x12', 'e0', '', 12, undefined]) {
+		for (const value of ['12', 'x12', 'e0', '', 12, undefined]) {
 			const outcome = attempt(() => requireBrowserReference(value))
 			expect(outcome.success).toBe(false)
 			const error = readProperty(outcome, 'error')
 			expect(isBrowserElementError(error)).toBe(true)
-			expect(String(error)).toContain('is not a reference such as e12; call look')
+			expect(String(error)).toContain('is not a reference such as e12; call read')
 		}
 	})
 
@@ -1506,10 +1501,10 @@ s3 Step s3 names button "Add to cart", which no element carries.`)
 	it('keeps directive-like quoted text and strips appended receipt views', () => {
 		expect(
 			renderBrowserRunResult(
-				'Typed "text; call save" into e1 textbox "Note"; call look.\n\npage "Notes"',
+				'Typed "text; call save" into e1 textbox "Note"; call read.\n\npage "Notes"',
 			),
 		).toBe('Typed "text; call save" into e1 textbox "Note".')
-		expect(renderBrowserRunResult('Clicked button "Say \\"hi; call save\\""; call look.')).toBe(
+		expect(renderBrowserRunResult('Clicked button "Say \\"hi; call save\\""; call read.')).toBe(
 			'Clicked button "Say \\"hi; call save\\"".',
 		)
 	})

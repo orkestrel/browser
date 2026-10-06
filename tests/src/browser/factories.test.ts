@@ -1,3 +1,4 @@
+import { renderBrowserLine } from '../../../src/core/index.js'
 import type { BrowserViewInterface } from '@src/core'
 import type { ToolInterface } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
@@ -30,7 +31,7 @@ import {
 	recordProbeSubscriptions,
 } from '../../setupBrowser.js'
 
-const VIEW_TOOLS = ['look', 'read', 'plain', 'click', 'type', 'wait']
+const VIEW_TOOLS = ['read', 'click', 'type', 'wait']
 
 describe('createBrowserDOMView', () => {
 	it('creates an untrusted view over a probe document', async () => {
@@ -39,7 +40,9 @@ describe('createBrowserDOMView', () => {
 		expect(view).toBeInstanceOf(BrowserDOMView)
 		expect(view.trusted).toBe(false)
 		expect(await view.title()).toBe('Cart')
-		expect((await view.elements.outline()).text).toContain('e1 button "Pay"')
+		expect((await view.elements.outline()).lines.map(renderBrowserLine).join('\n')).toContain(
+			'e1 button "Pay"',
+		)
 	})
 
 	it('refuses the realm own document unless own is true', () => {
@@ -111,10 +114,10 @@ describe('createDocumentToolset', () => {
 		const toolset = createDocumentToolset({ document: probe.document })
 		await toolset.start()
 		const signal = new AbortController().signal
-		const look = requireValue(toolset.tools.tool('look'), 'look')
+		const look = requireValue(toolset.tools.tool('read'), 'look')
 		const click = requireValue(toolset.tools.tool('click'), 'click')
 		const type = requireValue(toolset.tools.tool('type'), 'type')
-		await look.execute({ search: 'form' }, { signal })
+		await look.execute({ from: 1 }, { signal })
 		const [gift] = await toolset.view.elements.find({ role: 'checkbox', name: 'Gift wrap' })
 		const [label] = await toolset.view.elements.find({ role: 'button', name: 'Terms' })
 		const [note] = await toolset.view.elements.find({ role: 'textbox', name: 'Note' })
@@ -122,12 +125,12 @@ describe('createDocumentToolset', () => {
 		expect(Reflect.get(box ?? {}, 'checked')).toBe(true)
 		expect(trusted.calls).toEqual([[false]])
 		expect(clicked).toBe(
-			`Clicked ${gift?.reference} checkbox "Gift wrap". (untrusted event)\n\n${String(await look.execute({ search: 'form' }, { signal }))}`,
+			`Clicked ${gift?.reference} checkbox "Gift wrap". (untrusted event)\n\n${String(await look.execute({ from: 1 }, { signal }))}`,
 		)
 		const labelled = await click.execute({ ref: label?.reference }, { signal })
 		expect(Reflect.get(terms ?? {}, 'checked')).toBe(true)
 		expect(labelled).toBe(
-			`Clicked ${label?.reference} button "Terms". (untrusted event)\n\n${String(await look.execute({ search: 'form' }, { signal }))}`,
+			`Clicked ${label?.reference} button "Terms". (untrusted event)\n\n${String(await look.execute({ from: 1 }, { signal }))}`,
 		)
 		const typed = await type.execute(
 			{ ref: note?.reference, text: 'sam', submit: true },
@@ -135,7 +138,7 @@ describe('createDocumentToolset', () => {
 		)
 		expect(submits.calls).toEqual([[true]])
 		expect(typed).toBe(
-			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await look.execute({ search: 'form' }, { signal }))}`,
+			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await look.execute({ from: 1 }, { signal }))}`,
 		)
 		await toolset.destroy()
 	})
@@ -146,8 +149,8 @@ describe('createDocumentToolset', () => {
 		await toolset.start()
 		const signal = new AbortController().signal
 		const look = String(
-			await requireValue(toolset.tools.tool('look'), 'look').execute(
-				{ search: 'search' },
+			await requireValue(toolset.tools.tool('read'), 'look').execute(
+				{ from: 1, search: 'search' },
 				{ signal },
 			),
 		)
@@ -175,7 +178,10 @@ describe('createDocumentToolset', () => {
 		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(VIEW_TOOLS)
 		expect(toolset.native.map((tool) => tool.name)).toEqual(VIEW_TOOLS)
 		const signal = new AbortController().signal
-		await requireValue(toolset.tools.tool('look'), 'look').execute({ search: 'save' }, { signal })
+		await requireValue(toolset.tools.tool('read'), 'look').execute(
+			{ from: 1, search: 'save' },
+			{ signal },
+		)
 		const [save] = await toolset.view.elements.find({ role: 'button', name: 'Save' })
 		probe.save.remove()
 		const gone = await Promise.resolve(
@@ -198,14 +204,14 @@ describe('createDocumentToolset', () => {
 			{ signal },
 		)
 		const resolved = performance.now()
-		expect(waited).toBe('"Late arrival" is on the page.')
+		expect(waited).toContain('"Late arrival" is on the page.\n\npage ')
 		probe.late.textContent = ''
 		expect(
 			await requireValue(toolset.tools.tool('wait')).execute(
 				{ text: 'Late arrival', absent: true },
 				{ signal },
 			),
-		).toBe('"Late arrival" is not on the page.')
+		).toContain('"Late arrival" is not on the page.\n\npage ')
 		const [[at] = [Number.NaN]] = appended.calls
 		expect(resolved - at).toBeLessThan(100)
 		await toolset.destroy()
@@ -285,7 +291,7 @@ describe('createDocumentToolset', () => {
 			).toMatchObject({
 				success: true,
 				value:
-					'Saved save-draft with 1 step.\n\nsave-draft "Save the draft"\ns1 click button "Save"',
+					'Saved save-draft with 1 step.\n1: save-draft "Save the draft"\n2: s1 click button "Save"\n[lines 1–2 of 2; the whole page]',
 			})
 			const replayed = await toolset.tools.execute({
 				id: '4',
@@ -331,9 +337,13 @@ describe('document registry conformance', () => {
 		const toolset = createDocumentToolset({ document: probe.document })
 		try {
 			const outline = await toolset.view.elements.outline()
-			expect(outline.text.split('\n')).toContain('e5 form "Search cars" [tool=search-cars]')
-			expect(outline.text).not.toContain('autosubmit')
-			expect((await toolset.view.elements.outline()).text).toBe(outline.text)
+			expect(outline.lines.map(renderBrowserLine).join('\n').split('\n')).toContain(
+				'e5 form "Search cars" [tool=search-cars]',
+			)
+			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('autosubmit')
+			expect((await toolset.view.elements.outline()).lines.map(renderBrowserLine).join('\n')).toBe(
+				outline.lines.map(renderBrowserLine).join('\n'),
+			)
 		} finally {
 			await toolset.destroy()
 		}

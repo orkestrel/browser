@@ -141,22 +141,14 @@ describe('BrowserJourneyToolset file listing', () => {
 			const result = await toolset.tools.execute({
 				id: 'listing',
 				name: 'journeys',
-				arguments: { search: 'all' },
+				arguments: { from: 1 },
 			})
 			expect(result).toMatchObject({ success: true })
 			if (!result.success || typeof result.value !== 'string')
 				throw new Error('The journeys tool did not return a listing')
-			expect(result.value.match(/^(alpine|harbor|zebra) "Check readiness"$/gm)).toEqual([
-				'alpine "Check readiness"',
-				'harbor "Check readiness"',
-				'zebra "Check readiness"',
-			])
-			expect(result.value.split('\n\n')).toEqual([
-				'alpine "Check readiness"\ns1 wait "Ready"',
-				'broken cannot be read: Malformed journey revision',
-				'harbor "Check readiness"\ns1 wait "Ready"',
-				'zebra "Check readiness"\ns1 wait "Ready"',
-			])
+			expect(result.value).toBe(
+				'journeys (7 lines)\n1: alpine "Check readiness"\n2: s1 wait "Ready"\n3: broken cannot be read: Malformed journey revision\n4: harbor "Check readiness"\n5: s1 wait "Ready"\n6: zebra "Check readiness"\n7: s1 wait "Ready"\n[lines 1–7 of 7; the whole page]',
+			)
 		} finally {
 			await journeys.destroy()
 			await toolset.destroy()

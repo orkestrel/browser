@@ -2436,39 +2436,66 @@ export interface BrowserWaitOptions extends BrowserCallOptions {
 	readonly absent?: boolean
 }
 
-/**
- * Configures an outline's element limit, optional subtree, and search.
- *
- * @remarks
- * - `search` — the words that select the outline's `matches`: the text is lowercased and split
- *   into whole words of at least 3 letters or digits (`BROWSER_SEARCH_PATTERN`), each referenced
- *   row's role and accessible name are split the same way, and a row scores the number of distinct
- *   search words equal to one of its words; every referenced row with the highest score above 0
- *   matches
- */
+/** Configures an outline's element limit and optional subtree. */
 export interface BrowserOutlineOptions extends BrowserCallOptions {
 	readonly limit?: number
 	readonly within?: string
-	readonly search?: string
+	readonly secrets?: readonly string[]
 }
 
-/**
- * Carries a document-order outline and its included and available element counts.
- *
- * @remarks
- * - `matches` — the rendered rows that best match the options' `search`, in document order and
- *   past `limit` included; empty without a `search` or without a match
- * - `focus` — the rendered row of the referenced element that has focus, past `limit` included;
- *   the last such row in document order when several do, and `undefined` when focus is on no
- *   referenced element
- */
+/** Distinguishes searchable text from generated syntax and actionable references. */
+export interface BrowserLineSpan {
+	readonly category: 'text' | 'syntax' | 'reference'
+	readonly text: string
+}
+
+/** Carries the ordered spans of one addressed document line. */
+export interface BrowserLine {
+	readonly spans: readonly BrowserLineSpan[]
+}
+
+/** Carries document-order lines, element counts, and the focused element's row. */
 export interface BrowserOutline {
 	readonly url: string
 	readonly title: string
-	readonly text: string
+	readonly lines: readonly BrowserLine[]
 	readonly count: number
 	readonly total: number
-	readonly matches: readonly string[]
+	readonly focus: string | undefined
+}
+
+/** Configures a fresh line window within a whole-result character limit.
+ * @remarks
+ * - `from` — first line, inclusive. Default: 1
+ * - `to` — last line, inclusive. Default: as many lines as fit
+ * - `search` — words whose best match opens the window
+ * - `limit` — character room including the header and footer. Default: the toolset limit
+ */
+export interface BrowserToolsetReadOptions extends BrowserCallOptions {
+	readonly from?: number
+	readonly to?: number
+	readonly search?: string
+	readonly limit?: number
+}
+
+/** Describes the projection and context of one bounded reading window. */
+export interface BrowserPassage {
+	readonly url: string
+	readonly title: string
+	readonly lines: readonly BrowserLine[]
+	readonly from: number
+	readonly to?: number
+	readonly search?: string
+	readonly tabs: readonly BrowserTab[]
+	readonly changed: boolean
+	readonly note?: string
+}
+
+/** Carries a receipt's capture or the bounded reason no capture was available. */
+export interface BrowserCaptureResult {
+	readonly outline?: BrowserOutline
+	readonly note?: string
+	readonly tabs: readonly BrowserTab[]
 	readonly focus: string | undefined
 }
 
@@ -2803,20 +2830,17 @@ export interface BrowserRegistryPending {
 
 /**
  * Names a tool the browser toolset reserves: the generic tools, the staged `dialog`, the
- * opt-in `tabs` and `switch`, and the journey tools `record`, `save`, `journeys`, `edit`,
+ * opt-in `switch`, and the journey tools `record`, `save`, `journeys`, `edit`,
  * `replay`, `forget`, and `capture`, which a toolset constructed with `journeys` reserves.
  */
 export type BrowserToolName =
-	| 'look'
 	| 'read'
-	| 'plain'
 	| 'click'
 	| 'type'
 	| 'press'
 	| 'navigate'
 	| 'wait'
 	| 'dialog'
-	| 'tabs'
 	| 'switch'
 	| 'record'
 	| 'save'
@@ -2889,12 +2913,12 @@ export type BrowserToolsetEventMap = {
  * @remarks
  * - `tools` — the manager the toolset fills. Default: a manager the toolset creates
  * - `page` — the page behind the view, which adds `press`, `navigate`, the staged `dialog`,
- *   popup following, and the protocol subscriptions; omitting it leaves the five view tools
+ *   popup following, and the protocol subscriptions; omitting it leaves the view tools
  * - `source` — a fixed source of page tools. Default: `page.registry` when `page` is supplied,
  *   which the toolset starts and which follows the current page; no source otherwise
- * - `context` — the browser context whose pages the `tabs` and `switch` tools list and select;
- *   it requires `page`, and omitting it leaves both tools unadvertised
- * - `limit` — the most characters of a result or error message before its footer, a positive
+ * - `context` — the browser context whose pages `read` lists and `switch` selects;
+ *   it requires `page`, and omitting it leaves `switch` unadvertised
+ * - `limit` — the most characters of a complete result or error message, including its footer, a positive
  *   integer. Default: `BROWSER_TOOL_LIMIT`
  * - `schemes` — the URL schemes `navigate` accepts, each with its colon. Default:
  *   `BROWSER_SCHEMES`
@@ -2906,6 +2930,8 @@ export type BrowserToolsetEventMap = {
  *   through a journey toolset it constructs; omitting it leaves the journey tools unadvertised
  */
 export interface BrowserToolsetOptions {
+	/** Supplies and consumes host notices before the complete result is budgeted. */
+	readonly notes?: () => string
 	readonly on?: EmitterHooks<BrowserToolsetEventMap>
 	readonly error?: EmitterErrorHandler
 	readonly tools?: ToolManagerInterface
@@ -2933,7 +2959,7 @@ export interface BrowserFollowOptions extends BrowserCallOptions {
 }
 
 /**
- * Describes one open tab of a toolset's context, which the `tabs` tool lists one per line.
+ * Describes one open tab of a toolset's context, which the `read` header lists.
  *
  * @remarks
  * - `id` — `t` followed by the tab's one-based position in the context, which `switch` takes
@@ -2954,16 +2980,21 @@ export interface BrowserTab extends BrowserJourneyTab {
  * - `emitter` — emits `adopt`, `skip`, `select`, `action`, `hold`, and `release`
  * - `tools` — the manager the toolset fills, with execution through the `perform` boundary
  * - `native` — the generic tools alone, which a consumer publishes to a built-in agent: the
- *   `look`, `read`, `plain`, `click`, `type`, `press`, `navigate`, and `wait` for a page-backed
- *   toolset, and `look`, `read`, `plain`, `click`, `type`, and `wait` for a view-backed one
+ *   `read`, `click`, `type`, `press`, `navigate`, and `wait` for a page-backed
+ *   toolset, and `read`, `click`, `type`, and `wait` for a view-backed one
  * - `view` — the view the tools act on
  */
 export interface BrowserToolsetInterface {
+	/** Renders a fresh page window, including pending move notes, within the requested limit.
+	 * @param options - Inclusive range, search, cancellation, and character room
+	 * @returns Numbered lines with an exact continuation footer
+	 */
+	read(options?: BrowserToolsetReadOptions): Promise<string>
 	readonly emitter: EmitterInterface<BrowserToolsetEventMap>
 	readonly tools: ToolManagerInterface
 	readonly native: readonly ToolInterface[]
 	readonly view: BrowserViewInterface
-	/** Reports the character limit before a result or error footer. */
+	/** Reports the whole-result character limit, including a result or error footer. */
 	readonly limit: number
 	/** Names the acquired hold, or returns undefined while no hold owns the toolset. */
 	readonly held: string | undefined
@@ -2991,7 +3022,7 @@ export interface BrowserToolsetInterface {
 		options?: BrowserFollowOptions,
 	): Promise<BrowserAction>
 	/**
-	 * Lists the open tabs of the toolset's context in the order the `tabs` tool lists them.
+	 * Lists the open tabs of the toolset's context in the order the `read` header lists them.
 	 *
 	 * @remarks
 	 * A tab whose title does not answer within `BROWSER_TOOL_TIMEOUT_MS` lists an empty title, and a
@@ -3005,7 +3036,7 @@ export interface BrowserToolsetInterface {
 	 *
 	 * @remarks
 	 * An action without the token that arrives after the call is refused with `BROWSER_TOOLSET_BUSY`
-	 * and `The toolset is replaying NAME until it finishes; call look.`, while waiting and while held;
+	 * and `The toolset is replaying NAME until it finishes; call read.`, while waiting and while held;
 	 * the actions admitted before the call complete first; a wait that aborts or fails releases the
 	 * pending reservation.
 	 * A second hold waits for earlier holds to release and honours its signal while waiting.

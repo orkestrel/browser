@@ -1,3 +1,5 @@
+import { scanBrowserLines } from '@src/core'
+import { renderBrowserLine } from '../../../../src/core/index.js'
 import type { BrowserFrameInterface } from '@src/core'
 import type { CDPSentMessage } from '../../../setup.js'
 import { describe, expect, it } from 'vitest'
@@ -266,7 +268,9 @@ describe('element manager', () => {
 		try {
 			await fixture.page.elements.outline()
 			navigate = true
-			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('title', 'Cart')
+			await expect(fixture.page.elements.outline()).rejects.toMatchObject({
+				context: { reason: 'GONE' },
+			})
 			expect(fixture.page.elements.element('e6')).toBeUndefined()
 			expect(fixture.page.elements.element('e1')?.name).toBe('Home')
 		} finally {
@@ -364,8 +368,8 @@ describe('element manager', () => {
 			const outline = await fixture.page.elements.outline({
 				within: requireValue(found[0]).reference,
 			})
-			expect(outline.text).toContain('\nDelivery included.\n')
-			expect(outline.text).not.toContain('Home')
+			expect(outline.lines.map(renderBrowserLine)).toEqual(['Delivery included.'])
+			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('Home')
 			expect(outline.count).toBe(0)
 		} finally {
 			await fixture.client.close()
@@ -489,21 +493,23 @@ describe('element manager', () => {
 		const { page, client } = await createBrowserElementFixture()
 		try {
 			const outline = await page.elements.outline()
-			expect(outline).toEqual({
+			expect({ ...outline, lines: outline.lines.map(renderBrowserLine).join('\n') }).toEqual({
 				url: 'https://example.test/cart',
 				title: 'Cart',
 				count: 6,
 				total: 6,
-				text: 'page "Cart" https://example.test/cart\n# Your cart\ne1 link "Home"\ne2 textbox "Email" value="sam@example.test"\ne3 checkbox "Gift wrap" [checked]\ne4 button "Place order" [disabled]\nTwo items, 48.00 total.\ne5 Iframe "Checkout"\ne6 button "Save"\nDelivery included.\n(6 of 6 elements)',
-				matches: [],
+				lines:
+					'# Your cart\ne1 link "Home"\ne2 textbox "Email" value="sam@example.test"\ne3 checkbox "Gift wrap" [checked]\ne4 button "Place order" [disabled]\nTwo items, 48.00 total.\ne5 Iframe "Checkout"\ne6 button "Save"\nDelivery included.',
 				focus: undefined,
 			})
-			const cut = await page.elements.outline({ limit: 2, search: 'the save button' })
-			expect(cut.matches).toEqual(['e6 button "Save"'])
+			const cut = await page.elements.outline({ limit: 2 })
+			expect(scanBrowserLines((await page.elements.outline()).lines, 'the save button')).toEqual([
+				8,
+			])
 			expect(cut.count).toBe(2)
 			expect(cut.total).toBe(6)
-			expect(cut.text).toContain('Two items, 48.00 total.')
-			expect(cut.text).not.toContain('e3')
+			expect(cut.lines.map(renderBrowserLine).join('\n')).toContain('Two items, 48.00 total.')
+			expect(cut.lines.map(renderBrowserLine).join('\n')).not.toContain('e3')
 		} finally {
 			await client.close()
 		}
@@ -581,7 +587,7 @@ describe('element manager', () => {
 			await expect(first.click()).rejects.toMatchObject({
 				code: 'BROWSER_ELEMENT_ERROR',
 				context: { reason: 'GONE' },
-				message: expect.stringContaining('look'),
+				message: expect.stringContaining('read'),
 			})
 			transport.event(
 				'Page.lifecycleEvent',

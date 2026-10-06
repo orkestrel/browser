@@ -31,7 +31,7 @@ export class BrowserError extends Error {
  *
  * @remarks
  * The message names the element and the detail on one line. It ends with
- * `; call look for fresh refs.` for `GONE` alone, because only a changed page makes a fresh
+ * `; call read for fresh refs.` for `GONE` alone, because only a changed page makes a fresh
  * reference the remedy; every other reason ends the message with a period, and a caller whose
  * refusal a fresh reference does fix names that remedy in its detail.
  */
@@ -50,7 +50,7 @@ export class BrowserElementError extends BrowserError {
 					? 'needs a trusted event'
 					: reason.toLowerCase())
 		super(
-			`${subject} ${text}${reason === 'GONE' ? '; call look for fresh refs.' : '.'}`,
+			`${subject} ${text}${reason === 'GONE' ? '; call read for fresh refs.' : '.'}`,
 			'BROWSER_ELEMENT_ERROR',
 			isString(reference) ? { reference, reason } : { subject: reference.subject, reason },
 		)

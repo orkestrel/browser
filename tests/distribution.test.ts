@@ -1260,7 +1260,7 @@ describe('packed browse binary', () => {
 				expect(await callBrowse(client, 'record', { journey: 'reveal-code' })).toMatch(
 					/^Recording reveal-code; /u,
 				)
-				const view = await callBrowse(client, 'look', { search: 'the reveal button' })
+				const view = await callBrowse(client, 'read', { from: 1, search: 'the reveal button' })
 				const ref = requireValue(
 					/\b(e\d+) button "Reveal"/u.exec(view)?.[1],
 					`no Reveal in ${view}`,
@@ -1274,11 +1274,13 @@ describe('packed browse binary', () => {
 				expect(
 					await callBrowse(client, 'save', { description: 'Reveals the confirmation code' }),
 				).toMatch(/^Saved reveal-code with 2 steps\./u)
-				const listing = await callBrowse(client, 'journeys', { search: '' })
+				const listing = await callBrowse(client, 'journeys', { from: 1 })
 				expect(listing.split(/\r\n|\n/u)).toStrictEqual([
-					'reveal-code "Reveals the confirmation code"',
-					's1 click button "Reveal"',
-					`s2 wait "${FIXTURE_LATE_TEXT}"`,
+					'journeys (3 lines)',
+					'1: reveal-code "Reveals the confirmation code"',
+					'2: s1 click button "Reveal"',
+					`3: s2 wait "${FIXTURE_LATE_TEXT}"`,
+					'[lines 1–3 of 3; the whole page]',
 				])
 				const edited = await callBrowse(client, 'edit', {
 					journey: 'reveal-code',
@@ -1287,7 +1289,7 @@ describe('packed browse binary', () => {
 					],
 				})
 				expect(edited).toMatch(/^Edited reveal-code\./u)
-				expect(edited).toContain(`s3 navigate ${url}\ns1 click button "Reveal"`)
+				expect(edited).toContain(`2: s3 navigate ${url}\n3: s1 click button "Reveal"`)
 				const replayed = await callBrowse(client, 'replay', { journey: 'reveal-code' })
 				expect(replayed.split(/\r\n|\n/u)[0]).toBe('Replayed reveal-code: 3 of 3 steps.')
 				const runs = readdirSync(join(root, 'reveal-code/runs'))
@@ -1322,8 +1324,8 @@ describe('packed browse binary', () => {
 				const client = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
 				teardown.add(() => client.disconnect())
 				const views = await Promise.all([
-					callBrowse(client, 'look', { search: 'the page' }),
-					callBrowse(client, 'look', { search: 'the title' }),
+					callBrowse(client, 'read', { from: 1, search: 'the page' }),
+					callBrowse(client, 'read', { from: 1, search: 'the title' }),
 				])
 				expect(views).toStrictEqual([
 					expect.stringMatching(/^page /u),
@@ -1359,8 +1361,8 @@ describe('packed browse binary', () => {
 				const second = await connectBrowse(stage, { BROWSE_EXECUTABLE: executable })
 				teardown.add(() => second.disconnect())
 				await Promise.all([
-					callBrowse(first, 'look', { search: 'the page' }),
-					callBrowse(second, 'look', { search: 'the page' }),
+					callBrowse(first, 'read', { from: 1, search: 'the page' }),
+					callBrowse(second, 'read', { from: 1, search: 'the page' }),
 				])
 				const created = readProfiles(profiles).filter((profile) => !before.includes(profile))
 				expect(created).toHaveLength(2)

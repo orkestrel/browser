@@ -400,7 +400,7 @@ export const BROWSER_TEXT_ROLES: ReadonlySet<string> = Object.freeze(
 // === Browser toolset
 
 /**
- * Bounds each tool result and error message at `4_000` UTF-16 code units before its footer.
+ * Bounds each tool result and error message at `4_000` UTF-16 code units including its footer.
  *
  * @remarks
  * A page tool's error message and JSON output reach the toolset already cut at
@@ -431,25 +431,23 @@ export const BROWSER_TOOL_CAPTURE_MS = 1_000
  * passed before the view could be captured.
  */
 export const BROWSER_TOOL_DEADLINE_NOTE =
-	'(The view could not be read before the deadline; call look.)'
+	'(The view could not be read before the deadline; call read.)'
 
 /**
  * Holds the status an action receipt carries after a submission a page listener prevented, with no
  * navigation after it, naming `wait` as the next call because the page's outcome can arrive later.
  */
-export const BROWSER_TOOL_HANDLED_STATUS =
-	'the page handled the submission without navigating; call wait for the text you expect'
+export const BROWSER_TOOL_HANDLED_STATUS = 'the page handled the submission and changed'
+
+/** Holds the status of a handled submission with no rendered change before the deadline. */
+export const BROWSER_TOOL_UNCHANGED_STATUS =
+	'the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect'
 
 /** Holds the refusal for a hold requested while an earlier input remains pending. */
-export const BROWSER_TOOL_PENDING_NOTE = 'An earlier input is still pending; call look.'
+export const BROWSER_TOOL_PENDING_NOTE = 'An earlier input is still pending; call read.'
 
 /** Names the tools that observe the view without recording an action. */
-export const BROWSER_OBSERVATION_TOOL_NAMES: readonly string[] = Object.freeze([
-	'look',
-	'read',
-	'plain',
-	'tabs',
-])
+export const BROWSER_OBSERVATION_TOOL_NAMES: readonly string[] = Object.freeze(['read'])
 
 /**
  * Holds the note an action receipt carries in place of the view when the page changed under the
@@ -457,19 +455,12 @@ export const BROWSER_OBSERVATION_TOOL_NAMES: readonly string[] = Object.freeze([
  * readiness.
  */
 export const BROWSER_TOOL_CHANGED_NOTE =
-	'(The page changed before the view could be read; call look.)'
+	'(The page changed before the view could be read; call read.)'
 
 /**
- * Holds the clause that ends the footer of a cut result other than an action or `dialog` receipt
- * that carries a view, including `look` and `read` results.
+ * Holds the clause that ends a cut result without an addressed page window.
  */
 export const BROWSER_TOOL_CUT_FOOTER = 'the rest was cut'
-
-/**
- * Holds the clause that ends the footer of a cut action or `dialog` receipt that carries a view,
- * and names `look` as the call that finds an element the cut view leaves out.
- */
-export const BROWSER_TOOL_VIEW_FOOTER = 'the rest was cut; call look with words to find'
 
 /**
  * Names the accessibility roles the `type` tool writes to: `textbox`, `searchbox`, and
@@ -490,20 +481,17 @@ export const BROWSER_TYPED_ROLES: ReadonlySet<string> = Object.freeze(
 export const BROWSER_TOOL_TIMEOUT_LIMIT_MS = 30_000
 
 /**
- * Names every tool the browser toolset reserves: `look`, `read`, `plain`, `click`, `type`, `press`,
- * `navigate`, `wait`, `dialog`, `tabs`, and `switch`.
+ * Names the eight page tools: `read`, `click`, `type`, `press`, `navigate`, `wait`, `dialog`,
+ * and `switch`.
  */
 export const BROWSER_TOOL_NAMES: readonly BrowserToolName[] = Object.freeze([
-	'look',
 	'read',
-	'plain',
 	'click',
 	'type',
 	'press',
 	'navigate',
 	'wait',
 	'dialog',
-	'tabs',
 	'switch',
 ])
 
@@ -530,80 +518,43 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  *
  * @remarks
  * Every tool description is at most 25 words and says what the tool shows or does, and for
- * `look`, `read`, and `plain` when to call it; every parameter description is at most 100 characters.
- * Every tool declares at least one required parameter, because the streamed tool-call parser of
- * Ollama 0.34.4 rejects a call to a tool that declares no parameter. `look`, `read`, and `plain` take
- * `search` and `offset`; an element's own reading is `BrowserElementInterface.read`.
- * `look`, `read`, `plain`, and `journeys` annotate `pure` and
- * `untrusted`, `wait` and `tabs` annotate `pure`, and the rest carry no annotation. `type` takes
+ * `read` when to call it; every parameter description is at most 100 characters.
+ * `read` and `journeys` require `from` and accept optional `to` and `search`; an element's own
+ * reading is `BrowserElementInterface.read`. `read` and `journeys` annotate `pure` and
+ * `untrusted`, `wait` annotates `pure`, and the rest carry no annotation. `type` takes
  * `secret` beside `ref`, `text`, and `submit`. The journey tools `record`, `save`, `journeys`,
- * `edit`, and `replay` are advertised only by a toolset constructed with `journeys`.
+ * `edit`, `replay`, `forget`, and `capture` are advertised only by a toolset constructed with `journeys`.
  * `wait` takes `absent` beside `text` and `timeout`.
  */
 export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>> = Object.freeze({
-	look: Object.freeze({
-		name: 'look',
-		description:
-			"Shows the page's text and the elements you can act on, each with a reference like e4. Call it first and after the page changes.",
-		parameters: Object.freeze({
-			type: 'object',
-			properties: Object.freeze({
-				search: Object.freeze({
-					type: 'string',
-					description: 'Words to find on this page; matching elements come first.',
-				}),
-				offset: Object.freeze({
-					type: 'integer',
-					description: 'The character to continue from, as the last reply names. Default: 0.',
-				}),
-			}),
-			required: Object.freeze(['search']),
-		}),
-		annotations: Object.freeze({ pure: true, untrusted: true }),
-	}),
 	read: Object.freeze({
 		name: 'read',
 		description:
-			'Reads the page as Markdown, with headings, tables, and link addresses. Call it to learn a fact; continue with the offset a cut result names.',
+			'Shows numbered lines of the page, with references like e4 to act on. Call it to learn a fact or to find an element.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
+				from: Object.freeze({
+					type: 'integer',
+					description: "The first line to show: 1 for the top, or the line a reply's footer names.",
+				}),
+				to: Object.freeze({
+					type: 'integer',
+					description: 'The last line to show. Default: as many lines as fit.',
+				}),
 				search: Object.freeze({
 					type: 'string',
-					description: 'Words to find on this page; the lines that share them come first.',
-				}),
-				offset: Object.freeze({
-					type: 'integer',
-					description: 'The character to continue from, as the last reply names. Default: 0.',
+					description:
+						'Words to find; the reply starts at the first matching line at or after from.',
 				}),
 			}),
-			required: Object.freeze(['search']),
-		}),
-		annotations: Object.freeze({ pure: true, untrusted: true }),
-	}),
-	plain: Object.freeze({
-		name: 'plain',
-		description:
-			'Reads the page as plain text, without Markdown, link addresses, or image text. Call it for words to pass to wait or type.',
-		parameters: Object.freeze({
-			type: 'object',
-			properties: Object.freeze({
-				search: Object.freeze({
-					type: 'string',
-					description: 'Words to find on this page; the lines that share them come first.',
-				}),
-				offset: Object.freeze({
-					type: 'integer',
-					description: 'The character to continue from, as the last reply names. Default: 0.',
-				}),
-			}),
-			required: Object.freeze(['search']),
+			required: Object.freeze(['from']),
 		}),
 		annotations: Object.freeze({ pure: true, untrusted: true }),
 	}),
 	click: Object.freeze({
 		name: 'click',
-		description: 'Clicks the element with that reference.',
+		description: 'Clicks the referenced element, settles its action, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -615,7 +566,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	type: Object.freeze({
 		name: 'type',
 		description:
-			'Types into the text control with that reference; set submit to true to submit its form.',
+			'Fills the referenced control, optionally submits its form, settles the action, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -638,7 +589,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	press: Object.freeze({
 		name: 'press',
-		description: 'Presses that key or chord, such as Enter or Control+a.',
+		description: 'Presses a key or chord, settles its action, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -649,7 +600,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	navigate: Object.freeze({
 		name: 'navigate',
-		description: 'Opens that absolute web address in the current tab.',
+		description: 'Opens an absolute web address in the current tab and returns the loaded page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -660,7 +611,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	wait: Object.freeze({
 		name: 'wait',
-		description: 'Waits for text to appear; set absent to true to wait for it to leave.',
+		description: 'Waits for text to appear or leave, then returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -680,7 +631,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	dialog: Object.freeze({
 		name: 'dialog',
-		description: 'Accepts or dismisses the open dialog.',
+		description: 'Answers the open dialog, settles the interrupted action, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -693,24 +644,9 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 			required: Object.freeze(['accept']),
 		}),
 	}),
-	tabs: Object.freeze({
-		name: 'tabs',
-		description: 'Lists the open tabs; the current one is marked.',
-		parameters: Object.freeze({
-			type: 'object',
-			properties: Object.freeze({
-				search: Object.freeze({
-					type: 'string',
-					description: 'Words to find; matching tabs come first.',
-				}),
-			}),
-			required: Object.freeze(['search']),
-		}),
-		annotations: Object.freeze({ pure: true }),
-	}),
 	switch: Object.freeze({
 		name: 'switch',
-		description: 'Switches to a tab from tabs, such as t2.',
+		description: 'Selects an open tab that read lists and returns its page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -757,14 +693,18 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 			properties: Object.freeze({
 				search: Object.freeze({
 					type: 'string',
-					description: 'Words to find; matching journeys come first.',
+					description: 'Words to find in the given range.',
 				}),
-				offset: Object.freeze({
+				from: Object.freeze({
 					type: 'integer',
-					description: 'The character to continue from, as the last reply names. Default: 0.',
+					description: 'The first line to show.',
+				}),
+				to: Object.freeze({
+					type: 'integer',
+					description: 'Last line.',
 				}),
 			}),
-			required: Object.freeze(['search']),
+			required: Object.freeze(['from']),
 		}),
 		annotations: Object.freeze({ pure: true, untrusted: true }),
 	}),
@@ -981,3 +921,19 @@ export const BROWSER_JOURNEY_RECORDING_REFUSAL = 'A journey is recording; call s
 /** Holds the refusal `save` returns when no journey is recording. */
 export const BROWSER_JOURNEY_IDLE_REFUSAL =
 	'No journey is recording, so nothing can be saved; answer the user. A journey holds only the actions after record, so call record before them.'
+
+/** Caps a default reading window at 100 addressed lines. */
+export const BROWSER_READ_LINES = 100
+
+/** Caps the displayed search hit list at 50 line numbers. */
+export const BROWSER_READ_MATCHES = 50
+
+/** Opens a search window one line before its first match. */
+export const BROWSER_READ_CONTEXT = 1
+
+/** Wraps projection rows at 800 UTF-16 units, leaving room for receipt metadata. */
+export const BROWSER_READ_WIDTH = 800
+
+/** Reports changed line numbers without restarting a continuation. */
+export const BROWSER_READ_CHANGED_NOTE =
+	'The page changed since the last view; line numbers might differ.'

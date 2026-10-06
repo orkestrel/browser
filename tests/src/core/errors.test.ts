@@ -63,7 +63,7 @@ describe('core browser error guards', () => {
 		expect(untrusted.message).toBe(
 			'Element e4 opens a file chooser, which an untrusted click cannot do.',
 		)
-		expect(untrusted.message).not.toContain('call look')
+		expect(untrusted.message).not.toContain('call read')
 		expect(untrusted.code).toBe('BROWSER_ELEMENT_ERROR')
 		expect(untrusted.context).toEqual({ reference: 'e4', reason: 'UNTRUSTED' })
 		expect(isBrowserElementError(untrusted)).toBe(true)
@@ -71,7 +71,7 @@ describe('core browser error guards', () => {
 			'Upload needs a trusted event.',
 		)
 		expect(new BrowserElementError('e4', 'GONE').message).toBe(
-			'Element e4 is gone because the page changed; call look for fresh refs.',
+			'Element e4 is gone because the page changed; call read for fresh refs.',
 		)
 		expect(
 			[

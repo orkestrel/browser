@@ -393,7 +393,7 @@ describe('trusted element actions', () => {
 			await page.elements.outline()
 			await expect(requireValue(page.elements.element('e1')).click()).rejects.toMatchObject({
 				context: { reason: 'GONE' },
-				message: expect.stringContaining('look'),
+				message: expect.stringContaining('read'),
 			})
 		} finally {
 			await client.close()
@@ -416,7 +416,7 @@ describe('trusted element actions', () => {
 			expect(rejection).toMatchObject({
 				code: 'BROWSER_ELEMENT_ERROR',
 				context: { reference: 'e1', reason: 'GONE' },
-				message: 'Element e1 is gone because the page changed; call look for fresh refs.',
+				message: 'Element e1 is gone because the page changed; call read for fresh refs.',
 			})
 		} finally {
 			await client.close()
@@ -459,7 +459,7 @@ describe('trusted element actions', () => {
 			expect(rejection).toMatchObject({
 				code: 'BROWSER_ELEMENT_ERROR',
 				context: { reference: 'e6', reason: 'GONE' },
-				message: 'Element e6 is gone because the page changed; call look for fresh refs.',
+				message: 'Element e6 is gone because the page changed; call read for fresh refs.',
 			})
 		} finally {
 			await client.close()
@@ -652,7 +652,7 @@ describe('trusted element actions', () => {
 		expect(error).toMatchObject({
 			code: 'BROWSER_ELEMENT_ERROR',
 			context: { reason: 'GONE', reference: 'e12' },
-			message: expect.stringContaining('is gone because the page changed; call look'),
+			message: expect.stringContaining('is gone because the page changed; call read'),
 		})
 	})
 })

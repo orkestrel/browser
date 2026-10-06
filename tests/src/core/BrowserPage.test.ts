@@ -3215,7 +3215,7 @@ describe('BrowserPage out-of-process frame sessions', () => {
 			await expect(child.click()).rejects.toMatchObject({
 				code: 'BROWSER_ELEMENT_ERROR',
 				context: { reference: 'e6', reason: 'GONE' },
-				message: expect.stringContaining('look'),
+				message: expect.stringContaining('read'),
 			})
 			expect(page.elements.element('e1')).toBe(main)
 			const captures = transport.sent.length

@@ -22,9 +22,6 @@ import {
 	BROWSER_RESULT_LIMIT,
 	compileScreenshotPreparationExpression,
 	compileGuardedEvaluateExpression,
-	compileSubmitObserverExpression,
-	compileSubmitReadExpression,
-	BROWSER_SUBMIT_KEY,
 } from '@src/core'
 import {
 	BROWSER_JOURNEY_ACTION_FIXTURE,
@@ -34,11 +31,6 @@ import {
 	BROWSER_JOURNEY_MODULE_JAVASCRIPT,
 	evaluateJavaScript,
 	evaluateBrowserHit,
-	evaluateBrowserSubmit,
-	BrowserSubmitWindow,
-	BrowserSubmitWindows,
-	BROWSER_SUBMIT_CASES,
-	BROWSER_SUBMIT_FOCUS_CASES,
 	readBrowserCompiledTimers,
 	runBrowserCompiledTimers,
 	CAPTURE_TABLE_SIZES,
@@ -596,90 +588,5 @@ describe('compileBrowserJourneyValue', () => {
 		expect(compileBrowserJourneyValue(value)).toBe(
 			`{ text: { parameter: 'email' }, other: { parameter: 'name' }, pair: { parameter: 'email', extra: 1 } }`,
 		)
-	})
-})
-
-describe('compileSubmitObserverExpression and compileSubmitReadExpression', () => {
-	const observer = compileSubmitObserverExpression(7)
-	const read = compileSubmitReadExpression(7)
-
-	it.each(BROWSER_SUBMIT_CASES)(
-		'reads %s as its surviving relationships and its prevention, and removes the observer',
-		(_name, submits, destinations, prevented) => {
-			expect(evaluateBrowserSubmit(observer, read, submits)).toEqual([
-				{ destinations, prevented, submitted: true, implicit: false },
-				0,
-			])
-		},
-	)
-
-	it('reads nothing when no submission fired and replaces an earlier installation', () => {
-		const empty = { destinations: [], prevented: false, submitted: false, implicit: false }
-		expect(evaluateBrowserSubmit(observer, read)).toEqual([empty, 0])
-		expect(evaluateBrowserSubmit(observer, read, [], 2)).toEqual([empty, 0])
-		expect(evaluateBrowserSubmit(observer, read, [{ prevented: false, form: {} }], 2)).toEqual([
-			{ destinations: ['self'], prevented: false, submitted: true, implicit: false },
-			0,
-		])
-		expect(observer).toContain(JSON.stringify(BROWSER_SUBMIT_KEY))
-		expect(read).toContain(JSON.stringify(BROWSER_SUBMIT_KEY))
-	})
-
-	it.each(BROWSER_SUBMIT_FOCUS_CASES)(
-		'reads %s as implicit only when the Enter reached an input a form owns',
-		(_name, focus, key, implicit) => {
-			const window = new BrowserSubmitWindow()
-			window.focus(focus)
-			window.evaluate(compileSubmitObserverExpression(3))
-			expect(window.listeners).toBe(2)
-			window.press(key)
-			expect(window.evaluate(compileSubmitReadExpression(3))).toEqual({
-				destinations: [],
-				prevented: false,
-				submitted: false,
-				implicit,
-			})
-			expect(window.listeners).toBe(0)
-		},
-	)
-
-	it('reads no Enter that arrived before the installation, and one that arrived after a replacing installation', () => {
-		const window = new BrowserSubmitWindow()
-		window.focus({ name: 'input', form: {} })
-		window.press('Enter')
-		window.evaluate(compileSubmitObserverExpression(4))
-		expect(window.evaluate(compileSubmitReadExpression(4))).toMatchObject({ implicit: false })
-		window.press('Enter')
-		window.evaluate(compileSubmitObserverExpression(5))
-		window.evaluate(compileSubmitObserverExpression(6))
-		window.press('Enter')
-		expect(window.listeners).toBe(2)
-		expect(window.evaluate(compileSubmitReadExpression(6))).toMatchObject({ implicit: true })
-	})
-
-	it('answers null and removes nothing for a read of another token or of no observer', () => {
-		expect(evaluateBrowserSubmit(observer, read, [], 0)).toEqual([null, 0])
-		expect(
-			evaluateBrowserSubmit(compileSubmitObserverExpression(8), read, [
-				{ prevented: false, form: {} },
-			]),
-		).toEqual([null, 2])
-	})
-
-	it('keeps a later action observer when an earlier action removal lands after it installed', () => {
-		const windows = new BrowserSubmitWindows()
-		const window = windows.window('session-main', 91)
-		window.evaluate(compileSubmitObserverExpression(1))
-		window.evaluate(compileSubmitObserverExpression(2))
-		expect(window.evaluate(compileSubmitReadExpression(1))).toBeNull()
-		expect(window.listeners).toBe(2)
-		window.dispatch({ prevented: false, form: { target: '_parent' } })
-		expect(window.evaluate(compileSubmitReadExpression(2))).toEqual({
-			destinations: ['parent'],
-			prevented: false,
-			submitted: true,
-			implicit: false,
-		})
-		expect(window.listeners).toBe(0)
 	})
 })

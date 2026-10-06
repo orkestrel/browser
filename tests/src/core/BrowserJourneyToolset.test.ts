@@ -22,7 +22,6 @@ import {
 	MemoryBrowserRunStore,
 	createBrowserToolset,
 	createMemoryBrowserJourneyStore,
-	renderBrowserJourney,
 } from '@src/core'
 import {
 	BROWSER_JOURNEY_FIXTURE,
@@ -138,38 +137,41 @@ describe('BrowserJourneyToolset', () => {
 			await toolset.destroy()
 		}
 	})
-	it('lists matching journey headings with offsets independent of search and excludes steps', async () => {
+	it('searches numbered journey lines and respects the requested start', async () => {
 		const store = createMemoryBrowserJourneyStore()
-		const first = { ...createBrowserJourneyFixture(), name: 'alpha', description: 'Ordinary route' }
-		const second = {
-			...createBrowserJourneyFixture(),
-			name: 'delivery',
-			description: 'Delivery schedule',
-		}
-		await store.set(first)
-		await store.set(second)
+		await store.set(
+			createBrowserJourneyFixture(undefined, { name: 'alpha', description: 'Ordinary route' }),
+		)
+		await store.set(
+			createBrowserJourneyFixture(undefined, {
+				name: 'delivery',
+				description: 'Delivery schedule',
+			}),
+		)
 		const toolset = new BrowserToolset(createBrowserViewDouble())
-		const journeys = new BrowserJourneyToolset(toolset, { store, limit: 120 })
+		const journeys = new BrowserJourneyToolset(toolset, { store })
 		try {
 			const tool = requireValue(toolset.tools.tool('journeys'))
 			const context = { signal: new AbortController().signal }
-			const offset = renderBrowserJourney(first).length + 2
-			const matched = String(await tool.execute({ search: 'delivery schedule' }, context))
-			expect(matched.startsWith(`1 journey matches "delivery schedule":\n[${offset}]`)).toBe(true)
-			const continued = String(await tool.execute({ search: 'delivery schedule', offset }, context))
-			expect(continued.startsWith('delivery "Delivery schedule"')).toBe(true)
-			expect(continued).not.toContain('journey matches')
-			expect(await tool.execute({ search: 'Ready' }, context)).toBe(
-				await tool.execute({ search: '' }, context),
+			expect(await tool.execute({ from: 1, search: 'deliver schedule' }, context)).toContain(
+				'1 lines match "deliver schedule": 3',
 			)
-			await expect(tool.execute({ what: 'delivery' }, context)).rejects.toThrow(
-				'The journeys tool takes no what parameter; call journeys with search and offset.',
+			const result = String(await tool.execute({ from: 3, to: 3 }, context))
+			expect(result).toContain('3: delivery "Delivery schedule"')
+			expect(result).toContain('call journeys with from 4 for more')
+			expect(result).not.toContain('2: ')
+			expect(await tool.execute({ from: 1, search: 'Ready' }, context)).toContain(
+				'2 lines match "Ready": 2, 4',
 			)
+			await expect(tool.execute({ from: 0 }, context)).rejects.toMatchObject({
+				code: 'BROWSER_TOOLSET_ARGUMENT',
+			})
 		} finally {
 			await journeys.destroy()
 			await toolset.destroy()
 		}
 	})
+
 	it('l2a refuses forget on read-only journeys before touching the saved journey or runs', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		const runs = new MemoryBrowserRunStore()
@@ -344,7 +346,7 @@ describe('BrowserJourneyToolset', () => {
 				}),
 			).toMatchObject({
 				success: false,
-				error: 'The toolset is replaying check-ready until it finishes; call look.',
+				error: 'The toolset is replaying check-ready until it finishes; call read.',
 			})
 			expect(await store.get('check-ready')).toEqual(saved)
 		} finally {
@@ -574,12 +576,13 @@ describe('BrowserJourneyToolset', () => {
 				await toolset.tools.execute({
 					id: 'listing',
 					name: 'journeys',
-					arguments: { search: 'all' },
+					arguments: { from: 1 },
 				}),
 				'h2c: the store reason is rendered verbatim once',
 			).toMatchObject({
 				success: true,
-				value: 'broken-journey cannot be read: The read/write mode is unsupported',
+				value:
+					'journeys (1 lines)\n1: broken-journey cannot be read: The read/write mode is unsupported\n[lines 1–1 of 1; the whole page]',
 			})
 		} finally {
 			await journeys.destroy()
@@ -684,7 +687,7 @@ describe('BrowserJourneyToolset', () => {
 				),
 			).rejects.toMatchObject({
 				code: 'BROWSER_TOOLSET_BUSY',
-				message: 'The toolset is replaying foreign-journey until it finishes; call look.',
+				message: 'The toolset is replaying foreign-journey until it finishes; call read.',
 			})
 			expect(journeys.recording).toBeUndefined()
 		} finally {
@@ -703,11 +706,12 @@ describe('BrowserJourneyToolset', () => {
 				await toolset.tools.execute({
 					id: 'listing',
 					name: 'journeys',
-					arguments: { search: 'all' },
+					arguments: { from: 1 },
 				}),
 				'h2b: direct construction lists at the owner cap of 10',
 			).toMatchObject({
-				value: 'check-read\n\n[characters 0–10 of 45; call journeys with offset 10 for more]',
+				success: false,
+				error: 'The resul…',
 			})
 		} finally {
 			await journeys.destroy()
@@ -723,34 +727,35 @@ describe('BrowserJourneyToolset', () => {
 		})
 		const overridden = new BrowserToolset(createBrowserViewDouble(), {
 			limit: 10,
-			journeys: { store, limit: 20 },
+			journeys: { store, limit: 200 },
 		})
 		try {
 			expect(
 				await inherited.tools.execute({
 					id: 'inherited',
 					name: 'journeys',
-					arguments: { search: 'all' },
+					arguments: { from: 1 },
 				}),
 			).toMatchObject({
-				value: 'check-read\n\n[characters 0–10 of 45; call journeys with offset 10 for more]',
+				success: false,
+				error: 'The resul…',
 			})
 			expect(
 				await overridden.tools.execute({
 					id: 'overridden',
 					name: 'journeys',
-					arguments: { search: 'all' },
+					arguments: { from: 1 },
 				}),
 			).toMatchObject({
 				value:
-					'check-ready "Check r\n\n[characters 0–20 of 45; call journeys with offset 20 for more]',
+					'journeys (2 lines)\n1: check-ready "Check readiness"\n2: s1 wait "Ready"\n[lines 1–2 of 2; the whole page]',
 			})
 			await expect(
 				requireValue(overridden.tools.tool('journeys')).execute(
-					{ search: 'all', offset: -1 },
+					{ from: -1 },
 					{ signal: new AbortController().signal },
 				),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_ARGUMENT' })
+			).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ARGUMENT' })
 		} finally {
 			await inherited.destroy()
 			await overridden.destroy()
@@ -797,7 +802,7 @@ describe('BrowserJourneyToolset', () => {
 			})
 			expect(recorded, 'g5a2: recording cannot begin during replay').toMatchObject({
 				success: false,
-				error: 'The toolset is replaying check-ready until it finishes; call look.',
+				error: 'The toolset is replaying check-ready until it finishes; call read.',
 			})
 			expect(journeys.recording).toBeUndefined()
 		} finally {
@@ -884,7 +889,7 @@ describe('BrowserJourneyToolset', () => {
 			).toEqual({
 				record: ['journey'],
 				save: ['description'],
-				journeys: ['search'],
+				journeys: ['from'],
 				edit: ['journey', 'edits'],
 				replay: ['journey'],
 				forget: ['journey'],
@@ -923,10 +928,10 @@ describe('BrowserJourneyToolset', () => {
 			const refused = await toolset.tools.execute({
 				id: '1',
 				name: 'journeys',
-				arguments: { search: 'all', ref: 'e1' },
+				arguments: { from: 1, ref: 'e1' },
 			})
 			expect(readProperty(refused, 'error')).toBe(
-				'The journeys tool takes no ref parameter; call journeys with search and offset.',
+				'The journeys tool takes no ref parameter; call journeys with search, from, and to.',
 			)
 			await journeys.destroy()
 			expect(toolset.tools.tools()).toEqual([])
@@ -992,13 +997,8 @@ describe('BrowserJourneyToolset', () => {
 				})
 				expect(recorded).toMatchObject({
 					success: true,
-					value: `Recording check-form; each action you take is a step; call save when it is done.
-
-page "Form" https://example.test/form
-e1 button "Save"
-e2 textbox "Email"
-e3 combobox "Size"
-(3 of 3 elements)`,
+					value:
+						'Recording check-form; each action you take is a step; call save when it is done.\n\npage "Form" https://example.test/form (3 lines)\n1: e1 button "Save"\n2: e2 textbox "Email"\n3: e3 combobox "Size"\n[lines 1–3 of 3; the whole page]',
 				})
 				expect(journeys.recording).toBe('check-form')
 				await toolset.tools.execute({
@@ -1014,11 +1014,8 @@ e3 combobox "Size"
 				})
 				expect(saved).toMatchObject({
 					success: true,
-					value: `Saved check-form with 2 steps.
-
-check-form "Check the form"
-s1 wait "Ready"
-s2 click button "Save"`,
+					value:
+						'Saved check-form with 2 steps.\n1: check-form "Check the form"\n2: s1 wait "Ready"\n3: s2 click button "Save"\n[lines 1–3 of 3; the whole page]',
 				})
 				expect(journeys.recording).toBeUndefined()
 				expect((await store.get('check-form'))?.revision).toBe(1)
@@ -1091,7 +1088,7 @@ s2 click button "Save"`,
 				)
 				expect(journeys.recording).toBe('check-form')
 				expect(
-					await toolset.tools.execute({ id: '4', name: 'journeys', arguments: { search: 'all' } }),
+					await toolset.tools.execute({ id: '4', name: 'journeys', arguments: { from: 1 } }),
 				).toMatchObject({ value: BROWSER_JOURNEY_EMPTY_LISTING })
 				const locked = await toolset.tools.execute({
 					id: '6',
@@ -1107,11 +1104,8 @@ s2 click button "Save"`,
 				})
 				expect(saved).toMatchObject({
 					success: true,
-					value: `Saved check-form with 2 steps.
-
-check-form "Check the form"
-s1 wait "Ready"
-s2 unresolved: interrupted click`,
+					value:
+						'Saved check-form with 2 steps.\n1: check-form "Check the form"\n2: s1 wait "Ready"\n3: s2 unresolved: interrupted click\n[lines 1–3 of 3; the whole page]',
 				})
 				expect(journeys.recording).toBeUndefined()
 				expect((await memory.get('check-form'))?.revision).toBe(1)
@@ -1186,84 +1180,94 @@ s2 unresolved: interrupted click`,
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			try {
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { search: 'all' } }),
+					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { from: 1 } }),
 				).toMatchObject({ value: 'No journeys are saved; call record to start one.' })
 				await store.set(BROWSER_JOURNEY_FIXTURE)
 				expect(
-					await toolset.tools.execute({ id: '2', name: 'journeys', arguments: { search: 'all' } }),
-				).toMatchObject({ value: BROWSER_JOURNEY_LISTING })
+					await toolset.tools.execute({ id: '2', name: 'journeys', arguments: { from: 1 } }),
+				).toMatchObject({
+					value: `journeys (6 lines)\n${BROWSER_JOURNEY_LISTING.split('\n')
+						.map((line, index) => `${index + 1}: ${line}`)
+						.join('\n')}\n[lines 1–6 of 6; the whole page]`,
+				})
 				await store.set(createBrowserJourneyFixture())
 				expect(
-					await toolset.tools.execute({ id: '3', name: 'journeys', arguments: { search: 'all' } }),
+					await toolset.tools.execute({ id: '3', name: 'journeys', arguments: { from: 1 } }),
 				).toMatchObject({
-					value: `${BROWSER_JOURNEY_LISTING}
-
-check-ready "Check readiness"
-s1 wait "Ready"`,
+					value: `journeys (8 lines)
+${BROWSER_JOURNEY_LISTING.split('\n')
+	.map((line, index) => `${index + 1}: ${line}`)
+	.join('\n')}
+7: check-ready "Check readiness"
+8: s1 wait "Ready"
+[lines 1–8 of 8; the whole page]`,
 				})
 			} finally {
 				await journeys.destroy()
 			}
 		})
 
-		it('cuts the listing over characters at the limit and continues from the offset it names', async () => {
+		it('continues the numbered listing with exact inclusive ranges', async () => {
 			const store = createMemoryBrowserJourneyStore()
 			await store.set(
 				createBrowserJourneyFixture(undefined, { name: 'brew-tea', description: 'Brew thé' }),
 			)
 			await store.set(createBrowserJourneyFixture())
 			const toolset = new BrowserToolset(createBrowserViewDouble())
-			const journeys = new BrowserJourneyToolset(toolset, { store, limit: 40 })
+			const journeys = new BrowserJourneyToolset(toolset, { store, limit: 150 })
 			try {
-				const results = await toolset.tools.execute([
-					{ id: '1', name: 'journeys', arguments: { search: 'all' } },
-					{ id: '2', name: 'journeys', arguments: { search: 'all', offset: 40 } },
-					{ id: '3', name: 'journeys', arguments: { search: 'all', offset: 80 } },
-					{ id: '4', name: 'journeys', arguments: { search: 'all', offset: 82 } },
-					{ id: '5', name: 'journeys', arguments: { search: 'all', offset: -1 } },
-				])
-				expect(results.map((result) => readProperty(result, 'value'))).toEqual([
-					'brew-tea "Brew thé"\ns1 wait "Ready"\n\nche\n\n[characters 0–40 of 82; call journeys with offset 40 for more]',
-					'ck-ready "Check readiness"\ns1 wait "Read\n\n[characters 40–80 of 82; call journeys with offset 80 for more]',
-					'y"\n\n[characters 80–82 of 82]',
-					'brew-tea "Brew thé"\ns1 wait "Ready"\n\nche\n\n[characters 0–40 of 82; call journeys with offset 40 for more]',
-					undefined,
-				])
-				expect(readProperty(results[4], 'error')).toBe(
-					'The offset parameter must be a non-negative integer.',
+				const tool = requireValue(toolset.tools.tool('journeys'))
+				const context = { signal: new AbortController().signal }
+				const first = String(await tool.execute({ from: 1, to: 2 }, context))
+				expect(first).toBe(
+					'journeys (4 lines)\n1: brew-tea "Brew thé"\n2: s1 wait "Ready"\n[lines 1–2 of 4; 2 below; call journeys with from 3 for more]',
 				)
+				expect(first.length).toBeLessThanOrEqual(150)
+				expect(await tool.execute({ from: 3 }, context)).toBe(
+					'journeys (4 lines)\n3: check-ready "Check readiness"\n4: s1 wait "Ready"\n[lines 3–4 of 4; 2 above; end of page]',
+				)
+				await expect(tool.execute({ from: 5 }, context)).rejects.toMatchObject({
+					code: 'BROWSER_TOOLSET_ARGUMENT',
+				})
 			} finally {
 				await journeys.destroy()
+				await toolset.destroy()
 			}
 		})
 
-		it('never cuts a surrogate pair in half, and refuses a limit that cannot hold the pair', async () => {
+		it('preserves Unicode in complete lines and bounds refusals at tiny limits', async () => {
 			const store = createMemoryBrowserJourneyStore()
 			await store.set(
 				createBrowserJourneyFixture(undefined, { name: 'brew-tea', description: 'Brew 🍵' }),
 			)
 			const toolset = new BrowserToolset(createBrowserViewDouble())
-			const journeys = new BrowserJourneyToolset(toolset, { store, limit: 16 })
+			const journeys = new BrowserJourneyToolset(toolset, { store })
 			const narrow = new BrowserToolset(createBrowserViewDouble())
 			const single = new BrowserJourneyToolset(narrow, { store, limit: 1 })
 			try {
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { search: 'all' } }),
-				).toMatchObject({
-					value:
-						'brew-tea "Brew \n\n[characters 0–15 of 34; call journeys with offset 15 for more]',
-				})
-				const refused = await narrow.tools.execute({
-					id: '2',
+					await requireValue(toolset.tools.tool('journeys')).execute(
+						{ from: 1 },
+						{ signal: new AbortController().signal },
+					),
+				).toContain('Brew 🍵')
+				const result = await narrow.tools.execute({
+					id: 'tiny',
 					name: 'journeys',
-					arguments: { search: 'all', offset: 15 },
+					arguments: { from: 1 },
 				})
-				expect(readProperty(refused, 'error')).toBe(
-					'The journeys limit of 1 characters cannot hold the next character at offset 15; raise the journeys limit.',
-				)
+				expect(result).toMatchObject({ success: false, error: '…' })
+				await expect(
+					requireValue(narrow.tools.tool('journeys')).execute(
+						{ from: 1 },
+						{ signal: new AbortController().signal },
+					),
+				).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_LIMIT' })
 			} finally {
 				await single.destroy()
 				await journeys.destroy()
+				await toolset.destroy()
+				await narrow.destroy()
 			}
 		})
 
@@ -1275,13 +1279,10 @@ s1 wait "Ready"`,
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			try {
 				expect(
-					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { search: 'all' } }),
+					await toolset.tools.execute({ id: '1', name: 'journeys', arguments: { from: 1 } }),
 				).toMatchObject({
-					value: `brew-tea "Check readiness"
-s1 wait "Ready"
-
-check-ready "Check readiness"
-s1 wait "Ready"`,
+					value:
+						'journeys (4 lines)\n1: brew-tea "Check readiness"\n2: s1 wait "Ready"\n3: check-ready "Check readiness"\n4: s1 wait "Ready"\n[lines 1–4 of 4; the whole page]',
 				})
 			} finally {
 				await journeys.destroy()
@@ -1302,7 +1303,11 @@ s1 wait "Ready"`,
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			await toolset.start()
 			try {
-				await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'form' } })
+				await toolset.tools.execute({
+					id: '1',
+					name: 'read',
+					arguments: { from: 1, search: 'form' },
+				})
 				const edited = await toolset.tools.execute({
 					id: '2',
 					name: 'edit',
@@ -1321,12 +1326,8 @@ s1 wait "Ready"`,
 				})
 				expect(edited).toMatchObject({
 					success: true,
-					value: `Edited check-ready.
-
-check-ready "Check readiness" (parameters: email)
-s1 wait "Ready"
-s3 type "sam@example.test" as email into textbox "Email"
-s2 click combobox "Size"`,
+					value:
+						'Edited check-ready.\n1: check-ready "Check readiness" (parameters: email)\n2: s1 wait "Ready"\n3: s3 type "sam@example.test" as email into textbox "Email"\n4: s2 click combobox "Size"\n[lines 1–4 of 4; the whole page]',
 				})
 				const saved = requireValue(await store.get('check-ready'))
 				expect(saved.revision).toBe(2)
@@ -1388,7 +1389,7 @@ s2 click combobox "Size"`,
 				)
 				expect(results.map((result) => readProperty(result, 'error'))).toEqual([
 					'No journey is named "checkout"; call journeys.',
-					'Element e9 is not in the current view; call look for fresh refs.',
+					'Element e9 is not in the current view; call read for fresh refs.',
 					'Edit 2 is refused: it names unknown step "s9"; call journeys.',
 					'Edit 1 is refused: it declares "email" but no step binds it; call journeys.',
 					'Edit 1 is refused: its "remove" names no step in "id"; call journeys.',
@@ -1451,13 +1452,13 @@ s2 click combobox "Size"`,
 s1 "Ready" is on the page.
 s2 "Shipped" is on the page.
 
-page "Form" https://example.test/form
-e1 button "Save"
-e2 textbox "Email"
-e3 combobox "Size"
-(3 of 3 elements)`,
+page "Form" https://example.test/form (3 lines)
+1: e1 button "Save"
+2: e2 textbox "Email"
+3: e3 combobox "Size"
+[lines 1–3 of 3; the whole page]`,
 				})
-				expect(view.calls).toEqual(['wait Ready', 'wait Shipped', 'outline'])
+				expect(view.calls).toEqual(['wait Ready', 'outline', 'wait Shipped', 'outline', 'outline'])
 				const [run] = (await runs.list('check-ready')).entries
 				expect(run).toMatchObject({
 					outcome: 'complete',
@@ -1627,7 +1628,7 @@ e3 combobox "Size"
 				await toolset.tools.execute({ id: '2', name: 'save', arguments: { description: 'Brew' } })
 				const hold = await toolset.hold('add-kettle')
 				expect(readProperty(await toolset.tools.execute(replay), 'error')).toBe(
-					'The toolset is replaying add-kettle until it finishes; call look.',
+					'The toolset is replaying add-kettle until it finishes; call read.',
 				)
 				hold.destroy()
 				mode = 'block'
@@ -1637,7 +1638,7 @@ e3 combobox "Size"
 					() => journeys.replaying !== undefined,
 				)
 				expect(readProperty(await toolset.tools.execute(replay), 'error')).toBe(
-					'The toolset is replaying check-ready until it finishes; call look.',
+					'The toolset is replaying check-ready until it finishes; call read.',
 				)
 				pending.resolve()
 				expect(await first).toMatchObject({ success: true })
@@ -1739,7 +1740,7 @@ e3 combobox "Size"
 			try {
 				const calls = [
 					{ id: '1', name: 'record', arguments: { journey: 'brew-tea' } },
-					{ id: '2', name: 'journeys', arguments: { search: 'all' } },
+					{ id: '2', name: 'journeys', arguments: { from: 1 } },
 					{
 						id: '3',
 						name: 'edit',
@@ -1885,7 +1886,7 @@ e3 combobox "Size"
 				)
 				for (const name of BROWSER_JOURNEY_TOOL_NAMES)
 					expect(toolset.tools.tool(name)).toBeUndefined()
-				expect(toolset.tools.tool('look')).toBeDefined()
+				expect(toolset.tools.tool('read')).toBeDefined()
 			} finally {
 				await toolset.destroy()
 				await fixture.client.close()
@@ -1943,14 +1944,14 @@ e3 combobox "Size"
 				expect(saved).toMatchObject({
 					success: true,
 					value: `Saved sign-in with 1 step.
-
-sign-in "Sign in" (parameters: email (secret))
-s1 type (secret) as email into textbox "Email"`,
+1: sign-in "Sign in" (parameters: email (secret))
+2: s1 type (secret) as email into textbox "Email"
+[lines 1–2 of 2; the whole page]`,
 				})
 				const listed = await toolset.tools.execute({
 					id: '4',
 					name: 'journeys',
-					arguments: { search: 'all' },
+					arguments: { from: 1 },
 				})
 				const replayed = await toolset.tools.execute({
 					id: '5',

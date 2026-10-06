@@ -1,4 +1,5 @@
 import type {
+	BrowserLine,
 	BrowserJourney,
 	BrowserJourneyEdit,
 	BrowserJourneyOptions,
@@ -13,7 +14,15 @@ import type {
 	BrowserToolsetInterface,
 } from './types.js'
 import type { ToolContext, ToolInterface } from '@orkestrel/tool'
-import { attempt, isArray, isBoolean, isInteger, isRecord, isString } from '@orkestrel/contract'
+import {
+	attempt,
+	isArray,
+	isBoolean,
+	isInteger,
+	isError,
+	isRecord,
+	isString,
+} from '@orkestrel/contract'
 import { createTool } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
@@ -23,13 +32,20 @@ import {
 	BROWSER_JOURNEY_RECORDING_REFUSAL,
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
+	BROWSER_TOOL_CUT_FOOTER,
+	BROWSER_TOOL_LIMIT,
 } from './constants.js'
 import { BrowserElementError, BrowserError, isBrowserError } from './errors.js'
 import { createBrowserRecorder, createBrowserReplay } from './factories.js'
 import {
 	editBrowserJourney,
-	scanBrowserText,
-	renderBrowserMatches,
+	boundBrowserText,
+	abbreviateBrowserText,
+	renderBrowserLine,
+	renderBrowserWindow,
+	scanBrowserLines,
+	validateBrowserLines,
+	wrapBrowserLine,
 	readBrowserToolString,
 	renderBrowserJourney,
 	renderBrowserRun,
@@ -46,7 +62,7 @@ import {
  *
  * @remarks
  * The journey toolset composes the toolset's public members: `perform` reads the view a receipt
- * carries through `look`, `hold` and `emitter` drive the recorder and the replay, `view` converts
+ * carries through `read`, `hold` and `emitter` drive the recorder and the replay, `view` converts
  * an edit's `ref` to a target, and `tools` receives the journey tools at construction, which refuses
  * with `BROWSER_TOOLSET_RESERVED` when the manager already holds one of the names. Every refusal
  * is a sentence that names the next call, and a reason inside it is a clause without a directive
@@ -58,9 +74,10 @@ import {
  * locked write keeps the recorder recording with its steps for the next
  * `save`. An empty snapshot refuses with `BROWSER_JOURNEY_EMPTY` and keeps recording.
  * `edit` accepts an array or its JSON string and names a parse error when the string is invalid.
- * `journeys` joins the listings with one blank line and cuts the result at `limit`
- * characters with a footer that names the next offset. `replay` returns the run's render followed
- * by the view after the run.
+ * `journeys` addresses the complete listing by inclusive `from` and `to` lines. Every result
+ * fits the whole-result limit, including its footer. Save and edit continue through `journeys`.
+ * Record and replay size their page window to the remaining room; replay uses a read directive
+ * when a complete page window cannot fit.
  *
  * `destroy()` aborts the active replay and waits for it to finish, stops a recording without
  * saving it, and removes the journey tools the manager still holds under the instances it added.
@@ -112,7 +129,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		this.#store = options.store
 		this.#runs = options.runs
 		this.#readonly = options.readonly === true
-		this.#limit = limit
+		this.#limit = Math.min(limit, BROWSER_TOOL_LIMIT)
 		this.#tools = Object.freeze([
 			this.#create('record', this.#record.bind(this)),
 			this.#create('save', this.#save.bind(this)),
@@ -157,10 +174,20 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		context: ToolContext,
 	): Promise<string> {
 		if (this.#destroying !== undefined) throw this.#ended()
-		validateBrowserToolArguments(BROWSER_TOOL_COPY[name], args)
 		const signal = AbortSignal.any([context.signal, this.#lifetime.signal])
-		signal.throwIfAborted()
-		return handler(args, signal)
+		try {
+			validateBrowserToolArguments(BROWSER_TOOL_COPY[name], args)
+			signal.throwIfAborted()
+			return boundBrowserText(await handler(args, signal), this.#limit, BROWSER_TOOL_CUT_FOOTER)
+		} catch (error) {
+			const message = isError(error) ? error.message : String(error)
+			if (message.length <= this.#limit) throw error
+			throw new BrowserError(
+				boundBrowserText(message, this.#limit, BROWSER_TOOL_CUT_FOOTER),
+				isBrowserError(error) ? error.code : undefined,
+				isBrowserError(error) ? error.context : undefined,
+			)
+		}
 	}
 
 	async #capture(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
@@ -187,7 +214,13 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		const screenshot = await view.screenshot({ format: 'png', full })
 		signal.throwIfAborted()
-		return runs.snapshot(screenshot.bytes, { signal })
+		const path = await runs.snapshot(screenshot.bytes, { signal })
+		if (path.length > this.#limit)
+			throw new BrowserError(
+				'The image was saved, but its path exceeds the result limit.',
+				'BROWSER_TOOLSET_LIMIT',
+			)
+		return path
 	}
 
 	async #record(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
@@ -227,7 +260,10 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			await recorder?.destroy()
 			throw error
 		}
-		return `Recording ${name}; each action you take is a step; call save when it is done.\n\n${await this.#view(signal)}`
+		return this.#view(
+			signal,
+			`Recording ${name}; each action you take is a step; call save when it is done.`,
+		)
 	}
 
 	async #save(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
@@ -283,73 +319,87 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		}
 		await recorder.destroy()
 		const count = saved.journey.steps.length
-		return `Saved ${name} with ${count} ${count === 1 ? 'step' : 'steps'}.\n\n${renderBrowserJourney(saved.journey)}`
+		return this.#savedWindow(
+			signal,
+			name,
+			`Saved ${name} with ${count} ${count === 1 ? 'step' : 'steps'}.`,
+		)
 	}
 
-	async #journeys(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
-		const offset = args['offset'] ?? 0
-		if (!isInteger(offset) || offset < 0) {
-			throw new BrowserError(
-				'The offset parameter must be a non-negative integer.',
-				'BROWSER_JOURNEY_ARGUMENT',
-				{ key: 'offset' },
-			)
-		}
-		const listings: string[] = []
-		const headings: string[] = []
-		const offsets = new Map<number, number>()
-		let headingOffset = 0
-		let listingOffset = 0
+	async #listing(signal: AbortSignal): Promise<readonly BrowserLine[]> {
+		const lines: BrowserLine[] = []
 		const faults = new Set<string>()
-		let position = 0
+		let offset = 0
 		for (;;) {
-			const page = await this.#store.list({ signal, offset: position })
-			for (const entry of page.entries) {
-				const listing = renderBrowserJourney(entry.journey)
-				const heading = listing.split('\n', 1)[0] ?? ''
-				headings.push(heading)
-				offsets.set(headingOffset, listingOffset)
-				headingOffset += heading.length + 1
-				listingOffset += listing.length + 2
-				listings.push(listing)
-			}
-			// File stores can report the same unreadable path on successive pages.
+			const page = await this.#store.list({ signal, offset })
+			const listings = page.entries.map((entry) => renderBrowserJourney(entry.journey))
 			for (const fault of page.faults) {
 				if (faults.has(fault.name)) continue
 				faults.add(fault.name)
-				const listing = renderBrowserJourneyFault(fault)
-				listings.push(listing)
-				listingOffset += listing.length + 2
+				listings.push(renderBrowserJourneyFault(fault))
 			}
-			const span = page.entries.length
-			position += span
-			if (!page.truncated || span === 0) break
+			for (const listing of listings) {
+				for (const text of listing.split(/\r\n|\n/))
+					lines.push(...wrapBrowserLine({ spans: [{ category: 'text', text }] }))
+			}
+			offset += page.entries.length
+			if (!page.truncated || page.entries.length === 0) return lines
 		}
-		if (listings.length === 0) return BROWSER_JOURNEY_EMPTY_LISTING
-		const listing = listings.join('\n\n')
-		const start = offset < listing.length ? offset : 0
-		const search = isString(args['search']) ? args['search'] : ''
-		const matches = start === 0 ? scanBrowserText(headings.join('\n'), search) : []
-		const count = matches.length
-		const block = renderBrowserMatches(
-			`${count} ${count === 1 ? 'journey matches' : 'journeys match'} ${JSON.stringify(search)}:`,
-			matches.map((match) => `[${offsets.get(match.offset)}] ${match.text}`),
-			this.#limit,
+	}
+
+	async #savedWindow(signal: AbortSignal, name: string, status: string): Promise<string> {
+		const lines = await this.#listing(signal)
+		const from = Math.max(
+			1,
+			lines.findIndex((line) => renderBrowserLine(line).startsWith(name + ' "')) + 1,
 		)
-		let end = Math.min(listing.length, start + this.#limit - block.length)
-		const last = listing.charCodeAt(end - 1)
-		if (end < listing.length && last >= 0xd800 && last <= 0xdbff) end -= 1
-		// A limit that cannot hold the next code point would never advance the continuation.
-		if (end === start) {
+		return renderBrowserWindow(lines, from, undefined, status, this.#limit, 'journeys')
+	}
+
+	async #journeys(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
+		const from = args['from']
+		const to = args['to']
+		const search = args['search']
+		if (
+			!isInteger(from) ||
+			(to !== undefined && !isInteger(to)) ||
+			(search !== undefined && !isString(search))
+		)
 			throw new BrowserError(
-				`The journeys limit of ${this.#limit} characters cannot hold the next character at offset ${start}; raise the journeys limit.`,
-				'BROWSER_TOOLSET_LIMIT',
-				{ limit: this.#limit, offset: start },
+				'Journeys requires an integer from, an optional integer to, and optional search text.',
+				'BROWSER_TOOLSET_ARGUMENT',
 			)
-		}
-		const text = listing.slice(start, end)
-		if (start === 0 && end === listing.length) return `${block}${text}`
-		return `${block}${text}\n\n[characters ${start}–${end} of ${listing.length}${end < listing.length ? `; call journeys with offset ${end} for more` : ''}]`
+		validateBrowserLines(from, to)
+		const lines = await this.#listing(signal)
+		validateBrowserLines(from, to, lines.length)
+		if (lines.length === 0) return BROWSER_JOURNEY_EMPTY_LISTING
+		const matches = search === undefined ? [] : scanBrowserLines(lines, search, from, to)
+		const first = matches[0]
+		const heading =
+			'journeys (' +
+			lines.length +
+			' lines)' +
+			(search === undefined
+				? ''
+				: '\n' +
+					(matches.length === 0
+						? 'No line matches ' + JSON.stringify(abbreviateBrowserText(search, 120)) + '.'
+						: matches.length +
+							' lines match ' +
+							JSON.stringify(abbreviateBrowserText(search, 120)) +
+							': ' +
+							matches.slice(0, 50).join(', ') +
+							(matches.length > 50
+								? ', … and ' + (matches.length - 50) + ' more; add words to narrow'
+								: '')))
+		return renderBrowserWindow(
+			lines,
+			first === undefined ? from : Math.max(from, first - 1),
+			to,
+			heading,
+			this.#limit,
+			'journeys',
+		)
 	}
 
 	async #edit(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
@@ -406,7 +456,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				{ name },
 			)
 		}
-		return `Edited ${name}.\n\n${renderBrowserJourney(saved.journey)}`
+		return this.#savedWindow(signal, saved.journey.name, `Edited ${name}.`)
 	}
 
 	async #forget(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
@@ -481,7 +531,9 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			} catch (error) {
 				throw this.#prepared(error, revision.journey)
 			}
-			return renderBrowserRun(run, signal.aborted ? undefined : await this.#view(signal))
+			return signal.aborted
+				? boundBrowserText(renderBrowserRun(run), this.#limit, BROWSER_TOOL_CUT_FOOTER)
+				: this.#view(signal, renderBrowserRun(run))
 		} finally {
 			this.#replaying = undefined
 			this.#replay = undefined
@@ -574,7 +626,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			throw new BrowserElementError(
 				reference,
 				'UNKNOWN',
-				'is not in the current view; call look for fresh refs',
+				'is not in the current view; call read for fresh refs',
 			)
 		return { role: element.role, name: element.name, reference: element.reference }
 	}
@@ -605,15 +657,26 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		}
 	}
 
-	// Reads the view a receipt carries through `look`, so it is the first page at the toolset's
-	// limit and carries the notes of any view move; an empty `search` searches nothing, so the page
-	// carries no matches.
-	async #view(signal: AbortSignal): Promise<string> {
-		const performed = await this.#toolset.perform(
-			{ id: 'journey', name: 'look', arguments: { search: '' } },
-			{ signal },
+	async #view(signal: AbortSignal, status: string): Promise<string> {
+		const note = '(Call read to see the page.)'
+		const prefix = boundBrowserText(
+			status,
+			Math.max(1, this.#limit - note.length - 2),
+			BROWSER_TOOL_CUT_FOOTER,
 		)
-		return performed.result.success ? String(performed.result.value) : performed.result.error
+		const room = this.#limit - prefix.length - 2
+		try {
+			return prefix + '\n\n' + (await this.#toolset.read({ from: 1, limit: room, signal }))
+		} catch (error) {
+			if (signal.aborted) throw error
+			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_LIMIT')
+				return boundBrowserText(prefix + '\n\n' + note, this.#limit, BROWSER_TOOL_CUT_FOOTER)
+			return boundBrowserText(
+				prefix + '\n\n' + (isError(error) ? error.message : String(error)),
+				this.#limit,
+				BROWSER_TOOL_CUT_FOOTER,
+			)
+		}
 	}
 
 	#ended(): BrowserError {
@@ -635,7 +698,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		const active = this.#replaying ?? this.#toolset.held
 		if (active !== undefined)
 			throw new BrowserError(
-				`The toolset is replaying ${active} until it finishes; call look.`,
+				`The toolset is replaying ${active} until it finishes; call read.`,
 				'BROWSER_TOOLSET_BUSY',
 			)
 	}

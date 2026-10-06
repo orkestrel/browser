@@ -1,3 +1,4 @@
+import { renderBrowserLine } from '../src/core/index.js'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -190,18 +191,22 @@ describe('pinned WebMCP conformance', () => {
 			await fixture.page.registry.start()
 			fixture.transport.event('WebMCP.toolsAdded', { tools: [WEBMCP_TOOL] }, 'session-main')
 			const outline = await fixture.page.elements.outline()
-			expect(outline.text.split('\n')).toContain('e5 form "Search cars" [tool=search-cars]')
-			expect(outline.text).not.toContain('autosubmit')
-			disabled = true
-			expect((await fixture.page.elements.outline()).text.split('\n')).toContain(
-				'e5 form "Search cars" [disabled] [tool=search-cars]',
+			expect(outline.lines.map(renderBrowserLine).join('\n').split('\n')).toContain(
+				'e5 form "Search cars" [tool=search-cars]',
 			)
+			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('autosubmit')
+			disabled = true
+			expect(
+				(await fixture.page.elements.outline()).lines.map(renderBrowserLine).join('\n').split('\n'),
+			).toContain('e5 form "Search cars" [disabled] [tool=search-cars]')
 			fixture.transport.event(
 				'WebMCP.toolsRemoved',
 				{ tools: [{ name: 'search-cars', frameId: 'main' }] },
 				'session-main',
 			)
-			expect((await fixture.page.elements.outline()).text).not.toContain('[tool=')
+			expect(
+				(await fixture.page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
+			).not.toContain('[tool=')
 		} finally {
 			await fixture.client.close()
 		}

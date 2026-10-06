@@ -199,7 +199,7 @@ describe('BrowserReplay', () => {
 				{ inputs: createBrowserJourneyMalformedInputs('status', undefined) },
 			).execute()
 			expect(omitted).toMatchObject({ inputs: { status: 'Ready' }, outcome: 'complete' })
-			expect(view.calls).toEqual(['wait Ready'])
+			expect(view.calls).toEqual(['wait Ready', 'outline'])
 		} finally {
 			await toolset.destroy()
 		}
@@ -263,7 +263,7 @@ describe('BrowserReplay', () => {
 					},
 				},
 			).execute()
-			expect(view.calls).toEqual(['wait Ready'])
+			expect(view.calls).toEqual(['wait Ready', 'outline'])
 			expect(run).toMatchObject({
 				revision: 7,
 				inputs: { status: 'Ready' },
@@ -295,7 +295,7 @@ describe('BrowserReplay', () => {
 			expect(run.outcome).toBe('stopped')
 			expect(run.steps).toHaveLength(1)
 			expect(run.steps[0]?.outcome).toBe('timeout')
-			expect(view.calls).toEqual(['wait Absent'])
+			expect(view.calls).toEqual(['wait Absent', 'outline'])
 		} finally {
 			await toolset.destroy()
 		}

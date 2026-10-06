@@ -160,13 +160,13 @@ describe('bin entry', () => {
 				await client.connect()
 				const tools = await client.tools()
 				expect(tools.map((tool) => tool.name)).toStrictEqual(BROWSE_VOCABULARY)
-				await expect(client.call('look', { search: 'the page' })).rejects.toThrow(
+				await expect(client.call('read', { from: 1, search: 'the page' })).rejects.toThrow(
 					/BROWSER_SERVER_UNAVAILABLE:.*ENOENT/u,
 				)
 				expect(readdirSync(join(root, '.profiles'))).toStrictEqual([])
 				// Closing the client signals the child, and a later call is refused without reaching it.
 				await client.disconnect()
-				await expect(client.call('look', { search: 'the page' })).rejects.toThrow(
+				await expect(client.call('read', { from: 1, search: 'the page' })).rejects.toThrow(
 					"MCP client is not connected, so 'tools/call' was not issued",
 				)
 			} finally {
@@ -191,7 +191,7 @@ describe('bin entry', () => {
 					jsonrpc: '2.0',
 					id: 3,
 					method: 'tools/call',
-					params: { name: 'look', arguments: { search: 'the page' } },
+					params: { name: 'read', arguments: { from: 1, search: 'the page' } },
 				},
 				{ jsonrpc: '2.0', id: 4, method: 'ping', params: {} },
 			)
