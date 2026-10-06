@@ -106,7 +106,7 @@
 		"@orkestrel/emitter": "^0.0.11",
 		"@orkestrel/html": "^0.0.12",
 		"@orkestrel/markdown": "^0.0.17",
-		"@orkestrel/mcp": "^0.0.36",
+		"@orkestrel/mcp": "^0.0.37",
 		"@orkestrel/pool": "^0.0.16",
 		"@orkestrel/router": "^0.0.16",
 		"@orkestrel/server": "^0.0.22",
@@ -116,8 +116,8 @@
 	"devDependencies": {
 		"@microsoft/api-extractor": "^7.59.4",
 		"@orkestrel/guide": "^0.0.24",
-		"@orkestrel/probe": "^0.0.20",
-		"@orkestrel/scaffold": "^0.0.92",
+		"@orkestrel/probe": "^0.0.21",
+		"@orkestrel/scaffold": "^0.0.93",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.4",
 		"@vitest/browser-playwright": "^4.1.11",
@@ -125,7 +125,7 @@
 		"oxlint": "^1.87.0",
 		"playwright": "^1.63.0",
 		"typescript": "^6.0.3",
-		"vite": "^8.3.2",
+		"vite": "^8.3.3",
 		"vitest": "^4.1.11"
 	},
 	"engines": {
