@@ -29,7 +29,9 @@ describe('FileBrowserStore', () => {
 				races += 1
 				competing = rmdir(lock).catch((error: unknown) => error)
 			})
-			for (let index = 0; index < 512; index += 1) {
+			// At measured p >= 307/512, 8 independent races give (1 - p)^8 < 0.001.
+			const attempts = 8
+			for (let index = 0; index < attempts; index += 1) {
 				committed = false
 				const result = await files
 					.lock(lock, async () => {
@@ -40,7 +42,7 @@ describe('FileBrowserStore', () => {
 				await competing
 				if (result !== index) failures.push(result)
 			}
-			expect(races).toBe(512)
+			expect(races).toBe(attempts)
 			expect(failures).toEqual([])
 			expect(await readdir(scratch.path)).toEqual([])
 		} finally {
