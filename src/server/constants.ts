@@ -31,10 +31,17 @@ export const BROWSER_CDP_LIST_PATH = '/json/list'
 
 // === Browser launch
 
-/** Lists the flags always passed to a launched browser process, alongside the caller's own. */
+/**
+ * Lists the flags always passed to a launched browser process, alongside the caller's own.
+ *
+ * @remarks
+ * Disables account sync so extension installs cannot reset URL loader factories during page imports.
+ * Edge can still sign a fresh Windows profile in to the operating-system account.
+ */
 export const BROWSER_LAUNCH_ARGS: readonly string[] = Object.freeze([
 	'--no-first-run',
 	'--no-default-browser-check',
+	'--disable-sync',
 ])
 
 /**

@@ -1165,6 +1165,8 @@ A page hands the navigation steps it accepts, typed by `BrowserNavigationEventMa
 
 The Node runtime discovers a browser listening on a CDP port, attaches to it, or launches a Chromium-family process. The following fence probes, connects, and destroys.
 
+Every library launch, including `browse`, passes `--no-first-run`, `--no-default-browser-check`, and `--disable-sync` alongside your launch arguments. Sync stays off so account extensions cannot install during page imports and reset the browser's URL loader factories. On Windows, Edge signs a fresh automation profile in to the Windows Microsoft account; the flag leaves that sign-in in place. No extension, setting, or history syncs into the profile while sync is off.
+
 ```ts
 import { createBrowser } from '@orkestrel/browser/server'
 
