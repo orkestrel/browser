@@ -1,4 +1,7 @@
 import type { BrowserInterface } from '@src/server'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { BROWSER_LEGACY_JOURNEY_JSON } from '../setup.js'
 import type {
 	BrowserAction,
 	BrowserContextInterface,
@@ -128,6 +131,62 @@ describe('journey semantic replay', () => {
 		await cleanup.destroy()
 	})
 
+	it('audit repair 13: loads and replays a file written by the published 0.0.26 store', async () => {
+		const directory = createTempDirectory('reading-legacy-')
+		try {
+			mkdirSync(join(directory.path, 'legacy-ready'))
+			writeFileSync(
+				join(directory.path, 'legacy-ready', 'journey.json'),
+				BROWSER_LEGACY_JOURNEY_JSON,
+			)
+			const store = createFileBrowserJourneyStore({ root: directory.path })
+			expect(await store.get('legacy-ready')).toMatchObject({
+				revision: 1,
+				journey: { format: 1, name: 'legacy-ready' },
+			})
+			await toolset.destroy()
+			toolset = createBrowserToolset(page, { journeys: { store } })
+			await toolset.start()
+			await page.evaluate(`document.body.innerHTML = '<p>Legacy ready</p>'`)
+			const result = requireToolText(
+				await toolset.tools.execute({
+					id: 'legacy',
+					name: 'replay',
+					arguments: { journey: 'legacy-ready' },
+				}),
+			)
+			expect(result).toContain('Replayed legacy-ready: 1 of 1 steps.')
+			expect(result).toContain('Legacy ready')
+		} finally {
+			directory.destroy()
+		}
+	})
+	it('audit repair 2: journey listings budget and consume host notes before rendering', async () => {
+		await toolset.destroy()
+		let note = ''
+		const store = createMemoryBrowserJourneyStore()
+		await store.set({
+			...createBrowserJourneyFixture([{ action: 'wait', arguments: { text: 'Ready' } }]),
+			description: 'Material '.repeat(1000),
+		})
+		toolset = createBrowserToolset(page, {
+			journeys: { store },
+			notes: () => {
+				const result = note
+				note = ''
+				return result
+			},
+		})
+		await toolset.start()
+		note = 'Recovered the browser. ' + 'Details '.repeat(1000)
+		const result = requireToolText(
+			await toolset.tools.execute({ id: 'listing', name: 'journeys', arguments: { from: 1 } }),
+		)
+		expect(result).toContain('Recovered the browser.')
+		expect(result.length).toBeLessThanOrEqual(4000)
+		expect(result).toMatch(/call journeys with from \d+ for more\]$/)
+		expect(await toolset.read()).not.toContain('Recovered the browser.')
+	})
 	it('bounds the complete saved journey and exposes an exact line continuation', async () => {
 		await toolset.destroy()
 		toolset = createBrowserToolset(page, { journeys: { store: createMemoryBrowserJourneyStore() } })
@@ -572,7 +631,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 	})
 
 	describe('claim 6: a replay hold admits only its own actions', () => {
-		it('refuses a foreign click, dialog, and adopted page tool while look, read, tabs, and wait pass, after an action admitted before the hold completes first', async () => {
+		it('refuses a foreign click, dialog, and adopted page tool while read and wait pass, after an action admitted before the hold completes first', async () => {
 			const page = await context.create({ url: fixtures.url('/confirm') })
 			pages.push(page)
 			const invoked = createRecorder<[]>()
@@ -634,7 +693,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			]
 			const passed = [
 				await toolset.tools.execute({
-					id: 'look',
+					id: 'reading',
 					name: 'read',
 					arguments: { from: 1, search: 'drafts' },
 				}),
@@ -983,7 +1042,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			)
 			const view = requireToolText(
 				await toolset.tools.execute({
-					id: 'look',
+					id: 'reading',
 					name: 'read',
 					arguments: { from: 1 },
 				}),
@@ -1018,7 +1077,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			)
 			const current = requireToolText(
 				await toolset.tools.execute({
-					id: 'look',
+					id: 'reading',
 					name: 'read',
 					arguments: { from: 1 },
 				}),
@@ -1064,19 +1123,19 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				`Saved save-delivery with 2 steps.\n${listing
 					.split('\n')
 					.map((line, index) => `${index + 1}: ${line}`)
-					.join('\n')}\n[lines 1–3 of 3; the whole page]`,
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
 			)
 			expect(listed).toBe(
 				`journeys (3 lines)\n${listing
 					.split('\n')
 					.map((line, index) => `${index + 1}: ${line}`)
-					.join('\n')}\n[lines 1–3 of 3; the whole page]`,
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
 			)
 			expect(edited).toBe(
 				`Edited save-delivery.\n${listing
 					.split('\n')
 					.map((line, index) => `${index + 1}: ${line}`)
-					.join('\n')}\n4: s3 click button "Review"\n[lines 1–4 of 4; the whole page]`,
+					.join('\n')}\n4: s3 click button "Review"\n[lines 1–4 of 4; the whole listing]`,
 			)
 			expect(added).toMatchObject({
 				revision: 2,
@@ -1131,7 +1190,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			]
 			const view = requireToolText(
 				await toolset.tools.execute({
-					id: 'look',
+					id: 'reading',
 					name: 'read',
 					arguments: { from: 1, search: 'sign in' },
 				}),
@@ -1215,13 +1274,13 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				`Saved sign-in with 2 steps.\n${listing
 					.split('\n')
 					.map((line, index) => `${index + 1}: ${line}`)
-					.join('\n')}\n[lines 1–3 of 3; the whole page]`,
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
 			)
 			expect(listed).toBe(
 				`journeys (3 lines)\n${listing
 					.split('\n')
 					.map((line, index) => `${index + 1}: ${line}`)
-					.join('\n')}\n[lines 1–3 of 3; the whole page]`,
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
 			)
 			expect(maskBrowserReferences(rendered).split('\n').slice(0, 3)).toEqual([
 				'Replayed sign-in: 2 of 2 steps.',

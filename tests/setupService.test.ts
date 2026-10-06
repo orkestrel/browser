@@ -1,4 +1,4 @@
-import { renderBrowserLine } from '../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 /**
  * Proof for `tests/setupService.ts`.
  *
@@ -289,7 +289,7 @@ describe('extractOutlineRows', () => {
 		expect(extractOutlineRows('')).toStrictEqual([])
 	})
 
-	it('reads a look match row that repeats an outline row once, at its first occurrence', () => {
+	it('reads a read match row that repeats an outline row once, at its first occurrence', () => {
 		expect(
 			extractOutlineRows(
 				'1 element matches "the delete button":\ne1 button "Delete"\n\npage "Drafts" http://127.0.0.1/confirm (2 lines)\n1: e2 button "Keep"\n2: e1 button "Delete"\n[lines 1–2 of 2; the whole page]',

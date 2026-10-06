@@ -123,6 +123,63 @@ await new GuideCommand({
 	if (!isRecord(manifest)) throw new Error('Invalid package manifest: package.json')
 	const sources = createSourceManager({ files, modules: MODULES })
 
+	it('audit repair 8: published examples use addressed read calls and no removed footer constant', async () => {
+		const readme = requireValue(files['README.md'])
+		expect(readme).not.toMatch(/name: '(look|plain)'/)
+		expect(readme).toContain("name: 'read', arguments: { from: 1, search: 'Email' }")
+		expect(readme).not.toContain('a recorded exchange')
+		expect(requireValue(files['src/core/helpers.ts'])).not.toContain('BROWSER_TOOL_VIEW_FOOTER')
+		const { createBrowserElementFixture } = await import('./setup.js')
+		const { createBrowserToolset } = await import('@src/core')
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			for (const search of ['Email', 'delivery', 'confirmation'])
+				expect(
+					await toolset.tools.execute({ id: search, name: 'read', arguments: { from: 1, search } }),
+				).toMatchObject({ success: true })
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('audit repair 9: guide states the tested placement limits and labels the MCP illustration', async () => {
+		const guide = requireValue(files[GUIDE_SPEC])
+		expect(guide).toContain('when no submit event fires or a field is invalid')
+		expect(guide).toContain('unless an adopted page tool takes the name')
+		expect(guide).toContain('whitespace-normalized, concatenated text')
+		expect(guide).toContain('otherwise it opens at line 1')
+		expect(guide).toContain('unexecuted illustration')
+		expect(guide).not.toContain('the earlier recorded exchange')
+		expect(guide).not.toContain('never from the model’s answer')
+		expect(guide).not.toContain('removes the observer and returns')
+		const { findBrowserText, renderBrowserFooter } = await import('@src/core')
+		expect(
+			findBrowserText(
+				[
+					{ spans: [{ category: 'text', text: 'Earlier' }] },
+					{ spans: [{ category: 'text', text: 'Order' }] },
+					{ spans: [{ category: 'text', text: 'placed' }] },
+				],
+				'Order placed',
+			),
+		).toBe(2)
+		expect(findBrowserText([], 'Missing')).toBe(1)
+		expect(renderBrowserFooter(1, 4, 4, 'journeys')).toBe('[lines 1–4 of 4; the whole listing]')
+	})
+	it('audit repair 12: boundBrowserText example states the actual whole-result bound', async () => {
+		const { boundBrowserText } = await import('@src/core')
+		const actual = boundBrowserText('abcdef', 4, 'the rest was cut')
+		expect(actual).toBe('abc…')
+		expect(requireValue(files['src/core/helpers.ts'])).toContain(
+			"boundBrowserText('abcdef', 4, 'the rest was cut') // '" + actual + "'",
+		)
+		expect(requireValue(files['src/core/helpers.ts'])).toContain(
+			'cut text plus footer fits `limit`',
+		)
+	})
+
 	it('manifest lists at least one guide', () => {
 		expect(report.input).toEqual([])
 		expect(rows.length).toBeGreaterThan(0)
@@ -185,7 +242,7 @@ await new GuideCommand({
 			id: 'delivery',
 			parent: 'root',
 			session: 'main',
-			reference: 'e4',
+			reference: 'e12345',
 			role: 'link',
 			name: 'Shipping',
 			properties: { url: 'https://shop.example.test/delivery' },
@@ -197,13 +254,13 @@ await new GuideCommand({
 			{ spans: [{ category: 'text', text: 'We ship every weekday.' }] },
 			{ spans: [{ category: 'text', text: 'Contact the workshop.' }] },
 		]
-		expect(renderBrowserLine(lines[0] ?? { spans: [] })).toBe('e4 link "Shipping" /delivery')
+		expect(renderBrowserLine(lines[0] ?? { spans: [] })).toBe('e12345 link "Shipping" /delivery')
 		expect(scanBrowserLines(lines, 'ship')).toEqual([1, 2])
-		expect(scanBrowserLines(lines, 'e4')).toEqual([])
+		expect(scanBrowserLines(lines, 'e12345')).toEqual([])
 		expect(scanBrowserLines(lines, 'delivery', 2)).toEqual([])
 		expect(validateBrowserLines(1, 2, lines.length)).toBeUndefined()
 		expect(renderBrowserWindow(lines, 1, 2, 'Delivery', 4_000)).toBe(
-			'Delivery\n1: e4 link "Shipping" /delivery\n2: We ship every weekday.\n[lines 1–2 of 3; 1 below; call read with from 3 for more]',
+			'Delivery\n1: e12345 link "Shipping" /delivery\n2: We ship every weekday.\n[lines 1–2 of 3; 1 below; call read with from 3 for more]',
 		)
 		expect(renderBrowserFooter(3, 3, 3)).toBe('[lines 3–3 of 3; 2 above; end of page]')
 		expect(

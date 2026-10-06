@@ -147,7 +147,7 @@ describe('BrowserJourneyToolset file listing', () => {
 			if (!result.success || typeof result.value !== 'string')
 				throw new Error('The journeys tool did not return a listing')
 			expect(result.value).toBe(
-				'journeys (7 lines)\n1: alpine "Check readiness"\n2: s1 wait "Ready"\n3: broken cannot be read: Malformed journey revision\n4: harbor "Check readiness"\n5: s1 wait "Ready"\n6: zebra "Check readiness"\n7: s1 wait "Ready"\n[lines 1–7 of 7; the whole page]',
+				'journeys (7 lines)\n1: alpine "Check readiness"\n2: s1 wait "Ready"\n3: broken cannot be read: Malformed journey revision\n4: harbor "Check readiness"\n5: s1 wait "Ready"\n6: zebra "Check readiness"\n7: s1 wait "Ready"\n[lines 1–7 of 7; the whole listing]',
 			)
 		} finally {
 			await journeys.destroy()

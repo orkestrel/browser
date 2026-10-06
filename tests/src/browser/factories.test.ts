@@ -1,4 +1,4 @@
-import { renderBrowserLine } from '../../../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 import type { BrowserViewInterface } from '@src/core'
 import type { ToolInterface } from '@orkestrel/tool'
 import { describe, expect, it } from 'vitest'
@@ -114,10 +114,10 @@ describe('createDocumentToolset', () => {
 		const toolset = createDocumentToolset({ document: probe.document })
 		await toolset.start()
 		const signal = new AbortController().signal
-		const look = requireValue(toolset.tools.tool('read'), 'look')
+		const reading = requireValue(toolset.tools.tool('read'), 'reading')
 		const click = requireValue(toolset.tools.tool('click'), 'click')
 		const type = requireValue(toolset.tools.tool('type'), 'type')
-		await look.execute({ from: 1 }, { signal })
+		await reading.execute({ from: 1 }, { signal })
 		const [gift] = await toolset.view.elements.find({ role: 'checkbox', name: 'Gift wrap' })
 		const [label] = await toolset.view.elements.find({ role: 'button', name: 'Terms' })
 		const [note] = await toolset.view.elements.find({ role: 'textbox', name: 'Note' })
@@ -125,12 +125,12 @@ describe('createDocumentToolset', () => {
 		expect(Reflect.get(box ?? {}, 'checked')).toBe(true)
 		expect(trusted.calls).toEqual([[false]])
 		expect(clicked).toBe(
-			`Clicked ${gift?.reference} checkbox "Gift wrap". (untrusted event)\n\n${String(await look.execute({ from: 1 }, { signal }))}`,
+			`Clicked ${gift?.reference} checkbox "Gift wrap". (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
 		)
 		const labelled = await click.execute({ ref: label?.reference }, { signal })
 		expect(Reflect.get(terms ?? {}, 'checked')).toBe(true)
 		expect(labelled).toBe(
-			`Clicked ${label?.reference} button "Terms". (untrusted event)\n\n${String(await look.execute({ from: 1 }, { signal }))}`,
+			`Clicked ${label?.reference} button "Terms". (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
 		)
 		const typed = await type.execute(
 			{ ref: note?.reference, text: 'sam', submit: true },
@@ -138,7 +138,7 @@ describe('createDocumentToolset', () => {
 		)
 		expect(submits.calls).toEqual([[true]])
 		expect(typed).toBe(
-			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await look.execute({ from: 1 }, { signal }))}`,
+			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
 		)
 		await toolset.destroy()
 	})
@@ -148,14 +148,14 @@ describe('createDocumentToolset', () => {
 		const toolset = createDocumentToolset({ document: probe })
 		await toolset.start()
 		const signal = new AbortController().signal
-		const look = String(
-			await requireValue(toolset.tools.tool('read'), 'look').execute(
+		const reading = String(
+			await requireValue(toolset.tools.tool('read'), 'reading').execute(
 				{ from: 1, search: 'search' },
 				{ signal },
 			),
 		)
 		const [search] = await toolset.view.elements.find({ role: 'textbox', name: 'Search' })
-		expect(look).toContain(`${search?.reference} textbox "Search"`)
+		expect(reading).toContain(`${search?.reference} textbox "Search"`)
 		const refused = await Promise.resolve(
 			requireValue(toolset.tools.tool('type'), 'type').execute(
 				{ ref: search?.reference, text: 'kettle' },
@@ -178,7 +178,7 @@ describe('createDocumentToolset', () => {
 		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(VIEW_TOOLS)
 		expect(toolset.native.map((tool) => tool.name)).toEqual(VIEW_TOOLS)
 		const signal = new AbortController().signal
-		await requireValue(toolset.tools.tool('read'), 'look').execute(
+		await requireValue(toolset.tools.tool('read'), 'reading').execute(
 			{ from: 1, search: 'save' },
 			{ signal },
 		)
@@ -291,7 +291,7 @@ describe('createDocumentToolset', () => {
 			).toMatchObject({
 				success: true,
 				value:
-					'Saved save-draft with 1 step.\n1: save-draft "Save the draft"\n2: s1 click button "Save"\n[lines 1–2 of 2; the whole page]',
+					'Saved save-draft with 1 step.\n1: save-draft "Save the draft"\n2: s1 click button "Save"\n[lines 1–2 of 2; the whole listing]',
 			})
 			const replayed = await toolset.tools.execute({
 				id: '4',

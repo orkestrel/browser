@@ -1,4 +1,4 @@
-import { renderBrowserLine } from '../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 /**
  * Proof for `tests/setup.ts`.
  *

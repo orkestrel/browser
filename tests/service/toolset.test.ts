@@ -1,5 +1,5 @@
 import { BROWSER_READING_HTML, BROWSER_READING_STRUCTURE_HTML } from '../setup.js'
-import { renderBrowserLine } from '../../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 import { writeFileSync } from 'node:fs'
 import { SERVICE_READING_SUBMISSIONS, SERVICE_STORE_PARAGRAPHS } from '../setupService.js'
 import { BROWSER_SUBMIT_KEY } from '@src/core'
@@ -330,6 +330,157 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 	})
 
+	it('audit repair 14: measures an outline capture of 5000 paragraph nodes', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(`document.body.innerHTML = '<p>Ordinary capture material</p>'.repeat(5000)`)
+		const elapsed: number[] = []
+		for (let sample = 0; sample < 3; sample += 1) {
+			const started = performance.now()
+			const outline = await page.elements.outline({ timeout: 30000 })
+			elapsed.push(performance.now() - started)
+			expect(outline.lines).toHaveLength(5000)
+		}
+		writeFileSync(
+			'tmp/codex/reading-capture-cost.json',
+			JSON.stringify({ paragraphs: 5000, elapsed }),
+		)
+	})
+	it('audit repair 1: the receipt and error redaction layer protects unnumbered text', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		const secret = 'private-receipt-4821'
+		await page.evaluate(
+			`document.body.innerHTML = '<input aria-label="Code"><button>Save</button>'`,
+		)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const field = requireValue((await page.elements.find({ role: 'textbox', name: 'Code' }))[0])
+		await toolset.tools.execute({
+			id: 'secret',
+			name: 'type',
+			arguments: { ref: field.reference, text: secret, secret: true },
+		})
+		await page.evaluate(`document.querySelector('button').textContent = ${JSON.stringify(secret)}`)
+		const button = requireValue((await page.elements.find({ role: 'button', name: secret }))[0])
+		const receipt = requireToolText(
+			await toolset.tools.execute({
+				id: 'click',
+				name: 'click',
+				arguments: { ref: button.reference },
+			}),
+		)
+		expect(receipt).not.toContain(secret)
+		expect(receipt.split('\n')[0]).toContain('[redacted]')
+		const refused = await toolset.tools.execute({
+			id: 'bad',
+			name: 'read',
+			arguments: { from: 1, [secret]: true },
+		})
+		expect(refused.success ? '' : refused.error).not.toContain(secret)
+	})
+	it('audit repair 1: a numeric secret preserves addressed rows and continuation', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`document.body.innerHTML = '<input aria-label="Code">' + '<p>Ordinary prose</p>'.repeat(110)`,
+		)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const field = requireValue((await page.elements.find({ role: 'textbox', name: 'Code' }))[0])
+		const receipt = requireToolText(
+			await toolset.tools.execute({
+				id: 'secret',
+				name: 'type',
+				arguments: { ref: field.reference, text: '100', secret: true },
+			}),
+		)
+		expect(receipt).toContain('100: Ordinary prose')
+		expect(receipt).toContain('[lines 1–100 of 111; 11 below; call read with from 101 for more]')
+		for (const result of [
+			await toolset.read({ from: 100 }),
+			requireToolText(
+				await toolset.tools.execute({ id: 'read', name: 'read', arguments: { from: 100 } }),
+			),
+		]) {
+			expect(result).toContain('\n100: Ordinary prose')
+			expect(result).toContain('[lines 100–111 of 111; 99 above; end of page]')
+			expect(result.length).toBeLessThanOrEqual(4000)
+		}
+	})
+	it.each([' Tide4821', 'Tide4821 ', 'Tide  4821', 'Tide\n4821'])(
+		'audit repair 1: whitespace secret %j never reaches a receipt or window',
+		async (secret) => {
+			const page = await browser.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			await page.evaluate(`document.body.innerHTML = '<textarea aria-label="Code"></textarea>'`)
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			await toolset.start()
+			const field = requireValue((await page.elements.find({ role: 'textbox', name: 'Code' }))[0])
+			const receipt = requireToolText(
+				await toolset.tools.execute({
+					id: 'secret',
+					name: 'type',
+					arguments: { ref: field.reference, text: secret, secret: true },
+				}),
+			)
+			for (const result of [receipt, await toolset.read()]) {
+				expect(result).not.toContain('Tide')
+				expect(result).toContain('[redacted]')
+			}
+			expect(await page.evaluate('document.querySelector("textarea").value')).toBe(secret)
+		},
+	)
+	it('audit repair 3: refused captures preserve the last delivered projection and pending move note', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(`document.body.innerHTML = '<p>Original</p>'.repeat(110)`)
+		let note = ''
+		const toolset = createBrowserToolset(page, {
+			notes: () => {
+				const result = note
+				note = ''
+				return result
+			},
+		})
+		toolsets.push(toolset)
+		await toolset.start()
+		await toolset.read()
+		await page.evaluate(`document.body.innerHTML = '<p>Replacement</p>'.repeat(40)`)
+		note = 'The view moved to a new tab.'
+		await expect(toolset.read({ from: 101 })).rejects.toThrow('past the end')
+		const result = await toolset.read({ from: 20 })
+		expect(result).toContain('The page changed since the last view')
+		expect(result).toContain('The view moved to a new tab.')
+		expect(await toolset.read({ from: 20 })).not.toContain('The view moved to a new tab.')
+	})
+	it('audit repair 6: wait opens at text spanning wrapped lines and quoted names', async () => {
+		const page = await browser.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`document.body.innerHTML = '<p>Earlier</p>'.repeat(30) + '<p>' + 'filler '.repeat(113) + 'Order A12 placed</p><button>Say &quot;yes&quot;</button>'`,
+		)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const result = requireToolText(
+			await toolset.tools.execute({
+				id: 'wait',
+				name: 'wait',
+				arguments: { text: 'Order A12 placed' },
+			}),
+		)
+		expect(result).toContain('\n31: ')
+		expect(result).not.toContain('\n1: ')
+		const quoted = requireToolText(
+			await toolset.tools.execute({ id: 'quoted', name: 'wait', arguments: { text: 'Say "yes"' } }),
+		)
+		expect(quoted).toMatch(/\n33: e\d+ button/)
+		expect(quoted).not.toContain('\n1: ')
+	})
 	it('reading campaign: projects controls, redacts typed secrets in the receipt and the following window', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
@@ -713,17 +864,17 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		},
 	)
 
-	it('carries pressed and expanded CDP states into look with a plain-button control', async () => {
+	it('carries pressed and expanded CDP states into read with a plain-button control', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(SERVICE_TOGGLE_HTML)}`)
 		const toolset = createBrowserToolset(page)
 		toolsets.push(toolset)
 		await toolset.start()
-		const look = requireToolText(
-			await toolset.tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await toolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		expect(collectOutlineEntries(look)).toEqual(
+		expect(collectOutlineEntries(reading)).toEqual(
 			expect.arrayContaining([
 				'button "Toggle on" pressed=true',
 				'button "Toggle off" pressed=false',
@@ -733,14 +884,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				'button "Plain toggle control"',
 			]),
 		)
-		expect(collectOutlineEntries(look)).toEqual(
+		expect(collectOutlineEntries(reading)).toEqual(
 			collectOutlineEntries(
 				(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
 			),
 		)
 	})
 
-	it('runs one task end to end: look, click the text field by reference, type with submit, and read the result page, each receipt whole and under BROWSER_TOOL_LIMIT', async () => {
+	it('runs one task end to end: read, click the text field by reference, type with submit, and read the result page, each receipt whole and under BROWSER_TOOL_LIMIT', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		const tools = createToolManager()
@@ -748,11 +899,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
 		const [name, notes, speed, standard, express, submit, save, review] = extractOutlineRows(
-			look,
+			reading,
 		).map((row) => row.reference)
 		const form = [
 			`page "Delivery form" ${fixtures.url('/form')} (12 lines)`,
@@ -770,8 +921,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			`12: ${review} button "Review"`,
 			'[lines 1–12 of 12; the whole page]',
 		].join('\n')
-		expect(look).toBe(form)
-		expect(extractBrowserPage(look).body).toBe(
+		expect(reading).toBe(form)
+		expect(extractBrowserPage(reading).body).toBe(
 			(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
 		)
 
@@ -819,18 +970,20 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'read', name: 'read', arguments: { from: 1 } }),
 		)
 		expect(read).toBe(result)
-		const plain = requireToolText(
-			await tools.execute({ id: 'plain', name: 'read', arguments: { from: 1, search: '' } }),
+		const repeated = requireToolText(
+			await tools.execute({ id: 'repeat', name: 'read', arguments: { from: 1, search: '' } }),
 		)
-		expect(plain).toBe(result)
+		expect(repeated).toBe(result)
 
 		expect(
-			[look, click, typed, read, plain].filter((receipt) => receipt.length > BROWSER_TOOL_LIMIT),
+			[reading, click, typed, read, repeated].filter(
+				(receipt) => receipt.length > BROWSER_TOOL_LIMIT,
+			),
 		).toStrictEqual([])
 	})
 
-	describe('look past the cut view', () => {
-		it('lists the Tracking number textbox first on a page whose text before it runs past the limit, and its reference types into the field (control: a look that shares no word starts with the page line)', async () => {
+	describe('read past the cut view', () => {
+		it('lists the Tracking number textbox first on a page whose text before it runs past the limit, and its reference types into the field (control: a reading that shares no word starts with the page line)', async () => {
 			const page = await browser.create({ url: fixtures.url('/form') })
 			opened.push(page)
 			await page.evaluate(
@@ -844,16 +997,16 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const tracking = requireOutlineReference(outline, 'textbox', 'Tracking number')
 			expect(outline.indexOf(`${tracking} textbox`)).toBeGreaterThan(BROWSER_TOOL_LIMIT)
 
-			const look = requireToolText(
+			const reading = requireToolText(
 				await tools.execute({
-					id: 'look',
+					id: 'reading',
 					name: 'read',
 					arguments: { from: 1, search: 'the Tracking number textbox' },
 				}),
 			)
-			expect(look).toContain(`1 line matches "the Tracking number textbox":`)
-			expect(look).toContain(`${tracking} textbox "Tracking number"`)
-			expect(extractBrowserPage(look).body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			expect(reading).toContain(`2 lines match "the Tracking number textbox":`)
+			expect(reading).toContain(`${tracking} textbox "Tracking number"`)
+			expect(extractBrowserPage(reading).body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			expect(
 				await tools.execute({
 					id: 'type',
@@ -890,7 +1043,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			let from: number | undefined = 1
 			while (from !== undefined) {
 				const paged = extractBrowserPage(
-					requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from } })),
+					requireToolText(
+						await tools.execute({ id: 'reading', name: 'read', arguments: { from } }),
+					),
 				)
 				expect(paged.start).toBe(from)
 				expect(paged.body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
@@ -939,17 +1094,17 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const toolset = createBrowserToolset(page, { tools })
 		toolsets.push(toolset)
 		await toolset.start()
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const add = requireOutlineReference(look, 'button', 'Add to cart')
-		const hold = requireOutlineReference(look, 'button', 'Save for later')
+		const add = requireOutlineReference(reading, 'button', 'Add to cart')
+		const hold = requireOutlineReference(reading, 'button', 'Save for later')
 
 		const held = requireToolText(
 			await tools.execute({ id: 'hold', name: 'click', arguments: { ref: hold } }),
 		)
 		expect(held).toBe(
-			`Clicked ${hold} button "Save for later"; the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect.\n\n${look}`,
+			`Clicked ${hold} button "Save for later"; the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect.\n\n${reading}`,
 		)
 		expect(await page.evaluate('document.body.dataset.held')).toBe('yes')
 		expect(page.url).toBe(fixtures.url('/shop'))
@@ -976,11 +1131,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const toolset = createBrowserToolset(page, { tools })
 		toolsets.push(toolset)
 		await toolset.start()
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const name = requireOutlineReference(look, 'textbox', 'Name')
-		const recipient = requireOutlineReference(look, 'textbox', 'Gift name')
+		const name = requireOutlineReference(reading, 'textbox', 'Name')
+		const recipient = requireOutlineReference(reading, 'textbox', 'Gift name')
 		const confirmation = `Order ${FIXTURE_CHECKOUT_CODE} placed for Ada Lovelace.`
 
 		const typed = requireToolText(
@@ -1037,13 +1192,13 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const toolset = createBrowserToolset(page, { tools })
 		toolsets.push(toolset)
 		await toolset.start()
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const notes = requireOutlineReference(look, 'textbox', 'Notes')
-		const bold = requireOutlineReference(look, 'button', 'Bold')
-		const coupon = requireOutlineReference(look, 'button', 'Coupon')
-		expect(extractBrowserPage(look).body).toContain(
+		const notes = requireOutlineReference(reading, 'textbox', 'Notes')
+		const bold = requireOutlineReference(reading, 'button', 'Bold')
+		const coupon = requireOutlineReference(reading, 'button', 'Coupon')
+		expect(extractBrowserPage(reading).body).toContain(
 			[
 				'Plain notes',
 				`${notes} textbox "Notes"`,
@@ -1052,7 +1207,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				`${coupon} button "Coupon"`,
 			].join('\n'),
 		)
-		expect(extractOutlineRows(look).map((row) => row.name)).not.toContain('Plain notes')
+		expect(extractOutlineRows(reading).map((row) => row.name)).not.toContain('Plain notes')
 
 		expect(
 			await tools.execute({ id: 'notes', name: 'type', arguments: { ref: notes, text: 'kettle' } }),
@@ -1087,11 +1242,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const toolset = createBrowserToolset(page, { tools })
 		toolsets.push(toolset)
 		await toolset.start()
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const remove = requireOutlineReference(look, 'button', 'Delete')
-		const keep = requireOutlineReference(look, 'button', 'Keep')
+		const remove = requireOutlineReference(reading, 'button', 'Delete')
+		const keep = requireOutlineReference(reading, 'button', 'Keep')
 		const drafts = [
 			`page "Drafts" ${fixtures.url('/confirm')} (3 lines)`,
 			'1: # Drafts',
@@ -1099,7 +1254,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			`3: ${keep} button "Keep"`,
 			'[lines 1–3 of 3; the whole page]',
 		].join('\n')
-		expect(look).toBe(drafts)
+		expect(reading).toBe(drafts)
 		const kept = { action: `Clicked ${keep} button "Keep"`, view: drafts }
 
 		const plain = requireToolText(
@@ -1148,7 +1303,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const next = requireOutlineReference(
-			requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
+			requireToolText(await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } })),
 			'link',
 			'Next',
 		)
@@ -1195,7 +1350,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(control)
 		await control.start()
 		const link = requireOutlineReference(
-			requireToolText(await controls.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
+			requireToolText(
+				await controls.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
+			),
 			'link',
 			'Next',
 		)
@@ -1238,7 +1395,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await started.start()
 			toolset = started
 			const catalog = requireToolText(
-				await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+				await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 			)
 			const open = requireOutlineReference(catalog, 'button', 'Open details')
 			child = fixtures.url('/popup/child')
@@ -1296,7 +1453,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const catalog = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
 		const stay = requireOutlineReference(catalog, 'button', 'Stay')
 
@@ -1337,7 +1494,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolset = createBrowserToolset(catalogPage, { tools, context })
 			await toolset.start()
 			catalog = requireToolText(
-				await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+				await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 			)
 		})
 
@@ -1401,7 +1558,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				},
 			)
 			expect(
-				requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
+				requireToolText(
+					await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
+				),
 			).toContain(`The tab ${closed} closed; the view returned to ${fixtures.url('/popup')}.`)
 		})
 	})
@@ -1440,11 +1599,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect((await page.frames()).map((frame) => frame.url)).toContain(
 			fixtures.url('/frame/field', 'localhost'),
 		)
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
-		const code = requireOutlineReference(look, 'textbox', 'Code')
+		const frame = requireOutlineReference(reading, 'Iframe', 'Voucher form')
+		const code = requireOutlineReference(reading, 'textbox', 'Code')
 
 		const receipt = requireToolText(
 			await tools.execute({
@@ -1498,11 +1657,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					.includes('textbox "Code"'),
 			{ budget: 10_000, interval: 20 },
 		)
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const frame = requireOutlineReference(look, 'Iframe', 'Voucher form')
-		const code = requireOutlineReference(look, 'textbox', 'Code')
+		const frame = requireOutlineReference(reading, 'Iframe', 'Voucher form')
+		const code = requireOutlineReference(reading, 'textbox', 'Code')
 
 		const receipt = requireToolText(
 			await tools.execute({
@@ -1550,10 +1709,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			(candidate) => candidate.url === fixtures.url('/frame/middle', 'localhost'),
 		)
 		expect(inner?.parent).toBe(requireValue(middle).id)
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const coupon = requireOutlineReference(look, 'textbox', 'Coupon')
+		const coupon = requireOutlineReference(reading, 'textbox', 'Coupon')
 
 		const receipt = requireToolText(
 			await tools.execute({
@@ -1580,10 +1739,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const toolset = createBrowserToolset(page, { tools })
 		toolsets.push(toolset)
 		await toolset.start()
-		const look = requireToolText(
-			await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+		const reading = requireToolText(
+			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
-		const find = requireOutlineReference(look, 'button', 'Find')
+		const find = requireOutlineReference(reading, 'button', 'Find')
 		const started = performance.now()
 		const receipt = requireToolText(
 			await tools.execute({ id: 'find', name: 'click', arguments: { ref: find } }),
@@ -1616,7 +1775,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const name = requireOutlineReference(
-				requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
+				requireToolText(
+					await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
+				),
 				'textbox',
 				'Name',
 			)
@@ -1653,7 +1814,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const drafts = requireToolText(
-				await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } }),
+				await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 			)
 			const remove = requireOutlineReference(drafts, 'button', 'Delete')
 
@@ -1683,7 +1844,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			toolsets.push(toolset)
 			await toolset.start()
 			const link = requireOutlineReference(
-				requireToolText(await tools.execute({ id: 'look', name: 'read', arguments: { from: 1 } })),
+				requireToolText(
+					await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
+				),
 				'link',
 				'Next',
 			)

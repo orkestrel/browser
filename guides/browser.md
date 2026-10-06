@@ -299,7 +299,7 @@ An error names its refusal in `code`. The following table lists every code that 
 | `BROWSER_DOCUMENT`             | `BrowserError`             | `createBrowserDOMView` and `createDocumentToolset`                                                                                                                     | The given value is not a document attached to a window.                                                                                                                                                                                                                           |
 | `BROWSER_DOCUMENT_OWN`         | `BrowserError`             | `createBrowserDOMView` and `createDocumentToolset`                                                                                                                     | The given document is `globalThis.document` and `own` is not `true`.                                                                                                                                                                                                              |
 | `BROWSER_DOCUMENT_DESTROYED`   | `BrowserError`             | every `BrowserDOMView` call after `destroy()`, and a wait pending at `destroy()`                                                                                       | The view was destroyed.                                                                                                                                                                                                                                                           |
-| `BROWSER_DOCUMENT_SUBMIT`      | `BrowserError`             | `submit` in the DOM placement                                                                                                                                          | The form did not submit: its `submit` event was prevented or a field failed validation, which the message names with its `validationMessage`.                                                                                                                                     |
+| `BROWSER_DOCUMENT_SUBMIT`      | `BrowserError`             | `submit` in the DOM placement                                                                                                                                          | Refuses when no submit event fires or a field is invalid, naming its `validationMessage`. A prevented submit event counts as a handled submission.                                                                                                                                |
 | `BROWSER_ELEMENT_QUERY`        | `BrowserError`             | `find` and `wait` of `BrowserDOMElementManager`                                                                                                                        | The CSS selector is invalid.                                                                                                                                                                                                                                                      |
 | `BROWSER_TOOLSET_ARGUMENT`     | `BrowserError`             | every toolset tool and `BrowserToolset` construction                                                                                                                   | A call carries a parameter the tool does not advertise, omits a required argument, carries a value of the wrong type, or supplies an invalid line range; construction receives a limit that is not a positive integer.                                                            |
 | `BROWSER_TOOLSET_ROLE`         | `BrowserError`             | `type`                                                                                                                                                                 | The element's role is not in `BROWSER_TYPED_ROLES`.                                                                                                                                                                                                                               |
@@ -374,7 +374,7 @@ The helpers are pure: they decode protocol payloads, validate options, compile i
 | `compileSelectFunction`                  | function | Compiles text selection or select-option assignment against the resolved element.                                                                                                                   |
 | `compileHitFunction`                     | function | Compiles the descendant hit check for a resolved element.                                                                                                                                           |
 | `compileSubmitObserverExpression`        | function | Compiles the installation of a capture-phase `submit` observer owned by `token` on the window of the world it runs in.                                                                              |
-| `compileSubmitReadExpression`            | function | Compiles the read of the `submit` observer `compileSubmitObserverExpression` installs for `token`, removing the observer.                                                                           |
+| `compileSubmitReadExpression`            | function | Compiles the read of the `submit` observer `compileSubmitObserverExpression` installs for `token`, preserving the observer until cleanup.                                                           |
 | `compileBrowserBindingSource`            | function | Compiles the page-side promise facade for one Runtime binding.                                                                                                                                      |
 | `compileBrowserBindingResult`            | function | Compiles delivery of a host binding result to one execution context.                                                                                                                                |
 | `compileBrowserBindingCleanup`           | function | Compiles current-document cleanup for one page-side host binding facade.                                                                                                                            |
@@ -411,6 +411,9 @@ The helpers are pure: they decode protocol payloads, validate options, compile i
 | `redactBrowserText`                      | function | Redacts registered secrets before projection wrapping or output clipping.                                                                                                                           |
 | `renderBrowserFooter`                    | function | Renders an exact addressed-range footer, including the next line when content remains.                                                                                                              |
 | `renderBrowserLine`                      | function | Joins a projected line's spans without adding an address.                                                                                                                                           |
+| `findBrowserText`                        | function | Finds the first line contributing a whitespace-normalized match across consecutive text spans.                                                                                                      |
+| `renderBrowserSearch`                    | function | Renders a shared search header and chooses its context line within the requested range.                                                                                                             |
+| `renderBrowserReceiptWindow`             | function | Fits an unnumbered receipt and a complete page window inside one result limit.                                                                                                                      |
 | `renderBrowserPassage`                   | function | Renders a bounded window with numbered rows and an exact continuation.                                                                                                                              |
 | `renderBrowserSpans`                     | function | Renders an element as searchable text separated from references and syntax.                                                                                                                         |
 | `renderBrowserWindow`                    | function | Selects whole addressed rows after reserving the header and exact footer.                                                                                                                           |
@@ -933,6 +936,9 @@ import {
 	renderBrowserFooter,
 	renderBrowserLine,
 	renderBrowserPassage,
+	findBrowserText,
+	renderBrowserSearch,
+	renderBrowserReceiptWindow,
 	renderBrowserSpans,
 	renderBrowserWindow,
 	scanBrowserLines,
@@ -961,7 +967,7 @@ const link: BrowserOutlineNode = {
 	id: 'delivery',
 	parent: 'root',
 	session: 'main',
-	reference: 'e4',
+	reference: 'e12345',
 	role: 'link',
 	name: 'Shipping',
 	properties: { url: 'https://shop.example.test/delivery' },
@@ -972,14 +978,28 @@ const lines: readonly BrowserLine[] = [
 	{ spans: [{ category: 'text', text: 'We ship every weekday.' }] },
 	{ spans: [{ category: 'text', text: 'Contact the workshop.' }] },
 ]
-renderBrowserLine(lines[0] ?? { spans: [] }) // 'e4 link "Shipping" /delivery'
+renderBrowserLine(lines[0] ?? { spans: [] }) // 'e12345 link "Shipping" /delivery'
 scanBrowserLines(lines, 'ship') // [1, 2]
-scanBrowserLines(lines, 'e4') // []
+scanBrowserLines(lines, 'e12345') // []
+findBrowserText(lines, 'We ship every weekday.') // 2
+renderBrowserSearch(lines, 1, undefined, 'Shipping') // { from: 1, text: '1 line matches "Shipping": 1' }
+renderBrowserReceiptWindow(
+	{
+		url: 'https://shop.example.test/',
+		title: 'Delivery',
+		lines,
+		from: 1,
+		tabs: [],
+		changed: false,
+	},
+	'Read.',
+	4000,
+) // receipt and addressed window share the limit
 scanBrowserLines(lines, 'delivery', 2) // []
 validateBrowserLines(1, 2, lines.length)
 renderBrowserWindow(lines, 1, 2, 'Delivery', 4_000)
 // Delivery
-// 1: e4 link "Shipping" /delivery
+// 1: e12345 link "Shipping" /delivery
 // 2: We ship every weekday.
 // [lines 1–2 of 3; 1 below; call read with from 3 for more]
 renderBrowserFooter(3, 3, 3) // '[lines 3–3 of 3; 2 above; end of page]'
@@ -1059,6 +1079,7 @@ The following table lists the core types.
 | `BrowserCaptureResult`              | interface | Carries a receipt's capture or the bounded reason no capture was available.                                                                                                                                                                                  |
 | `BrowserLine`                       | interface | Carries the ordered spans of one addressed document line.                                                                                                                                                                                                    |
 | `BrowserLineSpan`                   | interface | Distinguishes searchable text from generated syntax and actionable references.                                                                                                                                                                               |
+| `BrowserSearch`                     | interface | Carries the opening line and optional search header of an addressed window.                                                                                                                                                                                  |
 | `BrowserPassage`                    | interface | Describes the projection and context of one bounded reading window.                                                                                                                                                                                          |
 | `BrowserToolsetReadOptions`         | interface | Configures a fresh line window within a whole-result character limit.                                                                                                                                                                                        |
 | `BrowserAXNode`                     | interface | Represents one decoded Chromium accessibility node.                                                                                                                                                                                                          |
@@ -2103,7 +2124,7 @@ source.emitter.on('change', async () => {
 
 #### `BrowserToolsetInterface`
 
-Publishes the browser vocabulary as `@orkestrel/tool` tools over one current view and adopts the page's tools beside them. A page-backed toolset advertises `read`, `click`, `type`, `press`, `navigate`, and `wait`, stages `dialog` while a dialog is open, and with the `context` option adds `switch`; a view-backed toolset advertises `read`, `click`, `type`, and `wait`. Every tool declares at least one required parameter. Every complete result and error message fits the smaller of `limit` and `BROWSER_TOOL_LIMIT`, including its footer, and actions run one at a time in first-in, first-out order. `native` holds the generic tools alone, which is what a consumer publishes to a built-in browser agent. [Toolset vocabulary](#toolset-vocabulary) lists each tool and the receipts it returns.
+Publishes the browser vocabulary as `@orkestrel/tool` tools over one current view and adopts the page's tools beside them. A page-backed toolset advertises `read`, `click`, `type`, `press`, `navigate`, and `wait`, stages `dialog` while a dialog is open, and with the `context` option adds `switch`; a view-backed toolset advertises `read`, `click`, `type`, and `wait`. Every tool declares at least one required parameter. Every complete browser or journey tool result and error message fits the smaller of `limit` and `BROWSER_TOOL_LIMIT`, including its footer, and actions run one at a time in first-in, first-out order. `native` holds the generic tools alone, which is what a consumer publishes to a built-in browser agent. [Toolset vocabulary](#toolset-vocabulary) lists each tool and the receipts it returns.
 
 A page-backed `click`, `type`, or `press` produces its receipt through the following steps, and the toolset keeps no frame, session, or loader state between them.
 
@@ -2129,6 +2150,8 @@ A `click`, a `type` with `submit`, or a `press` of Enter also opens `page.popups
 | Method    | Returns                          | Summary                                                                                                                                                                                                                                                                                                                          |
 | --------- | -------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `read`    | `Promise<string>`                | Renders a fresh page window, including pending move notes, within the requested limit.                                                                                                                                                                                                                                           |
+| `notes`   | `string`                         | Consumes pending move and host notes for inclusion inside a result's budget.                                                                                                                                                                                                                                                     |
+| `redact`  | `string`                         | Redacts registered secrets from unnumbered text before composing a result.                                                                                                                                                                                                                                                       |
 | `perform` | `Promise<BrowserToolsetResult>`  | Performs a tool call and returns its structured action when a handler ran.                                                                                                                                                                                                                                                       |
 | `follow`  | `Promise<BrowserAction>`         | Performs one recorded step on the current view through `perform` and returns its action.                                                                                                                                                                                                                                         |
 | `hold`    | `Promise<BrowserHoldInterface>`  | Takes a queue turn and reserves action admission from the call for the returned caller token.                                                                                                                                                                                                                                    |
@@ -2155,8 +2178,10 @@ const result = await toolset.tools.execute({
 	name: 'read',
 	arguments: { from: 1, search: 'cart' },
 })
+toolset.redact('Unnumbered status') // redacts any registered secrets
+toolset.notes() // consumes pending notes for the caller to budget
 const performed = await toolset.perform({ id: '2', name: 'click', arguments: { ref: 'e4' } })
-performed.action // { action: 'click', target: { role: 'button', name: 'Place order', reference: 'e4', frame }, outcome: 'done', receipt: 'Clicked e4 button "Place order".', … }
+performed.action // { action: 'click', target: { role: 'button', name: 'Place order', reference: 'e12345', frame }, outcome: 'done', receipt: 'Clicked e4 button "Place order".', … }
 const hold = await toolset.hold('add-kettle') // waits for its queue turn
 await toolset.tools.execute({ id: '3', name: 'click', arguments: { ref: 'e4' } }) // { success: false, error: 'The toolset is replaying add-kettle until it finishes; call read.' }
 await toolset.perform(
@@ -3083,7 +3108,7 @@ This section holds the words a model reads: the tools a toolset advertises and t
 
 ### Tools
 
-A page-backed toolset advertises `read`, `click`, `type`, `press`, `navigate`, and `wait`, stages `dialog` while a dialog is open, and advertises `switch` with `context`. A view-backed toolset advertises `read`, `click`, `type`, and `wait`. With `journeys`, either placement adds `record`, `save`, `journeys`, `edit`, `replay`, `forget`, and `capture`. Every tool declares at least one required parameter. The removed `look`, `plain`, and `tabs` names are not aliases; the browse server refuses them as unknown tools. The following table lists the advertised descriptions.
+A page-backed toolset advertises `read`, `click`, `type`, `press`, `navigate`, and `wait`, stages `dialog` while a dialog is open, and advertises `switch` with `context`. A view-backed toolset advertises `read`, `click`, `type`, and `wait`. With `journeys`, either placement adds `record`, `save`, `journeys`, `edit`, `replay`, `forget`, and `capture`. Every tool declares at least one required parameter. The removed `look`, `plain`, and `tabs` names are not aliases; the browse server refuses them as unknown tools unless an adopted page tool takes the name. The following table lists the advertised descriptions.
 
 | Tool       | Parameters                                                                                                                                                                  | Annotations                                                                      | Placements                                            | Description                                                                                                           |
 | ---------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------- | ----------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------- |
@@ -3097,7 +3122,7 @@ A page-backed toolset advertises `read`, `click`, `type`, `press`, `navigate`, a
 | `switch`   | `tab` (string, required)                                                                                                                                                    | none                                                                             | CDP, with `context`                                   | `Selects an open tab that read lists and returns its page.`                                                           |
 | `record`   | `journey` (string, required)                                                                                                                                                | none                                                                             | CDP and DOM, with `journeys`                          | `Starts recording your next actions as a journey with that name; call save when it is done.`                          |
 | `save`     | `description` (string, required)                                                                                                                                            | none                                                                             | CDP and DOM, with `journeys`                          | `Stops recording and saves the journey; describe what it achieves in one sentence.`                                   |
-| `journeys` | `search` (string, optional), `from` (integer, required), `to` (integer, inclusive)                                                                                          | `pure`, `untrusted`                                                              | CDP and DOM, with `journeys`                          | `Lists the saved journeys with their steps and the parameters each one takes.`                                        |
+| `journeys` | `search` (string, optional), `from` (integer, required), `to` (integer, inclusive)                                                                                          | `pure`, `untrusted`                                                              | CDP and DOM, with `journeys`                          | `Shows saved journeys as numbered lines.`                                                                             |
 | `edit`     | `journey` (string, required), `edits` (`anyOf`: array of `BrowserJourneyEditRequest` or a JSON string of that array, required)                                              | none                                                                             | CDP and DOM, with `journeys`                          | `Changes a saved journey: add, remove, or update steps by their ids from journeys, or declare a parameter.`           |
 | `replay`   | `journey` (string, required), `inputs` (object of strings)                                                                                                                  | none                                                                             | CDP and DOM, with `journeys`                          | `Replays a saved journey step by step; give each parameter's value under inputs.`                                     |
 | `capture`  | `full` (boolean, required)                                                                                                                                                  | none                                                                             | CDP and DOM, with `journeys`; requires a trusted view | `Saves the current view as a PNG in the runs directory and returns its path.`                                         |
@@ -3120,15 +3145,15 @@ Search is optional and combines with the range. It scores text spans, including 
 
 Every read and receipt window recaptures the page. On the same document, an unchanged projection keeps its line numbers and references. A continuation with `from` greater than 1 that encounters a changed projection carries `The page changed since the last view; line numbers might differ.` and serves fresh lines at the requested range. Follow the footer's `from` line to continue. Line numbers are not element references; actions take references such as `e4`.
 
-The projection includes headings, link destinations, list markers, table rows, named images, and exposed control values. Same-origin links show path, query, and fragment; other links show their absolute address. The projection excludes hidden content and redacts registered typed secrets before wrapping. Chromium's exposed password mask is retained. Rows wrap at `BROWSER_READ_WIDTH` UTF-16 units before numbering; a hard continuation starts with `↳` and joins without a space, preserving Unicode code points.
+The projection includes headings, link destinations, list markers, table rows, named images, and exposed control values. Same-origin links show path, query, and fragment; other links show their absolute address. The projection excludes hidden content. It redacts raw names and values before normalization, wrapping, and numbering, including raw, JSON-escaped, and whitespace-normalized forms of registered typed secrets. Titles, addresses, receipts, notes, errors, and journey content are also redacted before budgeting; numbered windows and footers are never re-redacted. Chromium's exposed password mask is retained. Rows wrap at `BROWSER_READ_WIDTH` UTF-16 units before numbering; a hard continuation starts with `↳` and joins without a space, preserving Unicode code points.
 
-Outline rows append `pressed`, `expanded`, and `selected` only when the state is present, including `false`. The DOM placement reads selection from an explicit ARIA token or native option selectedness; it omits selection on unannotated tabs, treeitems, and ARIA options inside their containers. On Edge 154.0.4258.53, CDP reports `selected=false` for an unannotated tab outside a tablist. That structure is invalid ARIA, and the DOM placement doesn’t emulate its selection default. On the same browser, CDP renders a native `<summary>` as a `DisclosureTriangle` row with `expanded=false` when its details element is closed; the DOM placement omits the summary row. A `treeitem` outside a tree becomes `generic` without these states in CDP; the DOM placement keeps its `treeitem` row with authored expansion and selection. These are declared row-format differences.
+Outline rows append `pressed`, `expanded`, and `selected` only when the state is present, including `false`. The DOM placement reads selection from an explicit ARIA token or native option selectedness; it omits selection on unannotated tabs, treeitems, and ARIA options inside their containers. On Edge 154.0.4258.53, CDP reports `selected=false` for an unannotated tab outside a tablist. That structure is invalid ARIA, and the DOM placement doesn’t emulate its selection default. On the same browser, CDP renders a native `<summary>` as a `DisclosureTriangle` row with `expanded=false` when its details element is closed; the DOM placement omits the summary row. A `treeitem` outside a tree becomes `generic` without these states in CDP; the DOM placement keeps its `treeitem` row with authored expansion and selection. These are declared row-format differences. Consecutive text nodes under one block or owner join in both placements; text inside a named referenced owner is omitted. Joining never crosses blocks, and a label remains separate from its control. Browser accessibility-tree structure can still differ from DOM structure, as the invalid ARIA and summary cases above show.
 
-Every complete result and error message fits the smaller of the configured `limit` and `BROWSER_TOOL_LIMIT`, including status, header, rows, and footer. The renderer reserves metadata and footer room before selecting whole rows. A limit too small for the header, footer, and next whole row refuses with `BROWSER_TOOLSET_LIMIT`.
+Every complete browser or journey tool result and error message fits the smaller of the configured `limit` and `BROWSER_TOOL_LIMIT`, including status, header, rows, and footer. The renderer budgets host notes, metadata, and footers before selecting whole rows. The MCP text block has the same bound as a backstop. The `acquire` and `tools` catalog JSON is outside this tool-result bound. A limit too small for the header, footer, and next whole row refuses with `BROWSER_TOOLSET_LIMIT`.
 
-An action receipt starts with its status and a fresh window from line 1, or a bounded capture-failure note. A successful appearance `wait` opens the window near the matching text; a timeout opens at line 1. With several tabs, the header includes tab ids and titles within its room, marks the current tab if included, and counts omitted tabs.
+An action receipt starts with its status and a fresh window from line 1, or a bounded capture-failure note. A successful appearance `wait` finds its text in the whitespace-normalized, concatenated text of consecutive projection lines and opens at the first line of that match; otherwise it opens at line 1. Hard-token continuations join without a space. An absent wait or a timeout opens at line 1. With several tabs, the header includes tab ids and titles within its room, marks the current tab if included, and counts omitted tabs.
 
-A handled submission settles before its receipt captures the page. A detected change reports `the page handled the submission and changed`. With no detected change before the settle deadline, it reports `the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect`. Never repeat a submission to obtain its result. Read the receipt before deciding whether another observation is needed. The settlement and cleanup are described under `BrowserToolsetInterface`.
+In the page placement, a handled submission settles before its receipt captures the page. The DOM placement has no rendered-change observer and does not wait for that settle. A detected change reports `the page handled the submission and changed`. With no detected change before the settle deadline, it reports `the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect`. Never repeat a submission to obtain its result. Read the receipt before deciding whether another observation is needed. The settlement and cleanup are described under `BrowserToolsetInterface`.
 
 In the following table, `URL` is an address, `REF` an element reference, `ROLE` and `NAME` its accessible role and name, `TITLE` a document title, `TEXT` the supplied text, `KEY` a key or chord, `MESSAGE` a dialog message, and `FRAME` a frame id. `START`, `END`, and `TOTAL` are line coordinates for addressed windows and character coordinates only for an unaddressed cut. `NEXT` is the next line, `BELOW` the remaining lines, and `REASON` a clause without a directive or final period.
 
@@ -3204,7 +3229,7 @@ In the following table, `URL` is an address, `REF` an element reference, `ROLE` 
 
 ## Journeys
 
-The store proof measured the journey tools and `type`'s `secret` at 798 prompt tokens per turn on the store model's tokenizer (`qwen3.5:2b-q4_K_M`), and the full tool list at 1 651, on 2026-10-01 against the tree at `4a10abe`; the measurement moves with the tool copy. A 4 096-token window cut a page task's third turn, while a 16 384-token window held the proof's journey conversation. When a step dismisses a message or closes a panel, follow it with a `wait` with `absent` set to `true` for its text, so the journey keeps the exit check.
+When a step dismisses a message or closes a panel, follow it with a `wait` with `absent` set to `true` for its text, so the journey keeps the exit check.
 
 The vocabulary case in [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts) bounds compact JSON containing each tool’s name, description, and input schema at 3,400 UTF-16 code units for the journey tools plus `type.secret`, and at 6,050 for the full list. These are character bounds, not token counts.
 
@@ -3365,7 +3390,7 @@ These invariants hold across the four faces (`src/core`, `src/browser`, `src/ser
 15. **A reference names one element for as long as that element exists.** A reference is `e` followed by a positive integer. On CDP every page's element manager mints from one counter its browser context owns and binds the reference to `SESSION:BACKEND`, because backend node ids are per renderer; in the DOM placement the view owns the counter and binds a `WeakRef`. No number is reused within the context. A cross-document navigation of the main frame drops every reference, a child frame's navigation or detachment drops that frame's, and a stale or unknown reference refuses `GONE` or `UNKNOWN` with a message naming `read`. `parseBrowserReference` accepts `e12`, `E12`, `[e12]`, `ref=e12`, and `[ref=e12]`. A journey's `reference` is evidence a developer reads, never a lookup: replay resolves each target by role and exact name. [`tests/src/core/elements/BrowserElementManager.test.ts`](../tests/src/core/elements/BrowserElementManager.test.ts), [`tests/src/core/parsers.test.ts`](../tests/src/core/parsers.test.ts), and [`tests/src/browser/elements/BrowserDOMElementManager.test.ts`](../tests/src/browser/elements/BrowserDOMElementManager.test.ts) pin it, and the `journey semantic replay` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) pins that a changed page resolves by name and that neither a stored reference nor a matching CSS selector resolves a target.
 16. **A reading is captured one time and sliced from one projection.** `frame.read()` issues one size-guarded evaluation in the isolated world; `markdown` and `text` each project the capture one time per mode and cut every slice from it, ending a bounded slice after the last line break in its window when one lies past `offset`. Truncation is derived as `offset + text.length < total`, and `stale` is derived from the navigation epoch, never stored. [`tests/src/core/BrowserReading.test.ts`](../tests/src/core/BrowserReading.test.ts) and [`tests/src/core/BrowserPage.test.ts`](../tests/src/core/BrowserPage.test.ts) pin it.
 17. **The registry mirrors the domain and settles every invocation.** `start()` subscribes before it enables, because enabling reports every registered tool; a `-32601` answer unsubscribes and resolves `false`, and any other failure rethrows. `execute` never passes the signal to `invokeTool`, so the invocation id always arrives; an abort or a deadline sends `WebMCP.cancelInvocation` with that id and rejects without waiting for `Canceled`; a navigation or detachment of the tool's frame and `destroy` reject; every terminal status resolves a `BrowserInvocationResult`. A `toolResponded` with an unknown id is held only while an `invokeTool` reply is pending. [`tests/src/core/BrowserRegistry.test.ts`](../tests/src/core/BrowserRegistry.test.ts) pins it.
-18. **Actions run one at a time.** The toolset runs actions in first-in, first-out order, and an action holds the queue until its receipt is produced; an action whose signal aborts while queued sends nothing. After a `mousePressed` or `keyDown` is sent, the matching release is sent without the signal, so an abort never leaves a button or key down, and the next action waits for a pending release. Every complete result and error message fits the smaller of `limit` and `BROWSER_TOOL_LIMIT`, including its footer. A `click`, `type`, or `press` on a page opens `page.navigation.record(frame)` before its first input and settles its receipt through that record, so the receipt's view follows the navigation the record selects, and the toolset holds no frame, session, or loader state of its own. While a replay holds the toolset, an action admitted after the hold that does not carry the hold's token is refused with `BROWSER_TOOLSET_BUSY` rather than queued, and the actions admitted before the hold complete first. The queue, bounds, destroy, hold, and navigation settlement cases in [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts), the selection cases in [`tests/src/core/BrowserNavigationRecord.test.ts`](../tests/src/core/BrowserNavigationRecord.test.ts), and the `claim 6` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) pin it.
+18. **Actions run one at a time.** The toolset runs actions in first-in, first-out order, and an action holds the queue until its receipt is produced; an action whose signal aborts while queued sends nothing. After a `mousePressed` or `keyDown` is sent, the matching release is sent without the signal, so an abort never leaves a button or key down, and the next action waits for a pending release. Every complete browser or journey tool result and error message fits the smaller of `limit` and `BROWSER_TOOL_LIMIT`, including its footer. A `click`, `type`, or `press` on a page opens `page.navigation.record(frame)` before its first input and settles its receipt through that record, so the receipt's view follows the navigation the record selects, and the toolset holds no frame, session, or loader state of its own. While a replay holds the toolset, an action admitted after the hold that does not carry the hold's token is refused with `BROWSER_TOOLSET_BUSY` rather than queued, and the actions admitted before the hold complete first. The queue, bounds, destroy, hold, and navigation settlement cases in [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts), the selection cases in [`tests/src/core/BrowserNavigationRecord.test.ts`](../tests/src/core/BrowserNavigationRecord.test.ts), and the `claim 6` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) pin it.
 19. **A dialog interrupts every tool and stages `dialog`.** Every pending step of every tool is raced against the page's `dialog` event, so a tool returns a receipt naming the dialog while the blocked command waits; the `dialog` tool is advertised while the dialog is open and bypasses the queue, and every other tool refuses with a message naming the open dialog and ending `call dialog.` A replay admits a `dialog` step only after an `interrupted` action, the continuation the toolset stages, and under a hold a `dialog` from another caller is refused with `BROWSER_TOOLSET_BUSY`. The dialog cases in [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts) and [`tests/src/core/BrowserReplay.test.ts`](../tests/src/core/BrowserReplay.test.ts), the `confirm()` and `beforeunload` dialog cases in [`tests/service/toolset.test.ts`](../tests/service/toolset.test.ts), and the `claim 6` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) pin it.
 20. **CDP input is trusted and DOM input is not.** A page's `trusted` is `true`: clicks, keys, and hovers are `Input` events whose `isTrusted` is `true`. A DOM view's `trusted` is `false`: `click` is `HTMLElement.click()`, `fill` is the native value setter plus `input` and `change`, and `submit` is `requestSubmit()` observed by a `submit` listener, so a form that fails validation reports `did not submit` with the field's `validationMessage`. Its `click` and `type` receipts end `(untrusted event)`. It refuses rather than fakes a key press, a navigation, a file chooser, typing into `contenteditable`, a link or form whose target opens another browsing context, a disabled control, and a cross-origin frame. [`tests/src/browser/elements/BrowserDOMElement.test.ts`](../tests/src/browser/elements/BrowserDOMElement.test.ts) and [`tests/service/document.test.ts`](../tests/service/document.test.ts) pin it.
 21. **The toolset's names are reserved at `start()`.** `start()` rejects with a coded `BrowserError` and adds nothing when the manager already holds `read`, `click`, `type`, `press`, `navigate`, `wait`, `dialog`, or `switch` under a tool the toolset did not add, and a page tool under a reserved name is skipped with `reserved`. A page tool named `unresolved` is also skipped as reserved. A toolset constructed with `journeys` also reserves `record`, `save`, `journeys`, `edit`, `replay`, `forget`, and `capture`: construction refuses a manager that holds one with `BROWSER_TOOLSET_RESERVED`, and a page tool under one is skipped with `reserved`. The `browse` server keeps its dispatchers on a manager of its own and forwards to the toolset's, so the toolset meets no foreign name. A consumer that replaces a reserved name after `start()` breaks the path a receipt names, such as `call dialog`. [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts), [`tests/src/core/BrowserJourneyToolset.test.ts`](../tests/src/core/BrowserJourneyToolset.test.ts), and [`tests/src/server/BrowserMCPServer.test.ts`](../tests/src/server/BrowserMCPServer.test.ts) pin it.
@@ -3436,7 +3461,7 @@ const saved = await toolset.tools.execute({
 // 2: s1 click link "Alpine Kettle"
 // 3: s2 click button "Add to cart"
 // 4: s3 wait "Added to cart"
-// [lines 1–4 of 4; the whole page]
+// [lines 1–4 of 4; the whole listing]
 ```
 
 `save` writes the journey before it ends the recording, so a write that fails or meets a held lock leaves the recording open, and the next `save` writes those steps and the actions recorded after the refusal. The journey lands at `tmp/browsers/add-kettle/journey.json`.
@@ -3472,12 +3497,12 @@ await toolset.tools.execute({
 	arguments: { from: 1, search: 'place-order' },
 })
 // journeys (4 lines)
-// 1 lines match "place-order": 1
+// 1 line matches "place-order": 1
 // 1: place-order "Order the Alpine Kettle with a name"
 // 2: s1 click link "Cart"
 // 3: s2 type "Ada Lovelace" into textbox "Full name", submit
 // 4: s3 click link "Orders"
-// [lines 1–4 of 4; the whole page]
+// [lines 1–4 of 4; the whole listing]
 await toolset.tools.execute({
 	id: '10',
 	name: 'edit',
@@ -3494,7 +3519,7 @@ await toolset.tools.execute({
 // 1: place-order "Order the Alpine Kettle with a name" (parameters: customer)
 // 2: s2 type "Ada Lovelace" as customer into textbox "Full name", submit
 // 3: s3 click link "Orders"
-// [lines 1–3 of 3; the whole page]
+// [lines 1–3 of 3; the whole listing]
 ```
 
 An added or updated step can name `ref` from the current view in place of a target; `edit` converts it to the element's role and exact name before the batch applies, and refuses a reference the view does not hold. `edit` writes at the revision it read, so a write that landed in between is refused with `Journey place-order changed since you read it; call journeys, then edit again.`
@@ -3672,7 +3697,7 @@ try {
 }
 ```
 
-Read the task's outcome from the page, never from the model's answer: the store proof checks the cart, the submitted query, and the read fact against the page state after each run.
+The store predicates check cart state and the submitted query on the page. A read task also checks the fact in the model’s final answer against the fixture’s expected fact; the answer alone does not prove the page actions.
 
 ### Host the toolset over MCP
 
@@ -3757,9 +3782,9 @@ Claude Code 2.1.286 registers the binary for a checkout in four steps:
 3. Run `claude mcp get browse`. Until the server is approved, it reports `Scope: Project config (shared via .mcp.json)` and ``Status: ⏸ Pending approval (run `claude` to approve)``, and Claude Code connects to no unapproved project server.
 4. Start `claude` in the checkout and approve `browse` when it asks about the project's MCP servers. `claude mcp reset-project-choices` clears that choice for the checkout.
 
-Steps 2 and 3 ran on 2026-10-01 against a scratch checkout whose `node_modules/@orkestrel/browser` linked this package's build, with their output quoted. The approval in step 4 is interactive, and no approved Claude Code session drove the server in that run; the exchange that follows drove the command the entry names over stdio directly. With `@orkestrel/mcp` 0.0.34, a client that subscribes through `subscriptions/listen` receives `notifications/tools/list_changed` when the server mirrors a page tool, and a client that connects through `initialize` receives none and sees the tool at its next `tools/list`; which of the two Claude Code 2.1.286 opens is unread.
+Steps 2 and 3 ran on 2026-10-01 against a scratch checkout whose `node_modules/@orkestrel/browser` linked this package's build, with their output quoted. The approval in step 4 is interactive, and no approved Claude Code session drove the server in that run; the requests below are illustrative rather than a transcript of that run. With `@orkestrel/mcp` 0.0.34, a client that subscribes through `subscriptions/listen` receives `notifications/tools/list_changed` when the server mirrors a page tool, and a client that connects through `initialize` receives none and sees the tool at its next `tools/list`; which of the two Claude Code 2.1.286 opens is unread.
 
-The following fence illustrates the line-based requests and the numbered journey listing. Page windows are omitted; the earlier recorded exchange supplies the example product and journey names.
+The following fence is an unexecuted illustration of line-based requests and numbered journey listings. Page windows are omitted. The distribution test below separately drives the packed binary.
 
 ```ts
 // -> tools/list
@@ -3778,13 +3803,18 @@ The following fence illustrates the line-based requests and the numbered journey
 // <- "Added to cart" is on the page.
 // -> tools/call save { description: 'Adds the Alpine Kettle to the cart' }
 // <- Saved add-kettle with 3 steps.
+// <- 1: add-kettle "Adds the Alpine Kettle to the cart"
+// <- 2: s1 click link "Alpine Kettle"
+// <- 3: s2 click button "Add to cart"
+// <- 4: s3 wait "Added to cart"
+// <- [lines 1–4 of 4; the whole listing]
 // -> tools/call journeys { from: 1 }
 // <- journeys (4 lines)
 // <- 1: add-kettle "Adds the Alpine Kettle to the cart"
 // <- 2: s1 click link "Alpine Kettle"
 // <- 3: s2 click button "Add to cart"
 // <- 4: s3 wait "Added to cart"
-// <- [lines 1–4 of 4; the whole page]
+// <- [lines 1–4 of 4; the whole listing]
 // -> tools/call navigate { url: 'http://127.0.0.1:35605/' }
 // <- Navigated to http://127.0.0.1:35605/.
 // -> tools/call replay { journey: 'add-kettle' }

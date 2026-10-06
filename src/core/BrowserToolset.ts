@@ -91,7 +91,9 @@ import {
 	redactBrowserText,
 	deriveBrowserToolSchema,
 	renderBrowserPassage,
+	renderBrowserReceiptWindow,
 	renderBrowserLine,
+	findBrowserText,
 	validateBrowserLines,
 	normalizeBrowserKey,
 	readBrowserToolString,
@@ -356,6 +358,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return this.#reservation?.name
 	}
 
+	redact(text: string): string {
+		return redactBrowserText(text, [...this.#secrets])
+	}
+
+	notes(): string {
+		return this.redact(this.#drain())
+	}
+
 	async perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
 		const tool = this.#tools.tool(call.name)
 		const entry =
@@ -371,9 +381,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				result: result.success
 					? {
 							...result,
-							value: isString(result.value)
-								? this.#boundReceipt(result.value, secret)
-								: result.value,
+							value:
+								isString(result.value) &&
+								!BROWSER_JOURNEY_TOOL_NAMES.some((name) => name === call.name)
+									? this.#boundReceipt(result.value, secret)
+									: result.value,
 						}
 					: { ...result, error: this.#boundReceipt(result.error, secret, BROWSER_TOOL_CUT_FOOTER) },
 			}
@@ -656,8 +668,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			)
 			if (name !== 'dialog') this.#refuseDialog()
 			const [content, suffix] = await handler(args, { ...context, signal })
-			const body = this.#boundReceipt(content, secret)
-			const footer = this.#boundReceipt(suffix, secret)
+			const body = BROWSER_TOOL_NAMES.some((reserved) => reserved === name)
+				? content
+				: this.#boundReceipt(content, secret)
+			const footer = suffix
 			// A cancellation that lands while the handler finishes wins over its result.
 			signal.throwIfAborted()
 			const state = this.#actions.get(signal)
@@ -666,7 +680,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					...state,
 					receipt: boundBrowserText(body.split('\n\n')[0] ?? body, this.#limit, clause),
 				})
-			return this.#boundReceipt(`${this.#drain()}${body}${footer}`, secret, clause)
+			return BROWSER_TOOL_NAMES.some((reserved) => reserved === name)
+				? `${body}${footer}`
+				: this.#boundReceipt(`${this.#drain()}${body}${footer}`, secret, clause)
 		} catch (error) {
 			const original = isError(error) ? error.message : String(error)
 			const message = this.#boundReceipt(original, secret)
@@ -747,32 +763,31 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				)
 			const projection = outline.lines.map(renderBrowserLine).join('\n')
 			const previous = this.#projections.get(view)
-			this.#projections.set(view, projection)
 			const tabs =
 				this.#context === undefined
 					? []
 					: ((await this.#bounded(this.#list(signal, true), deadline, '', signal)) ?? [])
-			return this.#boundReceipt(
-				renderBrowserPassage(
-					{
-						...outline,
-						from,
-						...(options?.to === undefined ? {} : { to: options.to }),
-						...(options?.search === undefined
-							? {}
-							: { search: this.#boundReceipt(options.search, undefined) }),
-						tabs: tabs.map((tab) => ({
-							...tab,
-							title: this.#boundReceipt(tab.title, undefined),
-							url: this.#boundReceipt(tab.url, undefined),
-						})),
-						changed: previous !== undefined && previous !== projection,
-						note: this.#boundReceipt(this.#drain(), undefined),
-					},
-					limit,
-				),
-				undefined,
+			const result = renderBrowserPassage(
+				{
+					...outline,
+					from,
+					...(options?.to === undefined ? {} : { to: options.to }),
+					...(options?.search === undefined
+						? {}
+						: { search: this.#boundReceipt(options.search, undefined) }),
+					tabs: tabs.map((tab) => ({
+						...tab,
+						title: this.#boundReceipt(tab.title, undefined),
+						url: this.#boundReceipt(tab.url, undefined),
+					})),
+					changed: previous !== undefined && previous !== projection,
+					note: this.#boundReceipt(this.#peek(), undefined),
+				},
+				limit,
 			)
+			this.#projections.set(view, projection)
+			this.#notes.length = 0
+			return result
 		} finally {
 			capture.abort(new BrowserError('the read settled', 'BROWSER_TOOLSET_SETTLED'))
 		}
@@ -1897,12 +1912,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				undefined,
 				BROWSER_TOOL_CUT_FOOTER,
 			)
-		this.#projections.set(this.#cursor, outline.lines.map(renderBrowserLine).join('\n'))
-		const match =
-			text === undefined
-				? -1
-				: outline.lines.findIndex((line) => renderBrowserLine(line).includes(text))
-		const from = match < 0 ? 1 : match + 1
+		const from = text === undefined ? 1 : findBrowserText(outline.lines, text)
 		const passage = {
 			...outline,
 			from,
@@ -1912,25 +1922,25 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				url: this.#boundReceipt(tab.url, undefined),
 			})),
 			changed: false,
-			note: this.#boundReceipt(this.#drain(), undefined),
+			note: this.#boundReceipt(this.#peek(), undefined),
 		}
-		const minimum = renderBrowserPassage({ ...passage, to: from }, this.#limit)
-		const room = this.#limit - minimum.length - 2
-		if (room < 1)
-			throw new BrowserError(
-				'The result limit cannot hold the receipt and page window.',
-				'BROWSER_TOOLSET_LIMIT',
-			)
-		const prefix = boundBrowserText(receipt, room, BROWSER_TOOL_CUT_FOOTER)
-		return prefix + '\n\n' + renderBrowserPassage(passage, this.#limit - prefix.length - 2)
+		const result = renderBrowserReceiptWindow(passage, receipt, this.#limit)
+		this.#projections.set(this.#cursor, outline.lines.map(renderBrowserLine).join('\n'))
+		this.#notes.length = 0
+		return result
+	}
+
+	#peek(): string {
+		const supplied = this.#notices?.()
+		if (supplied) this.#notes.push(supplied)
+		return this.#notes.length === 0 ? '' : `${this.#notes.join(' ')}\n\n`
 	}
 
 	// Returns the pending move notes as a block that leads the next result, and forgets them.
 	#drain(): string {
-		const notes = this.#notes.splice(0)
-		const supplied = this.#notices?.()
-		if (supplied) notes.push(supplied)
-		return notes.length === 0 ? '' : `${notes.join(' ')}\n\n`
+		const notes = this.#peek()
+		this.#notes.length = 0
+		return notes
 	}
 
 	// A failed startup lets a later `start()` try again, unless `destroy()` ended the toolset.

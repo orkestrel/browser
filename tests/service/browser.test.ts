@@ -1,4 +1,4 @@
-import { renderBrowserLine } from '../../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 /**
  * Live-browser proofs for the `Browser` façade.
  *
@@ -1225,7 +1225,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await page.wait('Saved', { absent: false })
 	})
 
-	it('navigate clears references: a stale element refuses GONE naming look, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {
+	it('navigate clears references: a stale element refuses GONE naming read, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		const previous = extractOutlineReferences(
@@ -1326,7 +1326,7 @@ describe('Browser proofs against the fixture pages', () => {
 			)
 		})
 
-		it('refuses a click on a removed and collected element GONE naming look', async () => {
+		it('refuses a click on a removed and collected element GONE naming read', async () => {
 			await expect(removed.click()).rejects.toMatchObject({
 				code: 'BROWSER_ELEMENT_ERROR',
 				context: { reference: removed.reference, reason: 'GONE' },

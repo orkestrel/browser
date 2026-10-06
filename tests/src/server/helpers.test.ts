@@ -172,7 +172,7 @@ describe('eager U4 profile and loss helpers', () => {
 			'https://example.test/cart',
 			'tabs',
 			'every element reference',
-			'retained reading',
+			'last projection',
 			'dialogs',
 			'holds',
 			'unsaved recording',

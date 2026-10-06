@@ -2491,6 +2491,12 @@ export interface BrowserPassage {
 	readonly note?: string
 }
 
+/** Carries the opening line and optional search header of an addressed window. */
+export interface BrowserSearch {
+	readonly from: number
+	readonly text?: string
+}
+
 /** Carries a receipt's capture or the bounded reason no capture was available. */
 export interface BrowserCaptureResult {
 	readonly outline?: BrowserOutline
@@ -2985,6 +2991,13 @@ export interface BrowserTab extends BrowserJourneyTab {
  * - `view` — the view the tools act on
  */
 export interface BrowserToolsetInterface {
+	/** Redacts registered secrets from unnumbered text before composing a result.
+	 * @param text - Unbounded, unnumbered text
+	 * @returns Text with registered secrets removed
+	 */
+	redact(text: string): string
+	/** Consumes pending move and host notes for inclusion inside a result's budget. */
+	notes(): string
 	/** Renders a fresh page window, including pending move notes, within the requested limit.
 	 * @param options - Inclusive range, search, cancellation, and character room
 	 * @returns Numbered lines with an exact continuation footer

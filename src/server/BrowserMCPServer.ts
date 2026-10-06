@@ -341,7 +341,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				error: boundBrowserText(result.error, BROWSER_TOOL_LIMIT, BROWSER_TOOL_CUT_FOOTER),
 			}
 		if (typeof result.value !== 'string') return result
-		return { resultType: 'complete', content: [{ type: 'text', text: result.value }] }
+		const text =
+			context.call.name === 'acquire' || context.call.name === 'tools'
+				? result.value
+				: boundBrowserText(result.value, BROWSER_TOOL_LIMIT, BROWSER_TOOL_CUT_FOOTER)
+		return { resultType: 'complete', content: [{ type: 'text', text }] }
 	}
 
 	// Answers the end of input and a termination signal.
@@ -790,7 +794,10 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 
 	#detach(holder: BrowserServerHolder, lease: BrowserServerLease, cause: unknown): void {
 		if (this.#leases.get(holder) !== lease || this.#holders.get(holder.id) !== holder) return
-		this.#departures.set(lease, { cause, url: lease.generation.toolset.view.url })
+		this.#departures.set(lease, {
+			cause,
+			url: lease.generation.toolset.redact(lease.generation.toolset.view.url),
+		})
 		if (holder === this.#shared) this.#unmirror()
 		this.#leases.delete(holder)
 		this.#untrack(lease.generation)

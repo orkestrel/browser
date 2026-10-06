@@ -1,5 +1,5 @@
 import { scanBrowserLines } from '@src/core'
-import { renderBrowserLine } from '../../../../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 import type { BrowserFrameInterface } from '@src/core'
 import type { CDPSentMessage } from '../../../setup.js'
 import { describe, expect, it } from 'vitest'

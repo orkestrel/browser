@@ -1,4 +1,4 @@
-import { renderBrowserLine } from '../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'

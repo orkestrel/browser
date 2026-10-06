@@ -1,5 +1,5 @@
 import { scanBrowserLines } from '@src/core'
-import { renderBrowserLine } from '../../../../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { isBrowserElementError, isBrowserError } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
@@ -331,11 +331,11 @@ describe('BrowserDOMElementManager', () => {
 			const view = createBrowserDOMView({ document: probe.document })
 			const outline = await view.elements.outline({ limit: 150 })
 			expect(
-				scanBrowserLines(outline.lines, 'the Email textbox')
+				scanBrowserLines(outline.lines, 'Email')
 					.map((number) => outline.lines[number - 1])
 					.filter((line) => line !== undefined)
 					.map(renderBrowserLine),
-			).toEqual(['e4 textbox "Email"'])
+			).toEqual(['Email', 'e4 textbox "Email"'])
 			expect(
 				scanBrowserLines((await view.elements.outline({ limit: 1 })).lines, 'Email').length,
 			).toBeGreaterThan(0)

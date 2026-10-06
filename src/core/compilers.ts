@@ -194,7 +194,7 @@ export function compileSubmitObserverExpression(token: number): string {
 
 /**
  * Compiles the read of the `submit` observer {@link compileSubmitObserverExpression} installs for
- * `token`, removing the observer.
+ * `token`, preserving the observer until cleanup.
  *
  * @remarks
  * The read resolves an object of four members:

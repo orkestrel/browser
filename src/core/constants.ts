@@ -544,7 +544,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 				search: Object.freeze({
 					type: 'string',
 					description:
-						'Words to find; the reply starts at the first matching line at or after from.',
+						'Words to find; the reply opens one line before the first match at or after from.',
 				}),
 			}),
 			required: Object.freeze(['from']),
@@ -686,7 +686,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	journeys: Object.freeze({
 		name: 'journeys',
-		description: 'Lists the saved journeys with their steps and the parameters each one takes.',
+		description: 'Shows saved journeys as numbered lines.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -696,11 +696,11 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 				}),
 				from: Object.freeze({
 					type: 'integer',
-					description: 'The first line to show.',
+					description: 'The first line: 1 for the top.',
 				}),
 				to: Object.freeze({
 					type: 'integer',
-					description: 'Last line.',
+					description: 'The last line to show. Default: as many lines as fit.',
 				}),
 			}),
 			required: Object.freeze(['from']),

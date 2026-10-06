@@ -123,7 +123,7 @@ export function describeBrowserServerLoss(code: string, cause: unknown, url?: st
 		cause === undefined ? 'Browser session lost' : isError(cause) ? cause.message : String(cause)
 	const message = `${code}: ${detail.replace(/\.+$/u, '')}${isNumber(pid) ? ` (pid ${pid})` : ''}.`
 	if (code !== BROWSER_SERVER_CRASH && code !== BROWSER_SERVER_UNRESOLVED) return message
-	const lost = `Lost the page${url === undefined ? '' : ` at ${url}`}, its tabs, every element reference, the retained reading, dialogs, holds, an unsaved recording, the active replay, and the isolated context's cookies.`
+	const lost = `Lost the page${url === undefined ? '' : ` at ${url}`}, its tabs, every element reference, the last projection, dialogs, holds, an unsaved recording, the active replay, and the isolated context's cookies.`
 	const next = `The next call acquires a browser that starts at about:blank, or answers ${BROWSER_SERVER_UNAVAILABLE} when none can serve.`
 	return code === BROWSER_SERVER_UNRESOLVED
 		? `${message} The outcome is unknown. ${lost} Browse did not repeat the call. ${next}`

@@ -21,6 +21,7 @@ import {
 	requireValue,
 	waitForCondition,
 	waitForEvent,
+	retryUntil,
 } from '@orkestrel/test'
 import { createScratch, createLoopback, readErrorCode } from '@orkestrel/test/server'
 import { isRecord, isString } from '@orkestrel/contract'
@@ -97,6 +98,81 @@ describe('contexts C2 built browse on one browser', () => {
 		scratch?.destroy()
 	})
 
+	it('audit repair 9: an adopted page tool may take the removed look name', async () => {
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			executable: requireSystemBrowser().executable,
+			pool: { size: 1 },
+			launch: (options) =>
+				launcher.launch({
+					...options,
+					args: [...(options.args ?? []), '--enable-features=WebMCP'],
+				}),
+		})
+		try {
+			await fixture.server.start()
+			await fixture.pair.initialize()
+			expect(
+				(await fixture.pair.call(2, 'navigate', { url: pages.url + '/adopted-look' })).error,
+			).toBe(false)
+			const browser = requireValue(launcher.browsers[0])
+			const page = requireValue(
+				browser
+					.contexts()
+					.flatMap((context) => context.pages())
+					.find((candidate) => candidate.url.includes('/adopted-look')),
+			)
+			expect(
+				await page.evaluate(
+					"(() => { const registry = navigator.modelContext ?? document.modelContext; registry.registerTool({ name: 'look', description: 'Reports the page authored answer', inputSchema: { type: 'object', properties: { purpose: { type: 'string' } }, required: ['purpose'] }, execute: () => 'A page authored look answer.' }); return true })()",
+				),
+			).toBe(true)
+			let id = 3
+			await retryUntil(
+				'the page tool is mirrored',
+				() => fixture.pair.request(id++, 'tools/list'),
+				(result) => JSON.stringify(result).includes('Reports the page authored answer'),
+				{ budget: 5000, interval: 50 },
+			)
+			expect(
+				await fixture.pair.call(id++, 'look', { purpose: 'Read the page tool answer' }),
+			).toEqual({ error: false, text: 'A page authored look answer.' })
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+	it('audit repair 5: a crash notice redacts the departed address with the lost toolset secrets', async () => {
+		const secret = 'departure-private-4821'
+		const source = await pages.read(server.client, holder, 'secret-departure')
+		const observer = await inspectHolderContext(scratch.path, source.url)
+		try {
+			const attached: unknown = await observer.client.send('Target.attachToTarget', {
+				targetId: observer.target,
+				flatten: true,
+			})
+			if (!isRecord(attached) || !isString(attached['sessionId']))
+				throw new Error('Missing session')
+			await observer.client.send(
+				'Runtime.evaluate',
+				{ expression: `document.body.innerHTML = '<input aria-label="Private">'` },
+				{ session: attached['sessionId'] },
+			)
+			const read = await callContextTool(server.client, holder, 'read', { from: 1 })
+			const ref = requireOutlineReference(read, 'textbox', 'Private')
+			await callContextTool(server.client, holder, 'type', { ref, text: secret, secret: true })
+			await callContextTool(server.client, holder, 'navigate', {
+				url: new URL(source.url).origin + '/state?secret=' + secret,
+			})
+			process.kill(observer.pid, 'SIGKILL')
+			await waitForProcessExit(observer.pid)
+			const result = await callContextTool(server.client, holder, 'read', { from: 1 })
+			expect(result).toContain('BROWSER_SERVER_CRASH')
+			expect(result).not.toContain(secret)
+			expect(result).toContain('[redacted]')
+		} finally {
+			await observer.client.close()
+		}
+	})
 	it('bounds complete MCP reading windows and refuses the removed names', async () => {
 		const source = await pages.read(server.client, holder, 'reading-bound')
 		const observer = await inspectHolderContext(scratch.path, source.url)
@@ -311,10 +387,17 @@ describe('contexts C2 built browse on one browser', () => {
 			await victim.client
 				.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
 				.catch(() => undefined)
-			const recovered = await callContextTool(server.client, holder, 'read', {
-				from: 1,
-				search: '',
-			})
+			let recovered: string
+			try {
+				recovered = await callContextTool(server.client, holder, 'read', { from: 1 })
+			} catch (error) {
+				// The crash can arrive during this observation; the next call must recover it.
+				if (
+					!String(error).includes('BROWSER_SERVER_UNRESOLVED: The current page renderer crashed.')
+				)
+					throw error
+				recovered = await callContextTool(server.client, holder, 'read', { from: 1 })
+			}
 			expect(recovered).toContain('BROWSER_SERVER_CRASH:')
 			expect(recovered).toContain(named.url)
 			expect(recovered).toContain('about:blank')
@@ -1406,7 +1489,7 @@ describe('eager U6 real browse', () => {
 			scratch.destroy()
 		}
 	})
-	it('starts connected, keeps navigate and look on one pid, and tears down the floor', async () => {
+	it('starts connected, keeps navigate and read on one pid, and tears down the floor', async () => {
 		const scratch = createScratch()
 		const launcher = new BrowseLauncher()
 		const pair = new MCPStdioPair()

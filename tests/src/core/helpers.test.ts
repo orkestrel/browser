@@ -1,5 +1,5 @@
 import { scanBrowserLines } from '@src/core'
-import { renderBrowserLine } from '../../../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 /**
  * src/core/helpers.ts tests.
  */
@@ -264,7 +264,7 @@ describe('element helpers', () => {
 		expect({ ...projected, lines: projected.lines.map(renderBrowserLine).join('\n') }).toEqual({
 			url: 'url',
 			title: 'title',
-			lines: 'e1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\ne4 link "Later"',
+			lines: 'e1 link "Home"\ne2 link "Child"\ne3 link "Other home"\ne4 link "Later"',
 			count: 4,
 			total: 4,
 			focus: undefined,

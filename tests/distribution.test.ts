@@ -1280,7 +1280,7 @@ describe('packed browse binary', () => {
 					'1: reveal-code "Reveals the confirmation code"',
 					'2: s1 click button "Reveal"',
 					`3: s2 wait "${FIXTURE_LATE_TEXT}"`,
-					'[lines 1–3 of 3; the whole page]',
+					'[lines 1–3 of 3; the whole listing]',
 				])
 				const edited = await callBrowse(client, 'edit', {
 					journey: 'reveal-code',

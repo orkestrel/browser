@@ -1,4 +1,4 @@
-import { renderBrowserLine } from '../../../../src/core/index.js'
+import { renderBrowserLine } from '@src/core'
 import type { BrowserAction } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {

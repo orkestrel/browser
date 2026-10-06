@@ -43,7 +43,7 @@ import {
 	abbreviateBrowserText,
 	renderBrowserLine,
 	renderBrowserWindow,
-	scanBrowserLines,
+	renderBrowserSearch,
 	validateBrowserLines,
 	wrapBrowserLine,
 	readBrowserToolString,
@@ -157,7 +157,11 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 
 	#create(
 		name: BrowserToolName,
-		handler: (args: Readonly<Record<string, unknown>>, signal: AbortSignal) => Promise<string>,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			signal: AbortSignal,
+			note: string,
+		) => Promise<string>,
 	): ToolInterface {
 		return createTool({
 			...BROWSER_TOOL_COPY[name],
@@ -169,19 +173,32 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	// parameters, and a signal that `destroy()` also aborts.
 	async #execute(
 		name: BrowserToolName,
-		handler: (args: Readonly<Record<string, unknown>>, signal: AbortSignal) => Promise<string>,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			signal: AbortSignal,
+			note: string,
+		) => Promise<string>,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<string> {
 		if (this.#destroying !== undefined) throw this.#ended()
 		const signal = AbortSignal.any([context.signal, this.#lifetime.signal])
+		const note = abbreviateBrowserText(this.#toolset.notes(), 200)
 		try {
 			validateBrowserToolArguments(BROWSER_TOOL_COPY[name], args)
 			signal.throwIfAborted()
-			return boundBrowserText(await handler(args, signal), this.#limit, BROWSER_TOOL_CUT_FOOTER)
+			const result = await handler(args, signal, note)
+			return name === 'capture' || name === 'forget'
+				? boundBrowserText(
+						[note, this.#toolset.redact(result)].filter(Boolean).join('\n'),
+						this.#limit,
+						BROWSER_TOOL_CUT_FOOTER,
+					)
+				: result
 		} catch (error) {
-			const message = isError(error) ? error.message : String(error)
-			if (message.length <= this.#limit) throw error
+			const original = isError(error) ? error.message : String(error)
+			const message = [note, this.#toolset.redact(original)].filter(Boolean).join('\n')
+			if (message === original && message.length <= this.#limit) throw error
 			throw new BrowserError(
 				boundBrowserText(message, this.#limit, BROWSER_TOOL_CUT_FOOTER),
 				isBrowserError(error) ? error.code : undefined,
@@ -223,7 +240,11 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		return path
 	}
 
-	async #record(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
+	async #record(
+		args: Readonly<Record<string, unknown>>,
+		signal: AbortSignal,
+		note: string,
+	): Promise<string> {
 		if (this.#readonly)
 			throw new BrowserError(BROWSER_JOURNEY_READONLY_REFUSAL, 'BROWSER_JOURNEY_READONLY')
 		this.#idleReplay()
@@ -263,10 +284,15 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		return this.#view(
 			signal,
 			`Recording ${name}; each action you take is a step; call save when it is done.`,
+			note,
 		)
 	}
 
-	async #save(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
+	async #save(
+		args: Readonly<Record<string, unknown>>,
+		signal: AbortSignal,
+		note: string,
+	): Promise<string> {
 		if (this.#readonly)
 			throw new BrowserError(BROWSER_JOURNEY_READONLY_REFUSAL, 'BROWSER_JOURNEY_READONLY')
 		const description = readBrowserToolString(args, 'description')
@@ -323,6 +349,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			signal,
 			name,
 			`Saved ${name} with ${count} ${count === 1 ? 'step' : 'steps'}.`,
+			note,
 		)
 	}
 
@@ -339,7 +366,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				listings.push(renderBrowserJourneyFault(fault))
 			}
 			for (const listing of listings) {
-				for (const text of listing.split(/\r\n|\n/))
+				for (const text of this.#toolset.redact(listing).split(/\r\n|\n/))
 					lines.push(...wrapBrowserLine({ spans: [{ category: 'text', text }] }))
 			}
 			offset += page.entries.length
@@ -347,16 +374,32 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		}
 	}
 
-	async #savedWindow(signal: AbortSignal, name: string, status: string): Promise<string> {
+	async #savedWindow(
+		signal: AbortSignal,
+		name: string,
+		status: string,
+		note: string,
+	): Promise<string> {
 		const lines = await this.#listing(signal)
 		const from = Math.max(
 			1,
 			lines.findIndex((line) => renderBrowserLine(line).startsWith(name + ' "')) + 1,
 		)
-		return renderBrowserWindow(lines, from, undefined, status, this.#limit, 'journeys')
+		return renderBrowserWindow(
+			lines,
+			from,
+			undefined,
+			[note, this.#toolset.redact(status)].filter(Boolean).join('\n'),
+			this.#limit,
+			'journeys',
+		)
 	}
 
-	async #journeys(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
+	async #journeys(
+		args: Readonly<Record<string, unknown>>,
+		signal: AbortSignal,
+		note: string,
+	): Promise<string> {
 		const from = args['from']
 		const to = args['to']
 		const search = args['search']
@@ -372,37 +415,29 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		validateBrowserLines(from, to)
 		const lines = await this.#listing(signal)
 		validateBrowserLines(from, to, lines.length)
-		if (lines.length === 0) return BROWSER_JOURNEY_EMPTY_LISTING
-		const matches = search === undefined ? [] : scanBrowserLines(lines, search, from, to)
-		const first = matches[0]
-		const heading =
-			'journeys (' +
-			lines.length +
-			' lines)' +
-			(search === undefined
-				? ''
-				: '\n' +
-					(matches.length === 0
-						? 'No line matches ' + JSON.stringify(abbreviateBrowserText(search, 120)) + '.'
-						: matches.length +
-							' lines match ' +
-							JSON.stringify(abbreviateBrowserText(search, 120)) +
-							': ' +
-							matches.slice(0, 50).join(', ') +
-							(matches.length > 50
-								? ', … and ' + (matches.length - 50) + ' more; add words to narrow'
-								: '')))
-		return renderBrowserWindow(
+		if (lines.length === 0)
+			return boundBrowserText(
+				[note, BROWSER_JOURNEY_EMPTY_LISTING].filter(Boolean).join('\n'),
+				this.#limit,
+				BROWSER_TOOL_CUT_FOOTER,
+			)
+		const found = renderBrowserSearch(
 			lines,
-			first === undefined ? from : Math.max(from, first - 1),
+			from,
 			to,
-			heading,
-			this.#limit,
-			'journeys',
+			search === undefined ? undefined : this.#toolset.redact(search),
 		)
+		const heading = [note, `journeys (${lines.length} lines)`, found.text]
+			.filter(Boolean)
+			.join('\n')
+		return renderBrowserWindow(lines, found.from, to, heading, this.#limit, 'journeys')
 	}
 
-	async #edit(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
+	async #edit(
+		args: Readonly<Record<string, unknown>>,
+		signal: AbortSignal,
+		note: string,
+	): Promise<string> {
 		if (this.#readonly)
 			throw new BrowserError(BROWSER_JOURNEY_READONLY_REFUSAL, 'BROWSER_JOURNEY_READONLY')
 		const name = readBrowserToolString(args, 'journey')
@@ -456,7 +491,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				{ name },
 			)
 		}
-		return this.#savedWindow(signal, saved.journey.name, `Edited ${name}.`)
+		return this.#savedWindow(signal, saved.journey.name, `Edited ${name}.`, note)
 	}
 
 	async #forget(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
@@ -495,6 +530,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	async #replayJourney(
 		args: Readonly<Record<string, unknown>>,
 		signal: AbortSignal,
+		note: string,
 	): Promise<string> {
 		const name = readBrowserToolString(args, 'journey')
 		const inputs: Record<string, string> = {}
@@ -532,8 +568,12 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 				throw this.#prepared(error, revision.journey)
 			}
 			return signal.aborted
-				? boundBrowserText(renderBrowserRun(run), this.#limit, BROWSER_TOOL_CUT_FOOTER)
-				: this.#view(signal, renderBrowserRun(run))
+				? boundBrowserText(
+						[note, this.#toolset.redact(renderBrowserRun(run))].filter(Boolean).join('\n'),
+						this.#limit,
+						BROWSER_TOOL_CUT_FOOTER,
+					)
+				: this.#view(signal, renderBrowserRun(run), note)
 		} finally {
 			this.#replaying = undefined
 			this.#replay = undefined
@@ -657,10 +697,10 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		}
 	}
 
-	async #view(signal: AbortSignal, status: string): Promise<string> {
+	async #view(signal: AbortSignal, status: string, notice: string): Promise<string> {
 		const note = '(Call read to see the page.)'
 		const prefix = boundBrowserText(
-			status,
+			[notice, this.#toolset.redact(status)].filter(Boolean).join('\n'),
 			Math.max(1, this.#limit - note.length - 2),
 			BROWSER_TOOL_CUT_FOOTER,
 		)
@@ -672,7 +712,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_LIMIT')
 				return boundBrowserText(prefix + '\n\n' + note, this.#limit, BROWSER_TOOL_CUT_FOOTER)
 			return boundBrowserText(
-				prefix + '\n\n' + (isError(error) ? error.message : String(error)),
+				prefix + '\n\n' + this.#toolset.redact(isError(error) ? error.message : String(error)),
 				this.#limit,
 				BROWSER_TOOL_CUT_FOOTER,
 			)

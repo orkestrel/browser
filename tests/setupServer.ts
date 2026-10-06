@@ -2298,11 +2298,11 @@ export function endBrowseChild(child: BrowseChild, ending: BrowseEnding): void {
 }
 
 /**
- * Opens the protocol on a browse child and makes its first `look` call, which launches the
+ * Opens the protocol on a browse child and makes its first `read` call, which launches the
  * child's Chromium.
  *
  * @param child - The spawned child
- * @returns The text the `look` call answered
+ * @returns The text the `read` call answered
  * @throws Thrown when the call answers an error, or when no answer arrives within 60 seconds
  */
 export async function startBrowseChild(child: BrowseChild): Promise<string> {
@@ -2325,7 +2325,7 @@ export async function startBrowseChild(child: BrowseChild): Promise<string> {
 		},
 	)
 	const answer = await retryUntil(
-		'the answer to the first look',
+		'the answer to the first read',
 		() =>
 			child.lines
 				.map((line): unknown => parseJSON(line))
@@ -2338,7 +2338,7 @@ export async function startBrowseChild(child: BrowseChild): Promise<string> {
 	const first: unknown = isArray(content) ? content[0] : undefined
 	const text = isRecord(first) ? first['text'] : undefined
 	if (!isString(text) || !isRecord(result) || result['isError'] === true)
-		throw new Error(`the first look answered ${JSON.stringify(answer)}`)
+		throw new Error(`the first read answered ${JSON.stringify(answer)}`)
 	return text
 }
 
@@ -2540,7 +2540,7 @@ export function readBundleImports(bundle: string, specifier: string): BundleImpo
  * Holds a browse server launched over a {@link BrowserLauncher} and an {@link MCPStdioPair}.
  *
  * @remarks
- * - `browser` — the one launch its first `look` made
+ * - `browser` — the one launch its first `read` made
  * - `profile` — the profile directory that launch was given, which exists
  * - `listeners` — the `SIGTERM` and `SIGINT` listener counts from before `start()`
  * - `teardown` — removes the scratch root and destroys the server
@@ -2555,10 +2555,10 @@ export interface BrowseSession {
 }
 
 /**
- * Starts a browse server under a scratch root and launches it with one `look`.
+ * Starts a browse server under a scratch root and launches it with one `read`.
  *
  * @returns The started session
- * @throws Thrown when the `look` fails or the launch made no profile
+ * @throws Thrown when the `read` fails or the launch made no profile
  */
 export async function openBrowseSession(): Promise<BrowseSession> {
 	const scratch = createScratch()
@@ -2578,8 +2578,8 @@ export async function openBrowseSession(): Promise<BrowseSession> {
 	teardown.add(() => server.destroy())
 	await server.start()
 	await pair.initialize()
-	const looked = await pair.call(2, 'read', { from: 1, search: 'the cart' })
-	if (looked.error) throw new Error(looked.text)
+	const reading = await pair.call(2, 'read', { from: 1, search: 'the cart' })
+	if (reading.error) throw new Error(reading.text)
 	const browser = requireValue(launcher.browsers[0], 'no launch was recorded')
 	const profile = requireValue(browser.options.profile, 'the launch named no profile')
 	if (!existsSync(profile)) throw new Error(`the launch made no profile at ${profile}`)

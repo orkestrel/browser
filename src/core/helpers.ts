@@ -2,6 +2,7 @@ import type {
 	BrowserLine,
 	BrowserLineSpan,
 	BrowserPassage,
+	BrowserSearch,
 	BrowserJourney,
 	BrowserStoreFault,
 	BrowserJourneyEdit,
@@ -77,6 +78,7 @@ import {
 import {
 	BROWSER_TOOL_COPY,
 	BROWSER_READ_WIDTH,
+	BROWSER_TOOL_CUT_FOOTER,
 	BROWSER_READ_LINES,
 	BROWSER_READ_MATCHES,
 	BROWSER_READ_CONTEXT,
@@ -384,10 +386,15 @@ export function renderBrowserMatches(
 export function renderBrowserOutline(
 	url: string,
 	title: string,
-	nodes: readonly BrowserOutlineNode[],
+	source: readonly BrowserOutlineNode[],
 	limit: number,
 	secrets: readonly string[] = [],
 ): BrowserOutline {
+	const nodes = source.map((node) => ({
+		...node,
+		name: node.name === undefined ? undefined : redactBrowserText(node.name, secrets),
+		value: node.value === undefined ? undefined : redactBrowserText(String(node.value), secrets),
+	}))
 	const indexed = new Map<string, BrowserOutlineNode>()
 	for (const node of nodes)
 		if (!indexed.has(`${node.session}:${node.id}`)) indexed.set(`${node.session}:${node.id}`, node)
@@ -396,7 +403,7 @@ export function renderBrowserOutline(
 	let count = 0
 	let total = 0
 	let focus: string | undefined
-	for (const node of nodes) {
+	for (const [position, node] of nodes.entries()) {
 		if (node.ignored) continue
 		if (node.reference !== undefined) {
 			total += 1
@@ -485,10 +492,26 @@ export function renderBrowserOutline(
 			}
 			if (
 				name !== '' &&
+				!(owner !== undefined && normalizeBrowserName(owner.name ?? '') !== '') &&
 				name !== normalizeBrowserName(parent?.name ?? '') &&
 				name !== normalizeBrowserName(String(owner?.value ?? ''))
-			)
-				spans = [{ category: 'text', text: name }]
+			) {
+				let text = node.name ?? ''
+				for (let index = position + 1; index < nodes.length; index += 1) {
+					if (parent === undefined) break
+					const next = nodes[index]
+					if (next?.role === 'InlineTextBox') continue
+					if (
+						next?.role !== 'StaticText' ||
+						next.parent !== node.parent ||
+						next.session !== node.session
+					)
+						break
+					text += next.name ?? ''
+					omitted.add(next)
+				}
+				spans = [{ category: 'text', text: normalizeBrowserName(redactBrowserText(text, secrets)) }]
+			}
 		} else if (node.reference !== undefined && count < limit) {
 			spans = renderBrowserSpans(node, url)
 			count += 1
@@ -552,7 +575,7 @@ export function renderBrowserSpans(
 	if (node.reference !== undefined)
 		spans.push({ category: 'reference', text: node.reference }, { category: 'syntax', text: ' ' })
 	spans.push(
-		{ category: 'text', text: node.role ?? 'unknown' },
+		{ category: 'syntax', text: node.role ?? 'unknown' },
 		{ category: 'syntax', text: ' "' },
 		{ category: 'text', text: JSON.stringify(normalizeBrowserName(node.name ?? '')).slice(1, -1) },
 		{ category: 'syntax', text: '"' },
@@ -586,7 +609,7 @@ export function renderBrowserSpans(
 		if (isString(value) || isBoolean(value))
 			spans.push(
 				{ category: 'syntax', text: ` ${key}=` },
-				{ category: 'text', text: String(value) },
+				{ category: 'syntax', text: String(value) },
 			)
 	}
 	if (node.properties['checked'] === true || node.properties['checked'] === 'true')
@@ -607,6 +630,32 @@ export function renderBrowserSpans(
  */
 export function renderBrowserLine(line: BrowserLine): string {
 	return line.spans.map((span) => span.text).join('')
+}
+
+/** Finds the first line contributing a whitespace-normalized match across consecutive text spans.
+ * @param lines - Wrapped projection
+ * @param text - Visible text to locate
+ * @returns One-based opening line, or 1 when no match exists
+ */
+export function findBrowserText(lines: readonly BrowserLine[], text: string): number {
+	const ends: number[] = []
+	let joined = ''
+	for (const line of lines) {
+		if (joined !== '' && line.spans[0]?.text !== '↳') joined += ' '
+		joined += normalizeBrowserName(
+			line.spans
+				.filter((span) => span.category === 'text')
+				.map((span) =>
+					span.text.replace(/\\(?:["\\/bfnrt]|u[\da-fA-F]{4})/g, (escape) =>
+						String(JSON.parse('"' + escape + '"')),
+					),
+				)
+				.join(' '),
+		)
+		ends.push(joined.length)
+	}
+	const match = joined.indexOf(normalizeBrowserName(text))
+	return match < 0 ? 1 : Math.max(1, ends.findIndex((end) => end > match) + 1)
 }
 
 /** Wraps spans before numbering, marking hard continuations with a leading ↳.
@@ -746,14 +795,44 @@ export function renderBrowserFooter(
 	total: number,
 	tool = 'read',
 ): string {
-	if (total === 0) return '[empty page; the whole page]'
+	const subject = tool === 'journeys' ? 'listing' : 'page'
+	if (total === 0) return `[empty ${subject}; the whole ${subject}]`
 	const above = from - 1
 	const below = total - to
 	const counts = [
 		above > 0 ? `${above} above` : undefined,
 		below > 0 ? `${below} below` : undefined,
 	].filter((value) => value !== undefined)
-	return `[lines ${from}–${to} of ${total}; ${counts.length > 0 ? `${counts.join(', ')}; ` : ''}${below > 0 ? `call ${tool} with from ${to + 1} for more` : above > 0 ? 'end of page' : 'the whole page'}]`
+	return `[lines ${from}–${to} of ${total}; ${counts.length > 0 ? `${counts.join(', ')}; ` : ''}${below > 0 ? `call ${tool} with from ${to + 1} for more` : above > 0 ? `end of ${subject}` : `the whole ${subject}`}]`
+}
+
+/** Renders a shared search header and chooses its context line within the requested range.
+ * @param lines - Wrapped projection
+ * @param from - Inclusive first candidate line
+ * @param to - Inclusive last candidate line
+ * @param search - Optional words to find
+ * @returns Opening line and optional match or miss text
+ */
+export function renderBrowserSearch(
+	lines: readonly BrowserLine[],
+	from: number,
+	to?: number,
+	search?: string,
+): BrowserSearch {
+	if (search === undefined || search === '') return { from }
+	const matches = scanBrowserLines(lines, search, from, to)
+	const first = matches[0]
+	const query = JSON.stringify(abbreviateBrowserText(search, 120))
+	return first === undefined
+		? {
+				from,
+				text:
+					from === 1 ? `No line matches ${query}.` : `No line from ${from} on matches ${query}.`,
+			}
+		: {
+				from: Math.max(from, first - BROWSER_READ_CONTEXT),
+				text: `${matches.length} ${matches.length === 1 ? 'line matches' : 'lines match'} ${query}: ${matches.slice(0, BROWSER_READ_MATCHES).join(', ')}${matches.length > BROWSER_READ_MATCHES ? `, … and ${matches.length - BROWSER_READ_MATCHES} more; add words to narrow` : ''}`,
+			}
 }
 
 /** Renders a bounded window with numbered rows and an exact continuation.
@@ -783,23 +862,31 @@ export function renderBrowserPassage(passage: BrowserPassage, limit: number): st
 	if (passage.note !== undefined && passage.note !== '')
 		header.push(abbreviateBrowserText(passage.note, 200))
 	if (passage.changed && passage.from > 1) header.push(BROWSER_READ_CHANGED_NOTE)
-	let from = passage.from
-	if (passage.search !== undefined && passage.search !== '') {
-		const matches = scanBrowserLines(passage.lines, passage.search, from, passage.to)
-		const first = matches[0]
-		const query = JSON.stringify(abbreviateBrowserText(passage.search, 120))
-		if (first === undefined)
-			header.push(
-				from === 1 ? `No line matches ${query}.` : `No line from ${from} on matches ${query}.`,
-			)
-		else {
-			from = Math.max(passage.from, first - BROWSER_READ_CONTEXT)
-			header.push(
-				`${matches.length} ${matches.length === 1 ? 'line matches' : 'lines match'} ${query}: ${matches.slice(0, BROWSER_READ_MATCHES).join(', ')}${matches.length > BROWSER_READ_MATCHES ? `, … and ${matches.length - BROWSER_READ_MATCHES} more; add words to narrow` : ''}`,
-			)
-		}
-	}
-	return renderBrowserWindow(passage.lines, from, passage.to, header.join('\n'), limit)
+	const found = renderBrowserSearch(passage.lines, passage.from, passage.to, passage.search)
+	if (found.text !== undefined) header.push(found.text)
+	return renderBrowserWindow(passage.lines, found.from, passage.to, header.join('\n'), limit)
+}
+
+/** Fits an unnumbered receipt and a complete page window inside one result limit.
+ * @param passage - Redacted projection and metadata, with the opening line already selected
+ * @param receipt - Redacted unnumbered status
+ * @param limit - Whole-result character room
+ * @returns Receipt followed by complete addressed rows and their exact footer
+ */
+export function renderBrowserReceiptWindow(
+	passage: BrowserPassage,
+	receipt: string,
+	limit: number,
+): string {
+	const minimum = renderBrowserPassage({ ...passage, to: passage.from }, limit)
+	const room = limit - minimum.length - 2
+	if (room < 1)
+		throw new BrowserError(
+			'The result limit cannot hold the receipt and page window.',
+			'BROWSER_TOOLSET_LIMIT',
+		)
+	const prefix = boundBrowserText(receipt, room, BROWSER_TOOL_CUT_FOOTER)
+	return prefix + '\n\n' + renderBrowserPassage(passage, limit - prefix.length - 2)
 }
 
 /** Selects whole addressed rows after reserving the header and exact footer.
@@ -966,15 +1053,13 @@ export function deriveBrowserToolSchema(
  * caller's closing clause.
  *
  * @remarks
- * A string within the limit returns unchanged. A longer one keeps its first `limit` UTF-16 code
- * units, one fewer when the last would split a surrogate pair (so a limit of 1 before a pair keeps
- * nothing), followed by `\n[characters 0–END of TOTAL; FOOTER]`. The footer has no default, so
- * every caller states what the cut result's reader does next: the toolset passes
- * `BROWSER_TOOL_VIEW_FOOTER` for an action or `dialog` receipt that carries a view and
- * `BROWSER_TOOL_CUT_FOOTER` for any other result, including bounded refusal results.
+ * A string within the limit returns unchanged. Otherwise the cut text plus footer fits `limit`
+ * UTF-16 code units, without splitting a surrogate pair. When the character-range footer cannot
+ * fit, the result ends with an ellipsis instead. The footer has no default: each caller states
+ * what the reader does next. Numbered windows select whole rows through `renderBrowserWindow`.
  *
  * @param text - The page-authored or composed string
- * @param limit - The most characters kept before the footer, a positive integer
+ * @param limit - The whole-result character limit, a positive integer
  * @param footer - The clause that closes the footer after the character range
  * @returns The string, cut and footed when it exceeds the limit
  * @throws Thrown when `limit` is not a positive integer.
@@ -983,7 +1068,7 @@ export function deriveBrowserToolSchema(
  * ```ts
  * import { boundBrowserText } from '@orkestrel/browser'
  *
- * boundBrowserText('abcdef', 4, 'the rest was cut') // 'abcd\n[characters 0–4 of 6; the rest was cut]'
+ * boundBrowserText('abcdef', 4, 'the rest was cut') // 'abc…'
  * boundBrowserText('abc', 4, 'the rest was cut') // 'abc'
  * ```
  */
@@ -1008,7 +1093,9 @@ export function boundBrowserText(text: string, limit: number, footer: string): s
  * @returns Text with literal and JSON-escaped secret occurrences replaced
  */
 export function redactBrowserText(text: string, secrets: readonly string[]): string {
-	for (const secret of [...secrets].sort((left, right) => right.length - left.length)) {
+	for (const secret of [
+		...new Set(secrets.flatMap((value) => [value, normalizeBrowserName(value)])),
+	].sort((left, right) => right.length - left.length)) {
 		if (secret === '') continue
 		text = text
 			.replaceAll(JSON.stringify(secret), '[redacted]')

@@ -675,7 +675,7 @@ export interface ServiceOutlineRow {
  *
  * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
  * @returns The reference, role, and JSON-decoded name of each row that opens with a reference
- * such as `e12` followed by a role and a quoted name, at its first occurrence, so a `look` match
+ * such as `e12` followed by a role and a quoted name, at its first occurrence, so a `read` match
  * row that repeats an outline row counts once; heading, text, and summary rows contribute nothing
  */
 export function extractOutlineRows(text: string): readonly ServiceOutlineRow[] {
@@ -970,4 +970,16 @@ export const SERVICE_STORE_PARAGRAPHS: readonly string[] = [
 	'Refunds go back to the card or account you paid with. Most banks show a refund within three working days of the day we send it; some take up to ten. We write to you on the day we send each refund.',
 	'Every order ships from and to an address in this country, so no customs forms or duties apply. When we begin to ship abroad, this section will state the duties each destination charges.',
 	'Write to the workshop by email or through the contact form. We answer every message ourselves, usually within one working day. Include the order number when you have one, so we can find your order quickly.',
+	'Before a parcel leaves the bench, a second packer checks the piece against the packing slip. They inspect handles, lids, edges, and glaze, and replace any wrapping that has shifted. The signed slip travels inside the box so a recipient can see who checked the contents.',
+	'A clean carton from an incoming supply can carry an outgoing parcel when its walls remain firm. Old address labels are removed and seams receive fresh paper tape. A reused carton receives the same inspection and protection as a carton cut for the first time.',
+	'Orders placed close together can travel in one box when their destinations agree. Write before packing begins and include both order numbers. Each piece stays on its own packing slip, and any delivery charge saved by combining the parcels goes back to the original payment.',
+	'A carrier needs a clear route to the entrance. Include gate instructions and a working contact number when you order. If a road closes after dispatch, contact the carrier through the tracking link to agree on an accessible meeting place or a later delivery day.',
+	'Set a parcel on a firm table before cutting the tape. Lift the paper layers apart instead of pulling on handles or rims. Keep the cradle until every piece has been checked, because the shaped supports make a return trip less likely to damage the contents.',
+	'Paper sleeves can be flattened and kept for storing pieces between uses. Keep them dry and away from a cooker. Pulp cradles fit in paper recycling where that service accepts moulded paper, and the workshop can take clean cradles back during collection hours.',
+	'The label states the packed weight, which includes the carton and its protective supports. It may differ from the weight listed for an individual piece. Heavy cartons carry a handling mark and remain within the limits agreed with the carrier for a safe lift.',
+	'Keep the receipt until every piece has arrived and been checked. If an email goes missing, send the order number and the address used at checkout. The workshop can send another copy to that address without changing the contents or the date of the original receipt.',
+	'During wet months each carton receives an extra folded paper liner. During hot months waxed boards are wrapped only after cooling on the shelf. These changes protect the pieces in transit and do not change the delivery price or the return period.',
+	'A recipient can request care notes without seeing the price paid for a gift. The packing slip names the piece and its maker. If a gift needs a replacement, either the sender or the recipient can contact the workshop with the number printed on that slip.',
+	'Take the delivery card and the identification the carrier requests when collecting from a depot. A person collecting on your behalf may need a signed note. Check the opening hours on the carrier notice before travelling, because depot hours differ from post office hours.',
+	'Keep photographs and tracking notices together while an enquiry is open. The workshop records each reply with the order, so a later message can continue the same conversation. Tell the workshop when a delayed parcel arrives so the carrier can close its enquiry.',
 ]

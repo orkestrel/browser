@@ -1940,7 +1940,7 @@ export function buildBrowserButtonTree(
 	}
 }
 
-/** Describes one page of a `look` or `read` result: its body and the range its footer names. */
+/** Describes one page of a numbered `read` result: its body and the range its footer names. */
 export interface BrowserPageFixture {
 	readonly body: string
 	readonly start: number
@@ -1950,12 +1950,12 @@ export interface BrowserPageFixture {
 }
 
 /**
- * Extracts the body and the footer's range from one page of a `look` or `read` result.
+ * Extracts the body and the footer's range from one page of a numbered `read` result.
  *
  * @param result - The tool's result text
- * @returns The body before the footer, the footer's start, end, and total, and the offset the
+ * @returns The body before the footer, the footer's start, end, and total, and the line the
  * footer names for the next page; a result with no footer reads as the whole text from 0 with no
- * next offset
+ * next line
  */
 export function extractBrowserPage(result: string): BrowserPageFixture {
 	const footer = /\n\[lines (\d+)–(\d+) of (\d+);[^\]]*\]$/.exec(result)
@@ -2689,7 +2689,7 @@ export const BROWSER_JOURNEY_SEQUENCE_CASES: readonly BrowserJourneySequenceCase
 
 /**
  * Creates the journey that replays a {@link BROWSER_JOURNEY_SEQUENCE_CASES} row, named for the row,
- * with each `tab` path resolved to the absolute URL the `tabs` tool lists.
+ * with each `tab` path resolved to the absolute URL the `read` header lists.
  * @param scenario - The row whose steps the journey carries
  * @param resolve - Returns the absolute URL the fixture server answers for a path
  * @returns The journey whose steps are `s1` onward
@@ -3774,6 +3774,10 @@ export function createBrowserJourneyFixture(
 		steps: steps.map((step, index) => ({ ...structuredClone(step), id: 's' + (index + 1) })),
 	}
 }
+
+/** Preserves a file written by the published 0.0.26 FileBrowserJourneyStore (tarball SHA1 995478a434df1087318c9a1b0748d704cd6b64de). */
+export const BROWSER_LEGACY_JOURNEY_JSON =
+	'{"journey":{"format":1,"name":"legacy-ready","description":"Written by browser 0.0.26","parameters":{},"next":2,"steps":[{"id":"s1","action":"wait","arguments":{"text":"Legacy ready"}}]},"revision":1}'
 
 /**
  * Creates a structured action event for the recorder boundary.

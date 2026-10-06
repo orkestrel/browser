@@ -2428,18 +2428,18 @@ describe('BrowserMCPServer', () => {
 			teardown.add(() => toolset.destroy())
 			await toolset.start()
 			const expected = await toolset.tools.execute({
-				id: 'look',
+				id: 'reading',
 				name: 'read',
 				arguments: { from: 1, search: 'the cart' },
 			})
 			if (!expected.success) throw new Error(expected.error)
 			const unadvertised = { search: 'the cart', colour: 'red' }
 			const refusal = await toolset.tools.execute({
-				id: 'look',
+				id: 'reading',
 				name: 'read',
 				arguments: unadvertised,
 			})
-			if (refusal.success) throw new Error('look accepted an unadvertised argument')
+			if (refusal.success) throw new Error('read accepted an unadvertised argument')
 			await server.start()
 			await pair.initialize()
 			expect(await pair.call(2, 'read', { from: 1, search: 'the cart' })).toStrictEqual({

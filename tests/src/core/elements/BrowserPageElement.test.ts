@@ -400,7 +400,7 @@ describe('trusted element actions', () => {
 		}
 	})
 
-	it('catches a collected node whose scroll refusal leaks instead of GONE naming look', async () => {
+	it('catches a collected node whose scroll refusal leaks instead of GONE naming read', async () => {
 		const { page, client } = await createBrowserElementFixture({
 			failure: {
 				method: 'DOM.scrollIntoViewIfNeeded',
@@ -446,7 +446,7 @@ describe('trusted element actions', () => {
 		},
 	)
 
-	it('catches a collected frame owner whose box model refusal leaks instead of GONE naming look', async () => {
+	it('catches a collected frame owner whose box model refusal leaks instead of GONE naming read', async () => {
 		const { page, client } = await createBrowserElementFixture({
 			failure: { method: 'DOM.getBoxModel', message: 'No node found for given backend id' },
 		})

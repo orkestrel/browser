@@ -227,7 +227,7 @@ describe('BrowserToolset', () => {
 				expect(toolset.tools.tools()).toEqual(manager.tools())
 				expect(toolset.tools.definitions()).toEqual(manager.definitions())
 				expect(toolset.tools.tool('read')).toBe(manager.tool('read'))
-				const call = { id: 'look', name: 'read', arguments: { from: 1 } }
+				const call = { id: 'read', name: 'read', arguments: { from: 1 } }
 				const missing = { id: 'missing', name: 'missing', arguments: {} }
 				expect(await toolset.tools.execute([call, missing])).toEqual([
 					await manager.execute(call),
@@ -556,7 +556,7 @@ describe('BrowserToolset', () => {
 				expect(direct).toEqual(first.result)
 				expect(actions.calls[2]?.[0].receipt).toBe(first.action?.receipt)
 				expect(
-					(await toolset.perform({ id: 'look', name: 'read', arguments: { from: 1 } })).action,
+					(await toolset.perform({ id: 'read', name: 'read', arguments: { from: 1 } })).action,
 				).toBeUndefined()
 				expect(
 					(await toolset.perform({ id: 'missing', name: 'missing', arguments: {} })).action,
@@ -720,7 +720,7 @@ describe('BrowserToolset', () => {
 				).catch((error: unknown) => error)
 				expect(readProperty(denied, 'code')).toBe('BROWSER_TOOLSET_BUSY')
 				for (const call of [
-					{ id: 'look', name: 'read', arguments: { from: 1 } },
+					{ id: 'read', name: 'read', arguments: { from: 1 } },
 					{ id: 'read', name: 'read', arguments: { from: 1 } },
 					{ id: 'plain', name: 'read', arguments: { from: 1 } },
 					{ id: 'wait', name: 'wait', arguments: { text: 'Form' } },
@@ -903,8 +903,8 @@ describe('BrowserToolset', () => {
 					'secret',
 				),
 			}
-			// With capture, the measured full copy is 6,024 UTF-16 code units; 6,050 is the smallest
-			// multiple of 50 that holds it. The journey copy measures 3,347, giving the same bound rule 3,400.
+			// With capture, the measured full copy is 6,041 UTF-16 code units; 6,050 is the smallest
+			// multiple of 50 that holds it. The journey copy measures 3,360, giving the same bound rule 3,400.
 			// Include the secret property's name and schema without charging for the rest of type.
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
@@ -987,7 +987,7 @@ describe('BrowserToolset', () => {
 			).toEqual({ type: 'boolean', description: 'True to wait for the text to leave the page.' })
 		})
 
-		it('catches a look or read that advertises or accepts ref, or a tool that runs with a parameter it does not advertise', async () => {
+		it('catches a read that advertises or accepts ref, or a tool that runs with a parameter it does not advertise', async () => {
 			expect(
 				Object.keys(readProperty<object>(BROWSER_TOOL_COPY.read.parameters, 'properties')),
 			).toEqual(['from', 'to', 'search'])
@@ -1476,9 +1476,9 @@ describe('BrowserToolset', () => {
 					}),
 				).catch((error: unknown) => error)
 				expect(isBrowserElementError(rejected) && rejected.code).toBe('BROWSER_ELEMENT_ERROR')
-				const looked = await toolset.perform({ id: 'look', name: 'read', arguments: { from: 1 } })
-				expect(looked.result.success).toBe(true)
-				expect(looked).not.toHaveProperty('fault')
+				const reading = await toolset.perform({ id: 'read', name: 'read', arguments: { from: 1 } })
+				expect(reading.result.success).toBe(true)
+				expect(reading).not.toHaveProperty('fault')
 			} finally {
 				await client.close()
 			}
@@ -2181,12 +2181,12 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				await toolset.tools.execute({
-					id: 'look',
+					id: 'read',
 					name: 'read',
 					arguments: { from: 1, search: 'cart' },
 				})
 				const click = requireValue(toolset.tools.tool('click'))
-				const look = requireValue(toolset.tools.tool('read'))
+				const read = requireValue(toolset.tools.tool('read'))
 				const holding = Promise.resolve(
 					click.execute({ ref: 'e1' }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
@@ -2200,7 +2200,7 @@ describe('BrowserToolset', () => {
 				transport.reply(requireValue(releases[0]).id, {})
 				expect(readProperty(await holding, 'message')).toBe('the browser session ended')
 				const after = await Promise.resolve(
-					look.execute({ from: 1, search: 'cart' }, { signal: new AbortController().signal }),
+					read.execute({ from: 1, search: 'cart' }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(after, 'message')).toBe('the browser session ended')
 				expect(readProperty(after, 'code')).toBe('BROWSER_TOOLSET_ENDED')
@@ -2882,7 +2882,7 @@ describe('BrowserToolset', () => {
 	})
 
 	describe('trust marker', () => {
-		it('catches an untrusted view whose click or type receipt omits the marker, or a look, read, or wait that gains it', async () => {
+		it('catches an untrusted view whose click or type receipt omits the marker, or a read or wait that gains it', async () => {
 			const view = createBrowserViewDouble()
 			const toolset = new BrowserToolset(view)
 			await toolset.start()

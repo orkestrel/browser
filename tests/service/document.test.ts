@@ -1,6 +1,7 @@
 import { extractBrowserPage } from '../setup.js'
 import { scanBrowserLines } from '@src/core'
-import { renderBrowserLine } from '../../src/core/index.js'
+import { writeFileSync } from 'node:fs'
+import { renderBrowserLine } from '@src/core'
 /**
  * Live-browser proofs for the DOM placement served from the built `dist/src/browser` bundle.
  *
@@ -58,8 +59,8 @@ import {
 
 const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 
-const DOCUMENT_LOOK =
-	"documentToolset.tools.execute({ id: 'look', name: 'read', arguments: { from: 1, search: 'the gift options' } })"
+const DOCUMENT_READ =
+	"documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: 'the gift options' } })"
 
 describe('createDocumentToolset served from dist/src/browser against CDP on the same page', () => {
 	const teardown = createTeardown()
@@ -105,6 +106,55 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 		afterEach(async () => {
 			for (const toolset of toolsets.splice(0)) await toolset.destroy().catch(() => undefined)
 			await page.close().catch(() => undefined)
+		})
+
+		it('audit repair 7: both placements join inline text without crossing blocks or losing labels', async () => {
+			await page.evaluate(
+				`document.body.innerHTML = '<h2>A heading</h2><a href="/p3"><span>Cedar</span> Tea Tray</a><ul><li><b>Free</b> shipping</li></ul><p>First <b>ordinary</b> block</p><p>Second block</p><table><tr><td>Tea</td><td>41</td></tr></table><img alt="Tea tin"><label>Buyer<input value="Ada"></label><button>Save</button>'`,
+			)
+			const cdp = (await page.elements.outline()).lines
+				.map(renderBrowserLine)
+				.map((line) => line.replace(/e\d+/g, 'eREF'))
+			writeFileSync(
+				'tmp/codex/reading-joining-source.json',
+				JSON.stringify(await page.accessibility.snapshot(), null, 2),
+			)
+			const dom = await page.evaluate(
+				`(async () => (await documentToolset.view.elements.outline()).lines.map(line => line.spans.map(span => span.text).join('')).map(line => line.replace(/e\\d+/g, 'eREF')))()`,
+			)
+			expect(cdp).toEqual([
+				'## A heading',
+				'eREF link "Cedar Tea Tray" /p3',
+				'- Free shipping',
+				'First ordinary block',
+				'Second block',
+				'Tea | 41',
+				'image "Tea tin"',
+				'Buyer',
+				'eREF textbox "Buyer" value="Ada"',
+				'eREF button "Save"',
+			])
+			expect(dom).toEqual(cdp)
+		})
+		it('audit repair 13: DOM continuation reconstructs every projected line', async () => {
+			await page.evaluate(
+				`document.body.innerHTML = '<p>Ordinary paragraph with enough material to fill several windows.</p>'.repeat(250)`,
+			)
+			const result = await page.evaluate(`(async () => {
+				const expected = (await documentToolset.view.elements.outline()).lines.map(line => line.spans.map(span => span.text).join(''))
+				const actual = []; let from = 1; let windows = 0
+				for (;;) {
+					const text = await documentToolset.read({ from }); windows++
+					if(text.length > 4000) throw new Error('Oversized DOM window')
+					actual.push(...text.split('\\n').filter(line => /^\\d+: /.test(line)).map(line => line.replace(/^\\d+: /, '')))
+					const next = /call read with from (\\d+) for more/.exec(text)
+					if(next === null) break
+					if(Number(next[1]) <= from) throw new Error('Non-advancing footer')
+					from = Number(next[1])
+				}
+				return { equal: JSON.stringify(actual) === JSON.stringify(expected), count: actual.length, windows }
+			})()`)
+			expect(result).toMatchObject({ equal: true, count: 250, windows: expect.any(Number) })
 		})
 
 		for (const placement of ['CDP', 'DOM']) {
@@ -401,8 +451,8 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			}
 		})
 
-		it('lists the same interactive (role, name) set in the DOM look as the CDP outline of the same page', async () => {
-			const dom = requireToolText(await page.evaluate(DOCUMENT_LOOK))
+		it('lists the same interactive (role, name) set in the DOM reading as the CDP outline of the same page', async () => {
+			const dom = requireToolText(await page.evaluate(DOCUMENT_READ))
 			const cdp = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
 
 			expect(collectOutlinePairs(cdp)).toStrictEqual([
@@ -414,7 +464,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			expect(collectOutlinePairs(dom)).toStrictEqual(collectOutlinePairs(cdp))
 		})
 
-		it('lists the same match rows in the DOM look as the CDP outline search of the same page', async () => {
+		it('lists the same match rows in the DOM reading as the CDP outline search of the same page', async () => {
 			const search = 'Gift wrap checkbox'
 			const cdp = await page.elements.outline()
 			expect(
@@ -428,21 +478,21 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			).toStrictEqual(['checkbox "Gift wrap"'])
 			const dom = requireToolText(
 				await page.evaluate(
-					`documentToolset.tools.execute({ id: 'look', name: 'read', arguments: { from: 1, search: ${JSON.stringify(search)} } })`,
+					`documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: ${JSON.stringify(search)} } })`,
 				),
 			)
 			const matches = scanBrowserLines(cdp.lines, search)
-			expect(dom).toContain(`1 line matches ${JSON.stringify(search)}: ${matches.join(', ')}`)
+			expect(dom).toContain(`2 lines match ${JSON.stringify(search)}: ${matches.join(', ')}`)
 			expect(collectOutlinePairs(dom)).toContain('checkbox "Gift wrap"')
 		})
 
 		it('ends a DOM click receipt with (untrusted event) and records isTrusted false, while a CDP click receipt on the same page carries no marker and records isTrusted true', async () => {
-			const look = requireToolText(
+			const reading = requireToolText(
 				await page.evaluate(
-					"documentToolset.tools.execute({ id: 'look', name: 'read', arguments: { from: 1, search: 'gift wrap' } })",
+					"documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: 'gift wrap' } })",
 				),
 			)
-			const wrap = requireOutlineReference(look, 'checkbox', 'Gift wrap')
+			const wrap = requireOutlineReference(reading, 'checkbox', 'Gift wrap')
 			const clicked = requireToolText(
 				await page.evaluate(
 					`documentToolset.tools.execute({ id: 'click', name: 'click', arguments: { ref: ${JSON.stringify(wrap)} } })`,
@@ -461,7 +511,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			const reference = requireOutlineReference(
 				requireToolText(
 					await tools.execute({
-						id: 'look',
+						id: 'reading',
 						name: 'read',
 						arguments: { from: 1, search: 'gift wrap' },
 					}),
@@ -482,11 +532,11 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			await page.evaluate(
 				`(() => { document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_EDITABLE_HTML)}); return true })()`,
 			)
-			const look = requireToolText(await page.evaluate(DOCUMENT_LOOK))
-			const notes = requireOutlineReference(look, 'textbox', 'Notes')
-			const bold = requireOutlineReference(look, 'button', 'Bold')
-			const coupon = requireOutlineReference(look, 'button', 'Coupon')
-			expect(extractBrowserPage(look).body).toContain(
+			const reading = requireToolText(await page.evaluate(DOCUMENT_READ))
+			const notes = requireOutlineReference(reading, 'textbox', 'Notes')
+			const bold = requireOutlineReference(reading, 'button', 'Bold')
+			const coupon = requireOutlineReference(reading, 'button', 'Coupon')
+			expect(extractBrowserPage(reading).body).toContain(
 				[
 					'Plain notes',
 					`${notes} textbox "Notes"`,
@@ -495,7 +545,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 					`${coupon} button "Coupon"`,
 				].join('\n'),
 			)
-			expect(extractOutlineRows(look).map((row) => row.name)).not.toContain('Plain notes')
+			expect(extractOutlineRows(reading).map((row) => row.name)).not.toContain('Plain notes')
 
 			const refused = await page.evaluate(
 				`documentToolset.tools.execute([${[notes, bold, coupon]
@@ -609,7 +659,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			]) {
 				if (!entries.includes(entry)) throw new Error(`CDP state precondition missing: ${entry}`)
 			}
-			dom = requireToolText(await page.evaluate(DOCUMENT_LOOK))
+			dom = requireToolText(await page.evaluate(DOCUMENT_READ))
 		})
 		afterAll(async () => {
 			await page.close().catch(() => undefined)
@@ -631,7 +681,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 					(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
 				),
 			).toContain('tab "Lone tab" selected=false')
-			const entries = collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_LOOK)))
+			const entries = collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_READ)))
 			expect(entries).toContain('tab "Lone tab"')
 			expect(entries).not.toContain('tab "Lone tab" selected=false')
 		} finally {
@@ -651,7 +701,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 					(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
 				),
 			).toContain('DisclosureTriangle "Delivery details" expanded=false')
-			const dom = requireToolText(await page.evaluate(DOCUMENT_LOOK))
+			const dom = requireToolText(await page.evaluate(DOCUMENT_READ))
 			expect(dom).toContain('Delivery details')
 			expect(extractOutlineRows(dom).filter((row) => row.name === 'Delivery details')).toEqual([])
 		} finally {
@@ -677,7 +727,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			const cdp = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			expect(cdp).toContain('Lone treeitem')
 			expect(extractOutlineRows(cdp).filter((row) => row.name === 'Lone treeitem')).toEqual([])
-			expect(collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_LOOK)))).toContain(
+			expect(collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_READ)))).toContain(
 				'treeitem "Lone treeitem" expanded=true selected=false',
 			)
 		} finally {
@@ -699,7 +749,7 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 			await page.evaluate(
 				"(() => { const label = document.createElement('label'); label.append('Box ', document.createElement('select')); label.lastChild.append(new Option('Small'), new Option('Large')); document.querySelector('main').append(label); return true })()",
 			)
-			dom = requireToolText(await page.evaluate(DOCUMENT_LOOK))
+			dom = requireToolText(await page.evaluate(DOCUMENT_READ))
 			cdp = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			const membership = [
 				'button "Apply"',
@@ -722,8 +772,8 @@ describe('createDocumentToolset served from dist/src/browser against CDP on the 
 		})
 
 		// `BrowserDOMElementManager` skips a `select` element's subtree after its combobox row, so the
-		// DOM look carries no `option` row, while the CDP outline lists one per option under it.
-		it('lists the option rows of the select in the DOM look as the CDP outline does', () => {
+		// DOM reading carries no `option` row, while the CDP outline lists one per option under it.
+		it('lists the option rows of the select in the DOM reading as the CDP outline does', () => {
 			expect(collectOutlinePairs(dom)).toStrictEqual(collectOutlinePairs(cdp))
 		})
 	})
