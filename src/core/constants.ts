@@ -434,8 +434,7 @@ export const BROWSER_TOOL_DEADLINE_NOTE =
 	'(The view could not be read before the deadline; call read.)'
 
 /**
- * Holds the status an action receipt carries after a submission a page listener prevented, with no
- * navigation after it, naming `wait` as the next call because the page's outcome can arrive later.
+ * Holds the status of a handled submission whose settle observed a change.
  */
 export const BROWSER_TOOL_HANDLED_STATUS = 'the page handled the submission and changed'
 

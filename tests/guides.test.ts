@@ -2,6 +2,7 @@
 // this repo's own `guides/README.md` manifest. The constants that follow preserve this
 // package's own parity policy.
 
+import type { BrowserLine, BrowserOutlineNode } from '@src/core'
 import { GuideCommand } from '@orkestrel/guide/server'
 import { readInventory } from '@orkestrel/test/server'
 import { createVitest } from 'vitest/node'
@@ -50,8 +51,8 @@ const SMALL_MODEL_TITLE = 'Drive a page with a small model'
  */
 const SMALL_MODEL_PROMPT =
 	'You control a web browser with tools and must call a tool before you answer. ' +
-	'The first message shows the page as look returns it; references such as e4 name its elements. ' +
-	'To learn a fact, call read with search set to words from your question; when its result ends by naming an offset, call read again with that offset. ' +
+	'The first message shows numbered page lines; references such as e4 name its elements. ' +
+	'To learn a fact, call read with from 1 and search words from your question; follow a footer by calling read with its from line. ' +
 	"To use the site's search box, call type with its reference, the words, and submit true. " +
 	'To press a button or follow a link, call click with its reference from the latest result. Never invent a reference. ' +
 	'If text you expect has not appeared, call wait once. ' +
@@ -60,14 +61,14 @@ const SMALL_MODEL_PROMPT =
 const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 	'const toolset = createBrowserToolset(page, { tools: createToolManager() })',
 	'await toolset.start()',
-	"toolset.tools.tools().map((tool) => tool.name) // ['look', 'read', 'plain', 'click', 'type', 'press', 'navigate', 'wait']",
-	"const seeded = await toolset.tools.execute({\n\tid: 'seed',\n\tname: 'look',\n\targuments: { search: '' },\n})",
+	"toolset.tools.tools().map((tool) => tool.name) // ['read', 'click', 'type', 'press', 'navigate', 'wait']",
+	"const seeded = await toolset.tools.execute({\n\tid: 'seed',\n\tname: 'read',\n\targuments: { from: 1 },\n})",
 	'const view = seeded.success ? String(seeded.value) : seeded.error',
 	'\tcontent: `What does the Alpine Kettle cost?\\n\\nThe browser shows this page:\\n${view}`,',
 ])
-/** The receipt the guide's Tools section quotes for a `look` call that carries `ref`. */
+/** The receipt the guide's Tools section quotes for a `read` call that carries `ref`. */
 const UNADVERTISED_RECEIPT =
-	'The look tool takes no ref parameter; call look with search and offset.'
+	'The read tool takes no ref parameter; call read with from, to, and search.'
 /** The failure a page command reports when its renderer hangs past the command deadline. */
 const HUNG_FAILURE = 'Runtime.evaluate timed out'
 /** The headings that open and close the guide's Tools table. */
@@ -149,7 +150,188 @@ await new GuideCommand({
 			),
 		).toBe('Matches:\n[5] Blue kettle\n\n')
 	})
-	it('shows the matching heading before the saved journey edit listing', async () => {
+	it('executes the numbered-line rendering fence', async () => {
+		const {
+			abbreviateBrowserText,
+			belongsBrowserOutline,
+			redactBrowserText,
+			renderBrowserFooter,
+			renderBrowserLine,
+			renderBrowserPassage,
+			renderBrowserSpans,
+			renderBrowserWindow,
+			scanBrowserLines,
+			validateBrowserLines,
+			wrapBrowserLine,
+		} = await import('@src/core')
+		const root: BrowserOutlineNode = {
+			id: 'root',
+			session: 'main',
+			reference: undefined,
+			properties: {},
+			parent: undefined,
+			children: ['delivery'],
+			backend: undefined,
+			frame: undefined,
+			ignored: false,
+			role: undefined,
+			name: undefined,
+			description: undefined,
+			value: undefined,
+		}
+		const link: BrowserOutlineNode = {
+			...root,
+			children: [],
+			id: 'delivery',
+			parent: 'root',
+			session: 'main',
+			reference: 'e4',
+			role: 'link',
+			name: 'Shipping',
+			properties: { url: 'https://shop.example.test/delivery' },
+		}
+		expect(belongsBrowserOutline(link, root, new Map([['main:root', root]]))).toBe(true)
+		expect(belongsBrowserOutline(root, link, new Map([['main:root', root]]))).toBe(false)
+		const lines: readonly BrowserLine[] = [
+			{ spans: renderBrowserSpans(link, 'https://shop.example.test/') },
+			{ spans: [{ category: 'text', text: 'We ship every weekday.' }] },
+			{ spans: [{ category: 'text', text: 'Contact the workshop.' }] },
+		]
+		expect(renderBrowserLine(lines[0] ?? { spans: [] })).toBe('e4 link "Shipping" /delivery')
+		expect(scanBrowserLines(lines, 'ship')).toEqual([1, 2])
+		expect(scanBrowserLines(lines, 'e4')).toEqual([])
+		expect(scanBrowserLines(lines, 'delivery', 2)).toEqual([])
+		expect(validateBrowserLines(1, 2, lines.length)).toBeUndefined()
+		expect(renderBrowserWindow(lines, 1, 2, 'Delivery', 4_000)).toBe(
+			'Delivery\n1: e4 link "Shipping" /delivery\n2: We ship every weekday.\n[lines 1–2 of 3; 1 below; call read with from 3 for more]',
+		)
+		expect(renderBrowserFooter(3, 3, 3)).toBe('[lines 3–3 of 3; 2 above; end of page]')
+		expect(
+			renderBrowserPassage(
+				{
+					url: 'https://shop.example.test/',
+					title: 'Delivery',
+					lines,
+					from: 2,
+					to: 2,
+					search: 'shipping',
+					tabs: [],
+					changed: true,
+				},
+				4_000,
+			),
+		).toBe(
+			'page "Delivery" https://shop.example.test/ (3 lines)\nThe page changed since the last view; line numbers might differ.\n1 line matches "shipping": 2\n2: We ship every weekday.\n[lines 2–2 of 3; 1 above, 1 below; call read with from 3 for more]',
+		)
+		expect(
+			wrapBrowserLine({ spans: [{ category: 'text', text: 'x'.repeat(801) }] }).map(
+				renderBrowserLine,
+			),
+		).toEqual(['x'.repeat(800), '↳x'])
+		expect(abbreviateBrowserText('Alpine Kettle', 7)).toBe('Alpine…')
+		expect(redactBrowserText('Order for Ada', ['Ada'])).toBe('Order for [redacted]')
+	})
+	it('proves range refusals, search boundaries, footer forms, and whole-window budgets', async () => {
+		const {
+			renderBrowserPassage,
+			renderBrowserWindow,
+			renderBrowserFooter,
+			scanBrowserLines,
+			validateBrowserLines,
+			parseBrowserReference,
+			BROWSER_TOOL_LIMIT,
+			boundBrowserText,
+			BROWSER_TOOL_CUT_FOOTER,
+		} = await import('@src/core')
+		const lines: readonly BrowserLine[] = Array.from({ length: 120 }, (_, index) => ({
+			spans: [
+				{ category: 'text', text: index === 110 ? 'Shipping schedules' : 'Workshop details' },
+			],
+		}))
+		const first = renderBrowserWindow(lines, 1, undefined, 'Delivery', BROWSER_TOOL_LIMIT)
+		expect(first).toContain('[lines 1–100 of 120; 20 below; call read with from 101 for more]')
+		expect(renderBrowserWindow(lines, 101, 999, 'Delivery', BROWSER_TOOL_LIMIT)).toContain(
+			'[lines 101–120 of 120; 100 above; end of page]',
+		)
+		const searched = renderBrowserPassage(
+			{
+				url: 'https://shop.example.test/',
+				title: 'Delivery',
+				lines,
+				from: 1,
+				search: 'ship schedule',
+				tabs: [],
+				changed: false,
+			},
+			BROWSER_TOOL_LIMIT,
+		)
+		expect(searched).toContain(
+			'1 line matches "ship schedule": 111\n110: Workshop details\n111: Shipping schedules',
+		)
+		expect(scanBrowserLines(lines, 'shipping', 1, 110)).toEqual([])
+		expect(scanBrowserLines(lines, 'hipping')).toEqual([])
+		expect(scanBrowserLines(lines, 'SHIPPING')).toEqual([111])
+		expect(scanBrowserLines(lines, 'sh')).toEqual([])
+		expect(scanBrowserLines(lines, 'shipping schedules workshop')).toEqual([111])
+		const missing = renderBrowserPassage(
+			{
+				url: 'about:blank',
+				title: '',
+				lines,
+				from: 2,
+				to: 2,
+				search: 'missing',
+				tabs: [],
+				changed: false,
+			},
+			BROWSER_TOOL_LIMIT,
+		)
+		expect(missing).toContain('No line from 2 on matches "missing".\n2: Workshop details')
+		expect(
+			renderBrowserPassage(
+				{ url: 'about:blank', title: '', lines: [], from: 1, tabs: [], changed: false },
+				BROWSER_TOOL_LIMIT,
+			),
+		).toBe('page "" about:blank (0 lines)\n[empty page; the whole page]')
+		expect(renderBrowserFooter(1, 7, 7)).toBe('[lines 1–7 of 7; the whole page]')
+		expect(renderBrowserFooter(48, 52, 52)).toBe('[lines 48–52 of 52; 47 above; end of page]')
+		for (const from of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 121])
+			expect(() => validateBrowserLines(from, undefined, 120)).toThrow(
+				expect.objectContaining({ code: 'BROWSER_TOOLSET_ARGUMENT' }),
+			)
+		expect(() => validateBrowserLines(2, 1)).toThrow(
+			expect.objectContaining({ code: 'BROWSER_TOOLSET_ARGUMENT' }),
+		)
+		expect(parseBrowserReference('12')).toBeUndefined()
+		expect(parseBrowserReference('e12')).toBe('e12')
+		expect(boundBrowserText('x'.repeat(5_000), 4_000, BROWSER_TOOL_CUT_FOOTER).length).toBe(4_000)
+		expect(() => renderBrowserWindow(lines, 1, undefined, 'Delivery', 20)).toThrow(
+			expect.objectContaining({ code: 'BROWSER_TOOLSET_LIMIT' }),
+		)
+		const bounded = renderBrowserPassage(
+			{
+				url: 'https://shop.example.test/' + 'u'.repeat(5000),
+				title: 't'.repeat(5000),
+				lines,
+				from: 1,
+				search: 'workshop',
+				changed: false,
+				tabs: Array.from({ length: 100 }, (_, index) => ({
+					id: `t${index + 1}`,
+					title: 'Tab '.repeat(30),
+					url: 'about:blank',
+					current: index === 0,
+				})),
+			},
+			BROWSER_TOOL_LIMIT,
+		)
+		expect(bounded).toContain('(current)')
+		expect(bounded).toContain('more tabs omitted')
+		expect(bounded).toContain('and 69 more; add words to narrow')
+		expect(bounded.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		expect(bounded).toMatch(/\[lines 1–\d+ of 120; \d+ below; call read with from \d+ for more\]$/)
+	})
+	it('executes the numbered listing and cart-visit edit fence', async () => {
 		const { BrowserToolset, BrowserJourneyToolset, createMemoryBrowserJourneyStore } =
 			await import('@src/core')
 		const { createBrowserJourneyFixture, createBrowserViewDouble } = await import('./setup.js')
@@ -165,13 +347,12 @@ await new GuideCommand({
 		await store.set(
 			createBrowserJourneyFixture(
 				[
+					{ action: 'click', arguments: {}, target: { role: 'link', name: 'Cart' } },
 					{
 						action: 'type',
 						arguments: { text: 'Ada Lovelace', submit: true },
 						target: { role: 'textbox', name: 'Full name' },
 					},
-					{ action: 'press', arguments: { key: 'Enter' } },
-					{ action: 'wait', arguments: { text: 'Order confirmed' } },
 					{ action: 'click', arguments: {}, target: { role: 'link', name: 'Orders' } },
 				],
 				{ name: 'place-order', description: 'Order the Alpine Kettle with a name' },
@@ -182,11 +363,129 @@ await new GuideCommand({
 		try {
 			const tool = requireValue(toolset.tools.tool('journeys'))
 			expect(
-				await tool.execute({ search: 'place-order' }, { signal: new AbortController().signal }),
+				await tool.execute(
+					{ from: 1, search: 'place-order' },
+					{ signal: new AbortController().signal },
+				),
 			).toBe(shown)
+			const edited = await requireValue(toolset.tools.tool('edit')).execute(
+				{
+					journey: 'place-order',
+					edits: [
+						{ operation: 'declare', name: 'customer', parameter: { default: 'Ada Lovelace' } },
+						{ operation: 'update', id: 's2', arguments: { text: { parameter: 'customer' } } },
+						{ operation: 'remove', id: 's1' },
+					],
+				},
+				{ signal: new AbortController().signal },
+			)
+			const editedComments = [
+				...(fence.code.split('await toolset.tools.execute')[2] ?? '').matchAll(/^\/\/ ?(.*)$/gm),
+			]
+				.map((line) => line[1])
+				.join('\n')
+			expect(edited).toBe(editedComments)
+			const revision = requireValue(await store.get('place-order'))
+			expect(revision.journey.steps.map((step) => step.id)).toEqual(['s2', 's3'])
+			expect(
+				revision.journey.steps.filter((step) => step.arguments['submit'] === true),
+			).toHaveLength(1)
 		} finally {
 			await journeys.destroy()
 			await toolset.destroy()
+		}
+	})
+	it('recaptures a continuation and keeps unchanged references stable', async () => {
+		const { createBrowserToolset, BROWSER_TOOL_LIMIT } = await import('@src/core')
+		const { createBrowserElementFixture, BROWSER_ELEMENT_AX_FIXTURE } = await import('./setup.js')
+		let changed = false
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(message.id, {
+					nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) =>
+						node.nodeId === 'email' && changed ? { ...node, name: { value: 'Buyer email' } } : node,
+					),
+				}),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			const first = await toolset.read({ from: 1, to: 1 })
+			const from = Number(requireValue(/call read with from (\d+) for more/.exec(first))[1])
+			expect(from).toBe(2)
+			const next = await toolset.read({ from })
+			expect(next).toContain('\n2: ')
+			expect(await toolset.read({ from })).toBe(next)
+			changed = true
+			const fresh = await toolset.read({ from })
+			expect(fresh).toContain('The page changed since the last view; line numbers might differ.')
+			expect(fresh).toContain('\n2: ')
+			expect(fresh).toContain('textbox "Buyer email"')
+			expect(fresh.match(/\be\d+\b/g)).toEqual(next.match(/\be\d+\b/g))
+			const bounded = await toolset.read({ from: 1, limit: 180 })
+			expect(bounded.length).toBeLessThanOrEqual(180)
+			expect(fresh.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			const seeded = await toolset.tools.execute({
+				id: 'read',
+				name: 'read',
+				arguments: { from: 1 },
+			})
+			expect(seeded.success).toBe(true)
+			expect(seeded.success ? seeded.value : seeded.error).toContain('\n1: ')
+			const missing = await toolset.tools.execute({ id: 'missing', name: 'read', arguments: {} })
+			expect(missing).toMatchObject({ success: false })
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('lists the revised MCP vocabulary and refuses removed tool names', async () => {
+		const { createBrowseFixture } = await import('./setupServer.js')
+		const fixture = createBrowseFixture()
+		try {
+			await fixture.server.start()
+			const listed = (await fixture.pair.request(2, 'tools/list'))['tools']
+			if (!Array.isArray(listed)) throw new Error('Missing tools/list array')
+			const names = listed.map((tool: unknown) => (isRecord(tool) ? tool['name'] : undefined))
+			expect(names).toEqual([
+				'read',
+				'click',
+				'type',
+				'press',
+				'navigate',
+				'wait',
+				'dialog',
+				'switch',
+				'record',
+				'save',
+				'journeys',
+				'edit',
+				'replay',
+				'forget',
+				'capture',
+				'acquire',
+				'execute',
+				'tools',
+				'destroy',
+			])
+			const fence = requireValue(
+				own.guide
+					.fences()
+					.find((entry) => entry.title === 'Register the browse binary with Claude Code'),
+			)
+			expect(fence.code).toContain('// <- ' + names.join(', '))
+			for (const [index, name] of ['look', 'plain', 'tabs'].entries()) {
+				const refused = await fixture.pair.call(3 + index, name, {})
+				expect(refused.error).toBe(true)
+				expect(refused.text).toContain(name)
+			}
+			const reading = await fixture.pair.call(6, 'read', { from: 1 })
+			expect(reading.error).toBe(false)
+			expect(reading.text).toMatch(/^page .+\(\d+ lines\)/)
+			expect(reading.text.length).toBeLessThanOrEqual(4_000)
+		} finally {
+			await fixture.teardown.destroy()
 		}
 	})
 
@@ -234,7 +533,7 @@ await new GuideCommand({
 			for (const line of SMALL_MODEL_LINES) expect(fences[0]?.code).toContain(line)
 		})
 
-		it('lists the tools its comment claims and seeds the look view over a real page', async () => {
+		it('lists the tools its comment claims and seeds numbered lines over a real page', async () => {
 			const { createBrowserElementFixture } = await import('./setup.js')
 			const { createBrowserToolset } = await import('@src/core')
 			const { createToolManager } = await import('@orkestrel/tool')
@@ -243,9 +542,7 @@ await new GuideCommand({
 				const toolset = createBrowserToolset(page, { tools: createToolManager() })
 				await toolset.start()
 				expect(toolset.tools.tools().map((tool) => tool.name)).toEqual([
-					'look',
 					'read',
-					'plain',
 					'click',
 					'type',
 					'press',
@@ -254,11 +551,11 @@ await new GuideCommand({
 				])
 				const seeded = await toolset.tools.execute({
 					id: 'seed',
-					name: 'look',
-					arguments: { search: '' },
+					name: 'read',
+					arguments: { from: 1 },
 				})
 				expect(seeded.success ? String(seeded.value) : seeded.error).toMatch(
-					/^page "[^"\n]*" https:\/\/example\.test\/cart\n/,
+					/^page "[^"\n]*" https:\/\/example\.test\/cart \(\d+ lines\)\n1: /,
 				)
 				await toolset.destroy()
 			} finally {
@@ -283,8 +580,8 @@ await new GuideCommand({
 			const sent = transport.sent.length
 			const result = await toolset.tools.execute({
 				id: 'unadvertised',
-				name: 'look',
-				arguments: { search: 'the cart', ref: 'e1' },
+				name: 'read',
+				arguments: { from: 1, search: 'the cart', ref: 'e1' },
 			})
 			expect(result).toMatchObject({ success: false, error: UNADVERTISED_RECEIPT })
 			expect(transport.sent.length).toBe(sent)
@@ -314,7 +611,7 @@ await new GuideCommand({
 			const answer = await fixture.pair.call(2, 'wait', { text: 'Order confirmed' })
 			expect(answer.error).toBe(true)
 			expect(answer.text).not.toContain('BROWSER_SERVER_')
-			expect((await fixture.pair.call(3, 'look', { search: 'cart' })).text).not.toContain(
+			expect((await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })).text).not.toContain(
 				'BROWSER_SERVER_CRASH',
 			)
 			expect(fixture.launcher.browsers).toHaveLength(1)
@@ -383,7 +680,9 @@ await new GuideCommand({
 
 		it('shows the render renderBrowserRun returns for a complete add-kettle run', async () => {
 			const { renderBrowserRun } = await import('@src/core')
-			const { BROWSER_RUN_FIXTURE, BROWSER_RUN_VIEW } = await import('./setup.js')
+			const { BROWSER_RUN_FIXTURE } = await import('./setup.js')
+			const view =
+				'page "Cart" https://shop.example.test/cart (5 lines)\n1: e40 link "Catalogue" /\n2: e41 link "Cart" /cart\n3: e42 link "Checkout" /checkout\n4: # Your cart\n5: Alpine Kettle\n[lines 1–5 of 5; the whole page]'
 			const shown = fences.filter((fence) => fence.title === RUN_TITLE)
 			expect(shown).toHaveLength(1)
 			const comment = (shown[0]?.code ?? '')
@@ -391,7 +690,7 @@ await new GuideCommand({
 				.filter((line) => line.startsWith('//'))
 				.map((line) => line.replace(/^\/\/ ?/u, ''))
 				.join('\n')
-			expect(comment).toBe(renderBrowserRun(BROWSER_RUN_FIXTURE, BROWSER_RUN_VIEW))
+			expect(comment).toBe(renderBrowserRun(BROWSER_RUN_FIXTURE, view))
 		})
 
 		// The formatter lays the guide's fence out at its print width, so the fence and the compiled

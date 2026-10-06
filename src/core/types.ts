@@ -2668,8 +2668,8 @@ export interface BrowserElementManagerInterface<
 > {
 	/**
 	 * Captures the view's document as a document-order outline, binding a reference to each
-	 * interactive element and bounding the referenced rows by `limit`. The outline also lists the
-	 * rows that best match `search` and names the focused referenced row, both past `limit`.
+	 * interactive element and bounding the referenced rows by `limit`. The outline carries
+	 * wrapped lines and names the focused referenced row even past `limit`.
 	 */
 	outline(options?: BrowserOutlineOptions): Promise<BrowserOutline>
 	/**
