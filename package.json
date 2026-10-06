@@ -114,7 +114,7 @@
 		"@orkestrel/websocket": "^0.0.14"
 	},
 	"devDependencies": {
-		"@microsoft/api-extractor": "^7.59.3",
+		"@microsoft/api-extractor": "^7.59.4",
 		"@orkestrel/guide": "^0.0.24",
 		"@orkestrel/probe": "^0.0.20",
 		"@orkestrel/scaffold": "^0.0.92",
