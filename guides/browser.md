@@ -348,8 +348,7 @@ import {
 try {
 	await element.click()
 } catch (error) {
-	if (isBrowserElementError(error))
-		log(error.code, error.context) // { reason: 'OCCLUDED', … }
+	if (isBrowserElementError(error)) log(error.code, error.context) // { reason: 'OCCLUDED', … }
 	else if (isCDPError(error)) log(error.code, error.context)
 	else if (isCDPConnectionError(error)) log(error.code)
 	else if (isCDPTimeoutError(error)) log(error.code)
