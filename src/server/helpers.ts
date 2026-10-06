@@ -426,6 +426,10 @@ export function findStorePaths(base: string, platform: string): readonly string[
  * Launches a browser process with raw-CDP debugging flags.
  *
  * @remarks
+ * Merges every caller and library `--disable-features` value into one switch because Chromium
+ * reads only the last occurrence. Keeps `msImplicitSignin` disabled alongside caller features;
+ * Chrome and Chromium ignore this Edge feature name. Preserves the caller's other arguments.
+ *
  * POSIX launches own an isolated process group so lifecycle teardown can
  * signal and await every Chromium subprocess without affecting the caller.
  * Windows launches are not detached and own no group, so teardown there
@@ -453,8 +457,20 @@ export function launchBrowserProcess(
 	// as an early positional argv entry ahead of the CDP flags that follow —
 	// Chromium itself accepts flags in any order, so production is unaffected.
 	const args: string[] = []
-	if (extra !== undefined) args.push(...extra)
-	args.push(`--remote-debugging-port=${port ?? 0}`, ...BROWSER_LAUNCH_ARGS)
+	const features = new Set<string>()
+	for (const arg of [
+		...(extra ?? []),
+		`--remote-debugging-port=${port ?? 0}`,
+		...BROWSER_LAUNCH_ARGS,
+	]) {
+		if (arg === '--disable-features') continue
+		if (arg.startsWith('--disable-features=')) {
+			for (const feature of arg.slice('--disable-features='.length).split(',')) {
+				if (feature.trim() !== '') features.add(feature.trim())
+			}
+		} else args.push(arg)
+	}
+	args.push(`--disable-features=${[...features].join(',')}`)
 
 	if (headless) args.push(BROWSER_HEADLESS_ARG)
 	if (profile !== undefined) args.push(`--user-data-dir=${profile}`)

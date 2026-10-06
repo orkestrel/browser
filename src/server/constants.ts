@@ -36,12 +36,15 @@ export const BROWSER_CDP_LIST_PATH = '/json/list'
  *
  * @remarks
  * Disables account sync so extension installs cannot reset URL loader factories during page imports.
- * Edge can still sign a fresh Windows profile in to the operating-system account.
+ * Disables Edge's implicit sign-in so fresh automation profiles carry no Microsoft account.
+ * Chromium ignores the unknown Edge feature name on Chrome and Chromium.
+ * The launcher merges disabled features with the caller's into one switch.
  */
 export const BROWSER_LAUNCH_ARGS: readonly string[] = Object.freeze([
 	'--no-first-run',
 	'--no-default-browser-check',
 	'--disable-sync',
+	'--disable-features=msImplicitSignin',
 ])
 
 /**

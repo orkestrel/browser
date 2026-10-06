@@ -654,6 +654,8 @@ describe('launchBrowserProcess', () => {
 			expect(process.spawnargs).toContain('--headless=new')
 			expect(process.spawnargs).toContain('--no-first-run')
 			expect(process.spawnargs).toContain('--no-default-browser-check')
+			expect(process.spawnargs).toContain('--disable-sync')
+			expect(process.spawnargs).toContain('--disable-features=msImplicitSignin')
 			expect(process.spawnargs).toContain('--extra-flag')
 		} finally {
 			process.kill()
@@ -671,9 +673,51 @@ describe('launchBrowserProcess', () => {
 		}
 	})
 
+	it('merges caller and library disabled features into one switch', () => {
+		const extra = Object.freeze(['--no-sandbox', '--disable-features=CallerFeature'])
+		const process = launchBrowserProcess(
+			globalThis.process.execPath,
+			undefined,
+			true,
+			undefined,
+			extra,
+		)
+		try {
+			expect(process.spawnargs.filter((arg) => arg.startsWith('--disable-features='))).toEqual([
+				'--disable-features=CallerFeature,msImplicitSignin',
+			])
+			expect(process.spawnargs).toContain('--no-sandbox')
+			expect(process.spawnargs).toContain('--headless=new')
+			expect(extra).toEqual(['--no-sandbox', '--disable-features=CallerFeature'])
+		} finally {
+			process.kill()
+		}
+	})
+
 	it('omits the headless flag when headless is false', () => {
 		const process = launchBrowserProcess(globalThis.process.execPath, 19_995, false)
 		try {
+			expect(process.spawnargs).not.toContain('--headless=new')
+		} finally {
+			process.kill()
+		}
+	})
+
+	it('combines repeated disabled-feature switches and ignores empty and duplicate entries', () => {
+		const process = launchBrowserProcess(globalThis.process.execPath, undefined, false, undefined, [
+			'launch-script.js',
+			'--disable-features=CallerFeature, msImplicitSignin,,CallerFeature',
+			'--disable-features=',
+			'--disable-features',
+			'--disable-features=AnotherFeature',
+			'--enable-features=EnabledFeature',
+		])
+		try {
+			expect(process.spawnargs[1]).toBe('launch-script.js')
+			expect(process.spawnargs.filter((arg) => arg.startsWith('--disable-features'))).toEqual([
+				'--disable-features=CallerFeature,msImplicitSignin,AnotherFeature',
+			])
+			expect(process.spawnargs).toContain('--enable-features=EnabledFeature')
 			expect(process.spawnargs).not.toContain('--headless=new')
 		} finally {
 			process.kill()
