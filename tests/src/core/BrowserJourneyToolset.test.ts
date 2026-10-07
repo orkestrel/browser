@@ -1,4 +1,4 @@
-import type { BrowserJourneyRevision, BrowserJourneyStoreInterface } from '@src/core'
+import type { BrowserJourney, BrowserJourneyRevision, BrowserJourneyStoreInterface } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
 import { BrowserJourneyToolset } from '../../../src/core/BrowserJourneyToolset.js'
 import { describe, expect, it } from 'vitest'
@@ -79,7 +79,7 @@ describe('BrowserJourneyToolset', () => {
 				name: 'navigate',
 				arguments: { url: 'https://example.test/checkout' },
 			})
-			expect(action.action?.outcome, JSON.stringify(action)).toBe('done')
+			expect(action.action?.outcome).toBe('done')
 			const saved = await toolset.tools.execute({
 				id: 'save',
 				name: 'save',
@@ -96,7 +96,9 @@ describe('BrowserJourneyToolset', () => {
 		}
 	})
 	it('journey start: omits about:blank and redacts a secret before storage', async () => {
-		for (const url of ['about:blank', 'https://example.test/?token=journey-secret']) {
+		const secret = 'https://example.test/?token=journey-secret'
+		const recorded = new Map<string, { readonly journey: BrowserJourney; readonly redacted: string }>()
+		for (const url of ['about:blank', secret]) {
 			const store = createMemoryBrowserJourneyStore()
 			const toolset = createBrowserToolset(createBrowserViewDouble({ url }), {
 				journeys: { store },
@@ -122,15 +124,15 @@ describe('BrowserJourneyToolset', () => {
 					arguments: { description: 'Sign in' },
 				})
 				const journey = requireValue(await store.get('sign-in')).journey
-				if (url === 'about:blank') expect(journey).not.toHaveProperty('start')
-				else {
-					expect(journey.start).toBe(toolset.redact(url))
-					expect(JSON.stringify(journey)).not.toContain('journey-secret')
-				}
+				recorded.set(url, { journey, redacted: toolset.redact(url) })
 			} finally {
 				await toolset.destroy()
 			}
 		}
+		expect(requireValue(recorded.get('about:blank')).journey).not.toHaveProperty('start')
+		const redacted = requireValue(recorded.get(secret))
+		expect(redacted.journey.start).toBe(redacted.redacted)
+		expect(JSON.stringify(redacted.journey)).not.toContain('journey-secret')
 	})
 	it('audit repair 11: listing search shares singular, capped matches and ranged misses with read', async () => {
 		const store = createMemoryBrowserJourneyStore()

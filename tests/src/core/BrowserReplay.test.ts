@@ -89,7 +89,7 @@ describe('BrowserReplay', () => {
 			])
 			fixture.transport.event('Page.loadEventFired', { timestamp: 1 }, 'session-main')
 			const run = await replaying
-			expect(run.outcome, JSON.stringify(run)).toBe('complete')
+			expect(run.outcome).toBe('complete')
 			expect(run.steps.map((step) => step.id)).toEqual(['s1'])
 			expect(run.steps[0]?.result).toContain('Clicked link "Home"')
 			expect(run.journey.start).toBe(journey.start)
