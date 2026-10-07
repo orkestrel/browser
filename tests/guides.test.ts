@@ -6,11 +6,14 @@ import type { BrowserLine, BrowserOutlineNode } from '@src/core'
 import { GuideCommand } from '@orkestrel/guide/server'
 import { readInventory } from '@orkestrel/test/server'
 import { createVitest } from 'vitest/node'
+import { stripTypeScriptTypes } from 'node:module'
 
 /** Every fence language this package's guides are allowed to use. */
 const FENCE_LANGUAGES = Object.freeze(['ts'])
 /** The fence language whose blocks count as worked examples. */
 const EXAMPLE_LANGUAGE = 'ts'
+/** Removes named imports after Node strips types; execution supplies the real entry's values. */
+const FENCE_IMPORT = /^import\s+\{[^}]*\}\s+from\s+['"][^'"]+['"]\s*;?/gmu
 /** The package identity that binds its manifest, module map, and README pitch. */
 const PACKAGE_NAME = '@orkestrel/browser'
 /** The one guide this package sources, whose tagline the README pitch equals. */
@@ -132,6 +135,255 @@ await new GuideCommand({
 	const manifest = parseJSON(requireValue(files['package.json'], 'Missing inventory: package.json'))
 	if (!isRecord(manifest)) throw new Error('Invalid package manifest: package.json')
 	const sources = createSourceManager({ files, modules: MODULES })
+
+	it('parses every published TypeScript fence without a syntax error', () => {
+		for (const fence of own.guide.fences()) {
+			expect(() => stripTypeScriptTypes(fence.code), fence.title).not.toThrow()
+		}
+		expect(() => stripTypeScriptTypes('const broken = )')).toThrow()
+	})
+
+	it('documents every callable interface and the complete bare error union', () => {
+		const documented = own.guide.methods().map((group) => group.interface)
+		const interfaces = own.source
+			.surface()
+			.filter(
+				(symbol) =>
+					symbol.keyword === 'interface' &&
+					symbol.name.endsWith('Interface') &&
+					own.source.methods(symbol.name).length > 0,
+			)
+		expect(
+			findMissing(
+				interfaces.map((symbol) => symbol.name),
+				documented,
+			),
+		).toEqual([])
+		const code = requireValue(own.guide.fences().find((fence) => fence.title === 'Errors')).code
+		const declaration = requireValue(
+			requireValue(files['src/core/types.ts']).match(
+				/export type BrowserErrorCode =[\s\S]*?(?=\r?\n\r?\n)/u,
+			)?.[0],
+		)
+		expect(code.replace(/^type/u, 'export type').replace(/\s+/gu, ' ').trim()).toBe(
+			declaration.replace(/\s+/gu, ' ').trim(),
+		)
+		expect(requireValue(files[GUIDE_SPEC])).toContain(
+			'`TOOLSET_SETTLED` and `TOOLSET_RECEIPT` are **internal**',
+		)
+	})
+
+	// Execute the published helper compositions themselves. The only injected data are the
+	// run artifact and its page text; imported values come from the actual public entry.
+	for (const title of [
+		'Page helpers',
+		'Journey helpers',
+		'Element and tool helpers',
+		'Protocol decoding',
+		'Narrow a browser error',
+		'Render numbered lines',
+	]) {
+		it(`executes the complete ${title} fence`, async () => {
+			const core = await import('@src/core')
+			const { BROWSER_RUN_FIXTURE } = await import('./setup.js')
+			const fence = requireValue(own.guide.fences().find((entry) => entry.title === title))
+			for (const imported of extractFenceImports(fence.code))
+				expect(imported.specifier).toBe(PACKAGE_NAME)
+			const code = stripTypeScriptTypes(fence.code).replace(FENCE_IMPORT, '')
+			const bindings = {
+				...core,
+				run: BROWSER_RUN_FIXTURE,
+				runFile: JSON.stringify(BROWSER_RUN_FIXTURE),
+				view: 'Page',
+			}
+			await new Function(...Object.keys(bindings), `return (async () => {\n${code}\n})()`)(
+				...Object.values(bindings),
+			)
+		})
+	}
+
+	it('executes the reading and both memory-store method fences', async () => {
+		const core = await import('@src/core')
+		const { createRecorder } = await import('@orkestrel/test')
+		const { BROWSER_JOURNEY_FIXTURE, BROWSER_RUN_FIXTURE } = await import('./setup.js')
+		const log = createRecorder<readonly unknown[]>()
+		const bindings = {
+			...core,
+			journey: BROWSER_JOURNEY_FIXTURE,
+			run: BROWSER_RUN_FIXTURE,
+			bytes: new Uint8Array([1]),
+			log: log.handler,
+		}
+		const fences = own.guide
+			.fences()
+			.filter(
+				(fence) =>
+					fence.title === 'BrowserJourneyStoreInterface' ||
+					fence.title === 'BrowserRunStoreInterface' ||
+					(fence.title === 'BrowserReadingInterface' &&
+						fence.code.includes('createBrowserReading')),
+			)
+		expect(fences).toHaveLength(3)
+		for (const fence of fences) {
+			for (const imported of extractFenceImports(fence.code))
+				expect(imported.specifier).toBe(PACKAGE_NAME)
+			const code = stripTypeScriptTypes(fence.code).replace(FENCE_IMPORT, '')
+			await new Function(...Object.keys(bindings), `return (async () => {\n${code}\n})()`)(
+				...Object.values(bindings),
+			)
+		}
+		expect(log.calls).toEqual([['JOURNEY_STALE']])
+	})
+
+	it("proves the helper fences' literal outcomes and refusal codes", async () => {
+		const core = await import('@src/core')
+		const { BROWSER_JOURNEY_FIXTURE } = await import('./setup.js')
+		expect(core.parseBrowserReference('[ref=e12]')).toBe('e12')
+		expect(core.parseBrowserReference('x12')).toBeUndefined()
+		expect(core.requireBrowserReference('e12')).toBe('e12')
+		expect(core.normalizeBrowserKey('ctrl+a')).toBe('Control+a')
+		expect(core.normalizeBrowserName('  Place   order ')).toBe('Place order')
+		expect(core.composeBrowserPoint({ x: 10, y: 10 }, [{ x: 100, y: 50 }])).toEqual({
+			x: 110,
+			y: 60,
+		})
+		expect(core.extractBrowserSlice('one\ntwo\nthree', 0, 8)).toEqual({
+			text: 'one\ntwo\n',
+			offset: 0,
+			total: 13,
+		})
+		expect(
+			core.boundBrowserText('x'.repeat(5_000), 4_000, core.BROWSER_TOOL_CUT_FOOTER),
+		).toHaveLength(4_000)
+		expect(core.renderBrowserToolOutput([{ type: 'text', text: 'Found 3 cars' }])).toBe(
+			'Found 3 cars',
+		)
+		expect(core.readBrowserToolString({ search: 'cart' }, 'search')).toBe('cart')
+		expect(() =>
+			core.validateBrowserToolArguments(core.BROWSER_TOOL_COPY.read, {
+				from: 1,
+				search: 'cart',
+				ref: 'e1',
+			}),
+		).toThrow(expect.objectContaining({ code: 'TOOLSET_ARGUMENT' }))
+		expect(() => core.validateBrowserJourneyParameter({ secret: true, default: 'x' })).toThrow(
+			expect.objectContaining({ code: 'JOURNEY_INVALID' }),
+		)
+		expect(
+			core.parseBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, name: 'Add kettle' }),
+		).toBeUndefined()
+		expect(core.parseBrowserJourneyEdit({ operation: 'rename', id: 's3' })).toBeUndefined()
+		expect(
+			core.isBrowserSecretBinding(
+				requireValue(BROWSER_JOURNEY_FIXTURE.steps[3]),
+				BROWSER_JOURNEY_FIXTURE.parameters,
+			),
+		).toBe(false)
+		expect(core.isBrowserJourneyBinding({ parameter: 'email' })).toBe(true)
+		expect(core.isBrowserJourneyTarget({ role: 'button', name: 'Add to cart' })).toBe(true)
+		expect(core.isBrowserJourneyTab({ url: 'https://shop.example.test/cart', title: 'Cart' })).toBe(
+			true,
+		)
+		expect(core.collectBrowserJourneyBindings(BROWSER_JOURNEY_FIXTURE.steps)).toEqual(
+			new Map([['email', ['type.text']]]),
+		)
+		expect(
+			core.resolveBrowserJourneyBinding({ parameter: 'email' }, { email: 'ada@example.test' }),
+		).toBe('ada@example.test')
+		expect(core.deriveBrowserJourneyTrigger(requireValue(BROWSER_JOURNEY_FIXTURE.steps[3]))).toBe(
+			'Email',
+		)
+		expect(core.deriveBrowserJourneySecret('Confirm password')).toBe('confirmPassword')
+		expect(core.deriveBrowserJourneySecret('Password', ['password'])).toBe('secret1')
+		expect(core.collectBrowserJourneyTextBindings(BROWSER_JOURNEY_FIXTURE.steps)).toEqual(['email'])
+		expect(core.generateBrowserRunId()).toMatch(/^\d{4}-\d{2}-\d{2}T.+-[0-9a-f]+$/u)
+		const edited = core.editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+			{ operation: 'remove', id: 's3' },
+			{ operation: 'add', step: { action: 'press', arguments: { key: 'Enter' } }, after: 's4' },
+		])
+		expect(edited.steps.map((step) => step.id)).toEqual(['s1', 's2', 's4', 's6', 's5'])
+		expect(edited.next).toBe(7)
+		expect(() =>
+			core.editBrowserJourney(BROWSER_JOURNEY_FIXTURE, [
+				{ operation: 'declare', name: 'coupon', parameter: { default: 'TEA10' } },
+			]),
+		).toThrow(expect.objectContaining({ code: 'JOURNEY_EDIT' }))
+		expect(
+			core.compileBrowserJourneyValue(
+				{ text: { parameter: 'email' }, submit: true },
+				new Map([['email', 'inputs.email']]),
+			),
+		).toBe('{ text: inputs.email, submit: true }')
+		expect(
+			core.compileBrowserJourney(BROWSER_JOURNEY_FIXTURE, { language: 'typescript' }).gaps,
+		).toEqual([])
+		const error: unknown = new core.BrowserError('ARGUMENT', 'A positive limit is required', {
+			limit: 0,
+		})
+		expect(core.isBrowserError(error)).toBe(true)
+		expect(core.isBrowserStepError(error)).toBe(false)
+		if (core.isBrowserError(error)) expect(error.code).toBe('ARGUMENT')
+	})
+
+	it('executes the conditional store, recorder, and manager contracts described by the guide', async () => {
+		const {
+			createMemoryBrowserJourneyStore,
+			createMemoryBrowserRunStore,
+			isBrowserPage,
+			createBrowserToolset,
+			compileBrowserJourney,
+		} = await import('@src/core')
+		const { BROWSER_JOURNEY_FIXTURE, createBrowserElementFixture, replyOk } =
+			await import('./setup.js')
+		const store = createMemoryBrowserJourneyStore()
+		const first = await store.set(BROWSER_JOURNEY_FIXTURE, { exclusive: true })
+		expect(first.revision).toBe(1)
+		await expect(store.set(BROWSER_JOURNEY_FIXTURE, { exclusive: true })).rejects.toMatchObject({
+			code: 'JOURNEY_STALE',
+		})
+		expect(
+			(await store.set(BROWSER_JOURNEY_FIXTURE, { revision: requireValue(first.revision) }))
+				.revision,
+		).toBe(2)
+		await expect(store.set(BROWSER_JOURNEY_FIXTURE, { revision: 1 })).rejects.toMatchObject({
+			code: 'JOURNEY_STALE',
+		})
+		await expect(
+			store.set(BROWSER_JOURNEY_FIXTURE, { revision: 2, exclusive: false }),
+		).rejects.toMatchObject({ code: 'ARGUMENT' })
+		expect((await store.get('add-kettle'))?.revision).toBe(2)
+		expect((await store.list({ offset: 0, limit: 20 })).faults).toEqual([])
+		expect((await store.set(BROWSER_JOURNEY_FIXTURE)).revision).toBe(3)
+		const runs = createMemoryBrowserRunStore()
+		const slot = await runs.create('add-kettle')
+		expect(await runs.capture(slot, 's2.png', new Uint8Array([1]))).toBeUndefined()
+		expect('write' in runs).toBe(false)
+		const fixture = await createBrowserElementFixture()
+		replyOk(fixture.transport, 'Runtime.addBinding')
+		replyOk(fixture.transport, 'Page.addScriptToEvaluateOnNewDocument')
+		replyOk(fixture.transport, 'Runtime.removeBinding')
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			expect(isBrowserPage(fixture.page)).toBe(true)
+			const recorder = fixture.page.recorder
+			expect(recorder).toBe(fixture.page.recorder)
+			expect(recorder.started).toBe(false)
+			await recorder.start()
+			expect(recorder.started).toBe(true)
+			await recorder.stop()
+			await toolset.start()
+			const result = await toolset.execute({ id: '1', name: 'read', arguments: { from: 1 } })
+			expect(result.result.success).toBe(true)
+			await toolset.destroy()
+			expect(fixture.page.closed).toBe(false)
+			expect(
+				compileBrowserJourney(BROWSER_JOURNEY_FIXTURE, { language: 'typescript' }).source,
+			).toContain('toolset.follow')
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 
 	it('audit repair 8: published examples use addressed read calls and no removed footer constant', async () => {
 		const readme = requireValue(files['README.md'])
