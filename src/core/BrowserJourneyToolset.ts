@@ -313,7 +313,15 @@ export class BrowserJourneyToolset {
 		}
 		let saved: BrowserJourneyRevision
 		try {
-			saved = await this.#store.set(snapshot.value, { exclusive: true, signal })
+			saved = await this.#store.set(
+				{
+					...snapshot.value,
+					...(snapshot.value.start === undefined
+						? {}
+						: { start: this.#toolset.redact(snapshot.value.start) }),
+				},
+				{ exclusive: true, signal },
+			)
 		} catch (error) {
 			if (signal.aborted) throw error
 			if (isBrowserError(error) && error.code === 'JOURNEY_STALE')

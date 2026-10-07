@@ -12,7 +12,7 @@ import type { CDPSentMessage } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool } from '@orkestrel/tool'
-import { createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
+import { createRecorder, readProperty, requireValue, waitForCondition } from '@orkestrel/test'
 import {
 	BrowserContext,
 	BrowserReplay,
@@ -21,6 +21,7 @@ import {
 	createBrowserToolset,
 	renderBrowserRun,
 	validateBrowserRun,
+	parseBrowserJourney,
 } from '@src/core'
 import {
 	BROWSER_SELECT_SECRET,
@@ -31,10 +32,133 @@ import {
 	createBrowserJourneyMalformedInputs,
 	createBrowserViewDouble,
 	PNG_BASE64,
+	BROWSER_ELEMENT_AX_FIXTURE,
+	BROWSER_LEGACY_JOURNEY_JSON,
+	emitBrowserNavigation,
 	replyOk,
 } from '../../setup.js'
 
 describe('BrowserReplay', () => {
+	it('journey start: navigates from another page and waits for load before resolving s1', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			evaluation: (message) =>
+				fixture.transport.reply(message.id, { result: { value: fixture.page.url } }),
+			accessibility: (message) =>
+				fixture.transport.reply(message.id, {
+					nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.filter(
+						(node) =>
+							message.params?.['frameId'] !== 'child' &&
+							(fixture.page.url === 'https://example.test/catalogue' || node.nodeId !== 'link'),
+					),
+				}),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		const runs = new MemoryBrowserRunStore()
+		const journey = {
+			...createBrowserJourneyFixture([
+				{ action: 'click', arguments: {}, target: { role: 'link', name: 'Home' } },
+			]),
+			start: 'https://example.test/catalogue',
+		}
+		try {
+			await toolset.start()
+			expect((await fixture.page.elements.find({ role: 'link', name: 'Home' })).length).toBe(0)
+			fixture.transport.onSend('Page.navigate', (message) => {
+				fixture.transport.reply(message.id, { frameId: 'main', loaderId: 'catalogue' })
+				emitBrowserNavigation(
+					fixture.transport,
+					'session-main',
+					'main',
+					journey.start,
+					'catalogue',
+					['request', 'start', 'commit'],
+				)
+			})
+			const replaying = new BrowserReplay(toolset, { journey }, { runs }).execute()
+			await waitForCondition(
+				'replay starts navigation',
+				() => fixture.transport.sent.some((message) => message.method === 'Page.navigate'),
+				{ budget: 1000 },
+			)
+			expect(
+				fixture.transport.sent.some((message) => message.method === 'Input.dispatchMouseEvent'),
+			).toBe(false)
+			emitBrowserNavigation(fixture.transport, 'session-main', 'main', journey.start, 'catalogue', [
+				'load',
+			])
+			fixture.transport.event('Page.loadEventFired', { timestamp: 1 }, 'session-main')
+			const run = await replaying
+			expect(run.outcome, JSON.stringify(run)).toBe('complete')
+			expect(run.steps.map((step) => step.id)).toEqual(['s1'])
+			expect(run.steps[0]?.result).toContain('Clicked link "Home"')
+			expect(run.journey.start).toBe(journey.start)
+			expect((await runs.get(journey.name, run.id))?.journey.start).toBe(journey.start)
+			expect(() => validateBrowserRun(run)).not.toThrow()
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: a failed load stops before s1 and persists the navigation failure', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		const runs = new MemoryBrowserRunStore()
+		const journey = { ...createBrowserJourneyFixture(), start: 'https://example.test/unreachable' }
+		try {
+			await toolset.start()
+			fixture.transport.onSend('Page.navigate', (message) =>
+				fixture.transport.reply(message.id, { errorText: 'net::ERR_CONNECTION_REFUSED' }),
+			)
+			replyOk(fixture.transport, 'Page.stopLoading')
+			const run = await new BrowserReplay(toolset, { journey }, { runs }).execute()
+			expect(run.outcome).toBe('stopped')
+			expect(run.steps).toEqual([])
+			expect(renderBrowserRun(run)).toBe(
+				'Replay of check-ready stopped before s1 of 1: its start page https://example.test/unreachable did not load: Navigation failed: net::ERR_CONNECTION_REFUSED.',
+			)
+			expect(await runs.get(journey.name, run.id)).toEqual(run)
+			expect(() => validateBrowserRun(run)).not.toThrow()
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: enforces the toolset schemes before s1', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page, { schemes: ['https:'] })
+		const journey = { ...createBrowserJourneyFixture(), start: 'http://example.test/' }
+		try {
+			await toolset.start()
+			const run = await new BrowserReplay(toolset, { journey }).execute()
+			expect(run.outcome).toBe('stopped')
+			expect(run.steps).toEqual([])
+			expect(renderBrowserRun(run)).toBe(
+				'Replay of check-ready stopped before s1 of 1: its start page http://example.test/ did not load: Navigation refused: the http: scheme is not allowed; use https:.',
+			)
+			expect(fixture.transport.sent.some((message) => message.method === 'Page.navigate')).toBe(
+				false,
+			)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: an older file loads and replays on the current page', async () => {
+		const stored: unknown = JSON.parse(BROWSER_LEGACY_JOURNEY_JSON)
+		const journey = requireValue(parseBrowserJourney(readProperty(stored, 'journey')))
+		const view = createBrowserViewDouble()
+		const toolset = createBrowserToolset(view)
+		try {
+			await toolset.start()
+			const run = await new BrowserReplay(toolset, { journey }).execute()
+			expect(journey).not.toHaveProperty('start')
+			expect(run.outcome).toBe('complete')
+			expect(view.calls).toEqual(['wait Legacy ready', 'outline'])
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	it('keeps an upstream secret select refusal out of the recorded run and render', async () => {
 		const fixture = await createBrowserSecretSelectFixture(
 			`No option ${JSON.stringify(BROWSER_SELECT_SECRET)} or ${BROWSER_SELECT_SECRET}`,

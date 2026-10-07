@@ -423,6 +423,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				const secret = call.name === 'type' && call.arguments['secret'] === true
 				this.#actions.set(signal, {
 					action: call.name,
+					start: this.redact(this.#cursor.url),
 					arguments: cloneJSONRecord(
 						Object.fromEntries(
 							Object.entries(call.arguments).filter(([key]) => !secret || key !== 'text'),
@@ -1370,6 +1371,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const pending = this.#pending
 			if (!answer && pending !== undefined) await this.#race(pending, '', signal, !answer)
 			if (!answer && this.#pending === pending) this.#pending = undefined
+			const action = this.#actions.get(signal)
+			if (action !== undefined)
+				this.#actions.set(signal, { ...action, start: this.redact(this.#cursor.url) })
 		} catch (error) {
 			turn.resolve()
 			if (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT') {

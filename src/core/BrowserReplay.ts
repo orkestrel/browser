@@ -91,6 +91,28 @@ export class BrowserReplay implements BrowserReplayInterface {
 				this.#toolset.emitter.on('select', select)
 				cleanup.push(() => this.#toolset.emitter.off('select', select))
 			}
+			if (journey.start !== undefined) {
+				const navigation = await this.#toolset.execute(
+					{ id: 'start', name: 'navigate', arguments: { url: journey.start } },
+					{ caller: hold.token, signal: options?.signal ?? new AbortController().signal },
+				)
+				if (
+					!navigation.result.success ||
+					navigation.action?.outcome !== 'done' ||
+					navigation.action.stage === 'requested' ||
+					navigation.action.stage === 'committed'
+				) {
+					const reason = navigation.result.success
+						? (navigation.action?.receipt ?? String(navigation.result.value))
+						: navigation.result.error
+					throw new BrowserError(
+						'NAVIGATION',
+						this.#toolset.redact(
+							`its start page ${journey.start} did not load: ${reason.replace(/\.+$/, '')}.`,
+						),
+					)
+				}
+			}
 			for (const [index, step] of journey.steps.entries()) {
 				options?.signal?.throwIfAborted()
 				const previous = steps.at(-1)

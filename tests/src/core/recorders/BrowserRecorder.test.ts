@@ -179,7 +179,7 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it('records the opener click after settlement moves the view to the popup', async () => {
+	it('journey start: records the opener click after settlement moves the view to the popup', async () => {
 		const fixture = await createBrowserPopupFixture()
 		const toolset = createBrowserToolset(fixture.page)
 		const recorder = new BrowserRecorder(toolset)
@@ -199,6 +199,9 @@ describe('BrowserRecorder', () => {
 			expect(views.calls[0]?.[0]).toBe(toolset.view)
 			expect(views.calls[0]?.[0]).not.toBe(fixture.page)
 			expect(toolset.view.url).toBe('https://example.test/popup')
+			expect(
+				recorder.journey({ name: 'open-details', description: 'Open the details' }).start,
+			).toBe('https://example.test/cart')
 			expect(recorder.steps(), 'popup settlement preserves the opener click').toEqual([
 				{
 					id: 's1',

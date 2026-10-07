@@ -32,6 +32,7 @@ import {
 	BROWSER_RUN_FIXTURE,
 	createBrowserActionFixture,
 	createBrowserElementFixture,
+	emitBrowserNavigation,
 	createBrowserFailingJourneyStore,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
@@ -40,6 +41,97 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('journey start: records the first action page, not the record or destination page', async () => {
+		const fixture = await createBrowserElementFixture({
+			evaluation: (message) =>
+				fixture.transport.reply(message.id, { result: { value: fixture.page.url } }),
+		})
+		const store = createMemoryBrowserJourneyStore()
+		const toolset = createBrowserToolset(fixture.page, { journeys: { store } })
+		try {
+			await toolset.start()
+			await toolset.tools.execute({
+				id: 'record',
+				name: 'record',
+				arguments: { journey: 'open-cart' },
+			})
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/catalogue',
+				'catalogue',
+			)
+			await toolset.read()
+			fixture.transport.onSend('Page.navigate', (message) => {
+				fixture.transport.reply(message.id, { frameId: 'main', loaderId: 'checkout' })
+				emitBrowserNavigation(
+					fixture.transport,
+					'session-main',
+					'main',
+					'https://example.test/checkout',
+					'checkout',
+				)
+				fixture.transport.event('Page.loadEventFired', { timestamp: 1 }, 'session-main')
+			})
+			const action = await toolset.execute({
+				id: 'go',
+				name: 'navigate',
+				arguments: { url: 'https://example.test/checkout' },
+			})
+			expect(action.action?.outcome, JSON.stringify(action)).toBe('done')
+			const saved = await toolset.tools.execute({
+				id: 'save',
+				name: 'save',
+				arguments: { description: 'Open the cart' },
+			})
+			expect(saved.success).toBe(true)
+			expect((await store.get('open-cart'))?.journey.start).toBe('https://example.test/catalogue')
+			expect(readProperty(saved, 'value')).toContain(
+				'1: open-cart "Open the cart" starts at https://example.test/catalogue',
+			)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: omits about:blank and redacts a secret before storage', async () => {
+		for (const url of ['about:blank', 'https://example.test/?token=journey-secret']) {
+			const store = createMemoryBrowserJourneyStore()
+			const toolset = createBrowserToolset(createBrowserViewDouble({ url }), {
+				journeys: { store },
+			})
+			try {
+				await toolset.start()
+				await toolset.tools.execute({
+					id: 'record',
+					name: 'record',
+					arguments: { journey: 'sign-in' },
+				})
+				await toolset.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
+				const typed = await toolset.execute({
+					id: 'secret',
+					name: 'type',
+					arguments: { ref: 42, text: 'journey-secret', secret: true },
+				})
+				expect(typed.result.success).toBe(false)
+				expect(JSON.stringify(typed.action)).not.toContain('journey-secret')
+				await toolset.tools.execute({
+					id: 'save',
+					name: 'save',
+					arguments: { description: 'Sign in' },
+				})
+				const journey = requireValue(await store.get('sign-in')).journey
+				if (url === 'about:blank') expect(journey).not.toHaveProperty('start')
+				else {
+					expect(journey.start).toBe(toolset.redact(url))
+					expect(JSON.stringify(journey)).not.toContain('journey-secret')
+				}
+			} finally {
+				await toolset.destroy()
+			}
+		}
+	})
 	it('audit repair 11: listing search shares singular, capped matches and ranged misses with read', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		await store.set(createBrowserJourneyFixture([{ action: 'wait', arguments: { text: 'Ready' } }]))
@@ -508,7 +600,10 @@ describe('BrowserJourneyToolset', () => {
 	})
 	it('k1b omits a timed-out wait so the saved journey replays', async () => {
 		const store = createMemoryBrowserJourneyStore()
-		const { toolset, pending } = createBrowserPendingToolsetFixture({ waited: false })
+		const { toolset, pending } = createBrowserPendingToolsetFixture({
+			waited: false,
+			url: 'about:blank',
+		})
 		pending.resolve('Checked out.')
 		const journeys = new BrowserJourneyToolset(toolset, { store })
 		await toolset.start()
@@ -1040,7 +1135,7 @@ describe('BrowserJourneyToolset', () => {
 				expect(saved).toMatchObject({
 					success: true,
 					value:
-						'Saved check-form with 2 steps.\n1: check-form "Check the form"\n2: s1 wait "Ready"\n3: s2 click button "Save"\n[lines 1–3 of 3; the whole listing]',
+						'Saved check-form with 2 steps.\n1: check-form "Check the form" starts at https://example.test/form\n2: s1 wait "Ready"\n3: s2 click button "Save"\n[lines 1–3 of 3; the whole listing]',
 				})
 				expect(journeys.recording).toBeUndefined()
 				expect((await store.get('check-form'))?.revision).toBe(1)
@@ -1130,7 +1225,7 @@ describe('BrowserJourneyToolset', () => {
 				expect(saved).toMatchObject({
 					success: true,
 					value:
-						'Saved check-form with 2 steps.\n1: check-form "Check the form"\n2: s1 wait "Ready"\n3: s2 unresolved: interrupted click\n[lines 1–3 of 3; the whole listing]',
+						'Saved check-form with 2 steps.\n1: check-form "Check the form" starts at https://example.test/form\n2: s1 wait "Ready"\n3: s2 unresolved: interrupted click\n[lines 1–3 of 3; the whole listing]',
 				})
 				expect(journeys.recording).toBeUndefined()
 				expect((await memory.get('check-form'))?.revision).toBe(1)
@@ -1936,12 +2031,26 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 
 	describe('secrets', () => {
 		it('keeps a secret out of the listing and the run render', async () => {
-			const fixture = await createBrowserElementFixture()
+			const fixture = await createBrowserElementFixture({
+				evaluation: (message) =>
+					fixture.transport.reply(message.id, { result: { value: fixture.page.url } }),
+			})
 			const toolset = createBrowserToolset(fixture.page)
 			const store = createMemoryBrowserJourneyStore()
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			await toolset.start()
 			try {
+				fixture.transport.onSend('Page.navigate', (message) => {
+					fixture.transport.reply(message.id, { frameId: 'main', loaderId: 'sign-in' })
+					emitBrowserNavigation(
+						fixture.transport,
+						'session-main',
+						'main',
+						fixture.page.url,
+						'sign-in',
+					)
+					fixture.transport.event('Page.loadEventFired', { timestamp: 1 }, 'session-main')
+				})
 				await toolset.tools.execute({ id: '1', name: 'record', arguments: { journey: 'sign-in' } })
 				const email = requireValue(
 					toolset.view.elements
@@ -1962,7 +2071,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				expect(saved).toMatchObject({
 					success: true,
 					value: `Saved sign-in with 1 step.
-1: sign-in "Sign in" (parameters: email (secret))
+1: sign-in "Sign in" starts at https://example.test/cart (parameters: email (secret))
 2: s1 type (secret) as email into textbox "Email"
 [lines 1–2 of 2; the whole listing]`,
 				})
@@ -1978,7 +2087,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				})
 				expect(readProperty<string>(replayed, 'value')).toMatch(
 					new RegExp(
-						`^Replayed sign-in: 1 of 1 steps\\.\\ns1 Typed a secret into textbox "Email" \\[ref=${email.reference}\\]`,
+						'^Replayed sign-in: 1 of 1 steps\\.\\ns1 Typed a secret into textbox "Email" \\[ref=e[1-9][0-9]*\\]',
 					),
 				)
 				for (const result of [saved, listed, replayed]) {

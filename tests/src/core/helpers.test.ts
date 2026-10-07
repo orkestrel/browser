@@ -1134,6 +1134,23 @@ describe('settleBrowserTeardown', () => {
 })
 
 describe('journey editing and rendering', () => {
+	it('journey start: removing s1 retains the start and renders it before parameters', () => {
+		const journey = { ...BROWSER_JOURNEY_FIXTURE, start: 'https://shop.example.test/catalogue' }
+		const edited = editBrowserJourney(journey, [{ operation: 'remove', id: 's1' }])
+		expect(edited.start).toBe(journey.start)
+		expect(edited.steps[0]?.id).toBe('s2')
+		expect(renderBrowserJourney(edited).split('\n')[0]).toBe(
+			'add-kettle "Add the Alpine Kettle to the cart" starts at https://shop.example.test/catalogue (parameters: email)',
+		)
+		expect(
+			renderBrowserJourney({
+				...journey,
+				start: 'https://shop.example.test/' + 'x'.repeat(200),
+			}).split('\n')[0],
+		).toContain(
+			`starts at ${abbreviateBrowserText('https://shop.example.test/' + 'x'.repeat(200), 160)} (parameters: email)`,
+		)
+	})
 	it('attributes an empty result to the removal even before a later declaration', () => {
 		const journey = {
 			...BROWSER_JOURNEY_FIXTURE,

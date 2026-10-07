@@ -147,6 +147,17 @@ describe('isBrowserPage', () => {
 })
 
 describe('journey validators', () => {
+	it('journey start: accepts format 1 with or without a string start and refuses other values', () => {
+		expect(() => validateBrowserJourney(BROWSER_JOURNEY_FIXTURE)).not.toThrow()
+		expect(() =>
+			validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, start: 'https://shop.example.test/' }),
+		).not.toThrow()
+		for (const start of [null, 42, false, [], {}]) {
+			expect(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, start })).toThrow(
+				'has malformed journey fields',
+			)
+		}
+	})
 	it('recognizes binding coordinates and contains hostile context reads', () => {
 		expect(
 			isBrowserJourneyValidationContext({ parameter: 'email', step: 's4', field: 'text' }),

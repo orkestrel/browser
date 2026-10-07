@@ -3290,7 +3290,7 @@ export function renderBrowserJourney(journey: BrowserJourney): string {
 	const defaults = Object.fromEntries(
 		parameters.map(([name, parameter]) => [name, parameter.default ?? name]),
 	)
-	const heading = `${journey.name} ${JSON.stringify(journey.description)}${parameters.length === 0 ? '' : ` (parameters: ${parameters.map(([name, parameter]) => `${name}${parameter.secret === true ? ' (secret)' : ''}`).join(', ')})`}`
+	const heading = `${journey.name} ${JSON.stringify(journey.description)}${journey.start === undefined ? '' : ` starts at ${abbreviateBrowserText(journey.start, 160)}`}${parameters.length === 0 ? '' : ` (parameters: ${parameters.map(([name, parameter]) => `${name}${parameter.secret === true ? ' (secret)' : ''}`).join(', ')})`}`
 	const lines = journey.steps.map((step) => {
 		const name =
 			step.target === undefined
@@ -3463,7 +3463,9 @@ export function renderBrowserRun(run: BrowserRun, view?: string): string {
 		run.outcome === 'complete'
 			? `Replayed ${run.journey.name}: ${run.steps.length} of ${run.journey.steps.length} steps.`
 			: run.outcome === 'stopped'
-				? `Replay of ${run.journey.name} stopped at ${at} of ${run.journey.steps.length}: ${reason}.`
+				? run.steps.length === 0 && run.journey.start !== undefined && run.fault !== undefined
+					? `Replay of ${run.journey.name} stopped before s1 of ${run.journey.steps.length}: ${run.fault.replace(/\.+$/, '')}.`
+					: `Replay of ${run.journey.name} stopped at ${at} of ${run.journey.steps.length}: ${reason}.`
 				: `Replay of ${run.journey.name} aborted at ${at} of ${run.journey.steps.length}.`
 	const lines = [
 		heading,
@@ -3589,7 +3591,12 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 		throw new BrowserError('STORE_FORMAT', 'Has an unknown journey format')
 	if (!isString(value['name']) || !BROWSER_JOURNEY_NAME_PATTERN.test(value['name']))
 		throw new BrowserError('JOURNEY_INVALID', 'Invariant 1 (name): has an invalid journey name')
-	if (!isString(value['description']) || !isArray(value['steps']) || !isRecord(value['parameters']))
+	if (
+		!isString(value['description']) ||
+		(value['start'] !== undefined && !isString(value['start'])) ||
+		!isArray(value['steps']) ||
+		!isRecord(value['parameters'])
+	)
 		throw new BrowserError(
 			'JOURNEY_INVALID',
 			'Invariant 6 (JSON round trip): has malformed journey fields',

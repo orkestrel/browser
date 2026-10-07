@@ -1768,6 +1768,9 @@ export interface BrowserJourneyStep extends BrowserJourneyStepInput {
  * - `format` — the file format, `BROWSER_JOURNEY_FORMAT_VERSION`
  * - `name` — the journey's name, matching `BROWSER_JOURNEY_NAME_PATTERN`
  * - `description` — what the journey achieves, in one sentence
+ * - `start` — the first recorded step's page URL, redacted before storage; absent for
+ *   `about:blank`. Edits retain it, including removal of the first step. Format 1 files
+ *   without it replay on the current page.
  * - `parameters` — the declared parameters by name
  * - `next` — the number the next added step takes, persisted so a removed id is never reused
  * - `steps` — the steps in order
@@ -1776,6 +1779,7 @@ export interface BrowserJourney {
 	readonly format: 1
 	readonly name: string
 	readonly description: string
+	readonly start?: string
 	readonly parameters: Readonly<Record<string, BrowserJourneyParameter>>
 	readonly next: number
 	readonly steps: readonly BrowserJourneyStep[]
@@ -1908,6 +1912,7 @@ export interface BrowserRecorderOptions {
  *
  * @remarks
  * - `action` — the tool's name
+ * - `start` — the view's URL before dispatch, with registered secrets redacted
  * - `arguments` — the call's arguments, without the text of a secret `type`
  * - `target` — the element the call's reference resolved to, captured before the input was
  *   dispatched: its role, exact accessible name, reference, and, in the page placement, frame
@@ -1923,6 +1928,7 @@ export interface BrowserRecorderOptions {
  */
 export interface BrowserAction {
 	readonly action: string
+	readonly start?: string
 	readonly arguments: Readonly<Record<string, JSONValue>>
 	readonly target?: {
 		readonly role: string
@@ -2024,7 +2030,7 @@ export interface BrowserRunStep {
 
 /**
  * Describes one run of a journey; `inputs` omits secret values; `fault` carries the run file's
- * write failure.
+ * write failure or the failure that stopped it before a step ran.
  *
  * @remarks
  * - `format` — the file format, `BROWSER_JOURNEY_FORMAT_VERSION`
@@ -2036,7 +2042,7 @@ export interface BrowserRunStep {
  * - `output` — the `console` and `error` events of a trusted view that declares `emitter`,
  *   during the run; absent for an untrusted view and for a journey with a secret parameter
  * - `elapsed` — the milliseconds the run took
- * - `fault` — why writing the run file failed
+ * - `fault` — why writing the run file failed or why it stopped before a step ran
  */
 export interface BrowserRun {
 	readonly format: 1
@@ -2087,6 +2093,12 @@ export interface BrowserReplayInterface {
 	 * Prepares the journey, holds the toolset, performs each step in order, and resolves with the
 	 * run, which stops at the first step that did not complete. Rejects with a coded `BrowserError`
 	 * at preparation, before any side effect, and on a destroyed toolset.
+	 *
+	 * @remarks
+	 * When the journey carries `start`, navigates the current tab there before resolving s1,
+	 * using the toolset's schemes and navigation settlement. A refused or unsettled start
+	 * stops the run before s1 and retains the navigation failure in `fault`. Without `start`,
+	 * resolves steps against the current page.
 	 */
 	execute(options?: BrowserCallOptions): Promise<BrowserRun>
 }

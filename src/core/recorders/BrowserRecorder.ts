@@ -41,6 +41,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	#active = false
 	#steps: readonly BrowserJourneyStep[] = []
 	#pending: BrowserAction | undefined
+	#start: string | undefined
 
 	constructor(toolset: BrowserToolsetInterface, options?: BrowserRecorderOptions) {
 		this.#toolset = toolset
@@ -94,12 +95,16 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 							gap: `interrupted ${this.#pending.action}`,
 						},
 					]
-		return buildBrowserJourney(steps, options)
+		return {
+			...buildBrowserJourney(steps, options),
+			...(this.#start === undefined ? {} : { start: this.#toolset.redact(this.#start) }),
+		}
 	}
 
 	clear(): void {
 		this.#steps = []
 		this.#pending = undefined
+		this.#start = undefined
 		this.#emitter.emit('clear')
 	}
 
@@ -126,6 +131,8 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 			action.outcome === 'timeout'
 		)
 			return
+		if (this.#steps.length === 0)
+			this.#start = action.start === 'about:blank' || action.start === '' ? undefined : action.start
 		if (action.outcome === 'interrupted') {
 			this.#pending = structuredClone(action)
 			return
