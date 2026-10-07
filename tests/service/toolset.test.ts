@@ -548,7 +548,38 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect(await toolset.read({ from: 1 })).not.toContain('The page changed since the last view')
 		},
 	)
-	it('line redesign: equals the measured cart range-miss reply and type refusal', async () => {
+	it('element best-match: policy token keeps the plain miss and window at 34', async () => {
+		const record = requireValue(
+			SERVICE_LINE_VIEW_RECORDS.find((row) => row.record.includes('paging')),
+		)
+		const context = await browser.isolate()
+		contexts.push(context)
+		const page = await context.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`(history.replaceState(null, '', '/policy'), document.open(), document.write(${JSON.stringify(record.html)}), document.close())`,
+		)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		for (const to of [undefined, 80, 60]) {
+			const result = await toolset.read({
+				from: 34,
+				...(to === undefined ? {} : { to }),
+				search: 'policy token',
+			})
+			expect(result).toContain(
+				`No line from 34 ${to === 60 ? 'to 60' : 'on'} matches "policy token".\n34: `,
+			)
+			expect(result).not.toContain('best match')
+			expect(result).not.toMatch(/^4: /m)
+			expect(result).toMatch(
+				/\[lines 34–\d+ of 80; 33 above, \d+ below; call read with from \d+ for more\]$/,
+			)
+			expect(result.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		}
+	})
+	it('element best-match: equals the measured cart range-miss reply and type refusal', async () => {
 		const record = requireValue(
 			SERVICE_LINE_VIEW_RECORDS.find((row) => row.record.includes('cart')),
 		)

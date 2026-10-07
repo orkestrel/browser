@@ -756,7 +756,8 @@ export function renderBrowserSearch(
 /** Renders a bounded window with numbered rows and an exact continuation.
  * @remarks A partial-view line follows the page header when rows remain after the window.
  * A changed projection carries its change note even from line 1. A search missing its range
- * reports the first page-wide best match without moving the window. Its query is abbreviated
+ * reports the first page-wide best match only when that line carries an element reference,
+ * without moving the window; otherwise it keeps the plain miss. Its query is abbreviated
  * to 120 UTF-16 units. The miss sentence is reserved with the minimum window; when the whole
  * quoted row cannot also fit, only the sentence is shown, ending with a period.
  * @param passage - Projection and contextual metadata
@@ -794,7 +795,7 @@ export function renderBrowserPassage(passage: BrowserPassage, limit: number): st
 	) {
 		const match = scanBrowserLines(passage.lines, passage.search)[0]
 		const line = match === undefined ? undefined : passage.lines[match - 1]
-		if (line !== undefined) {
+		if (line !== undefined && line.spans.some((span) => span.category === 'reference')) {
 			const range =
 				passage.to !== undefined && passage.to < total
 					? `from ${passage.from} to ${passage.to}`

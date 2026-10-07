@@ -2493,7 +2493,8 @@ export interface BrowserOutline {
  * - `from` — first line, inclusive. Default: 1
  * - `to` — last line, inclusive. Default: as many lines as fit
  * - `search` — words whose best in-range match opens the window; a range miss reports the
- *   page-wide best match without moving the window
+ *   first page-wide best match only when it carries an element reference, without moving
+ *   the window; otherwise it keeps the plain miss
  * - `limit` — character room including the header and footer. Default: the toolset limit
  */
 export interface BrowserToolsetReadOptions extends BrowserCallOptions {

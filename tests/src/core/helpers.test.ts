@@ -1528,10 +1528,76 @@ describe('write conditions and page lifecycle', () => {
 })
 
 describe('line projection and whole windows', () => {
+	it('element best-match: text-only winners keep the plain miss, including ties and reference-shaped text', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Shipping policy [ref=e9]' }] },
+			{
+				spans: [
+					{ category: 'text', text: 'Shipping policy' },
+					{ category: 'reference', text: ' [ref=e1]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other details' }] },
+			{ spans: [{ category: 'text', text: 'End' }] },
+		]
+		expect(scanBrowserLines(lines, 'policy token')).toEqual([1, 2])
+		for (const to of [3, 4]) {
+			const result = renderBrowserPassage(
+				{
+					title: 'Policy',
+					url: '/',
+					lines,
+					from: 3,
+					to,
+					tabs: [],
+					changed: false,
+					search: 'policy token',
+				},
+				4000,
+			)
+			expect(result).toContain(
+				`No line from 3 ${to === 3 ? 'to 3' : 'on'} matches "policy token".\n3: Other details`,
+			)
+			expect(result).not.toContain('best match')
+			expect(result).not.toMatch(/^[12]: /m)
+		}
+	})
+	it('element best-match: element winners outside the range are quoted with the window unmoved', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other products' }] },
+		]
+		const result = renderBrowserPassage(
+			{
+				title: 'Shop',
+				url: '/',
+				lines,
+				from: 2,
+				tabs: [],
+				changed: false,
+				search: 'Cedar Tea Tray',
+			},
+			4000,
+		)
+		expect(result).toContain(
+			'No line from 2 on matches "Cedar Tea Tray"; the best match is line 1:\n1: Cedar Tea Tray [ref=e7]\n2: Other products',
+		)
+		expect(result).toMatch(/\[lines 2–2 of 2; 1 above; end of page\]$/)
+	})
 	it('redesign fix: abbreviates the best-match query before reserving the sentence', () => {
 		const search = 'Cedar Tea Tray ' + 'zzzz '.repeat(700)
 		const lines: readonly BrowserLine[] = [
-			{ spans: [{ category: 'text', text: 'Cedar Tea Tray' }] },
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
 			{ spans: [{ category: 'text', text: 'Other products' }] },
 		]
 		const result = renderBrowserPassage(
@@ -1539,7 +1605,7 @@ describe('line projection and whole windows', () => {
 			4000,
 		)
 		expect(result).toContain(
-			`No line from 2 on matches ${JSON.stringify(abbreviateBrowserText(search, 120))}; the best match is line 1:\n1: Cedar Tea Tray\n2: Other products`,
+			`No line from 2 on matches ${JSON.stringify(abbreviateBrowserText(search, 120))}; the best match is line 1:\n1: Cedar Tea Tray [ref=e7]\n2: Other products`,
 		)
 		expect(result.length).toBeLessThanOrEqual(4000)
 	})
@@ -1575,8 +1641,18 @@ describe('line projection and whole windows', () => {
 	})
 	it('redesign fix: selects the first of tied page-wide best matches', () => {
 		const lines: readonly BrowserLine[] = [
-			{ spans: [{ category: 'text', text: 'Cedar Tea Tray first' }] },
-			{ spans: [{ category: 'text', text: 'Cedar Tea Tray second' }] },
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray first' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray second' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
 			{ spans: [{ category: 'text', text: 'Other products' }] },
 		]
 		expect(scanBrowserLines(lines, 'Cedar Tea Tray')).toEqual([1, 2])
@@ -1593,11 +1669,14 @@ describe('line projection and whole windows', () => {
 				},
 				4000,
 			),
-		).toContain('the best match is line 1:\n1: Cedar Tea Tray first\n3: Other products')
+		).toContain('the best match is line 1:\n1: Cedar Tea Tray first [ref=e7]\n3: Other products')
 	})
 	it('redesign fix: names an explicit shortened range in both miss sentences only', () => {
 		const lines: readonly BrowserLine[] = ['One', 'Two', 'Cedar'].map((text) => ({
-			spans: [{ category: 'text', text }],
+			spans: [
+				{ category: 'text', text },
+				{ category: 'reference', text: ' [ref=e7]' },
+			],
 		}))
 		for (const from of [1, 2]) {
 			expect(renderBrowserSearch(lines, from, 2, 'Missing').text).toBe(
@@ -1739,8 +1818,18 @@ describe('line projection and whole windows', () => {
 	})
 	it('line redesign: range misses show the page best match without moving the window and bound long notes', () => {
 		const lines: readonly BrowserLine[] = [
-			{ spans: [{ category: 'text', text: 'Cedar' }] },
-			{ spans: [{ category: 'text', text: 'Cedar Tea Tray' }] },
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
 			{ spans: [{ category: 'text', text: 'Other products' }] },
 			{ spans: [{ category: 'text', text: 'Shipping' }] },
 		]
@@ -1756,14 +1845,14 @@ describe('line projection and whole windows', () => {
 		}
 		const result = renderBrowserPassage(passage, 4000)
 		expect(result).toContain(
-			'This read shows lines 3–3 of 4; line 4 is not shown yet.\nNo line from 3 to 3 matches "Cedar Tea Tray"; the best match is line 2:\n2: Cedar Tea Tray\n3: Other products',
+			'This read shows lines 3–3 of 4; line 4 is not shown yet.\nNo line from 3 to 3 matches "Cedar Tea Tray"; the best match is line 2:\n2: Cedar Tea Tray [ref=e7]\n3: Other products',
 		)
 		expect(result).toMatch(/\[lines 3–3 of 4; 2 above, 1 below; call read with from 4 for more\]$/)
 		expect(renderBrowserPassage({ ...passage, from: 1 }, 4000)).not.toContain('best match')
 		expect(
 			renderBrowserPassage({ ...passage, from: 1, to: 1, search: 'Tea Tray' }, 4000),
 		).toContain(
-			'No line from 1 to 1 matches "Tea Tray"; the best match is line 2:\n2: Cedar Tea Tray\n1: Cedar',
+			'No line from 1 to 1 matches "Tea Tray"; the best match is line 2:\n2: Cedar Tea Tray [ref=e7]\n1: Cedar',
 		)
 		expect(renderBrowserPassage({ ...passage, search: 'Absent' }, 4000)).toContain(
 			'No line from 3 to 3 matches "Absent".',
