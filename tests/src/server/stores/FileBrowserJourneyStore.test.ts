@@ -48,7 +48,7 @@ describe('BrowserJourneyToolset file listing', () => {
 		await toolset.start()
 		try {
 			await store.set(BROWSER_JOURNEY_FIXTURE)
-			const slot = await runs.open('add-kettle')
+			const slot = await runs.create('add-kettle')
 			await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
 			await runs.capture(slot, 's1.png', new Uint8Array([137, 80]))
 			expect(
@@ -95,7 +95,7 @@ describe('BrowserJourneyToolset file listing', () => {
 		const journeys = new BrowserJourneyToolset(toolset, { store, runs })
 		try {
 			const saved = await store.set(BROWSER_JOURNEY_FIXTURE)
-			const slot = await runs.open('add-kettle')
+			const slot = await runs.create('add-kettle')
 			await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
 			await files.lock(join(scratch.path, 'add-kettle', 'journey.lock'), async () => {
 				await expect(
@@ -184,7 +184,9 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 				'The installed link capability probe cannot create and read this link category',
 			)
 			createLink(path, path + '-moved')
-			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+			await expect(store.set(journey, { revision: 1 })).rejects.toMatchObject({
+				code: 'JOURNEY_PATH',
+			})
 			await expect(store.delete(journey.name)).rejects.toMatchObject({
 				code: 'JOURNEY_PATH',
 			})
@@ -203,7 +205,10 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 		})
 		try {
 			await expect(
-				store.set({ ...journey, description: 'Replacement' }, 1, { signal: controller.signal }),
+				store.set(
+					{ ...journey, description: 'Replacement' },
+					{ revision: 1, ...{ signal: controller.signal } },
+				),
 			).rejects.toThrow('counter write aborted')
 		} finally {
 			watcher.close()
@@ -211,6 +216,6 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 		expect(await store.get(journey.name)).toEqual(saved)
 		expect(await readFile(join(directory, 'revision'), 'utf8')).toBe('1')
 		expect((await readdir(directory)).sort()).toEqual(['journey.json', 'revision'])
-		expect((await store.set(journey, 1)).revision).toBe(2)
+		expect((await store.set(journey, { revision: 1 })).revision).toBe(2)
 	})
 })

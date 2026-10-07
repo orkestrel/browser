@@ -62,6 +62,7 @@ export class BrowserContext implements BrowserContextInterface {
 	readonly #cookies: BrowserCookieManager
 	readonly #permissions: BrowserPermissionManager
 	readonly #storage: BrowserStorageManager
+	#emulate: ((page: BrowserPageInterface) => Promise<void>) | undefined
 	readonly #emulation: BrowserEmulationManager
 	readonly #pages: Map<string, BrowserPage> = new Map()
 	readonly #creating: Set<Promise<BrowserPage>> = new Set()
@@ -91,7 +92,13 @@ export class BrowserContext implements BrowserContextInterface {
 		this.#cookies = new BrowserCookieManager(client, options?.id)
 		this.#permissions = new BrowserPermissionManager(client, options?.id)
 		this.#storage = new BrowserStorageManager(this.#cookies, () => this.pages())
-		this.#emulation = new BrowserEmulationManager(() => this.pages(), options?.emulation)
+		this.#emulation = new BrowserEmulationManager(
+			() => this.pages(),
+			options?.emulation,
+			(attach) => {
+				this.#emulate = attach
+			},
+		)
 	}
 
 	get emitter(): EmitterInterface<BrowserContextEventMap> {
@@ -295,7 +302,7 @@ export class BrowserContext implements BrowserContextInterface {
 			)
 			this.#observe(page)
 			await this.#configurePage(page)
-			await this.#emulation.attach(page)
+			await this.#emulate?.(page)
 			if (viewport !== undefined) await this.#applyViewport(page, viewport)
 
 			return page
@@ -334,7 +341,7 @@ export class BrowserContext implements BrowserContextInterface {
 			)
 			this.#observe(page)
 			await this.#configurePage(page)
-			await this.#emulation.attach(page)
+			await this.#emulate?.(page)
 			if (viewport !== undefined) await this.#tryViewport(page, viewport)
 
 			return page
@@ -600,7 +607,7 @@ export class BrowserContext implements BrowserContextInterface {
 		try {
 			await Promise.allSettled([this.#publishing.get(popup.opener?.target ?? ''), predecessor])
 			if (this.#pages.get(popup.target) === popup) return
-			await this.#emulation.attach(popup)
+			await this.#emulate?.(popup)
 			if (this.#shutdown !== undefined || popup.closed) {
 				await popup.destroy()
 				return

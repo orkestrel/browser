@@ -76,7 +76,7 @@ describe('BrowserDOMElementManager', () => {
 					'Footer chrome nobody reads',
 				].join('\n'),
 			)
-			expect(outline).toMatchObject({ url: 'about:srcdoc', title: 'Probe', count: 4, total: 4 })
+			expect(outline).toMatchObject({ url: 'about:srcdoc', title: 'Probe', listed: 4, found: 4 })
 		})
 
 		it('omits hidden, aria-hidden, and display: none elements with their subtrees', async () => {
@@ -220,7 +220,7 @@ describe('BrowserDOMElementManager', () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			const bounded = await view.elements.outline({ limit: 1 })
-			expect(bounded).toMatchObject({ count: 1, total: 4 })
+			expect(bounded).toMatchObject({ listed: 1, found: 4 })
 			expect(bounded.lines.map(renderBrowserLine).join('\n')).not.toContain('e2 link')
 			const nav = probe.document.querySelector('nav')
 			nav?.setAttribute('role', 'button')

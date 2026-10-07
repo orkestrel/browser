@@ -24,6 +24,7 @@ import {
 } from './constants.js'
 import { BrowserError, isBrowserError } from './errors.js'
 import {
+	assertBrowserPage,
 	renderBrowserToolOutput,
 	deriveBrowserToolSchema,
 	validateBrowserTimeout,
@@ -175,7 +176,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	#assert(): void {
 		if (this.#destroying !== undefined)
 			throw new BrowserError('CLOSED', 'Browser registry is destroyed')
-		this.#page.assert()
+		assertBrowserPage(this.#page, this.#client)
 	}
 
 	async #start(options?: BrowserCallOptions): Promise<boolean> {

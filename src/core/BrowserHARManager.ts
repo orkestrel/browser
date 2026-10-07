@@ -57,7 +57,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		this.#writer = writer
 	}
 
-	get recording(): boolean {
+	get active(): boolean {
 		return this.#recording
 	}
 
@@ -129,11 +129,11 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 
 	async replay(har: BrowserHAR, options?: BrowserHARReplayOptions): Promise<void> {
 		validateBrowserHAR(har)
-		if (this.#archive !== undefined) await this.#network.unroute(this.#replayHandler)
+		if (this.#archive !== undefined) await this.#network.routes.remove(this.#replayHandler)
 		this.#archive = har
 		this.#fallback = options?.fallback === true
 		try {
-			await this.#network.route({}, this.#replayHandler)
+			await this.#network.routes.add({}, this.#replayHandler)
 		} catch (error) {
 			this.#archive = undefined
 			this.#fallback = false
@@ -146,7 +146,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		const replaying = this.#archive !== undefined
 		this.#archive = undefined
 		this.#fallback = false
-		if (replaying) await this.#network.unroute(this.#replayHandler)
+		if (replaying) await this.#network.routes.remove(this.#replayHandler)
 		this.#entries.length = 0
 		this.#pending.clear()
 	}

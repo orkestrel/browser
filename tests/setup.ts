@@ -1,3 +1,4 @@
+import { BrowserCodegen } from '../src/core/recorders/BrowserCodegen.js'
 import type {
 	BrowserAction,
 	BrowserJourneyStepInput,
@@ -37,7 +38,6 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RecorderInterface } from '@orkestrel/test'
 import { BrowserPage } from '../src/core/BrowserPage.js'
 import {
-	BrowserCodegen,
 	BROWSER_CODEGEN_SOURCE,
 	BrowserError,
 	BrowserToolset,
@@ -412,10 +412,10 @@ export function createBrowserFailingJourneyStore(
 		get: store.get.bind(store),
 		delete: store.delete.bind(store),
 		list: store.list.bind(store),
-		set: async (journey, expected, options) => {
+		set: async (journey, options) => {
 			const failure = pending.shift()
 			if (failure !== undefined) throw failure
-			return store.set(journey, expected, options)
+			return store.set(journey, options)
 		},
 	}
 }
@@ -2823,8 +2823,8 @@ export class BrowserElementManagerDouble implements BrowserElementManagerInterfa
 					},
 				],
 			})),
-			count: this.#elements.length,
-			total: this.#elements.length,
+			listed: this.#elements.length,
+			found: this.#elements.length,
 			focus: undefined,
 		}
 	}
@@ -3092,6 +3092,7 @@ export function scriptFrameTree(
 /** Describes a fully started codegen fixture. */
 export interface StartedCodegenFixture extends ConnectedCDPFixture {
 	readonly codegen: BrowserCodegen
+	readonly attach: (session: string) => Promise<void>
 }
 
 /** Creates a connected client with a started codegen recorder. */
@@ -3114,9 +3115,14 @@ export async function createStartedCodegen(
 	replyOk(transport, 'Runtime.evaluate', { result: { objectId: 'target' } })
 	replyOk(transport, 'Runtime.removeBinding')
 
-	const codegen = new BrowserCodegen(client, session)
+	const attachments: Array<(session: string) => Promise<void>> = []
+	const codegen = new BrowserCodegen(client, session, undefined, undefined, (attach) => {
+		attachments.push(attach)
+	})
+	const attach = attachments[0]
+	if (attach === undefined) throw new Error('Missing recorder attachment')
 	await codegen.start()
-	return { client, transport, codegen }
+	return { client, transport, codegen, attach }
 }
 
 /** Creates the CDP payload the codegen binding delivers. */

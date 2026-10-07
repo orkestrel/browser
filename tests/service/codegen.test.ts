@@ -72,7 +72,8 @@ describe('claim 12: page recorder against the fixture event log', () => {
 	})
 
 	it('projects trusted edits, Enter, selects, both frame kinds, dialog answers, and password markers', async () => {
-		const recorder = await page.codegen()
+		const recorder = page.recorder
+		await recorder.start()
 		await requireValue((await page.elements.find({ css: '#add' }))[0]).click()
 		await requireValue((await page.elements.find({ css: '#title' }))[0]).click()
 		await page.keyboard.type('Pasta night')
@@ -152,7 +153,8 @@ describe('claim 12: page recorder against the fixture event log', () => {
 	})
 
 	it('closes edits at submission, focus departure, navigation, and stop, including contenteditable', async () => {
-		const recorder = await page.codegen()
+		const recorder = page.recorder
+		await recorder.start()
 		await page.evaluate("document.querySelector('#title').focus()")
 		await page.keyboard.insert('first')
 		await page.keyboard.press('Enter')

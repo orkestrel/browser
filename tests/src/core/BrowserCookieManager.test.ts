@@ -113,6 +113,48 @@ describe('BrowserCookieManager', () => {
 		expect(transport.sent).toEqual([])
 	})
 
+	it('removes matching cookies and restores only retained cookies in the same context', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Storage.getCookies', {
+			cookies: [
+				{
+					name: 'drop',
+					value: 'one',
+					domain: 'example.com',
+					path: '/',
+					expires: -1,
+					httpOnly: false,
+					secure: true,
+				},
+				{
+					name: 'keep',
+					value: 'two',
+					domain: 'example.com',
+					path: '/',
+					expires: -1,
+					httpOnly: false,
+					secure: true,
+				},
+			],
+		})
+		replyOk(transport, 'Storage.clearCookies')
+		replyOk(transport, 'Storage.setCookies')
+		const cookies = new BrowserCookieManager(client, 'context-1')
+		try {
+			await cookies.remove({ name: 'drop' })
+			expect(transport.sent.map((message) => message.method)).toEqual([
+				'Storage.getCookies',
+				'Storage.clearCookies',
+				'Storage.setCookies',
+			])
+			expect(transport.sent[2]?.params).toMatchObject({
+				browserContextId: 'context-1',
+				cookies: [{ name: 'keep', value: 'two' }],
+			})
+		} finally {
+			await client.close()
+		}
+	})
 	it('clears all cookies directly when no filter is supplied', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Storage.clearCookies')

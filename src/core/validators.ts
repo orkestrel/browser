@@ -54,7 +54,12 @@ export function isBrowserPage(value: unknown): value is BrowserPageInterface {
 			frame: isFunction,
 			frames: isFunction,
 			snapshot: isFunction,
-			codegen: isFunction,
+			recorder: objectOf({
+				start: isFunction,
+				stop: isFunction,
+				journey: isFunction,
+				destroy: isFunction,
+			}),
 			destroy: isFunction,
 			close: isFunction,
 			elements: objectOf({ element: isFunction, find: isFunction, outline: isFunction }),

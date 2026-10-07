@@ -20,6 +20,7 @@ import {
 	compileSelectFunction,
 } from '../compilers.js'
 import {
+	assertBrowserPage,
 	computeBrowserButtons,
 	computeBrowserModifiers,
 	extractBrowserChord,
@@ -251,7 +252,7 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				describeBrowserRefusal(this.reference, 'GONE', 'is gone because the page changed'),
 				{ reference: this.reference, reason: 'GONE' },
 			)
-		this.#input.page.assert()
+		assertBrowserPage(this.#input.page, this.#input.client)
 	}
 
 	#epoch(): number {

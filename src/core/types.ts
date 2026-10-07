@@ -632,7 +632,7 @@ export interface BrowserHandleInterface {
 	/** Reads every own property by value. */
 	properties(options?: BrowserCallOptions): Promise<Readonly<Record<string, unknown>>>
 	/** Releases the retained remote object. Idempotent. */
-	dispose(): Promise<void>
+	destroy(): Promise<void>
 }
 
 /** Runs a host function exposed into page JavaScript. */
@@ -875,9 +875,9 @@ export interface BrowserDiagnosticsInterface {
 
 /** Controls Chromium virtual time for deterministic page timers. */
 export interface BrowserClockInterface {
-	readonly installed: boolean
+	readonly active: boolean
 	/** Takes over the page clock, optionally seeding it with an epoch time. */
-	install(time?: number): Promise<void>
+	start(time?: number): Promise<void>
 	/** Suspends virtual time so no page timer advances. */
 	pause(): Promise<void>
 	/** Continues virtual time after a pause. */
@@ -886,8 +886,8 @@ export interface BrowserClockInterface {
 	 * Moves virtual time forward by the given milliseconds, firing the timers that fall due.
 	 */
 	advance(ms: number): Promise<void>
-	/** Returns the page to the real clock, and does nothing when no clock was installed. */
-	uninstall(): Promise<void>
+	/** Returns the page to the real clock, and does nothing when no clock was active. */
+	stop(): Promise<void>
 }
 
 // === Browser input
@@ -1102,8 +1102,6 @@ export interface BrowserDownloadInterface {
 	 * status is still pending. The status becomes `'aborted'` and the `abort` event fires.
 	 */
 	abort(): Promise<void>
-	/** Records one step of the download's progress. The owning page drives it. */
-	update(progress: BrowserDownloadProgress): void
 }
 
 /** Represents one console API call. */
@@ -1147,7 +1145,7 @@ export interface BrowserWorkerInterface {
 		options?: BrowserCallOptions,
 	): Promise<unknown>
 	/** Stops driving the worker locally without closing its target. */
-	detach(): void
+	destroy(): void
 	/** Closes the worker target, tolerating a worker that already terminated. Idempotent. */
 	close(): Promise<void>
 }
@@ -1272,14 +1270,6 @@ export interface BrowserWebSocketInterface {
 	readonly emitter: EmitterInterface<BrowserWebSocketEventMap>
 	readonly id: string
 	readonly url: string
-	/** Reports one received frame. The page's network manager drives it. */
-	receive(frame: BrowserWebSocketFrame): void
-	/** Reports one sent frame. The page's network manager drives it. */
-	transmit(frame: BrowserWebSocketFrame): void
-	/** Reports a connection fault. The page's network manager drives it. */
-	fail(message: string): void
-	/** Reports the connection closing and destroys the emitter. The page's network manager drives it. */
-	close(timestamp: number): void
 }
 
 /** Maps the network events a page's network manager emits. */
@@ -1461,7 +1451,7 @@ export interface BrowserHARReplayOptions {
 
 /** Provides HAR recording and replay operations. */
 export interface BrowserHARManagerInterface {
-	readonly recording: boolean
+	readonly active: boolean
 	/** Begins recording exchanges, optionally capturing response content. */
 	start(options?: BrowserHAROptions): Promise<void>
 	/** Ends recording and returns the archive, writing it when a path was given. */
@@ -1474,6 +1464,9 @@ export interface BrowserHARManagerInterface {
 
 /** Provides page-scoped network observation and interception. */
 export interface BrowserNetworkManagerInterface {
+	readonly routes: BrowserRouteManagerInterface
+	/** Applies the supplied network overrides; omitted keys retain their values. */
+	apply(options: BrowserNetworkOptions): Promise<void>
 	readonly emitter: EmitterInterface<BrowserNetworkEventMap>
 	readonly har: BrowserHARManagerInterface
 	/** Enables the Network domain and subscribes to its events. Idempotent. */
@@ -1484,16 +1477,6 @@ export interface BrowserNetworkManagerInterface {
 	text(id: string): Promise<string>
 	/** Reads one observed response body as parsed JSON. */
 	json(id: string): Promise<unknown>
-	/** Intercepts requests matching the query and hands each one to the handler. */
-	route(query: BrowserRouteQuery, handler: BrowserRouteHandler): Promise<void>
-	/** Removes one handler's routes, or every route when given none. */
-	unroute(handler?: BrowserRouteHandler): Promise<void>
-	/** Applies extra HTTP headers to every request the page makes. */
-	headers(headers: Readonly<Record<string, string>>): Promise<void>
-	/** Emulates an offline connection, or restores connectivity. */
-	offline(offline: boolean): Promise<void>
-	/** Applies HTTP basic-auth credentials, or clears them when given none. */
-	credentials(credentials?: BrowserCredentials): Promise<void>
 	/** Removes every route, unsubscribes, and disables the domains this manager enabled. */
 	destroy(): Promise<void>
 }
@@ -1550,8 +1533,10 @@ export interface BrowserCookieManagerInterface {
 	cookies(urls?: readonly string[]): Promise<readonly BrowserCookie[]>
 	/** Writes the given cookies into the context. */
 	set(cookies: readonly BrowserCookieInput[]): Promise<void>
-	/** Deletes the context cookies matching the filter, or every cookie when given none. */
-	clear(filter?: BrowserCookieFilter): Promise<void>
+	/** Removes the context cookies matching the filter; an empty filter matches every cookie. */
+	remove(filter: BrowserCookieFilter): Promise<void>
+	/** Removes every cookie from the context. */
+	clear(): Promise<void>
 }
 
 /** Provides permission override operations scoped to one browser context. */
@@ -1560,7 +1545,7 @@ export interface BrowserPermissionManagerInterface {
 	grant(permissions: readonly string[], origin?: string): Promise<void>
 	/** Denies each named permission, optionally for one origin, as its own CDP frame. */
 	deny(permissions: readonly string[], origin?: string): Promise<void>
-	/** Resets every permission override on the context. */
+	/** Removes every permission override on the context. */
 	clear(): Promise<void>
 }
 
@@ -1591,7 +1576,7 @@ export interface BrowserStorageOptions {
 /** Provides storage-state import, export, and clearing operations. */
 export interface BrowserStorageManagerInterface {
 	/** Reads the context cookies and the per-origin local and session storage. */
-	state(options?: BrowserStorageOptions): Promise<BrowserStorageState>
+	snapshot(options?: BrowserStorageOptions): Promise<BrowserStorageState>
 	/** Writes a previously read state back into the context. */
 	restore(state: BrowserStorageState): Promise<void>
 	/** Drops the storage of one origin, or of every origin when given none. */
@@ -1660,8 +1645,6 @@ export interface BrowserEmulationManagerInterface {
 	apply(options: BrowserEmulationOptions): Promise<void>
 	/** Removes every override this manager applied. */
 	clear(): Promise<void>
-	/** Applies the retained overrides to a newly created page. */
-	attach(page: BrowserPageInterface): Promise<void>
 }
 
 /** Describes proxy settings used when creating an isolated browser context. */
@@ -1914,7 +1897,7 @@ export interface BrowserRecorderInterface {
 	 * The toolset recorder includes an unanswered interrupted action as a gap in this snapshot
 	 * without stopping the recording or consuming that action's pending dialog continuation.
 	 */
-	journey(options: { readonly name: string; readonly description: string }): BrowserJourney
+	journey(input: BrowserJourneyInput): BrowserJourney
 	/** Drops the recorded steps. */
 	clear(): void
 	/** Stops recording and releases the recorder's listeners. */
@@ -2176,15 +2159,15 @@ export interface BrowserJourneyStoreInterface {
 	 * Saves the journey under its name with the next revision and returns it.
 	 *
 	 * @remarks
-	 * Rejects with `JOURNEY_STALE` when `expected` differs from the stored revision, and
-	 * with `JOURNEY_LOCKED` when another write holds the name. An omitted `expected`
-	 * permits replacement; `expected: 0` requires no stored journey, including after deletion,
-	 * while the retained revision count still advances on recreation.
+	 * Rejects with `JOURNEY_STALE` when `revision` does not match a saved journey or
+	 * `exclusive: true` finds an existing journey, and with `JOURNEY_LOCKED` when another
+	 * write holds the name. Omitting both conditions permits replacement. Supplying both
+	 * conditions, or a revision that is not a positive safe integer, rejects with `ARGUMENT`
+	 * before writing. Revisions keep advancing across deletion and recreation.
 	 */
 	set(
 		journey: BrowserJourney,
-		expected?: number,
-		options?: BrowserStoreOptions,
+		options?: BrowserJourneyWriteOptions,
 	): Promise<BrowserJourneyRevision>
 	/**
 	 * Removes the journey saved under `name` and keeps its revision count, so a recreated journey
@@ -2196,13 +2179,11 @@ export interface BrowserJourneyStoreInterface {
 	 * Returns one page of the saved journeys sorted by name, starting at `offset` and holding at
 	 * most `limit` entries, with the entries it could not read in `faults`.
 	 */
-	list(
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
-	): Promise<BrowserStorePage<BrowserJourneyRevision>>
+	list(options?: BrowserStorePageOptions): Promise<BrowserStorePage<BrowserJourneyRevision>>
 }
 
 /**
- * Names the run directory a store opened, as data.
+ * Names the run directory a store created, as data.
  *
  * @remarks
  * - `id` — the run id
@@ -2223,21 +2204,21 @@ export interface BrowserRunStoreInterface {
 	 * @returns Absolute path of the saved image
 	 * @remarks Stores without standalone file storage omit this capability.
 	 */
-	snapshot?(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string>
+	write?(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string>
 	/** Mints a run id for the journey and creates its run directory exclusively. */
-	open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot>
+	create(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot>
 	/** Returns the run stored under the journey name and id, or `undefined` when none is stored. */
 	get(name: string, id: string, options?: BrowserStoreOptions): Promise<BrowserRun | undefined>
 	/** Writes the run under the journey name and the run id it carries. */
 	set(run: BrowserRun, options?: BrowserStoreOptions): Promise<void>
 	/**
-	 * Writes capture bytes under the name into the run directory `open` created for the slot.
-	 * @param slot - Slot opened by this store
+	 * Writes capture bytes under the name into the run directory `create` created for the slot.
+	 * @param slot - Slot created by this store
 	 * @param name - Capture file name
 	 * @param bytes - Screenshot bytes to persist
 	 * @param options - Cancellation options
 	 * @returns Name the step records, or `undefined` for a store without directories
-	 * @throws {@link BrowserError} Thrown with `JOURNEY_PATH` when this store did not open the slot.
+	 * @throws {@link BrowserError} Thrown with `JOURNEY_PATH` when this store did not create the slot.
 	 */
 	capture(
 		slot: BrowserRunSlot,
@@ -2248,7 +2229,7 @@ export interface BrowserRunStoreInterface {
 	/** Removes the run stored under the journey name and id; a missing run is a no-op. */
 	delete(name: string, id: string, options?: BrowserStoreOptions): Promise<void>
 	/**
-	 * Removes every run and opened slot of a journey and returns their count, including unsaved
+	 * Removes every run and created slot of a journey and returns their count, including unsaved
 	 * slots; a missing name returns zero. File stores exclude concurrent allocation with the
 	 * journey lock and refuse a held lock with `JOURNEY_LOCKED`.
 	 * @param name - Journey name
@@ -2260,10 +2241,7 @@ export interface BrowserRunStoreInterface {
 	 * Returns one page of the journey's runs, starting at `offset` and holding at most `limit`
 	 * entries, with the entries it could not read in `faults`.
 	 */
-	list(
-		name: string,
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
-	): Promise<BrowserStorePage<BrowserRun>>
+	list(name: string, options?: BrowserStorePageOptions): Promise<BrowserStorePage<BrowserRun>>
 }
 
 /**
@@ -2313,18 +2291,6 @@ export type BrowserCodegenLanguage = 'javascript' | 'typescript'
 export interface BrowserCodegenScript {
 	readonly source: string
 	readonly gaps: readonly string[]
-}
-
-/** Records semantic page gestures and compiles the resulting journey. */
-export interface BrowserCodegenInterface extends BrowserRecorderInterface {
-	/** Installs recording on an attached frame before its owner resumes it. */
-	attach(session: string): Promise<void>
-	/** Compiles the recorded journey into a standalone module and lists its gaps. */
-	script(options: {
-		readonly name: string
-		readonly description: string
-		readonly language?: BrowserCodegenLanguage
-	}): BrowserCodegenScript
 }
 
 /** Carries a sanitized gesture from the page listener without password values. */
@@ -2550,8 +2516,10 @@ export interface BrowserOutline {
 	readonly url: string
 	readonly title: string
 	readonly lines: readonly BrowserLine[]
-	readonly count: number
-	readonly total: number
+	/** Referenced rows carried in this outline. */
+	readonly listed: number
+	/** Referenced nodes in the complete outline tree. */
+	readonly found: number
 	readonly focus: string | undefined
 }
 
@@ -3263,21 +3231,6 @@ export interface BrowserFrameInterface {
 	subscribe(method: string, handler: CDPHandler): Promise<void>
 	/** Removes a frame-session CDP event subscription. */
 	unsubscribe(method: string, handler: CDPHandler): Promise<void>
-	/**
-	 * Persists bytes through a page writer; a child frame rejects because it owns no writer.
-	 */
-	save(path: string, bytes: Uint8Array): Promise<void>
-	/**
-	 * Throws a coded `BrowserError` when the frame can no longer accept protocol work: a frame
-	 * throws after the CDP client disconnects, and a page also throws after it closes. Every
-	 * other member here calls it first.
-	 */
-	assert(): void
-	/**
-	 * Records an externally observed URL as the frame's current `url`, which a page calls from
-	 * its own `Page.frameNavigated` handler.
-	 */
-	update(url: string): void
 }
 
 // === Browser snapshot
@@ -3347,9 +3300,6 @@ export interface BrowserSnapshotInput {
 	readonly styles: readonly string[]
 }
 
-/** Names the structural ordering for a browser snapshot walk. */
-export type BrowserWalkOrder = 'depth' | 'breadth'
-
 /**
  * Describes the options for walking a browser snapshot.
  *
@@ -3359,7 +3309,6 @@ export type BrowserWalkOrder = 'depth' | 'breadth'
  */
 export interface BrowserWalkOptions {
 	readonly root?: BrowserNode
-	readonly order?: BrowserWalkOrder
 }
 
 /** Names a structural sibling relationship relative to a browser node. */
@@ -3373,9 +3322,11 @@ export type BrowserSiblingRelation = 'preceding' | 'following'
 export interface BrowserSnapshotInterface extends BrowserSnapshotInput {
 	/**
 	 * Traverses the whole capture, or one subtree when `root` is given and yielded first, in
-	 * `'depth'` order by default or in `'breadth'` order. Visits each node exactly once.
+	 * depth-first order. Visits each node exactly once.
 	 */
-	walk(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown>
+	depth(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown>
+	/** Traverses the capture or a subtree breadth-first, yielding its root first. */
+	breadth(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown>
 	/** Traverses one node's subtree in depth-first order, excluding the node itself. */
 	descendants(node: BrowserNode): Generator<BrowserNode, void, unknown>
 	/** Resolves the captured document a node belongs to. */
@@ -3536,8 +3487,8 @@ export interface BrowserPageInterface
 	 * and requested computed style.
 	 */
 	snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface>
-	/** Starts the action recorder, or returns the running one. */
-	codegen(options?: BrowserRecorderOptions): Promise<BrowserCodegenInterface>
+	/** Returns the page recorder; call start() to begin capturing gestures. */
+	readonly recorder: BrowserRecorderInterface
 	/** Releases local resources and detaches without closing the remote target. */
 	destroy(): Promise<void>
 	/** Closes the remote target and releases its resources. */
@@ -3597,3 +3548,55 @@ export interface BrowserContextInterface {
 export type BrowserContextDisposal =
 	| { readonly confirmed: true }
 	| { readonly confirmed: false; readonly error: unknown }
+
+/** Names and describes a journey built from recorded steps. */
+export interface BrowserJourneyInput {
+	readonly name: string
+	readonly description: string
+}
+
+/** Configures one page of a store listing, with cancellation. */
+export interface BrowserStorePageOptions extends BrowserStoreOptions {
+	readonly offset?: number
+	readonly limit?: number
+}
+
+/** Constrains a journey write atomically at the store. */
+export interface BrowserJourneyWriteOptions extends BrowserStoreOptions {
+	/** Requires the saved journey to have this positive revision. */
+	readonly revision?: number
+	/** If true, requires absence; if false, permits replacement. Refused with revision. */
+	readonly exclusive?: boolean
+}
+
+/** Configures the supplied network overrides without changing omitted keys. */
+export interface BrowserNetworkOptions {
+	readonly headers?: Readonly<Record<string, string>>
+	readonly offline?: boolean
+	/** Supplies credentials; explicit undefined clears them. Omission retains them. */
+	readonly credentials?: BrowserCredentials | undefined
+}
+
+/** Manages the request handlers installed on a page network. */
+export interface BrowserRouteManagerInterface {
+	/** Intercepts matching requests with this handler. */
+	add(query: BrowserRouteQuery, handler: BrowserRouteHandler): Promise<void>
+	/** Removes every route belonging to this handler. */
+	remove(handler: BrowserRouteHandler): Promise<void>
+	/** Removes every route. */
+	clear(): Promise<void>
+}
+
+/** Supplies a frame's owner-held location. */
+export interface BrowserFrameLocation {
+	readonly get: () => string
+	readonly set: (url: string) => void
+}
+
+/** Receives the private drive callbacks for an observed WebSocket. */
+export interface BrowserWebSocketDriver {
+	readonly receive: (frame: BrowserWebSocketFrame) => void
+	readonly transmit: (frame: BrowserWebSocketFrame) => void
+	readonly fail: (message: string) => void
+	readonly close: (timestamp: number) => void
+}

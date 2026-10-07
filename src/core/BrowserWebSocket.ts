@@ -1,5 +1,6 @@
 import type {
 	BrowserWebSocketEventMap,
+	BrowserWebSocketDriver,
 	BrowserWebSocketFrame,
 	BrowserWebSocketInterface,
 } from './types.js'
@@ -9,13 +10,6 @@ import { Emitter } from '@orkestrel/emitter'
 /**
  * Represents an observable WebSocket connection reconstructed from Network-domain events.
  *
- * @example
- * ```ts
- * import { BrowserWebSocket } from '@orkestrel/browser'
- *
- * const socket = new BrowserWebSocket('request-1', 'wss://example.com/live')
- * socket.emitter.on('receive', (frame) => log(frame.data))
- * ```
  */
 export class BrowserWebSocket implements BrowserWebSocketInterface {
 	readonly #emitter: Emitter<BrowserWebSocketEventMap>
@@ -23,10 +17,16 @@ export class BrowserWebSocket implements BrowserWebSocketInterface {
 	readonly #url: string
 	#closed = false
 
-	constructor(id: string, url: string) {
+	constructor(id: string, url: string, drive: (driver: BrowserWebSocketDriver) => void) {
 		this.#id = id
 		this.#url = url
 		this.#emitter = new Emitter()
+		drive({
+			receive: this.#receive.bind(this),
+			transmit: this.#transmit.bind(this),
+			fail: this.#fail.bind(this),
+			close: this.#close.bind(this),
+		})
 	}
 
 	get emitter(): EmitterInterface<BrowserWebSocketEventMap> {
@@ -41,19 +41,19 @@ export class BrowserWebSocket implements BrowserWebSocketInterface {
 		return this.#url
 	}
 
-	receive(frame: BrowserWebSocketFrame): void {
+	#receive(frame: BrowserWebSocketFrame): void {
 		if (!this.#closed) this.#emitter.emit('receive', frame)
 	}
 
-	transmit(frame: BrowserWebSocketFrame): void {
+	#transmit(frame: BrowserWebSocketFrame): void {
 		if (!this.#closed) this.#emitter.emit('transmit', frame)
 	}
 
-	fail(message: string): void {
+	#fail(message: string): void {
 		if (!this.#closed) this.#emitter.emit('error', message)
 	}
 
-	close(timestamp: number): void {
+	#close(timestamp: number): void {
 		if (this.#closed) return
 		this.#closed = true
 		this.#emitter.emit('close', timestamp)

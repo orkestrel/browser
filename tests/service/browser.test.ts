@@ -266,7 +266,7 @@ describe('Browser real launch', () => {
 			await emails[0]?.fill('ada@example.com')
 			expect(await frame.evaluate("document.querySelector('input').value")).toBe('ada@example.com')
 
-			await page.network.route({ url: '**/api', method: 'GET' }, async (route) => {
+			await page.network.routes.add({ url: '**/api', method: 'GET' }, async (route) => {
 				await route.fulfill({
 					status: 200,
 					headers: { 'content-type': 'application/json' },

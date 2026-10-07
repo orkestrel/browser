@@ -49,13 +49,16 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 		await this.#client.send('Storage.setCookies', params)
 	}
 
-	async clear(filter?: BrowserCookieFilter): Promise<void> {
+	async clear(): Promise<void> {
+		await this.#client.send(
+			'Storage.clearCookies',
+			this.#context === undefined ? {} : { browserContextId: this.#context },
+		)
+	}
+
+	async remove(filter: BrowserCookieFilter): Promise<void> {
 		const params: Record<string, unknown> = {}
 		if (this.#context !== undefined) params['browserContextId'] = this.#context
-		if (filter === undefined) {
-			await this.#client.send('Storage.clearCookies', params)
-			return
-		}
 
 		const retained = (await this.cookies()).filter((cookie) => {
 			if (filter.name !== undefined && cookie.name !== filter.name) return true

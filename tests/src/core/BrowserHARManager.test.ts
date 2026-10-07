@@ -29,7 +29,7 @@ describe('BrowserHARManager', () => {
 
 		await expect(page.network.har.start()).rejects.toThrow('network failed')
 
-		expect(page.network.har.recording).toBe(false)
+		expect(page.network.har.active).toBe(false)
 		expect(page.network.emitter.count()).toBe(baseline)
 	})
 

@@ -5,8 +5,8 @@ import type {
 	BrowserReferenceFunction,
 	BrowserCallOptions,
 	BrowserWaitOptions,
-	BrowserCodegenInterface,
-	BrowserRecorderOptions,
+	BrowserRecorderInterface,
+	BrowserDownloadProgress,
 	BrowserClockInterface,
 	BrowserDiagnosticsInterface,
 	BrowserFrameInfo,
@@ -48,7 +48,6 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserCodegen } from './recorders/BrowserCodegen.js'
 import { BrowserElementManager } from './elements/BrowserElementManager.js'
 import { BrowserRegistry } from './BrowserRegistry.js'
-import { BrowserTransition } from './BrowserTransition.js'
 import { BrowserAccessibility } from './BrowserAccessibility.js'
 import { BrowserClock } from './BrowserClock.js'
 import { BrowserDiagnostics } from './BrowserDiagnostics.js'
@@ -81,6 +80,7 @@ import {
 	compileScreenshotPreparationExpression,
 } from './compilers.js'
 import {
+	assertBrowserPage,
 	decodeBase64,
 	readBrowserSnapshot,
 	browserPDFToParams,
@@ -188,7 +188,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		string,
 		{ readonly url: string; readonly reason: BrowserNavigationReason | undefined }
 	> = new Map()
-	readonly #downloads: Map<string, BrowserDownload> = new Map()
+	readonly #downloads: Map<string, (progress: BrowserDownloadProgress) => void> = new Map()
 	readonly #workers: Map<string, BrowserWorker> = new Map()
 	readonly #popups: Map<string, BrowserPage> = new Map()
 	// A popup target an attach is initializing, so the attach that arrives second, through discovery
@@ -252,9 +252,10 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	#closed = false
 	readonly #waitRelease = new AbortController()
 	readonly #textWaits = new Map<string, number>()
-	#codegen: BrowserCodegen | undefined
+	readonly #codegen: BrowserCodegen
+	#recordFrame: ((session: string) => Promise<void>) | undefined
+	#url: string
 	#registry: BrowserRegistry | undefined
-	readonly #codegenStart: BrowserTransition<BrowserCodegen> = new BrowserTransition()
 	#navigation: Promise<BrowserNavigationResult> | undefined
 	#closing: Promise<void> | undefined
 	#releasing: Promise<void> | undefined
@@ -295,12 +296,18 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			client,
 			sessionId,
 			frameId ?? targetId,
-			url ?? 'about:blank',
+			{
+				get: () => this.#url,
+				set: (value) => {
+					this.#url = value
+				},
+			},
 			undefined,
 			undefined,
 			false,
 			() => this.#epochOf(this.id),
 			(session, call) => this.#world(this.id, session, call),
+			() => this.#assert(),
 		)
 		const held = reference === undefined ? undefined : BrowserPage.#track(client)
 		const holder = held?.get(targetId)
@@ -308,6 +315,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			throw new BrowserError('TARGET_HELD', 'Browser target already has a page', {
 				target: targetId,
 			})
+		this.#url = url ?? 'about:blank'
 		this.#client = client
 		this.#targetId = targetId
 		this.#sessionId = sessionId
@@ -315,6 +323,16 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#contextId = contextId
 		this.#opener = opener
 		this.#setup = ready ?? Promise.resolve()
+		this.#codegen = new BrowserCodegen(
+			this.#client,
+			this.#sessionId,
+			undefined,
+			() => [...this.#frameSessions.values()].map(({ session }) => session),
+			(attach) => {
+				this.#recordFrame = attach
+			},
+			() => this.#assert(),
+		)
 		this.#emitter = new Emitter({
 			...(options?.on !== undefined ? { on: options.on } : {}),
 			...(options?.error !== undefined ? { error: options.error } : {}),
@@ -417,7 +435,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async wait(text: string, options?: BrowserWaitOptions): Promise<void> {
-		this.assert()
+		this.#assert()
 		options = {
 			...options,
 			signal:
@@ -475,7 +493,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	get registry(): BrowserRegistryInterface {
-		this.assert()
+		this.#assert()
 		this.#registry ??= new BrowserRegistry(this, this.#client, this.#sessionId, this.#frameIds)
 		return this.#registry
 	}
@@ -520,11 +538,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		url: string,
 		options?: BrowserNavigationOptions,
 	): Promise<BrowserNavigationResult> {
-		this.assert()
+		this.#assert()
 		while (this.#navigation !== undefined) {
 			await this.#navigation.catch(() => undefined)
 		}
-		this.assert()
+		this.#assert()
 		const navigation = this.#navigate(url, options)
 		this.#navigation = navigation
 
@@ -536,11 +554,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async reload(options?: BrowserNavigationOptions): Promise<BrowserNavigationResult> {
-		this.assert()
+		this.#assert()
 		while (this.#navigation !== undefined) {
 			await this.#navigation.catch(() => undefined)
 		}
-		this.assert()
+		this.#assert()
 		const navigation = this.#reload(options)
 		this.#navigation = navigation
 
@@ -560,7 +578,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async screenshot(options?: BrowserScreenshotOptions): Promise<BrowserScreenshotResult> {
-		this.assert()
+		this.#assert()
 		const params: Record<string, unknown> = { ...browserScreenshotToParams(options) }
 
 		if (options?.full === true) {
@@ -645,7 +663,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			}
 
 			const bytes = decodeBase64(result['data'])
-			if (options?.path !== undefined) await this.save(options.path, bytes)
+			if (options?.path !== undefined) await this.#save(options.path, bytes)
 			return { bytes, path: options?.path }
 		} finally {
 			if (transparent) {
@@ -658,17 +676,17 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async pdf(options?: BrowserPDFOptions): Promise<BrowserPDFResult> {
-		this.assert()
+		this.#assert()
 		const result = await this.send('Page.printToPDF', browserPDFToParams(options))
 		if (!isRecord(result) || !isString(result['data'])) {
 			throw new BrowserError('PROTOCOL', 'PDF failed: no data returned')
 		}
 		const bytes = decodeBase64(result['data'])
-		if (options?.path !== undefined) await this.save(options.path, bytes)
+		if (options?.path !== undefined) await this.#save(options.path, bytes)
 		return { bytes, path: options?.path }
 	}
 
-	override async save(path: string, bytes: Uint8Array): Promise<void> {
+	async #save(path: string, bytes: Uint8Array): Promise<void> {
 		if (this.#writer === undefined) {
 			throw new BrowserError('ARGUMENT', 'Browser page has no configured file writer', { path })
 		}
@@ -681,7 +699,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async frames(): Promise<readonly BrowserFrameInterface[]> {
-		this.assert()
+		this.#assert()
 		const result = await this.send('Page.getFrameTree')
 		const frames = readBrowserFrames(result, [...this.#iframes.values()])
 		for (const { id, parent } of frames) if (parent !== undefined) this.#parents.set(id, parent)
@@ -689,7 +707,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async snapshot(options?: BrowserSnapshotOptions): Promise<BrowserSnapshotInterface> {
-		this.assert()
+		this.#assert()
 		const styles = options?.styles ?? []
 		const result = await this.send('DOMSnapshot.captureSnapshot', {
 			computedStyles: [...styles],
@@ -701,13 +719,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		)
 	}
 
-	async codegen(options?: BrowserRecorderOptions): Promise<BrowserCodegenInterface> {
-		this.assert()
-		const active = this.#codegenStart.pending
-		if (active !== undefined) return await active
-		if (this.#codegen !== undefined) return this.#codegen
-
-		return await this.#codegenStart.execute(() => this.#startCodegen(options))
+	get recorder(): BrowserRecorderInterface {
+		return this.#codegen
 	}
 
 	destroy(): Promise<void> {
@@ -736,9 +749,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		return closing
 	}
 
-	override assert(): void {
-		super.assert()
-		if (this.#closed) throw new BrowserError('CLOSED', 'Browser page is closed')
+	#assert(): void {
+		assertBrowserPage(this, this.#client)
 	}
 
 	async #navigate(
@@ -808,12 +820,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		offset: -1 | 1,
 		options?: BrowserNavigationOptions,
 	): Promise<BrowserNavigationResult> {
-		this.assert()
+		this.#assert()
 		options?.signal?.throwIfAborted()
 		while (this.#navigation !== undefined) {
 			await this.#navigation.catch(() => undefined)
 		}
-		this.assert()
+		this.#assert()
 		options?.signal?.throwIfAborted()
 		const navigation = this.#navigateHistory(offset, options)
 		this.#navigation = navigation
@@ -909,32 +921,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		try {
 			const currentUrl = await this.evaluate('location.href', options)
 			const resolved = requireBrowserString(currentUrl, 'Navigation URL')
-			this.update(resolved)
+			this.#url = resolved
 			return this.#navigationResult(watch, resolved, loader)
 		} catch (error) {
 			this.#clearNavigationWatch(watch)
 			throw error
 		}
-	}
-
-	async #startCodegen(options?: BrowserRecorderOptions): Promise<BrowserCodegen> {
-		const codegen = new BrowserCodegen(this.#client, this.#sessionId, options, () =>
-			[...this.#frameSessions.values()].map(({ session }) => session),
-		)
-		this.#codegen = codegen
-		try {
-			await codegen.start()
-		} catch (error) {
-			this.#codegen = undefined
-			await codegen.destroy()
-			throw error
-		}
-		if (this.#closed) {
-			await codegen.destroy()
-			throw new BrowserError('CLOSED', 'Browser page is closed')
-		}
-		this.#codegen = codegen
-		return codegen
 	}
 
 	async #destroy(): Promise<void> {
@@ -979,19 +971,15 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#settleReadiness(id)?.reject(new BrowserError('CLOSED', 'Browser session ended'))
 		this.#cancelLoad()
 		await this.#registry?.destroy().catch(() => undefined)
-		await this.#codegenStart.pending?.catch(() => undefined)
 		await this.#scripts.destroy().catch(() => undefined)
 		await this.#diagnostics.destroy().catch(() => undefined)
-		await this.#clock.uninstall().catch(() => undefined)
+		await this.#clock.stop().catch(() => undefined)
 		await this.#network.destroy().catch(() => undefined)
 
-		if (this.#codegen !== undefined) {
-			try {
-				await this.#codegen.destroy()
-			} catch {
-				// The recorder's session may already be unavailable.
-			}
-			this.#codegen = undefined
+		try {
+			await this.#codegen.destroy()
+		} catch {
+			// The recorder's session may already be unavailable.
 		}
 
 		this.#advancePage()
@@ -1000,7 +988,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#frameIds.clear()
 		this.#attaching.clear()
 		this.#iframes.clear()
-		for (const worker of this.#workers.values()) worker.detach()
+		for (const worker of this.#workers.values()) worker.destroy()
 		this.#workers.clear()
 		this.#popups.clear()
 		this.#claimed.clear()
@@ -1081,7 +1069,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async #ready(options?: BrowserCallOptions): Promise<void> {
-		this.assert()
+		this.#assert()
 		options?.signal?.throwIfAborted()
 		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
@@ -1329,7 +1317,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	// the load of the document it holds arrive on this session after the resume.
 	async #enableFrameSession(session: string): Promise<string> {
 		await this.#client.send('Page.enable', undefined, { session })
-		await this.#codegen?.attach(session)
+		await this.#recordFrame?.(session)
 		await this.#client.send('Runtime.enable', undefined, { session })
 		await this.#client.send('Page.setLifecycleEventsEnabled', { enabled: true }, { session })
 		await this.#client.send(
@@ -1539,7 +1527,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	#recordPopups(): BrowserPopupRecordInterface {
-		this.assert()
+		this.#assert()
 		const key = Symbol('popups')
 		this.#records.set(key, { opened: 0, targets: new Set(), outcomes: new Map() })
 		return {
@@ -1760,7 +1748,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			this.#dom = this.#loader ?? 'initial'
 			for (const id of this.#readiness.keys()) this.#settleReadiness(id)?.resolve()
 		}
-		this.update(frame['url'])
+		this.#url = frame['url']
 		this.#emitter.emit('navigate', frame['url'], false)
 	}
 
@@ -1882,7 +1870,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		if (!isString(frame)) return
 		this.#advanceFrame(frame)
 		if (frame !== this.id || !isString(params['url'])) return
-		this.update(params['url'])
+		this.#url = params['url']
 		this.#emitter.emit('navigate', params['url'], true)
 	}
 
@@ -1962,8 +1950,11 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			start.url,
 			start.name,
 			this.#contextId,
+			(update) => {
+				this.#downloads.set(start.id, update)
+			},
 		)
-		this.#downloads.set(start.id, download)
+
 		this.#emitter.emit('download', download)
 	}
 
@@ -1973,7 +1964,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const [id, progress] = decoded
 		const download = this.#downloads.get(id)
 		if (download === undefined) return
-		download.update(progress)
+		download(progress)
 		if (progress.status !== 'pending') this.#downloads.delete(id)
 	}
 
@@ -2136,7 +2127,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		if (isString(target)) {
 			const worker = this.#workers.get(target)
 			if (worker !== undefined) {
-				worker.detach()
+				worker.destroy()
 				this.#workers.delete(target)
 			}
 			const popup = this.#popups.get(target)

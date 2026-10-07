@@ -12,14 +12,14 @@ import { isFiniteNumber } from '@orkestrel/contract'
  * import { BrowserClock } from '@orkestrel/browser'
  *
  * const clock = new BrowserClock(page)
- * await clock.install(Date.UTC(2026, 0, 1))
+ * await clock.start(Date.UTC(2026, 0, 1))
  * await clock.advance(5_000)
- * await clock.uninstall()
+ * await clock.stop()
  * ```
  */
 export class BrowserClock implements BrowserClockInterface {
 	readonly #frame: BrowserFrameInterface
-	#installed = false
+	#active = false
 	#advancing = false
 	#budgetResolve: (() => void) | undefined
 	readonly #budgetHandler = this.#handleBudget.bind(this)
@@ -28,12 +28,12 @@ export class BrowserClock implements BrowserClockInterface {
 		this.#frame = frame
 	}
 
-	get installed(): boolean {
-		return this.#installed
+	get active(): boolean {
+		return this.#active
 	}
 
-	async install(time = Date.now()): Promise<void> {
-		if (this.#installed) throw new BrowserError('ARGUMENT', 'Browser clock is already installed')
+	async start(time = Date.now()): Promise<void> {
+		if (this.#active) throw new BrowserError('ARGUMENT', 'Browser clock is already active')
 		if (!isFiniteNumber(time) || time < 0) {
 			throw new BrowserError('ARGUMENT', 'Browser clock time must be a non-negative finite epoch', {
 				time,
@@ -43,7 +43,7 @@ export class BrowserClock implements BrowserClockInterface {
 			policy: 'pause',
 			initialVirtualTime: time / 1000,
 		})
-		this.#installed = true
+		this.#active = true
 	}
 
 	async pause(): Promise<void> {
@@ -109,18 +109,18 @@ export class BrowserClock implements BrowserClockInterface {
 		if (failure !== undefined) throw failure
 	}
 
-	async uninstall(): Promise<void> {
-		if (!this.#installed) return
+	async stop(): Promise<void> {
+		if (!this.#active) return
 		this.#idle()
 		await this.#frame.send('Emulation.setVirtualTimePolicy', {
 			policy: 'advance',
 			maxVirtualTimeTaskStarvationCount: 10_000,
 		})
-		this.#installed = false
+		this.#active = false
 	}
 
 	#assert(): void {
-		if (!this.#installed) throw new BrowserError('ARGUMENT', 'Browser clock is not installed')
+		if (!this.#active) throw new BrowserError('ARGUMENT', 'Browser clock is not active')
 	}
 
 	#idle(): void {

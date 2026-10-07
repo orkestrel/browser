@@ -1469,7 +1469,13 @@ describe('packed browse binary', () => {
 				const store = createFileBrowserJourneyStore({ root })
 				const read = requireValue(await store.get(name), `no ${name} under ${root}`)
 				expect(read.revision).toBe(1)
-				expect((await store.set(read.journey, read.revision)).revision).toBe(2)
+				expect(
+					(
+						await store.set(read.journey, {
+							...(read.revision === undefined ? {} : { revision: read.revision }),
+						})
+					).revision,
+				).toBe(2)
 				await writer.writeFile(original)
 				await writer.close()
 				expect(await refusal).toHaveProperty(

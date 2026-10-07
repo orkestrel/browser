@@ -70,7 +70,7 @@ export class BrowserWorker implements BrowserWorkerInterface {
 		return await this.#client.send(method, params, { session: this.#session, ...options })
 	}
 
-	detach(): void {
+	destroy(): void {
 		this.#closed = true
 	}
 

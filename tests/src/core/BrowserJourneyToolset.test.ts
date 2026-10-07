@@ -201,7 +201,7 @@ describe('BrowserJourneyToolset', () => {
 		const store = createMemoryBrowserJourneyStore()
 		const runs = new MemoryBrowserRunStore()
 		const saved = await store.set(BROWSER_JOURNEY_FIXTURE)
-		const slot = await runs.open(saved.journey.name)
+		const slot = await runs.create(saved.journey.name)
 		await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const journeys = new BrowserJourneyToolset(toolset, { store, runs, readonly: true })
@@ -232,10 +232,10 @@ describe('BrowserJourneyToolset', () => {
 		const runs = new MemoryBrowserRunStore()
 		await store.set(BROWSER_JOURNEY_FIXTURE)
 		const sibling = await store.set(createBrowserJourneyFixture())
-		const first = await runs.open('add-kettle')
+		const first = await runs.create('add-kettle')
 		await runs.set({ ...BROWSER_RUN_FIXTURE, id: first.id })
-		const unsaved = await runs.open('add-kettle')
-		const other = await runs.open('check-ready')
+		const unsaved = await runs.create('add-kettle')
+		const other = await runs.create('check-ready')
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const journeys = new BrowserJourneyToolset(toolset, { store, runs })
 		try {
@@ -1151,9 +1151,9 @@ describe('BrowserJourneyToolset', () => {
 					calls.handler('get')
 					return memory.get(name, options)
 				},
-				set: (journey, expected, options) => {
+				set: (journey, options) => {
 					calls.handler('set')
-					return memory.set(journey, expected, options)
+					return memory.set(journey, options)
 				},
 				delete: memory.delete.bind(memory),
 				list: (options) => {
@@ -1378,10 +1378,10 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 					if (read !== undefined && scripted[0] === 'stale') await memory.set(read.journey)
 					return read
 				},
-				set: async (journey, expected, options) => {
+				set: async (journey, options) => {
 					if (scripted.shift() === 'locked')
 						throw new BrowserError('JOURNEY_LOCKED', 'Journey check-ready is locked.')
-					return memory.set(journey, expected, options)
+					return memory.set(journey, options)
 				},
 				delete: memory.delete.bind(memory),
 				list: memory.list.bind(memory),
@@ -1747,7 +1747,7 @@ page "Form" https://example.test/form (3 lines)
 					await waitForAbort(requireValue(options?.signal))
 					throw requireValue(options?.signal).reason
 				},
-				set: async (_journey, _expected, options) => {
+				set: async (_journey, options) => {
 					reached.handler('set')
 					await waitForAbort(requireValue(options?.signal))
 					throw requireValue(options?.signal).reason
@@ -1792,7 +1792,7 @@ page "Form" https://example.test/form (3 lines)
 			const writes = createRecorder<readonly [boolean]>()
 			const store: BrowserJourneyStoreInterface = {
 				get: memory.get.bind(memory),
-				set: async (_journey, _expected, options) => {
+				set: async (_journey, options) => {
 					writes.handler(options?.signal?.aborted ?? true)
 					await waitForAbort(requireValue(options?.signal))
 					throw requireValue(options?.signal).reason

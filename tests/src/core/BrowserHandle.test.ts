@@ -39,8 +39,8 @@ describe('BrowserHandle', () => {
 		replyOk(transport, 'Runtime.releaseObject')
 		const handle = new BrowserHandle(client, 'session-1', 'object-1')
 
-		await handle.dispose()
-		await handle.dispose()
+		await handle.destroy()
+		await handle.destroy()
 
 		expect(
 			transport.sent.filter((message) => message.method === 'Runtime.releaseObject'),

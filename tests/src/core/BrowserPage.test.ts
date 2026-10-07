@@ -88,7 +88,7 @@ describe('BrowserPage', () => {
 			const second = fixture.page.elements.outline({ timeout: 200 })
 			const outcome = second.catch((error: unknown) => error)
 			fixture.transport.reply(seed, { result: { value: 'complete' } })
-			expect(await outcome).toHaveProperty('count', 6)
+			expect(await outcome).toHaveProperty('listed', 6)
 			expect(attempts).toBe(1)
 		} finally {
 			await fixture.client.close()
@@ -107,7 +107,7 @@ describe('BrowserPage', () => {
 		})
 		try {
 			await expect(fixture.page.elements.outline()).rejects.toThrow('Readiness unavailable')
-			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('count', 6)
+			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('listed', 6)
 			expect(attempts).toBe(2)
 		} finally {
 			await fixture.client.close()
@@ -1694,8 +1694,8 @@ describe('BrowserPage', () => {
 		})
 	})
 
-	describe('codegen()', () => {
-		it('starts a recorder and returns the same instance on repeat calls', async () => {
+	describe('recorder', () => {
+		it('keeps a dormant recorder until explicitly started and returns the same instance', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptFrameTree(transport)
 			replyOk(transport, 'Runtime.enable')
@@ -1707,8 +1707,15 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Runtime.evaluate')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const first = await page.codegen()
-			const second = await page.codegen()
+			const first = page.recorder
+			expect(first.started).toBe(false)
+			expect(transport.sent).toEqual([])
+			expect('codegen' in page).toBe(false)
+			expect('attach' in first).toBe(false)
+			expect('script' in first).toBe(false)
+			await first.start()
+			const second = page.recorder
+			await second.start()
 
 			expect(first.started).toBe(true)
 			expect(second).toBe(first)
@@ -1910,7 +1917,8 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Runtime.evaluate')
 			replyOk(transport, 'Runtime.removeBinding')
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const codegen = await page.codegen()
+			const codegen = page.recorder
+			await codegen.start()
 
 			transport.event('Target.targetDestroyed', { targetId: 'target-1' })
 			await waitForCondition('the codegen recorder stopped', () => !codegen.started)
@@ -1934,7 +1942,8 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Target.closeTarget')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const codegen = await page.codegen()
+			const codegen = page.recorder
+			await codegen.start()
 			await page.close()
 
 			expect(codegen.started).toBe(false)
@@ -1977,7 +1986,7 @@ describe('BrowserPage', () => {
 			const sent = transport.sent.length
 
 			await expect(page.title()).rejects.toSatisfy(isBrowserError)
-			await expect(page.codegen()).rejects.toSatisfy(isBrowserError)
+			await expect(page.recorder.start()).rejects.toSatisfy(isBrowserError)
 			expect(transport.sent).toHaveLength(sent)
 		})
 	})

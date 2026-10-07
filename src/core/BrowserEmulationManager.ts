@@ -22,10 +22,15 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 	readonly #pages: BrowserPagesFunction
 	#options: BrowserEmulationOptions | undefined
 
-	constructor(pages: BrowserPagesFunction, options?: BrowserEmulationOptions) {
+	constructor(
+		pages: BrowserPagesFunction,
+		options?: BrowserEmulationOptions,
+		drive?: (attach: (page: BrowserPageInterface) => Promise<void>) => void,
+	) {
 		if (options !== undefined) validateBrowserEmulationOptions(options)
 		this.#pages = pages
 		this.#options = options
+		drive?.(this.#attach.bind(this))
 	}
 
 	async apply(options: BrowserEmulationOptions): Promise<void> {
@@ -69,7 +74,7 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 		this.#options = undefined
 	}
 
-	async attach(page: BrowserPageInterface): Promise<void> {
+	async #attach(page: BrowserPageInterface): Promise<void> {
 		const options = this.#options
 		if (options === undefined) return
 		try {
@@ -129,13 +134,13 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 			})
 		}
 		if (options.offline !== undefined) {
-			await page.network.offline(options.offline)
+			await page.network.apply({ offline: options.offline })
 		}
 		if (options.headers !== undefined) {
-			await page.network.headers(options.headers)
+			await page.network.apply({ headers: options.headers })
 		}
 		if (options.credentials !== undefined) {
-			await page.network.credentials(options.credentials)
+			await page.network.apply({ credentials: options.credentials })
 		}
 	}
 
@@ -160,11 +165,11 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 			await page.send('Emulation.setEmulatedMedia', { media: '', features: [] })
 		}
 		if (options.offline !== undefined) {
-			await page.network.offline(false)
+			await page.network.apply({ offline: false })
 		}
 		if (options.headers !== undefined) {
-			await page.network.headers({})
+			await page.network.apply({ headers: {} })
 		}
-		if (options.credentials !== undefined) await page.network.credentials(undefined)
+		if (options.credentials !== undefined) await page.network.apply({ credentials: undefined })
 	}
 }

@@ -23,13 +23,21 @@ export class BrowserDownload implements BrowserDownloadInterface {
 	#total = 0
 	#path: string | undefined
 
-	constructor(client: CDPClientInterface, id: string, url: string, name: string, context?: string) {
+	constructor(
+		client: CDPClientInterface,
+		id: string,
+		url: string,
+		name: string,
+		context?: string,
+		drive?: (update: (progress: BrowserDownloadProgress) => void) => void,
+	) {
 		this.#client = client
 		this.#context = context
 		this.#id = id
 		this.#url = url
 		this.#name = name
 		this.#emitter = new Emitter()
+		drive?.(this.#update.bind(this))
 	}
 
 	get emitter(): EmitterInterface<BrowserDownloadEventMap> {
@@ -71,7 +79,7 @@ export class BrowserDownload implements BrowserDownloadInterface {
 		await this.#client.send('Browser.cancelDownload', params)
 	}
 
-	update(progress: BrowserDownloadProgress): void {
+	#update(progress: BrowserDownloadProgress): void {
 		if (this.#status !== 'pending') return
 		this.#received = progress.received
 		this.#total = progress.total

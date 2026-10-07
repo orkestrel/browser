@@ -1019,7 +1019,10 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 					const read = await files.get(name, options)
 					// A second store over the same root saves the journey between this read and the
 					// edit's write.
-					if (read !== undefined && concurrent) await writer.set(read.journey, read.revision)
+					if (read !== undefined && concurrent)
+						await writer.set(read.journey, {
+							...(read.revision === undefined ? {} : { revision: read.revision }),
+						})
 					return read
 				},
 				set: files.set.bind(files),

@@ -1,8 +1,7 @@
 import type {
+	BrowserJourneyInput,
 	BrowserCodegenGesture,
-	BrowserCodegenInterface,
-	BrowserCodegenLanguage,
-	BrowserCodegenScript,
+	BrowserRecorderInterface,
 	BrowserJourney,
 	BrowserJourneyStep,
 	BrowserJourneyStepInput,
@@ -21,7 +20,6 @@ import {
 	BROWSER_CODEGEN_SOURCE,
 	BROWSER_INTERACTIVE_ROLES,
 } from '../constants.js'
-import { compileBrowserJourney } from '../compilers.js'
 import { BrowserError } from '../errors.js'
 import {
 	buildBrowserJourney,
@@ -33,13 +31,10 @@ import {
 import { parseCodegenActionPayload } from '../parsers.js'
 
 /**
- * Records semantic page gestures and compiles them into a journey module.
- * @example
- * const recorder = await page.codegen()
- * await recorder.stop()
- * const script = recorder.script({ name: "add-note", description: "Add a note" })
+ * Records semantic page gestures as journey steps.
  */
-export class BrowserCodegen implements BrowserCodegenInterface {
+export class BrowserCodegen implements BrowserRecorderInterface {
+	readonly #assertion: (() => void) | undefined
 	readonly #client: CDPClientInterface
 	readonly #session: string
 	readonly #frames: (() => readonly string[]) | undefined
@@ -69,10 +64,14 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		session: string,
 		options?: BrowserRecorderOptions,
 		frames?: () => readonly string[],
+		drive?: (attach: (session: string) => Promise<void>) => void,
+		assert?: () => void,
 	) {
+		this.#assertion = assert
 		this.#client = client
 		this.#session = session
 		this.#frames = frames
+		drive?.(this.#attach.bind(this))
 		this.#emitter = new Emitter({
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
@@ -86,6 +85,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	}
 
 	async start(): Promise<void> {
+		this.#assertion?.()
 		if (this.#shutdown !== undefined || this.#emitter.destroyed)
 			throw new BrowserError('CLOSED', 'The recorder was destroyed')
 		await this.#stopping.pending
@@ -96,6 +96,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 			try {
 				await this.#install(this.#session)
 				await Promise.all((this.#frames?.() ?? []).map((session) => this.#install(session)))
+				this.#assertion?.()
 				this.#started = true
 				this.#emitter.emit('start')
 			} catch (error) {
@@ -104,12 +105,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 			}
 		})
 	}
-	/**
-	 * Installs recording on an attached frame before its owner resumes it.
-	 * @param session - The attached frame session
-	 * @returns Completion of listener installation
-	 */
-	async attach(session: string): Promise<void> {
+	async #attach(session: string): Promise<void> {
 		if (
 			(!this.#started && this.#starting.pending === undefined) ||
 			this.#stopping.pending !== undefined ||
@@ -136,18 +132,8 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 	steps(): readonly BrowserJourneyStep[] {
 		return structuredClone(this.#steps)
 	}
-	journey(options: { readonly name: string; readonly description: string }): BrowserJourney {
+	journey(options: BrowserJourneyInput): BrowserJourney {
 		return buildBrowserJourney(this.#steps, options)
-	}
-	script(options: {
-		readonly name: string
-		readonly description: string
-		readonly language?: BrowserCodegenLanguage
-	}): BrowserCodegenScript {
-		return compileBrowserJourney(
-			this.journey({ name: options.name, description: options.description }),
-			options.language === undefined ? {} : { language: options.language },
-		)
 	}
 	clear(): void {
 		this.#epoch += 1

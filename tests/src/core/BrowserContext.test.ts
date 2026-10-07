@@ -91,6 +91,36 @@ describe('BrowserContext', () => {
 	})
 
 	describe('create()', () => {
+		it('finishes inherited emulation before publishing or resolving a created page', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			scriptCDPAttach(transport)
+			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
+			const emulations = createRecorder<[CDPSentMessage]>()
+			transport.onSend('Emulation.setLocaleOverride', emulations.handler)
+			const pages = createRecorder<[BrowserPageInterface]>()
+			const context = new BrowserContext(client, {
+				emulation: { locale: 'de-DE' },
+				on: { page: pages.handler },
+			})
+			let resolved = false
+			const creating = context.create().then((page) => {
+				resolved = true
+				return page
+			})
+			try {
+				await waitForCondition('emulation is awaiting its response', () => emulations.count === 1)
+				expect(resolved).toBe(false)
+				expect(pages.count).toBe(0)
+				expect(requireValue(emulations.calls[0]?.[0]).params).toEqual({ locale: 'de-DE' })
+				transport.reply(requireValue(emulations.calls[0]?.[0]).id, {})
+				const page = await creating
+				expect(page.target).toBe('target-1')
+				expect(pages.calls).toEqual([[page]])
+			} finally {
+				await client.close()
+				await context.destroy()
+			}
+		})
 		it('creates, attaches, and enables domains for a new page', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptCDPAttach(transport)

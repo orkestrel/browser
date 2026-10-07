@@ -3,6 +3,7 @@ import type {
 	BrowserRunSlot,
 	BrowserRunStoreInterface,
 	BrowserStoreOptions,
+	BrowserStorePageOptions,
 	BrowserStorePage,
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
@@ -28,7 +29,7 @@ import { FileBrowserStore } from './FileBrowserStore.js'
  * still refuses conflicting mutations and allocations from another process.
  * @example
  * const store = new FileBrowserRunStore({ root: directory })
- * const slot = await store.open('check-ready')
+ * const slot = await store.create('check-ready')
  */
 export class FileBrowserRunStore implements BrowserRunStoreInterface {
 	static readonly #allocations = new Map<string, Promise<void>>()
@@ -40,7 +41,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		this.#files = new FileBrowserStore(options)
 	}
 
-	async snapshot(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string> {
+	async write(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string> {
 		options?.signal?.throwIfAborted()
 		const owned = new Uint8Array(bytes)
 		const directory = await this.#files.allocate(
@@ -60,7 +61,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		}
 	}
 
-	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
+	async create(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)
 		const path = this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_DIRECTORY)
@@ -194,7 +195,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 
 	async list(
 		name: string,
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
+		options?: BrowserStorePageOptions,
 	): Promise<BrowserStorePage<BrowserRun>> {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)

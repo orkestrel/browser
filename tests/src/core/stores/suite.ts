@@ -16,6 +16,57 @@ export function describeBrowserJourneyStore(
 	factory: () => BrowserJourneyStoreInterface | Promise<BrowserJourneyStoreInterface>,
 ): void {
 	describe(`${name}`, () => {
+		it('refuses incompatible conditions and invalid revisions before any write', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			for (const options of [
+				{ revision: 1, exclusive: true },
+				{ revision: 1, exclusive: false },
+				{ revision: 0 },
+				{ revision: -1 },
+				{ revision: 1.5 },
+				{ revision: Number.NaN },
+				{ revision: Number.POSITIVE_INFINITY },
+				{ revision: Number.MAX_SAFE_INTEGER + 1 },
+			]) {
+				await expect(store.set(journey, options)).rejects.toMatchObject({ code: 'ARGUMENT' })
+				expect(await store.get(journey.name)).toBeUndefined()
+			}
+			const saved = await store.set(journey)
+			await expect(
+				store.set({ ...journey, description: 'Rejected' }, { revision: 1, exclusive: true }),
+			).rejects.toMatchObject({ code: 'ARGUMENT' })
+			expect(await store.get(journey.name)).toEqual(saved)
+			expect((await store.set(journey, { exclusive: false })).revision).toBe(2)
+		})
+		it('accepts exactly one competing exclusive creator and one revision writer', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			for (const options of [{ exclusive: true }, { revision: 1 }]) {
+				const outcomes = await Promise.allSettled([
+					store.set({ ...journey, description: 'First' }, options),
+					store.set({ ...journey, description: 'Second' }, options),
+				])
+				expect(outcomes.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+				const saved = outcomes.find((result) => result.status === 'fulfilled')
+				if (saved?.status !== 'fulfilled') throw new Error('No accepted write')
+				expect(await store.get(journey.name)).toEqual(saved.value)
+				const refused = outcomes.filter((result) => result.status === 'rejected')
+				for (const result of refused)
+					expect(['JOURNEY_STALE', 'JOURNEY_LOCKED']).toContain(result.reason.code)
+			}
+			expect((await store.get(journey.name))?.revision).toBe(2)
+		})
+		it('owns the write conditions while an asynchronous backend acquires its lock', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			const options = { exclusive: true }
+			const saving = store.set({ ...journey, description: 'Rejected' }, options)
+			options.exclusive = false
+			await expect(saving).rejects.toMatchObject({ code: 'JOURNEY_STALE' })
+			expect((await store.get(journey.name))?.revision).toBe(1)
+		})
 		it('gets missing entries and deletes missing names', async () => {
 			const store = await factory()
 			expect(await store.get('missing')).toBeUndefined()
@@ -60,26 +111,32 @@ export function describeBrowserJourneyStore(
 			const store = await factory()
 			const journey = createBrowserJourneyFixture()
 			expect((await store.set(journey)).revision).toBe(1)
-			expect((await store.set({ ...journey, description: 'Accepted' }, 1)).revision).toBe(2)
-			await expect(store.set({ ...journey, description: 'Stale' }, 1)).rejects.toMatchObject({
+			expect(
+				(await store.set({ ...journey, description: 'Accepted' }, { revision: 1 })).revision,
+			).toBe(2)
+			await expect(
+				store.set({ ...journey, description: 'Stale' }, { revision: 1 }),
+			).rejects.toMatchObject({
 				code: 'JOURNEY_STALE',
 				message: 'Journey check-ready changed since you read it',
 			})
 			expect((await store.get(journey.name))?.journey.description).toBe('Accepted')
 		})
-		it('creates only an absent journey with expected zero, including after deletion', async () => {
+		it('creates only an absent journey with exclusive creation, including after deletion', async () => {
 			const store = await factory()
 			const journey = createBrowserJourneyFixture()
-			const saved = await store.set(journey, 0)
+			const saved = await store.set(journey, { exclusive: true })
 			expect(saved.revision).toBe(1)
-			await expect(store.set({ ...journey, description: 'Replacement' }, 0)).rejects.toMatchObject({
+			await expect(
+				store.set({ ...journey, description: 'Replacement' }, { exclusive: true }),
+			).rejects.toMatchObject({
 				code: 'JOURNEY_STALE',
 				message: `Journey ${journey.name} changed since you read it`,
 			})
 			expect(await store.get(journey.name)).toEqual(saved)
 			await store.delete(journey.name)
-			expect((await store.set(journey, 0)).revision).toBe(2)
-			await expect(store.set(journey, 1)).rejects.toMatchObject({
+			expect((await store.set(journey, { exclusive: true })).revision).toBe(2)
+			await expect(store.set(journey, { revision: 1 })).rejects.toMatchObject({
 				code: 'JOURNEY_STALE',
 				message: `Journey ${journey.name} changed since you read it`,
 			})
@@ -90,9 +147,13 @@ export function describeBrowserJourneyStore(
 			await store.set(journey)
 			await store.delete(journey.name)
 			expect(await store.get(journey.name)).toBeUndefined()
-			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'JOURNEY_STALE' })
+			await expect(store.set(journey, { revision: 1 })).rejects.toMatchObject({
+				code: 'JOURNEY_STALE',
+			})
 			expect((await store.set(journey)).revision).toBe(2)
-			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'JOURNEY_STALE' })
+			await expect(store.set(journey, { revision: 1 })).rejects.toMatchObject({
+				code: 'JOURNEY_STALE',
+			})
 		})
 		it('refuses negative journey paging', async () => {
 			const store = await factory()
@@ -137,7 +198,7 @@ export function describeBrowserJourneyStore(
 			const store = await factory()
 			const options = { signal: AbortSignal.abort(new Error('store aborted')) }
 			await expect(store.get('missing', options)).rejects.toThrow('store aborted')
-			await expect(store.set(createBrowserJourneyFixture(), undefined, options)).rejects.toThrow(
+			await expect(store.set(createBrowserJourneyFixture(), { ...options })).rejects.toThrow(
 				'store aborted',
 			)
 			await expect(store.delete('missing', options)).rejects.toThrow('store aborted')
@@ -165,10 +226,10 @@ export function describeBrowserRunStore(
 		it('clears saved runs and unsaved slots without touching another journey', async () => {
 			const store = await factory()
 			const journey = BROWSER_RUN_FIXTURE.journey.name
-			const first = await store.open(journey)
+			const first = await store.create(journey)
 			await store.set({ ...BROWSER_RUN_FIXTURE, id: first.id })
-			const unsaved = await store.open(journey)
-			const sibling = await store.open('other-journey')
+			const unsaved = await store.create(journey)
+			const sibling = await store.create('other-journey')
 			expect(await store.clear(journey)).toBe(2)
 			expect(await store.list(journey)).toEqual({ entries: [], truncated: false, faults: [] })
 			for (const slot of [first, unsaved]) {
@@ -182,14 +243,14 @@ export function describeBrowserRunStore(
 			await store.capture(sibling, 's1.png', new Uint8Array([2]))
 			expect(await store.clear(journey)).toBe(0)
 			expect(await store.clear('missing')).toBe(0)
-			const recreated = await store.open(journey)
+			const recreated = await store.create(journey)
 			await store.set({ ...BROWSER_RUN_FIXTURE, id: recreated.id })
 			expect((await store.list(journey)).entries.map((run) => run.id)).toEqual([recreated.id])
 		})
 		it('refuses invalid journey names in run operations', async () => {
 			const store = await factory()
 			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
-				await expect(store.open(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(store.create(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
 				await expect(store.clear(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
 				await expect(store.get(invalid, BROWSER_RUN_FIXTURE.id)).rejects.toMatchObject({
 					code: 'JOURNEY_PATH',
@@ -209,7 +270,7 @@ export function describeBrowserRunStore(
 				await store.get(BROWSER_RUN_FIXTURE.journey.name, BROWSER_RUN_FIXTURE.id),
 			).toBeUndefined()
 			const other = await factory()
-			const slot = await other.open(BROWSER_RUN_FIXTURE.journey.name)
+			const slot = await other.create(BROWSER_RUN_FIXTURE.journey.name)
 			await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
 				code: 'JOURNEY_PATH',
 			})
@@ -234,14 +295,14 @@ export function describeBrowserRunStore(
 		it('refuses capture on a slot opened by another store', async () => {
 			const store = await factory()
 			const other = await factory()
-			const slot = await other.open('add-kettle')
+			const slot = await other.create('add-kettle')
 			await expect(store.capture(slot, 's1.png', new Uint8Array([137, 80]))).rejects.toMatchObject({
 				code: 'JOURNEY_PATH',
 			})
 		})
 		it('honours an aborted signal when capturing an opened slot', async () => {
 			const store = await factory()
-			const slot = await store.open('add-kettle')
+			const slot = await store.create('add-kettle')
 			await expect(
 				store.capture(slot, 's1.png', new Uint8Array([137, 80]), {
 					signal: AbortSignal.abort(new Error('capture aborted')),
@@ -250,8 +311,8 @@ export function describeBrowserRunStore(
 		})
 		it('opens unique ids and gets and deletes missing runs', async () => {
 			const store = await factory()
-			const first = await store.open('add-kettle')
-			const second = await store.open('add-kettle')
+			const first = await store.create('add-kettle')
+			const second = await store.create('add-kettle')
 			expect(first.id).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[0-9a-f]{4}$/)
 			expect(first.id).not.toBe(second.id)
 			expect(await store.get('add-kettle', first.id)).toBeUndefined()
@@ -261,7 +322,7 @@ export function describeBrowserRunStore(
 		it('owns snapshots and keys runs by journey name and id', async () => {
 			const store = await factory()
 			const run = structuredClone(BROWSER_RUN_FIXTURE)
-			const slot = await store.open(run.journey.name)
+			const slot = await store.create(run.journey.name)
 			const saved = { ...run, id: slot.id }
 			await store.set(saved)
 			Reflect.set(saved, 'elapsed', 99)
@@ -279,7 +340,7 @@ export function describeBrowserRunStore(
 			const store = await factory()
 			const ids: string[] = []
 			for (let index = 0; index < 3; index += 1) {
-				const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
+				const slot = await store.create(BROWSER_RUN_FIXTURE.journey.name)
 				ids.push(slot.id)
 				await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
 			}
@@ -298,7 +359,7 @@ export function describeBrowserRunStore(
 		})
 		it('refuses an unknown format before overwriting a run', async () => {
 			const store = await factory()
-			const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
+			const slot = await store.create(BROWSER_RUN_FIXTURE.journey.name)
 			const run = { ...structuredClone(BROWSER_RUN_FIXTURE), id: slot.id }
 			await store.set(run)
 			Reflect.set(run, 'format', 9)
@@ -308,7 +369,7 @@ export function describeBrowserRunStore(
 		it('honours an aborted signal on every primitive', async () => {
 			const store = await factory()
 			const options = { signal: AbortSignal.abort(new Error('store aborted')) }
-			await expect(store.open('add-kettle', options)).rejects.toThrow('store aborted')
+			await expect(store.create('add-kettle', options)).rejects.toThrow('store aborted')
 			await expect(store.clear('add-kettle', options)).rejects.toThrow('store aborted')
 			await expect(store.get('add-kettle', BROWSER_RUN_FIXTURE.id, options)).rejects.toThrow(
 				'store aborted',

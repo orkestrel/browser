@@ -914,7 +914,7 @@ describe('BrowserToolset', () => {
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
-			const toolset = new BrowserToolset(page)
+				const toolset = new BrowserToolset(page)
 				expect(toolset.tools.count).toBe(0)
 				await toolset.start()
 				const names = ['read', 'click', 'type', 'press', 'navigate', 'wait']

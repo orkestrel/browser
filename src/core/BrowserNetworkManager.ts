@@ -5,13 +5,15 @@ import type {
 	BrowserNetworkEventMap,
 	BrowserNetworkManagerInterface,
 	BrowserRouteDefinition,
-	BrowserRouteHandler,
-	BrowserRouteQuery,
+	BrowserRouteManagerInterface,
+	BrowserNetworkOptions,
+	BrowserWebSocketDriver,
 	BrowserWriterInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserTransition } from './BrowserTransition.js'
 import { BrowserHARManager } from './BrowserHARManager.js'
+import { BrowserRouteManager } from './BrowserRouteManager.js'
 import { BrowserRoute } from './BrowserRoute.js'
 import { BrowserWebSocket } from './BrowserWebSocket.js'
 import {
@@ -49,7 +51,8 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	readonly #emitter: Emitter<BrowserNetworkEventMap>
 	readonly #har: BrowserHARManager
 	readonly #routes: BrowserRouteDefinition[] = []
-	readonly #sockets: Map<string, BrowserWebSocket> = new Map()
+	readonly #manager: BrowserRouteManager
+	readonly #sockets: Map<string, BrowserWebSocketDriver> = new Map()
 	#credentials: BrowserCredentials | undefined
 	#started = false
 	#intercepting = false
@@ -71,6 +74,9 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		this.#frame = frame
 		this.#emitter = new Emitter()
 		this.#har = new BrowserHARManager(this, writer)
+		this.#manager = new BrowserRouteManager(this.#routes, this.start.bind(this), async () => {
+			if (this.#started && !this.#destroyed) await this.#configure()
+		})
 	}
 
 	get emitter(): EmitterInterface<BrowserNetworkEventMap> {
@@ -79,6 +85,33 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 
 	get har(): BrowserHARManagerInterface {
 		return this.#har
+	}
+
+	get routes(): BrowserRouteManagerInterface {
+		return this.#manager
+	}
+
+	async apply(options: BrowserNetworkOptions): Promise<void> {
+		await this.start()
+		if (options.headers !== undefined)
+			await this.#frame.send('Network.setExtraHTTPHeaders', { headers: options.headers })
+		if (options.offline !== undefined)
+			await this.#frame.send('Network.emulateNetworkConditions', {
+				offline: options.offline,
+				latency: 0,
+				downloadThroughput: -1,
+				uploadThroughput: -1,
+			})
+		if ('credentials' in options) {
+			const previous = this.#credentials
+			this.#credentials = options.credentials === undefined ? undefined : { ...options.credentials }
+			try {
+				await this.#configure()
+			} catch (error) {
+				this.#credentials = previous
+				throw error
+			}
+		}
 	}
 
 	async start(): Promise<void> {
@@ -115,56 +148,6 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 			id,
 			error: isJSONValue(result.error) ? result.error : String(result.error),
 		})
-	}
-
-	async route(query: BrowserRouteQuery, handler: BrowserRouteHandler): Promise<void> {
-		await this.start()
-		const definition = { query, handler }
-		this.#routes.push(definition)
-		try {
-			await this.#configure()
-		} catch (error) {
-			this.#routes.splice(this.#routes.indexOf(definition), 1)
-			throw error
-		}
-	}
-
-	async unroute(handler?: BrowserRouteHandler): Promise<void> {
-		if (handler === undefined) {
-			this.#routes.length = 0
-		} else {
-			for (let index = this.#routes.length - 1; index >= 0; index -= 1) {
-				if (this.#routes[index]?.handler === handler) this.#routes.splice(index, 1)
-			}
-		}
-		if (this.#started && !this.#destroyed) await this.#configure()
-	}
-
-	async headers(headers: Readonly<Record<string, string>>): Promise<void> {
-		await this.start()
-		await this.#frame.send('Network.setExtraHTTPHeaders', { headers })
-	}
-
-	async offline(offline: boolean): Promise<void> {
-		await this.start()
-		await this.#frame.send('Network.emulateNetworkConditions', {
-			offline,
-			latency: 0,
-			downloadThroughput: -1,
-			uploadThroughput: -1,
-		})
-	}
-
-	async credentials(credentials?: BrowserCredentials): Promise<void> {
-		await this.start()
-		const previous = this.#credentials
-		this.#credentials = credentials
-		try {
-			await this.#configure()
-		} catch (error) {
-			this.#credentials = previous
-			throw error
-		}
 	}
 
 	async destroy(): Promise<void> {
@@ -216,8 +199,10 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 
 	#handleSocket(params: Readonly<Record<string, unknown>>): void {
 		if (!isString(params['requestId']) || !isString(params['url'])) return
-		const socket = new BrowserWebSocket(params['requestId'], params['url'])
-		this.#sockets.set(socket.id, socket)
+		const id = params['requestId']
+		const socket = new BrowserWebSocket(id, params['url'], (driver) => {
+			this.#sockets.set(id, driver)
+		})
 		this.#emitter.emit('socket', socket)
 	}
 

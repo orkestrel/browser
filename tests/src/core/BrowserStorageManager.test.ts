@@ -20,7 +20,7 @@ describe('BrowserStorageManager', () => {
 		)
 		const storage = new BrowserStorageManager(new BrowserCookieManager(client), () => [page])
 
-		await expect(storage.state()).resolves.toEqual({
+		await expect(storage.snapshot()).resolves.toEqual({
 			cookies: [],
 			origins: [
 				{
@@ -65,7 +65,7 @@ describe('BrowserStorageManager', () => {
 		replyOk(transport, 'Storage.getCookies', { cookies: [] })
 		const storage = new BrowserStorageManager(new BrowserCookieManager(client), () => [])
 
-		await expect(storage.state({ origins: ['https://missing.test'] })).rejects.toSatisfy(
+		await expect(storage.snapshot({ origins: ['https://missing.test'] })).rejects.toSatisfy(
 			isBrowserError,
 		)
 		expect(transport.sent).toEqual([])

@@ -135,7 +135,8 @@ describe('createBrowserContext', () => {
 					?.params,
 			).toMatchObject({ width: 640, height: 480 })
 			const bytes = new Uint8Array([7, 8])
-			await page.save('capture.bin', bytes)
+			replyOk(transport, 'Page.captureScreenshot', { data: 'Bwg=' })
+			await page.screenshot({ path: 'capture.bin' })
 			expect(writer.calls).toEqual([{ path: 'capture.bin', data: bytes }])
 			await context.destroy()
 			expect(client.connected).toBe(true)

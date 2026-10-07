@@ -1,3 +1,6 @@
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
+import { assertBrowserPage, validateBrowserJourneyWriteOptions } from '@src/core'
+import { createConnectedCDPClient, replyOk } from '../../setup.js'
 import { scanBrowserLines, describeBrowserRefusal, isBrowserError } from '@src/core'
 import { renderBrowserLine } from '@src/core'
 /**
@@ -292,8 +295,8 @@ describe('element helpers', () => {
 			url: 'url',
 			title: 'title',
 			lines: 'e1 link "Home"\ne2 link "Child"\ne3 link "Other home"\ne4 link "Later"',
-			count: 4,
-			total: 4,
+			listed: 4,
+			found: 4,
 			focus: undefined,
 		})
 	})
@@ -339,8 +342,8 @@ describe('element helpers', () => {
 			filterBrowserOutline(rows, { role: 'button', name: 'order' }).map((node) => node.id),
 		).toEqual(['order'])
 		expect(renderBrowserOutline('url', 'title', rows, 0)).toMatchObject({
-			count: 0,
-			total: 1,
+			listed: 0,
+			found: 1,
 			focus: undefined,
 		})
 	})
@@ -429,8 +432,8 @@ describe('outline search and focus helpers', () => {
 			url: 'url',
 			title: 'title',
 			lines: 'e1 button "Close"',
-			count: 1,
-			total: 3,
+			listed: 1,
+			found: 3,
 			focus: 'e3 button "Archive"',
 		})
 		expect(
@@ -1589,5 +1592,36 @@ describe('buildBrowserJourney', () => {
 				description: '',
 			}),
 		).toThrow('Invariant 2')
+	})
+})
+
+describe('write conditions and page lifecycle', () => {
+	it('validates journey write conditions independently of a backend', () => {
+		for (const options of [
+			undefined,
+			{},
+			{ exclusive: true },
+			{ exclusive: false },
+			{ revision: 1 },
+		])
+			expect(() => validateBrowserJourneyWriteOptions(options)).not.toThrow()
+		for (const options of [
+			{ revision: 0 },
+			{ revision: Number.NaN },
+			{ revision: 1, exclusive: false },
+		])
+			expect(() => validateBrowserJourneyWriteOptions(options)).toThrow(BrowserError)
+	})
+	it('refuses a released page and a disconnected frame before protocol work', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'target', 'session')
+		expect(() => assertBrowserPage(page, client)).not.toThrow()
+		expect(transport.sent).toEqual([])
+		replyOk(transport, 'Target.detachFromTarget')
+		await page.destroy()
+		expect(() => assertBrowserPage(page, client)).toThrow('Browser page is closed')
+		await client.close()
+		expect(() => assertBrowserPage(page, client)).toThrow('Browser frame is disconnected')
+		expect(transport.sent.map((message) => message.method)).toEqual(['Target.detachFromTarget'])
 	})
 })

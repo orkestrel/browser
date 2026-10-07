@@ -1,7 +1,8 @@
+import { BrowserCodegen } from '../../../../src/core/recorders/BrowserCodegen.js'
 import { BrowserPage } from '../../../../src/core/BrowserPage.js'
 import { describe, it, expect } from 'vitest'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
-import { BrowserCodegen, compileBrowserJourney, createCDPClient } from '@src/core'
+import { compileBrowserJourney, createCDPClient } from '@src/core'
 import {
 	captureCodegenSource,
 	createCDPTestTransport,
@@ -371,8 +372,8 @@ describe('BrowserCodegen', () => {
 		])
 	})
 	it('records child-frame, native-dialog, and unsupported gaps without the answer', async () => {
-		const { transport, codegen } = await createStartedCodegen()
-		await codegen.attach('frame-session')
+		const { transport, codegen, attach } = await createStartedCodegen()
+		await attach('frame-session')
 		transport.event(
 			'Runtime.bindingCalled',
 			createCodegenBindingPayload({
@@ -443,8 +444,8 @@ describe('BrowserCodegen', () => {
 		const journey = codegen.journey({ name: 'sign-in', description: 'Sign in' })
 		expect(journey.steps[0]?.arguments).toEqual({ text: { parameter: 'confirmPassword' } })
 		expect(journey.parameters).toEqual({ confirmPassword: { secret: true } })
-		expect(codegen.script({ ...journey, language: 'typescript' })).toEqual(
-			compileBrowserJourney(journey, { language: 'typescript' }),
+		expect(compileBrowserJourney(journey, { language: 'typescript' }).source).toContain(
+			'confirmPassword',
 		)
 	})
 	it('the shipped listener never sends password text or non-Enter keys', () => {
@@ -509,7 +510,8 @@ describe('BrowserCodegen', () => {
 			frameTree: { frame: { id: 'remote', url: 'https://remote.test/' } },
 		})
 		const page = new BrowserPage(client, 'main', 'session-1')
-		const recorder = await page.codegen()
+		const recorder = page.recorder
+		await recorder.start()
 		transport.event(
 			'Target.attachedToTarget',
 			{

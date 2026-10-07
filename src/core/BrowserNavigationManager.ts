@@ -11,7 +11,7 @@ import type {
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { BrowserNavigationRecord } from './BrowserNavigationRecord.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
-import { matchesBrowserURL, validateBrowserTimeout } from './helpers.js'
+import { assertBrowserPage, matchesBrowserURL, validateBrowserTimeout } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { isString } from '@orkestrel/contract'
 
@@ -82,7 +82,7 @@ export class BrowserNavigationManager implements BrowserNavigationManagerInterfa
 	}
 
 	record(frame: string): BrowserNavigationRecordInterface {
-		this.#page.assert()
+		assertBrowserPage(this.#page, this.#client)
 		return new BrowserNavigationRecord(
 			this.#steps,
 			this.#page.id,

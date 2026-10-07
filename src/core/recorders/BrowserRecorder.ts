@@ -1,4 +1,5 @@
 import type {
+	BrowserJourneyInput,
 	BrowserAction,
 	BrowserJourney,
 	BrowserJourneyStep,
@@ -80,7 +81,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 		return structuredClone(this.#steps)
 	}
 
-	journey(options: { readonly name: string; readonly description: string }): BrowserJourney {
+	journey(options: BrowserJourneyInput): BrowserJourney {
 		const steps: readonly BrowserJourneyStep[] =
 			this.#pending === undefined
 				? this.#steps

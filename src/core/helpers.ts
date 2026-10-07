@@ -1,4 +1,8 @@
 import type {
+	BrowserJourneyInput,
+	BrowserPageInterface,
+	CDPClientInterface,
+	BrowserJourneyWriteOptions,
 	BrowserLine,
 	BrowserLineSpan,
 	BrowserPassage,
@@ -562,8 +566,8 @@ export function renderBrowserOutline(
 		url: redactBrowserText(url, secrets),
 		title: redactBrowserText(title, secrets),
 		lines: rows,
-		count,
-		total,
+		listed: count,
+		found: total,
 		focus: focus === undefined ? undefined : redactBrowserText(focus, secrets),
 	}
 }
@@ -3960,7 +3964,7 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
  */
 export function buildBrowserJourney(
 	steps: readonly BrowserJourneyStep[],
-	options: Pick<BrowserJourney, 'name' | 'description'>,
+	options: BrowserJourneyInput,
 ): BrowserJourney {
 	const parameters: Record<string, BrowserJourneyParameter> = {}
 	for (const step of steps) {
@@ -3981,4 +3985,35 @@ export function buildBrowserJourney(
 	}
 	validateBrowserJourney(journey)
 	return journey
+}
+
+/**
+ * Validates the mutually exclusive conditions of a journey write before side effects.
+ * @param options - Conditional write and cancellation options
+ * @throws Thrown with ARGUMENT for conflicting conditions or an invalid revision.
+ * @example
+ * validateBrowserJourneyWriteOptions({ exclusive: true })
+ */
+export function validateBrowserJourneyWriteOptions(options?: BrowserJourneyWriteOptions): void {
+	if (
+		options?.revision !== undefined &&
+		(!Number.isSafeInteger(options.revision) || options.revision < 1)
+	)
+		throw new BrowserError('ARGUMENT', 'A journey revision must be a positive safe integer')
+	if (options?.revision !== undefined && options.exclusive !== undefined)
+		throw new BrowserError('ARGUMENT', 'A journey write cannot combine revision and exclusive')
+}
+
+/**
+ * Refuses work on a disconnected or closed page.
+ * @param page - The page whose lifecycle permits the operation
+ * @param client - The client's connection carrying the page
+ * @throws Thrown with CLOSED when the client disconnected or the page closed.
+ * @example
+ * assertBrowserPage(page, client)
+ */
+export function assertBrowserPage(page: BrowserPageInterface, client: CDPClientInterface): void {
+	if (!client.connected)
+		throw new BrowserError('CLOSED', 'Browser frame is disconnected', { frame: page.id })
+	if (page.closed) throw new BrowserError('CLOSED', 'Browser page is closed')
 }

@@ -216,14 +216,14 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		if (view.screenshot === undefined)
 			throw new BrowserError('CAPTURE_UNAVAILABLE', 'This view cannot capture an image.')
 		const runs = this.#runs
-		if (runs?.snapshot === undefined)
+		if (runs?.write === undefined)
 			throw new BrowserError(
 				'CAPTURE_UNAVAILABLE',
 				'Capture requires a runs store with standalone file storage.',
 			)
 		const screenshot = await view.screenshot({ format: 'png', full })
 		signal.throwIfAborted()
-		const path = await runs.snapshot(screenshot.bytes, { signal })
+		const path = await runs.write(screenshot.bytes, { signal })
 		if (path.length > this.#limit)
 			throw new BrowserError(
 				'TOOLSET_LIMIT',
@@ -311,7 +311,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		}
 		let saved: BrowserJourneyRevision
 		try {
-			saved = await this.#store.set(snapshot.value, 0, { signal })
+			saved = await this.#store.set(snapshot.value, { exclusive: true, signal })
 		} catch (error) {
 			if (signal.aborted) throw error
 			if (isBrowserError(error) && error.code === 'JOURNEY_STALE')
@@ -462,7 +462,10 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		}
 		let saved: BrowserJourneyRevision
 		try {
-			saved = await this.#store.set(edited, revision.revision, { signal })
+			saved = await this.#store.set(edited, {
+				...(revision.revision === undefined ? {} : { revision: revision.revision }),
+				signal,
+			})
 		} catch (error) {
 			if (signal.aborted) throw error
 			const code = isBrowserError(error) ? error.code : 'JOURNEY_FILE'

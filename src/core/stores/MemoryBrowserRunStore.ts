@@ -3,6 +3,7 @@ import type {
 	BrowserRunSlot,
 	BrowserRunStoreInterface,
 	BrowserStoreOptions,
+	BrowserStorePageOptions,
 	BrowserStorePage,
 } from '../types.js'
 import { BrowserError } from '../errors.js'
@@ -17,14 +18,14 @@ import {
  * Keeps owned runs under their journey names and producer ids without directories.
  * @example
  * const store = new MemoryBrowserRunStore()
- * const slot = await store.open('add-kettle')
+ * const slot = await store.create('add-kettle')
  */
 export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 	readonly #runs = new Map<string, Map<string, BrowserRun>>()
 	readonly #slots = new Map<string, Set<string>>()
 	readonly #opened = new WeakMap<BrowserRunSlot, string>()
 
-	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
+	async create(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
 		validateBrowserJourneyName(name)
 		const slots = this.#slots.get(name) ?? new Set<string>()
@@ -89,7 +90,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 
 	async list(
 		name: string,
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
+		options?: BrowserStorePageOptions,
 	): Promise<BrowserStorePage<BrowserRun>> {
 		options?.signal?.throwIfAborted()
 		validateBrowserJourneyName(name)

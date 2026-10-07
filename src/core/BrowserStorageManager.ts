@@ -37,7 +37,7 @@ export class BrowserStorageManager implements BrowserStorageManagerInterface {
 		this.#pages = pages
 	}
 
-	async state(options?: BrowserStorageOptions): Promise<BrowserStorageState> {
+	async snapshot(options?: BrowserStorageOptions): Promise<BrowserStorageState> {
 		const pages = this.#pages()
 		const requested = options?.origins
 		const origins =

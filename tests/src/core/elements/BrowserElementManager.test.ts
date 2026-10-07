@@ -371,7 +371,7 @@ describe('element manager', () => {
 			})
 			expect(outline.lines.map(renderBrowserLine)).toEqual(['Delivery included.'])
 			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('Home')
-			expect(outline.count).toBe(0)
+			expect(outline.listed).toBe(0)
 		} finally {
 			await fixture.client.close()
 		}
@@ -497,8 +497,8 @@ describe('element manager', () => {
 			expect({ ...outline, lines: outline.lines.map(renderBrowserLine).join('\n') }).toEqual({
 				url: 'https://example.test/cart',
 				title: 'Cart',
-				count: 6,
-				total: 6,
+				listed: 6,
+				found: 6,
 				lines:
 					'# Your cart\ne1 link "Home"\ne2 textbox "Email" value="sam@example.test"\ne3 checkbox "Gift wrap" [checked]\ne4 button "Place order" [disabled]\nTwo items, 48.00 total.\ne5 Iframe "Checkout"\ne6 button "Save"\nDelivery included.',
 				focus: undefined,
@@ -507,8 +507,8 @@ describe('element manager', () => {
 			expect(scanBrowserLines((await page.elements.outline()).lines, 'the save button')).toEqual([
 				8,
 			])
-			expect(cut.count).toBe(2)
-			expect(cut.total).toBe(6)
+			expect(cut.listed).toBe(2)
+			expect(cut.found).toBe(6)
 			expect(cut.lines.map(renderBrowserLine).join('\n')).toContain('Two items, 48.00 total.')
 			expect(cut.lines.map(renderBrowserLine).join('\n')).not.toContain('e3')
 		} finally {
@@ -832,7 +832,7 @@ describe('element manager', () => {
 				{ frameId: 'main', loaderId: 'loading', name: 'DOMContentLoaded' },
 				'session-main',
 			)
-			expect((await pending).count).toBe(6)
+			expect((await pending).listed).toBe(6)
 			expect(performance.now() - started).toBeGreaterThanOrEqual(20 - TIMER_LEAD)
 		} finally {
 			await client.close()

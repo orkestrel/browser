@@ -84,7 +84,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 			hold = await this.#toolset.hold(journey.name, options)
 			options?.signal?.throwIfAborted()
 			if (this.#options?.runs !== undefined)
-				slot = await this.#options.runs.open(journey.name, options)
+				slot = await this.#options.runs.create(journey.name, options)
 			if (!secret) {
 				this.#observe(output, cleanup, observed)
 				const select = this.#observe.bind(this, output, cleanup, observed)

@@ -72,7 +72,7 @@ describe('element protocol and compiler fixtures', () => {
 	it('records run writes while retaining the memory store validation and persistence', async () => {
 		const store = new RecordingBrowserRunStore()
 		const journey = createBrowserJourneyFixture()
-		const slot = await store.open(journey.name)
+		const slot = await store.create(journey.name)
 		await store.set({
 			format: 1,
 			id: slot.id,
@@ -84,7 +84,7 @@ describe('element protocol and compiler fixtures', () => {
 		})
 		expect(store.writes.count).toBe(1)
 		expect(await store.get(journey.name, slot.id)).toEqual(store.writes.calls[0]?.[0])
-		const unopened = await new RecordingBrowserRunStore().open(journey.name)
+		const unopened = await new RecordingBrowserRunStore().create(journey.name)
 		await expect(
 			store.set({
 				format: 1,
@@ -1050,6 +1050,21 @@ describe('createStartedCodegen', () => {
 		expect(transport.sent.every((message) => message.sessionId === 'session-4')).toBe(true)
 	})
 
+	it('registers the owner callback for a newly attached frame session', async () => {
+		const { codegen, transport, attach, client } = await createStartedCodegen()
+		try {
+			await attach('child-session')
+			expect(
+				transport.sent.some(
+					(message) =>
+						message.method === 'Runtime.addBinding' && message.sessionId === 'child-session',
+				),
+			).toBe(true)
+		} finally {
+			await codegen.destroy()
+			await client.close()
+		}
+	})
 	it('scripts the binding removal so stop() resolves on the started fixture', async () => {
 		const { codegen } = await createStartedCodegen()
 

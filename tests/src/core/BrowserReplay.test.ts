@@ -492,8 +492,8 @@ describe('BrowserReplay', () => {
 				},
 				{
 					runs: {
-						open: async (name, options) => ({
-							...(await memory.open(name, options)),
+						create: async (name, options) => ({
+							...(await memory.create(name, options)),
 							directory: '/opened-run',
 						}),
 						capture: async (_slot, name) => {
@@ -697,7 +697,7 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: runs.capture.bind(runs),
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
@@ -772,7 +772,7 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: runs.capture.bind(runs),
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
@@ -804,7 +804,7 @@ describe('BrowserReplay', () => {
 		await toolset.start()
 		replyOk(fixture.transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 		const runs = new MemoryBrowserRunStore()
-		const slot = { ...(await runs.open('check-ready')), directory: '/opened-run' }
+		const slot = { ...(await runs.create('check-ready')), directory: '/opened-run' }
 		const signal = new AbortController().signal
 		try {
 			const run = await new BrowserReplay(
@@ -814,7 +814,7 @@ describe('BrowserReplay', () => {
 				},
 				{
 					runs: {
-						open: async () => slot,
+						create: async () => slot,
 						capture: async (opened, name, bytes, options) => {
 							captures.handler(opened, name, bytes, options)
 							return 'stored.png'
@@ -879,8 +879,8 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: async (name, options) => ({
-							...(await runs.open(name, options)),
+						create: async (name, options) => ({
+							...(await runs.create(name, options)),
 							directory: '/opened-run',
 						}),
 						capture: async (slot, name, bytes) => {
@@ -941,7 +941,7 @@ describe('BrowserReplay', () => {
 						},
 					},
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: async (_slot, name, bytes) => {
 							captures.handler(name, bytes)
 							return name
@@ -1021,7 +1021,7 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: async (_slot, name) => {
 							captures.handler(name)
 							return name
@@ -1062,7 +1062,7 @@ describe('BrowserReplay', () => {
 				{
 					on: { step: emitted.handler },
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: async () => {
 							throw new Error('capture refused')
 						},
@@ -1167,8 +1167,8 @@ describe('BrowserReplay', () => {
 				{
 					inputs: { password: 'private-replay-value' },
 					runs: {
-						open: async (name, options) => ({
-							...(await runs.open(name, options)),
+						create: async (name, options) => ({
+							...(await runs.create(name, options)),
 							directory: '/secret-run',
 						}),
 						capture: runs.capture.bind(runs),

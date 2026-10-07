@@ -104,7 +104,7 @@ describe('file store factories', () => {
 	it('creates a run store that allocates and persists a run', async () => {
 		scratch = createScratch()
 		const store = createFileBrowserRunStore({ root: scratch.path })
-		const slot = await store.open(BROWSER_RUN_FIXTURE.journey.name)
+		const slot = await store.create(BROWSER_RUN_FIXTURE.journey.name)
 		const run = { ...BROWSER_RUN_FIXTURE, id: slot.id }
 		await store.set(run)
 		expect(

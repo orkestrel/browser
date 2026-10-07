@@ -3,6 +3,8 @@ import type {
 	BrowserJourneyRevision,
 	BrowserJourneyStoreInterface,
 	BrowserStoreOptions,
+	BrowserStorePageOptions,
+	BrowserJourneyWriteOptions,
 	BrowserStorePage,
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
@@ -11,6 +13,7 @@ import {
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BrowserError,
 	validateBrowserJourney,
+	validateBrowserJourneyWriteOptions,
 	normalizeBrowserJourneyReason,
 } from '@src/core'
 import {
@@ -69,10 +72,11 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 
 	async set(
 		journey: BrowserJourney,
-		expected?: number,
-		options?: BrowserStoreOptions,
+		options?: BrowserJourneyWriteOptions,
 	): Promise<BrowserJourneyRevision> {
 		options?.signal?.throwIfAborted()
+		validateBrowserJourneyWriteOptions(options)
+		const condition = { revision: options?.revision, exclusive: options?.exclusive }
 		this.#files.validateName(journey.name)
 		validateBrowserJourney(journey)
 		const owned = structuredClone(journey)
@@ -82,7 +86,10 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			this.#files.resolvePath(owned.name, BROWSER_JOURNEY_LOCK_DIRECTORY),
 			async () => {
 				const current = await this.get(owned.name, options)
-				if (expected !== undefined && expected !== (current?.revision ?? 0))
+				if (
+					(condition.exclusive === true && current !== undefined) ||
+					(condition.revision !== undefined && condition.revision !== current?.revision)
+				)
 					throw new BrowserError('JOURNEY_STALE', `Journey ${owned.name} changed since you read it`)
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
@@ -131,9 +138,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		)
 	}
 
-	async list(
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
-	): Promise<BrowserStorePage<BrowserJourneyRevision>> {
+	async list(options?: BrowserStorePageOptions): Promise<BrowserStorePage<BrowserJourneyRevision>> {
 		options?.signal?.throwIfAborted()
 		return this.#files.list(
 			this.#files.resolvePath(),

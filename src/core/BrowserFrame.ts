@@ -1,5 +1,6 @@
 import type {
 	BrowserEpochFunction,
+	BrowserFrameLocation,
 	BrowserFrameInterface,
 	BrowserHandleInterface,
 	BrowserReadingInterface,
@@ -37,18 +38,20 @@ export class BrowserFrame implements BrowserFrameInterface {
 	readonly #isolated: boolean
 	readonly #epoch: BrowserEpochFunction | undefined
 	readonly #world: BrowserWorldFunction | undefined
-	#url: string
+	readonly #assertion: (() => void) | undefined
+	#url: string | BrowserFrameLocation
 
 	constructor(
 		client: CDPClientInterface,
 		session: string | BrowserSessionFunction,
 		id: string,
-		url: string,
+		url: string | BrowserFrameLocation,
 		parent?: string,
 		name?: string,
 		isolated = true,
 		epoch?: BrowserEpochFunction,
 		world?: BrowserWorldFunction,
+		assert?: () => void,
 	) {
 		this.#client = client
 		this.#session = session
@@ -59,6 +62,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#isolated = isolated
 		this.#epoch = epoch
 		this.#world = world
+		this.#assertion = assert
 	}
 
 	get id(): string {
@@ -74,17 +78,17 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	get url(): string {
-		return this.#url
+		return isString(this.#url) ? this.#url : this.#url.get()
 	}
 
 	async title(options?: BrowserCallOptions): Promise<string> {
-		this.assert()
+		this.#assert()
 		const result = await this.#evaluate('document.title', options)
 		return requireBrowserString(result, 'Document title')
 	}
 
 	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
-		this.assert()
+		this.#assert()
 		// The epoch is sampled before the capture is issued, so a navigation that lands while the
 		// evaluation is in flight leaves the reading stale rather than current.
 		const epoch = this.#epoch?.()
@@ -117,7 +121,10 @@ export class BrowserFrame implements BrowserFrameInterface {
 			throw new BrowserError('PROTOCOL', 'Browser read capture is malformed', { frame: this.#id })
 		}
 		// A capture that a navigation overtook must not regress the frame URL the navigation set.
-		if (this.#epoch === undefined || this.#epoch() === epoch) this.#url = capture['url']
+		if (this.#epoch === undefined || this.#epoch() === epoch) {
+			if (isString(this.#url)) this.#url = capture['url']
+			else this.#url.set(capture['url'])
+		}
 		return new BrowserReading({
 			url: capture['url'],
 			title: capture['title'],
@@ -129,7 +136,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	async evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {
-		this.assert()
+		this.#assert()
 		return await this.#evaluate(
 			compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT),
 			options,
@@ -137,7 +144,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	async handle(expression: string, options?: BrowserCallOptions): Promise<BrowserHandleInterface> {
-		this.assert()
+		this.#assert()
 		const session = await this.#sessionId()
 		const params: Record<string, unknown> = {
 			expression,
@@ -167,7 +174,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		params?: Readonly<Record<string, unknown>>,
 		options?: BrowserCallOptions,
 	): Promise<unknown> {
-		this.assert()
+		this.#assert()
 		return await this.#client.send(method, params, {
 			session: await this.#sessionId(),
 			...options,
@@ -175,7 +182,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	async subscribe(method: string, handler: CDPHandler): Promise<void> {
-		this.assert()
+		this.#assert()
 		this.#client.subscribe(method, handler, await this.#sessionId())
 	}
 
@@ -183,19 +190,11 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#client.unsubscribe(method, handler, await this.#sessionId())
 	}
 
-	async save(path: string, _bytes: Uint8Array): Promise<void> {
-		// Frames satisfy the persistence contract, but only top-level pages receive a writer.
-		throw new BrowserError('ARGUMENT', 'Browser frame has no configured file writer', { path })
-	}
-
-	assert(): void {
+	#assert(): void {
+		this.#assertion?.()
 		if (!this.#client.connected) {
 			throw new BrowserError('CLOSED', 'Browser frame is disconnected', { frame: this.#id })
 		}
-	}
-
-	update(url: string): void {
-		this.#url = url
 	}
 
 	async #evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {

@@ -21,6 +21,7 @@ import {
 } from '../constants.js'
 import { compileQueryWaitExpression } from '../compilers.js'
 import {
+	assertBrowserPage,
 	composeBrowserPoint,
 	filterBrowserOutline,
 	readBrowserAccessibility,
@@ -317,7 +318,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	}
 
 	async #capture(options?: BrowserCallOptions): Promise<readonly BrowserOutlineNode[]> {
-		this.#input.page.assert()
+		assertBrowserPage(this.#input.page, this.#input.client)
 		const rows = await this.#tree(this.#input.page.id, this.#input.session, new Set(), options)
 		return rows
 	}
