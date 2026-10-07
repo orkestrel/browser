@@ -1022,6 +1022,7 @@ export const SERVICE_LINE_VIEW_REPLIES = Object.freeze({
 	refusal: {
 		record: 'validate-4/2b/T1/attempts/inputs/49171-cart-calls.jsonl',
 		arguments: { ref: 'e7', text: 'Cedar Tea Tray', submit: true },
-		expected: 'Element link "Cedar Tea Tray" [ref=e7] takes no text; call click for a link.',
+		expected:
+			'Element link "Cedar Tea Tray" [ref=e7] takes no text; to type, use searchbox "Search products" [ref=e4].',
 	},
 })

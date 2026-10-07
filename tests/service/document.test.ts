@@ -516,6 +516,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 				`(() => { document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_EDITABLE_HTML)}); return true })()`,
 			)
 			const reading = requireToolText(await page.evaluate(DOCUMENT_READ))
+			const message = requireOutlineReference(reading, 'textbox', 'Message')
 			const notes = requireOutlineReference(reading, 'textbox', 'Notes')
 			const bold = requireOutlineReference(reading, 'button', 'Bold')
 			const coupon = requireOutlineReference(reading, 'button', 'Coupon')
@@ -545,11 +546,11 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 				},
 				{
 					success: false,
-					error: `Element button "Bold" [ref=${bold}] takes no text; call click for a button.`,
+					error: `Element button "Bold" [ref=${bold}] takes no text; to type, use textbox "Message" [ref=${message}] or textbox "Notes" [ref=${notes}].`,
 				},
 				{
 					success: false,
-					error: `Element button "Coupon" [ref=${coupon}] takes no text; call click for a button.`,
+					error: `Element button "Coupon" [ref=${coupon}] takes no text; to type, use textbox "Message" [ref=${message}] or textbox "Notes" [ref=${notes}].`,
 				},
 			])
 			expect(await page.evaluate("document.querySelector('[role=textbox]').textContent")).toBe('')

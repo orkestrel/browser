@@ -1281,6 +1281,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const reading = requireToolText(
 			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 		)
+		const message = requireOutlineReference(reading, 'textbox', 'Message')
 		const notes = requireOutlineReference(reading, 'textbox', 'Notes')
 		const bold = requireOutlineReference(reading, 'button', 'Bold')
 		const coupon = requireOutlineReference(reading, 'button', 'Coupon')
@@ -1313,11 +1314,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(refused).toMatchObject([
 			{
 				success: false,
-				error: `Element button "Bold" [ref=${bold}] takes no text; call click for a button.`,
+				error: `Element button "Bold" [ref=${bold}] takes no text; to type, use textbox "Message" [ref=${message}] or textbox "Notes" [ref=${notes}].`,
 			},
 			{
 				success: false,
-				error: `Element button "Coupon" [ref=${coupon}] takes no text; call click for a button.`,
+				error: `Element button "Coupon" [ref=${coupon}] takes no text; to type, use textbox "Message" [ref=${message}] or textbox "Notes" [ref=${notes}].`,
 			},
 		])
 		expect(await page.evaluate("document.querySelector('[aria-label=Coupon]').value")).toBe('')
