@@ -1,4 +1,5 @@
 import type {
+	CDPHandler,
 	BrowserCaptureResult,
 	BrowserAction,
 	BrowserFollowOptions,
@@ -29,7 +30,6 @@ import type {
 	BrowserToolsetInterface,
 	BrowserToolsetOptions,
 	BrowserToolsetReason,
-	BrowserToolsetWatch,
 	BrowserViewInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -211,7 +211,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #journeys: BrowserJourneyToolsetInterface | undefined
 	readonly #added = new Set<ToolInterface>()
 	readonly #adopted = new Map<string, ToolInterface>()
-	readonly #watches = new Map<BrowserPageInterface, BrowserToolsetWatch>()
+	readonly #watches = new Map<
+		BrowserPageInterface,
+		{
+			readonly dialog: (dialog: BrowserDialogInterface) => void
+			readonly popup: (page: BrowserPageInterface) => void
+			readonly close: () => void
+			readonly closed: CDPHandler
+		}
+	>()
 	readonly #dialogs = new Map<BrowserPageInterface, BrowserDialogInterface>()
 	readonly #handlers = new WeakMap<
 		ToolInterface,
@@ -2106,7 +2114,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	async #watch(page: BrowserPageInterface): Promise<void> {
 		if (this.#watches.has(page)) return
-		const watch: BrowserToolsetWatch = {
+		const watch: {
+			readonly dialog: (dialog: BrowserDialogInterface) => void
+			readonly popup: (page: BrowserPageInterface) => void
+			readonly close: () => void
+			readonly closed: CDPHandler
+		} = {
 			dialog: this.#handleDialog.bind(this, page),
 			popup: this.#handlePopup.bind(this, page),
 			close: this.#handleClose.bind(this, page),
@@ -2128,7 +2141,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		await this.#release(page, watch)
 	}
 
-	async #release(page: BrowserPageInterface, watch: BrowserToolsetWatch): Promise<void> {
+	async #release(
+		page: BrowserPageInterface,
+		watch: {
+			readonly dialog: (dialog: BrowserDialogInterface) => void
+			readonly popup: (page: BrowserPageInterface) => void
+			readonly close: () => void
+			readonly closed: CDPHandler
+		},
+	): Promise<void> {
 		page.emitter.off('dialog', watch.dialog)
 		page.emitter.off('popup', watch.popup)
 		page.emitter.off('close', watch.close)

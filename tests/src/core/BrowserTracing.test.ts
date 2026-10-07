@@ -12,6 +12,27 @@ import { BrowserTracing, isBrowserError } from '@src/core'
 import { createAttachedPage, createRecordingWriter, readCDPParams, replyOk } from '../../setup.js'
 
 describe('BrowserTracing', () => {
+	it('closes the IO stream and avoids writing when codec refuses a chunk', async () => {
+		const { page, client, transport } = await createAttachedPage()
+		replyOk(transport, 'Tracing.start')
+		replyOk(transport, 'Tracing.end')
+		replyOk(transport, 'IO.read', { data: 'aa==', base64Encoded: true, eof: true })
+		replyOk(transport, 'IO.close')
+		transport.onSend('Tracing.end', () => {
+			transport.event('Tracing.tracingComplete', { stream: 'invalid-stream' }, 'session-1')
+		})
+		const writer = createRecordingWriter()
+		const tracing = new BrowserTracing(page, writer)
+		try {
+			await tracing.start({ path: 'trace.json' })
+			await expect(tracing.stop()).rejects.toMatchObject({ code: 'PROTOCOL' })
+			expect(readCDPParams(transport, 'IO.close')).toEqual([{ handle: 'invalid-stream' }])
+			expect(writer.calls).toEqual([])
+			expect(tracing.active).toBe(false)
+		} finally {
+			await client.close()
+		}
+	})
 	it('starts with the default categories and reports active between start and stop', async () => {
 		const { page, transport } = await createAttachedPage()
 		replyOk(transport, 'Tracing.start')

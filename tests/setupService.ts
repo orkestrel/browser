@@ -26,7 +26,7 @@ import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, createCDPClient 
 import {
 	createBrowser,
 	createWebSocketCDPTransport,
-	findSystemBrowser,
+	findSystemBrowsers,
 	parseBrowserProfileRecord,
 } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
@@ -517,7 +517,7 @@ export function resolveServiceEngine(value: string | undefined): BrowserEngine |
  */
 export function requireSystemBrowser(options?: SystemBrowserOptions): SystemBrowser {
 	const engine = resolveServiceEngine(process.env[SERVICE_ENGINE_ENV_KEY])
-	const found = findSystemBrowser(options ?? (engine === undefined ? undefined : { engine }))
+	const found = findSystemBrowsers(options ?? (engine === undefined ? undefined : { engine }))[0]
 	if (found === undefined) {
 		throw new Error(
 			'The service project requires a Chromium-family browser on this host and found none. ' +

@@ -1,3 +1,4 @@
+import { decodeBase64 } from '@orkestrel/codec'
 import type {
 	BrowserHAR,
 	BrowserHAREntry,
@@ -13,13 +14,7 @@ import type {
 	BrowserWriterInterface,
 } from './types.js'
 import { BROWSER_HAR_CREATOR } from './constants.js'
-import {
-	browserHARHeadersToRecord,
-	createBrowserHAREntry,
-	decodeBase64,
-	textToBytes,
-	validateBrowserHAR,
-} from './helpers.js'
+import { browserHARHeadersToRecord, createBrowserHAREntry, validateBrowserHAR } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { isJSONValue } from '@orkestrel/contract'
 
@@ -122,7 +117,10 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 			if (this.#writer === undefined) {
 				throw new BrowserError('ARGUMENT', 'Browser HAR path requires a configured writer')
 			}
-			await this.#writer.write(this.#options.path, textToBytes(JSON.stringify(har, undefined, 2)))
+			await this.#writer.write(
+				this.#options.path,
+				new TextEncoder().encode(JSON.stringify(har, undefined, 2)),
+			)
 		}
 		return har
 	}
@@ -205,6 +203,10 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 				: entry.response.content.encoding === 'base64'
 					? decodeBase64(entry.response.content.text)
 					: entry.response.content.text
+		if (entry.response.content.text !== undefined && body === undefined) {
+			await route.abort('Failed')
+			return
+		}
 		await route.fulfill({
 			status: entry.response.status,
 			phrase: entry.response.statusText,

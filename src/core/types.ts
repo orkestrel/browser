@@ -334,27 +334,6 @@ export interface BrowserNavigationResult {
 	readonly same: boolean
 }
 
-/** Holds the state retained while correlating navigation with Network events. */
-export interface BrowserNavigationWatch {
-	readonly responses: readonly BrowserResponse[]
-}
-
-/**
- * Represents one pending navigation or network-idle wait.
- *
- * @remarks
- * - `pattern` — the URL glob, undefined for a network-idle wait
- * - `listener` — the abort listener registered on `signal`, undefined without a signal
- */
-export interface BrowserNavigationWait {
-	readonly pattern: string | undefined
-	readonly timer: ReturnType<typeof setTimeout>
-	readonly signal: AbortSignal | undefined
-	readonly listener: (() => void) | undefined
-	readonly resolve: (url: string) => void
-	readonly reject: (error: unknown) => void
-}
-
 /** Reads the loader id of the page's current document, undefined before the first commit. */
 export type BrowserLoaderFunction = () => string | undefined
 
@@ -658,12 +637,6 @@ export interface BrowserScriptManagerInterface {
 	revoke(name: string): Promise<void>
 	/** Removes every installed script and binding this manager owns. */
 	destroy(): Promise<void>
-}
-
-/** Represents one installed new-document script and its optional host binding owner. */
-export interface BrowserScriptEntry {
-	readonly source: string
-	readonly binding: string | undefined
 }
 
 // === Browser accessibility
@@ -2345,17 +2318,6 @@ export interface BrowserReadResult {
 }
 
 /**
- * Describes a matching line and its character offset in a reading's projection.
- *
- * @remarks
- * Offsets count UTF-16 code units in the original text, including preceding line breaks.
- */
-export interface BrowserReadMatch {
-	readonly offset: number
-	readonly text: string
-}
-
-/**
  * Reads the navigation epoch of the frame a reading was captured from.
  *
  * @returns The frame's current navigation epoch
@@ -2657,15 +2619,6 @@ export interface BrowserElementInput extends BrowserElementManagerInput {
 	readonly point: BrowserElementPointFunction
 }
 
-/** Holds the resources of one lifecycle-event readiness wait. */
-export interface BrowserReadinessWait {
-	readonly resolve: () => void
-	readonly reject: (error: unknown) => void
-	readonly timer: ReturnType<typeof setTimeout>
-	readonly signal: AbortSignal | undefined
-	readonly listener: (() => void) | undefined
-}
-
 /** Provides actions and reading through a stable document element reference. */
 export interface BrowserElementInterface {
 	readonly reference: string
@@ -2878,17 +2831,6 @@ export interface BrowserRegistryInterface {
 	): Promise<BrowserInvocationResult>
 	/** Disables every enabled session, unsubscribes, and rejects pending invocations. */
 	destroy(): Promise<void>
-}
-
-/** Holds one unsettled registry execution and its resource cleanup. */
-export interface BrowserRegistryPending {
-	readonly frame: string
-	readonly session: string
-	readonly signal: AbortSignal | undefined
-	readonly controller: AbortController
-	readonly timer: ReturnType<typeof setTimeout>
-	readonly resolve: (result: BrowserInvocationResult) => void
-	readonly reject: (error: unknown) => void
 }
 
 // === Browser toolset
@@ -3134,14 +3076,6 @@ export type BrowserToolsetHandler = (
 	args: Readonly<Record<string, unknown>>,
 	context: ToolContext,
 ) => Promise<readonly [body: string, footer: string]>
-
-/** Holds the listeners a toolset attaches to one followed page. */
-export interface BrowserToolsetWatch {
-	readonly dialog: (dialog: BrowserDialogInterface) => void
-	readonly popup: (page: BrowserPageInterface) => void
-	readonly close: () => void
-	readonly closed: CDPHandler
-}
 
 /**
  * Describes one tool receipt before rendering.

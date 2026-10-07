@@ -13,15 +13,7 @@ import type {
 	BrowserLaunchFunction,
 	BrowserMCPServerInterface,
 	BrowserMCPServerOptions,
-	BrowserServerHolder,
 	BrowserServerCatalog,
-	BrowserServerMirror,
-	BrowserSlot,
-	BrowserSlotWatch,
-	BrowserServerContext,
-	BrowserServerLease,
-	BrowserServerLoss,
-	BrowserServerWatch,
 } from './types.js'
 import { randomUUID } from 'node:crypto'
 import { addAbortListener } from 'node:events'
@@ -140,33 +132,222 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	readonly #abort = new AbortController()
 	readonly #signal: () => void
 	readonly #vocabulary: ReadonlySet<string>
-	#mirrored: BrowserServerMirror | undefined
-	readonly #pool: PoolInterface<BrowserSlot>
+	#mirrored:
+		| {
+				readonly lease: {
+					readonly token: PoolToken<{
+						readonly browser: BrowserInterface
+						readonly profile: string
+					}>
+					readonly generation: {
+						readonly context: BrowserContextInterface
+						readonly toolset: BrowserToolsetInterface
+						readonly directory: string
+					}
+				}
+				readonly added: (tool: ToolInterface) => void
+				readonly removed: (tool: ToolInterface) => void
+				readonly cleared: (tools: readonly ToolInterface[]) => void
+		  }
+		| undefined
+	readonly #pool: PoolInterface<{
+		readonly browser: BrowserInterface
+		readonly profile: string
+	}>
 	readonly #log: NodeJS.WritableStream
 	readonly #folders = new Set<string>()
 	readonly #faults = new Set<unknown>()
-	readonly #losses = new WeakMap<BrowserSlot, { readonly cause: unknown }>()
-	readonly #departures = new WeakMap<BrowserServerLease, BrowserServerLoss>()
-	readonly #pings = new WeakMap<BrowserSlot, Promise<void>>()
-	readonly #watches = new Map<BrowserSlot, BrowserSlotWatch>()
-	readonly #observed = new Map<BrowserServerContext, BrowserServerWatch>()
-	readonly #prepared = new Map<BrowserSlot, BrowserServerContext>()
-	readonly #owned = new Map<BrowserSlot, Set<BrowserServerContext>>()
-	readonly #building = new Map<BrowserSlot, Set<Promise<BrowserServerContext>>>()
-	readonly #cleaning = new WeakMap<BrowserServerContext, Promise<boolean>>()
-	readonly #endings = new WeakMap<BrowserSlot, PromiseWithResolvers<void>>()
-	readonly #retentions = new Map<BrowserServerHolder, unknown>()
-	readonly #shared: BrowserServerHolder = {
+	readonly #losses = new WeakMap<
+		{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		{ readonly cause: unknown }
+	>()
+	readonly #departures = new WeakMap<
+		{
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		},
+		{
+			readonly cause: unknown
+			readonly url: string
+		}
+	>()
+	readonly #pings = new WeakMap<
+		{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		Promise<void>
+	>()
+	readonly #watches = new Map<
+		{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		{
+			readonly resolve: (cause: unknown) => void
+			readonly disconnect: () => void
+			readonly subscription: Disposable
+		}
+	>()
+	readonly #observed = new Map<
+		{
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		},
+		{
+			readonly page: (page: BrowserPageInterface) => void
+			readonly crashes: ReadonlyMap<BrowserPageInterface, () => void>
+		}
+	>()
+	readonly #prepared = new Map<
+		{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		{
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		}
+	>()
+	readonly #owned = new Map<
+		{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		Set<{
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		}>
+	>()
+	readonly #building = new Map<
+		{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		Set<
+			Promise<{
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}>
+		>
+	>()
+	readonly #cleaning = new WeakMap<
+		{
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		},
+		Promise<boolean>
+	>()
+	readonly #endings = new WeakMap<
+		{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		PromiseWithResolvers<void>
+	>()
+	readonly #retentions = new Map<
+		{
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		unknown
+	>()
+	readonly #shared: {
+		readonly id: string
+		readonly purpose: string
+		readonly abort: AbortController
+	} = {
 		id: 'shared',
 		purpose: 'Shared browser',
 		abort: this.#abort,
 	}
-	readonly #holders = new Map<string, BrowserServerHolder>([[this.#shared.id, this.#shared]])
-	readonly #leases = new Map<BrowserServerHolder, BrowserServerLease>()
-	readonly #grants = new Map<BrowserServerHolder, Promise<BrowserServerLease>>()
-	readonly #notices = new Map<BrowserServerHolder, Set<BrowserServerLease>>()
+	readonly #holders = new Map<
+		string,
+		{
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		}
+	>([[this.#shared.id, this.#shared]])
+	readonly #leases = new Map<
+		{
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		{
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		}
+	>()
+	readonly #grants = new Map<
+		{
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		Promise<{
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		}>
+	>()
+	readonly #notices = new Map<
+		{
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		Set<{
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		}>
+	>()
 	readonly #disposals = new Map<string, Promise<void>>()
-	readonly #drains = new Map<BrowserServerHolder, Set<Promise<void>>>()
+	readonly #drains = new Map<
+		{
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		Set<Promise<void>>
+	>()
 	readonly #readers = new Map<string, Set<symbol>>()
 	readonly #writers = new Set<string>()
 	readonly #admission: number
@@ -199,7 +380,10 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#admission = size * contexts
 		this.#log = options?.log ?? process.stderr
 		this.#reference = this.#issue.bind(this)
-		this.#pool = createPool<BrowserSlot>({
+		this.#pool = createPool<{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		}>({
 			create: this.#warm.bind(this),
 			destroy: this.#destroyRecord.bind(this),
 			validate: this.#validate.bind(this),
@@ -368,7 +552,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				BROWSER_SERVER_BUSY,
 				`${BROWSER_SERVER_BUSY}: ${[...this.#holders.values()].map((holder) => `${holder.id} (${holder.purpose})`).join(', ')}. Call destroy for a holder no longer needed or call the named tools to share the shared browser.`,
 			)
-		const holder: BrowserServerHolder = { id: randomUUID(), purpose, abort: new AbortController() }
+		const holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		} = { id: randomUUID(), purpose, abort: new AbortController() }
 		this.#holders.set(holder.id, holder)
 		const listener = addAbortListener(context.signal, () =>
 			holder.abort.abort(context.signal.reason),
@@ -393,7 +581,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	#holder(value: unknown): BrowserServerHolder {
+	#holder(value: unknown): {
+		readonly id: string
+		readonly purpose: string
+		readonly abort: AbortController
+	} {
 		const holder = isString(value) ? this.#holders.get(value) : undefined
 		if (holder === undefined || holder === this.#shared || holder.abort.signal.aborted)
 			throw new BrowserError(
@@ -448,7 +640,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		return 'Holder destroyed.'
 	}
 
-	#retire(holder: BrowserServerHolder): Promise<void> {
+	#retire(holder: {
+		readonly id: string
+		readonly purpose: string
+		readonly abort: AbortController
+	}): Promise<void> {
 		const pending = this.#disposals.get(holder.id)
 		if (pending !== undefined) return pending
 		holder.abort.abort()
@@ -479,7 +675,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	async #forward(
-		holder: BrowserServerHolder,
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
 		name: string,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
@@ -514,7 +714,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	async #perform(
-		holder: BrowserServerHolder,
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
 		name: string,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
@@ -523,7 +727,17 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			holder === this.#shared
 				? context.signal
 				: AbortSignal.any([context.signal, holder.abort.signal])
-		let lease: BrowserServerLease
+		let lease: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		}
 		try {
 			lease = await this.#serve(holder, signal)
 		} catch (error) {
@@ -600,7 +814,25 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			: result.value
 	}
 
-	#annotate(holder: BrowserServerHolder, value: string, lease?: BrowserServerLease): string {
+	#annotate(
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		value: string,
+		lease?: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		},
+	): string {
 		const notes: string[] = []
 		for (const lost of this.#notices.get(holder) ?? []) {
 			if (lost === lease) continue
@@ -641,7 +873,24 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	async #grant(holder: BrowserServerHolder, signal: AbortSignal): Promise<BrowserServerLease> {
+	async #grant(
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		signal: AbortSignal,
+	): Promise<{
+		readonly token: PoolToken<{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		}>
+		readonly generation: {
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		}
+	}> {
 		const held = this.#leases.get(holder)
 		if (held !== undefined) return held
 		let granting = this.#grants.get(holder)
@@ -665,9 +914,26 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	async #hold(
-		holder: BrowserServerHolder,
-		token: PoolToken<BrowserSlot>,
-	): Promise<BrowserServerLease> {
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		token: PoolToken<{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		}>,
+	): Promise<{
+		readonly token: PoolToken<{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		}>
+		readonly generation: {
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		}
+	}> {
 		const slot = token.value
 		if (
 			this.#closing !== undefined ||
@@ -695,7 +961,17 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			else token.release()
 			throw this.#unavailable(error)
 		}
-		const lease: BrowserServerLease = { token, generation }
+		const lease: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		} = { token, generation }
 		if (
 			this.#closing !== undefined ||
 			this.#holders.get(holder.id) !== holder ||
@@ -709,7 +985,22 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#observe(slot, generation)
 		if (holder === this.#shared) {
 			const tools = generation.toolset.tools
-			const mirrored: BrowserServerMirror = {
+			const mirrored: {
+				readonly lease: {
+					readonly token: PoolToken<{
+						readonly browser: BrowserInterface
+						readonly profile: string
+					}>
+					readonly generation: {
+						readonly context: BrowserContextInterface
+						readonly toolset: BrowserToolsetInterface
+						readonly directory: string
+					}
+				}
+				readonly added: (tool: ToolInterface) => void
+				readonly removed: (tool: ToolInterface) => void
+				readonly cleared: (tools: readonly ToolInterface[]) => void
+			} = {
 				lease,
 				added: this.#mirror.bind(this, lease),
 				removed: this.#withdraw.bind(this, lease),
@@ -724,7 +1015,24 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		return lease
 	}
 
-	async #serve(holder: BrowserServerHolder, signal: AbortSignal): Promise<BrowserServerLease> {
+	async #serve(
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		signal: AbortSignal,
+	): Promise<{
+		readonly token: PoolToken<{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		}>
+		readonly generation: {
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		}
+	}> {
 		if (this.#closing !== undefined || holder.abort.signal.aborted) throw this.#ended()
 		await this.#race(this.#starting, signal)
 		if (this.#closing !== undefined || holder.abort.signal.aborted) throw this.#ended()
@@ -755,7 +1063,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	#ping(slot: BrowserSlot): Promise<void> {
+	#ping(slot: { readonly browser: BrowserInterface; readonly profile: string }): Promise<void> {
 		const pending = this.#pings.get(slot)
 		if (pending !== undefined) return pending
 		const ping = slot.browser
@@ -768,7 +1076,10 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		return ping
 	}
 
-	async #validate(slot: BrowserSlot): Promise<boolean> {
+	async #validate(slot: {
+		readonly browser: BrowserInterface
+		readonly profile: string
+	}): Promise<boolean> {
 		try {
 			await slot.browser.ping({ signal: this.#abort.signal })
 			return true
@@ -778,7 +1089,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	#lose(slot: BrowserSlot, cause: unknown): void {
+	#lose(
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		cause: unknown,
+	): void {
 		if (this.#closing !== undefined || this.#losses.has(slot)) return
 		this.#losses.set(slot, { cause })
 		this.#failure = cause
@@ -791,7 +1108,25 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		watch?.resolve(cause)
 	}
 
-	#detach(holder: BrowserServerHolder, lease: BrowserServerLease, cause: unknown): void {
+	#detach(
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		lease: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		},
+		cause: unknown,
+	): void {
 		if (this.#leases.get(holder) !== lease || this.#holders.get(holder.id) !== holder) return
 		this.#departures.set(lease, {
 			cause,
@@ -800,12 +1135,30 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		if (holder === this.#shared) this.#unmirror()
 		this.#leases.delete(holder)
 		this.#untrack(lease.generation)
-		const notices = this.#notices.get(holder) ?? new Set<BrowserServerLease>()
+		const notices =
+			this.#notices.get(holder) ??
+			new Set<{
+				readonly token: PoolToken<{
+					readonly browser: BrowserInterface
+					readonly profile: string
+				}>
+				readonly generation: {
+					readonly context: BrowserContextInterface
+					readonly toolset: BrowserToolsetInterface
+					readonly directory: string
+				}
+			}>()
 		notices.add(lease)
 		this.#notices.set(holder, notices)
 	}
 
-	#watch(slot: BrowserSlot, signal: AbortSignal): Promise<unknown> {
+	#watch(
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		signal: AbortSignal,
+	): Promise<unknown> {
 		const loss = Promise.withResolvers<unknown>()
 		const disconnect = this.#disconnect.bind(this, slot)
 		const subscription = addAbortListener(signal, this.#unwatch.bind(this, slot))
@@ -816,7 +1169,17 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		return loss.promise
 	}
 
-	#observe(slot: BrowserSlot, generation: BrowserServerContext): void {
+	#observe(
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		generation: {
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		},
+	): void {
 		if (this.#observed.has(generation)) return
 		const page = this.#track.bind(this, slot, generation)
 		this.#observed.set(generation, { page, crashes: new Map() })
@@ -824,7 +1187,18 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		for (const current of generation.context.pages()) this.#track(slot, generation, current)
 	}
 
-	#track(slot: BrowserSlot, generation: BrowserServerContext, page: BrowserPageInterface): void {
+	#track(
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		generation: {
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		},
+		page: BrowserPageInterface,
+	): void {
 		const watch = this.#observed.get(generation)
 		if (watch === undefined || watch.crashes.has(page)) return
 		const crash = this.#crash.bind(this, slot, generation, page)
@@ -835,7 +1209,18 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		})
 	}
 
-	#crash(slot: BrowserSlot, generation: BrowserServerContext, page: BrowserPageInterface): void {
+	#crash(
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		generation: {
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		},
+		page: BrowserPageInterface,
+	): void {
 		if (this.#prepared.get(slot) === generation) {
 			this.#prepared.delete(slot)
 			this.#untrack(generation)
@@ -853,7 +1238,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		void drain.finally(() => drains.delete(drain)).catch(this.#fault.bind(this))
 	}
 
-	#untrack(generation: BrowserServerContext): void {
+	#untrack(generation: {
+		readonly context: BrowserContextInterface
+		readonly toolset: BrowserToolsetInterface
+		readonly directory: string
+	}): void {
 		const watch = this.#observed.get(generation)
 		if (watch === undefined) return
 		this.#observed.delete(generation)
@@ -861,7 +1250,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		for (const [page, crash] of watch.crashes) page.emitter.off('crash', crash)
 	}
 
-	#disconnect(slot: BrowserSlot): void {
+	#disconnect(slot: { readonly browser: BrowserInterface; readonly profile: string }): void {
 		this.#lose(
 			slot,
 			new Error(
@@ -872,7 +1261,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		)
 	}
 
-	#unwatch(slot: BrowserSlot): void {
+	#unwatch(slot: { readonly browser: BrowserInterface; readonly profile: string }): void {
 		const watch = this.#watches.get(slot)
 		if (watch === undefined) return
 		this.#watches.delete(slot)
@@ -880,7 +1269,24 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		watch.subscription[Symbol.dispose]()
 	}
 
-	async #release(holder: BrowserServerHolder, lease: BrowserServerLease): Promise<void> {
+	async #release(
+		holder: {
+			readonly id: string
+			readonly purpose: string
+			readonly abort: AbortController
+		},
+		lease: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		},
+	): Promise<void> {
 		const slot = lease.token.value
 		const removed = await this.#clean(slot, lease.generation)
 		const disposal = lease.generation.context.disposal
@@ -898,7 +1304,17 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		} else if (removed) lease.token.release()
 	}
 
-	#clean(slot: BrowserSlot, generation: BrowserServerContext): Promise<boolean> {
+	#clean(
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		generation: {
+			readonly context: BrowserContextInterface
+			readonly toolset: BrowserToolsetInterface
+			readonly directory: string
+		},
+	): Promise<boolean> {
 		let cleaning = this.#cleaning.get(generation)
 		if (cleaning !== undefined) return cleaning
 		cleaning = Promise.resolve().then(async () => {
@@ -919,9 +1335,30 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		return cleaning
 	}
 
-	#build(slot: BrowserSlot, token?: PoolToken<BrowserSlot>): Promise<BrowserServerContext> {
+	#build(
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		token?: PoolToken<{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		}>,
+	): Promise<{
+		readonly context: BrowserContextInterface
+		readonly toolset: BrowserToolsetInterface
+		readonly directory: string
+	}> {
 		const construction = this.#construct(slot, token)
-		const building = this.#building.get(slot) ?? new Set<Promise<BrowserServerContext>>()
+		const building =
+			this.#building.get(slot) ??
+			new Set<
+				Promise<{
+					readonly context: BrowserContextInterface
+					readonly toolset: BrowserToolsetInterface
+					readonly directory: string
+				}>
+			>()
 		building.add(construction)
 		this.#building.set(slot, building)
 		void construction.finally(() => building.delete(construction)).catch(() => undefined)
@@ -929,9 +1366,19 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	async #construct(
-		slot: BrowserSlot,
-		token?: PoolToken<BrowserSlot>,
-	): Promise<BrowserServerContext> {
+		slot: {
+			readonly browser: BrowserInterface
+			readonly profile: string
+		},
+		token?: PoolToken<{
+			readonly browser: BrowserInterface
+			readonly profile: string
+		}>,
+	): Promise<{
+		readonly context: BrowserContextInterface
+		readonly toolset: BrowserToolsetInterface
+		readonly directory: string
+	}> {
 		const directory = join(slot.profile, 'contexts', randomUUID(), 'downloads')
 		let context: BrowserContextInterface | undefined
 		let toolset: BrowserToolsetInterface | undefined
@@ -967,8 +1414,18 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				},
 			})
 			await toolset.start()
-			const generation: BrowserServerContext = { context, toolset, directory }
-			const owned = this.#owned.get(slot) ?? new Set<BrowserServerContext>()
+			const generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			} = { context, toolset, directory }
+			const owned =
+				this.#owned.get(slot) ??
+				new Set<{
+					readonly context: BrowserContextInterface
+					readonly toolset: BrowserToolsetInterface
+					readonly directory: string
+				}>()
 			owned.add(generation)
 			this.#owned.set(slot, owned)
 			return generation
@@ -989,7 +1446,10 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		}
 	}
 
-	async #destroyRecord(slot: BrowserSlot): Promise<void> {
+	async #destroyRecord(slot: {
+		readonly browser: BrowserInterface
+		readonly profile: string
+	}): Promise<void> {
 		// A timed-out browser cannot answer context cleanup; kill before awaiting that cleanup.
 		const cause = this.#losses.get(slot)?.cause
 		if (isBrowserError(cause) && cause.code === 'TIMEOUT' && slot.browser.pid !== undefined) {
@@ -1021,7 +1481,10 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		this.#faults.add(error)
 	}
 
-	async #warm(): Promise<BrowserSlot> {
+	async #warm(): Promise<{
+		readonly browser: BrowserInterface
+		readonly profile: string
+	}> {
 		if (this.#closing !== undefined) throw this.#ended()
 		if (this.#stranded !== undefined)
 			throw new BrowserError(
@@ -1032,7 +1495,12 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const profile = join(this.#root, '.profiles', formatBrowserLockEntry(process.pid, randomUUID()))
 		// Without `recursive`, an existing directory refuses with `EEXIST`, so no two launches share one.
 		let browser: BrowserInterface | undefined
-		let slot: BrowserSlot | undefined
+		let slot:
+			| {
+					readonly browser: BrowserInterface
+					readonly profile: string
+			  }
+			| undefined
 		try {
 			await mkdir(profile)
 			this.#folders.add(profile)
@@ -1169,7 +1637,20 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	// Adds a dispatcher for a tool the toolset's manager added under a name outside the vocabulary.
-	#mirror(lease: BrowserServerLease, tool: ToolInterface): void {
+	#mirror(
+		lease: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		},
+		tool: ToolInterface,
+	): void {
 		if (this.#leases.get(this.#shared) !== lease || this.#vocabulary.has(tool.name)) return
 		this.#tools.add(
 			createTool({
@@ -1181,14 +1662,40 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 
 	// Removes the dispatcher of a withdrawn tool; a replacement publishes `remove` while it is
 	// installed, so the mirror follows the manager's current tool rather than the event.
-	#withdraw(lease: BrowserServerLease, tool: ToolInterface): void {
+	#withdraw(
+		lease: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		},
+		tool: ToolInterface,
+	): void {
 		if (this.#leases.get(this.#shared) !== lease || this.#vocabulary.has(tool.name)) return
 		const current = lease.generation.toolset.tools.tool(tool.name)
 		if (current === undefined) this.#tools.remove(tool.name)
 		else this.#mirror(lease, current)
 	}
 
-	#clear(lease: BrowserServerLease, tools: readonly ToolInterface[]): void {
+	#clear(
+		lease: {
+			readonly token: PoolToken<{
+				readonly browser: BrowserInterface
+				readonly profile: string
+			}>
+			readonly generation: {
+				readonly context: BrowserContextInterface
+				readonly toolset: BrowserToolsetInterface
+				readonly directory: string
+			}
+		},
+		tools: readonly ToolInterface[],
+	): void {
 		for (const tool of tools) this.#withdraw(lease, tool)
 	}
 

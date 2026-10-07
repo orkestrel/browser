@@ -2,8 +2,8 @@
  * src/server/helpers.ts tests.
  *
  * `fetchCDPTargets` is exercised against a real
- * in-process HTTP server (`createCDPTestServer`). `findSystemBrowsers` /
- * `findSystemBrowser` are exercised through their `SystemBrowserOptions`
+ * in-process HTTP server (`createCDPTestServer`). `findSystemBrowsers`
+ * is exercised through its `SystemBrowserOptions`
  * override bag with real temp files/dirs (`node:fs`) so every assertion is
  * deterministic across machines — no mocking, no dependency on what happens
  * to be installed. `launchBrowserProcess` argument construction is verified
@@ -23,7 +23,6 @@ import { createScratch, readErrorCode } from '@orkestrel/test/server'
 import {
 	createBrowserProfile,
 	findSystemBrowsers,
-	findSystemBrowser,
 	findStorePaths,
 	parseBrowserEngine,
 	launchBrowserProcess,
@@ -239,9 +238,9 @@ afterEach(async () => {
 	for (const scratch of scratches.splice(0)) scratch.destroy()
 })
 
-describe('findSystemBrowser', () => {
-	it('returns undefined when every candidate source is empty', () => {
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [] })
+describe('findSystemBrowsers first candidate', () => {
+	it('leaves the first candidate undefined when every source is empty', () => {
+		const found = findSystemBrowsers({ env: {}, paths: [], names: [], stores: [] })[0]
 		expect(found).toBeUndefined()
 	})
 
@@ -251,7 +250,7 @@ describe('findSystemBrowser', () => {
 		const file = join(scratch.path, 'chrome')
 		scratch.write('chrome', '')
 
-		const found = findSystemBrowser({ env: {}, paths: [file], names: [], stores: [] })
+		const found = findSystemBrowsers({ env: {}, paths: [file], names: [], stores: [] })[0]
 
 		expect(found).toEqual({ executable: file, engine: 'chrome' })
 	})
@@ -264,12 +263,12 @@ describe('findSystemBrowser', () => {
 		scratch.write('env-chrome', '')
 		scratch.write('path-chrome', '')
 
-		const found = findSystemBrowser({
+		const found = findSystemBrowsers({
 			env: { PLAYWRIGHT_EXECUTABLE_PATH: envFile },
 			paths: [pathFile],
 			names: [],
 			stores: [],
-		})
+		})[0]
 
 		expect(found?.executable).toBe(envFile)
 	})
@@ -280,12 +279,12 @@ describe('findSystemBrowser', () => {
 		const chromePathFile = join(scratch.path, 'chrome-path-chrome')
 		scratch.write('chrome-path-chrome', '')
 
-		const found = findSystemBrowser({
+		const found = findSystemBrowsers({
 			env: { CHROME_PATH: chromePathFile },
 			paths: [],
 			names: [],
 			stores: [],
-		})
+		})[0]
 
 		expect(found?.executable).toBe(chromePathFile)
 	})
@@ -307,7 +306,7 @@ describe('findSystemBrowser', () => {
 		scratch.write(relative, '')
 		const binary = join(scratch.path, relative)
 
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [scratch.path] })
+		const found = findSystemBrowsers({ env: {}, paths: [], names: [], stores: [scratch.path] })[0]
 
 		expect(found).toEqual({ executable: binary, engine: 'chromium' })
 	})
@@ -318,7 +317,7 @@ describe('findSystemBrowser', () => {
 		const link = join(scratch.path, 'chromium')
 		scratch.write('chromium', '')
 
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [scratch.path] })
+		const found = findSystemBrowsers({ env: {}, paths: [], names: [], stores: [scratch.path] })[0]
 
 		expect(found).toEqual({ executable: link, engine: 'chromium' })
 	})

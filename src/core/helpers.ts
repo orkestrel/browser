@@ -1,3 +1,4 @@
+import { decodeBase64, encodeBase64 } from '@orkestrel/codec'
 import type {
 	BrowserJourneyInput,
 	BrowserPageInterface,
@@ -51,7 +52,6 @@ import type {
 	BrowserRouteQuery,
 	BrowserQuad,
 	BrowserReadResult,
-	BrowserReadMatch,
 	BrowserReceipt,
 	BrowserElementInterface,
 	BrowserSnapshotInput,
@@ -99,10 +99,8 @@ import {
 	BROWSER_JOURNEY_FORMAT_VERSION,
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BROWSER_JOURNEY_PARAMETER_PATTERN,
-	BASE64_CHARS,
 	BROWSER_OUTLINE_OMITTED_ROLES,
 	BROWSER_SEARCH_PATTERN,
-	BASE64_LOOKUP,
 	BROWSER_RESULT_LIMIT,
 	BROWSER_REGISTRY_OUTPUT_LIMIT,
 	BROWSER_RESULT_LIMIT_PATTERN,
@@ -242,72 +240,6 @@ export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
 }
 
 /**
- * Returns the referenced outline nodes whose role and accessible name share the most words with a
- * search, in document order.
- *
- * @remarks
- * The search and each node's role and name are lowercased and split into whole words by
- * `BROWSER_SEARCH_PATTERN`, so a word shorter than 3 letters or digits never counts, and words
- * compare whole, with no substring or prefix match. A node scores the number of distinct search
- * words equal to one of its words, and every node with the highest score above 0 matches. Only a
- * node an outline renders as a referenced row takes part: one that is not ignored, carries a
- * reference, and whose role is not omitted, a heading, or text.
- *
- * @param nodes - Ordered accessibility rows
- * @param search - The words to match
- * @returns The best-matching nodes in document order; empty when no node shares a word
- *
- * @example
- * ```ts
- * import { scanBrowserOutline } from '@orkestrel/browser'
- *
- * const node = {
- * 	parent: undefined,
- * 	children: [],
- * 	backend: undefined,
- * 	frame: undefined,
- * 	ignored: false,
- * 	description: undefined,
- * 	value: undefined,
- * 	properties: {},
- * 	session: 'main',
- * }
- * const nodes = [
- * 	{ ...node, id: '1', role: 'button', name: 'Close', reference: 'e1' },
- * 	{ ...node, id: '2', role: 'button', name: 'Archive', reference: 'e2' },
- * ]
- * scanBrowserOutline(nodes, 'archive dialog button').map((match) => match.reference) // ['e2']
- * ```
- */
-export function scanBrowserOutline(
-	nodes: readonly BrowserOutlineNode[],
-	search: string,
-): readonly BrowserOutlineNode[] {
-	const words = collectBrowserWords(search)
-	if (words.size === 0) return []
-	let best = 0
-	const scored: Array<{ readonly node: BrowserOutlineNode; readonly score: number }> = []
-	for (const node of nodes) {
-		const role = node.role ?? ''
-		if (
-			node.ignored ||
-			node.reference === undefined ||
-			BROWSER_OUTLINE_OMITTED_ROLES.has(role) ||
-			role === 'heading' ||
-			role === 'StaticText'
-		)
-			continue
-		const own = collectBrowserWords(`${role} ${node.name ?? ''}`)
-		let score = 0
-		for (const word of words) if (own.has(word)) score += 1
-		if (score === 0) continue
-		best = Math.max(best, score)
-		scored.push({ node, score })
-	}
-	return scored.filter((entry) => entry.score === best).map((entry) => entry.node)
-}
-
-/**
  * Collects distinct lowercase words of at least 3 letters or digits.
  *
  * @param text - Text to scan
@@ -323,82 +255,6 @@ export function collectBrowserWords(text: string): ReadonlySet<string> {
 	return new Set(
 		Array.from(text.toLowerCase().matchAll(BROWSER_SEARCH_PATTERN), (match) => match[0]),
 	)
-}
-
-/**
- * Matches the lines sharing the most distinct search words, in document order.
- *
- * @param text - The complete projection
- * @param search - Words to match, using the outline's word rule
- * @returns The best-scoring lines and their original UTF-16 offsets; empty without a shared word
- *
- * @example
- * ```ts
- * import { scanBrowserText } from '@orkestrel/browser'
- * scanBrowserText('Cart\nBlue kettle', 'kettle') // [{ offset: 5, text: 'Blue kettle' }]
- * ```
- */
-export function scanBrowserText(text: string, search: string): readonly BrowserReadMatch[] {
-	const words = collectBrowserWords(search)
-	if (words.size === 0) return []
-	let best = 0
-	const scored: Array<{ readonly match: BrowserReadMatch; readonly score: number }> = []
-	for (const line of text.matchAll(/[^\r\n]+/g)) {
-		const own = collectBrowserWords(line[0])
-		let score = 0
-		for (const word of words) if (own.has(word)) score += 1
-		if (score === 0) continue
-		best = Math.max(best, score)
-		scored.push({ match: { offset: line.index, text: line[0] }, score })
-	}
-	return scored.filter((entry) => entry.score === best).map((entry) => entry.match)
-}
-
-/**
- * Renders matching rows in at most half the available reply room.
- *
- * @remarks
- * An oversized first row is cut with an ellipsis without splitting a surrogate pair, reserving
- * room for the first later row that can fit beside it only when the cut keeps the leading token
- * through its first space. Otherwise it cuts without reserving. Later rows that do not fit are
- * skipped. An empty collection or a cut with no character before the ellipsis produces no block.
- *
- * @param heading - The match count and search, ending with a colon
- * @param rows - Matching rows in document order
- * @param room - Characters available in the reply
- * @returns The bounded block with a trailing blank line, or an empty string
- *
- * @example
- * ```ts
- * import { renderBrowserMatches } from '@orkestrel/browser'
- * renderBrowserMatches('Matches:', ['[5] Cart'], 100) // 'Matches:\n[5] Cart\n\n'
- * ```
- */
-export function renderBrowserMatches(
-	heading: string,
-	rows: readonly string[],
-	room: number,
-): string {
-	const half = Math.floor(room / 2)
-	let text = `${heading}\n`
-	let count = 0
-	for (const row of rows) {
-		const space = half - text.length - 2
-		if (space < 1) break
-		if (row.length > space) {
-			if (count > 0) continue
-			let end = space - 1
-			const later = rows.slice(1).find((candidate) => candidate.length + 2 <= space)
-			if (later !== undefined && end - later.length - 1 >= row.indexOf(' ') + 1)
-				end -= later.length + 1
-			const last = row.charCodeAt(end - 1)
-			if (last >= 0xd800 && last <= 0xdbff) end -= 1
-			if (end < 1) break
-			text += `${row.slice(0, end)}…\n`
-		} else text += `${row}\n`
-		count += 1
-	}
-	return count === 0 ? '' : `${text}\n`
 }
 
 /** Renders document-order accessibility lines with a bounded element count.
@@ -1290,77 +1146,6 @@ export function renderBrowserReceipt(receipt: BrowserReceipt): string {
 }
 
 /**
- * Decodes a base64-encoded string into raw bytes.
- *
- * @remarks
- * Pure JS implementation — no `Buffer`, no `atob` (DOM-only) — so it runs
- * identically in Node and browser environments. Whitespace and `=` padding
- * are ignored; invalid characters are skipped.
- *
- * @param text - Base64-encoded input string
- * @returns Decoded bytes
- *
- * @example
- * ```ts
- * decodeBase64('aGVsbG8=') // Uint8Array [104, 101, 108, 108, 111]
- * ```
- */
-export function decodeBase64(text: string): Uint8Array {
-	const clean = text.replace(/[^A-Za-z0-9+/]/g, '')
-	const bytes: number[] = []
-
-	let buffer = 0
-	let bits = 0
-
-	for (const char of clean) {
-		const value = BASE64_LOOKUP[char]
-		if (value === undefined) continue
-
-		buffer = (buffer << 6) | value
-		bits += 6
-
-		if (bits >= 8) {
-			bits -= 8
-			bytes.push((buffer >> bits) & 0xff)
-		}
-	}
-
-	return new Uint8Array(bytes)
-}
-
-/**
- * Encodes raw bytes as base64 without relying on Node or DOM globals.
- *
- * @param bytes - Raw input bytes
- * @returns Base64 text
- */
-export function encodeBase64(bytes: Uint8Array): string {
-	let result = ''
-	for (let index = 0; index < bytes.length; index += 3) {
-		const first = bytes[index]
-		const second = bytes[index + 1]
-		const third = bytes[index + 2]
-		if (first === undefined) break
-		const value = (first << 16) | ((second ?? 0) << 8) | (third ?? 0)
-		result += BASE64_CHARS[(value >> 18) & 63] ?? ''
-		result += BASE64_CHARS[(value >> 12) & 63] ?? ''
-		result += second === undefined ? '=' : (BASE64_CHARS[(value >> 6) & 63] ?? '')
-		result += third === undefined ? '=' : (BASE64_CHARS[value & 63] ?? '')
-	}
-	return result
-}
-
-/** Encodes UTF-8 text as bytes. */
-export function textToBytes(value: string): Uint8Array {
-	return new TextEncoder().encode(value)
-}
-
-/** Decodes UTF-8 bytes as text. */
-export function bytesToText(value: Uint8Array): string {
-	return new TextDecoder().decode(value)
-}
-
-/**
  * Converts a header record to Fetch-domain name/value entries.
  *
  * @param headers - Header record
@@ -1460,7 +1245,7 @@ export function createBrowserHAREntry(
 					}
 				: {}),
 			headersSize: -1,
-			bodySize: post === undefined ? 0 : textToBytes(post).byteLength,
+			bodySize: post === undefined ? 0 : new TextEncoder().encode(post).byteLength,
 		},
 		response: {
 			status: response?.status ?? 0,
@@ -1639,9 +1424,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 			!isString(entry['response']['content']['mimeType']) ||
 			(text !== undefined && !isString(text)) ||
 			(encoding !== undefined && encoding !== 'base64') ||
-			(encoding === 'base64' &&
-				(text === undefined ||
-					!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)))
+			(encoding === 'base64' && (text === undefined || decodeBase64(text) === undefined))
 		) {
 			throw new BrowserError('ARGUMENT', 'Browser HAR response content is malformed', { index })
 		}
@@ -2068,9 +1851,14 @@ export function readBrowserStreamChunk(value: unknown): BrowserStreamChunk {
 	if (!isRecord(value) || !isString(value['data'])) {
 		throw new BrowserError('PROTOCOL', 'Browser IO stream chunk is malformed')
 	}
+	const bytes =
+		value['base64Encoded'] === true
+			? decodeBase64(value['data'])
+			: new TextEncoder().encode(value['data'])
+	if (bytes === undefined)
+		throw new BrowserError('PROTOCOL', 'Browser IO stream chunk has malformed base64 data')
 	return {
-		bytes:
-			value['base64Encoded'] === true ? decodeBase64(value['data']) : textToBytes(value['data']),
+		bytes,
 		eof: value['eof'] === true,
 	}
 }

@@ -46,7 +46,7 @@ import {
 import {
 	browserToEngine,
 	createBrowserProfile,
-	findSystemBrowser,
+	findSystemBrowsers,
 	launchBrowserProcess,
 	parseBrowserEngine,
 	readBrowserEndpoint,
@@ -643,10 +643,10 @@ export class Browser implements BrowserInterface {
 		if (executable !== undefined) {
 			resolvedEngine = parseBrowserEngine(executable) ?? 'chromium'
 		} else {
-			const found = findSystemBrowser({
+			const found = findSystemBrowsers({
 				...this.#options.browsers,
 				...(requestedEngine !== undefined ? { engine: requestedEngine } : {}),
-			})
+			})[0]
 			executable = found?.executable
 			resolvedEngine = found?.engine
 		}

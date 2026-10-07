@@ -1,7 +1,6 @@
 import type {
 	BrowserBindingHandler,
 	BrowserFrameInterface,
-	BrowserScriptEntry,
 	BrowserScriptManagerInterface,
 } from './types.js'
 import {
@@ -28,7 +27,13 @@ import { BrowserError } from './errors.js'
 export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	readonly #frame: BrowserFrameInterface
 	readonly #bindings: Map<string, BrowserBindingHandler> = new Map()
-	readonly #scripts: Map<string, BrowserScriptEntry> = new Map()
+	readonly #scripts: Map<
+		string,
+		{
+			readonly source: string
+			readonly binding: string | undefined
+		}
+	> = new Map()
 	#subscribed = false
 	#destroyed = false
 	readonly #bindingHandler = this.#handleBinding.bind(this)

@@ -1,7 +1,7 @@
+import { decodeBase64 } from '@orkestrel/codec'
 import type {
 	BrowserElementManagerInterface,
 	BrowserPageElementInterface,
-	BrowserReadinessWait,
 	BrowserReferenceFunction,
 	BrowserCallOptions,
 	BrowserWaitOptions,
@@ -18,7 +18,6 @@ import type {
 	BrowserNavigationOptions,
 	BrowserNavigationManagerInterface,
 	BrowserNavigationResult,
-	BrowserNavigationWatch,
 	BrowserNetworkManagerInterface,
 	BrowserPDFOptions,
 	BrowserPDFResult,
@@ -81,7 +80,6 @@ import {
 } from './compilers.js'
 import {
 	assertBrowserPage,
-	decodeBase64,
 	readBrowserSnapshot,
 	browserPDFToParams,
 	browserScreenshotToParams,
@@ -159,7 +157,16 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	readonly #mouse: BrowserMouse
 	readonly #touch: BrowserTouch
 	readonly #reference: BrowserReferenceFunction
-	readonly #readiness = new Map<symbol, BrowserReadinessWait>()
+	readonly #readiness = new Map<
+		symbol,
+		{
+			readonly resolve: () => void
+			readonly reject: (error: unknown) => void
+			readonly timer: ReturnType<typeof setTimeout>
+			readonly signal: AbortSignal | undefined
+			readonly listener: (() => void) | undefined
+		}
+	>()
 	#referenceSequence = 0
 	#waitSequence = 0
 	#dom: string | undefined
@@ -663,6 +670,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			}
 
 			const bytes = decodeBase64(result['data'])
+			if (bytes === undefined)
+				throw new BrowserError('PROTOCOL', 'Screenshot failed: malformed base64 data')
 			if (options?.path !== undefined) await this.#save(options.path, bytes)
 			return { bytes, path: options?.path }
 		} finally {
@@ -682,6 +691,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			throw new BrowserError('PROTOCOL', 'PDF failed: no data returned')
 		}
 		const bytes = decodeBase64(result['data'])
+		if (bytes === undefined) throw new BrowserError('PROTOCOL', 'PDF failed: malformed base64 data')
 		if (options?.path !== undefined) await this.#save(options.path, bytes)
 		return { bytes, path: options?.path }
 	}
@@ -884,20 +894,24 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		}
 	}
 
-	#watchNavigation(): BrowserNavigationWatch {
+	#watchNavigation(): {
+		readonly responses: readonly BrowserResponse[]
+	} {
 		const responses: BrowserResponse[] = []
 		this.#responses = responses
 		this.#network.emitter.on('response', this.#navigationResponseHandler)
 		return { responses }
 	}
 
-	#clearNavigationWatch(watch: BrowserNavigationWatch): void {
+	#clearNavigationWatch(watch: { readonly responses: readonly BrowserResponse[] }): void {
 		this.#network.emitter.off('response', this.#navigationResponseHandler)
 		if (this.#responses === watch.responses) this.#responses = undefined
 	}
 
 	#navigationResult(
-		watch: BrowserNavigationWatch,
+		watch: {
+			readonly responses: readonly BrowserResponse[]
+		},
 		url: string,
 		loader?: string,
 	): BrowserNavigationResult {
@@ -914,7 +928,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	async #completeNavigation(
-		watch: BrowserNavigationWatch,
+		watch: {
+			readonly responses: readonly BrowserResponse[]
+		},
 		loader?: string,
 		options?: BrowserCallOptions,
 	): Promise<BrowserNavigationResult> {
@@ -1144,7 +1160,15 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#settleReadiness(id)?.reject(signal.reason)
 	}
 
-	#settleReadiness(id: symbol): BrowserReadinessWait | undefined {
+	#settleReadiness(id: symbol):
+		| {
+				readonly resolve: () => void
+				readonly reject: (error: unknown) => void
+				readonly timer: ReturnType<typeof setTimeout>
+				readonly signal: AbortSignal | undefined
+				readonly listener: (() => void) | undefined
+		  }
+		| undefined {
 		const wait = this.#readiness.get(id)
 		if (wait === undefined) return undefined
 		clearTimeout(wait.timer)

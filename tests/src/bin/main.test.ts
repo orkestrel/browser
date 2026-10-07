@@ -15,7 +15,7 @@ import {
 	readProfiles,
 	waitForProcessExit,
 } from '../../setupServer.js'
-import { findSystemBrowser, parseBrowserProfileRecord, probeProcess } from '@src/server'
+import { findSystemBrowsers, parseBrowserProfileRecord, probeProcess } from '@src/server'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
@@ -62,7 +62,7 @@ describe('bin entry', () => {
 			`import { writeFileSync } from 'node:fs'\nawait import(${JSON.stringify(pathToFileURL(BUILT_ENTRY).href)})\nprocess.stdin.once('end', () => process.stderr.write('closed-reader probe\\n', error => writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ code: error?.code ?? null }))))\n`,
 		)
 		const child = new BrowseChild(entry, scratch.path, {
-			BROWSE_EXECUTABLE: requireValue(findSystemBrowser(), 'Chromium executable').executable,
+			BROWSE_EXECUTABLE: requireValue(findSystemBrowsers()[0], 'Chromium executable').executable,
 		})
 		const profiles = join(scratch.path, 'tmp/browsers/.profiles')
 		const pids: number[] = []

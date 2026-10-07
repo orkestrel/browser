@@ -1,14 +1,12 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { StdioServerOptions } from '@orkestrel/mcp/server'
-import type { ToolDefinition, ToolInterface } from '@orkestrel/tool'
-import type { PoolToken } from '@orkestrel/pool'
+import type { ToolDefinition } from '@orkestrel/tool'
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
 	BrowserContextOptions,
 	BrowserPageInterface,
 	BrowserPageOptions,
-	BrowserToolsetInterface,
 	BrowserViewport,
 	CDPTransportEventMap,
 } from '@src/core'
@@ -41,7 +39,7 @@ export interface BrowserDiscoveryResult {
 }
 
 /**
- * Describes the options overriding `findSystemBrowsers`'/`findSystemBrowser`'s candidate sources.
+ * Describes the options overriding the candidate sources for `findSystemBrowsers`.
  *
  * @remarks
  * Each field replaces the default candidate list for its category — a field
@@ -73,7 +71,7 @@ export interface SystemBrowserOptions {
  * Represents one discovered browser executable on this machine.
  *
  * @remarks
- * Returned by `findSystemBrowsers`/`findSystemBrowser` — pairs the resolved
+ * Returned by `findSystemBrowsers` — pairs the resolved
  * absolute executable path with its classified engine.
  */
 export type SystemBrowser = {
@@ -358,44 +356,6 @@ export interface FileBrowserStoreOptions {
  */
 export type BrowserLaunchFunction = (options: BrowserOptions) => BrowserInterface
 
-/** Holds one pooled browser and its exclusively owned profile. */
-export interface BrowserSlot {
-	readonly browser: BrowserInterface
-	readonly profile: string
-}
-
-/** Holds one prepared or assigned context generation and its downloads directory. */
-export interface BrowserServerContext {
-	readonly context: BrowserContextInterface
-	readonly toolset: BrowserToolsetInterface
-	readonly directory: string
-}
-
-/** Binds a holder generation to the exact browser lease reserved for its lifetime. */
-export interface BrowserServerLease {
-	readonly token: PoolToken<BrowserSlot>
-	readonly generation: BrowserServerContext
-}
-
-/** Records a lost generation's cause and its own last URL. */
-export interface BrowserServerLoss {
-	readonly cause: unknown
-	readonly url: string
-}
-
-/** Holds the listeners and resolver of one browser slot's loss watch. */
-export interface BrowserSlotWatch {
-	readonly resolve: (cause: unknown) => void
-	readonly disconnect: () => void
-	readonly subscription: Disposable
-}
-
-/** Holds page subscriptions for one prepared or assigned context generation. */
-export interface BrowserServerWatch {
-	readonly page: (page: BrowserPageInterface) => void
-	readonly crashes: ReadonlyMap<BrowserPageInterface, () => void>
-}
-
 /**
  * Configures the browse server.
  *
@@ -404,8 +364,8 @@ export interface BrowserServerWatch {
  *   against the working directory at construction. Default: `tmp/browsers`
  * - `browser.headless` — if `true`, launches Chromium without a window; if `false`, with one. Default:
  *   `true`
- * - `browser.executable` — the path of the Chromium executable the server launches. Default: the browser
- *   `findSystemBrowser` finds
+ * - `browser.executable` — the path of the Chromium executable the server launches. Default: the first browser
+ *   `findSystemBrowsers` finds
  * - `browser.viewport` — the default viewport for every page in each browser's isolated context;
  *   omission keeps the browser's launch default
  * - `journeys.readonly` — if `true`, refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs;
@@ -440,25 +400,10 @@ export interface BrowserMCPServerOptions {
 /** Names the server tools that manage independent browser holders. */
 export type BrowserServerToolName = 'acquire' | 'execute' | 'tools' | 'destroy'
 
-/** Identifies one admitted browser lifetime independently of its current pool token. */
-export interface BrowserServerHolder {
-	readonly id: string
-	readonly purpose: string
-	readonly abort: AbortController
-}
-
 /** Describes the JSON catalog returned by the holder tools. */
 export interface BrowserServerCatalog {
 	readonly holder: string
 	readonly tools: readonly ToolDefinition[]
-}
-
-/** Binds shared catalog subscriptions to the exact generation that published them. */
-export interface BrowserServerMirror {
-	readonly lease: BrowserServerLease
-	readonly added: (tool: ToolInterface) => void
-	readonly removed: (tool: ToolInterface) => void
-	readonly cleared: (tools: readonly ToolInterface[]) => void
 }
 
 /** Serves the browser vocabulary and the journey tools over MCP on stdio. */

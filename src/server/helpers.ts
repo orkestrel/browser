@@ -220,17 +220,6 @@ export function findSystemBrowsers(options?: SystemBrowserOptions): readonly Sys
 }
 
 /**
- * Locates a Chrome/Chromium/Edge executable on this machine — the first entry
- * of {@link findSystemBrowsers}.
- *
- * @param options - Overrides for the candidate sources; see {@link SystemBrowserOptions}
- * @returns The first discovered browser, or undefined
- */
-export function findSystemBrowser(options?: SystemBrowserOptions): SystemBrowser | undefined {
-	return findSystemBrowsers(options)[0]
-}
-
-/**
  * Classifies an executable path/name into a {@link BrowserEngine} by
  * case-insensitive hint, checked in the order edge → chromium → chrome.
  *

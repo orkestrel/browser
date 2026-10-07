@@ -1,3 +1,4 @@
+import { decodeBase64 } from '@orkestrel/codec'
 import type {
 	BrowserCredentials,
 	BrowserFrameInterface,
@@ -16,13 +17,7 @@ import { BrowserHARManager } from './BrowserHARManager.js'
 import { BrowserRouteManager } from './BrowserRouteManager.js'
 import { BrowserRoute } from './BrowserRoute.js'
 import { BrowserWebSocket } from './BrowserWebSocket.js'
-import {
-	bytesToText,
-	decodeBase64,
-	matchesBrowserRoute,
-	settleBrowserTeardown,
-	textToBytes,
-} from './helpers.js'
+import { matchesBrowserRoute, settleBrowserTeardown } from './helpers.js'
 import {
 	parseBrowserRequest,
 	parseBrowserRequestFailure,
@@ -131,13 +126,17 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		if (!isRecord(result) || !isString(result['body'])) {
 			throw new BrowserError('PROTOCOL', 'Browser response body is malformed', { id })
 		}
-		return result['base64Encoded'] === true
-			? decodeBase64(result['body'])
-			: textToBytes(result['body'])
+		const bytes =
+			result['base64Encoded'] === true
+				? decodeBase64(result['body'])
+				: new TextEncoder().encode(result['body'])
+		if (bytes === undefined)
+			throw new BrowserError('PROTOCOL', 'Browser response body has malformed base64 data', { id })
+		return bytes
 	}
 
 	async text(id: string): Promise<string> {
-		return bytesToText(await this.body(id))
+		return new TextDecoder().decode(await this.body(id))
 	}
 
 	async json(id: string): Promise<unknown> {

@@ -4,7 +4,6 @@ import type {
 	BrowserNavigationEventMap,
 	BrowserNavigationManagerInterface,
 	BrowserNavigationRecordInterface,
-	BrowserNavigationWait,
 	BrowserPageInterface,
 	CDPClientInterface,
 } from './types.js'
@@ -44,7 +43,17 @@ export class BrowserNavigationManager implements BrowserNavigationManagerInterfa
 	readonly #parent: (frame: string) => string | undefined
 	// Aborts with the page-closed error when the page closes, which ends every record.
 	readonly #lifetime = new AbortController()
-	readonly #waits: Map<symbol, BrowserNavigationWait> = new Map()
+	readonly #waits: Map<
+		symbol,
+		{
+			readonly pattern: string | undefined
+			readonly timer: ReturnType<typeof setTimeout>
+			readonly signal: AbortSignal | undefined
+			readonly listener: (() => void) | undefined
+			readonly resolve: (url: string) => void
+			readonly reject: (error: unknown) => void
+		}
+	> = new Map()
 	readonly #navigateHandler = this.#handleNavigate.bind(this)
 	readonly #lifecycleHandler = this.#handleLifecycle.bind(this)
 	readonly #closeHandler = this.#handleClose.bind(this)
@@ -127,7 +136,16 @@ export class BrowserNavigationManager implements BrowserNavigationManagerInterfa
 		}
 	}
 
-	#settle(id: symbol): BrowserNavigationWait | undefined {
+	#settle(id: symbol):
+		| {
+				readonly pattern: string | undefined
+				readonly timer: ReturnType<typeof setTimeout>
+				readonly signal: AbortSignal | undefined
+				readonly listener: (() => void) | undefined
+				readonly resolve: (url: string) => void
+				readonly reject: (error: unknown) => void
+		  }
+		| undefined {
 		const wait = this.#waits.get(id)
 		if (wait === undefined) return undefined
 		clearTimeout(wait.timer)

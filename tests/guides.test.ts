@@ -196,9 +196,8 @@ await new GuideCommand({
 		expect(own.entry.spec).toBe(GUIDE_SPEC)
 	})
 
-	it('executes the whole-page reading and matching fence', async () => {
-		const { createBrowserReading, collectBrowserWords, scanBrowserText, renderBrowserMatches } =
-			await import('@src/core')
+	it('executes the retained whole-page reading helpers', async () => {
+		const { createBrowserReading, collectBrowserWords } = await import('@src/core')
 		const reading = createBrowserReading({
 			url: 'https://example.test/',
 			title: '',
@@ -207,15 +206,6 @@ await new GuideCommand({
 		expect(reading.text().text).toBe('Menu\nBlue kettle')
 		expect(reading.text({ distill: true }).text).toBe('Blue kettle')
 		expect([...collectBrowserWords('Blue BLUE to 12')]).toEqual(['blue'])
-		const matches = scanBrowserText(reading.text().text, 'blue kettle')
-		expect(matches).toEqual([{ offset: 5, text: 'Blue kettle' }])
-		expect(
-			renderBrowserMatches(
-				'Matches:',
-				matches.map((match) => `[${match.offset}] ${match.text}`),
-				100,
-			),
-		).toBe('Matches:\n[5] Blue kettle\n\n')
 	})
 	it('executes the numbered-line rendering fence', async () => {
 		const {

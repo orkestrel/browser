@@ -59,6 +59,7 @@ import {
 	BROWSER_PENDING_REQUEST_CASES,
 	JPEG_BASE64,
 	PNG_BASE64,
+	BROWSER_BASE64_REFUSALS,
 	throwListenerError,
 	TIMER_LEAD,
 } from '../../setup.js'
@@ -1204,6 +1205,51 @@ describe('BrowserPage', () => {
 	})
 
 	describe('screenshot()', () => {
+		it.each(BROWSER_BASE64_REFUSALS)(
+			'refuses malformed screenshot and PDF base64 %j before writing',
+			async (data) => {
+				const { client, transport } = await createConnectedCDPClient()
+				const writer = createRecordingWriter()
+				replyOk(transport, 'Page.captureScreenshot', { data })
+				replyOk(transport, 'Page.printToPDF', { data })
+				replyOk(transport, 'Emulation.setDefaultBackgroundColorOverride')
+				const page = new BrowserPage(client, 'target-1', 'session-1', writer)
+				try {
+					await expect(
+						page.screenshot({ path: 'shot.png', transparent: true }),
+					).rejects.toMatchObject({
+						code: 'PROTOCOL',
+						message: 'Screenshot failed: malformed base64 data',
+					})
+					await expect(page.pdf({ path: 'report.pdf' })).rejects.toMatchObject({
+						code: 'PROTOCOL',
+						message: 'PDF failed: malformed base64 data',
+					})
+					expect(writer.calls).toEqual([])
+					const backgrounds = transport.sent.filter(
+						(message) => message.method === 'Emulation.setDefaultBackgroundColorOverride',
+					)
+					expect(backgrounds).toHaveLength(2)
+					expect(backgrounds[0]?.params).toEqual({ color: { r: 0, g: 0, b: 0, a: 0 } })
+					expect(backgrounds[1]?.params).toBeUndefined()
+				} finally {
+					await client.close()
+				}
+			},
+		)
+
+		it('keeps an empty base64 result distinct from refusal', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Page.captureScreenshot', { data: '' })
+			replyOk(transport, 'Page.printToPDF', { data: '' })
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			try {
+				expect((await page.screenshot()).bytes).toEqual(new Uint8Array())
+				expect((await page.pdf()).bytes).toEqual(new Uint8Array())
+			} finally {
+				await client.close()
+			}
+		})
 		it('decodes PNG bytes by default with no writer', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })

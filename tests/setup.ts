@@ -3318,6 +3318,9 @@ export function createRecordingWriter(): RecordingWriterInterface {
 /** Encodes bytes `[137, 80, 78, 71, 13]` as base64 (PNG-signature-prefixed). */
 export const PNG_BASE64 = 'iVBORw0='
 
+/** Exercises invalid alphabet, whitespace, padding, trailing bits, and the URL alphabet at browser boundaries. */
+export const BROWSER_BASE64_REFUSALS = ['AQ!ID', 'AQ ID\n', 'AQID==', 'aQ', 'aa==', '_w=='] as const
+
 /** Encodes bytes `[255, 216, 255, 224]` as base64 (JPEG-signature-prefixed). */
 export const JPEG_BASE64 = '/9j/4A=='
 

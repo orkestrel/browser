@@ -3,9 +3,28 @@ import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
 import { isBrowserError } from '@src/core'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
-import { createConnectedCDPClient, ignoreAsyncCall, replyOk } from '../../setup.js'
+import {
+	BROWSER_BASE64_REFUSALS,
+	createConnectedCDPClient,
+	ignoreAsyncCall,
+	replyOk,
+} from '../../setup.js'
 
 describe('BrowserNetworkManager', () => {
+	it.each(BROWSER_BASE64_REFUSALS)('refuses a malformed response body %j', async (body) => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Network.enable')
+		replyOk(transport, 'Network.getResponseBody', { body, base64Encoded: true })
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		try {
+			await expect(page.network.body('malformed')).rejects.toMatchObject({
+				code: 'PROTOCOL',
+				context: { id: 'malformed' },
+			})
+		} finally {
+			await client.close()
+		}
+	})
 	it('decodes requests, redirects, responses, failures, and completion events', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Network.enable')
@@ -136,6 +155,11 @@ describe('BrowserNetworkManager', () => {
 		expect(await page.network.json('two')).toEqual({ ok: true })
 		body = { body: 'not-json', base64Encoded: false }
 		await expect(page.network.json('three')).rejects.toSatisfy(isBrowserError)
+		body = { body: '', base64Encoded: true }
+		expect(await page.network.body('empty')).toEqual(new Uint8Array())
+		body = { body: 'caf\u00e9 \u{1f600}', base64Encoded: false }
+		expect(await page.network.text('unicode')).toBe('caf\u00e9 \u{1f600}')
+		await client.close()
 	})
 
 	it('matches Fetch routes and fulfills them exactly once', async () => {
