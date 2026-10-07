@@ -65,20 +65,18 @@ describe('BrowserToolset', () => {
 	it('small copy: advertises click, type, and the words to enter exactly', () => {
 		expect
 			.soft(BROWSER_TOOL_COPY.click.description)
-			.toBe(
-				'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
-			)
+			.toBe('Clicks the referenced element, settles its action, and returns the page.')
 		expect
 			.soft(BROWSER_TOOL_COPY.type.description)
 			.toBe(
-				'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
+				'Types into a field such as a search box, optionally submits its form, and returns the page.',
 			)
 		expect(
 			readProperty(
 				readProperty(readProperty(BROWSER_TOOL_COPY.type.parameters, 'properties'), 'text'),
 				'description',
 			),
-		).toBe("The words to enter or the option to choose; never the field's own name.")
+		).toBe('The text to type or the option to choose.')
 	})
 	it('small copy: type refusal names one field, two fields in view order, or click with no fields', async () => {
 		let count = 2
@@ -1076,7 +1074,7 @@ describe('BrowserToolset', () => {
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
 				.toBeLessThanOrEqual(3400)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6200)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6050)
 		})
 
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
@@ -1132,9 +1130,8 @@ describe('BrowserToolset', () => {
 				),
 			).toEqual({
 				read: 'Shows numbered lines of the page, with references like e4 to act on. Call it to learn a fact or to find an element.',
-				click:
-					'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
-				type: 'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
+				click: 'Clicks the referenced element, settles its action, and returns the page.',
+				type: 'Types into a field such as a search box, optionally submits its form, and returns the page.',
 				press: 'Presses a key or chord, settles its action, and returns the page.',
 				navigate: 'Opens an absolute web address in the current tab and returns the loaded page.',
 				wait: 'Waits for text to appear or leave, then returns the page.',

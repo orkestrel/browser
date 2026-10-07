@@ -440,6 +440,8 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * @remarks
  * Every tool description is at most 25 words and says what the tool shows or does, and for
  * `read` when to call it; every parameter description is at most 100 characters.
+ * The 2B's search depends on the `click`, `type`, and `type.text` description bytes: on
+ * 2026-10-07, qwen3.5:2b-q4_K_M passed 16/16 with these bytes and 0/16 with the expanded copy under either prompt order.
  * `read` requires `from`: making it optional reduced search from 16/16 to 6/16 and paging from
  * 16/16 to 0/6 in the 2026-10-07 qwen3.5:2b-q4_K_M store measurement.
  * `journeys` keeps optional `from` with default 1 for the measured 2B `journeys{}` omission;
@@ -479,8 +481,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	click: Object.freeze({
 		name: 'click',
-		description:
-			'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
+		description: 'Clicks the referenced element, settles its action, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -492,14 +493,14 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	type: Object.freeze({
 		name: 'type',
 		description:
-			'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
+			'Types into a field such as a search box, optionally submits its form, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
 				ref: Object.freeze({ type: 'string', description: 'The reference, such as e4.' }),
 				text: Object.freeze({
 					type: 'string',
-					description: "The words to enter or the option to choose; never the field's own name.",
+					description: 'The text to type or the option to choose.',
 				}),
 				submit: Object.freeze({
 					type: 'boolean',

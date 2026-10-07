@@ -1058,16 +1058,16 @@ void [wrapper, origins, isolated, creation, identity]
 		const { BROWSER_TOOL_COPY, BROWSER_JOURNEY_SAVE_SAVED_REFUSAL } = await import('@src/core')
 		const guide = requireValue(files[GUIDE_SPEC])
 		expect(BROWSER_TOOL_COPY.click.description).toBe(
-			'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
+			'Clicks the referenced element, settles its action, and returns the page.',
 		)
 		expect(BROWSER_TOOL_COPY.type.description).toBe(
-			'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
+			'Types into a field such as a search box, optionally submits its form, and returns the page.',
 		)
 		const text = readProperty<string>(
 			readProperty(readProperty(BROWSER_TOOL_COPY.type.parameters, 'properties'), 'text'),
 			'description',
 		)
-		expect(text).toBe("The words to enter or the option to choose; never the field's own name.")
+		expect(text).toBe('The text to type or the option to choose.')
 		expect(guide).toContain(`\`${text}\``)
 		expect(guide).toContain(
 			'`Element link "Checkout" [ref=e15] takes no text; to type, use textbox "Full name" [ref=e19].`',
