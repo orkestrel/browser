@@ -440,8 +440,12 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * @remarks
  * Every tool description is at most 25 words and says what the tool shows or does, and for
  * `read` when to call it; every parameter description is at most 100 characters.
- * `read` and `journeys` default `from` to 1 and accept optional `to` and `search`; an element's own
- * reading is `BrowserElementInterface.read`. `read` and `journeys` annotate `pure` and
+ * `read` requires `from`: making it optional reduced search from 16/16 to 6/16 and paging from
+ * 16/16 to 0/6 in the 2026-10-07 qwen3.5:2b-q4_K_M store measurement.
+ * `journeys` keeps optional `from` with default 1 for the measured 2B `journeys{}` omission;
+ * the page tasks in that measurement never advertise it.
+ * Both tools accept optional `to` and `search`; an element's own reading is
+ * `BrowserElementInterface.read`. `read` and `journeys` annotate `pure` and
  * `untrusted`, `wait` annotates `pure`, and the rest carry no annotation. `type` takes
  * `secret` beside `ref`, `text`, and `submit`. The journey tools `record`, `save`, `journeys`,
  * `edit`, `replay`, `forget`, and `capture` are advertised only by a toolset constructed with `journeys`.
@@ -457,8 +461,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 			properties: Object.freeze({
 				from: Object.freeze({
 					type: 'integer',
-					description:
-						"The first line to show: 1 for the top, or the line a reply's footer names. Default: 1.",
+					description: "The first line to show: 1 for the top, or the line a reply's footer names.",
 				}),
 				to: Object.freeze({
 					type: 'integer',
@@ -470,7 +473,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 						'Words to find; the reply opens one line before the first match at or after from.',
 				}),
 			}),
-			required: Object.freeze([]),
+			required: Object.freeze(['from']),
 		}),
 		annotations: Object.freeze({ pure: true, untrusted: true }),
 	}),

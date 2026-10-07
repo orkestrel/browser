@@ -1036,7 +1036,7 @@ void [wrapper, origins, isolated, creation, identity]
 			await toolset.destroy()
 		}
 	})
-	it('small refusals: pins recording exits, missing edit names, and default coordinates', () => {
+	it('small refusals: pins recording exits, missing edit names, and coordinate requirements', () => {
 		const guide = requireValue(files[GUIDE_SPEC])
 		for (const text of [
 			"Nothing is recorded for add-kettle yet, and it is still recording. Click and type the flow's steps now, then call save.",
@@ -1047,7 +1047,9 @@ void [wrapper, origins, isolated, creation, identity]
 			'Edit requires journey, the saved journey\'s name such as "add-kettle", beside edits.',
 			"Edit requires journey, a saved journey's name, beside edits; call journeys.",
 			'The journey parameter must be a string.',
+			'`from` (integer, required)',
 			'`from` (integer, optional, default 1)',
+			'`from` is a required positive safe integer',
 			'`"7a"`, `"1.5"`, `"-1"`, `""`, and `"07"`',
 		])
 			expect(guide).toContain(text)
@@ -1119,7 +1121,10 @@ void [wrapper, origins, isolated, creation, identity]
 			expect(seeded.success).toBe(true)
 			expect(seeded.success ? seeded.value : seeded.error).toContain('\n1: ')
 			const missing = await toolset.tools.execute({ id: 'missing', name: 'read', arguments: {} })
-			expect(missing).toMatchObject({ success: true, value: expect.stringContaining('\n1: ') })
+			expect(missing).toMatchObject({
+				success: false,
+				error: 'Read requires an integer from, an optional integer to, and optional search text.',
+			})
 		} finally {
 			await toolset.destroy()
 			await fixture.client.close()

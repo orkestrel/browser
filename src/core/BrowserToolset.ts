@@ -858,7 +858,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
-		const from = args['from'] === undefined ? 1 : parseBrowserToolInteger(args['from'])
+		const from = parseBrowserToolInteger(args['from'])
 		const to = parseBrowserToolInteger(args['to'])
 		const search = args['search']
 		if (
