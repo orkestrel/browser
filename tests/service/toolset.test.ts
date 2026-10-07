@@ -578,6 +578,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			)
 			expect(result.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 		}
+		const boundary = await toolset.read({ from: 34, search: 'policy token' })
+		expect(boundary).toContain('This read shows lines 34–60 of 80; lines 61–80 are not shown yet.')
+		expect(boundary).not.toMatch(/^61: /m)
+		expect(boundary).toMatch(
+			/\[lines 34–60 of 80; 33 above, 20 below; call read with from 61 for more\]$/,
+		)
+		const next = await toolset.read({ from: 61, search: 'policy token' })
+		expect(next).toContain('\n61: ## Access instructions\n62: ')
 	})
 	it('element best-match: equals the measured cart range-miss reply and type refusal', async () => {
 		const record = requireValue(

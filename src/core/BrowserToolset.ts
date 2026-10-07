@@ -122,6 +122,7 @@ import {
  * `from` and optional `to`; search scores text spans and opens near the first best match.
  * Wrapping precedes numbering, and every continuation names the next complete line. An
  * unchanged page keeps its addresses; a changed read includes a change note, even from line 1.
+ * A trailing heading opens the next window unless it is the only row or ends the page.
  * A partial-view line follows the page header when rows remain after the window. A search
  * missing its range reports the first page-wide best match only when that line carries an
  * element reference, without moving that window; otherwise it keeps the plain miss.

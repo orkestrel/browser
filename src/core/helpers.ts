@@ -851,6 +851,7 @@ export function renderBrowserReceiptWindow(
 
 /** Selects whole addressed rows after reserving the header and exact footer.
  * @remarks The partial switch reserves a partial-view line before selecting rows, independently of header text.
+ * A trailing heading opens the next window unless it is the only row or ends the page.
  * @param lines - Complete projection
  * @param from - Inclusive first line
  * @param to - Inclusive last line, or the default window
@@ -889,6 +890,13 @@ export function renderBrowserWindow(
 		const candidate = [...heading, ...rows, row].join('\n')
 		if (candidate.length + footer.length + 1 > limit) break
 		rows.push(row)
+		if (
+			index > from &&
+			index < lines.length &&
+			line.spans[0]?.category === 'syntax' &&
+			/^#{1,6} $/.test(line.spans[0].text)
+		)
+			continue
 		body = candidate
 		end = index
 	}

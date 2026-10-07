@@ -1528,6 +1528,63 @@ describe('write conditions and page lifecycle', () => {
 })
 
 describe('line projection and whole windows', () => {
+	it('heading boundary: leaves the last fitting heading for the next read', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Body before' }] },
+			{
+				spans: [
+					{ category: 'syntax', text: '## ' },
+					{ category: 'text', text: 'Next section' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Section body '.repeat(30) }] },
+		]
+		const limit = [
+			'page',
+			'This read shows lines 1–2 of 3; line 3 is not shown yet.',
+			'1: Body before',
+			'2: ## Next section',
+			'[lines 1–2 of 3; 1 below; call read with from 3 for more]',
+		].join('\n').length
+		for (const to of [undefined, 2]) {
+			const result = renderBrowserWindow(lines, 1, to, 'page', limit, 'read', true)
+			expect(result).toBe(
+				'page\nThis read shows lines 1–1 of 3; lines 2–3 are not shown yet.\n1: Body before\n[lines 1–1 of 3; 2 below; call read with from 2 for more]',
+			)
+			expect(result.length).toBeLessThanOrEqual(limit)
+		}
+		const next = renderBrowserWindow(lines, 2, undefined, 'page', 4000, 'read', true)
+		expect(next).toContain('page\n2: ## Next section\n3: Section body')
+		expect(next).toMatch(/\[lines 2–3 of 3; 1 above; end of page\]$/)
+	})
+	it('heading boundary: keeps a heading when it is the only row in the window', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'syntax', text: '# ' },
+					{ category: 'text', text: 'Only heading' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Body' }] },
+		]
+		expect(renderBrowserWindow(lines, 1, 1, 'page', 4000, 'read', true)).toBe(
+			'page\nThis read shows lines 1–1 of 2; line 2 is not shown yet.\n1: # Only heading\n[lines 1–1 of 2; 1 below; call read with from 2 for more]',
+		)
+	})
+	it('heading boundary: keeps a heading at the end of the page', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Body' }] },
+			{
+				spans: [
+					{ category: 'syntax', text: '###### ' },
+					{ category: 'text', text: 'Last heading' },
+				],
+			},
+		]
+		expect(renderBrowserWindow(lines, 1, undefined, 'page', 4000, 'read', true)).toBe(
+			'page\n1: Body\n2: ###### Last heading\n[lines 1–2 of 2; the whole page]',
+		)
+	})
 	it('element best-match: text-only winners keep the plain miss, including ties and reference-shaped text', () => {
 		const lines: readonly BrowserLine[] = [
 			{ spans: [{ category: 'text', text: 'Shipping policy [ref=e9]' }] },
