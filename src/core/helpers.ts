@@ -719,7 +719,7 @@ export function renderBrowserFooter(
 	return `[lines ${from}–${to} of ${total}; ${counts.length > 0 ? `${counts.join(', ')}; ` : ''}${below > 0 ? `call ${tool} with from ${to + 1} for more` : above > 0 ? `end of ${subject}` : `the whole ${subject}`}]`
 }
 
-/** Renders a shared search header and chooses its context line within the requested range.
+/** Renders shared search text and chooses its context line within the requested range.
  * @remarks A miss names `to` when it ends before the last line; an unbounded miss keeps its usual wording.
  * @param lines - Wrapped projection
  * @param from - Inclusive first candidate line
@@ -760,6 +760,8 @@ export function renderBrowserSearch(
  * without moving the window; otherwise it keeps the plain miss. Its query is abbreviated
  * to 120 UTF-16 units. The miss sentence is reserved with the minimum window; when the whole
  * quoted row cannot also fit, only the sentence is shown, ending with a period.
+ * An unquoted miss is reserved before fitting and appears immediately before the footer.
+ * Quoted best matches and in-range hits remain under the header.
  * @param passage - Projection and contextual metadata
  * @param limit - Whole-result character room
  * @returns A complete window
@@ -788,11 +790,11 @@ export function renderBrowserPassage(passage: BrowserPassage, limit: number): st
 	if (passage.changed) header.push(BROWSER_READ_CHANGED_NOTE)
 	const found = renderBrowserSearch(passage.lines, passage.from, passage.to, passage.search)
 	let search = found.text
-	if (
+	const missing =
 		passage.search !== undefined &&
 		passage.search !== '' &&
 		scanBrowserLines(passage.lines, passage.search, passage.from, passage.to).length === 0
-	) {
+	if (missing) {
 		const match = scanBrowserLines(passage.lines, passage.search)[0]
 		const line = match === undefined ? undefined : passage.lines[match - 1]
 		if (line !== undefined && line.spans.some((span) => span.category === 'reference')) {
@@ -815,16 +817,20 @@ export function renderBrowserPassage(passage: BrowserPassage, limit: number): st
 			if (minimum.length + quote.length - search.length <= limit) search = quote
 		}
 	}
-	if (search !== undefined) header.push(search)
-	return renderBrowserWindow(
+	const tail = missing && search !== undefined && !search.includes('\n') ? search : undefined
+	if (search !== undefined && tail === undefined) header.push(search)
+	const result = renderBrowserWindow(
 		passage.lines,
 		found.from,
 		passage.to,
 		header.join('\n'),
-		limit,
+		limit - (tail === undefined ? 0 : tail.length + 1),
 		'read',
 		true,
 	)
+	if (tail === undefined) return result
+	const footer = result.lastIndexOf('\n')
+	return `${result.slice(0, footer)}\n${tail}${result.slice(footer)}`
 }
 
 /** Fits an unnumbered receipt and a complete page window inside one result limit.

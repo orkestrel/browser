@@ -1528,6 +1528,46 @@ describe('write conditions and page lifecycle', () => {
 })
 
 describe('line projection and whole windows', () => {
+	it('miss placement: reserves the plain miss immediately before the footer', () => {
+		const lines: readonly BrowserLine[] = [
+			'Policy details',
+			'Other details',
+			'Last details '.repeat(30),
+		].map((text) => ({ spans: [{ category: 'text', text }] }))
+		const passage: BrowserPassage = {
+			title: 'Policy',
+			url: '/',
+			lines,
+			from: 2,
+			tabs: [],
+			changed: false,
+			search: 'policy token',
+		}
+		const expected =
+			'page "Policy" / (3 lines)\nThis read shows lines 2–2 of 3; line 3 is not shown yet.\n2: Other details\nNo line from 2 on matches "policy token".\n[lines 2–2 of 3; 1 above, 1 below; call read with from 3 for more]'
+		expect(renderBrowserPassage(passage, expected.length)).toBe(expected)
+		expect(() => renderBrowserPassage(passage, expected.length - 1)).toThrow('cannot hold')
+		expect(renderBrowserPassage({ ...passage, to: 2 }, 4000)).toContain(
+			'\n2: Other details\nNo line from 2 to 2 matches "policy token".\n[lines 2–2',
+		)
+		expect(renderBrowserPassage({ ...passage, from: 1, search: 'missing' }, 4000)).toContain(
+			'\nNo line matches "missing".\n[lines 1–3',
+		)
+	})
+	it('miss placement: leaves an in-range hit under the header unchanged', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Policy details' }] },
+			{ spans: [{ category: 'text', text: 'Other details' }] },
+		]
+		expect(
+			renderBrowserPassage(
+				{ title: 'Policy', url: '/', lines, from: 1, tabs: [], changed: false, search: 'policy' },
+				4000,
+			),
+		).toBe(
+			'page "Policy" / (2 lines)\n1 line matches "policy": 1\n1: Policy details\n2: Other details\n[lines 1–2 of 2; the whole page]',
+		)
+	})
 	it('heading boundary: leaves the last fitting heading for the next read', () => {
 		const lines: readonly BrowserLine[] = [
 			{ spans: [{ category: 'text', text: 'Body before' }] },
@@ -1613,7 +1653,7 @@ describe('line projection and whole windows', () => {
 				4000,
 			)
 			expect(result).toContain(
-				`No line from 3 ${to === 3 ? 'to 3' : 'on'} matches "policy token".\n3: Other details`,
+				`No line from 3 ${to === 3 ? 'to 3' : 'on'} matches "policy token".\n[lines 3–${to}`,
 			)
 			expect(result).not.toContain('best match')
 			expect(result).not.toMatch(/^[12]: /m)
@@ -1687,7 +1727,7 @@ describe('line projection and whole windows', () => {
 		}
 		const result = renderBrowserPassage(passage, 1200)
 		expect(result).toContain(
-			'No line from 2 on matches "Cedar"; the best match is line 1.\n2: Other ',
+			'No line from 2 on matches "Cedar"; the best match is line 1.\n[lines 2–2',
 		)
 		expect(result).not.toMatch(/^1: /m)
 		expect(result).not.toContain('[characters')

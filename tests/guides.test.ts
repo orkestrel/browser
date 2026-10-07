@@ -927,7 +927,9 @@ void [wrapper, origins, isolated, creation, identity]
 			},
 			BROWSER_TOOL_LIMIT,
 		)
-		expect(missing).toContain('No line from 2 to 2 matches "missing".\n2: Workshop details')
+		expect(missing).toContain(
+			'2: Workshop details\nNo line from 2 to 2 matches "missing".\n[lines 2–2',
+		)
 		expect(
 			renderBrowserPassage(
 				{ url: 'about:blank', title: '', lines: [], from: 1, tabs: [], changed: false },

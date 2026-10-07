@@ -2494,7 +2494,8 @@ export interface BrowserOutline {
  * - `to` — last line, inclusive. Default: as many lines as fit
  * - `search` — words whose best in-range match opens the window; a range miss reports the
  *   first page-wide best match only when it carries an element reference, without moving
- *   the window; otherwise it keeps the plain miss
+ *   the window; otherwise it keeps the plain miss. Unquoted misses appear before the footer;
+ *   quoted best matches and in-range hits stay under the header
  * - `limit` — character room including the header and footer. Default: the toolset limit
  */
 export interface BrowserToolsetReadOptions extends BrowserCallOptions {
@@ -2517,7 +2518,7 @@ export interface BrowserPassage {
 	readonly note?: string
 }
 
-/** Carries the opening line and optional search header of an addressed window. */
+/** Carries the opening line and optional search text of an addressed window. */
 export interface BrowserSearch {
 	readonly from: number
 	readonly text?: string

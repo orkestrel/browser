@@ -126,6 +126,8 @@ import {
  * A partial-view line follows the page header when rows remain after the window. A search
  * missing its range reports the first page-wide best match only when that line carries an
  * element reference, without moving that window; otherwise it keeps the plain miss.
+ * An unquoted miss appears immediately before the footer, with its space reserved before
+ * fitting rows. Quoted best matches and in-range hits remain under the header.
  * A `press` receipt names the referenced element that has focus after the key. A page tool's
  * error message and JSON output reach the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT`
  * (4 096) by the registry, so a `limit` over that shows at most 4 096 characters of either; a page

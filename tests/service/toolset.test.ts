@@ -533,7 +533,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect(miss).toContain(
 				route === '/'
 					? 'No line from 47 on matches "Cedar Tea Tray"; the best match is line 11:\n11: ### link "Cedar Tea Tray" [ref=e7] /product/p3\n47: '
-					: 'No line from 47 on matches "Cedar Tea Tray".\n47: ',
+					: 'No line from 47 on matches "Cedar Tea Tray".\n[lines 47–',
 			)
 			expect(miss).toMatch(
 				route === '/'
@@ -569,7 +569,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				search: 'policy token',
 			})
 			expect(result).toContain(
-				`No line from 34 ${to === 60 ? 'to 60' : 'on'} matches "policy token".\n34: `,
+				`No line from 34 ${to === 60 ? 'to 60' : 'on'} matches "policy token".\n[lines 34–`,
 			)
 			expect(result).not.toContain('best match')
 			expect(result).not.toMatch(/^4: /m)
@@ -586,6 +586,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		const next = await toolset.read({ from: 61, search: 'policy token' })
 		expect(next).toContain('\n61: ## Access instructions\n62: ')
+		const miss = await toolset.read({ from: 33, to: 80, search: 'policy token' })
+		expect(miss).toMatch(
+			/\n60: [^\n]+\nNo line from 33 on matches "policy token"\.\n\[lines 33–60 of 80; 32 above, 20 below; call read with from 61 for more\]$/,
+		)
+		expect(miss).toContain(
+			'This read shows lines 33–60 of 80; lines 61–80 are not shown yet.\n33: ## Weather and holidays',
+		)
+		expect(miss.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 	})
 	it('element best-match: equals the measured cart range-miss reply and type refusal', async () => {
 		const record = requireValue(
