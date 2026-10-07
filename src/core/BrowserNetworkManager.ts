@@ -28,7 +28,7 @@ import {
 	parseBrowserWebSocketFrame,
 } from './parsers.js'
 import { BrowserError } from './errors.js'
-import { attempt, isFiniteNumber, isRecord, isString } from '@orkestrel/contract'
+import { attempt, isFiniteNumber, isRecord, isString, isJSONValue } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 
 /**
@@ -82,7 +82,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	}
 
 	async start(): Promise<void> {
-		if (this.#destroyed) throw new BrowserError('Browser network manager is destroyed')
+		if (this.#destroyed) throw new BrowserError('CLOSED', 'Browser network manager is destroyed')
 		if (this.#started) return
 		const active = this.#starting.pending
 		if (active !== undefined) {
@@ -96,7 +96,7 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		await this.start()
 		const result = await this.#frame.send('Network.getResponseBody', { requestId: id })
 		if (!isRecord(result) || !isString(result['body'])) {
-			throw new BrowserError('Browser response body is malformed', undefined, { id })
+			throw new BrowserError('PROTOCOL', 'Browser response body is malformed', { id })
 		}
 		return result['base64Encoded'] === true
 			? decodeBase64(result['body'])
@@ -111,9 +111,9 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 		const text = await this.text(id)
 		const result = attempt<unknown>(() => JSON.parse(text))
 		if (result.success) return result.value
-		throw new BrowserError('Browser response body is not valid JSON', 'BROWSER_JSON_ERROR', {
+		throw new BrowserError('JSON', 'Browser response body is not valid JSON', {
 			id,
-			error: result.error,
+			error: isJSONValue(result.error) ? result.error : String(result.error),
 		})
 	}
 

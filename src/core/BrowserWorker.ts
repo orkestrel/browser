@@ -85,7 +85,7 @@ export class BrowserWorker implements BrowserWorkerInterface {
 	}
 
 	#assert(): void {
-		if (this.#closed) throw new BrowserError('Browser worker is closed')
-		if (!this.#client.connected) throw new BrowserError('Browser worker is disconnected')
+		if (this.#closed) throw new BrowserError('CLOSED', 'Browser worker is closed')
+		if (!this.#client.connected) throw new BrowserError('CLOSED', 'Browser worker is disconnected')
 	}
 }

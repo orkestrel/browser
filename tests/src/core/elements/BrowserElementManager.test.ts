@@ -91,7 +91,7 @@ describe('element manager', () => {
 		const { page, client } = fixture
 		try {
 			await expect(page.elements.wait({ css: '[' }, { timeout: 500 })).rejects.toMatchObject({
-				code: 'BROWSER_CDP_ERROR',
+				code: 'REMOTE',
 				message: 'Selector is invalid',
 			})
 			expect(attempts).toBe(2)
@@ -143,7 +143,7 @@ describe('element manager', () => {
 		})
 		try {
 			await expect(page.elements.wait({ css: '#missing' }, { timeout: 20 })).rejects.toMatchObject({
-				code: 'BROWSER_WAIT_TIMEOUT',
+				code: 'WAIT_TIMEOUT',
 			})
 		} finally {
 			await client.close()
@@ -154,7 +154,7 @@ describe('element manager', () => {
 		const { page, client, transport } = await createBrowserElementFixture({ local: true })
 		try {
 			await expect(page.elements.wait({ css: '#missing' }, { timeout: 0 })).rejects.toMatchObject({
-				code: 'BROWSER_WAIT_TIMEOUT',
+				code: 'WAIT_TIMEOUT',
 			})
 			expect(transport.sent.some((message) => message.method === 'Page.createIsolatedWorld')).toBe(
 				false,
@@ -185,7 +185,7 @@ describe('element manager', () => {
 			const started = performance.now()
 			await fixture.page.close()
 			expect(await Promise.race([pending, waitForDelay(200)])).toMatchObject({
-				code: 'BROWSER_ERROR',
+				code: 'CLOSED',
 			})
 			expect(performance.now() - started).toBeLessThan(500)
 		} finally {
@@ -585,7 +585,7 @@ describe('element manager', () => {
 			)
 			expect(page.elements.element('e1')).toBeUndefined()
 			await expect(first.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reason: 'GONE' },
 				message: expect.stringContaining('read'),
 			})
@@ -614,7 +614,7 @@ describe('element manager', () => {
 			transport.event('Page.frameDetached', { frameId: 'child', reason: 'remove' }, 'session-child')
 			expect(page.elements.element('e6')).toBeUndefined()
 			await expect(child.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reason: 'GONE' },
 			})
 			expect(page.elements.element('e1')).toBe(main)
@@ -746,7 +746,7 @@ describe('element manager', () => {
 			transport.event('Page.frameDetached', { frameId: 'child', reason: 'remove' }, 'session-main')
 			expect(page.elements.element(child.reference)).toBeUndefined()
 			await expect(child.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reason: 'GONE' },
 			})
 			expect(page.elements.element('e1')).toBe(main)

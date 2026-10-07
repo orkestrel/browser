@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { compileQueryWaitExpression, isBrowserElementError, isBrowserError } from '@src/core'
+import { compileQueryWaitExpression, isBrowserError } from '@src/core'
 import { BrowserDOMWait, collectBrowserRoots } from '@src/browser'
 import { createRecorder, requireValue, waitForDelay, waitForEvent } from '@orkestrel/test'
 import {
@@ -91,7 +91,7 @@ describe('BrowserDOMWait', () => {
 			} else if (ending === 'abort') controller.abort(new Error('stopped'))
 			const result = await waiting
 			expect(result).toBe(
-				ending === 'settle' ? 'done' : ending === 'abort' ? 'stopped' : 'BROWSER_WAIT_TIMEOUT',
+				ending === 'settle' ? 'done' : ending === 'abort' ? 'stopped' : 'WAIT_TIMEOUT',
 			)
 			for (const listener of listeners)
 				expect(requireValue(listener.calls[0]?.[0]).aborted).toBe(true)
@@ -235,7 +235,7 @@ describe('BrowserDOMWait', () => {
 		})
 			.execute()
 			.catch((error: unknown) => error)
-		expect(isBrowserError(expired) && expired.code).toBe('BROWSER_WAIT_TIMEOUT')
+		expect(isBrowserError(expired) && expired.code).toBe('WAIT_TIMEOUT')
 		expect(checks.count).toBe(1)
 	})
 
@@ -394,7 +394,7 @@ describe('BrowserDOMWait', () => {
 			subject: 'Consumed wait',
 		})
 		const expired = await wait.execute().catch((error: unknown) => error)
-		expect(isBrowserError(expired) && expired.code).toBe('BROWSER_WAIT_TIMEOUT')
+		expect(isBrowserError(expired) && expired.code).toBe('WAIT_TIMEOUT')
 		expect(checks.count).toBe(1)
 		expect(wait.roots).toEqual([])
 	})
@@ -448,6 +448,8 @@ describe('BrowserDOMWait', () => {
 		}).execute()
 		requireValue(probe.frame, 'probe frame').remove()
 		const refusal = await pending.catch((error: unknown) => error)
-		expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({ reason: 'GONE' })
+		expect(isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context).toMatchObject({
+			reason: 'GONE',
+		})
 	})
 })

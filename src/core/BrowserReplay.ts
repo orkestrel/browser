@@ -65,7 +65,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 		const revision = structuredClone(this.#revision)
 		const journey = revision.journey
 		if (this.#toolset.emitter.destroyed)
-			throw new BrowserError('The browser session ended', 'BROWSER_TOOLSET_ENDED')
+			throw new BrowserError('TOOLSET_ENDED', 'The browser session ended')
 		const started = performance.now()
 		const secret = Object.values(journey.parameters).some((parameter) => parameter.secret === true)
 		const visible = Object.fromEntries(
@@ -170,8 +170,8 @@ export class BrowserReplay implements BrowserReplayInterface {
 		} catch (error) {
 			if (!isBrowserError(error)) throw error
 			throw new BrowserError(
-				error.message,
 				error.code,
+				error.message,
 				error.context ?? { action: 'replay', placement },
 			)
 		}
@@ -179,8 +179,8 @@ export class BrowserReplay implements BrowserReplayInterface {
 		for (const name of Object.keys(supplied)) {
 			if (!Object.hasOwn(journey.parameters, name))
 				throw new BrowserError(
+					'JOURNEY_INPUT',
 					`Journey ${journey.name} has no parameter named ${JSON.stringify(name)}.`,
-					'BROWSER_JOURNEY_INPUT',
 					{ parameter: name },
 				)
 		}
@@ -197,8 +197,8 @@ export class BrowserReplay implements BrowserReplayInterface {
 		for (const [name, parameter] of parameters) {
 			if (parameter.default === undefined && !isString(values.get(name)))
 				throw new BrowserError(
+					'JOURNEY_INPUT',
 					`Journey ${journey.name} needs input ${JSON.stringify(name)}.`,
-					'BROWSER_JOURNEY_INPUT',
 					{ parameter: name },
 				)
 		}
@@ -208,19 +208,17 @@ export class BrowserReplay implements BrowserReplayInterface {
 			if (isString(value)) inputs[name] = value
 			else if (value !== undefined)
 				throw new BrowserError(
+					'JOURNEY_INPUT',
 					`Journey ${journey.name} input ${JSON.stringify(name)} is not a string.`,
-					'BROWSER_JOURNEY_INPUT',
 					{ parameter: name },
 				)
 			else if (parameter.default !== undefined) inputs[name] = parameter.default
 		}
 		for (const step of journey.steps) {
 			if (step.action === 'unresolved')
-				throw new BrowserError(
-					`Step ${step.id} is unresolved: ${step.gap}.`,
-					'BROWSER_JOURNEY_GAP',
-					{ step: step.id },
-				)
+				throw new BrowserError('JOURNEY_GAP', `Step ${step.id} is unresolved: ${step.gap}.`, {
+					step: step.id,
+				})
 			if (BROWSER_JOURNEY_ACTIONS.some((name) => name === step.action)) {
 				const supported =
 					['click', 'type', 'wait'].includes(step.action) ||
@@ -231,8 +229,8 @@ export class BrowserReplay implements BrowserReplayInterface {
 							: this.#toolset.native.some((tool) => tool.name === step.action))
 				if (!supported)
 					throw new BrowserError(
+						'JOURNEY_PLACEMENT',
 						`Step ${step.id} cannot execute ${step.action} in this placement.`,
-						'BROWSER_JOURNEY_PLACEMENT',
 						{
 							step: step.id,
 							action: step.action,
@@ -266,10 +264,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 		let refusal: string | undefined
 		try {
 			if (step.action === 'dialog' && !interrupted)
-				throw new BrowserError(
-					`Step ${step.id} answers no interrupted action.`,
-					'BROWSER_JOURNEY_DIALOG',
-				)
+				throw new BrowserError('JOURNEY_DIALOG', `Step ${step.id} answers no interrupted action.`)
 			action = await this.#toolset.follow(
 				step.id,
 				{
@@ -353,7 +348,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 		const deadline = Promise.withResolvers<void>()
 		const abort = deadline.reject.bind(
 			undefined,
-			new BrowserError('Writing the run timed out', 'BROWSER_JOURNEY_FILE'),
+			new BrowserError('JOURNEY_FILE', 'Writing the run timed out'),
 		)
 		signal.addEventListener('abort', abort, { once: true })
 		try {

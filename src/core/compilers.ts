@@ -455,7 +455,7 @@ export function compileStorageClearExpression(): string {
  * A result whose `JSON.stringify` length exceeds `limit` throws
  * `Error('BROWSER_RESULT_LIMIT: <length>')` inside the page instead of being
  * returned — the caller maps that sentinel to a coded
- * {@link BrowserResultLimitError}. A non-serializable result (`undefined`,
+ * {@link BrowserError}. A non-serializable result (`undefined`,
  * a function, a symbol) makes `JSON.stringify` return `undefined`, so the
  * length check is skipped and today's undefined-passthrough behavior is
  * unchanged.
@@ -890,7 +890,7 @@ export function compileBrowserJourneyValue(
  * @param journey - The journey to compile
  * @param options - The target language
  * @returns The module source and the gap step ids in step order
- * @throws BrowserError - Thrown with `BROWSER_JOURNEY_FORMAT` or `BROWSER_JOURNEY_INVALID` when the
+ * @throws BrowserError - Thrown with `JOURNEY_FORMAT` or `JOURNEY_INVALID` when the
  * journey fails validation, before any source is compiled
  * @example
  * ```ts

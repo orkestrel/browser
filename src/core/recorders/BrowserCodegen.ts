@@ -87,7 +87,7 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 
 	async start(): Promise<void> {
 		if (this.#shutdown !== undefined || this.#emitter.destroyed)
-			throw new BrowserError('The recorder was destroyed')
+			throw new BrowserError('CLOSED', 'The recorder was destroyed')
 		await this.#stopping.pending
 		if (this.#starting.pending !== undefined) return await this.#starting.pending
 		if (this.#started) return
@@ -185,7 +185,8 @@ export class BrowserCodegen implements BrowserCodegenInterface {
 		if (session === this.#session) {
 			const tree = await this.#client.send('Page.getFrameTree', undefined, { session })
 			this.#frame = readBrowserFrames(tree).find((frame) => frame.parent === undefined)?.id
-			if (this.#frame === undefined) throw new BrowserError('The recorder requires a main frame')
+			if (this.#frame === undefined)
+				throw new BrowserError('ARGUMENT', 'The recorder requires a main frame')
 		}
 		await this.#client.send('Runtime.enable', undefined, { session })
 		await this.#client.send(

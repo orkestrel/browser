@@ -1,7 +1,7 @@
 import { scanBrowserLines } from '@src/core'
 import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { isBrowserElementError, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
 import { requireValue, waitForDelay, waitForEvent } from '@orkestrel/test'
 import {
@@ -384,37 +384,39 @@ describe('BrowserDOMElementManager', () => {
 			const refusal = await view.elements
 				.outline({ within: 'e99' })
 				.catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context?.['reason']).toBe('GONE')
+			expect(
+				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context?.['reason'],
+			).toBe('GONE')
 		})
 	})
 
 	describe('destroyed view', () => {
-		it('refuses outline after its view is destroyed with BROWSER_DOCUMENT_DESTROYED', async () => {
+		it('refuses outline after its view is destroyed with DOCUMENT_DESTROYED', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			view.destroy()
 			const refusal = await view.elements.outline().catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 
-		it('refuses find after its view is destroyed with BROWSER_DOCUMENT_DESTROYED', async () => {
+		it('refuses find after its view is destroyed with DOCUMENT_DESTROYED', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			view.destroy()
 			const refusal = await view.elements
 				.find({ role: 'button', name: 'Save' })
 				.catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 
-		it('refuses wait after its view is destroyed with BROWSER_DOCUMENT_DESTROYED, even for a present match', async () => {
+		it('refuses wait after its view is destroyed with DOCUMENT_DESTROYED, even for a present match', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			view.destroy()
 			const refusal = await view.elements
 				.wait({ role: 'button', name: 'Save' })
 				.catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 	})
 
@@ -447,7 +449,9 @@ describe('BrowserDOMElementManager', () => {
 			replacement.textContent = 'Save'
 			probe.save.replaceWith(replacement)
 			const refusal = await save?.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({
+			expect(
+				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context,
+			).toMatchObject({
 				reference: 'e3',
 				reason: 'GONE',
 			})
@@ -507,7 +511,7 @@ describe('BrowserDOMElementManager', () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			const refusal = await view.elements.find({ css: 'a[' }).catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_ELEMENT_QUERY')
+			expect(isBrowserError(refusal) && refusal.code).toBe('ELEMENT_QUERY')
 		})
 	})
 
@@ -541,7 +545,7 @@ describe('BrowserDOMElementManager', () => {
 			const expired = await view.elements
 				.wait({ name: 'Never' }, { timeout: 20 })
 				.catch((error: unknown) => error)
-			expect(isBrowserError(expired) && expired.code).toBe('BROWSER_WAIT_TIMEOUT')
+			expect(isBrowserError(expired) && expired.code).toBe('WAIT_TIMEOUT')
 			const controller = new AbortController()
 			const pending = view.elements.wait({ name: 'Never' }, { signal: controller.signal })
 			controller.abort(new Error('stopped'))
@@ -565,7 +569,7 @@ describe('BrowserDOMElementManager', () => {
 			probe.late.innerHTML = '<button>Late</button>'
 			view.destroy()
 			const refusal = await pending.catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 			await waitForDelay(10)
 			expect(view.elements.elements()).toEqual([])
 		})
@@ -577,7 +581,7 @@ describe('BrowserDOMElementManager', () => {
 			view.destroy()
 			probe.late.innerHTML = '<button>Late</button>'
 			const refusal = await pending.catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 	})
 })

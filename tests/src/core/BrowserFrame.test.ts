@@ -7,8 +7,6 @@ import {
 	compileReadFunction,
 	createCDPClient,
 	isBrowserError,
-	isBrowserResultLimitError,
-	isCDPTimeoutError,
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
 import {
@@ -222,7 +220,7 @@ describe('BrowserFrame', () => {
 			'https://example.com/frame',
 		)
 
-		await expect(frame.read()).rejects.toSatisfy(isBrowserResultLimitError)
+		await expect(frame.read()).rejects.toMatchObject({ name: 'BrowserError', code: 'RESULT_LIMIT' })
 		expect(frame.url).toBe('https://example.com/frame')
 		const evaluation = transport.sent.find((message) => message.method === 'Runtime.evaluate')
 		expect(evaluation?.params?.['expression']).toBe(
@@ -367,9 +365,10 @@ describe('BrowserFrame', () => {
 			'https://example.com/frame',
 		)
 
-		await expect(frame.send('DOM.getDocument', undefined, { timeout: 20 })).rejects.toSatisfy(
-			isCDPTimeoutError,
-		)
+		await expect(frame.send('DOM.getDocument', undefined, { timeout: 20 })).rejects.toMatchObject({
+			name: 'BrowserError',
+			code: 'TIMEOUT',
+		})
 	})
 
 	it('rejects operations after the CDP client disconnects', async () => {
@@ -444,6 +443,9 @@ describe('BrowserFrame', () => {
 			'https://example.com/frame',
 		)
 
-		await expect(frame.evaluate('1', { timeout: 20 })).rejects.toSatisfy(isCDPTimeoutError)
+		await expect(frame.evaluate('1', { timeout: 20 })).rejects.toMatchObject({
+			name: 'BrowserError',
+			code: 'TIMEOUT',
+		})
 	})
 })

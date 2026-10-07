@@ -82,7 +82,7 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 		if (this.#context !== undefined) restore['browserContextId'] = this.#context
 		const result = await this.#client.send('Storage.setCookies', restore)
 		if (result !== undefined && !isRecord(result)) {
-			throw new BrowserError('Browser cookie restore returned a malformed result')
+			throw new BrowserError('PROTOCOL', 'Browser cookie restore returned a malformed result')
 		}
 	}
 }

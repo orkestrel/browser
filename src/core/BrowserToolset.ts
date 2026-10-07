@@ -73,13 +73,7 @@ import {
 	BROWSER_TOOL_TIMEOUT_MS,
 	BROWSER_TYPED_ROLES,
 } from './constants.js'
-import {
-	BrowserElementError,
-	BrowserError,
-	BrowserStepError,
-	isBrowserElementError,
-	isBrowserError,
-} from './errors.js'
+import { BrowserError, BrowserStepError, isBrowserError } from './errors.js'
 import {
 	compileSubmitObserverExpression,
 	compileSubmitReadExpression,
@@ -102,6 +96,7 @@ import {
 	renderBrowserToolOutput,
 	requireBrowserReference,
 	validateBrowserToolArguments,
+	describeBrowserRefusal,
 } from './helpers.js'
 
 /**
@@ -152,7 +147,7 @@ import {
  * navigation record opens, `click` and `type` with `submit` install a `submit` observer in the
  * isolated world of the element's document, and `press` in every document one `page.frames()`
  * call lists; an action whose input
- * document cannot be observed is refused with `BROWSER_TOOLSET_OBSERVE` before any input, and a
+ * document cannot be observed is refused with `TOOLSET_OBSERVE` before any input, and a
  * document `press` did not list is not observed. A navigation that starts in the input's frame or
  * an ancestor before the input settles is followed; when the input settles first, each observed
  * submission that kept its default action names its destination frame, and the receipt waits for
@@ -258,15 +253,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const limit = options?.limit ?? BROWSER_TOOL_LIMIT
 		if (!isInteger(limit) || limit < 1) {
 			throw new BrowserError(
+				'TOOLSET_ARGUMENT',
 				'Browser toolset limit must be a positive integer',
-				'BROWSER_TOOLSET_ARGUMENT',
 				{
 					limit,
 				},
 			)
 		}
 		if (options?.context !== undefined && options.page === undefined) {
-			throw new BrowserError('Browser toolset context requires a page', 'BROWSER_TOOLSET_CONTEXT')
+			throw new BrowserError('TOOLSET_CONTEXT', 'Browser toolset context requires a page')
 		}
 		this.#view = view
 		this.#notices = options?.notes
@@ -496,6 +491,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const action = performed.action
 		if (action === undefined)
 			throw new BrowserError(
+				'PROTOCOL',
 				`${id}: ${performed.result.success ? String(performed.result.value) : performed.result.error}`,
 			)
 		if (
@@ -563,7 +559,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const invocation = { ...context }
 		this.#invocations.set(invocation, { handler, clause })
 		const performed = await this.perform({ id: '', name, arguments: args }, invocation)
-		if (!performed.result.success) throw performed.fault ?? new BrowserError(performed.result.error)
+		if (!performed.result.success)
+			throw performed.fault ?? new BrowserError('PROTOCOL', performed.result.error)
 		return performed.result.value
 	}
 
@@ -571,8 +568,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const hold = this.#reservation ?? this.#holds.values().next().value
 		if (hold !== undefined && caller !== hold.token && category !== 'observation')
 			throw new BrowserError(
+				'TOOLSET_BUSY',
 				`The toolset is replaying ${hold.name} until it finishes; call read.`,
-				'BROWSER_TOOLSET_BUSY',
 			)
 	}
 
@@ -580,10 +577,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
 		if (dialog !== undefined || this.#pending !== undefined)
 			throw new BrowserError(
+				'TOOLSET_DIALOG',
 				dialog === undefined
 					? BROWSER_TOOL_PENDING_NOTE
 					: renderBrowserReceipt({ action: '', dialog }),
-				'BROWSER_TOOLSET_DIALOG',
 			)
 	}
 
@@ -618,8 +615,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		})
 		if (conflict !== undefined) {
 			throw new BrowserError(
+				'TOOLSET_RESERVED',
 				`The tool manager already holds a tool named ${conflict}, a name the browser toolset reserves`,
-				'BROWSER_TOOLSET_RESERVED',
 				{ name: conflict },
 			)
 		}
@@ -688,14 +685,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const message = this.#boundReceipt(original, secret)
 			if (context.signal.aborted && error === context.signal.reason && message === original)
 				throw error
-			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
+			if (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT') {
 				this.#actions.set(signal, { ...this.#actions.get(signal), outcome: 'interrupted' })
 				return this.#boundReceipt(`${this.#drain()}${message}`, secret, BROWSER_TOOL_CUT_FOOTER)
 			}
 			if (message === original && message.length <= this.#limit) throw error
 			throw new BrowserError(
+				isBrowserError(error) ? error.code : 'PROTOCOL',
 				boundBrowserText(message, this.#limit, BROWSER_TOOL_CUT_FOOTER),
-				isBrowserError(error) ? error.code : undefined,
 				isBrowserError(error) ? error.context : undefined,
 			)
 		}
@@ -748,7 +745,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				} catch (error) {
 					if (
 						signal.aborted ||
-						!isBrowserElementError(error) ||
+						!(isBrowserError(error) && error.code === 'ELEMENT') ||
 						error.context?.['reason'] !== 'GONE'
 					)
 						throw error
@@ -757,10 +754,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				}
 			}
 			if (outline === undefined)
-				throw new BrowserError(
-					'The page could not be captured; call read.',
-					'BROWSER_TOOLSET_CAPTURE',
-				)
+				throw new BrowserError('TOOLSET_CAPTURE', 'The page could not be captured; call read.')
 			const projection = outline.lines.map(renderBrowserLine).join('\n')
 			const previous = this.#projections.get(view)
 			const tabs =
@@ -789,7 +783,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			this.#notes.length = 0
 			return result
 		} finally {
-			capture.abort(new BrowserError('the read settled', 'BROWSER_TOOLSET_SETTLED'))
+			capture.abort(new BrowserError('TOOLSET_SETTLED', 'the read settled'))
 		}
 	}
 
@@ -806,8 +800,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			(search !== undefined && !isString(search))
 		)
 			throw new BrowserError(
+				'TOOLSET_ARGUMENT',
 				'Read requires an integer from, an optional integer to, and optional search text.',
-				'BROWSER_TOOLSET_ARGUMENT',
 			)
 		return [
 			await this.read({
@@ -877,17 +871,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const submit = args['submit']
 		const secret = args['secret']
 		if (secret !== undefined && !isBoolean(secret))
-			throw new BrowserError(
-				'The secret parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'secret' },
-			)
+			throw new BrowserError('TOOLSET_ARGUMENT', 'The secret parameter must be a boolean.', {
+				key: 'secret',
+			})
 		if (submit !== undefined && !isBoolean(submit)) {
-			throw new BrowserError(
-				'The submit parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'submit' },
-			)
+			throw new BrowserError('TOOLSET_ARGUMENT', 'The submit parameter must be a boolean.', {
+				key: 'submit',
+			})
 		}
 
 		const turn = await this.#acquire(context.signal)
@@ -900,8 +890,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			// refused before any protocol command reaches it.
 			if (!BROWSER_TYPED_ROLES.has(element.role)) {
 				throw new BrowserError(
+					'TOOLSET_ROLE',
 					`Element ${renderBrowserElement(element)} takes no text; call click for ${/^[aeiou]/i.test(element.role) ? 'an' : 'a'} ${element.role}.`,
-					'BROWSER_TOOLSET_ROLE',
 					{ reference: element.reference, role: element.role },
 				)
 			}
@@ -1045,15 +1035,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const parsed = URL.canParse(url) ? new URL(url) : undefined
 		if (parsed === undefined) {
 			throw new BrowserError(
+				'TOOLSET_SCHEME',
 				`Navigation refused: ${JSON.stringify(url)} is not an absolute URL.`,
-				'BROWSER_TOOLSET_SCHEME',
 				{ url },
 			)
 		}
 		if (!this.#schemes.includes(parsed.protocol)) {
 			throw new BrowserError(
+				'TOOLSET_SCHEME',
 				`Navigation refused: the ${parsed.protocol} scheme is not allowed; use ${this.#schemes.join(' or ')}.`,
-				'BROWSER_TOOLSET_SCHEME',
 				{ url },
 			)
 		}
@@ -1092,16 +1082,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const seconds = args['timeout']
 		const absent = args['absent']
 		if (absent !== undefined && !isBoolean(absent)) {
-			throw new BrowserError(
-				'The absent parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'absent' },
-			)
+			throw new BrowserError('TOOLSET_ARGUMENT', 'The absent parameter must be a boolean.', {
+				key: 'absent',
+			})
 		}
 		if (seconds !== undefined && (!isFiniteNumber(seconds) || seconds <= 0)) {
 			throw new BrowserError(
+				'TOOLSET_ARGUMENT',
 				'The timeout parameter must be a positive number of seconds.',
-				'BROWSER_TOOLSET_ARGUMENT',
 				{ key: 'timeout' },
 			)
 		}
@@ -1125,11 +1113,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				'',
 			]
 		} catch (error) {
-			if (
-				!context.signal.aborted &&
-				isBrowserError(error) &&
-				error.code === 'BROWSER_WAIT_TIMEOUT'
-			) {
+			if (!context.signal.aborted && isBrowserError(error) && error.code === 'WAIT_TIMEOUT') {
 				this.#actions.set(context.signal, {
 					...this.#actions.get(context.signal),
 					outcome: 'timeout',
@@ -1155,14 +1139,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const accept = args['accept']
 		const text = args['text']
 		if (!isBoolean(accept)) {
-			throw new BrowserError(
-				'The accept parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'accept' },
-			)
+			throw new BrowserError('TOOLSET_ARGUMENT', 'The accept parameter must be a boolean.', {
+				key: 'accept',
+			})
 		}
 		if (text !== undefined && !isString(text)) {
-			throw new BrowserError('The text parameter must be a string.', 'BROWSER_TOOLSET_ARGUMENT', {
+			throw new BrowserError('TOOLSET_ARGUMENT', 'The text parameter must be a string.', {
 				key: 'text',
 			})
 		}
@@ -1171,7 +1153,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const page = this.#paged()
 			const dialog = this.#dialogs.get(page)
 			if (dialog === undefined) {
-				throw new BrowserError('No dialog is open; call read.', 'BROWSER_TOOLSET_DIALOG')
+				throw new BrowserError('TOOLSET_DIALOG', 'No dialog is open; call read.')
 			}
 			context.signal.throwIfAborted()
 			if (accept) await dialog.accept(text)
@@ -1200,8 +1182,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const page = match === null ? undefined : pages[Number(match[1]) - 1]
 			if (page === undefined) {
 				throw new BrowserError(
+					'TOOLSET_TAB',
 					`Tab ${JSON.stringify(tab)} is not open; call read.`,
-					'BROWSER_TOOLSET_TAB',
 					{ tab },
 				)
 			}
@@ -1267,7 +1249,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#refuseDialog(): void {
 		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
 		if (dialog !== undefined)
-			throw new BrowserError(renderBrowserReceipt({ action: '', dialog }), 'BROWSER_TOOLSET_DIALOG')
+			throw new BrowserError('TOOLSET_DIALOG', renderBrowserReceipt({ action: '', dialog }))
 	}
 
 	async #choose(
@@ -1291,10 +1273,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const reference = requireBrowserReference(value)
 		const element = this.#cursor.elements.element(reference)
 		if (element === undefined) {
-			throw new BrowserElementError(
-				reference,
-				'UNKNOWN',
-				'is not in the current view; call read for fresh refs',
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal(
+					reference,
+					'UNKNOWN',
+					'is not in the current view; call read for fresh refs',
+				),
+				{ reference: reference, reason: 'UNKNOWN' },
 			)
 		}
 		const frame = this.#page === undefined ? undefined : this.#resolveFrame(this.#page, reference)
@@ -1312,7 +1298,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	#paged(): BrowserPageInterface {
 		if (this.#page === undefined) {
-			throw new BrowserError('This view has no page', 'BROWSER_TOOLSET_PAGE')
+			throw new BrowserError('TOOLSET_PAGE', 'This view has no page')
 		}
 		return this.#page
 	}
@@ -1334,8 +1320,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			if (!answer && this.#pending === pending) this.#pending = undefined
 		} catch (error) {
 			turn.resolve()
-			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
-				throw new BrowserError(error.message, 'BROWSER_TOOLSET_DIALOG')
+			if (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT') {
+				throw new BrowserError('TOOLSET_DIALOG', error.message)
 			}
 			throw error
 		}
@@ -1516,8 +1502,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			return await this.#race(step, action, signal)
 		} catch (error) {
-			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')
-				this.#parkInput(command)
+			if (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT') this.#parkInput(command)
 			throw error
 		}
 	}
@@ -1545,8 +1530,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const name = target.name
 		if (!isString(name))
 			throw new BrowserError(
+				'JOURNEY_INPUT',
 				`Step ${id} binds its target name to parameter ${JSON.stringify(name.parameter)}; pass the name itself.`,
-				'BROWSER_JOURNEY_INPUT',
 				{ step: id, parameter: name.parameter },
 			)
 		const matches = await this.#cursor.elements.find(
@@ -1556,8 +1541,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const [element] = matches
 		if (matches.length === 1 && element !== undefined) return element.reference
 		throw new BrowserError(
+			matches.length === 0 ? 'JOURNEY_TARGET' : 'JOURNEY_AMBIGUOUS',
 			`Step ${id} names ${target.role} ${JSON.stringify(name)}, which ${matches.length === 0 ? 'no element carries' : `${matches.length} elements carry`}; call edit to remove or replace ${id}.`,
-			matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
 		)
 	}
 
@@ -1573,8 +1558,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const [match] = matches
 		if (matches.length === 1 && match !== undefined) return match.id
 		throw new BrowserError(
+			matches.length === 0 ? 'JOURNEY_TARGET' : 'JOURNEY_AMBIGUOUS',
 			`${id}: The tab ${JSON.stringify(tab.title)} at ${tab.url} ${matches.length === 0 ? 'is not open' : 'is ambiguous'}; call read.`,
-			matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
 		)
 	}
 
@@ -1610,8 +1595,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const installed = await this.#race(Promise.all(installs), '', signal)
 		if (!frames.some((frame, index) => frame.id === required && installed[index] === true))
 			throw new BrowserError(
+				'TOOLSET_OBSERVE',
 				`The action was not sent: frame ${required}, which receives the input, could not be observed for a form submission; call read.`,
-				'BROWSER_TOOLSET_OBSERVE',
 				{ frame: required },
 			)
 	}
@@ -1711,7 +1696,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				implicit,
 			}
 		} catch (error) {
-			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
+			if (signal.aborted || (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT')) {
 				throw error
 			}
 			return undefined
@@ -1817,7 +1802,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#interrupt(dialog: BrowserDialogInterface): void {
 		for (const [interrupt, action] of this.#interrupts) {
 			interrupt.reject(
-				new BrowserError(renderBrowserReceipt({ action, dialog }), 'BROWSER_TOOLSET_RECEIPT'),
+				new BrowserError('TOOLSET_RECEIPT', renderBrowserReceipt({ action, dialog })),
 			)
 		}
 	}
@@ -1871,10 +1856,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				? { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
 				: { outline, focus: outline.focus, tabs }
 		} catch (error) {
-			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
+			if (signal.aborted || (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT')) {
 				throw error
 			}
-			if (!isBrowserElementError(error) || error.context?.['reason'] !== 'GONE') {
+			if (
+				!(isBrowserError(error) && error.code === 'ELEMENT') ||
+				error.context?.['reason'] !== 'GONE'
+			) {
 				return {
 					note: `(The view could not be read: ${isError(error) ? error.message : String(error)}; call read.)`,
 					focus: undefined,
@@ -1893,13 +1881,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					? { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
 					: { outline, focus: outline.focus, tabs }
 			} catch (retry) {
-				if (signal.aborted || (isBrowserError(retry) && retry.code === 'BROWSER_TOOLSET_RECEIPT')) {
+				if (signal.aborted || (isBrowserError(retry) && retry.code === 'TOOLSET_RECEIPT')) {
 					throw retry
 				}
 				return { note: BROWSER_TOOL_CHANGED_NOTE, focus: undefined, tabs: [] }
 			}
 		} finally {
-			receipt.abort(new BrowserError('the receipt settled', 'BROWSER_TOOLSET_SETTLED'))
+			receipt.abort(new BrowserError('TOOLSET_SETTLED', 'the receipt settled'))
 		}
 	}
 
@@ -1953,7 +1941,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	#ended(): BrowserError {
-		return new BrowserError('the browser session ended', 'BROWSER_TOOLSET_ENDED')
+		return new BrowserError('TOOLSET_ENDED', 'the browser session ended')
 	}
 
 	#current(generation: number, source: BrowserToolSourceInterface): boolean {

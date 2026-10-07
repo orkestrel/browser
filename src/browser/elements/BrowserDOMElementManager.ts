@@ -14,13 +14,13 @@ import {
 	BROWSER_INTERACTIVE_ROLES,
 	BROWSER_OUTLINE_LIMIT,
 	BROWSER_REFERENCE_PREFIX,
-	BrowserElementError,
 	BrowserError,
 	filterBrowserOutline,
 	normalizeBrowserName,
 	parseBrowserReference,
 	renderBrowserOutline,
 	validateBrowserTimeout,
+	describeBrowserRefusal,
 } from '@src/core'
 import { BrowserDOMElement } from './BrowserDOMElement.js'
 import { BrowserDOMWait } from '../BrowserDOMWait.js'
@@ -104,14 +104,17 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		this.#input.signal.throwIfAborted()
 		const limit = options?.limit ?? BROWSER_OUTLINE_LIMIT
 		if (!isInteger(limit) || limit < 0) {
-			throw new BrowserError('Outline limit must be a nonnegative integer', undefined, { limit })
+			throw new BrowserError('ARGUMENT', 'Outline limit must be a nonnegative integer', { limit })
 		}
 		options?.signal?.throwIfAborted()
 		const document = this.#input.document()
 		const epoch = this.#epoch(new WeakRef(document))
 		const rows = this.#capture(this.#root(document, options?.within), options?.within)
 		if (document !== this.#input.document() || epoch !== this.#epoch(new WeakRef(document)))
-			throw new BrowserElementError({ subject: 'outline' }, 'GONE')
+			throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'outline' }, 'GONE'), {
+				subject: 'outline',
+				reason: 'GONE',
+			})
 		return renderBrowserOutline(document.URL, document.title, rows, limit, options?.secrets)
 	}
 
@@ -182,7 +185,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		if (css === undefined) return matches
 		const selected = attempt(() => Array.from(root.querySelectorAll(css)))
 		if (!selected.success) {
-			throw new BrowserError(`CSS query is invalid: ${css}`, 'BROWSER_ELEMENT_QUERY', { css })
+			throw new BrowserError('ELEMENT_QUERY', `CSS query is invalid: ${css}`, { css })
 		}
 		const bound = selected.value.map((element) => {
 			const role = computeBrowserRole(element) ?? 'generic'
@@ -205,7 +208,10 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		if (within === undefined) return document.documentElement
 		const node = this.#records.get(parseBrowserReference(within) ?? '')?.node.deref()
 		if (node === undefined || !node.isConnected || node.ownerDocument.defaultView === null) {
-			throw new BrowserElementError(within, 'GONE')
+			throw new BrowserError('ELEMENT', describeBrowserRefusal(within, 'GONE'), {
+				reference: within,
+				reason: 'GONE',
+			})
 		}
 		return node
 	}

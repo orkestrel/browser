@@ -92,7 +92,7 @@ describe('journey validators', () => {
 	it.each(BROWSER_JOURNEY_EDIT_SHAPES)('names the operation and field for %j', (value, message) => {
 		expect(attempt(() => validateBrowserJourneyEdit(value))).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_EDIT', message },
+			error: { code: 'JOURNEY_EDIT', message },
 		})
 	})
 	it('refuses an empty journey with the invalid code', () => {
@@ -100,7 +100,7 @@ describe('journey validators', () => {
 			attempt(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, steps: [] })),
 		).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_INVALID', message: 'Invariant 2 (ids): has no steps' },
+			error: { code: 'JOURNEY_INVALID', message: 'Invariant 2 (ids): has no steps' },
 		})
 	})
 	it.each(BROWSER_JOURNEY_INVALID_CASES)(
@@ -110,7 +110,7 @@ describe('journey validators', () => {
 			expect(result).toMatchObject({
 				success: false,
 				error: {
-					code: 'BROWSER_JOURNEY_INVALID',
+					code: 'JOURNEY_INVALID',
 					message: expect.stringContaining(`Invariant ${invariant}`),
 				},
 			})
@@ -119,10 +119,10 @@ describe('journey validators', () => {
 	it('refuses unknown formats with the format code', () => {
 		expect(
 			attempt(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, format: 2 })),
-		).toMatchObject({ success: false, error: { code: 'BROWSER_JOURNEY_FORMAT' } })
+		).toMatchObject({ success: false, error: { code: 'JOURNEY_FORMAT' } })
 		expect(attempt(() => validateBrowserRun({ ...BROWSER_RUN_FIXTURE, format: 2 }))).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_FORMAT' },
+			error: { code: 'JOURNEY_FORMAT' },
 		})
 	})
 	it('refuses a secret bound to wait.text', () => {
@@ -137,7 +137,7 @@ describe('journey validators', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_INVALID',
+				code: 'JOURNEY_INVALID',
 				message: 'Invariant 5 (secrets): binds secret "password" outside type.text',
 				context: { parameter: 'password', step: 's1', field: 'text' },
 			},

@@ -69,7 +69,7 @@ import {
 } from '@orkestrel/test'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
-import { BrowserDestroyedError, BrowserNotConnectedError } from '@src/server'
+
 import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
 
@@ -1730,9 +1730,10 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	}
 
 	async ping(options?: BrowserCallOptions): Promise<void> {
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 		const fixture = this.#fixture
-		if (fixture?.client.connected !== true) throw new BrowserNotConnectedError()
+		if (fixture?.client.connected !== true)
+			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		const timeout = options?.timeout ?? this.#handlers.timeout
 		await fixture.client.send('Browser.getVersion', undefined, {
 			...options,
@@ -1862,12 +1863,12 @@ export class BrowserLaunchDouble implements BrowserInterface {
 
 	async isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
 		if ((this.#handlers.broken ?? 0) > 0)
-			throw new BrowserError('The fixture refused isolation', 'BROWSER_FIXTURE_ISOLATE')
+			throw new BrowserError('PROTOCOL', 'The fixture refused isolation')
 		const fixture = this.#fixture
-		if (fixture === undefined) throw new BrowserError('The double is not connected')
+		if (fixture === undefined) throw new BrowserError('ARGUMENT', 'The double is not connected')
 		const result: unknown = await fixture.client.send('Target.createBrowserContext', {})
 		if (!isRecord(result) || !isString(result['browserContextId']))
-			throw new BrowserError('The fixture returned no context id')
+			throw new BrowserError('ARGUMENT', 'The fixture returned no context id')
 		const context = new BrowserContext(
 			fixture.client,
 			result['browserContextId'],
@@ -1892,7 +1893,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		await this.#fixture?.client.close()
 		if (this.#handlers.cleanup !== undefined) throw this.#handlers.cleanup
 		if ((this.#handlers.survivors ?? 0) > 0)
-			throw new BrowserError('The fixture termination is unconfirmed', 'BROWSER_FIXTURE_TEARDOWN')
+			throw new BrowserError('CONNECTION', 'The fixture termination is unconfirmed')
 	}
 
 	async close(): Promise<void> {
@@ -1935,7 +1936,7 @@ export class BrowserLauncher {
 		return (options) => {
 			const failure =
 				this.#failures > 0 || (this.#browsers.length >= this.#refusing && this.#refusals > 0)
-					? new BrowserError('The fixture refused the launch', 'BROWSER_FIXTURE_LAUNCH')
+					? new BrowserError('CONNECTION', 'The fixture refused the launch')
 					: undefined
 			if (this.#failures > 0) this.#failures -= 1
 			if (this.#browsers.length >= this.#refusing) this.#refusals -= 1

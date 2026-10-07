@@ -57,7 +57,7 @@ describe('FileBrowserStore', () => {
 				if (checked.endsWith('.tmp') && existsSync(checked)) await unlink(checked)
 			})
 			await expect(files.write(path, 'replacement')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_FILE',
+				code: 'JOURNEY_FILE',
 				message: expect.stringContaining('ENOENT'),
 			})
 			expect(await readdir(scratch.path)).toEqual(['destination'])
@@ -110,7 +110,7 @@ describe('FileBrowserStore', () => {
 				await writeFile(join(lock, foreign), '')
 			})
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_LOCKED',
+				code: 'JOURNEY_LOCKED',
 			})
 			expect(await readdir(lock)).toEqual([foreign])
 			await unlink(join(lock, foreign))
@@ -138,7 +138,7 @@ describe('FileBrowserStore', () => {
 				}),
 				'rmdir failure names the denied directory',
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_ACCESS',
+				code: 'JOURNEY_ACCESS',
 				message: `Cannot remove lock directory: ${lock}`,
 				context: { path: lock },
 			})
@@ -164,7 +164,7 @@ describe('FileBrowserStore', () => {
 				await writeFile(join(lock, replacement), '')
 			})
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_LOCKED',
+				code: 'JOURNEY_LOCKED',
 			})
 			expect(replaced).toBe(true)
 			expect(await readdir(lock)).toEqual([replacement])
@@ -183,7 +183,7 @@ describe('FileBrowserStore', () => {
 				await rmdir(lock)
 			})
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_LOCKED',
+				code: 'JOURNEY_LOCKED',
 			})
 			expect(attempts).toBe(BROWSER_JOURNEY_LOCK_ATTEMPTS)
 			expect(attempts).toBe(8)
@@ -200,12 +200,12 @@ describe('FileBrowserStore', () => {
 			await mkdir(lock)
 			await writeFile(join(lock, 'invalid'), '')
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_LOCKED',
+				code: 'JOURNEY_LOCKED',
 			})
 			expect(await readdir(lock)).toEqual(['invalid'])
 			await writeFile(join(lock, 'second'), '')
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_LOCKED',
+				code: 'JOURNEY_LOCKED',
 			})
 			expect((await readdir(lock)).sort()).toEqual(['invalid', 'second'])
 		} finally {
@@ -224,7 +224,7 @@ describe('FileBrowserStore', () => {
 			await mkdir(lock)
 			await writeFile(join(lock, entry), '')
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_LOCKED',
+				code: 'JOURNEY_LOCKED',
 			})
 			expect(await readdir(lock)).toEqual([entry])
 		} finally {
@@ -247,7 +247,7 @@ describe('FileBrowserStore', () => {
 				})
 				.catch((error: unknown) => error)
 			expect(failure).toMatchObject({
-				code: 'BROWSER_JOURNEY_ACCESS',
+				code: 'JOURNEY_ACCESS',
 				message: `Cannot remove lock entry: ${blocked}`,
 				context: { path: blocked },
 			})
@@ -279,7 +279,7 @@ describe('FileBrowserStore', () => {
 			await mkdir(path)
 			await writeFile(join(path, entry), '')
 			await expect(files.lock(path, async () => 'entered')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_LOCKED',
+				code: 'JOURNEY_LOCKED',
 			})
 			expect(await readdir(path)).toEqual([entry])
 		} finally {
@@ -312,7 +312,7 @@ describe('FileBrowserStore', () => {
 		const scratch = createScratch()
 		try {
 			expect(() => new FileBrowserStore({ root: scratch.path, limit: 0 })).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'JOURNEY_ARGUMENT' }),
 			)
 		} finally {
 			scratch.destroy()
@@ -336,12 +336,12 @@ describe('FileBrowserStore', () => {
 			scratch.destroy()
 		}
 	})
-	it('refuses a missing root with BROWSER_JOURNEY_PATH naming the root', () => {
+	it('refuses a missing root with JOURNEY_PATH naming the root', () => {
 		const scratch = createScratch()
 		try {
 			const root = join(scratch.path, 'absent')
 			expect(() => new FileBrowserStore({ root })).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_PATH', message: `Missing root: ${root}` }),
+				expect.objectContaining({ code: 'JOURNEY_PATH', message: `Missing root: ${root}` }),
 			)
 		} finally {
 			scratch.destroy()
@@ -385,7 +385,7 @@ describe('FileBrowserStore', () => {
 			await mkdir(path)
 			await writeFile(join(path, 'previous'), 'saved')
 			await expect(files.write(path, 'replacement')).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_FILE',
+				code: 'JOURNEY_FILE',
 			})
 			expect(await readdir(scratch.path)).toEqual(['destination'])
 			expect(await readFile(join(path, 'previous'), 'utf8')).toBe('saved')
@@ -404,7 +404,7 @@ describe('FileBrowserStore', () => {
 			)
 			createLink(files.resolvePath('.temporary.tmp'), files.resolvePath('target'))
 			await expect(files.check(files.resolvePath('.temporary.tmp'))).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
+				code: 'JOURNEY_PATH',
 			})
 		} finally {
 			scratch.destroy()
@@ -441,7 +441,7 @@ describe('FileBrowserStore', () => {
 			await rename(join(scratch.path, 'root'), join(scratch.path, 'moved'))
 			createLink(join(scratch.path, 'root'), join(scratch.path, 'moved'))
 			await expect(files.read(files.resolvePath('entry'))).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
+				code: 'JOURNEY_PATH',
 			})
 		} finally {
 			scratch.destroy()

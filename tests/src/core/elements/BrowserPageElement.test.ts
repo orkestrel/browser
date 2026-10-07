@@ -1,7 +1,7 @@
 import type { BrowserPageInterface } from '@src/core'
 import type { BrowserInterface } from '@src/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { BrowserElementError, isBrowserElementError, isCDPError } from '@src/core'
+import { BrowserError, describeBrowserRefusal, isBrowserError } from '@src/core'
 import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createBrowserElementFixture } from '../../../setup.js'
 import { readFileSync } from 'node:fs'
@@ -46,7 +46,7 @@ describe('real Chromium pointer settling', () => {
 			(await page.elements.find({ role: 'button', name: 'Outside the viewport' }))[0],
 		)
 		await expect(element.click()).rejects.toMatchObject({
-			code: 'BROWSER_ELEMENT_ERROR',
+			code: 'ELEMENT',
 			context: { reference: element.reference, reason: 'OCCLUDED' },
 			message: expect.stringContaining('location held no node'),
 		})
@@ -58,7 +58,7 @@ describe('real Chromium pointer settling', () => {
 			"requestAnimationFrame(function move() { window.scrollTo({ top: window.scrollY === 0 ? 500 : 0, behavior: 'instant' }); requestAnimationFrame(move) })",
 		)
 		await expect(element.click({ timeout: 100 })).rejects.toMatchObject({
-			code: 'BROWSER_CDP_TIMEOUT_ERROR',
+			code: 'TIMEOUT',
 			context: { timeout: 100 },
 		})
 		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBeUndefined()
@@ -92,7 +92,7 @@ describe('trusted element actions', () => {
 			await expect(
 				requireValue(page.elements.element('e1')).focus({ timeout: 1 }),
 			).rejects.toMatchObject({
-				code: 'BROWSER_CDP_TIMEOUT_ERROR',
+				code: 'TIMEOUT',
 				context: { method: 'DOM.resolveNode', timeout: 1 },
 			})
 			expect(transport.sent.some((message) => message.method === 'DOM.focus')).toBe(false)
@@ -109,7 +109,7 @@ describe('trusted element actions', () => {
 			await fixture.page.elements.outline()
 			await expect(requireValue(fixture.page.elements.element('e1')).focus()).rejects.toMatchObject(
 				{
-					code: 'BROWSER_CDP_CONNECTION_ERROR',
+					code: 'DISCONNECTED',
 					context: { method: 'DOM.resolveNode' },
 					message: 'CDP connection failed: Error: Transport context not found',
 				},
@@ -143,7 +143,7 @@ describe('trusted element actions', () => {
 			await fixture.page.elements.outline()
 			await expect(requireValue(fixture.page.elements.element('e1')).focus()).rejects.toMatchObject(
 				{
-					code: 'BROWSER_CDP_ERROR',
+					code: 'REMOTE',
 					context: { method: 'DOM.resolveNode', message: 'Internal error', code: -32603 },
 				},
 			)
@@ -161,7 +161,7 @@ describe('trusted element actions', () => {
 			await expect(
 				requireValue(fixture.page.elements.element('e1')).select(['Business']),
 			).rejects.toMatchObject({
-				code: 'BROWSER_CDP_CONNECTION_ERROR',
+				code: 'DISCONNECTED',
 				context: { method: 'Runtime.callFunctionOn' },
 				message: 'CDP connection failed: Error: Transport context not found',
 			})
@@ -181,7 +181,7 @@ describe('trusted element actions', () => {
 			const element = requireValue(page.elements.element('e1'))
 			await expect(
 				method === 'DOM.focus' ? element.focus() : element.click(),
-			).rejects.toMatchObject({ code: 'BROWSER_ELEMENT_ERROR', context: { reason } })
+			).rejects.toMatchObject({ code: 'ELEMENT', context: { reason } })
 		} finally {
 			await client.close()
 		}
@@ -412,9 +412,9 @@ describe('trusted element actions', () => {
 			const rejection = await requireValue(page.elements.element('e1'))
 				.click()
 				.catch((error: unknown) => error)
-			expect(rejection).toSatisfy(isBrowserElementError)
+			expect(rejection).toMatchObject({ name: 'BrowserError', code: 'ELEMENT' })
 			expect(rejection).toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reference: 'e1', reason: 'GONE' },
 				message: 'Element e1 is gone because the page changed; call read for fresh refs.',
 			})
@@ -434,8 +434,8 @@ describe('trusted element actions', () => {
 				const rejection = await requireValue(page.elements.element('e1'))
 					.click()
 					.catch((error: unknown) => error)
-				expect(rejection).toSatisfy(isCDPError)
-				expect(rejection).not.toSatisfy(isBrowserElementError)
+				expect(rejection).toMatchObject({ name: 'BrowserError', code: 'REMOTE' })
+				expect(rejection).not.toMatchObject({ name: 'BrowserError', code: 'ELEMENT' })
 				expect(rejection).toMatchObject({
 					message,
 					context: { method: 'DOM.scrollIntoViewIfNeeded', message },
@@ -455,9 +455,9 @@ describe('trusted element actions', () => {
 			const child = requireValue(page.elements.element('e6'))
 			expect(child.name).toBe('Save')
 			const rejection = await child.click().catch((error: unknown) => error)
-			expect(rejection).toSatisfy(isBrowserElementError)
+			expect(rejection).toMatchObject({ name: 'BrowserError', code: 'ELEMENT' })
 			expect(rejection).toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reference: 'e6', reason: 'GONE' },
 				message: 'Element e6 is gone because the page changed; call read for fresh refs.',
 			})
@@ -475,8 +475,8 @@ describe('trusted element actions', () => {
 			const rejection = await requireValue(page.elements.element('e6'))
 				.click()
 				.catch((error: unknown) => error)
-			expect(rejection).toSatisfy(isCDPError)
-			expect(rejection).not.toSatisfy(isBrowserElementError)
+			expect(rejection).toMatchObject({ name: 'BrowserError', code: 'REMOTE' })
+			expect(rejection).not.toMatchObject({ name: 'BrowserError', code: 'ELEMENT' })
 			expect(rejection).toMatchObject({
 				message: 'Internal error',
 				context: { method: 'DOM.getBoxModel', message: 'Internal error' },
@@ -512,10 +512,11 @@ describe('trusted element actions', () => {
 					.fill('ada@example.test')
 					.catch((caught: unknown) => caught)
 				outcomes.push(
-					isBrowserElementError(refused) && {
-						message: refused.message,
-						reason: refused.context?.['reason'],
-					},
+					isBrowserError(refused) &&
+						refused.code === 'ELEMENT' && {
+							message: refused.message,
+							reason: refused.context?.['reason'],
+						},
 				)
 			} finally {
 				await fixture.client.close()
@@ -613,7 +614,7 @@ describe('trusted element actions', () => {
 			const refused = await requireValue(page.elements.element('e1'))
 				.fill('Search')
 				.catch((caught: unknown) => caught)
-			expect(isBrowserElementError(refused)).toBe(true)
+			expect(isBrowserError(refused) && refused.code === 'ELEMENT').toBe(true)
 			expect(refused).toMatchObject({
 				message: 'Element e1 is not a text control.',
 				context: { reference: 'e1', reason: 'UNKNOWN' },
@@ -646,11 +647,14 @@ describe('trusted element actions', () => {
 	})
 
 	it('catches losing element error identity, code, reason, or recovery', () => {
-		const error = new BrowserElementError('e12', 'GONE')
-		expect(isBrowserElementError(error)).toBe(true)
-		expect(isBrowserElementError(new Error('gone'))).toBe(false)
+		const error = new BrowserError('ELEMENT', describeBrowserRefusal('e12', 'GONE'), {
+			reference: 'e12',
+			reason: 'GONE',
+		})
+		expect(isBrowserError(error) && error.code === 'ELEMENT').toBe(true)
+		expect(isBrowserError(new Error('gone'))).toBe(false)
 		expect(error).toMatchObject({
-			code: 'BROWSER_ELEMENT_ERROR',
+			code: 'ELEMENT',
 			context: { reason: 'GONE', reference: 'e12' },
 			message: expect.stringContaining('is gone because the page changed; call read'),
 		})

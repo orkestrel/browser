@@ -122,7 +122,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 			!isString(capture['title']) ||
 			!isString(capture['html'])
 		) {
-			throw new BrowserError('Browser read capture is malformed', undefined, { frame: this.#id })
+			throw new BrowserError('PROTOCOL', 'Browser read capture is malformed', { frame: this.#id })
 		}
 		// A capture that a navigation overtook must not regress the frame URL the navigation set.
 		if (this.#epoch === undefined || this.#epoch() === epoch) this.#url = capture['url']
@@ -163,7 +163,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 			!isRecord(result['result']) ||
 			!isString(result['result']['objectId'])
 		) {
-			throw new BrowserError('Browser expression did not resolve to an object handle', undefined, {
+			throw new BrowserError('PROTOCOL', 'Browser expression did not resolve to an object handle', {
 				frame: this.#id,
 			})
 		}
@@ -193,12 +193,12 @@ export class BrowserFrame implements BrowserFrameInterface {
 
 	async save(path: string, _bytes: Uint8Array): Promise<void> {
 		// Frames satisfy the persistence contract, but only top-level pages receive a writer.
-		throw new BrowserError('Browser frame has no configured file writer', undefined, { path })
+		throw new BrowserError('ARGUMENT', 'Browser frame has no configured file writer', { path })
 	}
 
 	assert(): void {
 		if (!this.#client.connected) {
-			throw new BrowserError('Browser frame is disconnected', undefined, { frame: this.#id })
+			throw new BrowserError('CLOSED', 'Browser frame is disconnected', { frame: this.#id })
 		}
 	}
 

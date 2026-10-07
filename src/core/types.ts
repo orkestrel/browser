@@ -9,6 +9,89 @@ import type {
 	ToolResult,
 } from '@orkestrel/tool'
 
+// === Browser errors
+
+/**
+ * Identifies a browser refusal, lifecycle failure, or protocol failure.
+ *
+ * @remarks
+ * `TOOLSET_SETTLED` and `TOOLSET_RECEIPT` stop internal toolset work.
+ * Callers receive their resulting receipt rather than these internal signals.
+ */
+export type BrowserErrorCode =
+	| 'ARGUMENT'
+	| 'CAPTURE_UNAVAILABLE'
+	| 'CAPTURE_UNTRUSTED'
+	| 'CLOSED'
+	| 'CONNECTION'
+	| 'CONTEXT_CLOSED'
+	| 'DESTROYED'
+	| 'DISCONNECTED'
+	| 'DOCUMENT'
+	| 'DOCUMENT_DESTROYED'
+	| 'DOCUMENT_OWN'
+	| 'DOCUMENT_SUBMIT'
+	| 'ELEMENT'
+	| 'ELEMENT_QUERY'
+	| 'HAR'
+	| 'JOURNEY_ACCESS'
+	| 'JOURNEY_AMBIGUOUS'
+	| 'JOURNEY_ARGUMENT'
+	| 'JOURNEY_DIALOG'
+	| 'JOURNEY_EDIT'
+	| 'JOURNEY_EMPTY'
+	| 'JOURNEY_FILE'
+	| 'JOURNEY_FORMAT'
+	| 'JOURNEY_GAP'
+	| 'JOURNEY_INPUT'
+	| 'JOURNEY_INVALID'
+	| 'JOURNEY_LOCKED'
+	| 'JOURNEY_MISSING'
+	| 'JOURNEY_PATH'
+	| 'JOURNEY_PLACEMENT'
+	| 'JOURNEY_READONLY'
+	| 'JOURNEY_RECORDING'
+	| 'JOURNEY_SAVED'
+	| 'JOURNEY_STALE'
+	| 'JOURNEY_TARGET'
+	| 'JSON'
+	| 'NAVIGATION'
+	| 'NAVIGATION_TIMEOUT'
+	| 'PAGE_CLOSED'
+	| 'PROTOCOL'
+	| 'REMOTE'
+	| 'RESULT_LIMIT'
+	| 'SERVER_BUSY'
+	| 'SERVER_CRASH'
+	| 'SERVER_ENVIRONMENT'
+	| 'SERVER_EXHAUSTED'
+	| 'SERVER_HOLDER'
+	| 'SERVER_LAUNCH'
+	| 'SERVER_OPTIONS'
+	| 'SERVER_SWEEP'
+	| 'SERVER_TEARDOWN'
+	| 'SERVER_UNAVAILABLE'
+	| 'SERVER_UNRESOLVED'
+	| 'STEP'
+	| 'TARGET_HELD'
+	| 'TIMEOUT'
+	| 'TOOLSET_ARGUMENT'
+	| 'TOOLSET_BUSY'
+	| 'TOOLSET_CAPTURE'
+	| 'TOOLSET_CONTEXT'
+	| 'TOOLSET_DIALOG'
+	| 'TOOLSET_ENDED'
+	| 'TOOLSET_LIMIT'
+	| 'TOOLSET_OBSERVE'
+	| 'TOOLSET_PAGE'
+	| 'TOOLSET_RECEIPT'
+	| 'TOOLSET_RESERVED'
+	| 'TOOLSET_ROLE'
+	| 'TOOLSET_SCHEME'
+	| 'TOOLSET_SETTLED'
+	| 'TOOLSET_TAB'
+	| 'WAIT_TIMEOUT'
+
 // === CDP transport
 
 /**
@@ -41,7 +124,7 @@ export interface CDPTransportInterface {
 	/** Opens the underlying connection. */
 	start(): Promise<void>
 	/**
-	 * Writes one raw text frame to the connection. Throws a coded `BrowserConnectionError`
+	 * Writes one raw text frame to the connection. Throws a coded `BrowserError`
 	 * carrying the transport `url` when called before the connection opens or after it closes.
 	 */
 	send(data: string): Promise<void>
@@ -309,7 +392,7 @@ export interface BrowserNavigationRecordInterface {
 	/**
 	 * Resolves when the record's frame or one of its ancestors starts a navigation after the record
 	 * opened; `settle` reports that navigation's reason. Rejects at `timeout` with
-	 * `BROWSER_NAVIGATION_TIMEOUT`, with `signal.reason` on abort, and when the record ends or the
+	 * `NAVIGATION_TIMEOUT`, with `signal.reason` on abort, and when the record ends or the
 	 * page closes.
 	 */
 	wait(options?: BrowserCallOptions): Promise<void>
@@ -1739,7 +1822,7 @@ export interface BrowserJourneyRevision {
  *   `tab`
  * - `declare` — declares the parameter `name` names, which a step binds at the end of the batch
  *
- * A refused batch rejects with `BROWSER_JOURNEY_EDIT`, naming the edit's index and the reason.
+ * A refused batch rejects with `JOURNEY_EDIT`, naming the edit's index and the reason.
  */
 export type BrowserJourneyEdit =
 	| {
@@ -2077,16 +2160,16 @@ export interface BrowserStorePage<T> {
 export interface BrowserJourneyStoreInterface {
 	/**
 	 * Returns the journey saved under `name` with its revision, or `undefined` when none is saved.
-	 * Rejects with `BROWSER_JOURNEY_FILE` for a malformed entry, `BROWSER_JOURNEY_FORMAT` for an
-	 * unknown format, and `BROWSER_JOURNEY_ACCESS` for a permission error, each naming the path.
+	 * Rejects with `JOURNEY_FILE` for a malformed entry, `JOURNEY_FORMAT` for an
+	 * unknown format, and `JOURNEY_ACCESS` for a permission error, each naming the path.
 	 */
 	get(name: string, options?: BrowserStoreOptions): Promise<BrowserJourneyRevision | undefined>
 	/**
 	 * Saves the journey under its name with the next revision and returns it.
 	 *
 	 * @remarks
-	 * Rejects with `BROWSER_JOURNEY_STALE` when `expected` differs from the stored revision, and
-	 * with `BROWSER_JOURNEY_LOCKED` when another write holds the name. An omitted `expected`
+	 * Rejects with `JOURNEY_STALE` when `expected` differs from the stored revision, and
+	 * with `JOURNEY_LOCKED` when another write holds the name. An omitted `expected`
 	 * permits replacement; `expected: 0` requires no stored journey, including after deletion,
 	 * while the retained revision count still advances on recreation.
 	 */
@@ -2097,7 +2180,7 @@ export interface BrowserJourneyStoreInterface {
 	): Promise<BrowserJourneyRevision>
 	/**
 	 * Removes the journey saved under `name` and keeps its revision count, so a recreated journey
-	 * continues it; a missing name is a no-op. Rejects with `BROWSER_JOURNEY_LOCKED` when another
+	 * continues it; a missing name is a no-op. Rejects with `JOURNEY_LOCKED` when another
 	 * write holds the name.
 	 */
 	delete(name: string, options?: BrowserStoreOptions): Promise<void>
@@ -2146,7 +2229,7 @@ export interface BrowserRunStoreInterface {
 	 * @param bytes - Screenshot bytes to persist
 	 * @param options - Cancellation options
 	 * @returns Name the step records, or `undefined` for a store without directories
-	 * @throws {@link BrowserError} Thrown with `BROWSER_JOURNEY_PATH` when this store did not open the slot.
+	 * @throws {@link BrowserError} Thrown with `JOURNEY_PATH` when this store did not open the slot.
 	 */
 	capture(
 		slot: BrowserRunSlot,
@@ -2159,7 +2242,7 @@ export interface BrowserRunStoreInterface {
 	/**
 	 * Removes every run and opened slot of a journey and returns their count, including unsaved
 	 * slots; a missing name returns zero. File stores exclude concurrent allocation with the
-	 * journey lock and refuse a held lock with `BROWSER_JOURNEY_LOCKED`.
+	 * journey lock and refuse a held lock with `JOURNEY_LOCKED`.
 	 * @param name - Journey name
 	 * @param options - Cancellation options
 	 * @returns Number of removed runs, including unsaved slots
@@ -2613,7 +2696,7 @@ export interface BrowserElementInterface {
 	readonly role: string
 	readonly name: string
 	/**
-	 * Clicks the element, refusing with a coded `BrowserElementError` when it is gone, hidden,
+	 * Clicks the element, refusing with a coded `BrowserError` when it is gone, hidden,
 	 * covered, or disabled.
 	 */
 	click(options?: BrowserCallOptions): Promise<void>
@@ -2729,7 +2812,7 @@ export interface BrowserViewInterface<E extends BrowserElementInterface = Browse
 	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
 	/**
 	 * Resolves when the main document body’s `innerText` contains `text`, or lacks it with `absent`; rejects with a `BrowserError` coded
-	 * `BROWSER_WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort.
+	 * `WAIT_TIMEOUT` at the deadline, and with `signal.reason` on abort.
 	 */
 	wait(text: string, options?: BrowserWaitOptions): Promise<void>
 }
@@ -3022,8 +3105,8 @@ export interface BrowserToolsetInterface {
 	 * `reference` and `css` are evidence only. A `switch` step on a toolset with `context` resolves
 	 * the one tab `tabs()` lists with the step's URL and title, and sends the tab's id as `tab`.
 	 * Every other step sends its arguments unchanged, a page tool's included. A missing target or
-	 * tab refuses with `BROWSER_JOURNEY_TARGET`, several refuse with `BROWSER_JOURNEY_AMBIGUOUS`, and
-	 * a target name that binds a parameter refuses with `BROWSER_JOURNEY_INPUT`, each naming the
+	 * tab refuses with `JOURNEY_TARGET`, several refuse with `JOURNEY_AMBIGUOUS`, and
+	 * a target name that binds a parameter refuses with `JOURNEY_INPUT`, each naming the
 	 * step before any input. An action that is `done`, or `interrupted` by a dialog a following
 	 * `dialog` step answers, returns; any other outcome, and a navigation that stopped at
 	 * `requested` or `committed`, throws a `BrowserStepError` whose `action` is the performed
@@ -3041,20 +3124,20 @@ export interface BrowserToolsetInterface {
 	 * A tab whose title does not answer within `BROWSER_TOOL_TIMEOUT_MS` lists an empty title, and a
 	 * toolset without `context` lists none. Rejects with `the browser session ended` after
 	 * `destroy()`, with the signal's reason when `options.signal` aborts, and with
-	 * `BROWSER_TOOLSET_DIALOG` while a dialog is open on the current tab.
+	 * `TOOLSET_DIALOG` while a dialog is open on the current tab.
 	 */
 	tabs(options?: BrowserCallOptions): Promise<readonly BrowserTab[]>
 	/**
 	 * Takes a queue turn and reserves action admission from the call for the returned caller token.
 	 *
 	 * @remarks
-	 * An action without the token that arrives after the call is refused with `BROWSER_TOOLSET_BUSY`
+	 * An action without the token that arrives after the call is refused with `TOOLSET_BUSY`
 	 * and `The toolset is replaying NAME until it finishes; call read.`, while waiting and while held;
 	 * the actions admitted before the call complete first; a wait that aborts or fails releases the
 	 * pending reservation.
 	 * A second hold waits for earlier holds to release and honours its signal while waiting.
 	 * An open dialog or an input left pending by an earlier receipt refuses with
-	 * `BROWSER_TOOLSET_DIALOG` before admission is reserved. A dialog that opens while the
+	 * `TOOLSET_DIALOG` before admission is reserved. A dialog that opens while the
 	 * queue drains also refuses the hold, leaving its answer admissible.
 	 */
 	hold(name: string, options?: BrowserCallOptions): Promise<BrowserHoldInterface>

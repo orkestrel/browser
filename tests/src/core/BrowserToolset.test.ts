@@ -39,7 +39,6 @@ import {
 	createMemoryBrowserJourneyStore,
 	createMemoryBrowserRunStore,
 	BrowserError,
-	isBrowserElementError,
 	isBrowserError,
 	isBrowserStepError,
 } from '@src/core'
@@ -90,7 +89,7 @@ describe('BrowserToolset', () => {
 						{ signal: new AbortController().signal },
 					),
 				).rejects.toMatchObject({
-					code: 'BROWSER_TOOLSET_ARGUMENT',
+					code: 'TOOLSET_ARGUMENT',
 					context: { key: 'absent' },
 					message: 'The absent parameter must be a boolean.',
 				})
@@ -463,7 +462,7 @@ describe('BrowserToolset', () => {
 				})
 				await waitForCondition('the dialog answer is pending', () => answers.length === 1)
 				await expect(toolset.hold('add-kettle')).rejects.toMatchObject({
-					code: 'BROWSER_TOOLSET_DIALOG',
+					code: 'TOOLSET_DIALOG',
 				})
 				expect(order).toEqual([])
 				fixture.transport.reply(requireValue(answers[0]).id, {})
@@ -502,7 +501,7 @@ describe('BrowserToolset', () => {
 				// A turn of the host loop bounds the refusal without waiting on the blocked input.
 				const refusal = await Promise.race([holding, waitForDelay().then(() => undefined)])
 				expect(refusal, 'g5a1: hold refuses before waiting on the dialog input').toMatchObject({
-					code: 'BROWSER_TOOLSET_DIALOG',
+					code: 'TOOLSET_DIALOG',
 					message: 'A confirm dialog is open: "Continue?"; call dialog.',
 				})
 				const answered = await toolset.perform({
@@ -516,7 +515,7 @@ describe('BrowserToolset', () => {
 					waitForDelay().then(() => undefined),
 				])
 				expect(pending, 'a closed dialog still leaves its input pending').toMatchObject({
-					code: 'BROWSER_TOOLSET_DIALOG',
+					code: 'TOOLSET_DIALOG',
 					message: 'An earlier input is still pending; call read.',
 				})
 				fixture.transport.reply(requireValue(withheld[0]).id, {})
@@ -718,7 +717,7 @@ describe('BrowserToolset', () => {
 						{ signal: new AbortController().signal },
 					),
 				).catch((error: unknown) => error)
-				expect(readProperty(denied, 'code')).toBe('BROWSER_TOOLSET_BUSY')
+				expect(readProperty(denied, 'code')).toBe('TOOLSET_BUSY')
 				for (const call of [
 					{ id: 'read', name: 'read', arguments: { from: 1 } },
 					{ id: 'read', name: 'read', arguments: { from: 1 } },
@@ -773,7 +772,7 @@ describe('BrowserToolset', () => {
 				const hold = await holding
 				const denied = await foreign
 				expect(denied).toMatchObject({
-					code: 'BROWSER_TOOLSET_BUSY',
+					code: 'TOOLSET_BUSY',
 					message: 'The toolset is replaying add-kettle until it finishes; call read.',
 				})
 				expect(order).toEqual(['checkout', 'hold'])
@@ -1014,7 +1013,7 @@ describe('BrowserToolset', () => {
 					{ signal: new AbortController().signal },
 				),
 			).catch((caught: unknown) => caught)
-			expect(readProperty(refused, 'code')).toBe('BROWSER_TOOLSET_ARGUMENT')
+			expect(readProperty(refused, 'code')).toBe('TOOLSET_ARGUMENT')
 			expect(readProperty(refused, 'context')).toEqual({ key: 'ref' })
 			await toolset.destroy()
 		})
@@ -1029,7 +1028,7 @@ describe('BrowserToolset', () => {
 					const toolset = createBrowserToolset(page, { tools })
 					const error = await toolset.start().catch((caught: unknown) => caught)
 					expect(isBrowserError(error)).toBe(true)
-					expect(readProperty(error, 'code')).toBe('BROWSER_TOOLSET_RESERVED')
+					expect(readProperty(error, 'code')).toBe('TOOLSET_RESERVED')
 					expect(readProperty(error, 'context')).toEqual({ name })
 					expect(tools.tools()).toEqual([foreign])
 				}
@@ -1046,7 +1045,7 @@ describe('BrowserToolset', () => {
 						'Browser toolset limit must be a positive integer',
 					)
 					expect(captureError(() => createBrowserToolset(page, { limit }))).toMatchObject({
-						code: 'BROWSER_TOOLSET_ARGUMENT',
+						code: 'TOOLSET_ARGUMENT',
 					})
 				}
 			} finally {
@@ -1335,7 +1334,7 @@ describe('BrowserToolset', () => {
 					staged.execute({ accept: true }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(refused, 'message')).toBe('No dialog is open; call read.')
-				expect(readProperty(refused, 'code')).toBe('BROWSER_TOOLSET_DIALOG')
+				expect(readProperty(refused, 'code')).toBe('TOOLSET_DIALOG')
 			} finally {
 				await client.close()
 			}
@@ -1463,11 +1462,13 @@ describe('BrowserToolset', () => {
 					success: false,
 					error: 'Reference "x12" is not a reference such as e12; call read for fresh refs.',
 				})
-				expect(isBrowserElementError(copy.fault) && copy.fault.code).toBe('BROWSER_ELEMENT_ERROR')
+				expect(isBrowserError(copy.fault) && copy.fault.code === 'ELEMENT' && copy.fault.code).toBe(
+					'ELEMENT',
+				)
 				expect(copy.fault).toBe(performed.fault)
 				expect(JSON.parse(JSON.stringify(copy))).toHaveProperty('fault', {
-					name: 'BrowserElementError',
-					code: 'BROWSER_ELEMENT_ERROR',
+					name: 'BrowserError',
+					code: 'ELEMENT',
 					context: { subject: 'Reference "x12"', reason: 'UNKNOWN' },
 				})
 				const rejected = await Promise.resolve(
@@ -1475,7 +1476,9 @@ describe('BrowserToolset', () => {
 						signal: new AbortController().signal,
 					}),
 				).catch((error: unknown) => error)
-				expect(isBrowserElementError(rejected) && rejected.code).toBe('BROWSER_ELEMENT_ERROR')
+				expect(isBrowserError(rejected) && rejected.code === 'ELEMENT' && rejected.code).toBe(
+					'ELEMENT',
+				)
 				const reading = await toolset.perform({ id: 'read', name: 'read', arguments: { from: 1 } })
 				expect(reading.result.success).toBe(true)
 				expect(reading).not.toHaveProperty('fault')
@@ -1502,7 +1505,7 @@ describe('BrowserToolset', () => {
 				},
 			).toEqual({
 				message: 'Element e1 button "Save" takes no text; call click for a button.',
-				code: 'BROWSER_TOOLSET_ROLE',
+				code: 'TOOLSET_ROLE',
 				context: { reference: 'e1', role: 'button' },
 			})
 			expect(view.calls).toEqual([])
@@ -2203,7 +2206,7 @@ describe('BrowserToolset', () => {
 					read.execute({ from: 1, search: 'cart' }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(after, 'message')).toBe('the browser session ended')
-				expect(readProperty(after, 'code')).toBe('BROWSER_TOOLSET_ENDED')
+				expect(readProperty(after, 'code')).toBe('TOOLSET_ENDED')
 				expect(
 					readProperty(await toolset.start().catch((caught: unknown) => caught), 'message'),
 				).toBe('the browser session ended')
@@ -2343,7 +2346,7 @@ describe('BrowserToolset', () => {
 					refusals.map((start) => start.catch((caught: unknown) => caught)),
 				)
 				expect(first).toBe(second)
-				expect(readProperty(first, 'code')).toBe('BROWSER_TOOLSET_RESERVED')
+				expect(readProperty(first, 'code')).toBe('TOOLSET_RESERVED')
 				tools.remove('wait')
 				const starts = [toolset.start(), toolset.start()]
 				expect(starts[0]).toBe(starts[1])
@@ -3024,7 +3027,7 @@ describe('BrowserToolset', () => {
 				expect(isBrowserError(error)).toBe(true)
 				expect(error).toMatchObject({
 					name: 'BrowserStepError',
-					code: 'BROWSER_STEP_ERROR',
+					code: 'STEP',
 					message: 's1: "Saved" did not appear within 0.01 s.',
 					context: { step: 's1' },
 					action: {
@@ -3038,7 +3041,7 @@ describe('BrowserToolset', () => {
 				expect(isBrowserStepError(error) ? error.action : undefined).toEqual(
 					performed.calls[0]?.[0],
 				)
-				expect(isBrowserStepError(new BrowserError('s1: refused'))).toBe(false)
+				expect(isBrowserStepError(new BrowserError('ARGUMENT', 's1: refused'))).toBe(false)
 				expect(isBrowserStepError(performed.calls[0]?.[0])).toBe(false)
 			} finally {
 				await toolset.destroy()
@@ -3155,7 +3158,7 @@ describe('BrowserToolset', () => {
 				await expect(
 					toolset.follow('s0', { action: 'press', arguments: { key: 'Escape' } }),
 				).rejects.toMatchObject({
-					code: 'BROWSER_STEP_ERROR',
+					code: 'STEP',
 					message: 's0: The toolset is replaying add-kettle until it finishes; call read.',
 					action: { action: 'press', outcome: 'refused' },
 				})
@@ -3205,7 +3208,7 @@ describe('BrowserToolset', () => {
 						target: { role: 'button', name: 'Add to cart' },
 					}),
 				).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_TARGET',
+					code: 'JOURNEY_TARGET',
 					message:
 						'Step s3 names button "Add to cart", which no element carries; call edit to remove or replace s3.',
 				})
@@ -3216,7 +3219,7 @@ describe('BrowserToolset', () => {
 						target: { role: 'button', name: { parameter: 'label' } },
 					}),
 				).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_INPUT',
+					code: 'JOURNEY_INPUT',
 					message: 'Step s6 binds its target name to parameter "label"; pass the name itself.',
 					context: { step: 's6', parameter: 'label' },
 				})
@@ -3257,7 +3260,7 @@ describe('BrowserToolset', () => {
 				await expect(
 					toolset.follow('s3', { action: 'click', arguments: {}, target }),
 				).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_AMBIGUOUS',
+					code: 'JOURNEY_AMBIGUOUS',
 					message:
 						'Step s3 names button "Delete", which 2 elements carry; call edit to remove or replace s3.',
 				})
@@ -3392,7 +3395,7 @@ describe('BrowserToolset', () => {
 						tab: { title: 'Cart', url: 'about:blank' },
 					}),
 				).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_AMBIGUOUS',
+					code: 'JOURNEY_AMBIGUOUS',
 					message: 's3: The tab "Cart" at about:blank is ambiguous; call read.',
 				})
 				for (const tab of [
@@ -3402,7 +3405,7 @@ describe('BrowserToolset', () => {
 					await expect(
 						toolset.follow('s4', { action: 'switch', arguments: {}, tab }),
 					).rejects.toMatchObject({
-						code: 'BROWSER_JOURNEY_TARGET',
+						code: 'JOURNEY_TARGET',
 						message: `s4: The tab ${JSON.stringify(tab.title)} at ${tab.url} is not open; call read.`,
 					})
 				expect(fronted()).toBe(0)
@@ -3440,17 +3443,17 @@ describe('BrowserToolset', () => {
 					{ type: 'alert', message: 'Saved' },
 					'session-tab-4',
 				)
-				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_DIALOG' })
+				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'TOOLSET_DIALOG' })
 				await expect(
 					toolset.follow('s7', {
 						action: 'switch',
 						arguments: {},
 						tab: { title: 'Orders', url: 'about:blank' },
 					}),
-				).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_DIALOG' })
+				).rejects.toMatchObject({ code: 'TOOLSET_DIALOG' })
 				expect(fronted()).toBe(2)
 				await toolset.destroy()
-				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ENDED' })
+				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'TOOLSET_ENDED' })
 				const viewless = createBrowserToolset(first)
 				await viewless.start()
 				expect(await viewless.tabs()).toStrictEqual([])
@@ -3521,7 +3524,7 @@ describe('BrowserToolset', () => {
 						journeys: { store: createMemoryBrowserJourneyStore() },
 					}),
 			)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_TOOLSET_RESERVED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('TOOLSET_RESERVED')
 			expect(readProperty(refusal, 'context')).toEqual({ name: 'replay' })
 			expect(tools.tools()).toEqual([held])
 		})

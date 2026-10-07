@@ -29,28 +29,28 @@ try {
 	] as const) {
 		if (value !== undefined && value !== '' && parsed === undefined) {
 			throw new BrowserError(
+				'SERVER_ENVIRONMENT',
 				`${name} must be true, false, 1, or 0, not ${JSON.stringify(value)}`,
-				'BROWSER_SERVER_ENVIRONMENT',
 				{ name, value },
 			)
 		}
 	}
 	if (BROWSE_POOL !== undefined && BROWSE_POOL !== '' && size === undefined)
 		throw new BrowserError(
+			'SERVER_ENVIRONMENT',
 			`BROWSE_POOL must be an integer, not ${JSON.stringify(BROWSE_POOL)}`,
-			'BROWSER_SERVER_ENVIRONMENT',
 			{ name: 'BROWSE_POOL', value: BROWSE_POOL },
 		)
 	if (BROWSE_VIEWPORT !== undefined && BROWSE_VIEWPORT !== '' && viewport === undefined)
 		throw new BrowserError(
+			'SERVER_ENVIRONMENT',
 			`BROWSE_VIEWPORT must be positive integers in WIDTHxHEIGHT form, not ${JSON.stringify(BROWSE_VIEWPORT)}`,
-			'BROWSER_SERVER_ENVIRONMENT',
 			{ name: 'BROWSE_VIEWPORT', value: BROWSE_VIEWPORT },
 		)
 	if (BROWSE_CONTEXTS !== undefined && BROWSE_CONTEXTS !== '' && contexts === undefined)
 		throw new BrowserError(
+			'SERVER_ENVIRONMENT',
 			`BROWSE_CONTEXTS must be an integer, not ${JSON.stringify(BROWSE_CONTEXTS)}`,
-			'BROWSER_SERVER_ENVIRONMENT',
 			{ name: 'BROWSE_CONTEXTS', value: BROWSE_CONTEXTS },
 		)
 	await createBrowserMCPServer({

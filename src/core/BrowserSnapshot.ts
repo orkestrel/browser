@@ -127,8 +127,8 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 	filter(query: BrowserNodeQuery | BrowserNodePredicate, limit?: number): readonly BrowserNode[] {
 		if (limit !== undefined && (!isInteger(limit) || limit < 0)) {
 			throw new BrowserError(
+				'ARGUMENT',
 				'Browser node result limit must be a non-negative integer',
-				undefined,
 				{
 					limit,
 				},

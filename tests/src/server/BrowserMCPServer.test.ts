@@ -37,7 +37,6 @@ import {
 	BROWSER_TOOL_COPY,
 	createBrowserToolset,
 	BrowserError,
-	CDPError,
 } from '@src/core'
 import {
 	createBrowser,
@@ -134,14 +133,14 @@ describe('holders H3 journey admission', () => {
 			])
 			const refused = await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })
 			expect(refused.error).toBe(true)
-			expect(refused.text).toContain('BROWSER_JOURNEY_LOCKED')
+			expect(refused.text).toContain('JOURNEY_LOCKED')
 			const directories = readdirSync(join(fixture.root, 'check-ready', 'runs'))
 			expect(directories).toHaveLength(2)
 			expect(new Set(directories).size).toBe(2)
 			firstRelease.resolve()
 			expect((await a).error).toBe(false)
 			expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).text).toContain(
-				'BROWSER_JOURNEY_LOCKED',
+				'JOURNEY_LOCKED',
 			)
 			release.resolve()
 			for (const result of await Promise.all([a, b])) {
@@ -475,7 +474,7 @@ describe('holders H2', () => {
 				arguments: { from: 1, search: 'after refill' },
 			})
 			expect(next.error).toBe(false)
-			expect(next.text).toContain('BROWSER_SERVER_CRASH')
+			expect(next.text).toContain('SERVER_CRASH')
 		} finally {
 			hook.disable()
 			fixture.launcher.release()
@@ -638,7 +637,7 @@ describe('holders H2', () => {
 			})
 			const busy = await fixture.pair.call(3, 'acquire', { purpose: 'overflow' })
 			expect(busy.error).toBe(true)
-			expect(busy.text).toMatch(/^BROWSER_SERVER_BUSY:/)
+			expect(busy.text).toMatch(/^SERVER_BUSY:/)
 			expect(busy.text).toContain('shared (Shared browser)')
 			expect(busy.text).toMatch(/[0-9a-f-]{36} \(held checkout\)/)
 			expect(busy.text).toContain('destroy')
@@ -699,11 +698,11 @@ describe('holders H2', () => {
 				})
 				const busy = JSON.stringify(await fixture.pair.answer(5))
 				expect(busy).toContain(`${String(holder)} (closing checkout)`)
-				expect(busy).toContain('BROWSER_SERVER_BUSY')
+				expect(busy).toContain('SERVER_BUSY')
 			} finally {
 				disposal.destroy()
 			}
-			expect(JSON.stringify(await fixture.pair.answer(3))).toContain('BROWSER_SERVER_UNRESOLVED')
+			expect(JSON.stringify(await fixture.pair.answer(3))).toContain('SERVER_UNRESOLVED')
 			expect(transport.sent.some((message) => message.params?.['awaitPromise'] === true)).toBe(true)
 			expect((await fixture.pair.answer(4))['isError']).not.toBe(true)
 			expect((await fixture.pair.call(6, 'destroy', { holder })).error).toBe(false)
@@ -733,7 +732,7 @@ describe('holders H2', () => {
 						arguments: { from: 1, search: 'cart' },
 					})
 					expect(result.error).toBe(true)
-					expect(result.text).toContain('BROWSER_SERVER_HOLDER')
+					expect(result.text).toContain('SERVER_HOLDER')
 				}
 			}
 			expect((await fixture.pair.call(id++, 'destroy', { holder: 'absent' })).error).toBe(true)
@@ -775,7 +774,7 @@ describe('holders H2', () => {
 			const acquired = await retryUntil(
 				'cancelled holder disposal settled',
 				() => fixture.pair.call(id++, 'acquire', { purpose: 'replacement' }),
-				(result) => !result.text.includes('BROWSER_SERVER_BUSY'),
+				(result) => !result.text.includes('SERVER_BUSY'),
 			)
 			expect(acquired.error).toBe(false)
 			expect(fixture.launcher.browsers).toHaveLength(2)
@@ -797,7 +796,7 @@ describe('holders H2', () => {
 				params: { name: 'acquire', arguments: { purpose: 'cancelled' } },
 			})
 			expect((await fixture.pair.call(3, 'acquire', { purpose: 'capacity check' })).text).toContain(
-				'BROWSER_SERVER_BUSY',
+				'SERVER_BUSY',
 			)
 			fixture.pair.send({
 				jsonrpc: '2.0',
@@ -845,13 +844,13 @@ describe('holders H2', () => {
 				arguments: { from: 1, search: 'cart' },
 			})
 			expect(healthy.error).toBe(false)
-			expect(healthy.text).not.toContain('BROWSER_SERVER_CRASH')
+			expect(healthy.text).not.toContain('SERVER_CRASH')
 			expect((await fixture.pair.call(6, 'read', { from: 1, search: 'cart' })).text).not.toContain(
-				'BROWSER_SERVER_CRASH',
+				'SERVER_CRASH',
 			)
 			expect(fixture.pair.answered).not.toContain(4)
 			fixture.launcher.release()
-			expect(JSON.stringify(await fixture.pair.answer(4))).toContain('BROWSER_SERVER_CRASH')
+			expect(JSON.stringify(await fixture.pair.answer(4))).toContain('SERVER_CRASH')
 			expect(
 				(
 					await fixture.pair.call(7, 'execute', {
@@ -860,7 +859,7 @@ describe('holders H2', () => {
 						arguments: { from: 1, search: 'cart' },
 					})
 				).text,
-			).not.toContain('BROWSER_SERVER_CRASH')
+			).not.toContain('SERVER_CRASH')
 		} finally {
 			fixture.launcher.release()
 			await fixture.teardown.destroy()
@@ -988,7 +987,7 @@ describe('holders H2 continuations', () => {
 			expect(successor.destroyed).toBe(false)
 			expect(
 				(await fixture.pair.call(6, 'read', { from: 1, search: 'shared' })).text,
-			).not.toContain('BROWSER_SERVER_CRASH')
+			).not.toContain('SERVER_CRASH')
 		} finally {
 			version.resolve()
 			await fixture.teardown.destroy()
@@ -1071,8 +1070,8 @@ describe('eager U7', () => {
 				const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
 				expect(answer.text).toContain(
 					loss === 'drop'
-						? 'BROWSER_SERVER_CRASH: The browser transport disconnected.'
-						: 'BROWSER_SERVER_CRASH: The browser process exited.',
+						? 'SERVER_CRASH: The browser transport disconnected.'
+						: 'SERVER_CRASH: The browser process exited.',
 				)
 			} finally {
 				child.kill()
@@ -1120,7 +1119,7 @@ describe('eager U7', () => {
 			)
 			const answer = await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })
 			expect(answer.error).toBe(false)
-			expect(answer.text).toContain('BROWSER_SERVER_CRASH:')
+			expect(answer.text).toContain('SERVER_CRASH:')
 			expect(fixture.pair.answered).not.toContain(2)
 		} finally {
 			await fixture.teardown.destroy()
@@ -1139,13 +1138,13 @@ describe('eager U7', () => {
 		)
 		try {
 			await expect(fixture.server.start()).rejects.toMatchObject({
-				code: 'BROWSER_SERVER_UNAVAILABLE',
+				code: 'SERVER_UNAVAILABLE',
 				message: 'The browser process exited.',
 			})
 			expect(pinged).toBe(true)
 			expect(commit.resolved).toContain('Pool.#commit')
 			expect(await fixture.pair.initialize()).toMatchObject({
-				message: 'BROWSER_SERVER_UNAVAILABLE: The browser process exited.',
+				message: 'SERVER_UNAVAILABLE: The browser process exited.',
 			})
 			expect((await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })).error).toBe(true)
 		} finally {
@@ -1166,11 +1165,11 @@ describe('eager U7', () => {
 				const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
 				expect(grant.resolved).toContain('BrowserMCPServer.#grant')
 				expect(answer.error).toBe(true)
-				expect(answer.text.match(/BROWSER_SERVER_CRASH:/g)).toHaveLength(2)
-				expect(answer.text).toMatch(/\nBROWSER_SERVER_UNAVAILABLE:/)
+				expect(answer.text.match(/SERVER_CRASH:/g)).toHaveLength(2)
+				expect(answer.text).toMatch(/\nSERVER_UNAVAILABLE:/)
 				expect(
 					(await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })).text,
-				).not.toContain('BROWSER_SERVER_CRASH')
+				).not.toContain('SERVER_CRASH')
 			} finally {
 				grant.destroy()
 			}
@@ -1202,7 +1201,7 @@ describe('eager U7', () => {
 				expect(fixture.launcher.browsers[0]?.destroyed).toBe(true)
 				expect(clicked.text).not.toContain('UNRESOLVED')
 				expect((await fixture.pair.call(4, 'read', { from: 1, search: 'cart' })).text).toMatch(
-					/BROWSER_SERVER_CRASH:/,
+					/SERVER_CRASH:/,
 				)
 			} finally {
 				result.destroy()
@@ -1244,12 +1243,12 @@ describe('eager U7', () => {
 		try {
 			await fixture.server.start()
 			const answer = await fixture.pair.call(2, 'wait', { text: 'never arrives' })
-			expect(answer.text).toMatch(/^BROWSER_SERVER_UNRESOLVED:/)
+			expect(answer.text).toMatch(/^SERVER_UNRESOLVED:/)
 			expect(answer.text).toContain('The outcome is unknown')
 			expect(answer.text).toContain('Browse did not repeat the call')
 			const next = await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })
 			expect(next.error).toBe(false)
-			expect(next.text).toContain('BROWSER_SERVER_CRASH:')
+			expect(next.text).toContain('SERVER_CRASH:')
 			expect(fixture.launcher.browsers).toHaveLength(2)
 		} finally {
 			await fixture.teardown.destroy()
@@ -1262,10 +1261,10 @@ describe('eager U7', () => {
 			await fixture.server.start()
 			const result = await fixture.pair.call(2, 'click', { ref: 'e9999' })
 			expect(result.error).toBe(true)
-			expect(result.text).not.toContain('BROWSER_SERVER_')
+			expect(result.text).not.toContain('SERVER_')
 			expect(fixture.launcher.browsers).toHaveLength(1)
 			expect((await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })).text).not.toContain(
-				'BROWSER_SERVER_CRASH',
+				'SERVER_CRASH',
 			)
 		} finally {
 			await fixture.teardown.destroy()
@@ -1317,7 +1316,7 @@ describe('eager U7', () => {
 			expect(page.emitter.count('crash')).toBe(1)
 			const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
 			expect(answer.error).toBe(false)
-			expect(answer.text).toMatch(/BROWSER_SERVER_CRASH: second ping refused/)
+			expect(answer.text).toMatch(/SERVER_CRASH: second ping refused/)
 			expect(lost.emitter.count('disconnect')).toBe(0)
 			expect(context.emitter.count('page')).toBe(0)
 			expect(page.emitter.count('crash')).toBe(0)
@@ -1372,7 +1371,7 @@ describe('eager U7', () => {
 			expect(late.emitter.count('crash')).toBe(1)
 			late.emitter.emit('crash')
 			const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
-			expect(answer.text).not.toContain('BROWSER_SERVER_CRASH:')
+			expect(answer.text).not.toContain('SERVER_CRASH:')
 			expect(browser.destroyed).toBe(false)
 			browser.kill()
 			expect(late.emitter.count('crash')).toBe(0)
@@ -1417,7 +1416,7 @@ describe('eager U7', () => {
 			fixture.launcher.release()
 			const result = await call
 			expect(result.error).toBe(false)
-			expect(result.text).toContain('BROWSER_SERVER_CRASH:')
+			expect(result.text).toContain('SERVER_CRASH:')
 			await waitForCondition(
 				'T2 grant reset refills the floor',
 				() => fixture.launcher.browsers.length === 5,
@@ -1438,8 +1437,8 @@ describe('eager U7', () => {
 			browser.kill()
 			const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
 			expect(answer.error).toBe(true)
-			expect(answer.text).toContain('BROWSER_SERVER_CRASH:')
-			expect(answer.text).toMatch(/\nBROWSER_SERVER_UNAVAILABLE:.*termination is unconfirmed/)
+			expect(answer.text).toContain('SERVER_CRASH:')
+			expect(answer.text).toMatch(/\nSERVER_UNAVAILABLE:.*termination is unconfirmed/)
 			expect(fixture.launcher.browsers).toHaveLength(1)
 			expect(existsSync(profile)).toBe(true)
 			fixture.pair.input.end()
@@ -1466,7 +1465,7 @@ describe('eager U7', () => {
 			requireValue(fixture.launcher.browsers[0], 'lease').kill()
 			const result = await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
 			expect(result.error).toBe(false)
-			expect(result.text).toContain('BROWSER_SERVER_CRASH:')
+			expect(result.text).toContain('SERVER_CRASH:')
 			expect(fixture.launcher.browsers).toHaveLength(2)
 			expect(fixture.log.lines.filter((line) => line.includes('TEARDOWN'))).toHaveLength(1)
 			await expect(fixture.server.destroy()).rejects.toThrow('teardown failed')
@@ -1479,12 +1478,12 @@ describe('eager U7', () => {
 		const fixture = createBrowseFixture(undefined, { survivors: 1, broken: 1 })
 		try {
 			await expect(fixture.server.start()).rejects.toMatchObject({
-				code: 'BROWSER_SERVER_UNAVAILABLE',
+				code: 'SERVER_UNAVAILABLE',
 				message: 'The fixture termination is unconfirmed.',
 			})
 			const initialized = await fixture.pair.initialize()
 			expect(initialized).toMatchObject({
-				message: 'BROWSER_SERVER_UNAVAILABLE: The fixture termination is unconfirmed.',
+				message: 'SERVER_UNAVAILABLE: The fixture termination is unconfirmed.',
 			})
 			expect(fixture.launcher.browsers).toHaveLength(1)
 			await expect(fixture.server.destroy()).rejects.toMatchObject({
@@ -1507,10 +1506,10 @@ describe('eager U7', () => {
 			await waitForCondition('held wait evaluation', () => held.count > 0)
 			requireValue(fixture.launcher.browsers[0], 'lease').kill()
 			const next = await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })
-			expect(next.text).toContain('BROWSER_SERVER_CRASH:')
-			expect((await pending).text).toMatch(/^BROWSER_SERVER_UNRESOLVED:/)
+			expect(next.text).toContain('SERVER_CRASH:')
+			expect((await pending).text).toMatch(/^SERVER_UNRESOLVED:/)
 			expect((await fixture.pair.call(4, 'read', { from: 1, search: 'cart' })).text).not.toContain(
-				'BROWSER_SERVER_CRASH',
+				'SERVER_CRASH',
 			)
 		} finally {
 			await fixture.teardown.destroy()
@@ -1576,18 +1575,18 @@ describe('eager U6', () => {
 			)
 			try {
 				await expect(fixture.server.start()).rejects.toMatchObject({
-					code: 'BROWSER_SERVER_UNAVAILABLE',
+					code: 'SERVER_UNAVAILABLE',
 					message: expect.stringContaining('The fixture refused the launch'),
 				})
 				const initialized = await fixture.pair.initialize()
 				expect(initialized).toMatchObject({
 					code: -32000,
-					data: { code: 'BROWSER_SERVER_UNAVAILABLE' },
+					data: { code: 'SERVER_UNAVAILABLE' },
 				})
 				expect(JSON.stringify(initialized).match(/The fixture refused the launch/g)).toHaveLength(1)
 				const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
 				expect(answer.error).toBe(true)
-				expect(answer.text.match(/BROWSER_SERVER_UNAVAILABLE/g)).toHaveLength(1)
+				expect(answer.text.match(/SERVER_UNAVAILABLE/g)).toHaveLength(1)
 				expect(answer.text.match(/The fixture refused the launch/g)).toHaveLength(1)
 				const modern = await fixture.pair.request(3, 'tools/call', {
 					name: 'read',
@@ -1597,12 +1596,12 @@ describe('eager U6', () => {
 						'io.modelcontextprotocol/clientCapabilities': {},
 					},
 				})
-				expect(JSON.stringify(modern).match(/BROWSER_SERVER_UNAVAILABLE/g)).toHaveLength(1)
+				expect(JSON.stringify(modern).match(/SERVER_UNAVAILABLE/g)).toHaveLength(1)
 				expect(JSON.stringify(modern).match(/The fixture refused the launch/g)).toHaveLength(1)
 				expect(fixture.launcher.browsers).toHaveLength(2)
 				expect(fixture.log.lines).toEqual([
-					'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
-					'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+					'browse: SERVER_LAUNCH: The fixture refused the launch.\n',
+					'browse: SERVER_LAUNCH: The fixture refused the launch.\n',
 				])
 			} finally {
 				await fixture.teardown.destroy()
@@ -1624,18 +1623,15 @@ describe('eager U6', () => {
 			requireValue(fixture.launcher.browsers[1], 'spare').kill()
 			await waitForCondition(
 				'post-setup replacement bound spent',
-				() =>
-					fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:')).length === 1,
+				() => fixture.log.lines.filter((line) => line.includes('SERVER_LAUNCH:')).length === 1,
 			)
 			expect((await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })).error).toBe(false)
 			expect(fixture.launcher.browsers).toHaveLength(3)
 			expect(fixture.launcher.browsers[0]?.destroyed).toBe(false)
-			expect(fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:'))).toEqual([
-				'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+			expect(fixture.log.lines.filter((line) => line.includes('SERVER_LAUNCH:'))).toEqual([
+				'browse: SERVER_LAUNCH: The fixture refused the launch.\n',
 			])
-			expect(
-				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_EXHAUSTED:')),
-			).toEqual([])
+			expect(fixture.log.lines.filter((line) => line.includes('SERVER_EXHAUSTED:'))).toEqual([])
 		} finally {
 			await fixture.teardown.destroy()
 		}
@@ -1653,13 +1649,11 @@ describe('eager U6', () => {
 			)
 			expect(fixture.launcher.browsers).toHaveLength(3)
 			expect(fixture.log.lines.filter((line) => line.includes('EXHAUSTED'))).toHaveLength(1)
-			expect(fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:'))).toEqual([
-				'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
-				'browse: BROWSER_SERVER_LAUNCH: The fixture refused the launch.\n',
+			expect(fixture.log.lines.filter((line) => line.includes('SERVER_LAUNCH:'))).toEqual([
+				'browse: SERVER_LAUNCH: The fixture refused the launch.\n',
+				'browse: SERVER_LAUNCH: The fixture refused the launch.\n',
 			])
-			expect(fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_UNAVAILABLE:'))).toBe(
-				false,
-			)
+			expect(fixture.log.lines.some((line) => line.includes('SERVER_UNAVAILABLE:'))).toBe(false)
 			expect((await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })).error).toBe(false)
 			expect(fixture.launcher.browsers[0]?.destroyed).toBe(false)
 		} finally {
@@ -1667,7 +1661,7 @@ describe('eager U6', () => {
 		}
 	})
 	it('names a pid-bearing launch failure in the unavailable response', async () => {
-		const failure = new BrowserError('termination unconfirmed', 'BROWSER_FIXTURE', {
+		const failure = new BrowserError('PROTOCOL', 'termination unconfirmed', {
 			pid: process.pid,
 		})
 		const fixture = createBrowseFixture({
@@ -1697,8 +1691,7 @@ describe('eager U6', () => {
 		try {
 			await waitForCondition(
 				'both spare refusals',
-				() =>
-					fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:')).length === 2,
+				() => fixture.log.lines.filter((line) => line.includes('SERVER_LAUNCH:')).length === 2,
 			)
 			expect(fixture.launcher.browsers).toHaveLength(3)
 			version.resolve()
@@ -1709,12 +1702,8 @@ describe('eager U6', () => {
 			await fixture.pair.request(10, 'ping')
 			expect(fixture.launcher.browsers).toHaveLength(3)
 			expect(fixture.log.lines.filter((line) => line.includes('EXHAUSTED'))).toHaveLength(1)
-			expect(
-				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_LAUNCH:')),
-			).toHaveLength(2)
-			expect(fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_UNAVAILABLE:'))).toBe(
-				false,
-			)
+			expect(fixture.log.lines.filter((line) => line.includes('SERVER_LAUNCH:'))).toHaveLength(2)
+			expect(fixture.log.lines.some((line) => line.includes('SERVER_UNAVAILABLE:'))).toBe(false)
 		} finally {
 			version.resolve()
 			await fixture.teardown.destroy()
@@ -1732,7 +1721,7 @@ describe('eager U6', () => {
 			await fixture.server.start()
 			for (const id of [2, 3, 4]) {
 				expect((await fixture.pair.call(id, 'read', { from: 1, search: 'cart' })).text).toMatch(
-					/^BROWSER_SERVER_UNAVAILABLE:/m,
+					/^SERVER_UNAVAILABLE:/m,
 				)
 				expect(fixture.launcher.browsers).toHaveLength(3)
 			}
@@ -1792,7 +1781,7 @@ describe('eager U6', () => {
 	for (const size of [0, 4, 1.5, -1, NaN, Infinity]) {
 		it(`refuses pool size ${size}`, () => {
 			expect(() => createBrowserMCPServer({ pool: { contexts: 1, size } })).toThrow(
-				expect.objectContaining({ code: 'BROWSER_SERVER_OPTIONS' }),
+				expect.objectContaining({ code: 'SERVER_OPTIONS' }),
 			)
 		})
 	}
@@ -1859,7 +1848,7 @@ describe('eager U6', () => {
 		try {
 			await fixture.server.destroy()
 			expect(existsSync(fixture.root)).toBe(false)
-			await expect(fixture.server.start()).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ENDED' })
+			await expect(fixture.server.start()).rejects.toMatchObject({ code: 'TOOLSET_ENDED' })
 		} finally {
 			await fixture.teardown.destroy()
 		}
@@ -1878,7 +1867,7 @@ describe('eager U6', () => {
 			await expect(fixture.server.start()).rejects.toThrow(String(code))
 			expect(await fixture.pair.initialize()).toMatchObject({
 				code: -32000,
-				data: { code: 'BROWSER_SERVER_UNAVAILABLE' },
+				data: { code: 'SERVER_UNAVAILABLE' },
 			})
 			const answer = await fixture.pair.request(2, 'tools/call', {
 				name: 'read',
@@ -1888,7 +1877,7 @@ describe('eager U6', () => {
 					'io.modelcontextprotocol/clientCapabilities': {},
 				},
 			})
-			expect(JSON.stringify(answer)).toContain('BROWSER_SERVER_UNAVAILABLE:')
+			expect(JSON.stringify(answer)).toContain('SERVER_UNAVAILABLE:')
 			await fixture.server.destroy()
 		} finally {
 			await fixture.teardown.destroy()
@@ -2108,7 +2097,7 @@ describe('eager U6', () => {
 			await waitForDelay(timeout / 2)
 			const joined = performance.now()
 			const next = await client.call('read', { from: 1, search: 'cart' })
-			expect(JSON.stringify(next)).toContain('BROWSER_SERVER_CRASH:')
+			expect(JSON.stringify(next)).toContain('SERVER_CRASH:')
 			expect(performance.now() - joined).toBeLessThan(timeout * 0.8)
 			expect(
 				transport.sent.filter((message) => message.method === 'Browser.getVersion'),
@@ -2203,11 +2192,9 @@ describe('eager U6', () => {
 			await fixture.server.start()
 			expect(await fixture.pair.initialize()).toHaveProperty('serverInfo')
 			await waitForCondition('sweep failure line', () =>
-				fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_SWEEP')),
+				fixture.log.lines.some((line) => line.includes('SERVER_SWEEP')),
 			)
-			expect(
-				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_SWEEP')),
-			).toHaveLength(1)
+			expect(fixture.log.lines.filter((line) => line.includes('SERVER_SWEEP'))).toHaveLength(1)
 		} finally {
 			chmodSync(profiles, 0o700)
 			await fixture.teardown.destroy()
@@ -2222,11 +2209,9 @@ describe('eager U6', () => {
 			fixture.pair.input.on('end', () => process.emit('SIGTERM'))
 			fixture.pair.input.end()
 			await waitForCondition('teardown line', () =>
-				fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_TEARDOWN')),
+				fixture.log.lines.some((line) => line.includes('SERVER_TEARDOWN')),
 			)
-			expect(
-				fixture.log.lines.filter((line) => line.includes('BROWSER_SERVER_TEARDOWN')),
-			).toHaveLength(1)
+			expect(fixture.log.lines.filter((line) => line.includes('SERVER_TEARDOWN'))).toHaveLength(1)
 			expect(process.exitCode).toBe(1)
 			await expect(fixture.server.destroy()).rejects.toMatchObject({ errors: [failure] })
 		} finally {
@@ -2247,7 +2232,7 @@ describe('eager U6', () => {
 		const fixture = createBrowseFixture({ log }, { failures: 2 })
 		try {
 			await expect(fixture.server.start()).rejects.toMatchObject({
-				code: 'BROWSER_SERVER_UNAVAILABLE',
+				code: 'SERVER_UNAVAILABLE',
 			})
 			await expect(fixture.server.destroy()).rejects.toMatchObject({ errors: [failure] })
 			await waitForDelay()
@@ -2272,7 +2257,7 @@ describe('eager U6', () => {
 		const fixture = createBrowseFixture({ log }, { failures: 2 })
 		try {
 			await expect(fixture.server.start()).rejects.toMatchObject({
-				code: 'BROWSER_SERVER_UNAVAILABLE',
+				code: 'SERVER_UNAVAILABLE',
 			})
 			await expect(fixture.server.destroy()).rejects.toMatchObject({
 				errors: expect.arrayContaining([expect.objectContaining({ code: 'ERR_STREAM_DESTROYED' })]),
@@ -2769,7 +2754,7 @@ describe('BrowserMCPServer', () => {
 			const pair = new MCPStdioPair()
 			const server = createBrowserMCPServer({ launch: new BrowserLauncher().launch, stdio: pair })
 			await server.destroy()
-			await expect(server.start()).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ENDED' })
+			await expect(server.start()).rejects.toMatchObject({ code: 'TOOLSET_ENDED' })
 			expect(pair.input.listenerCount('data')).toBe(0)
 		})
 	})
@@ -2871,7 +2856,7 @@ describe('C1 context ownership', () => {
 				expect(sibling.closed).toBe(false)
 				expect(
 					(await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })).text,
-				).not.toContain('BROWSER_SERVER_CRASH')
+				).not.toContain('SERVER_CRASH')
 			} finally {
 				await rm(directory, { force: true })
 				if (existsSync(moved)) await rename(moved, directory)
@@ -2943,10 +2928,10 @@ describe('C1 context ownership', () => {
 			const successor = requireValue(fixture.launcher.browsers[0]?.context(2)?.page())
 			expect(successor.closed).toBe(false)
 			transport.reply(ping.id, {})
-			expect((await call).text).toContain('BROWSER_SERVER_UNRESOLVED')
+			expect((await call).text).toContain('SERVER_UNRESOLVED')
 			const result = await fixture.pair.call(5, 'tools', { holder: acquired['holder'] })
 			expect(result.error).toBe(false)
-			expect(result.text).not.toContain('BROWSER_SERVER_CRASH')
+			expect(result.text).not.toContain('SERVER_CRASH')
 			expect(parseJSON(result.text)).toEqual(acquired)
 			expect(successor.closed).toBe(false)
 			expect(fixture.launcher.browsers[0]?.contexts()).toHaveLength(3)
@@ -2977,7 +2962,7 @@ describe('C1 context ownership', () => {
 			request = await pending.promise
 			expect(
 				(await fixture.pair.call(4, 'acquire', { purpose: 'retirement pending' })).text,
-			).toContain('BROWSER_SERVER_BUSY')
+			).toContain('SERVER_BUSY')
 			expect(fixture.pair.answered).not.toContain(3)
 			transport.reply(request.id, {})
 			expect(await ending).toEqual({ error: false, text: 'Holder destroyed.' })
@@ -3015,7 +3000,7 @@ describe('C1 context ownership', () => {
 			expect(await starting).toBeInstanceOf(Error)
 			const outcome = requireValue(context.disposal)
 			if (outcome.confirmed) throw new Error('Expected disposal refusal')
-			expect(outcome.error).toBeInstanceOf(CDPError)
+			expect(outcome.error).toMatchObject({ name: 'BrowserError', code: 'REMOTE' })
 			await expect(fixture.server.destroy()).rejects.toMatchObject({
 				message: 'The browse server teardown failed',
 				errors: expect.arrayContaining([outcome.error]),
@@ -3071,7 +3056,7 @@ describe('C1 context ownership', () => {
 			expect((await acquiring).error).toBe(true)
 			const outcome = requireValue(context.disposal)
 			if (outcome.confirmed) throw new Error('Expected disposal refusal')
-			expect(outcome.error).toBeInstanceOf(CDPError)
+			expect(outcome.error).toMatchObject({ name: 'BrowserError', code: 'REMOTE' })
 			await expect(fixture.server.destroy()).resolves.toBeUndefined()
 		} finally {
 			await peer.close()
@@ -3226,7 +3211,7 @@ describe('C1 context ownership', () => {
 			).toEqual(acquired)
 			const refused = await fixture.pair.call(4, 'acquire', { purpose: 'past default capacity' })
 			expect(refused.error).toBe(true)
-			expect(refused.text).toContain('BROWSER_SERVER_BUSY: shared (Shared browser),')
+			expect(refused.text).toContain('SERVER_BUSY: shared (Shared browser),')
 			expect(refused.text).toContain(`${String(acquired['holder'])} (default named context)`)
 			expect(fixture.launcher.browsers).toHaveLength(1)
 			expect(fixture.launcher.browsers[0]?.contexts()).toHaveLength(2)
@@ -3242,7 +3227,7 @@ describe('C1 context ownership', () => {
 			expect((await fixture.pair.call(2, 'acquire', { purpose: 'first' })).error).toBe(false)
 			expect((await fixture.pair.call(3, 'acquire', { purpose: 'second' })).error).toBe(false)
 			expect((await fixture.pair.call(4, 'acquire', { purpose: 'over bound' })).text).toContain(
-				'BROWSER_SERVER_BUSY',
+				'SERVER_BUSY',
 			)
 			expect(fixture.launcher.browsers.map((browser) => browser.contexts().length)).toEqual([
 				1, 1, 1,
@@ -3278,7 +3263,7 @@ describe('C1 context ownership', () => {
 			await waitForCondition('second reserved construction', () => pending.length === 2)
 			expect(new Set(pending.map((entry) => entry.transport)).size).toBe(2)
 			expect((await fixture.pair.call(5, 'acquire', { purpose: 'over bound' })).text).toContain(
-				'BROWSER_SERVER_BUSY',
+				'SERVER_BUSY',
 			)
 			for (const entry of pending)
 				entry.transport.reply(entry.request.id, { browserContextId: 'reserved-context' })
@@ -3309,20 +3294,18 @@ describe('C1 context ownership', () => {
 				[3, 4, 5].map((id) => fixture.pair.call(id, 'tools', { holder: acquired['holder'] })),
 			)
 			for (const result of results) expect(result.error).toBe(false)
-			expect(results.filter((result) => result.text.includes('BROWSER_SERVER_CRASH'))).toHaveLength(
-				1,
-			)
+			expect(results.filter((result) => result.text.includes('SERVER_CRASH'))).toHaveLength(1)
 			expect(browser.contexts()).toHaveLength(3)
 			expect(context.disposal?.confirmed).toBe(true)
 			expect(sibling.closed).toBe(false)
 			expect(browser.destroyed).toBe(false)
 			expect(
 				(await fixture.pair.call(6, 'read', { from: 1, search: 'sibling' })).text,
-			).not.toContain('BROWSER_SERVER_CRASH')
+			).not.toContain('SERVER_CRASH')
 			page.emitter.emit('crash')
 			expect(
 				(await fixture.pair.call(7, 'tools', { holder: acquired['holder'] })).text,
-			).not.toContain('BROWSER_SERVER_CRASH')
+			).not.toContain('SERVER_CRASH')
 			expect(browser.contexts()).toHaveLength(3)
 		} finally {
 			await fixture.teardown.destroy()
@@ -3359,7 +3342,7 @@ describe('C1 context ownership', () => {
 			browser.kill()
 			browser.kill()
 			expect((await fixture.pair.call(4, 'tools', { holder: other['holder'] })).text).not.toContain(
-				'BROWSER_SERVER_CRASH',
+				'SERVER_CRASH',
 			)
 			await waitForCondition('one refill starts', () => fixture.launcher.browsers.length === 3)
 			fixture.launcher.release()
@@ -3491,7 +3474,7 @@ describe('C1 context ownership', () => {
 				await waitForCondition('retained capacity refuses admission', () =>
 					fixture.pair.answered.includes(4),
 				)
-				expect(JSON.stringify(await fixture.pair.answer(4))).toContain('BROWSER_SERVER_BUSY')
+				expect(JSON.stringify(await fixture.pair.answer(4))).toContain('SERVER_BUSY')
 				expect(browser.destroyed).toBe(false)
 				expect(existsSync(download)).toBe(true)
 			} finally {

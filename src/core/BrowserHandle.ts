@@ -74,7 +74,7 @@ export class BrowserHandle implements BrowserHandleInterface {
 			options,
 		)
 		if (!isRecord(value)) {
-			throw new BrowserError('Browser handle properties did not resolve to an object')
+			throw new BrowserError('PROTOCOL', 'Browser handle properties did not resolve to an object')
 		}
 		return value
 	}
@@ -97,7 +97,7 @@ export class BrowserHandle implements BrowserHandleInterface {
 	}
 
 	#assert(): void {
-		if (this.#disposed) throw new BrowserError('Browser handle is disposed')
-		if (!this.#client.connected) throw new BrowserError('Browser handle is disconnected')
+		if (this.#disposed) throw new BrowserError('CLOSED', 'Browser handle is disposed')
+		if (!this.#client.connected) throw new BrowserError('CLOSED', 'Browser handle is disconnected')
 	}
 }

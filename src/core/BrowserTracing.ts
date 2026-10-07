@@ -40,7 +40,7 @@ export class BrowserTracing implements BrowserTracingInterface {
 	}
 
 	async start(options?: BrowserTracingOptions): Promise<void> {
-		if (this.#active) throw new BrowserError('Browser tracing is already active')
+		if (this.#active) throw new BrowserError('ARGUMENT', 'Browser tracing is already active')
 		const categories = [...(options?.categories ?? ['devtools.timeline', 'v8.execute'])]
 		if (options?.screenshots === true) {
 			categories.push('disabled-by-default-devtools.screenshot')
@@ -71,7 +71,7 @@ export class BrowserTracing implements BrowserTracingInterface {
 
 	async stop(): Promise<BrowserTracingResult> {
 		if (!this.#active || this.#completion === undefined) {
-			throw new BrowserError('Browser tracing is not active')
+			throw new BrowserError('ARGUMENT', 'Browser tracing is not active')
 		}
 		const completion = this.#completion
 		const options = this.#options
@@ -99,7 +99,7 @@ export class BrowserTracing implements BrowserTracingInterface {
 		const bytes = concatBytes(chunks)
 		if (options?.path !== undefined) {
 			if (this.#writer === undefined) {
-				throw new BrowserError('Browser trace path requires a configured writer')
+				throw new BrowserError('ARGUMENT', 'Browser trace path requires a configured writer')
 			}
 			await this.#writer.write(options.path, bytes)
 		}
@@ -114,7 +114,7 @@ export class BrowserTracing implements BrowserTracingInterface {
 	async #wait(promise: Promise<string>): Promise<string> {
 		const deferred = Promise.withResolvers<string>()
 		const timer = setTimeout(() => {
-			deferred.reject(new BrowserError('Browser trace completion timed out'))
+			deferred.reject(new BrowserError('PROTOCOL', 'Browser trace completion timed out'))
 		}, BROWSER_DEFAULT_TIMEOUT_MS)
 		void promise.then(deferred.resolve, deferred.reject)
 		try {
@@ -128,6 +128,7 @@ export class BrowserTracing implements BrowserTracingInterface {
 		const completion = this.#completion
 		if (completion === undefined) return
 		if (isString(params['stream'])) completion.resolve(params['stream'])
-		else completion.reject(new BrowserError('Browser trace did not return an IO stream'))
+		else
+			completion.reject(new BrowserError('PROTOCOL', 'Browser trace did not return an IO stream'))
 	}
 }

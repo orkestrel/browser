@@ -5,7 +5,6 @@ import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_JOURNEY_TOOL_NAMES,
 	createMemoryBrowserJourneyStore,
-	isBrowserElementError,
 	isBrowserError,
 } from '@src/core'
 import {
@@ -47,7 +46,7 @@ describe('createBrowserDOMView', () => {
 
 	it('refuses the realm own document unless own is true', () => {
 		const refusal = captureError(() => createBrowserDOMView({ document: globalThis.document }))
-		expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_OWN')
+		expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_OWN')
 		const own = createBrowserDOMView({ document: globalThis.document, own: true })
 		expect(own.url).toBe(globalThis.document.URL)
 		own.destroy()
@@ -64,7 +63,7 @@ describe('createBrowserDOMView', () => {
 describe('createDocumentToolset', () => {
 	it('refuses globalThis.document unless own is true, and drives the iframe document', async () => {
 		const refusal = captureError(() => createDocumentToolset({ document: globalThis.document }))
-		expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_OWN')
+		expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_OWN')
 		const own = createDocumentToolset({ document: globalThis.document, own: true })
 		expect(own.view.url).toBe(globalThis.document.URL)
 		await own.destroy()
@@ -89,7 +88,7 @@ describe('createDocumentToolset', () => {
 		}
 		for (const view of views) {
 			const refusal = await view.read().catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		}
 		const refusal = captureError(() =>
 			createDocumentToolset({ document: probe.document, limit: 0 }),
@@ -163,7 +162,8 @@ describe('createDocumentToolset', () => {
 			),
 		).catch((error: unknown) => error)
 		expect(
-			isBrowserElementError(refused) && { message: refused.message, context: refused.context },
+			isBrowserError(refused) &&
+				refused.code === 'ELEMENT' && { message: refused.message, context: refused.context },
 		).toEqual({
 			message: `Element ${search?.reference} is not a text control.`,
 			context: { reference: search?.reference, reason: 'UNKNOWN' },
@@ -190,7 +190,7 @@ describe('createDocumentToolset', () => {
 				{ signal },
 			),
 		).catch((error: unknown) => error)
-		expect(isBrowserElementError(gone) && gone.context).toEqual({
+		expect(isBrowserError(gone) && gone.code === 'ELEMENT' && gone.context).toEqual({
 			reference: save?.reference,
 			reason: 'GONE',
 		})
@@ -313,7 +313,7 @@ describe('createDocumentToolset', () => {
 		const refusal = captureError(() =>
 			createDocumentToolset({ document: probe.document, tools, journeys: { store } }),
 		)
-		expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_TOOLSET_RESERVED')
+		expect(isBrowserError(refusal) && refusal.code).toBe('TOOLSET_RESERVED')
 		expect(tools.tools()).toEqual([held])
 		expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([true])
 	})

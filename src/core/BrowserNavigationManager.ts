@@ -99,11 +99,11 @@ export class BrowserNavigationManager implements BrowserNavigationManagerInterfa
 			this.#settle(id)
 			deferred.reject(
 				new BrowserError(
+					'NAVIGATION_TIMEOUT',
 					pattern === undefined
 						? 'Browser network idle wait timed out'
 						: 'Browser URL wait timed out',
-					'BROWSER_NAVIGATION_TIMEOUT',
-					{ pattern, timeout },
+					{ ...(pattern === undefined ? {} : { pattern }), timeout },
 				),
 			)
 		}, timeout)
@@ -155,7 +155,10 @@ export class BrowserNavigationManager implements BrowserNavigationManagerInterfa
 
 	#handleClose(): void {
 		this.#client.unsubscribe('Page.lifecycleEvent', this.#lifecycleHandler, this.#session)
-		const closed = new BrowserError('Browser navigation wait ended because the page closed')
+		const closed = new BrowserError(
+			'CLOSED',
+			'Browser navigation wait ended because the page closed',
+		)
 		for (const id of [...this.#waits.keys()]) this.#settle(id)?.reject(closed)
 		this.#lifetime.abort(closed)
 	}

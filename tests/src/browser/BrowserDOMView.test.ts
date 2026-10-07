@@ -1,12 +1,6 @@
 import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import {
-	BROWSER_RESULT_LIMIT,
-	createBrowserReading,
-	isBrowserElementError,
-	isBrowserError,
-	isBrowserResultLimitError,
-} from '@src/core'
+import { BROWSER_RESULT_LIMIT, createBrowserReading, isBrowserError } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
 import { readProperty, requireValue, waitForEvent } from '@orkestrel/test'
 import {
@@ -30,7 +24,7 @@ describe('BrowserDOMView', () => {
 				const result = await waiting.catch((error: unknown) =>
 					isBrowserError(error) ? error.code : error,
 				)
-				expect(result).toBe(scenario.absent ? undefined : 'BROWSER_WAIT_TIMEOUT')
+				expect(result).toBe(scenario.absent ? undefined : 'WAIT_TIMEOUT')
 			} finally {
 				view.destroy()
 			}
@@ -42,7 +36,7 @@ describe('BrowserDOMView', () => {
 		try {
 			requireValue(document.querySelector('details')).open = true
 			await expect(view.wait('Wait subject', { absent: true, timeout: 25 })).rejects.toMatchObject({
-				code: 'BROWSER_WAIT_TIMEOUT',
+				code: 'WAIT_TIMEOUT',
 			})
 		} finally {
 			view.destroy()
@@ -83,7 +77,7 @@ describe('BrowserDOMView', () => {
 			await view.wait('Never present', { absent: true, timeout: 0 })
 			document.body.innerHTML = '<p>Saved</p>'
 			await expect(view.wait('Saved', { absent: true, timeout: 25 })).rejects.toMatchObject({
-				code: 'BROWSER_WAIT_TIMEOUT',
+				code: 'WAIT_TIMEOUT',
 			})
 			await view.wait('Saved', { absent: false })
 		} finally {
@@ -175,10 +169,12 @@ describe('BrowserDOMView', () => {
 			probe.document.body.append(filler)
 			const html = probe.document.documentElement.outerHTML
 			const refusal = await view.read().catch((error: unknown) => error)
-			expect(isBrowserResultLimitError(refusal) && refusal.context).toEqual({
-				length: expect.any(Number),
-				limit: BROWSER_RESULT_LIMIT,
-			})
+			expect(isBrowserError(refusal) && refusal.code === 'RESULT_LIMIT' && refusal.context).toEqual(
+				{
+					length: expect.any(Number),
+					limit: BROWSER_RESULT_LIMIT,
+				},
+			)
 			expect(
 				readProperty<number>(readProperty<object>(refusal, 'context'), 'length'),
 			).toBeGreaterThan(BROWSER_RESULT_LIMIT)
@@ -189,28 +185,28 @@ describe('BrowserDOMView', () => {
 	})
 
 	describe('destroy', () => {
-		it('refuses read after destroy with BROWSER_DOCUMENT_DESTROYED', async () => {
+		it('refuses read after destroy with DOCUMENT_DESTROYED', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			view.destroy()
 			const refusal = await view.read().catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 
-		it('refuses title after destroy with BROWSER_DOCUMENT_DESTROYED', async () => {
+		it('refuses title after destroy with DOCUMENT_DESTROYED', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			view.destroy()
 			const refusal = await view.title().catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 
-		it('refuses a text wait after destroy with BROWSER_DOCUMENT_DESTROYED, even for present text', async () => {
+		it('refuses a text wait after destroy with DOCUMENT_DESTROYED, even for present text', async () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			view.destroy()
 			const refusal = await view.wait('Probe page').catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 
 		it('stays destroyed through a second destroy with the same refusal', async () => {
@@ -220,7 +216,7 @@ describe('BrowserDOMView', () => {
 			const first = await view.read().catch((error: unknown) => error)
 			view.destroy()
 			const second = await view.read().catch((error: unknown) => error)
-			expect(isBrowserError(second) && second.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(second) && second.code).toBe('DOCUMENT_DESTROYED')
 			expect(second).toBe(first)
 			expect(view.elements.elements()).toEqual([])
 		})
@@ -303,7 +299,9 @@ describe('BrowserDOMView', () => {
 			expect(await view.title()).toBe('Next')
 			expect(view.elements.elements()).toEqual([])
 			const refusal = await save.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({ reason: 'GONE' })
+			expect(
+				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context,
+			).toMatchObject({ reason: 'GONE' })
 			const outline = await view.elements.outline()
 			expect(outline.lines.map(renderBrowserLine).join('\n')).toContain('e5 button "Next"')
 		})
@@ -340,7 +338,7 @@ describe('BrowserDOMView', () => {
 			const view = createBrowserDOMView({ document: probe.document })
 			await view.wait('Probe page', { timeout: 0 })
 			const expired = await view.wait('Never', { timeout: 20 }).catch((error: unknown) => error)
-			expect(isBrowserError(expired) && expired.code).toBe('BROWSER_WAIT_TIMEOUT')
+			expect(isBrowserError(expired) && expired.code).toBe('WAIT_TIMEOUT')
 			await expect(view.wait('Never', { timeout: -1 })).rejects.toThrow(/non-negative/)
 		})
 
@@ -351,7 +349,7 @@ describe('BrowserDOMView', () => {
 			view.destroy()
 			probe.late.textContent = 'Arrived'
 			const refusal = await pending.catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_DESTROYED')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
 		})
 
 		it('rejects with GONE when the document is unloaded mid-wait', async () => {
@@ -360,7 +358,9 @@ describe('BrowserDOMView', () => {
 			const pending = view.wait('Never', { timeout: 1_000 })
 			probe.frame.remove()
 			const refusal = await pending.catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({ reason: 'GONE' })
+			expect(
+				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context,
+			).toMatchObject({ reason: 'GONE' })
 		})
 	})
 })

@@ -41,10 +41,7 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		validateBrowserJourney(journey)
 		const previous = this.#revisions.get(journey.name)
 		if (expected !== undefined && expected !== (this.#journeys.get(journey.name)?.revision ?? 0))
-			throw new BrowserError(
-				`Journey ${journey.name} changed since you read it`,
-				'BROWSER_JOURNEY_STALE',
-			)
+			throw new BrowserError('JOURNEY_STALE', `Journey ${journey.name} changed since you read it`)
 		const revision = (previous ?? 0) + 1
 		const saved = structuredClone({ journey, revision })
 		this.#journeys.set(journey.name, saved)

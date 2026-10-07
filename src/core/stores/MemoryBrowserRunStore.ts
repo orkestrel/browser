@@ -51,7 +51,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		options?.signal?.throwIfAborted()
 		validateBrowserRun(run)
 		if (!this.#slots.get(run.journey.name)?.has(run.id))
-			throw new BrowserError('The run was not opened by this store', 'BROWSER_JOURNEY_PATH')
+			throw new BrowserError('JOURNEY_PATH', 'The run was not opened by this store')
 		const runs = this.#runs.get(run.journey.name) ?? new Map<string, BrowserRun>()
 		runs.set(run.id, structuredClone(run))
 		this.#runs.set(run.journey.name, runs)
@@ -66,7 +66,7 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		options?.signal?.throwIfAborted()
 		const journey = this.#opened.get(slot)
 		if (journey === undefined || !this.#slots.get(journey)?.has(slot.id))
-			throw new BrowserError('The run slot was not opened by this store', 'BROWSER_JOURNEY_PATH')
+			throw new BrowserError('JOURNEY_PATH', 'The run slot was not opened by this store')
 		// Memory stores own slots but have no directory in which to persist these bytes.
 		return undefined
 	}

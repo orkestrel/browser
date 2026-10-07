@@ -59,7 +59,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	async start(): Promise<void> {
-		if (this.#emitter.destroyed) throw new BrowserError('The recorder was destroyed')
+		if (this.#emitter.destroyed) throw new BrowserError('CLOSED', 'The recorder was destroyed')
 		this.clear()
 		this.#started = true
 		const held = this.#toolset.held

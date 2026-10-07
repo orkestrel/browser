@@ -103,7 +103,7 @@ describe('eager browse service fixtures', () => {
 			)
 			try {
 				await expect(fixture.server.start()).rejects.toMatchObject({
-					code: 'BROWSER_SERVER_UNAVAILABLE',
+					code: 'SERVER_UNAVAILABLE',
 				})
 				expect(fixture.launcher.browsers.every((browser) => browser.destroyed)).toBe(true)
 				expect(readdirSync(join(fixture.root, '.profiles'))).toEqual([])

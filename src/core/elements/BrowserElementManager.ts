@@ -12,7 +12,7 @@ import type {
 	BrowserPoint,
 } from '../types.js'
 import { BrowserPageElement } from './BrowserPageElement.js'
-import { BrowserElementError, BrowserError, isCDPTimeoutError } from '../errors.js'
+import { BrowserError, isBrowserError } from '../errors.js'
 import {
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	BROWSER_CONTEXT_LOSS_PATTERN,
@@ -29,6 +29,7 @@ import {
 	renderBrowserOutline,
 	requireBrowserString,
 	validateBrowserTimeout,
+	describeBrowserRefusal,
 } from '../helpers.js'
 import { parseBrowserReference } from '../parsers.js'
 import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/contract'
@@ -79,7 +80,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	async outline(options?: BrowserOutlineOptions): Promise<BrowserOutline> {
 		const limit = options?.limit ?? BROWSER_OUTLINE_LIMIT
 		if (!isInteger(limit) || limit < 0)
-			throw new BrowserError('Outline limit must be a nonnegative integer')
+			throw new BrowserError('ARGUMENT', 'Outline limit must be a nonnegative integer')
 		await this.#input.ready(options)
 		const epoch = this.#generation(this.#input.page.id)
 		const changes = this.#changes
@@ -92,7 +93,11 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				{ session: this.#input.session, ...options },
 			)
 			this.#assertCapture(this.#input.page.id, epoch)
-			if (this.#changes !== changes) throw new BrowserElementError({ subject: 'outline' }, 'GONE')
+			if (this.#changes !== changes)
+				throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'outline' }, 'GONE'), {
+					subject: 'outline',
+					reason: 'GONE',
+				})
 			return renderBrowserOutline(
 				this.#input.page.url,
 				requireBrowserString(readEvaluationResult(result), 'Document title'),
@@ -105,7 +110,10 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 			// rejection that follows one reports the change rather than the protocol failure.
 			if (options?.signal?.aborted === true || this.#changes === changes) throw error
 			this.#lifetime.signal.throwIfAborted()
-			throw new BrowserElementError({ subject: 'outline' }, 'GONE')
+			throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'outline' }, 'GONE'), {
+				subject: 'outline',
+				reason: 'GONE',
+			})
 		}
 	}
 
@@ -162,14 +170,18 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				: isRecord(document) && isArray(document['nodeIds'])
 					? document['nodeIds'][0]
 					: undefined
-		if (!isInteger(root)) throw new BrowserElementError({ subject: 'document' }, 'GONE')
+		if (!isInteger(root))
+			throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'document' }, 'GONE'), {
+				subject: 'document',
+				reason: 'GONE',
+			})
 		const result = await this.#input.client.send(
 			'DOM.querySelectorAll',
 			{ nodeId: root, selector: query.css },
 			{ session, ...options },
 		)
 		if (!isRecord(result) || !isArray(result['nodeIds']))
-			throw new BrowserError('CSS query result is malformed')
+			throw new BrowserError('PROTOCOL', 'CSS query result is malformed')
 		const rows: BrowserOutlineNode[] = []
 		for (const nodeId of result['nodeIds']) {
 			if (!isInteger(nodeId)) continue
@@ -258,11 +270,11 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				const outcome = await pending
 				if ('error' in outcome) throw outcome.error
 				if (readEvaluationResult(outcome.result) !== true || performance.now() >= end)
-					throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
+					throw new BrowserError('WAIT_TIMEOUT', 'Element wait timed out')
 			} catch (error) {
 				signal.throwIfAborted()
-				if (isCDPTimeoutError(error))
-					throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
+				if (isBrowserError(error) && error.code === 'TIMEOUT')
+					throw new BrowserError('WAIT_TIMEOUT', 'Element wait timed out')
 				if (
 					this.#input.page.closed ||
 					(this.#changes === changes &&
@@ -290,7 +302,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 
 	#remaining(end: number): number {
 		const remaining = end - performance.now()
-		if (remaining <= 0) throw new BrowserError('Element wait timed out', 'BROWSER_WAIT_TIMEOUT')
+		if (remaining <= 0) throw new BrowserError('WAIT_TIMEOUT', 'Element wait timed out')
 		return remaining
 	}
 
@@ -379,7 +391,10 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	#assertCapture(frame: string, epoch: number): void {
 		this.#lifetime.signal.throwIfAborted()
 		if (this.#generation(frame) !== epoch)
-			throw new BrowserElementError({ subject: 'outline' }, 'GONE')
+			throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'outline' }, 'GONE'), {
+				subject: 'outline',
+				reason: 'GONE',
+			})
 	}
 
 	#bind(node: BrowserAXNode, frame: string, session: string, css = false): BrowserOutlineNode {
@@ -448,7 +463,11 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	} {
 		const canonical = parseBrowserReference(reference)
 		const entry = [...this.#records.values()].find((record) => record.node.reference === canonical)
-		if (entry === undefined) throw new BrowserElementError(reference, 'GONE')
+		if (entry === undefined)
+			throw new BrowserError('ELEMENT', describeBrowserRefusal(reference, 'GONE'), {
+				reference: reference,
+				reason: 'GONE',
+			})
 		return entry
 	}
 
@@ -485,7 +504,11 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		while (current !== this.#input.page.id && !visited.has(current)) {
 			visited.add(current)
 			const owner = this.#owners.get(current)
-			if (owner === undefined) throw new BrowserElementError({ subject: 'frame' }, 'GONE')
+			if (owner === undefined)
+				throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'frame' }, 'GONE'), {
+					subject: 'frame',
+					reason: 'GONE',
+				})
 			const session = await this.#input.resolve(current)
 			if (session !== owner.session) {
 				const result = await this.#input.client.send(
@@ -527,7 +550,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 
 	#close(): void {
 		this.clear()
-		this.#lifetime.abort(new BrowserError('Browser session ended'))
+		this.#lifetime.abort(new BrowserError('CLOSED', 'Browser session ended'))
 		this.#input.page.emitter.off('navigate', this.#navigationHandler)
 		this.#input.steps.off('commit', this.#commitHandler)
 		this.#input.steps.off('detach', this.#detachHandler)

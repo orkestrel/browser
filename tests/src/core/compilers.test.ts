@@ -536,14 +536,14 @@ describe('compileBrowserJourney', () => {
 
 	it('refuses an invalid journey with the validator code before compiling any source', () => {
 		const cases: ReadonlyArray<readonly [journey: BrowserJourney, code: string]> = [
-			[{ ...BROWSER_JOURNEY_FIXTURE, name: 'Add Kettle' }, 'BROWSER_JOURNEY_INVALID'],
+			[{ ...BROWSER_JOURNEY_FIXTURE, name: 'Add Kettle' }, 'JOURNEY_INVALID'],
 			[
 				{ ...BROWSER_JOURNEY_FIXTURE, parameters: { email: { secret: true, default: 'x' } } },
-				'BROWSER_JOURNEY_INVALID',
+				'JOURNEY_INVALID',
 			],
-			[{ ...BROWSER_JOURNEY_FIXTURE, parameters: {} }, 'BROWSER_JOURNEY_INVALID'],
+			[{ ...BROWSER_JOURNEY_FIXTURE, parameters: {} }, 'JOURNEY_INVALID'],
 			// `Object.assign` types the unknown format as the declared literal, as a parsed file reaches the compiler.
-			[Object.assign({ ...BROWSER_JOURNEY_FIXTURE }, { format: 2 }), 'BROWSER_JOURNEY_FORMAT'],
+			[Object.assign({ ...BROWSER_JOURNEY_FIXTURE }, { format: 2 }), 'JOURNEY_FORMAT'],
 		]
 		for (const [journey, code] of cases) {
 			expect(attempt(() => compileBrowserJourney(journey))).toMatchObject({

@@ -354,16 +354,16 @@ await new GuideCommand({
 		expect(renderBrowserFooter(48, 52, 52)).toBe('[lines 48–52 of 52; 47 above; end of page]')
 		for (const from of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 121])
 			expect(() => validateBrowserLines(from, undefined, 120)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_TOOLSET_ARGUMENT' }),
+				expect.objectContaining({ code: 'TOOLSET_ARGUMENT' }),
 			)
 		expect(() => validateBrowserLines(2, 1)).toThrow(
-			expect.objectContaining({ code: 'BROWSER_TOOLSET_ARGUMENT' }),
+			expect.objectContaining({ code: 'TOOLSET_ARGUMENT' }),
 		)
 		expect(parseBrowserReference('12')).toBeUndefined()
 		expect(parseBrowserReference('e12')).toBe('e12')
 		expect(boundBrowserText('x'.repeat(5_000), 4_000, BROWSER_TOOL_CUT_FOOTER).length).toBe(4_000)
 		expect(() => renderBrowserWindow(lines, 1, undefined, 'Delivery', 20)).toThrow(
-			expect.objectContaining({ code: 'BROWSER_TOOLSET_LIMIT' }),
+			expect.objectContaining({ code: 'TOOLSET_LIMIT' }),
 		)
 		const bounded = renderBrowserPassage(
 			{
@@ -667,9 +667,9 @@ await new GuideCommand({
 			const page = requireValue(browser.context()?.page())
 			const answer = await fixture.pair.call(2, 'wait', { text: 'Order confirmed' })
 			expect(answer.error).toBe(true)
-			expect(answer.text).not.toContain('BROWSER_SERVER_')
+			expect(answer.text).not.toContain('SERVER_')
 			expect((await fixture.pair.call(3, 'read', { from: 1, search: 'cart' })).text).not.toContain(
-				'BROWSER_SERVER_CRASH',
+				'SERVER_CRASH',
 			)
 			expect(fixture.launcher.browsers).toHaveLength(1)
 			expect(browser.destroyed).toBe(false)

@@ -1,7 +1,7 @@
 import { describe, expect, inject, it } from 'vitest'
 import { isString } from '@orkestrel/contract'
 import { createRecorder, waitForEvent } from '@orkestrel/test'
-import { createCDPClient, isBrowserConnectionError } from '@src/core'
+import { createCDPClient, isBrowserError } from '@src/core'
 import { createSocketCDPTransport, SocketCDPTransport } from '@src/browser'
 
 describe('SocketCDPTransport', () => {
@@ -53,7 +53,7 @@ describe('SocketCDPTransport', () => {
 			expect(closes.count).toBe(1)
 			expect(drops.count).toBe(1)
 			const refusal = await transport.send('{}').catch((error: unknown) => error)
-			expect(isBrowserConnectionError(refusal)).toBe(true)
+			expect(isBrowserError(refusal) && refusal.code === 'CONNECTION').toBe(true)
 		} finally {
 			await browser.close()
 		}
@@ -63,17 +63,23 @@ describe('SocketCDPTransport', () => {
 		const url = inject('endpoint')
 		const transport = new SocketCDPTransport({ url })
 		const refusal = await transport.send('{}').catch((error: unknown) => error)
-		expect(isBrowserConnectionError(refusal) && refusal.code).toBe('BROWSER_CONNECTION_ERROR')
-		expect(isBrowserConnectionError(refusal) && refusal.context).toEqual({ url })
+		expect(isBrowserError(refusal) && refusal.code === 'CONNECTION' && refusal.code).toBe(
+			'CONNECTION',
+		)
+		expect(isBrowserError(refusal) && refusal.code === 'CONNECTION' && refusal.context).toEqual({
+			url,
+		})
 	})
 
 	it('rejects start against a browser launched without --remote-allow-origins', async () => {
 		const url = inject('endpointWithoutFlag')
 		const transport = new SocketCDPTransport({ url })
 		const refusal = await transport.start().catch((error: unknown) => error)
-		expect(isBrowserConnectionError(refusal) && refusal.context).toEqual({ url })
+		expect(isBrowserError(refusal) && refusal.code === 'CONNECTION' && refusal.context).toEqual({
+			url,
+		})
 		const second = await transport.send('{}').catch((error: unknown) => error)
-		expect(isBrowserConnectionError(second)).toBe(true)
+		expect(isBrowserError(second) && second.code === 'CONNECTION').toBe(true)
 	})
 
 	it('rejects start for a URL that is not ws: or wss:, and for a malformed URL', async () => {
@@ -81,15 +87,23 @@ describe('SocketCDPTransport', () => {
 		const malformed = new SocketCDPTransport({ url: 'not a url' })
 		const scheme = await plain.start().catch((error: unknown) => error)
 		const parse = await malformed.start().catch((error: unknown) => error)
-		expect(isBrowserConnectionError(scheme) && scheme.message).toMatch(/requires a ws: or wss:/)
-		expect(isBrowserConnectionError(parse) && parse.message).toMatch(/URL is invalid/)
+		expect(isBrowserError(scheme) && scheme.code === 'CONNECTION' && scheme.message).toMatch(
+			/requires a ws: or wss:/,
+		)
+		expect(isBrowserError(parse) && parse.code === 'CONNECTION' && parse.message).toMatch(
+			/URL is invalid/,
+		)
 	})
 
 	it('codes a URL the WebSocket constructor refuses, one with a fragment', async () => {
 		const url = 'ws://127.0.0.1:9222/#fragment'
 		const refusal = await new SocketCDPTransport({ url }).start().catch((error: unknown) => error)
-		expect(isBrowserConnectionError(refusal) && refusal.code).toBe('BROWSER_CONNECTION_ERROR')
-		expect(isBrowserConnectionError(refusal) && refusal.context).toMatchObject({ url })
+		expect(isBrowserError(refusal) && refusal.code === 'CONNECTION' && refusal.code).toBe(
+			'CONNECTION',
+		)
+		expect(
+			isBrowserError(refusal) && refusal.code === 'CONNECTION' && refusal.context,
+		).toMatchObject({ url })
 	})
 
 	it('joins concurrent starts, closes on request, and starts a fresh socket after', async () => {
@@ -100,7 +114,7 @@ describe('SocketCDPTransport', () => {
 		await transport.close()
 		expect(closes.count).toBe(1)
 		const refusal = await transport.send('{}').catch((error: unknown) => error)
-		expect(isBrowserConnectionError(refusal)).toBe(true)
+		expect(isBrowserError(refusal) && refusal.code === 'CONNECTION').toBe(true)
 		await transport.start()
 		const messages = createRecorder<[string]>()
 		transport.emitter.on('message', messages.handler)
@@ -120,7 +134,7 @@ describe('SocketCDPTransport', () => {
 		const starting = transport.start()
 		await transport.close()
 		const refusal = await starting.catch((error: unknown) => error)
-		expect(isBrowserConnectionError(refusal) && refusal.message).toMatch(
+		expect(isBrowserError(refusal) && refusal.code === 'CONNECTION' && refusal.message).toMatch(
 			/was closed before it finished connecting/,
 		)
 	})

@@ -6,9 +6,7 @@ import {
 	BrowserReplay,
 	BrowserToolset,
 	renderBrowserRun,
-	isBrowserElementError,
 	isBrowserError,
-	isBrowserResultLimitError,
 } from '@src/core'
 import { BrowserDOMElement, createBrowserDOMView } from '@src/browser'
 import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
@@ -59,21 +57,23 @@ describe('BrowserDOMElement', () => {
 			const disabled = await button.click().catch((error: unknown) => error)
 			const popup = await link.click().catch((error: unknown) => error)
 			const chooser = await file.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(disabled) && disabled.context).toMatchObject({
+			expect(
+				isBrowserError(disabled) && disabled.code === 'ELEMENT' && disabled.context,
+			).toMatchObject({
 				reason: 'DISABLED',
 			})
-			expect(isBrowserElementError(popup) && popup.context).toEqual({
+			expect(isBrowserError(popup) && popup.code === 'ELEMENT' && popup.context).toEqual({
 				reference: link.reference,
 				reason: 'UNTRUSTED',
 			})
-			expect(isBrowserElementError(popup) && popup.message).toBe(
+			expect(isBrowserError(popup) && popup.code === 'ELEMENT' && popup.message).toBe(
 				`Element ${link.reference} opens another browsing context, which an untrusted click cannot do.`,
 			)
-			expect(isBrowserElementError(chooser) && chooser.context).toEqual({
+			expect(isBrowserError(chooser) && chooser.code === 'ELEMENT' && chooser.context).toEqual({
 				reference: file.reference,
 				reason: 'UNTRUSTED',
 			})
-			expect(isBrowserElementError(chooser) && chooser.message).toBe(
+			expect(isBrowserError(chooser) && chooser.code === 'ELEMENT' && chooser.message).toBe(
 				`Element ${file.reference} opens a file chooser, which an untrusted click cannot do.`,
 			)
 			expect(clicks.calls).toEqual([])
@@ -89,11 +89,17 @@ describe('BrowserDOMElement', () => {
 			const [photo, gift] = await view.elements.find({ role: 'button' })
 			const chooser = await photo?.click().catch((error: unknown) => error)
 			const disabled = await gift?.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(chooser) && chooser.message).toMatch(/opens a file chooser/)
-			expect(isBrowserElementError(chooser) && chooser.context).toMatchObject({
+			expect(isBrowserError(chooser) && chooser.code === 'ELEMENT' && chooser.message).toMatch(
+				/opens a file chooser/,
+			)
+			expect(
+				isBrowserError(chooser) && chooser.code === 'ELEMENT' && chooser.context,
+			).toMatchObject({
 				reason: 'UNTRUSTED',
 			})
-			expect(isBrowserElementError(disabled) && disabled.context).toMatchObject({
+			expect(
+				isBrowserError(disabled) && disabled.code === 'ELEMENT' && disabled.context,
+			).toMatchObject({
 				reason: 'DISABLED',
 			})
 			expect(clicks.calls).toEqual([])
@@ -108,11 +114,11 @@ describe('BrowserDOMElement', () => {
 			const view = createBrowserDOMView({ document: probe })
 			const text = await findProbeElement(view, 'span')
 			const refusal = await text.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toEqual({
+			expect(isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context).toEqual({
 				reference: text.reference,
 				reason: 'UNTRUSTED',
 			})
-			expect(isBrowserElementError(refusal) && refusal.message).toBe(
+			expect(isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.message).toBe(
 				`Element ${text.reference} opens a file chooser, which an untrusted click cannot do.`,
 			)
 			expect(clicks.calls).toEqual([])
@@ -182,7 +188,9 @@ describe('BrowserDOMElement', () => {
 			const save = await findProbeElement(view, 'button')
 			probe.save.style.display = 'none'
 			const refusal = await save.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({ reason: 'HIDDEN' })
+			expect(
+				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context,
+			).toMatchObject({ reason: 'HIDDEN' })
 		})
 
 		it('reports GONE for an element removed from its document', async () => {
@@ -191,7 +199,9 @@ describe('BrowserDOMElement', () => {
 			const save = await findProbeElement(view, 'button')
 			probe.save.remove()
 			const refusal = await save.click().catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toMatchObject({
+			expect(
+				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context,
+			).toMatchObject({
 				reference: save.reference,
 				reason: 'GONE',
 			})
@@ -237,7 +247,7 @@ describe('BrowserDOMElement', () => {
 				),
 			)
 			for (const refusal of refusals) {
-				expect(isBrowserElementError(refusal) && refusal.context).toEqual({
+				expect(isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context).toEqual({
 					reference: 'e8',
 					reason: 'GONE',
 				})
@@ -315,22 +325,28 @@ describe('BrowserDOMElement', () => {
 			const box = await checkbox.fill('on').catch((error: unknown) => error)
 			const button = await search.fill('kettle').catch((error: unknown) => error)
 			const fixed = await code.fill('SPRING').catch((error: unknown) => error)
-			expect(isBrowserElementError(notes) && notes.message).toBe(
+			expect(isBrowserError(notes) && notes.code === 'ELEMENT' && notes.message).toBe(
 				`Element ${editable.reference} is contenteditable, which an untrusted event cannot type into.`,
 			)
-			expect(isBrowserElementError(notes) && notes.context).toMatchObject({ reason: 'UNTRUSTED' })
+			expect(isBrowserError(notes) && notes.code === 'ELEMENT' && notes.context).toMatchObject({
+				reason: 'UNTRUSTED',
+			})
 			expect(probe.querySelector('div')?.textContent).toBe('')
-			expect(isBrowserElementError(box) && box.message).toBe(
+			expect(isBrowserError(box) && box.code === 'ELEMENT' && box.message).toBe(
 				`Element ${checkbox.reference} is not a text control.`,
 			)
-			expect(isBrowserElementError(button) && button.message).toBe(
+			expect(isBrowserError(button) && button.code === 'ELEMENT' && button.message).toBe(
 				`Element ${search.reference} is not a text control.`,
 			)
-			expect(isBrowserElementError(button) && button.context).toMatchObject({ reason: 'UNKNOWN' })
-			expect(isBrowserElementError(fixed) && fixed.message).toBe(
+			expect(isBrowserError(button) && button.code === 'ELEMENT' && button.context).toMatchObject({
+				reason: 'UNKNOWN',
+			})
+			expect(isBrowserError(fixed) && fixed.code === 'ELEMENT' && fixed.message).toBe(
 				`Element ${code.reference} is not editable.`,
 			)
-			expect(isBrowserElementError(box) && box.context).toMatchObject({ reason: 'UNKNOWN' })
+			expect(isBrowserError(box) && box.code === 'ELEMENT' && box.context).toMatchObject({
+				reason: 'UNKNOWN',
+			})
 		})
 	})
 
@@ -341,7 +357,7 @@ describe('BrowserDOMElement', () => {
 			const element = await findProbeElement(view, 'select')
 			const refusal = await element.select([BROWSER_SELECT_SECRET]).catch((error: unknown) => error)
 			expect(
-				isBrowserElementError(refusal) && refusal.message,
+				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.message,
 				'the element must not quote the missing option',
 			).toBe(`Element ${element.reference} has no such option.`)
 			const toolset = new BrowserToolset(view)
@@ -439,12 +455,16 @@ describe('BrowserDOMElement', () => {
 			const missing = await size.select(['Huge']).catch((error: unknown) => error)
 			const field = await findProbeElement(view, 'input')
 			const text = await field.select(['x']).catch((error: unknown) => error)
-			expect(isBrowserElementError(missing) && missing.message).toBe(
+			expect(isBrowserError(missing) && missing.code === 'ELEMENT' && missing.message).toBe(
 				`Element ${size.reference} has no such option.`,
 			)
 			expect(isBrowserError(text) && text.message).toMatch(/not a select control/)
-			expect(isBrowserElementError(missing) && missing.context).toMatchObject({ reason: 'UNKNOWN' })
-			expect(isBrowserElementError(text) && text.context).toMatchObject({ reason: 'UNKNOWN' })
+			expect(
+				isBrowserError(missing) && missing.code === 'ELEMENT' && missing.context,
+			).toMatchObject({ reason: 'UNKNOWN' })
+			expect(isBrowserError(text) && text.code === 'ELEMENT' && text.context).toMatchObject({
+				reason: 'UNKNOWN',
+			})
 		})
 
 		it('refuses a disabled select DISABLED, a hidden one HIDDEN, and a removed one GONE', async () => {
@@ -469,7 +489,11 @@ describe('BrowserDOMElement', () => {
 					),
 				),
 			)
-			expect(refusals.map((refusal) => isBrowserElementError(refusal) && refusal.context)).toEqual([
+			expect(
+				refusals.map(
+					(refusal) => isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context,
+				),
+			).toEqual([
 				{ reference: off.reference, reason: 'DISABLED' },
 				{ reference: shut.reference, reason: 'HIDDEN' },
 				{ reference: gone.reference, reason: 'GONE' },
@@ -506,7 +530,7 @@ describe('BrowserDOMElement', () => {
 			const refusal = await email.submit().catch((error: unknown) => error)
 			expect(submits.count).toBe(0)
 			expect(input.validationMessage).not.toBe('')
-			expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_DOCUMENT_SUBMIT')
+			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_SUBMIT')
 			expect(isBrowserError(refusal) && refusal.message).toBe(
 				`did not submit: Email — ${input.validationMessage}`,
 			)
@@ -525,12 +549,18 @@ describe('BrowserDOMElement', () => {
 			const button = await findProbeElement(view, 'button')
 			const loose = await field.submit().catch((error: unknown) => error)
 			const popup = await button.submit().catch((error: unknown) => error)
-			expect(isBrowserElementError(loose) && loose.message).toMatch(/is not in a form/)
-			expect(isBrowserElementError(loose) && loose.context).toMatchObject({ reason: 'UNKNOWN' })
-			expect(isBrowserElementError(popup) && popup.message).toBe(
+			expect(isBrowserError(loose) && loose.code === 'ELEMENT' && loose.message).toMatch(
+				/is not in a form/,
+			)
+			expect(isBrowserError(loose) && loose.code === 'ELEMENT' && loose.context).toMatchObject({
+				reason: 'UNKNOWN',
+			})
+			expect(isBrowserError(popup) && popup.code === 'ELEMENT' && popup.message).toBe(
 				`Element ${button.reference} submits into another browsing context, which an untrusted submission cannot open.`,
 			)
-			expect(isBrowserElementError(popup) && popup.context).toMatchObject({ reason: 'UNTRUSTED' })
+			expect(isBrowserError(popup) && popup.code === 'ELEMENT' && popup.context).toMatchObject({
+				reason: 'UNTRUSTED',
+			})
 		})
 
 		it('refuses a removed form control GONE and fires no submit', async () => {
@@ -547,7 +577,7 @@ describe('BrowserDOMElement', () => {
 			const email = await findProbeElement(view, 'input')
 			requireValue(probe.querySelector('input'), 'input').remove()
 			const refusal = await email.submit().catch((error: unknown) => error)
-			expect(isBrowserElementError(refusal) && refusal.context).toEqual({
+			expect(isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context).toEqual({
 				reference: email.reference,
 				reason: 'GONE',
 			})
@@ -576,10 +606,12 @@ describe('BrowserDOMElement', () => {
 			const filler = probe.document.createTextNode('x'.repeat(BROWSER_RESULT_LIMIT))
 			probe.save.append(filler)
 			const refusal = await save.read().catch((error: unknown) => error)
-			expect(isBrowserResultLimitError(refusal) && refusal.context).toEqual({
-				length: expect.any(Number),
-				limit: BROWSER_RESULT_LIMIT,
-			})
+			expect(isBrowserError(refusal) && refusal.code === 'RESULT_LIMIT' && refusal.context).toEqual(
+				{
+					length: expect.any(Number),
+					limit: BROWSER_RESULT_LIMIT,
+				},
+			)
 			expect(
 				readProperty<number>(readProperty<object>(refusal, 'context'), 'length'),
 			).toBeGreaterThan(BROWSER_RESULT_LIMIT)

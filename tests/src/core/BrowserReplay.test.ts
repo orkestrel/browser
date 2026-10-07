@@ -94,7 +94,7 @@ describe('BrowserReplay', () => {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs, inputs: { password: 'Ready' } }).execute(),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_INVALID',
+				code: 'JOURNEY_INVALID',
 				context: { parameter: 'password' },
 			})
 			expect(holds.count).toBe(0)
@@ -117,7 +117,7 @@ describe('BrowserReplay', () => {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs }).execute(),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_FORMAT',
+				code: 'JOURNEY_FORMAT',
 				context: { action: 'replay', placement: 'dom' },
 			})
 			expect(holds.count).toBe(0)
@@ -142,7 +142,7 @@ describe('BrowserReplay', () => {
 		try {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs }).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'status' } })
+			).rejects.toMatchObject({ code: 'JOURNEY_INPUT', context: { parameter: 'status' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			await expect(
@@ -152,7 +152,7 @@ describe('BrowserReplay', () => {
 					{ runs, inputs: { status: 'Ready', extra: 'unknown' } },
 				).execute(),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_INPUT',
+				code: 'JOURNEY_INPUT',
 				context: { parameter: 'extra' },
 				message: 'Journey check-ready has no parameter named "extra".',
 			})
@@ -164,7 +164,7 @@ describe('BrowserReplay', () => {
 			])
 			await expect(
 				new BrowserReplay(toolset, { journey: gap }, { runs }).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_GAP', context: { step: 's2' } })
+			).rejects.toMatchObject({ code: 'JOURNEY_GAP', context: { step: 's2' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			expect((await runs.list(journey.name)).entries).toEqual([])
@@ -190,7 +190,7 @@ describe('BrowserReplay', () => {
 					{ journey },
 					{ inputs: createBrowserJourneyMalformedInputs('status', 42) },
 				).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'status' } })
+			).rejects.toMatchObject({ code: 'JOURNEY_INPUT', context: { parameter: 'status' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			const omitted = await new BrowserReplay(
@@ -227,7 +227,7 @@ describe('BrowserReplay', () => {
 			])
 			try {
 				await expect(new BrowserReplay(toolset, { journey }).execute()).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_PLACEMENT',
+					code: 'JOURNEY_PLACEMENT',
 					context: { step: 's2', action, placement: 'dom' },
 				})
 				expect(holds.count).toBe(0)

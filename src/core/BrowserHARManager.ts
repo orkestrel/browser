@@ -21,6 +21,7 @@ import {
 	validateBrowserHAR,
 } from './helpers.js'
 import { BrowserError } from './errors.js'
+import { isJSONValue } from '@orkestrel/contract'
 
 /**
  * Records and replays HTTP archives over one page network manager.
@@ -106,8 +107,8 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 			}
 		}
 		if (this.#failure !== undefined) {
-			throw new BrowserError('Browser HAR recording failed', 'BROWSER_HAR_ERROR', {
-				error: this.#failure,
+			throw new BrowserError('HAR', 'Browser HAR recording failed', {
+				error: isJSONValue(this.#failure) ? this.#failure : String(this.#failure),
 			})
 		}
 		const har: BrowserHAR = {
@@ -119,7 +120,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		}
 		if (this.#options?.path !== undefined) {
 			if (this.#writer === undefined) {
-				throw new BrowserError('Browser HAR path requires a configured writer')
+				throw new BrowserError('ARGUMENT', 'Browser HAR path requires a configured writer')
 			}
 			await this.#writer.write(this.#options.path, textToBytes(JSON.stringify(har, undefined, 2)))
 		}

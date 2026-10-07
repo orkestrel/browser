@@ -28,12 +28,12 @@ export class BrowserProfiler implements BrowserProfilerInterface {
 	}
 
 	async start(interval?: number): Promise<void> {
-		if (this.#active) throw new BrowserError('Browser CPU profiling is already active')
+		if (this.#active) throw new BrowserError('ARGUMENT', 'Browser CPU profiling is already active')
 		if (interval !== undefined) {
 			if (!isInteger(interval) || interval <= 0) {
 				throw new BrowserError(
+					'ARGUMENT',
 					'Browser CPU sampling interval must be a positive integer',
-					undefined,
 					{
 						interval,
 					},
@@ -52,7 +52,7 @@ export class BrowserProfiler implements BrowserProfilerInterface {
 	}
 
 	async stop(): Promise<BrowserProfile> {
-		if (!this.#active) throw new BrowserError('Browser CPU profiling is not active')
+		if (!this.#active) throw new BrowserError('ARGUMENT', 'Browser CPU profiling is not active')
 		this.#active = false
 		let result: unknown
 		try {

@@ -65,15 +65,15 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 		this.#assert()
 		if (!/^[$A-Z_a-z][$\w]*$/.test(name)) {
 			throw new BrowserError(
+				'ARGUMENT',
 				'Browser binding name must be a valid JavaScript identifier',
-				undefined,
 				{
 					name,
 				},
 			)
 		}
 		if (this.#bindings.has(name)) {
-			throw new BrowserError('Browser binding already exists', undefined, { name })
+			throw new BrowserError('ARGUMENT', 'Browser binding already exists', { name })
 		}
 		const subscribed = this.#subscribed
 		if (!subscribed) {
@@ -87,7 +87,7 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 			const id = await this.add(compileBrowserBindingSource(name))
 			const entry = this.#scripts.get(id)
 			if (entry === undefined) {
-				throw new BrowserError('Browser binding script registration was lost', undefined, {
+				throw new BrowserError('PROTOCOL', 'Browser binding script registration was lost', {
 					name,
 				})
 			}
@@ -163,6 +163,6 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	}
 
 	#assert(): void {
-		if (this.#destroyed) throw new BrowserError('Browser script manager is destroyed')
+		if (this.#destroyed) throw new BrowserError('CLOSED', 'Browser script manager is destroyed')
 	}
 }

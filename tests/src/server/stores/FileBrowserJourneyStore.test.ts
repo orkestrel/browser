@@ -102,7 +102,7 @@ describe('BrowserJourneyToolset file listing', () => {
 						{ journey: 'add-kettle' },
 						{ signal: new AbortController().signal },
 					),
-				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_LOCKED' })
+				).rejects.toMatchObject({ code: 'JOURNEY_LOCKED' })
 				expect(
 					await toolset.tools.execute({
 						id: 'forget',
@@ -183,9 +183,9 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 				'The installed link capability probe cannot create and read this link category',
 			)
 			createLink(path, path + '-moved')
-			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+			await expect(store.set(journey, 1)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
 			await expect(store.delete(journey.name)).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
+				code: 'JOURNEY_PATH',
 			})
 		},
 	)

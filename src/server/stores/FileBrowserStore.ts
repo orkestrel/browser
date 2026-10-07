@@ -28,15 +28,12 @@ export class FileBrowserStore {
 	constructor(options: FileBrowserStoreOptions) {
 		this.#limit = options.limit ?? BROWSER_FILE_STORE_LIMIT
 		if (!Number.isSafeInteger(this.#limit) || this.#limit < 1)
-			throw new BrowserError(
-				'The listing cap must be a positive integer',
-				'BROWSER_JOURNEY_ARGUMENT',
-			)
+			throw new BrowserError('JOURNEY_ARGUMENT', 'The listing cap must be a positive integer')
 		try {
 			this.#root = realpathSync(options.root)
 		} catch (error) {
 			if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
-				throw new BrowserError(`Missing root: ${options.root}`, 'BROWSER_JOURNEY_PATH', {
+				throw new BrowserError('JOURNEY_PATH', `Missing root: ${options.root}`, {
 					path: options.root,
 				})
 			throw this.translateError(options.root, error)
@@ -46,13 +43,13 @@ export class FileBrowserStore {
 	/** Checks a journey name before filesystem access. @param name - Journey name */
 	validateName(name: string): void {
 		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-			throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+			throw new BrowserError('JOURNEY_PATH', `Refused journey name: ${name}`)
 	}
 
 	/** Checks a run id before filesystem access. @param id - Producer id */
 	validateId(id: string): void {
 		if (!BROWSER_RUN_ID_PATTERN.test(id))
-			throw new BrowserError(`Refused run id: ${id}`, 'BROWSER_JOURNEY_PATH')
+			throw new BrowserError('JOURNEY_PATH', `Refused run id: ${id}`)
 	}
 
 	/** Resolves a confined target. @param parts - Relative components @returns Absolute target */
@@ -62,7 +59,7 @@ export class FileBrowserStore {
 			path !== this.#root &&
 			!path.startsWith(this.#root.endsWith(sep) ? this.#root : this.#root + sep)
 		)
-			throw new BrowserError(`Refused path: ${path}`, 'BROWSER_JOURNEY_PATH')
+			throw new BrowserError('JOURNEY_PATH', `Refused path: ${path}`)
 		return path
 	}
 
@@ -82,9 +79,9 @@ export class FileBrowserStore {
 				const status = await lstat(current)
 				options?.signal?.throwIfAborted()
 				if (status.isSymbolicLink())
-					throw new BrowserError(`Refused symbolic link: ${current}`, 'BROWSER_JOURNEY_PATH')
+					throw new BrowserError('JOURNEY_PATH', `Refused symbolic link: ${current}`)
 				if (index < parts.length && !status.isDirectory())
-					throw new BrowserError(`Not a directory: ${current}`, 'BROWSER_JOURNEY_PATH')
+					throw new BrowserError('JOURNEY_PATH', `Not a directory: ${current}`)
 			} catch (error) {
 				options?.signal?.throwIfAborted()
 				if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false
@@ -99,7 +96,7 @@ export class FileBrowserStore {
 	/** Creates checked directories one component at a time. @param path - Directory @param options - Cancellation options */
 	async createDirectory(path: string, options?: BrowserStoreOptions): Promise<void> {
 		if (await this.check(path, options)) return
-		if (path === this.#root) throw new BrowserError(`Missing root: ${path}`, 'BROWSER_JOURNEY_PATH')
+		if (path === this.#root) throw new BrowserError('JOURNEY_PATH', `Missing root: ${path}`)
 		await this.createDirectory(dirname(path), options)
 		options?.signal?.throwIfAborted()
 		try {
@@ -160,7 +157,7 @@ export class FileBrowserStore {
 					(error.code === 'EISDIR' || error.code === 'EPERM') &&
 					target?.isDirectory()
 				)
-					throw new BrowserError(`Cannot replace directory: ${path}`, 'BROWSER_JOURNEY_FILE', {
+					throw new BrowserError('JOURNEY_FILE', `Cannot replace directory: ${path}`, {
 						path,
 					})
 				throw error
@@ -240,7 +237,7 @@ export class FileBrowserStore {
 				await this.#removeLock(path)
 			}
 		}
-		throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
+		throw new BrowserError('JOURNEY_LOCKED', `Journey is locked: ${path}`)
 	}
 
 	/**
@@ -287,11 +284,11 @@ export class FileBrowserStore {
 					reason:
 						typeof reason === 'string'
 							? reason
-							: error instanceof BrowserError && error.code === 'BROWSER_JOURNEY_PATH'
+							: error instanceof BrowserError && error.code === 'JOURNEY_PATH'
 								? 'The entry path is refused'
-								: error instanceof BrowserError && error.code === 'BROWSER_JOURNEY_ACCESS'
+								: error instanceof BrowserError && error.code === 'JOURNEY_ACCESS'
 									? 'Permission denied'
-									: error instanceof BrowserError && error.code === 'BROWSER_JOURNEY_FORMAT'
+									: error instanceof BrowserError && error.code === 'JOURNEY_FORMAT'
 										? 'Unknown file format'
 										: 'The stored entry is malformed or unreadable',
 				})
@@ -336,12 +333,12 @@ export class FileBrowserStore {
 	translateError(path: string, error: unknown): BrowserError {
 		const code = error instanceof Error && 'code' in error ? error.code : undefined
 		return new BrowserError(
-			`${path}: ${error instanceof Error ? error.message : String(error)}`,
 			code === 'EACCES' || code === 'EPERM'
-				? 'BROWSER_JOURNEY_ACCESS'
-				: error instanceof BrowserError && code !== 'BROWSER_JOURNEY_INVALID'
+				? 'JOURNEY_ACCESS'
+				: error instanceof BrowserError && code !== 'JOURNEY_INVALID'
 					? error.code
-					: 'BROWSER_JOURNEY_FILE',
+					: 'JOURNEY_FILE',
+			`${path}: ${error instanceof Error ? error.message : String(error)}`,
 			{ path },
 		)
 	}
@@ -354,15 +351,14 @@ export class FileBrowserStore {
 			const entries = await readdir(path, { withFileTypes: true })
 			for (const entry of entries) {
 				await this.check(this.resolvePath(path, entry.name), options)
-				if (!entry.isFile())
-					throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
+				if (!entry.isFile()) throw new BrowserError('JOURNEY_LOCKED', `Journey is locked: ${path}`)
 			}
 			return entries.map((entry) => entry.name)
 		} catch (error) {
 			if (error instanceof Error && 'code' in error) {
 				if (error.code === 'ENOENT') return undefined
 				if (error.code === 'ENOTDIR')
-					throw new BrowserError(`Journey is locked: ${path}`, 'BROWSER_JOURNEY_LOCKED')
+					throw new BrowserError('JOURNEY_LOCKED', `Journey is locked: ${path}`)
 			}
 			throw this.translateError(path, error)
 		}
@@ -380,7 +376,7 @@ export class FileBrowserStore {
 				(error.code === 'ENOENT' || error.code === 'ENOTEMPTY')
 			)
 				return false
-			throw new BrowserError(`Cannot remove lock entry: ${path}`, 'BROWSER_JOURNEY_ACCESS', {
+			throw new BrowserError('JOURNEY_ACCESS', `Cannot remove lock entry: ${path}`, {
 				path,
 			})
 		}
@@ -401,7 +397,7 @@ export class FileBrowserStore {
 					}
 				}
 			}
-			throw new BrowserError(`Cannot remove lock directory: ${path}`, 'BROWSER_JOURNEY_ACCESS', {
+			throw new BrowserError('JOURNEY_ACCESS', `Cannot remove lock directory: ${path}`, {
 				path,
 			})
 		}

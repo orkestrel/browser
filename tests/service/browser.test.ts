@@ -29,7 +29,6 @@ import {
 	BROWSER_REGISTRY_ABSENT_CODE,
 	createCDPClient,
 	isBrowserError,
-	isBrowserResultLimitError,
 	readEvaluationResult,
 } from '@src/core'
 import { isRecord, isString } from '@orkestrel/contract'
@@ -426,9 +425,9 @@ describe('Browser real launch', () => {
 		const page = await browser.create()
 		const pid = browser.pid
 
-		await expect(page.evaluate(`'x'.repeat(${BROWSER_RESULT_LIMIT + 100_000})`)).rejects.toSatisfy(
-			isBrowserResultLimitError,
-		)
+		await expect(
+			page.evaluate(`'x'.repeat(${BROWSER_RESULT_LIMIT + 100_000})`),
+		).rejects.toMatchObject({ name: 'BrowserError', code: 'RESULT_LIMIT' })
 
 		// The browser must survive the oversized result — no crashed session.
 		expect(browser.status).toBe('connected')
@@ -465,7 +464,10 @@ describe('Browser real launch', () => {
 			await browser.connect()
 			const page = await browser.create({ url })
 
-			await expect(page.read()).rejects.toSatisfy(isBrowserResultLimitError)
+			await expect(page.read()).rejects.toMatchObject({
+				name: 'BrowserError',
+				code: 'RESULT_LIMIT',
+			})
 			expect(browser.status).toBe('connected')
 			expect(await page.evaluate('1 + 1')).toBe(2)
 
@@ -982,7 +984,7 @@ describe('Browser proofs against the fixture pages', () => {
 		const covered = requireValue(save)
 
 		await expect(covered.click()).rejects.toMatchObject({
-			code: 'BROWSER_ELEMENT_ERROR',
+			code: 'ELEMENT',
 			context: { reference: covered.reference, reason: 'OCCLUDED' },
 			message: `Element ${covered.reference} is covered by div#veil.`,
 		})
@@ -1071,7 +1073,7 @@ describe('Browser proofs against the fixture pages', () => {
 	// one system clock: the page records `performance.timeOrigin + performance.now()` at the
 	// insertion, and this process reads the same sum at resolution; 2 ms covers the rounding each
 	// process applies to its origin.
-	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text stays pending before its deadline, then rejects BROWSER_WAIT_TIMEOUT)', async () => {
+	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text stays pending before its deadline, then rejects WAIT_TIMEOUT)', async () => {
 		const page = await browser.create({ url: fixtures.url('/late') })
 		opened.push(page)
 		const [reveal] = await page.elements.find({ role: 'button', name: 'Reveal' })
@@ -1099,7 +1101,7 @@ describe('Browser proofs against the fixture pages', () => {
 		// covers the two processes' monotonic clocks.
 		const started = performance.now()
 		await expect(page.wait('Never shown', { timeout: 1_000 })).rejects.toMatchObject({
-			code: 'BROWSER_WAIT_TIMEOUT',
+			code: 'WAIT_TIMEOUT',
 		})
 		expect(performance.now() - started).toBeGreaterThanOrEqual(1_000 - 2)
 	})
@@ -1117,7 +1119,7 @@ describe('Browser proofs against the fixture pages', () => {
 			const result = await waiting.catch((error: unknown) =>
 				isBrowserError(error) ? error.code : error,
 			)
-			expect(result).toBe(scenario.absent ? undefined : 'BROWSER_WAIT_TIMEOUT')
+			expect(result).toBe(scenario.absent ? undefined : 'WAIT_TIMEOUT')
 		})
 	}
 	it('opening details makes an absent text wait time out', async () => {
@@ -1126,7 +1128,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_DETAILS_HTML)}`)
 		await page.evaluate("document.querySelector('details').open = true")
 		await expect(page.wait('Wait subject', { absent: true, timeout: 100 })).rejects.toMatchObject({
-			code: 'BROWSER_WAIT_TIMEOUT',
+			code: 'WAIT_TIMEOUT',
 		})
 	})
 	it('closing a page rejects a pending text wait well before its deadline', async () => {
@@ -1145,7 +1147,7 @@ describe('Browser proofs against the fixture pages', () => {
 		const refusal = await waiting.catch((error: unknown) => error)
 		console.log('close wait', { elapsed: performance.now() - start, refusal })
 		expect(refusal).toBeInstanceOf(Error)
-		expect(isBrowserError(refusal) && refusal.code).not.toBe('BROWSER_WAIT_TIMEOUT')
+		expect(isBrowserError(refusal) && refusal.code).not.toBe('WAIT_TIMEOUT')
 		expect(performance.now() - start).toBeLessThan(1_000)
 	})
 	it('navigation settles a pending absent element wait', async () => {
@@ -1220,7 +1222,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await page.wait('Never present', { absent: true })
 		await page.evaluate("document.body.innerHTML = '<p>Saved</p>'")
 		await expect(page.wait('Saved', { absent: true, timeout: 100 })).rejects.toMatchObject({
-			code: 'BROWSER_WAIT_TIMEOUT',
+			code: 'WAIT_TIMEOUT',
 		})
 		await page.wait('Saved', { absent: false })
 	})
@@ -1240,7 +1242,7 @@ describe('Browser proofs against the fixture pages', () => {
 
 		expect(page.elements.element(stale.reference)).toBeUndefined()
 		await expect(stale.click()).rejects.toMatchObject({
-			code: 'BROWSER_ELEMENT_ERROR',
+			code: 'ELEMENT',
 			context: { reference: stale.reference, reason: 'GONE' },
 			message: `Element ${stale.reference} is gone because the page changed; call read for fresh refs.`,
 		})
@@ -1328,7 +1330,7 @@ describe('Browser proofs against the fixture pages', () => {
 
 		it('refuses a click on a removed and collected element GONE naming read', async () => {
 			await expect(removed.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reference: removed.reference, reason: 'GONE' },
 				message: `Element ${removed.reference} is gone because the page changed; call read for fresh refs.`,
 			})

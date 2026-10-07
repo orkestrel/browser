@@ -33,9 +33,9 @@ export class BrowserClock implements BrowserClockInterface {
 	}
 
 	async install(time = Date.now()): Promise<void> {
-		if (this.#installed) throw new BrowserError('Browser clock is already installed')
+		if (this.#installed) throw new BrowserError('ARGUMENT', 'Browser clock is already installed')
 		if (!isFiniteNumber(time) || time < 0) {
-			throw new BrowserError('Browser clock time must be a non-negative finite epoch', undefined, {
+			throw new BrowserError('ARGUMENT', 'Browser clock time must be a non-negative finite epoch', {
 				time,
 			})
 		}
@@ -65,7 +65,7 @@ export class BrowserClock implements BrowserClockInterface {
 		this.#assert()
 		this.#idle()
 		if (!isFiniteNumber(ms) || ms < 0) {
-			throw new BrowserError('Browser clock advance must be non-negative and finite', undefined, {
+			throw new BrowserError('ARGUMENT', 'Browser clock advance must be non-negative and finite', {
 				ms,
 			})
 		}
@@ -84,7 +84,7 @@ export class BrowserClock implements BrowserClockInterface {
 			throw error
 		}
 		const timer = setTimeout(() => {
-			deferred.reject(new BrowserError('Browser virtual-time budget timed out'))
+			deferred.reject(new BrowserError('PROTOCOL', 'Browser virtual-time budget timed out'))
 		}, BROWSER_DEFAULT_TIMEOUT_MS)
 		let failure: unknown
 		try {
@@ -120,11 +120,12 @@ export class BrowserClock implements BrowserClockInterface {
 	}
 
 	#assert(): void {
-		if (!this.#installed) throw new BrowserError('Browser clock is not installed')
+		if (!this.#installed) throw new BrowserError('ARGUMENT', 'Browser clock is not installed')
 	}
 
 	#idle(): void {
-		if (this.#advancing) throw new BrowserError('Browser clock advance is already active')
+		if (this.#advancing)
+			throw new BrowserError('ARGUMENT', 'Browser clock advance is already active')
 	}
 
 	#handleBudget(): void {

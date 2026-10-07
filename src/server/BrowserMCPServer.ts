@@ -43,10 +43,8 @@ import {
 	createBrowserToolset,
 	createCDPClient,
 	isBrowserError,
-	isCDPConnectionError,
-	isCDPTimeoutError,
 } from '@src/core'
-import { version } from '../../package.json' with { type: 'json' }
+import { version } from '../../package.json'
 import {
 	createBrowser,
 	createCDPTransport,
@@ -190,13 +188,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const contexts = options?.pool?.contexts ?? BROWSER_SERVER_CONTEXTS
 		if (!isInteger(size) || size < 1 || size > BROWSER_SERVER_POOL_LIMIT)
 			throw new BrowserError(
-				`pool.size must be an integer from 1 through ${BROWSER_SERVER_POOL_LIMIT}`,
 				BROWSER_SERVER_OPTIONS,
+				`pool.size must be an integer from 1 through ${BROWSER_SERVER_POOL_LIMIT}`,
 			)
 		if (!isInteger(contexts) || contexts < 1 || contexts > BROWSER_SERVER_CONTEXTS_LIMIT)
 			throw new BrowserError(
-				`pool.contexts must be an integer from 1 through ${BROWSER_SERVER_CONTEXTS_LIMIT}`,
 				BROWSER_SERVER_OPTIONS,
+				`pool.contexts must be an integer from 1 through ${BROWSER_SERVER_CONTEXTS_LIMIT}`,
 			)
 		this.#admission = size * contexts
 		this.#log = options?.log ?? process.stderr
@@ -364,11 +362,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		if (this.#closing !== undefined) throw this.#ended()
 		const purpose = args['purpose']
 		if (!isString(purpose) || purpose.trim().length === 0)
-			throw new BrowserError('purpose must describe the work', 'BROWSER_TOOLSET_ARGUMENT')
+			throw new BrowserError('TOOLSET_ARGUMENT', 'purpose must describe the work')
 		if (this.#holders.size >= this.#admission)
 			throw new BrowserError(
-				`${BROWSER_SERVER_BUSY}: ${[...this.#holders.values()].map((holder) => `${holder.id} (${holder.purpose})`).join(', ')}. Call destroy for a holder no longer needed or call the named tools to share the shared browser.`,
 				BROWSER_SERVER_BUSY,
+				`${BROWSER_SERVER_BUSY}: ${[...this.#holders.values()].map((holder) => `${holder.id} (${holder.purpose})`).join(', ')}. Call destroy for a holder no longer needed or call the named tools to share the shared browser.`,
 			)
 		const holder: BrowserServerHolder = { id: randomUUID(), purpose, abort: new AbortController() }
 		this.#holders.set(holder.id, holder)
@@ -399,8 +397,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const holder = isString(value) ? this.#holders.get(value) : undefined
 		if (holder === undefined || holder === this.#shared || holder.abort.signal.aborted)
 			throw new BrowserError(
-				`${BROWSER_SERVER_HOLDER}: unknown or ended holder`,
 				BROWSER_SERVER_HOLDER,
+				`${BROWSER_SERVER_HOLDER}: unknown or ended holder`,
 			)
 		return holder
 	}
@@ -410,7 +408,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const name = args['name']
 		const parameters = args['arguments']
 		if (!isString(name) || !isRecord(parameters))
-			throw new BrowserError('execute requires name and arguments', 'BROWSER_TOOLSET_ARGUMENT')
+			throw new BrowserError('TOOLSET_ARGUMENT', 'execute requires name and arguments')
 		return this.#forward(holder, name, parameters, context)
 	}
 
@@ -431,13 +429,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			context.signal.throwIfAborted()
 			if (holder.abort.signal.aborted)
 				throw new BrowserError(
-					`${BROWSER_SERVER_UNRESOLVED}: the holder ended during the call`,
 					BROWSER_SERVER_UNRESOLVED,
+					`${BROWSER_SERVER_UNRESOLVED}: the holder ended during the call`,
 				)
 			if (isBrowserError(error))
 				throw new BrowserError(
-					this.#annotate(holder, `${error.code}: ${error.message}`),
 					error.code,
+					this.#annotate(holder, `${error.code}: ${error.message}`),
 				)
 			throw error
 		}
@@ -492,8 +490,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			return this.#perform(holder, name, args, context)
 		if (this.#writers.has(journey) || (name === 'forget' && this.#readers.has(journey)))
 			throw new BrowserError(
-				`BROWSER_JOURNEY_LOCKED: Journey ${journey} is locked; call ${name} again.`,
-				'BROWSER_JOURNEY_LOCKED',
+				'JOURNEY_LOCKED',
+				`JOURNEY_LOCKED: Journey ${journey} is locked; call ${name} again.`,
 				{ name: journey },
 			)
 		const reader = Symbol(journey)
@@ -532,13 +530,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			context.signal.throwIfAborted()
 			if (holder !== this.#shared && holder.abort.signal.aborted)
 				throw new BrowserError(
-					`${BROWSER_SERVER_UNRESOLVED}: the holder ended during the call`,
 					BROWSER_SERVER_UNRESOLVED,
+					`${BROWSER_SERVER_UNRESOLVED}: the holder ended during the call`,
 				)
 			if (isBrowserError(error))
 				throw new BrowserError(
-					this.#annotate(holder, `${error.code}: ${error.message}`),
 					error.code,
+					this.#annotate(holder, `${error.code}: ${error.message}`),
 				)
 			throw error
 		}
@@ -565,8 +563,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		context.signal.throwIfAborted()
 		if (holder !== this.#shared && holder.abort.signal.aborted)
 			throw new BrowserError(
-				BROWSER_SERVER_UNRESOLVED + ': the holder ended during the call',
 				BROWSER_SERVER_UNRESOLVED,
+				BROWSER_SERVER_UNRESOLVED + ': the holder ended during the call',
 			)
 		if (!result.success) {
 			if (this.#leases.get(holder) === lease && !context.signal.aborted) {
@@ -580,15 +578,16 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			if (this.#leases.get(holder) !== lease) {
 				const loss = this.#departures.get(lease)
 				throw new BrowserError(
+					BROWSER_SERVER_UNRESOLVED,
 					this.#annotate(
 						holder,
 						describeBrowserServerLoss(BROWSER_SERVER_UNRESOLVED, loss?.cause, loss?.url),
 						lease,
 					),
-					BROWSER_SERVER_UNRESOLVED,
 				)
 			}
 			throw new BrowserError(
+				'PROTOCOL',
 				boundBrowserText(
 					this.#annotate(holder, result.error, lease),
 					BROWSER_TOOL_LIMIT,
@@ -981,7 +980,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 					!this.#losses.has(slot) &&
 					slot.browser.status === 'connected' &&
 					this.#closing === undefined &&
-					!isCDPConnectionError(failure)
+					!(isBrowserError(failure) && failure.code === 'DISCONNECTED')
 				)
 					this.#fault(failure)
 			})
@@ -992,7 +991,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 
 	async #destroyRecord(slot: BrowserSlot): Promise<void> {
 		// A timed-out browser cannot answer context cleanup; kill before awaiting that cleanup.
-		if (isCDPTimeoutError(this.#losses.get(slot)?.cause) && slot.browser.pid !== undefined) {
+		const cause = this.#losses.get(slot)?.cause
+		if (isBrowserError(cause) && cause.code === 'TIMEOUT' && slot.browser.pid !== undefined) {
 			try {
 				process.kill(slot.browser.pid, 'SIGKILL')
 			} catch (error) {
@@ -1025,8 +1025,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		if (this.#closing !== undefined) throw this.#ended()
 		if (this.#stranded !== undefined)
 			throw new BrowserError(
-				isError(this.#stranded) ? this.#stranded.message : String(this.#stranded),
 				BROWSER_SERVER_TEARDOWN,
+				isError(this.#stranded) ? this.#stranded.message : String(this.#stranded),
 				isBrowserError(this.#stranded) ? this.#stranded.context : undefined,
 			)
 		const profile = join(this.#root, '.profiles', formatBrowserLockEntry(process.pid, randomUUID()))
@@ -1159,8 +1159,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	#unavailable(cause: unknown): BrowserError {
 		const message = describeBrowserServerLoss(BROWSER_SERVER_UNAVAILABLE, cause)
 		return new BrowserError(
-			message.slice(BROWSER_SERVER_UNAVAILABLE.length + 2),
 			BROWSER_SERVER_UNAVAILABLE,
+			message.slice(BROWSER_SERVER_UNAVAILABLE.length + 2),
 		)
 	}
 
@@ -1205,6 +1205,6 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	#ended(): BrowserError {
-		return new BrowserError('the browser session ended', 'BROWSER_TOOLSET_ENDED')
+		return new BrowserError('TOOLSET_ENDED', 'the browser session ended')
 	}
 }

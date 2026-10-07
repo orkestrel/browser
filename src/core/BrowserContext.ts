@@ -140,7 +140,7 @@ export class BrowserContext implements BrowserContextInterface {
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
 		if (this.#shutdown !== undefined)
-			throw new BrowserError('Browser context is closed', 'BROWSER_CONTEXT_CLOSED')
+			throw new BrowserError('CONTEXT_CLOSED', 'Browser context is closed')
 
 		const attempt = this.#create(options)
 		this.#creating.add(attempt)
@@ -158,7 +158,7 @@ export class BrowserContext implements BrowserContextInterface {
 			active = this.#syncing.pending
 		}
 		if (this.#shutdown !== undefined)
-			throw new BrowserError('Browser context is closed', 'BROWSER_CONTEXT_CLOSED')
+			throw new BrowserError('CONTEXT_CLOSED', 'Browser context is closed')
 
 		await this.#syncing.execute(() => this.#sync(targets))
 	}
@@ -191,7 +191,7 @@ export class BrowserContext implements BrowserContextInterface {
 		})
 
 		if (!isRecord(result) || !isString(result['targetId'])) {
-			throw new BrowserError('Failed to create new browser target')
+			throw new BrowserError('PROTOCOL', 'Failed to create new browser target')
 		}
 
 		const targetId = result['targetId']
@@ -215,10 +215,7 @@ export class BrowserContext implements BrowserContextInterface {
 				})
 			}
 			if (this.#shutdown !== undefined) {
-				throw new BrowserError(
-					'Browser context closed during page creation',
-					'BROWSER_CONTEXT_CLOSED',
-				)
+				throw new BrowserError('CONTEXT_CLOSED', 'Browser context closed during page creation')
 			}
 
 			if (!this.#publish(page)) throw this.#refuse(targetId)
@@ -230,7 +227,7 @@ export class BrowserContext implements BrowserContextInterface {
 				throw error
 			}
 			// A target another path already holds stays open; the creation joins that path's page.
-			if (instanceOf(BrowserError)(error) && error.code === 'BROWSER_TARGET_HELD') {
+			if (instanceOf(BrowserError)(error) && error.code === 'TARGET_HELD') {
 				this.#unreserve(targetId, published)
 				const retry = await this.#acquire(targetId)
 				if (retry === undefined) return await this.#join(targetId, options)
@@ -463,7 +460,7 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	#refuse(target: string): BrowserError {
-		return new BrowserError('Browser page closed during creation', 'BROWSER_PAGE_CLOSED', {
+		return new BrowserError('PAGE_CLOSED', 'Browser page closed during creation', {
 			target,
 		})
 	}
@@ -480,7 +477,7 @@ export class BrowserContext implements BrowserContextInterface {
 
 	#unreserve(target: string, published: PromiseWithResolvers<void>): void {
 		if (this.#publishing.get(target) === published.promise) this.#publishing.delete(target)
-		published.reject(new BrowserError('Browser page was not published'))
+		published.reject(new BrowserError('PROTOCOL', 'Browser page was not published'))
 	}
 
 	// Publishes a live page once; true if the context holds it afterwards, false for a closed page.
@@ -498,7 +495,7 @@ export class BrowserContext implements BrowserContextInterface {
 			flatten: true,
 		})
 		if (!isRecord(result) || !isString(result['sessionId'])) {
-			throw new BrowserError('Failed to attach to browser target')
+			throw new BrowserError('PROTOCOL', 'Failed to attach to browser target')
 		}
 		return result['sessionId']
 	}
@@ -511,7 +508,8 @@ export class BrowserContext implements BrowserContextInterface {
 	async #mainFrame(sessionId: string): Promise<string> {
 		const result = await this.#client.send('Page.getFrameTree', undefined, { session: sessionId })
 		const frame = readBrowserFrames(result)[0]
-		if (frame === undefined) throw new BrowserError('Failed to resolve the main browser frame')
+		if (frame === undefined)
+			throw new BrowserError('PROTOCOL', 'Failed to resolve the main browser frame')
 		return frame.id
 	}
 

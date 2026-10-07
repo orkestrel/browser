@@ -303,7 +303,7 @@ describe('journey semantic replay', () => {
 						arguments: {},
 						target: { role: 'button', name: 'Delete' },
 					}),
-				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_AMBIGUOUS' })
+				).rejects.toMatchObject({ code: 'JOURNEY_AMBIGUOUS' })
 				expect(
 					transport.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
 				).toEqual([])
@@ -333,7 +333,7 @@ describe('journey semantic replay', () => {
 			await expect(
 				toolset.follow('s1', { action: 'click', arguments: {}, target }),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_TARGET',
+				code: 'JOURNEY_TARGET',
 			})
 			const run = await createBrowserReplay(toolset, { journey }).execute()
 			expect(run.outcome).toBe('stopped')
@@ -498,7 +498,7 @@ describe('compiled module equality', () => {
 		expect(failure).toMatchObject({
 			message: 's2: the element is in a child frame; handle it here',
 		})
-		expect(refusal).toMatchObject({ code: 'BROWSER_JOURNEY_GAP' })
+		expect(refusal).toMatchObject({ code: 'JOURNEY_GAP' })
 		expect(
 			await readBrowserJourneyOutcome(built.context.pages(), clicked, scenario.state),
 		).toStrictEqual([{ clicks: 'save:true submit:true', saved: 'yes' }])
@@ -984,7 +984,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 
 			expect(refused).toEqual({
 				refusal: {
-					code: 'BROWSER_JOURNEY_PLACEMENT',
+					code: 'JOURNEY_PLACEMENT',
 					message: 'Step s2 cannot execute press in this placement.',
 				},
 				events: '0',

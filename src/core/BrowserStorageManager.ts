@@ -53,7 +53,7 @@ export class BrowserStorageManager implements BrowserStorageManagerInterface {
 		for (const origin of origins) {
 			const page = pages.find((candidate) => this.#origin(candidate.url) === origin)
 			if (page === undefined) {
-				throw new BrowserError('Storage origin has no attached page', undefined, { origin })
+				throw new BrowserError('ARGUMENT', 'Storage origin has no attached page', { origin })
 			}
 			storage.push(
 				readBrowserStorageOrigin(await page.evaluate(compileStorageReadExpression()), origin),
@@ -80,7 +80,7 @@ export class BrowserStorageManager implements BrowserStorageManagerInterface {
 			const normalized = this.#validate(origin.origin)
 			const page = pages.find((candidate) => this.#origin(candidate.url) === normalized)
 			if (page === undefined) {
-				throw new BrowserError('Storage origin has no attached page', undefined, {
+				throw new BrowserError('ARGUMENT', 'Storage origin has no attached page', {
 					origin: normalized,
 				})
 			}
@@ -90,7 +90,7 @@ export class BrowserStorageManager implements BrowserStorageManagerInterface {
 			const normalized = this.#validate(origin.origin)
 			const page = pages.find((candidate) => this.#origin(candidate.url) === normalized)
 			if (page === undefined) {
-				throw new BrowserError('Storage origin disappeared during restore', undefined, {
+				throw new BrowserError('CLOSED', 'Storage origin disappeared during restore', {
 					origin: normalized,
 				})
 			}
@@ -118,8 +118,8 @@ export class BrowserStorageManager implements BrowserStorageManagerInterface {
 		const origin = this.#origin(value)
 		if (origin === undefined) {
 			throw new BrowserError(
+				'ARGUMENT',
 				'Browser storage origin must be an absolute HTTP(S) origin',
-				undefined,
 				{
 					origin: value,
 				},

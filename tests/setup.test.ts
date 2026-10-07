@@ -203,7 +203,7 @@ describe('element protocol and compiler fixtures', () => {
 				),
 			)
 
-			expect(refusals[0]).toMatchObject({ code: 'BROWSER_TARGET_HELD' })
+			expect(refusals[0]).toMatchObject({ code: 'TARGET_HELD' })
 			expect(refusals[1]).toBeUndefined()
 		} finally {
 			await held.client.close()
@@ -346,7 +346,7 @@ describe('element protocol and compiler fixtures', () => {
 		await expect(save.select(['x'])).rejects.toThrow('Element is not a select control')
 		await requireValue(view.elements.element('e3')).select(['Large'])
 		const wait = await view.wait('Paid').catch((caught: unknown) => caught)
-		expect(readProperty(wait, 'code')).toBe('BROWSER_WAIT_TIMEOUT')
+		expect(readProperty(wait, 'code')).toBe('WAIT_TIMEOUT')
 		expect(view.elements.element('e9')).toBeUndefined()
 		expect(view.calls).toEqual([
 			'outline',

@@ -67,7 +67,7 @@ export class BrowserDialog implements BrowserDialogInterface {
 
 	#assert(): void {
 		if (this.#handled || this.#handling) {
-			throw new BrowserError('Browser dialog is already handled')
+			throw new BrowserError('CLOSED', 'Browser dialog is already handled')
 		}
 	}
 }

@@ -1441,7 +1441,7 @@ describe('BrowserContext', () => {
 				transport.reply(requireValue(pending[0], 'late navigation').id, {})
 
 				const refusal = await refused
-				expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_PAGE_CLOSED')
+				expect(isBrowserError(refusal) && refusal.code).toBe('PAGE_CLOSED')
 				expect(context.pages()).toEqual([])
 			} finally {
 				await client.close()
@@ -1589,7 +1589,7 @@ describe('BrowserContext', () => {
 
 				expect(page.closed).toBe(true)
 				const refusal = await refused
-				expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_PAGE_CLOSED')
+				expect(isBrowserError(refusal) && refusal.code).toBe('PAGE_CLOSED')
 				expect(context.pages()).toEqual([])
 				expect(transport.sent.some((message) => message.method === 'Page.navigate')).toBe(false)
 			} finally {
@@ -1742,7 +1742,7 @@ describe('BrowserContext', () => {
 			await expect(context.create()).rejects.toThrow('Browser context is closed')
 		})
 
-		it('catches a closed-context refusal without BROWSER_CONTEXT_CLOSED, or an attachment failure that loses the client error', async () => {
+		it('catches a closed-context refusal without CONTEXT_CLOSED, or an attachment failure that loses the client error', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			const held: CDPSentMessage[] = []
 			scriptCDPAttach(transport, 'session-1', undefined, (message) => {
@@ -1771,9 +1771,9 @@ describe('BrowserContext', () => {
 						isBrowserError(error) && error.code,
 					]),
 				).toEqual([
-					['Browser context closed during page creation', 'BROWSER_CONTEXT_CLOSED'],
-					['Browser context is closed', 'BROWSER_CONTEXT_CLOSED'],
-					['Browser context is closed', 'BROWSER_CONTEXT_CLOSED'],
+					['Browser context closed during page creation', 'CONTEXT_CLOSED'],
+					['Browser context is closed', 'CONTEXT_CLOSED'],
+					['Browser context is closed', 'CONTEXT_CLOSED'],
 				])
 			} finally {
 				await client.close()
@@ -1789,7 +1789,7 @@ describe('BrowserContext', () => {
 					.create()
 					.catch((error: unknown) => error)
 				expect(isBrowserError(refusal) && [refusal.code, refusal.message]).toEqual([
-					'BROWSER_CDP_ERROR',
+					'REMOTE',
 					'No target with given id found',
 				])
 			} finally {

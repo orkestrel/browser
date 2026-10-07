@@ -20,18 +20,17 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { addAbortListener, once } from 'node:events'
-import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/contract'
+import { isArray, isError, isInteger, isRecord, isString, isJSONValue } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
-	BrowserConnectionError,
 	BrowserContext,
 	BrowserTransition,
 	BROWSER_DEFAULT_TIMEOUT_MS,
 	CDPClient,
-	isBrowserConnectionError,
 	validateBrowserContextOptions,
+	BrowserError,
+	isBrowserError,
 } from '@src/core'
-import { BrowserDestroyedError, BrowserNotConnectedError } from './errors.js'
 import {
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_CDP_VERSION_PATH,
@@ -146,10 +145,10 @@ export class Browser implements BrowserInterface {
 	}
 
 	async ping(options?: BrowserCallOptions): Promise<void> {
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 		const client = this.#client
 		if (this.#status !== 'connected' || client === undefined) {
-			throw new BrowserNotConnectedError()
+			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		}
 		await client.send('Browser.getVersion', undefined, options)
 	}
@@ -161,7 +160,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	async connect(): Promise<void> {
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 
 		const active = this.#connecting.pending
 		if (active !== undefined) {
@@ -174,13 +173,13 @@ export class Browser implements BrowserInterface {
 	}
 
 	adopt(): void {
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 		if (
 			this.#status !== 'connected' ||
 			this.#client === undefined ||
 			this.#endpoint === undefined
 		) {
-			throw new BrowserNotConnectedError()
+			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		}
 		this.#owned = true
 	}
@@ -219,10 +218,10 @@ export class Browser implements BrowserInterface {
 	}
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 		const client = this.#client
 		if (this.#status !== 'connected' || client === undefined) {
-			throw new BrowserNotConnectedError()
+			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		}
 
 		let context = this.#contexts[0]
@@ -263,10 +262,10 @@ export class Browser implements BrowserInterface {
 	// === Private helpers
 
 	async #isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 		const client = this.#client
 		if (this.#status !== 'connected' || client === undefined) {
-			throw new BrowserNotConnectedError()
+			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		}
 		validateBrowserContextOptions(options)
 		const params: Record<string, unknown> = { disposeOnDetach: false }
@@ -281,7 +280,7 @@ export class Browser implements BrowserInterface {
 		}
 		const result = await client.send('Target.createBrowserContext', params)
 		if (!isRecord(result) || !isString(result['browserContextId'])) {
-			throw new BrowserConnectionError('Failed to create isolated browser context')
+			throw new BrowserError('CONNECTION', 'Failed to create isolated browser context')
 		}
 		const id = result['browserContextId']
 		const context = new BrowserContext(
@@ -295,7 +294,8 @@ export class Browser implements BrowserInterface {
 		)
 
 		try {
-			if (this.#destroyed || this.#client !== client) throw new BrowserDestroyedError()
+			if (this.#destroyed || this.#client !== client)
+				throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 			if (options?.downloads !== undefined) {
 				await client.send('Browser.setDownloadBehavior', {
 					behavior: options.downloads.named === true ? 'allowAndName' : 'allow',
@@ -304,7 +304,8 @@ export class Browser implements BrowserInterface {
 					eventsEnabled: true,
 				})
 			}
-			if (this.#destroyed || this.#client !== client) throw new BrowserDestroyedError()
+			if (this.#destroyed || this.#client !== client)
+				throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 		} catch (error) {
 			await context.close().catch(() => undefined)
 			throw error
@@ -318,7 +319,7 @@ export class Browser implements BrowserInterface {
 		const disconnecting = this.#disconnecting.pending
 		if (disconnecting !== undefined) await disconnecting
 		await this.#settleExit()
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 		if (this.#status === 'connected') return
 
 		this.#assertNotAborted()
@@ -351,14 +352,20 @@ export class Browser implements BrowserInterface {
 			this.#assertNotAborted()
 			await this.#launch()
 		} catch (error) {
-			if (this.#destroyed) throw new BrowserDestroyedError()
+			if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
 
 			this.#status = 'error'
 			this.#emitter.emit('error', error)
-			if (isBrowserConnectionError(error)) throw error
+			if (isBrowserError(error) && error.code === 'CONNECTION') throw error
 
 			const message = isError(error) ? error.message : String(error)
-			throw new BrowserConnectionError(message, { executable: this.#options.executable })
+			throw new BrowserError(
+				'CONNECTION',
+				message,
+				this.#options.executable === undefined
+					? undefined
+					: { executable: this.#options.executable },
+			)
 		}
 	}
 
@@ -385,7 +392,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	#assertNotAborted(): void {
-		if (this.#signal().aborted) throw new BrowserConnectionError('Connection aborted')
+		if (this.#signal().aborted) throw new BrowserError('CONNECTION', 'Connection aborted')
 	}
 
 	#signal(): AbortSignal {
@@ -397,11 +404,11 @@ export class Browser implements BrowserInterface {
 
 	async #raceAbort<T>(promise: Promise<T>): Promise<T> {
 		const signal = this.#signal()
-		if (signal.aborted) throw new BrowserConnectionError('Connection aborted')
+		if (signal.aborted) throw new BrowserError('CONNECTION', 'Connection aborted')
 
 		const aborted = Promise.withResolvers<never>()
 		const listener = addAbortListener(signal, () => {
-			aborted.reject(new BrowserConnectionError('Connection aborted'))
+			aborted.reject(new BrowserError('CONNECTION', 'Connection aborted'))
 		})
 
 		try {
@@ -435,7 +442,7 @@ export class Browser implements BrowserInterface {
 
 		this.#emitter.emit(
 			'error',
-			new BrowserConnectionError('The browser process exited unexpectedly', {
+			new BrowserError('CONNECTION', 'The browser process exited unexpectedly', {
 				cause: BROWSER_PROCESS_EXIT_CAUSE,
 			}),
 		)
@@ -494,7 +501,7 @@ export class Browser implements BrowserInterface {
 		void this.#closeClient(client)
 		this.#emitter.emit(
 			'error',
-			new BrowserConnectionError('The CDP transport connection was lost', {
+			new BrowserError('CONNECTION', 'The CDP transport connection was lost', {
 				cause: BROWSER_TRANSPORT_LOSS_CAUSE,
 			}),
 		)
@@ -569,7 +576,8 @@ export class Browser implements BrowserInterface {
 
 	async #assertPortFree(): Promise<void> {
 		if (await this.#probePort()) {
-			throw new BrowserConnectionError(
+			throw new BrowserError(
+				'CONNECTION',
 				`Port ${this.#cdpPort} on ${this.#cdpHost} is already occupied by another CDP endpoint`,
 				{ port: this.#cdpPort, host: this.#cdpHost },
 			)
@@ -622,7 +630,7 @@ export class Browser implements BrowserInterface {
 
 	async #launch(): Promise<void> {
 		if (this.#process !== undefined) {
-			throw new BrowserConnectionError('A browser process is already active on this instance')
+			throw new BrowserError('CONNECTION', 'A browser process is already active on this instance')
 		}
 
 		const requestedEngine = this.#options.engine ?? this.#options.browsers?.engine
@@ -641,7 +649,8 @@ export class Browser implements BrowserInterface {
 		}
 
 		if (executable === undefined) {
-			throw new BrowserConnectionError(
+			throw new BrowserError(
+				'CONNECTION',
 				'No Chromium browser found. Install Chrome, Edge, or Chromium.',
 				requestedEngine === undefined ? undefined : { engine: requestedEngine },
 			)
@@ -736,9 +745,15 @@ export class Browser implements BrowserInterface {
 
 		if (pid === undefined) {
 			await this.#closeRemote(client)
-			throw new BrowserConnectionError(
+			throw new BrowserError(
+				'CONNECTION',
 				'The browser launcher exited without naming the process serving its CDP endpoint',
-				{ executable: this.#options.executable, pid: process.pid },
+				{
+					...(this.#options.executable === undefined
+						? {}
+						: { executable: this.#options.executable }),
+					...(process.pid === undefined ? {} : { pid: process.pid }),
+				},
 			)
 		}
 
@@ -750,14 +765,18 @@ export class Browser implements BrowserInterface {
 		executable: string,
 		args?: readonly string[],
 	): Promise<string> {
-		const context = { executable, args }
+		const context = { executable, ...(args === undefined ? {} : { args }) }
 		const timeout = this.#timeout()
 		const controller = new AbortController()
 		const deadline = AbortSignal.timeout(timeout)
 		const signal = AbortSignal.any([controller.signal, this.#signal(), deadline])
 		const stderr = process.stderr
 		if (stderr === null) {
-			throw new BrowserConnectionError('The browser process has no standard error to read', context)
+			throw new BrowserError(
+				'CONNECTION',
+				'The browser process has no standard error to read',
+				context,
+			)
 		}
 		const exit = once(process, 'exit', { signal })
 		void exit.catch(() => undefined)
@@ -768,7 +787,8 @@ export class Browser implements BrowserInterface {
 			if (signal.aborted) throw error
 			const values = await exit
 			if (values[0] === 0 && values[1] === null) throw error
-			throw new BrowserConnectionError(
+			throw new BrowserError(
+				'CONNECTION',
 				this.#formatLaunchExit(
 					isInteger(values[0]) ? values[0] : null,
 					isString(values[1]) ? values[1] : null,
@@ -785,23 +805,25 @@ export class Browser implements BrowserInterface {
 			// the same readiness budget, which still fails when the line never
 			// arrives.
 			if (code === 0 && exitSignal === null) return ready
-			throw new BrowserConnectionError(this.#formatLaunchExit(code, exitSignal), context)
+			throw new BrowserError('CONNECTION', this.#formatLaunchExit(code, exitSignal), context)
 		})
 
 		try {
 			return await Promise.race([ready, exited])
 		} catch (error) {
-			if (isBrowserConnectionError(error)) throw error
-			if (this.#signal().aborted) throw new BrowserConnectionError('Connection aborted', context)
+			if (isBrowserError(error) && error.code === 'CONNECTION') throw error
+			if (this.#signal().aborted)
+				throw new BrowserError('CONNECTION', 'Connection aborted', context)
 			if (deadline.aborted) {
-				throw new BrowserConnectionError(
+				throw new BrowserError(
+					'CONNECTION',
 					`Browser did not report a CDP endpoint within ${timeout}ms`,
 					{ ...context, timeout },
 				)
 			}
 
 			const message = isError(error) ? error.message : String(error)
-			throw new BrowserConnectionError(message, context)
+			throw new BrowserError('CONNECTION', message, context)
 		} finally {
 			controller.abort()
 			void ready.catch(() => undefined)
@@ -1103,10 +1125,11 @@ export class Browser implements BrowserInterface {
 				isError(error) && 'code' in error && isString(error.code) ? error.code : undefined
 			if (code === 'ESRCH') return false
 			if (signal === 0) return code === 'EPERM' ? true : undefined
-			throw new BrowserConnectionError('Failed to signal the browser process', {
-				pid: serving ?? pid,
+			const target = serving ?? pid
+			throw new BrowserError('CONNECTION', 'Failed to signal the browser process', {
+				...(target === undefined ? {} : { pid: target }),
 				signal,
-				cause: error,
+				cause: isJSONValue(error) ? error : String(error),
 			})
 		}
 	}
@@ -1166,8 +1189,9 @@ export class Browser implements BrowserInterface {
 			if (this.#signalProcess(process, 'SIGKILL') === false) return
 			if (await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS, true)) return
 
-			throw new BrowserConnectionError('Browser process did not exit after SIGKILL', {
-				pid: this.#servingPid ?? process.pid,
+			const target = this.#servingPid ?? process.pid
+			throw new BrowserError('CONNECTION', 'Browser process did not exit after SIGKILL', {
+				...(target === undefined ? {} : { pid: target }),
 			})
 		} finally {
 			await this.#closeProcessPipe(process)

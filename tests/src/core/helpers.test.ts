@@ -1,4 +1,4 @@
-import { scanBrowserLines } from '@src/core'
+import { scanBrowserLines, describeBrowserRefusal, isBrowserError } from '@src/core'
 import { renderBrowserLine } from '@src/core'
 /**
  * src/core/helpers.ts tests.
@@ -38,7 +38,6 @@ import {
 	renderBrowserToolOutput,
 	deriveBrowserToolSchema,
 	BROWSER_REGISTRY_OUTPUT_LIMIT,
-	BrowserResultLimitError,
 	decodeBase64,
 	extractBrowserSlice,
 	readBrowserAttributes,
@@ -49,7 +48,6 @@ import {
 	encodeBase64,
 	isBrowserNodeQuery,
 	isBrowserNodeVisible,
-	isBrowserResultLimitError,
 	matchesBrowserNode,
 	settleBrowserTeardown,
 	readBrowserFrames,
@@ -65,7 +63,6 @@ import {
 	readBrowserToolString,
 	renderBrowserElement,
 	renderBrowserReceipt,
-	isBrowserElementError,
 } from '@src/core'
 import { readProperty, requireValue } from '@orkestrel/test'
 import {
@@ -88,6 +85,36 @@ import {
 	PNG_BASE64,
 	createBrowserOutlineNodes,
 } from '../../setup.js'
+
+describe('element refusals', () => {
+	it('keeps element references, named subjects, details, and punctuation', () => {
+		expect(describeBrowserRefusal('e4', 'GONE')).toBe(
+			'Element e4 is gone because the page changed; call read for fresh refs.',
+		)
+		expect(describeBrowserRefusal({ subject: 'outline' }, 'GONE', 'changed during capture')).toBe(
+			'outline changed during capture; call read for fresh refs.',
+		)
+		expect(describeBrowserRefusal({ subject: 'Upload' }, 'UNTRUSTED')).toBe(
+			'Upload needs a trusted event.',
+		)
+		expect(
+			describeBrowserRefusal(
+				'e4',
+				'UNTRUSTED',
+				'opens a file chooser, which an untrusted click cannot do',
+			),
+		).toBe('Element e4 opens a file chooser, which an untrusted click cannot do.')
+		expect(describeBrowserRefusal('e4', 'UNKNOWN', 'is not editable')).toBe(
+			'Element e4 is not editable.',
+		)
+		expect(describeBrowserRefusal('e4', 'DISABLED', 'is disabled')).toBe('Element e4 is disabled.')
+		expect(describeBrowserRefusal('e4', 'HIDDEN')).toBe('Element e4 hidden.')
+		expect(describeBrowserRefusal('e4', 'OCCLUDED', 'is covered by div#veil')).toBe(
+			'Element e4 is covered by div#veil.',
+		)
+		expect(describeBrowserRefusal('e4', 'UNKNOWN', '')).toBe('Element e4 .')
+	})
+})
 
 describe('reading matches', () => {
 	it('bounds matches, cuts a long first row safely, and skips later long rows', () => {
@@ -595,7 +622,7 @@ describe('toolset helpers', () => {
 			const outcome = attempt(() => requireBrowserReference(value))
 			expect(outcome.success).toBe(false)
 			const error = readProperty(outcome, 'error')
-			expect(isBrowserElementError(error)).toBe(true)
+			expect(isBrowserError(error) && error.code === 'ELEMENT').toBe(true)
 			expect(String(error)).toContain('is not a reference such as e12; call read')
 		}
 	})
@@ -805,7 +832,7 @@ describe('evaluation result helpers', () => {
 		expect(readEvaluationResult({ result: {} })).toBeUndefined()
 	})
 
-	it('maps the result-limit sentinel to BrowserResultLimitError', () => {
+	it('maps the result-limit sentinel to BrowserError', () => {
 		const result = attempt(() =>
 			readEvaluationResult({
 				exceptionDetails: {
@@ -818,9 +845,11 @@ describe('evaluation result helpers', () => {
 
 		expect(result.success).toBe(false)
 		if (result.success) return
-		expect(isBrowserResultLimitError(result.error)).toBe(true)
+		expect(isBrowserError(result.error) && result.error.code === 'RESULT_LIMIT').toBe(true)
 		expect(
-			isBrowserResultLimitError(result.error) ? result.error.context : undefined,
+			isBrowserError(result.error) && result.error.code === 'RESULT_LIMIT'
+				? result.error.context
+				: undefined,
 		).toMatchObject({
 			length: 1234,
 		})
@@ -1036,10 +1065,13 @@ describe('snapshot decoders', () => {
 
 	it('rejects invalid limits and enforces the aggregate node limit', () => {
 		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], -1)).toThrow(
-			'Browser snapshot limit must be a non-negative integer',
+			expect.objectContaining({
+				code: 'ARGUMENT',
+				message: 'Browser snapshot limit must be a non-negative integer',
+			}),
 		)
 		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], 8)).toThrow(
-			BrowserResultLimitError,
+			expect.objectContaining({ code: 'RESULT_LIMIT' }),
 		)
 		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], 9)).not.toThrow()
 	})
@@ -1208,7 +1240,7 @@ describe('journey editing and rendering', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				message: 'Edit 1 is refused: it removes the last step',
 				context: { index: 1 },
 			},
@@ -1242,7 +1274,7 @@ describe('journey editing and rendering', () => {
 		expect(() => validateBrowserJourneyName('a'.repeat(64))).not.toThrow()
 		for (const name of [...BROWSER_STORE_INVALID_NAMES, 'a'.repeat(65)])
 			expect(() => validateBrowserJourneyName(name)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_PATH' }),
+				expect.objectContaining({ code: 'JOURNEY_PATH' }),
 			)
 	})
 	it('checks safe integer paging boundaries with the argument code', () => {
@@ -1256,15 +1288,15 @@ describe('journey editing and rendering', () => {
 			Number.MAX_SAFE_INTEGER + 1,
 		]) {
 			expect(() => validateBrowserStorePage(invalid, 1)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'JOURNEY_ARGUMENT' }),
 			)
 			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'JOURNEY_ARGUMENT' }),
 			)
 		}
 		for (const invalid of [0, -0])
 			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'JOURNEY_ARGUMENT' }),
 			)
 	})
 	it('attributes an exhausted id counter to the add before later edits', () => {
@@ -1287,7 +1319,7 @@ describe('journey editing and rendering', () => {
 		const before = structuredClone(BROWSER_JOURNEY_FIXTURE)
 		expect(attempt(() => editBrowserJourney(BROWSER_JOURNEY_FIXTURE, edits))).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_EDIT', context: { index } },
+			error: { code: 'JOURNEY_EDIT', context: { index } },
 		})
 		expect(BROWSER_JOURNEY_FIXTURE).toEqual(before)
 	})
@@ -1312,7 +1344,7 @@ describe('journey editing and rendering', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				context: { index: 1 },
 				message: 'Edit 1 is refused: it binds undeclared parameter "missing"',
 			},
@@ -1336,7 +1368,7 @@ describe('journey editing and rendering', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				message: 'Edit 1 is refused: it declares "unused" but no step binds it',
 				context: { index: 1, reason: 'declares "unused" but no step binds it' },
 			},
@@ -1397,7 +1429,7 @@ describe('journey editing and rendering', () => {
 		expect(result).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				message: expect.stringMatching(/^Edit 2 is refused: its? [^\n]+[^.]$/),
 			},
 		})

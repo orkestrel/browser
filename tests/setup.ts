@@ -2569,7 +2569,7 @@ export function emitDocumentReady(
  * Configures the scripted results of a {@link BrowserViewDouble}.
  * @remarks
  * `url`, `title`, and `html` describe the document the view reads; `waited` is `false` to make
- * every text wait reject coded `BROWSER_WAIT_TIMEOUT`.
+ * every text wait reject coded `WAIT_TIMEOUT`.
  */
 export interface BrowserViewDoubleOptions {
 	readonly url?: string
@@ -2765,7 +2765,8 @@ export class BrowserElementDouble implements BrowserElementInterface {
 
 	async select(values: readonly string[], options?: BrowserCallOptions): Promise<void> {
 		options?.signal?.throwIfAborted()
-		if (this.#role !== 'combobox') throw new BrowserError('Element is not a select control')
+		if (this.#role !== 'combobox')
+			throw new BrowserError('ARGUMENT', 'Element is not a select control')
 		this.#calls.push(`select ${this.#reference} ${values.join(',')}`)
 	}
 
@@ -2899,7 +2900,7 @@ export class BrowserViewDouble implements BrowserViewInterface {
 		options?.signal?.throwIfAborted()
 		this.#calls.push(`wait ${text}${options?.absent === true ? ' absent' : ''}`)
 		if (!this.#waited)
-			throw new BrowserError('Browser text wait timed out', 'BROWSER_WAIT_TIMEOUT', { text })
+			throw new BrowserError('WAIT_TIMEOUT', 'Browser text wait timed out', { text })
 	}
 }
 
@@ -3816,7 +3817,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 			{ parameters: { status: {} } },
 		),
 		inputs: {},
-		code: 'BROWSER_JOURNEY_INPUT',
+		code: 'JOURNEY_INPUT',
 		context: { parameter: 'status' },
 		sentence: 'Journey check-ready needs the input "status"; call replay with inputs.',
 	},
@@ -3824,7 +3825,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 		name: 'unknown input',
 		journey: createBrowserJourneyFixture(),
 		inputs: { extra: 'Ready' },
-		code: 'BROWSER_JOURNEY_INPUT',
+		code: 'JOURNEY_INPUT',
 		context: { parameter: 'extra' },
 		sentence: 'Journey check-ready has no parameter named "extra"; call journeys.',
 	},
@@ -3834,7 +3835,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 			{ action: 'unresolved', arguments: {}, gap: 'child frame' },
 		]),
 		inputs: {},
-		code: 'BROWSER_JOURNEY_GAP',
+		code: 'JOURNEY_GAP',
 		context: { step: 's1' },
 		sentence:
 			'Journey check-ready has a gap at s1 (child frame); call edit to remove or replace s1.',
@@ -3843,7 +3844,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 		name: 'placement',
 		journey: createBrowserJourneyFixture([{ action: 'press', arguments: { key: 'Enter' } }]),
 		inputs: {},
-		code: 'BROWSER_JOURNEY_PLACEMENT',
+		code: 'JOURNEY_PLACEMENT',
 		context: { step: 's1', action: 'press', placement: 'dom' },
 		sentence:
 			'Journey check-ready cannot run here: s1 press is not available in a page toolset; call journeys.',
@@ -3853,7 +3854,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 		journey: createBrowserJourneyFixture(),
 		inputs: {},
 		corrupt: ['format', 9],
-		code: 'BROWSER_JOURNEY_FORMAT',
+		code: 'JOURNEY_FORMAT',
 		context: { action: 'replay', placement: 'dom' },
 		sentence: 'Journey check-ready cannot be read: Has an unknown journey format; call journeys.',
 	},
@@ -3862,7 +3863,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 		journey: createBrowserJourneyFixture(),
 		inputs: {},
 		corrupt: ['next', 0],
-		code: 'BROWSER_JOURNEY_INVALID',
+		code: 'JOURNEY_INVALID',
 		context: { action: 'replay', placement: 'dom' },
 		sentence: 'Journey check-ready cannot be read: has an invalid next counter; call journeys.',
 	},
@@ -4548,13 +4549,13 @@ export const BROWSER_JOURNEY_PREPARATION_CASES: readonly BrowserJourneyPreparati
 			name: 'a missing input',
 			journey: BROWSER_JOURNEY_PREPARED_JOURNEY,
 			inputs: {},
-			code: 'BROWSER_JOURNEY_INPUT',
+			code: 'JOURNEY_INPUT',
 		},
 		{
 			name: 'an unknown input',
 			journey: BROWSER_JOURNEY_PREPARED_JOURNEY,
 			inputs: { name: 'Grace', nmae: 'Grace' },
-			code: 'BROWSER_JOURNEY_INPUT',
+			code: 'JOURNEY_INPUT',
 		},
 		{
 			name: 'a gap',
@@ -4566,7 +4567,7 @@ export const BROWSER_JOURNEY_PREPARATION_CASES: readonly BrowserJourneyPreparati
 				{ name: 'gap-draft', description: 'Save the draft across a gap' },
 			),
 			inputs: {},
-			code: 'BROWSER_JOURNEY_GAP',
+			code: 'JOURNEY_GAP',
 		},
 		{
 			name: 'a switch without a context',
@@ -4582,7 +4583,7 @@ export const BROWSER_JOURNEY_PREPARATION_CASES: readonly BrowserJourneyPreparati
 				{ name: 'switch-draft', description: 'Save the draft and switch tabs' },
 			),
 			inputs: {},
-			code: 'BROWSER_JOURNEY_PLACEMENT',
+			code: 'JOURNEY_PLACEMENT',
 		},
 	])
 
@@ -4664,7 +4665,7 @@ export const BROWSER_JOURNEY_INPUT_CASES: readonly BrowserJourneyRefusalCase[] =
 		state: BROWSER_JOURNEY_DRAFT_STATE,
 		outcome: [{ clicks: '', saved: 'no' }],
 		message: 'name: the input is missing',
-		code: 'BROWSER_JOURNEY_INPUT',
+		code: 'JOURNEY_INPUT',
 	},
 	{
 		name: 'an unknown input',
@@ -4674,7 +4675,7 @@ export const BROWSER_JOURNEY_INPUT_CASES: readonly BrowserJourneyRefusalCase[] =
 		state: BROWSER_JOURNEY_DRAFT_STATE,
 		outcome: [{ clicks: '', saved: 'no' }],
 		message: 'nmae: no parameter has that name',
-		code: 'BROWSER_JOURNEY_INPUT',
+		code: 'JOURNEY_INPUT',
 	},
 	{
 		name: 'a defaulted input that is not a string',
@@ -4684,7 +4685,7 @@ export const BROWSER_JOURNEY_INPUT_CASES: readonly BrowserJourneyRefusalCase[] =
 		state: BROWSER_JOURNEY_DRAFT_STATE,
 		outcome: [{ clicks: '', saved: 'no' }],
 		message: 'name: the input is not a string',
-		code: 'BROWSER_JOURNEY_INPUT',
+		code: 'JOURNEY_INPUT',
 	},
 ])
 

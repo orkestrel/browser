@@ -51,16 +51,16 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 				!Number.isSafeInteger(value['revision']) ||
 				value['revision'] < 1
 			)
-				throw new BrowserError('Malformed journey revision', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('JOURNEY_FILE', 'Malformed journey revision')
 			if (!isRecord(value['journey']) || !('format' in value['journey']))
-				throw new BrowserError('Missing journey format', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('JOURNEY_FILE', 'Missing journey format')
 			validateBrowserJourney(value['journey'])
 			if (value['journey'].name !== name)
-				throw new BrowserError('Journey name differs from its directory', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('JOURNEY_FILE', 'Journey name differs from its directory')
 			return { journey: value['journey'], revision: value['revision'] }
 		} catch (error) {
 			const translated = this.#files.translateError(path, error)
-			throw new BrowserError(translated.message, translated.code, {
+			throw new BrowserError(translated.code, translated.message, {
 				...translated.context,
 				reason: normalizeBrowserJourneyReason(error),
 			})
@@ -83,17 +83,14 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			async () => {
 				const current = await this.get(owned.name, options)
 				if (expected !== undefined && expected !== (current?.revision ?? 0))
-					throw new BrowserError(
-						`Journey ${owned.name} changed since you read it`,
-						'BROWSER_JOURNEY_STALE',
-					)
+					throw new BrowserError('JOURNEY_STALE', `Journey ${owned.name} changed since you read it`)
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
 				if (!Number.isSafeInteger(previous) || previous < 0 || source?.trim() === '')
-					throw new BrowserError(`Malformed revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
+					throw new BrowserError('JOURNEY_FILE', `Malformed revision: ${counter}`)
 				const revision = Math.max(previous, current?.revision ?? 0) + 1
 				if (!Number.isSafeInteger(revision))
-					throw new BrowserError(`Exhausted revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
+					throw new BrowserError('JOURNEY_FILE', `Exhausted revision: ${counter}`)
 				const saved = { journey: owned, revision }
 				await this.#files.write(path, JSON.stringify(saved), options)
 				try {
@@ -122,7 +119,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
 				if (!Number.isSafeInteger(previous) || previous < 0 || source?.trim() === '')
-					throw new BrowserError(`Malformed revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
+					throw new BrowserError('JOURNEY_FILE', `Malformed revision: ${counter}`)
 				// Preserve the committed revision even if a process exited before updating its counter.
 				await this.#files.write(counter, String(Math.max(previous, current.revision ?? 0)), options)
 				await this.#files.remove(

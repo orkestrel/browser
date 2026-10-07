@@ -1,6 +1,5 @@
 export * from './types.js'
 export * from './constants.js'
-export * from './errors.js'
 export * from './helpers.js'
 export * from './transports/WebSocketCDPTransport.js'
 export * from './writers/FileBrowserWriter.js'

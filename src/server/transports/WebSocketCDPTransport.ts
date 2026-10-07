@@ -7,7 +7,7 @@ import type { Duplex } from 'node:stream'
 import { randomBytes } from 'node:crypto'
 import { request as httpRequest } from 'node:http'
 import { request as httpsRequest } from 'node:https'
-import { attempt, isString } from '@orkestrel/contract'
+import { attempt, isString, isJSONValue } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
 	computeWebSocketAccept,
@@ -16,7 +16,7 @@ import {
 	WEBSOCKET_READY_OPEN,
 	WEBSOCKET_VERSION,
 } from '@orkestrel/websocket'
-import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserConnectionError, BrowserTransition } from '@src/core'
+import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserTransition, BrowserError } from '@src/core'
 
 // === WebSocketCDPTransport
 
@@ -84,7 +84,9 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	async send(data: string): Promise<void> {
 		const socket = this.#socket
 		if (socket === undefined || socket.readyState !== WEBSOCKET_READY_OPEN) {
-			throw new BrowserConnectionError('WebSocket CDP transport is not open', { url: this.#url })
+			throw new BrowserError('CONNECTION', 'WebSocket CDP transport is not open', {
+				url: this.#url,
+			})
 		}
 		socket.send(data)
 	}
@@ -98,14 +100,15 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	async #start(): Promise<void> {
 		const parsed = attempt(() => new URL(this.#url))
 		if (!parsed.success) {
-			throw new BrowserConnectionError(`WebSocket CDP URL is invalid: ${this.#url}`, {
+			throw new BrowserError('CONNECTION', `WebSocket CDP URL is invalid: ${this.#url}`, {
 				url: this.#url,
-				error: parsed.error,
+				error: isJSONValue(parsed.error) ? parsed.error : String(parsed.error),
 			})
 		}
 		const url = parsed.value
 		if (url.protocol !== 'ws:' && url.protocol !== 'wss:') {
-			throw new BrowserConnectionError(
+			throw new BrowserError(
+				'CONNECTION',
 				`WebSocket CDP connection requires a ws: or wss: URL: ${this.#url}`,
 				{ url: this.#url },
 			)
@@ -147,7 +150,8 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 		if (request !== undefined) {
 			this.#rejectRequest(
 				request,
-				new BrowserConnectionError(
+				new BrowserError(
+					'CONNECTION',
 					`WebSocket CDP connection to ${this.#url} was closed before it finished connecting`,
 					{ url: this.#url },
 				),
@@ -192,7 +196,8 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 			socket.destroy()
 			this.#rejectRequest(
 				request,
-				new BrowserConnectionError(
+				new BrowserError(
+					'CONNECTION',
 					`WebSocket CDP connection to ${this.#url} failed: Sec-WebSocket-Accept mismatch`,
 					{ url: this.#url },
 				),
@@ -216,7 +221,7 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 				: `upgrade declined with status ${response.statusCode}`
 		this.#rejectRequest(
 			request,
-			new BrowserConnectionError(`WebSocket CDP connection to ${this.#url} failed: ${reason}`, {
+			new BrowserError('CONNECTION', `WebSocket CDP connection to ${this.#url} failed: ${reason}`, {
 				url: this.#url,
 			}),
 		)
@@ -225,7 +230,8 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	#fail(request: ClientRequest, error: Error): void {
 		this.#rejectRequest(
 			request,
-			new BrowserConnectionError(
+			new BrowserError(
+				'CONNECTION',
 				`WebSocket CDP connection to ${this.#url} failed: ${error.message}`,
 				{ url: this.#url },
 			),
@@ -235,7 +241,8 @@ export class WebSocketCDPTransport implements CDPTransportInterface {
 	#expire(request: ClientRequest): void {
 		this.#rejectRequest(
 			request,
-			new BrowserConnectionError(
+			new BrowserError(
+				'CONNECTION',
 				`WebSocket CDP connection to ${this.#url} timed out after ${this.#timeout}ms`,
 				{ url: this.#url, timeout: this.#timeout },
 			),

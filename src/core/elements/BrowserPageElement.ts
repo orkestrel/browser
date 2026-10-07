@@ -10,13 +10,7 @@ import type {
 	BrowserScreenshotResult,
 } from '../types.js'
 import { BrowserReading } from '../BrowserReading.js'
-import {
-	BrowserElementError,
-	isBrowserElementError,
-	isCDPConnectionError,
-	isCDPError,
-	isCDPTimeoutError,
-} from '../errors.js'
+import { BrowserError, isBrowserError } from '../errors.js'
 import { BROWSER_ELEMENT_REFUSALS, BROWSER_RESULT_LIMIT } from '../constants.js'
 import {
 	compileActionabilityFunction,
@@ -35,6 +29,7 @@ import {
 	readBrowserQuad,
 	readEvaluationResult,
 	requireBrowserString,
+	describeBrowserRefusal,
 } from '../helpers.js'
 import { isArray, isError, isInteger, isNumber, isRecord, isString } from '@orkestrel/contract'
 
@@ -116,7 +111,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			options,
 		)
 		if (!isRecord(capture))
-			throw new BrowserElementError(this.reference, 'UNKNOWN', 'returned an invalid reading')
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal(this.reference, 'UNKNOWN', 'returned an invalid reading'),
+				{ reference: this.reference, reason: 'UNKNOWN' },
+			)
 		return new BrowserReading({
 			url: requireBrowserString(capture['url'], 'Element URL'),
 			title: requireBrowserString(capture['title'], 'Element title'),
@@ -206,7 +205,10 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			)
 			.catch(this.#failure.bind(this, options))
 		if (!isRecord(result) || !isArray(result['quads']) || result['quads'].length === 0)
-			throw new BrowserElementError(this.reference, 'HIDDEN')
+			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'HIDDEN'), {
+				reference: this.reference,
+				reason: 'HIDDEN',
+			})
 		const quad = readBrowserQuad(result)
 		// The frame owners' box models are read here, so a collected owner reaches the classifier too.
 		const center = await this.#input
@@ -249,7 +251,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 	#assert(options?: BrowserCallOptions): void {
 		options?.signal?.throwIfAborted()
 		if (!this.#input.current())
-			throw new BrowserElementError(this.reference, 'GONE', 'is gone because the page changed')
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal(this.reference, 'GONE', 'is gone because the page changed'),
+				{ reference: this.reference, reason: 'GONE' },
+			)
 		this.#input.page.assert()
 	}
 
@@ -274,19 +280,30 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				!isRecord(result['object']) ||
 				!isString(result['object']['objectId'])
 			)
-				throw new BrowserElementError(this.reference, 'GONE')
+				throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'GONE'), {
+					reference: this.reference,
+					reason: 'GONE',
+				})
 			this.#assert(options)
 			return { object: result['object']['objectId'], context }
 		} catch (error) {
 			options?.signal?.throwIfAborted()
-			if (isCDPTimeoutError(error) || isCDPConnectionError(error)) throw error
 			if (
-				isCDPError(error) &&
+				(isBrowserError(error) && error.code === 'TIMEOUT') ||
+				(isBrowserError(error) && error.code === 'DISCONNECTED')
+			)
+				throw error
+			if (
+				isBrowserError(error) &&
+				error.code === 'REMOTE' &&
 				/Could not find node|No node with given id|No node found for given backend id/i.test(
 					error.message,
 				)
 			)
-				throw new BrowserElementError(this.reference, 'GONE')
+				throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'GONE'), {
+					reference: this.reference,
+					reason: 'GONE',
+				})
 			throw error
 		}
 	}
@@ -326,14 +343,22 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 
 	#failure(options: BrowserCallOptions | undefined, error: unknown): never {
 		options?.signal?.throwIfAborted()
-		if (isBrowserElementError(error) || isCDPTimeoutError(error) || isCDPConnectionError(error))
+		if (
+			(isBrowserError(error) && error.code === 'ELEMENT') ||
+			(isBrowserError(error) && error.code === 'TIMEOUT') ||
+			(isBrowserError(error) && error.code === 'DISCONNECTED')
+		)
 			throw error
 		// An in-page refusal carries the page's stack after its first line; only that line reaches
 		// the refusal.
 		const message = (isError(error) ? error.message : String(error)).split('\n', 1)[0] ?? ''
 		const known = BROWSER_ELEMENT_REFUSALS.get(message.replace(/^Error: /, ''))
 		if (known !== undefined)
-			throw new BrowserElementError(this.reference, known.reason, known.detail)
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal(this.reference, known.reason, known.detail),
+				{ reference: this.reference, reason: known.reason },
+			)
 		const reason = /layout object|not visible/i.test(message)
 			? 'HIDDEN'
 			: /disabled/i.test(message)
@@ -344,7 +369,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 					? 'GONE'
 					: undefined
 		if (reason === undefined) throw error
-		throw new BrowserElementError(this.reference, reason, reason === 'GONE' ? undefined : message)
+		throw new BrowserError(
+			'ELEMENT',
+			describeBrowserRefusal(this.reference, reason, reason === 'GONE' ? undefined : message),
+			{ reference: this.reference, reason: reason },
+		)
 	}
 
 	async #scroll(session: string, options?: BrowserCallOptions): Promise<BrowserPoint> {
@@ -408,11 +437,15 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			)
 			.catch((error: unknown) => {
 				options?.signal?.throwIfAborted()
-				if (isCDPError(error) && error.context?.['message'] === 'No node found at given location')
-					throw new BrowserElementError(
-						this.reference,
-						'OCCLUDED',
-						'hit-test location held no node',
+				if (
+					isBrowserError(error) &&
+					error.code === 'REMOTE' &&
+					error.context?.['message'] === 'No node found at given location'
+				)
+					throw new BrowserError(
+						'ELEMENT',
+						describeBrowserRefusal(this.reference, 'OCCLUDED', 'hit-test location held no node'),
+						{ reference: this.reference, reason: 'OCCLUDED' },
 					)
 				throw error
 			})
@@ -421,7 +454,10 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			!isInteger(hit['backendNodeId']) ||
 			(hit['frameId'] !== undefined && hit['frameId'] !== this.#input.frame)
 		)
-			throw new BrowserElementError(this.reference, 'OCCLUDED')
+			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'OCCLUDED'), {
+				reference: this.reference,
+				reason: 'OCCLUDED',
+			})
 		if (
 			hit['backendNodeId'] !== this.#input.backend &&
 			(await this.#call(compileHitFunction(), options, hit['backendNodeId'])) !== true
@@ -442,7 +478,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				else if (attributes.includes('class') && isString(classes) && classes.trim() !== '')
 					name += `.${classes.trim().split(/\s+/).join('.')}`
 			}
-			throw new BrowserElementError(this.reference, 'OCCLUDED', `is covered by ${name}`)
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal(this.reference, 'OCCLUDED', `is covered by ${name}`),
+				{ reference: this.reference, reason: 'OCCLUDED' },
+			)
 		}
 		return point
 	}

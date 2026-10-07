@@ -75,7 +75,7 @@ describe('BrowserJourneyToolset', () => {
 					{ full: false },
 					{ signal: new AbortController().signal },
 				),
-			).rejects.toMatchObject({ code: 'BROWSER_CAPTURE_UNTRUSTED' })
+			).rejects.toMatchObject({ code: 'CAPTURE_UNTRUSTED' })
 		} finally {
 			await toolset.destroy()
 		}
@@ -95,10 +95,10 @@ describe('BrowserJourneyToolset', () => {
 					const context = { signal: new AbortController().signal }
 					for (const args of [{}, { full: 'false' }, { full: 0 }])
 						await expect(tool.execute(args, context)).rejects.toMatchObject({
-							code: 'BROWSER_TOOLSET_ARGUMENT',
+							code: 'TOOLSET_ARGUMENT',
 						})
 					await expect(tool.execute({ full: false }, context)).rejects.toMatchObject({
-						code: 'BROWSER_CAPTURE_UNAVAILABLE',
+						code: 'CAPTURE_UNAVAILABLE',
 					})
 					const reason = new Error('Capture aborted')
 					await expect(
@@ -107,7 +107,7 @@ describe('BrowserJourneyToolset', () => {
 					const hold = await toolset.hold('check-ready')
 					try {
 						await expect(tool.execute({ full: false }, context)).rejects.toMatchObject({
-							code: 'BROWSER_TOOLSET_BUSY',
+							code: 'TOOLSET_BUSY',
 						})
 					} finally {
 						hold.destroy()
@@ -189,7 +189,7 @@ describe('BrowserJourneyToolset', () => {
 				'2 lines match "Ready": 2, 4',
 			)
 			await expect(tool.execute({ from: 0 }, context)).rejects.toMatchObject({
-				code: 'BROWSER_TOOLSET_ARGUMENT',
+				code: 'TOOLSET_ARGUMENT',
 			})
 		} finally {
 			await journeys.destroy()
@@ -219,7 +219,7 @@ describe('BrowserJourneyToolset', () => {
 					{ journey: saved.journey.name },
 					{ signal: new AbortController().signal },
 				),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_READONLY' })
+			).rejects.toMatchObject({ code: 'JOURNEY_READONLY' })
 			expect(await store.get(saved.journey.name)).toEqual(saved)
 			expect((await runs.list(saved.journey.name)).entries.map((run) => run.id)).toEqual([slot.id])
 		} finally {
@@ -251,7 +251,7 @@ describe('BrowserJourneyToolset', () => {
 			})
 			expect(await store.get('add-kettle')).toBeUndefined()
 			await expect(runs.set({ ...BROWSER_RUN_FIXTURE, id: unsaved.id })).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_PATH',
+				code: 'JOURNEY_PATH',
 			})
 			expect(await store.get('check-ready')).toEqual(sibling)
 			await expect(runs.capture(other, 's1.png', new Uint8Array())).resolves.toBeUndefined()
@@ -307,7 +307,7 @@ describe('BrowserJourneyToolset', () => {
 			const forget = requireValue(toolset.tools.tool('forget'))
 			await expect(
 				forget.execute({ journey: 'check-ready' }, { signal: new AbortController().signal }),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_MISSING' })
+			).rejects.toMatchObject({ code: 'JOURNEY_MISSING' })
 			expect(
 				await toolset.tools.execute({
 					id: 'missing',
@@ -325,7 +325,7 @@ describe('BrowserJourneyToolset', () => {
 			})
 			await expect(
 				forget.execute({ journey: 'check-ready' }, { signal: new AbortController().signal }),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_RECORDING' })
+			).rejects.toMatchObject({ code: 'JOURNEY_RECORDING' })
 			expect(
 				await toolset.tools.execute({
 					id: 'recording',
@@ -362,7 +362,7 @@ describe('BrowserJourneyToolset', () => {
 					{ journey: 'check-ready' },
 					{ signal: new AbortController().signal },
 				),
-			).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_BUSY' })
+			).rejects.toMatchObject({ code: 'TOOLSET_BUSY' })
 			expect(
 				await toolset.tools.execute({
 					id: 'forget',
@@ -624,7 +624,7 @@ describe('BrowserJourneyToolset', () => {
 			const record = requireValue(toolset.tools.tool('record'))
 			const context = { signal: new AbortController().signal }
 			await expect(record.execute({ journey: 'check-ready' }, context)).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_SAVED',
+				code: 'JOURNEY_SAVED',
 			})
 			expect(journeys.recording).toBeUndefined()
 			await expect(record.execute({ journey: 'another-name' }, context)).resolves.toContain(
@@ -675,7 +675,7 @@ describe('BrowserJourneyToolset', () => {
 			])
 			expect(results, 'h2a: one recording wins and the second is refused').toMatchObject([
 				{ status: 'fulfilled' },
-				{ status: 'rejected', reason: { code: 'BROWSER_JOURNEY_RECORDING' } },
+				{ status: 'rejected', reason: { code: 'JOURNEY_RECORDING' } },
 			])
 			expect(journeys.recording, 'h2a: the first recorder remains owned').toBe('first-recording')
 			expect(toolset.emitter.count('action')).toBe(listeners + 1)
@@ -711,7 +711,7 @@ describe('BrowserJourneyToolset', () => {
 					{ signal: new AbortController().signal },
 				),
 			).rejects.toMatchObject({
-				code: 'BROWSER_TOOLSET_BUSY',
+				code: 'TOOLSET_BUSY',
 				message: 'The toolset is replaying foreign-journey until it finishes; call read.',
 			})
 			expect(journeys.recording).toBeUndefined()
@@ -780,7 +780,7 @@ describe('BrowserJourneyToolset', () => {
 					{ from: -1 },
 					{ signal: new AbortController().signal },
 				),
-			).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_ARGUMENT' })
+			).rejects.toMatchObject({ code: 'TOOLSET_ARGUMENT' })
 		} finally {
 			await inherited.destroy()
 			await overridden.destroy()
@@ -797,7 +797,7 @@ describe('BrowserJourneyToolset', () => {
 					}),
 			).toThrow(
 				expect.objectContaining({
-					code: 'BROWSER_JOURNEY_ARGUMENT',
+					code: 'JOURNEY_ARGUMENT',
 					message: 'The journeys limit must be a positive integer',
 				}),
 			)
@@ -970,7 +970,7 @@ describe('BrowserJourneyToolset', () => {
 			const error = captureError(
 				() => new BrowserJourneyToolset(toolset, { store: createMemoryBrowserJourneyStore() }),
 			)
-			expect(readProperty(error, 'code')).toBe('BROWSER_TOOLSET_RESERVED')
+			expect(readProperty(error, 'code')).toBe('TOOLSET_RESERVED')
 			expect(readProperty(error, 'context')).toEqual({ name: 'edit' })
 			expect(tools.tools()).toEqual([held])
 		})
@@ -1089,7 +1089,7 @@ describe('BrowserJourneyToolset', () => {
 			const memory = createMemoryBrowserJourneyStore()
 			const store = createBrowserFailingJourneyStore(memory, [
 				new Error('the disk is full.'),
-				new BrowserError('Journey check-form is locked.', 'BROWSER_JOURNEY_LOCKED'),
+				new BrowserError('JOURNEY_LOCKED', 'Journey check-form is locked.'),
 			])
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store })
@@ -1252,7 +1252,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 					'journeys (4 lines)\n3: check-ready "Check readiness"\n4: s1 wait "Ready"\n[lines 3–4 of 4; 2 above; end of listing]',
 				)
 				await expect(tool.execute({ from: 5 }, context)).rejects.toMatchObject({
-					code: 'BROWSER_TOOLSET_ARGUMENT',
+					code: 'TOOLSET_ARGUMENT',
 				})
 			} finally {
 				await journeys.destroy()
@@ -1287,7 +1287,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 						{ from: 1 },
 						{ signal: new AbortController().signal },
 					),
-				).rejects.toMatchObject({ code: 'BROWSER_TOOLSET_LIMIT' })
+				).rejects.toMatchObject({ code: 'TOOLSET_LIMIT' })
 			} finally {
 				await single.destroy()
 				await journeys.destroy()
@@ -1380,7 +1380,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				},
 				set: async (journey, expected, options) => {
 					if (scripted.shift() === 'locked')
-						throw new BrowserError('Journey check-ready is locked.', 'BROWSER_JOURNEY_LOCKED')
+						throw new BrowserError('JOURNEY_LOCKED', 'Journey check-ready is locked.')
 					return memory.set(journey, expected, options)
 				},
 				delete: memory.delete.bind(memory),
@@ -1629,8 +1629,8 @@ page "Form" https://example.test/form (3 lines)
 					if (mode === 'block') await pending.promise
 					if (mode === 'file')
 						throw new BrowserError(
+							'JOURNEY_FILE',
 							'The journey file tmp/browsers/check-ready/journey.json is malformed.',
-							'BROWSER_JOURNEY_FILE',
 						)
 					if (mode === 'format' && read !== undefined)
 						return { ...read, journey: { ...read.journey, format: 1, next: 0 } }
