@@ -9,6 +9,7 @@ import type {
 	BrowserRecorderInterface,
 	BrowserRun,
 	BrowserRunStoreInterface,
+	BrowserStoreFault,
 	BrowserToolName,
 	BrowserToolsetInterface,
 } from './types.js'
@@ -453,18 +454,27 @@ export class BrowserJourneyToolset {
 	): Promise<string> {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
 		let name: string
-		if ('journey' in args) name = readBrowserToolString(args, 'journey')
+		if (args['journey'] !== undefined) name = readBrowserToolString(args, 'journey')
 		else {
-			const saved = await this.#store.list({ signal, limit: Number.MAX_SAFE_INTEGER })
-			const only = saved.entries[0]
-			if (only === undefined || saved.entries.length !== 1)
+			const entries: BrowserJourneyRevision[] = []
+			const faults: BrowserStoreFault[] = []
+			let offset = 0
+			for (;;) {
+				const page = await this.#store.list({ signal, offset })
+				entries.push(...page.entries)
+				faults.push(...page.faults)
+				offset += page.entries.length
+				if (!page.truncated) break
+			}
+			const only = entries[0]
+			if (only === undefined || entries.length !== 1 || faults.length !== 0)
 				throw new BrowserError(
 					'ARGUMENT',
-					only === undefined
+					only === undefined && faults.length === 0
 						? BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL
 						: BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL.replace(
 								'{names}',
-								saved.entries.map((entry) => JSON.stringify(entry.journey.name)).join(', '),
+								entries.map((entry) => JSON.stringify(entry.journey.name)).join(', '),
 							),
 					{ subject: 'toolset', key: 'journey' },
 				)

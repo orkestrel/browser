@@ -179,6 +179,62 @@ describe('BrowserJourneyToolset file listing', () => {
 			scratch.destroy()
 		}
 	})
+	it('small model: edit resolves every store page before defaulting to the only saved journey', async () => {
+		const scratch = createScratch()
+		const store = createFileBrowserJourneyStore({ root: scratch.path, limit: 1 })
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { journeys: { store } })
+		try {
+			await toolset.start()
+			for (const name of ['first-flow', 'last-flow'])
+				await store.set(createBrowserJourneyFixture(undefined, { name }))
+			const edit = requireValue(toolset.tools.tool('edit'))
+			const args = {
+				edits: [{ operation: 'update', id: 's1', arguments: { text: 'Changed' } }],
+			}
+			const context = { signal: new AbortController().signal }
+			await expect(edit.execute(args, context)).rejects.toMatchObject({
+				code: 'ARGUMENT',
+				message:
+					'Edit requires journey, one of "first-flow", "last-flow"; call edit with that name beside edits.',
+			})
+			for (const name of ['first-flow', 'last-flow'])
+				expect((await store.get(name))?.revision).toBe(1)
+			await store.delete('last-flow')
+			expect(await edit.execute(args, context)).toContain('Edited first-flow.')
+			expect((await store.get('first-flow'))?.journey.steps[0]?.arguments).toEqual({
+				text: 'Changed',
+			})
+		} finally {
+			await toolset.destroy()
+			scratch.destroy()
+		}
+	})
+	it('small model: unreadable saved journeys prevent edit defaulting and add no choice name', async () => {
+		const scratch = createScratch()
+		const store = createFileBrowserJourneyStore({ root: scratch.path, limit: 1 })
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { journeys: { store } })
+		try {
+			await toolset.start()
+			await store.set(createBrowserJourneyFixture(undefined, { name: 'first-flow' }))
+			scratch.write('last-flow/journey.json', '{')
+			const edit = requireValue(toolset.tools.tool('edit'))
+			const context = { signal: new AbortController().signal }
+			await expect(edit.execute({ edits: [] }, context)).rejects.toMatchObject({
+				code: 'ARGUMENT',
+				message:
+					'Edit requires journey, one of "first-flow"; call edit with that name beside edits.',
+			})
+			expect((await store.get('first-flow'))?.revision).toBe(1)
+			await store.delete('first-flow')
+			await expect(edit.execute({ edits: [] }, context)).rejects.toMatchObject({
+				code: 'ARGUMENT',
+				message: 'Edit requires journey, one of ; call edit with that name beside edits.',
+			})
+		} finally {
+			await toolset.destroy()
+			scratch.destroy()
+		}
+	})
 	it('lists every readable journey exactly once across store pages and reports a repeated fault once', async () => {
 		const scratch = createScratch()
 		const toolset = new BrowserToolset(createBrowserViewDouble())

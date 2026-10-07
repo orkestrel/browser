@@ -440,8 +440,9 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * @remarks
  * Every tool description is at most 25 words and says what the tool shows or does, and for
  * `read` when to call it; every parameter description is at most 100 characters.
- * In the 2026-10-07 measurement, the small model reads the `click` and `type` description bytes
- * as instructions with thinking on, and `type` focusing the field itself removes a click before each entry.
+ * In the 2026-10-07 measurement, qwen3.5:2b-q4_K_M reads the `click` and `type` tool description
+ * bytes as instructions with thinking on, and the `type` tool focusing the field itself removes
+ * a click before each entry.
  * `read` requires `from`: making it optional reduced search from 16/16 to 6/16 and paging from
  * 16/16 to 0/6 in the 2026-10-07 qwen3.5:2b-q4_K_M store measurement.
  * `journeys` keeps optional `from` with default 1 for the measured 2B `journeys{}` omission;

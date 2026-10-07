@@ -181,20 +181,23 @@ describe('BrowserJourneyToolset', () => {
 		try {
 			const context = { signal: new AbortController().signal }
 			const edit = requireValue(toolset.tools.tool('edit'))
-			const results = await toolset.tools.execute([
-				{
-					id: 'edit-only',
-					name: 'edit',
-					arguments: {
-						edits: [{ operation: 'update', id: 's1', arguments: { text: 'Changed' } }],
+			for (const args of [{}, { journey: undefined }]) {
+				const results = await toolset.tools.execute([
+					{
+						id: 'edit-only',
+						name: 'edit',
+						arguments: {
+							...args,
+							edits: [{ operation: 'update', id: 's1', arguments: { text: 'Changed' } }],
+						},
 					},
-				},
-			])
-			expect(readProperty(results[0], 'value')).toContain('Edited check-ready.')
-			expect((await store.get('check-ready'))?.journey.steps[0]?.arguments).toEqual({
-				text: 'Changed',
-			})
-			for (const journey of [null, 7, false, undefined])
+				])
+				expect(readProperty(results[0], 'value')).toContain('Edited check-ready.')
+				expect((await store.get('check-ready'))?.journey.steps[0]?.arguments).toEqual({
+					text: 'Changed',
+				})
+			}
+			for (const journey of [null, 7, false])
 				await expect(edit.execute({ journey, edits: [] }, context)).rejects.toMatchObject({
 					code: 'ARGUMENT',
 					message: 'The journey parameter must be a string.',
