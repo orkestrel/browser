@@ -62,6 +62,81 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it('small copy: advertises click, type, and the words to enter exactly', () => {
+		expect
+			.soft(BROWSER_TOOL_COPY.click.description)
+			.toBe(
+				'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
+			)
+		expect
+			.soft(BROWSER_TOOL_COPY.type.description)
+			.toBe(
+				'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
+			)
+		expect(
+			readProperty(
+				readProperty(readProperty(BROWSER_TOOL_COPY.type.parameters, 'properties'), 'text'),
+				'description',
+			),
+		).toBe("The words to enter or the option to choose; never the field's own name.")
+	})
+	it('small copy: type refusal names one field, two fields in view order, or click with no fields', async () => {
+		let count = 2
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					buildBrowserReferenceTree(
+						[
+							{ role: 'link', name: 'Checkout' },
+							{ role: 'button', name: 'Add to cart' },
+							{ role: 'textbox', name: 'Full name' },
+							{ role: 'searchbox', name: 'Address' },
+						].slice(0, count),
+					),
+				),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			await toolset.read()
+			const type = requireValue(toolset.tools.tool('type'))
+			const context = { signal: new AbortController().signal }
+			await expect(type.execute({ ref: 'e2', text: 'Sam' }, context)).rejects.toMatchObject({
+				code: 'TOOLSET_ROLE',
+				message: 'Element button "Add to cart" [ref=e2] takes no text; call click for a button.',
+				context: { reference: 'e2', role: 'button' },
+			})
+			count = 3
+			await toolset.read()
+			const sent = fixture.transport.sent.length
+			await expect.soft(type.execute({ ref: 'e1', text: 'Sam' }, context)).rejects.toMatchObject({
+				code: 'TOOLSET_ROLE',
+				message:
+					'Element link "Checkout" [ref=e1] takes no text; to type, use textbox "Full name" [ref=e3].',
+				context: { reference: 'e1', role: 'link' },
+			})
+			expect(fixture.transport.sent.slice(sent)).toEqual([])
+			count = 4
+			await toolset.read()
+			await expect.soft(type.execute({ ref: 'e2', text: 'Sam' }, context)).rejects.toMatchObject({
+				code: 'TOOLSET_ROLE',
+				message:
+					'Element button "Add to cart" [ref=e2] takes no text; to type, use textbox "Full name" [ref=e3] or searchbox "Address" [ref=e4].',
+				context: { reference: 'e2', role: 'button' },
+			})
+			count = 2
+			await toolset.read()
+			await expect(type.execute({ ref: 'e2', text: 'Sam' }, context)).rejects.toMatchObject({
+				code: 'TOOLSET_ROLE',
+				message: 'Element button "Add to cart" [ref=e2] takes no text; call click for a button.',
+			})
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 	it('stable links: carries listed links and names a gone reference while preserving unknown refusals', async () => {
 		let navigated = false
 		const fixture = await createBrowserElementFixture({
@@ -991,13 +1066,12 @@ describe('BrowserToolset', () => {
 					'secret',
 				),
 			}
-			// With capture, the measured full copy is 6,041 UTF-16 code units; 6,050 is the smallest
-			// multiple of 50 that holds it. The journey copy measures 3,360, giving the same bound rule 3,400.
+			// Round the compact copy's bound to the next multiple of 50.
 			// Include the secret property's name and schema without charging for the rest of type.
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
 				.toBeLessThanOrEqual(3400)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6050)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6200)
 		})
 
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
@@ -1053,8 +1127,9 @@ describe('BrowserToolset', () => {
 				),
 			).toEqual({
 				read: 'Shows numbered lines of the page, with references like e4 to act on. Call it to learn a fact or to find an element.',
-				click: 'Clicks the referenced element, settles its action, and returns the page.',
-				type: 'Types into a field such as a search box, optionally submits its form, and returns the page.',
+				click:
+					'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
+				type: 'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
 				press: 'Presses a key or chord, settles its action, and returns the page.',
 				navigate: 'Opens an absolute web address in the current tab and returns the loaded page.',
 				wait: 'Waits for text to appear or leave, then returns the page.',
@@ -1594,7 +1669,8 @@ describe('BrowserToolset', () => {
 					context: refused.context,
 				},
 			).toEqual({
-				message: 'Element button "Save" [ref=e1] takes no text; call click for a button.',
+				message:
+					'Element button "Save" [ref=e1] takes no text; to type, use textbox "Email" [ref=e2] or combobox "Size" [ref=e3].',
 				code: 'TOOLSET_ROLE',
 				context: { reference: 'e1', role: 'button' },
 			})

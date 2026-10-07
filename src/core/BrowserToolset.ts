@@ -175,7 +175,8 @@ import {
  * receipt aborts the capture. A capture that the page's change makes stale waits for the page's
  * readiness and reads the view once more inside the same deadline, and reports
  * `BROWSER_TOOL_CHANGED_NOTE` when that read fails too. `type` refuses an element whose role is
- * not in `BROWSER_TYPED_ROLES` before it sends anything, naming `click` as the next call. A `click` on an element whose role is in `BROWSER_TYPED_ROLES`
+ * not in `BROWSER_TYPED_ROLES` before it sends anything, naming the view's text-taking fields,
+ * or `click` when there are none. A `click` on an element whose role is in `BROWSER_TYPED_ROLES`
  * adds `; call type with REF to enter text` to its receipt line. A click
  * or type over a view whose `trusted` is `false` ends its receipt line with ` (untrusted event)`.
  *
@@ -958,9 +959,20 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			// The role the latest capture recorded decides, so a control that takes no text is
 			// refused before any protocol command reaches it.
 			if (!BROWSER_TYPED_ROLES.has(element.role)) {
+				const projection = this.#projections.get(this.#cursor)
+				const fields = this.#cursor.elements
+					.elements()
+					.filter((candidate) => BROWSER_TYPED_ROLES.has(candidate.role))
+					.map((candidate) => ({
+						element: candidate,
+						position: projection?.indexOf(`[ref=${candidate.reference}]`) ?? 0,
+					}))
+					.filter((candidate) => candidate.position >= 0)
+					.sort((left, right) => left.position - right.position)
+					.map((candidate) => renderBrowserElement(candidate.element))
 				throw new BrowserError(
 					'TOOLSET_ROLE',
-					`Element ${renderBrowserElement(element)} takes no text; call click for ${/^[aeiou]/i.test(element.role) ? 'an' : 'a'} ${element.role}.`,
+					`Element ${renderBrowserElement(element)} takes no text; ${fields.length > 0 ? `to type, use ${fields.join(' or ')}` : `call click for ${/^[aeiou]/i.test(element.role) ? 'an' : 'a'} ${element.role}`}.`,
 					{ reference: element.reference, role: element.role },
 				)
 			}

@@ -144,7 +144,7 @@ await new GuideCommand({
 		isExternalLink,
 		resolveLink,
 	} = await import('@orkestrel/guide')
-	const { requireValue } = await import('@orkestrel/test')
+	const { readProperty, requireValue } = await import('@orkestrel/test')
 	const { describe, expect, it } = await import('vitest')
 	const own = requireValue(
 		rows.find((row) => row.entry.spec === GUIDE_SPEC),
@@ -1051,6 +1051,34 @@ void [wrapper, origins, isolated, creation, identity]
 			'`"7a"`, `"1.5"`, `"-1"`, `""`, and `"07"`',
 		])
 			expect(guide).toContain(text)
+	})
+	it('small copy: pins field guidance and the saved-session exit', async () => {
+		const { BROWSER_TOOL_COPY, BROWSER_JOURNEY_SAVE_SAVED_REFUSAL } = await import('@src/core')
+		const guide = requireValue(files[GUIDE_SPEC])
+		expect(BROWSER_TOOL_COPY.click.description).toBe(
+			'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
+		)
+		expect(BROWSER_TOOL_COPY.type.description).toBe(
+			'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
+		)
+		const text = readProperty<string>(
+			readProperty(readProperty(BROWSER_TOOL_COPY.type.parameters, 'properties'), 'text'),
+			'description',
+		)
+		expect(text).toBe("The words to enter or the option to choose; never the field's own name.")
+		expect(guide).toContain(`\`${text}\``)
+		expect(guide).toContain(
+			'`Element link "Checkout" [ref=e15] takes no text; to type, use textbox "Full name" [ref=e19].`',
+		)
+		expect(guide).toContain(
+			'`Element button "Add to cart" [ref=e16] takes no text; call click for a button.`',
+		)
+		expect(BROWSER_JOURNEY_SAVE_SAVED_REFUSAL.replace('{name}', '"add-kettle"')).toBe(
+			'Nothing is recording, so there is nothing to save; "add-kettle" is already saved. Answer the user.',
+		)
+		expect(guide).toContain(
+			`\`${BROWSER_JOURNEY_SAVE_SAVED_REFUSAL.replace('{name}', '"add-kettle"')}\``,
+		)
 	})
 	it('recaptures a continuation and keeps unchanged references stable', async () => {
 		const { createBrowserToolset, BROWSER_TOOL_LIMIT } = await import('@src/core')

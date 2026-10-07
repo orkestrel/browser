@@ -476,7 +476,8 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	}),
 	click: Object.freeze({
 		name: 'click',
-		description: 'Clicks the referenced element, settles its action, and returns the page.',
+		description:
+			'Clicks a link, button, checkbox, or tab by its reference, settles its action, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -488,14 +489,14 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	type: Object.freeze({
 		name: 'type',
 		description:
-			'Types into a field such as a search box, optionally submits its form, and returns the page.',
+			'Enters text into a field such as a textbox, searchbox, or combobox, optionally submits its form, and returns the page. Click links and buttons instead.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
 				ref: Object.freeze({ type: 'string', description: 'The reference, such as e4.' }),
 				text: Object.freeze({
 					type: 'string',
-					description: 'The text to type or the option to choose.',
+					description: "The words to enter or the option to choose; never the field's own name.",
 				}),
 				submit: Object.freeze({
 					type: 'boolean',
@@ -864,6 +865,10 @@ export const BROWSER_JOURNEY_EDIT_MISSING_REFUSAL =
 /** Holds the refusal `save` returns when no journey is recording. */
 export const BROWSER_JOURNEY_IDLE_REFUSAL =
 	'No journey is recording, so nothing can be saved; answer the user. A journey holds only the actions after record, so call record before them.'
+
+/** Holds the refusal `save` returns after a successful save when no journey is recording. */
+export const BROWSER_JOURNEY_SAVE_SAVED_REFUSAL =
+	'Nothing is recording, so there is nothing to save; {name} is already saved. Answer the user.'
 
 /** Caps a default reading window at 100 addressed lines. */
 export const BROWSER_READ_LINES = 100

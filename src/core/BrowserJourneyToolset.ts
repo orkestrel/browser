@@ -18,6 +18,7 @@ import { createTool } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
 	BROWSER_JOURNEY_IDLE_REFUSAL,
+	BROWSER_JOURNEY_SAVE_SAVED_REFUSAL,
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BROWSER_JOURNEY_READONLY_REFUSAL,
 	BROWSER_JOURNEY_RECORDING_REFUSAL,
@@ -306,7 +307,7 @@ export class BrowserJourneyToolset {
 				'JOURNEY_RECORDING',
 				this.#saved === undefined
 					? BROWSER_JOURNEY_IDLE_REFUSAL
-					: `Nothing is recording; ${JSON.stringify(this.#saved)} was saved. Call journeys, edit, or replay.`,
+					: BROWSER_JOURNEY_SAVE_SAVED_REFUSAL.replace('{name}', JSON.stringify(this.#saved)),
 			)
 		const snapshot = attempt(() => recorder.journey({ name, description }))
 		if (!snapshot.success) {

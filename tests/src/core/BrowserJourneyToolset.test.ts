@@ -773,7 +773,7 @@ describe('BrowserJourneyToolset', () => {
 			])
 			expect(results.map((result) => readProperty(result, 'error'))).toEqual([
 				'Journey "check-ready" is saved already; do not call record for it again. Call journeys to list it, edit to change it, or replay to run it, or answer the user.',
-				'Nothing is recording; "check-ready" was saved. Call journeys, edit, or replay.',
+				'Nothing is recording, so there is nothing to save; "check-ready" is already saved. Answer the user.',
 			])
 		} finally {
 			await journeys.destroy()
