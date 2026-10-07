@@ -2930,7 +2930,7 @@ A journey is one user intent kept as JSON: a `name`, a one-sentence `description
 
 ### Record a journey
 
-The journey file keeps `format: 1` and accepts an optional string `start`. The toolset recorder captures the URL of the view the first recorded step acts in, before the action can navigate or open a popup. `save` redacts the URL through the toolset before storage. A first step on `about:blank` stores no `start`. An older file without `start` remains valid. Edits retain `start`, including removal of s1, and the run retains it in its journey snapshot.
+The journey file keeps `format: 1` and accepts an optional string `start`. The toolset recorder captures the URL of the view the first recorded step acts in, before the action can navigate or open a popup. `save` redacts the URL through the toolset before storage. A first step on an `about:` page, such as `about:blank` or an `srcdoc` document's `about:srcdoc`, stores no `start`. An older file without `start` remains valid. Edits retain `start`, including removal of s1, and the run retains it in its journey snapshot.
 
 A recorder has three sources, and each one produces the same steps.
 

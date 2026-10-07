@@ -1768,9 +1768,9 @@ export interface BrowserJourneyStep extends BrowserJourneyStepInput {
  * - `format` — the file format, `BROWSER_JOURNEY_FORMAT_VERSION`
  * - `name` — the journey's name, matching `BROWSER_JOURNEY_NAME_PATTERN`
  * - `description` — what the journey achieves, in one sentence
- * - `start` — the first recorded step's page URL, redacted before storage; absent for
- *   `about:blank`. Edits retain it, including removal of the first step. Format 1 files
- *   without it replay on the current page.
+ * - `start` — the first recorded step's page URL, redacted before storage; absent for an
+ *   `about:` page such as `about:blank` or `about:srcdoc`. Edits retain it, including removal
+ *   of the first step. Format 1 files without it replay on the current page.
  * - `parameters` — the declared parameters by name
  * - `next` — the number the next added step takes, persisted so a removed id is never reused
  * - `steps` — the steps in order

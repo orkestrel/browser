@@ -1,4 +1,8 @@
-import type { BrowserJourney, BrowserJourneyRevision, BrowserJourneyStoreInterface } from '@src/core'
+import type {
+	BrowserJourney,
+	BrowserJourneyRevision,
+	BrowserJourneyStoreInterface,
+} from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
 import { BrowserJourneyToolset } from '../../../src/core/BrowserJourneyToolset.js'
 import { describe, expect, it } from 'vitest'
@@ -95,10 +99,13 @@ describe('BrowserJourneyToolset', () => {
 			await fixture.client.close()
 		}
 	})
-	it('journey start: omits about:blank and redacts a secret before storage', async () => {
+	it('journey start: omits an about: page and redacts a secret before storage', async () => {
 		const secret = 'https://example.test/?token=journey-secret'
-		const recorded = new Map<string, { readonly journey: BrowserJourney; readonly redacted: string }>()
-		for (const url of ['about:blank', secret]) {
+		const recorded = new Map<
+			string,
+			{ readonly journey: BrowserJourney; readonly redacted: string }
+		>()
+		for (const url of ['about:blank', 'about:srcdoc', secret]) {
 			const store = createMemoryBrowserJourneyStore()
 			const toolset = createBrowserToolset(createBrowserViewDouble({ url }), {
 				journeys: { store },
@@ -130,6 +137,7 @@ describe('BrowserJourneyToolset', () => {
 			}
 		}
 		expect(requireValue(recorded.get('about:blank')).journey).not.toHaveProperty('start')
+		expect(requireValue(recorded.get('about:srcdoc')).journey).not.toHaveProperty('start')
 		const redacted = requireValue(recorded.get(secret))
 		expect(redacted.journey.start).toBe(redacted.redacted)
 		expect(JSON.stringify(redacted.journey)).not.toContain('journey-secret')
