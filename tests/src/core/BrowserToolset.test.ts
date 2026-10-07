@@ -69,7 +69,7 @@ describe('BrowserToolset', () => {
 		expect
 			.soft(BROWSER_TOOL_COPY.type.description)
 			.toBe(
-				'Types into a field such as a search box, optionally submits its form, and returns the page.',
+				'Focuses a field such as a search box and types into it, optionally submits its form, and returns the page.',
 			)
 		expect(
 			readProperty(
@@ -1074,7 +1074,7 @@ describe('BrowserToolset', () => {
 			expect
 				.soft(JSON.stringify(journeys).length + JSON.stringify(secret).length, 'journey copy')
 				.toBeLessThanOrEqual(3400)
-			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6050)
+			expect.soft(JSON.stringify(definitions).length, 'full tool copy').toBeLessThanOrEqual(6100)
 		})
 
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
@@ -1131,7 +1131,7 @@ describe('BrowserToolset', () => {
 			).toEqual({
 				read: 'Shows numbered lines of the page, with references like e4 to act on. Call it to learn a fact or to find an element.',
 				click: 'Clicks the referenced element, settles its action, and returns the page.',
-				type: 'Types into a field such as a search box, optionally submits its form, and returns the page.',
+				type: 'Focuses a field such as a search box and types into it, optionally submits its form, and returns the page.',
 				press: 'Presses a key or chord, settles its action, and returns the page.',
 				navigate: 'Opens an absolute web address in the current tab and returns the loaded page.',
 				wait: 'Waits for text to appear or leave, then returns the page.',

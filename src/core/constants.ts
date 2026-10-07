@@ -440,8 +440,8 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * @remarks
  * Every tool description is at most 25 words and says what the tool shows or does, and for
  * `read` when to call it; every parameter description is at most 100 characters.
- * The 2B's search depends on the `click`, `type`, and `type.text` description bytes: on
- * 2026-10-07, qwen3.5:2b-q4_K_M passed 16/16 with these bytes and 0/16 with the expanded copy under either prompt order.
+ * In the 2026-10-07 measurement, the small model reads the `click` and `type` description bytes
+ * as instructions with thinking on, and `type` focusing the field itself removes a click before each entry.
  * `read` requires `from`: making it optional reduced search from 16/16 to 6/16 and paging from
  * 16/16 to 0/6 in the 2026-10-07 qwen3.5:2b-q4_K_M store measurement.
  * `journeys` keeps optional `from` with default 1 for the measured 2B `journeys{}` omission;
@@ -493,7 +493,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	type: Object.freeze({
 		name: 'type',
 		description:
-			'Types into a field such as a search box, optionally submits its form, and returns the page.',
+			'Focuses a field such as a search box and types into it, optionally submits its form, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({
@@ -644,7 +644,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 			properties: Object.freeze({
 				journey: Object.freeze({
 					type: 'string',
-					description: 'The journey name, such as add-kettle.',
+					description: 'The journey name, such as add-kettle. Default: the only saved journey.',
 				}),
 				edits: Object.freeze({
 					description:
@@ -700,7 +700,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 					]),
 				}),
 			}),
-			required: Object.freeze(['journey', 'edits']),
+			required: Object.freeze(['edits']),
 		}),
 	}),
 	replay: Object.freeze({
@@ -858,13 +858,13 @@ export const BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL =
 export const BROWSER_JOURNEY_RECORD_STEPS_REFUSAL =
 	'{name} is already recording with {count} {steps}; call save when the flow is done.'
 
-/** Holds the refusal `edit` returns without a journey after a successful save. */
-export const BROWSER_JOURNEY_EDIT_SAVED_REFUSAL =
-	'Edit requires journey, the saved journey\'s name such as "{name}", beside edits.'
+/** Holds the refusal `edit` returns without a journey when several journeys are saved. */
+export const BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL =
+	'Edit requires journey, one of {names}; call edit with that name beside edits.'
 
-/** Holds the refusal `edit` returns without a journey before any successful save. */
-export const BROWSER_JOURNEY_EDIT_MISSING_REFUSAL =
-	"Edit requires journey, a saved journey's name, beside edits; call journeys."
+/** Holds the refusal `edit` returns without a journey when no journey is saved. */
+export const BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL =
+	'No journey is saved, so there is nothing to edit; call record to start one.'
 
 /** Holds the refusal `save` returns when no journey is recording. */
 export const BROWSER_JOURNEY_IDLE_REFUSAL =

@@ -156,7 +156,7 @@ describe('BrowserJourneyToolset', () => {
 			await toolset.destroy()
 		}
 	})
-	it('small refusals: missing edit journey names the last successful save', async () => {
+	it('small model: edit without journey refuses with none saved', async () => {
 		const toolset = new BrowserToolset(createBrowserViewDouble(), {
 			journeys: { store: createMemoryBrowserJourneyStore() },
 		})
@@ -166,25 +166,63 @@ describe('BrowserJourneyToolset', () => {
 			const edit = requireValue(toolset.tools.tool('edit'))
 			await expect(edit.execute({ edits: [] }, context)).rejects.toMatchObject({
 				code: 'ARGUMENT',
-				message: "Edit requires journey, a saved journey's name, beside edits; call journeys.",
+				message: 'No journey is saved, so there is nothing to edit; call record to start one.',
+				context: { subject: 'toolset', key: 'journey' },
 			})
-			for (const name of ['first-flow', 'last-flow']) {
-				await requireValue(toolset.tools.tool('record')).execute({ journey: name }, context)
-				await toolset.execute({ id: name, name: 'wait', arguments: { text: 'Ready' } })
-				await requireValue(toolset.tools.tool('save')).execute(
-					{ description: 'Check readiness' },
-					context,
-				)
-				await expect(edit.execute({ edits: [] }, context)).rejects.toMatchObject({
-					code: 'ARGUMENT',
-					message: `Edit requires journey, the saved journey's name such as "${name}", beside edits.`,
-				})
-			}
+		} finally {
+			await toolset.destroy()
+		}
+	})
+	it('small model: edit without journey edits the only saved journey', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(createBrowserJourneyFixture())
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { journeys: { store } })
+		await toolset.start()
+		try {
+			const context = { signal: new AbortController().signal }
+			const edit = requireValue(toolset.tools.tool('edit'))
+			const results = await toolset.tools.execute([
+				{
+					id: 'edit-only',
+					name: 'edit',
+					arguments: {
+						edits: [{ operation: 'update', id: 's1', arguments: { text: 'Changed' } }],
+					},
+				},
+			])
+			expect(readProperty(results[0], 'value')).toContain('Edited check-ready.')
+			expect((await store.get('check-ready'))?.journey.steps[0]?.arguments).toEqual({
+				text: 'Changed',
+			})
 			for (const journey of [null, 7, false, undefined])
 				await expect(edit.execute({ journey, edits: [] }, context)).rejects.toMatchObject({
 					code: 'ARGUMENT',
 					message: 'The journey parameter must be a string.',
 				})
+		} finally {
+			await toolset.destroy()
+		}
+	})
+	it('small model: edit without journey refuses naming both saved journeys', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		for (const name of ['first-flow', 'last-flow'])
+			await store.set({ ...createBrowserJourneyFixture(), name })
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { journeys: { store } })
+		await toolset.start()
+		try {
+			await expect(
+				requireValue(toolset.tools.tool('edit')).execute(
+					{ edits: [{ operation: 'update', id: 's1', arguments: { text: 'Changed' } }] },
+					{ signal: new AbortController().signal },
+				),
+			).rejects.toMatchObject({
+				code: 'ARGUMENT',
+				message:
+					'Edit requires journey, one of "first-flow", "last-flow"; call edit with that name beside edits.',
+				context: { subject: 'toolset', key: 'journey' },
+			})
+			for (const name of ['first-flow', 'last-flow'])
+				expect((await store.get(name))?.revision).toBe(1)
 		} finally {
 			await toolset.destroy()
 		}
@@ -694,6 +732,14 @@ describe('BrowserJourneyToolset', () => {
 			expect(edits).not.toHaveProperty('type')
 			const contract = createContract(schemaToShape(parameters))
 			expect(
+				contract.is({ edits: [{ operation: 'update', id: 's1', arguments: { text: 'Changed' } }] }),
+			).toBe(true)
+			expect(contract.is({})).toBe(false)
+			expect(readProperty(readProperty(parameters, 'properties'), 'journey')).toEqual({
+				type: 'string',
+				description: 'The journey name, such as add-kettle. Default: the only saved journey.',
+			})
+			expect(
 				contract.is({ journey: 'check-ready', edits: [{ operation: 'remove', id: 's1' }] }),
 			).toBe(true)
 			expect(
@@ -1192,7 +1238,7 @@ describe('BrowserJourneyToolset', () => {
 				record: ['journey'],
 				save: ['description'],
 				journeys: [],
-				edit: ['journey', 'edits'],
+				edit: ['edits'],
 				replay: ['journey'],
 				forget: ['journey'],
 				capture: ['full'],

@@ -1044,8 +1044,9 @@ void [wrapper, origins, isolated, creation, identity]
 			'add-kettle is already recording with 1 step; call save when the flow is done.',
 			'add-kettle is already recording with 2 steps; call save when the flow is done.',
 			'add-kettle is recording; call save before you record another.',
-			'Edit requires journey, the saved journey\'s name such as "add-kettle", beside edits.',
-			"Edit requires journey, a saved journey's name, beside edits; call journeys.",
+			'Edit requires journey, one of "add-kettle", "place-order"; call edit with that name beside edits.',
+			'No journey is saved, so there is nothing to edit; call record to start one.',
+			'`journey` (string, optional, default: the only saved journey)',
 			'The journey parameter must be a string.',
 			'`from` (integer, required)',
 			'`from` (integer, optional, default 1)',
@@ -1061,7 +1062,7 @@ void [wrapper, origins, isolated, creation, identity]
 			'Clicks the referenced element, settles its action, and returns the page.',
 		)
 		expect(BROWSER_TOOL_COPY.type.description).toBe(
-			'Types into a field such as a search box, optionally submits its form, and returns the page.',
+			'Focuses a field such as a search box and types into it, optionally submits its form, and returns the page.',
 		)
 		const text = readProperty<string>(
 			readProperty(readProperty(BROWSER_TOOL_COPY.type.parameters, 'properties'), 'text'),
@@ -1418,8 +1419,8 @@ void [wrapper, origins, isolated, creation, identity]
 				BROWSER_JOURNEY_EMPTY_REFUSAL,
 				BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL,
 				BROWSER_JOURNEY_RECORD_STEPS_REFUSAL,
-				BROWSER_JOURNEY_EDIT_SAVED_REFUSAL,
-				BROWSER_JOURNEY_EDIT_MISSING_REFUSAL,
+				BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL,
+				BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL,
 			} = await import('@src/core')
 			for (const quoted of [
 				BROWSER_JOURNEY_EMPTY_LISTING,
@@ -1430,8 +1431,8 @@ void [wrapper, origins, isolated, creation, identity]
 				BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL,
 				BROWSER_JOURNEY_RECORD_STEPS_REFUSAL.replace('{count}', '1').replace('{steps}', 'step'),
 				BROWSER_JOURNEY_RECORD_STEPS_REFUSAL.replace('{count}', '2').replace('{steps}', 'steps'),
-				BROWSER_JOURNEY_EDIT_SAVED_REFUSAL,
-				BROWSER_JOURNEY_EDIT_MISSING_REFUSAL,
+				BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL.replace('{names}', '"add-kettle", "place-order"'),
+				BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL,
 			])
 				expect(files[GUIDE_SPEC]).toContain(`\`${quoted.replace('{name}', 'add-kettle')}\``)
 		})

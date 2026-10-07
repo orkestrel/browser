@@ -25,8 +25,8 @@ import {
 	BROWSER_JOURNEY_EMPTY_REFUSAL,
 	BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL,
 	BROWSER_JOURNEY_RECORD_STEPS_REFUSAL,
-	BROWSER_JOURNEY_EDIT_SAVED_REFUSAL,
-	BROWSER_JOURNEY_EDIT_MISSING_REFUSAL,
+	BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL,
+	BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL,
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
 	BROWSER_TOOL_CUT_FOOTER,
@@ -452,15 +452,24 @@ export class BrowserJourneyToolset {
 		note: string,
 	): Promise<string> {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
-		if (!('journey' in args))
-			throw new BrowserError(
-				'ARGUMENT',
-				this.#saved === undefined
-					? BROWSER_JOURNEY_EDIT_MISSING_REFUSAL
-					: BROWSER_JOURNEY_EDIT_SAVED_REFUSAL.replace('{name}', this.#saved),
-				{ subject: 'toolset', key: 'journey' },
-			)
-		const name = readBrowserToolString(args, 'journey')
+		let name: string
+		if ('journey' in args) name = readBrowserToolString(args, 'journey')
+		else {
+			const saved = await this.#store.list({ signal, limit: Number.MAX_SAFE_INTEGER })
+			const only = saved.entries[0]
+			if (only === undefined || saved.entries.length !== 1)
+				throw new BrowserError(
+					'ARGUMENT',
+					only === undefined
+						? BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL
+						: BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL.replace(
+								'{names}',
+								saved.entries.map((entry) => JSON.stringify(entry.journey.name)).join(', '),
+							),
+					{ subject: 'toolset', key: 'journey' },
+				)
+			name = only.journey.name
+		}
 		let requests = args['edits']
 		if (isString(requests)) {
 			const text = requests
