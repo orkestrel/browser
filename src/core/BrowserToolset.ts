@@ -863,7 +863,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			const element = this.#element(args['ref'], context.signal)
 			const action = BROWSER_TYPED_ROLES.has(element.role)
-				? `Clicked ${renderBrowserElement(element)}; call type with [ref=${element.reference}] to enter text`
+				? `Clicked ${renderBrowserElement(element)}; call type with ${element.reference} to enter text`
 				: `Clicked ${renderBrowserElement(element)}`
 			const page = this.#page
 			if (page !== undefined) {

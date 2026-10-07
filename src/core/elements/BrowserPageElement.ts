@@ -32,6 +32,7 @@ import {
 	readEvaluationResult,
 	requireBrowserString,
 	describeBrowserRefusal,
+	renderBrowserElement,
 } from '../helpers.js'
 import { isArray, isError, isInteger, isNumber, isRecord, isString } from '@orkestrel/contract'
 
@@ -134,7 +135,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		if (!isRecord(capture))
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'UNKNOWN', 'returned an invalid reading'),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'UNKNOWN',
+					'returned an invalid reading',
+				),
 				{ reference: this.reference, reason: 'UNKNOWN' },
 			)
 		return new BrowserReading({
@@ -226,10 +231,14 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			)
 			.catch(this.#failure.bind(this, options))
 		if (!isRecord(result) || !isArray(result['quads']) || result['quads'].length === 0)
-			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'HIDDEN'), {
-				reference: this.reference,
-				reason: 'HIDDEN',
-			})
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'HIDDEN'),
+				{
+					reference: this.reference,
+					reason: 'HIDDEN',
+				},
+			)
 		const quad = readBrowserQuad(result)
 		// The frame owners' box models are read here, so a collected owner reaches the classifier too.
 		const center = await this.#input
@@ -274,7 +283,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		if (!this.#input.current())
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'GONE', 'is gone because the page changed'),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'GONE',
+					'is gone because the page changed',
+				),
 				{ reference: this.reference, reason: 'GONE' },
 			)
 		validateBrowserPageOpen(this.#input.page, this.#input.client)
@@ -301,10 +314,14 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				!isRecord(result['object']) ||
 				!isString(result['object']['objectId'])
 			)
-				throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'GONE'), {
-					reference: this.reference,
-					reason: 'GONE',
-				})
+				throw new BrowserError(
+					'ELEMENT',
+					describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'GONE'),
+					{
+						reference: this.reference,
+						reason: 'GONE',
+					},
+				)
 			this.#assert(options)
 			return { object: result['object']['objectId'], context }
 		} catch (error) {
@@ -321,10 +338,14 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 					error.message,
 				)
 			)
-				throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'GONE'), {
-					reference: this.reference,
-					reason: 'GONE',
-				})
+				throw new BrowserError(
+					'ELEMENT',
+					describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'GONE'),
+					{
+						reference: this.reference,
+						reason: 'GONE',
+					},
+				)
 			throw error
 		}
 	}
@@ -377,7 +398,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		if (known !== undefined)
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, known.reason, known.detail),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					known.reason,
+					known.detail,
+				),
 				{ reference: this.reference, reason: known.reason },
 			)
 		const reason = /layout object|not visible/i.test(message)
@@ -392,7 +417,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		if (reason === undefined) throw error
 		throw new BrowserError(
 			'ELEMENT',
-			describeBrowserRefusal(this.reference, reason, reason === 'GONE' ? undefined : message),
+			describeBrowserRefusal(
+				{ subject: `Element ${renderBrowserElement(this)}` },
+				reason,
+				reason === 'GONE' ? undefined : message,
+			),
 			{ reference: this.reference, reason: reason },
 		)
 	}
@@ -465,7 +494,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				)
 					throw new BrowserError(
 						'ELEMENT',
-						describeBrowserRefusal(this.reference, 'OCCLUDED', 'hit-test location held no node'),
+						describeBrowserRefusal(
+							{ subject: `Element ${renderBrowserElement(this)}` },
+							'OCCLUDED',
+							'hit-test location held no node',
+						),
 						{ reference: this.reference, reason: 'OCCLUDED' },
 					)
 				throw error
@@ -475,10 +508,14 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			!isInteger(hit['backendNodeId']) ||
 			(hit['frameId'] !== undefined && hit['frameId'] !== this.#input.frame)
 		)
-			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'OCCLUDED'), {
-				reference: this.reference,
-				reason: 'OCCLUDED',
-			})
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'OCCLUDED'),
+				{
+					reference: this.reference,
+					reason: 'OCCLUDED',
+				},
+			)
 		if (
 			hit['backendNodeId'] !== this.#input.backend &&
 			(await this.#call(compileHitFunction(), options, hit['backendNodeId'])) !== true
@@ -501,7 +538,11 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			}
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'OCCLUDED', `is covered by ${name}`),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'OCCLUDED',
+					`is covered by ${name}`,
+				),
 				{ reference: this.reference, reason: 'OCCLUDED' },
 			)
 		}

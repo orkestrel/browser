@@ -541,7 +541,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			expect(refused).toMatchObject([
 				{
 					success: false,
-					error: `Element [ref=${notes}] is contenteditable, which an untrusted event cannot type into.`,
+					error: `Element textbox "Notes" [ref=${notes}] is contenteditable, which an untrusted event cannot type into.`,
 				},
 				{
 					success: false,

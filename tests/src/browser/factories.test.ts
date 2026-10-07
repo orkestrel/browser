@@ -177,7 +177,7 @@ describe('createBrowserToolset over a document', () => {
 			isBrowserError(refused) &&
 				refused.code === 'ELEMENT' && { message: refused.message, context: refused.context },
 		).toEqual({
-			message: `Element [ref=${search?.reference}] is not a text control.`,
+			message: `Element textbox "Search" [ref=${search?.reference}] is not a text control.`,
 			context: { reference: search?.reference, reason: 'UNKNOWN' },
 		})
 		await toolset.destroy()

@@ -1572,7 +1572,10 @@ describe('BrowserToolset', () => {
 						name: 'type',
 						arguments: { ref: 'e2', text: 'x', submit: true },
 					}),
-				).toMatchObject({ success: false, error: 'Element [ref=e2] is not editable.' })
+				).toMatchObject({
+					success: false,
+					error: 'Element textbox "Email" [ref=e2] is not editable.',
+				})
 				expect(transport.sent.some((message) => message.method === 'Input.insertText')).toBe(false)
 			} finally {
 				await client.close()
@@ -2917,7 +2920,7 @@ describe('BrowserToolset', () => {
 			const outline =
 				'page "Form" https://example.test/form (3 lines)\n1: button "Save" [ref=e1]\n2: textbox "Email" [ref=e2]\n3: combobox "Size" [ref=e3]\n[lines 1–3 of 3; the whole page]'
 			expect(await click.execute({ ref: 'e2' }, { signal })).toBe(
-				`Clicked textbox "Email" [ref=e2]; call type with [ref=e2] to enter text. (untrusted event)\n\n${outline}`,
+				`Clicked textbox "Email" [ref=e2]; call type with e2 to enter text. (untrusted event)\n\n${outline}`,
 			)
 			expect(await click.execute({ ref: 'e1' }, { signal })).toBe(
 				`Clicked button "Save" [ref=e1]. (untrusted event)\n\n${outline}`,

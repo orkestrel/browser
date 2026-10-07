@@ -170,7 +170,7 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
  * })
  * agent.context.messages.add({
  * 	role: 'user',
- * 	content: `What does the Alpine Kettle cost?\n\nThe browser shows this page:\n${view}`,
+ * 	content: `What does the Alpine Kettle cost?\n\nThe browser's first read of the page:\n${view}`,
  * })
  * const result = await agent.generate()
  * await toolset.destroy()

@@ -29,6 +29,11 @@ import {
 } from './setupConformance.js'
 
 describe('pinned WebMCP conformance', () => {
+	it('redesign fix: service tests keep author evidence capture outside the committed suite', () => {
+		const source = readFileSync(new URL('./service/toolset.test.ts', import.meta.url), 'utf8')
+		expect(source).not.toContain('tmp/codex/')
+		expect(source).not.toContain('writeFileSync')
+	})
 	it.each([...WEBMCP_DOMAIN_ROWS, ...WEBMCP_SOURCE_ROWS, ...WEBMCP_WEBREF_ROWS, ...WEBMCP_GAPS])(
 		'$symbol ($ruling)',
 		(row) => {

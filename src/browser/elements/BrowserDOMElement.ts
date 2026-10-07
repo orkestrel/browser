@@ -3,7 +3,12 @@ import type { BrowserElementInterface } from '@src/core'
 import type { BrowserCallOptions, BrowserReadingInterface } from '@src/core'
 import type { BrowserDOMElementInterface } from '../types.js'
 import { isString } from '@orkestrel/contract'
-import { BrowserError, createBrowserReading, describeBrowserRefusal } from '@src/core'
+import {
+	BrowserError,
+	createBrowserReading,
+	describeBrowserRefusal,
+	renderBrowserElement,
+} from '@src/core'
 import { BROWSER_TYPED_INPUTS } from '../constants.js'
 import {
 	computeBrowserName,
@@ -72,7 +77,11 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 			if (control.matches(':disabled')) {
 				throw new BrowserError(
 					'ELEMENT',
-					describeBrowserRefusal(this.reference, 'DISABLED', 'labels a disabled control'),
+					describeBrowserRefusal(
+						{ subject: `Element ${renderBrowserElement(this)}` },
+						'DISABLED',
+						'labels a disabled control',
+					),
 					{ reference: this.reference, reason: 'DISABLED' },
 				)
 			}
@@ -94,7 +103,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 			throw new BrowserError(
 				'ELEMENT',
 				describeBrowserRefusal(
-					this.reference,
+					{ subject: `Element ${renderBrowserElement(this)}` },
 					'UNTRUSTED',
 					'is contenteditable, which an untrusted event cannot type into',
 				),
@@ -110,14 +119,22 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (control === undefined || (input !== undefined && !BROWSER_TYPED_INPUTS.has(input.type))) {
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'UNKNOWN', 'is not a text control'),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'UNKNOWN',
+					'is not a text control',
+				),
 				{ reference: this.reference, reason: 'UNKNOWN' },
 			)
 		}
 		if (control.readOnly || setter === undefined) {
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'UNKNOWN', 'is not editable'),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'UNKNOWN',
+					'is not editable',
+				),
 				{ reference: this.reference, reason: 'UNKNOWN' },
 			)
 		}
@@ -139,7 +156,11 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (!(node instanceof view.HTMLSelectElement)) {
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'UNKNOWN', 'is not a select control'),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'UNKNOWN',
+					'is not a select control',
+				),
 				{ reference: this.reference, reason: 'UNKNOWN' },
 			)
 		}
@@ -153,7 +174,11 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (missing !== undefined) {
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'UNKNOWN', 'has no such option'),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'UNKNOWN',
+					'has no such option',
+				),
 				{ reference: this.reference, reason: 'UNKNOWN' },
 			)
 		}
@@ -178,7 +203,11 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (!(owner instanceof view.HTMLFormElement)) {
 			throw new BrowserError(
 				'ELEMENT',
-				describeBrowserRefusal(this.reference, 'UNKNOWN', 'is not in a form'),
+				describeBrowserRefusal(
+					{ subject: `Element ${renderBrowserElement(this)}` },
+					'UNKNOWN',
+					'is not in a form',
+				),
 				{ reference: this.reference, reason: 'UNKNOWN' },
 			)
 		}
@@ -189,16 +218,20 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 				? node
 				: undefined
 		if (submitter?.matches(':disabled') === true) {
-			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'DISABLED'), {
-				reference: this.reference,
-				reason: 'DISABLED',
-			})
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'DISABLED'),
+				{
+					reference: this.reference,
+					reason: 'DISABLED',
+				},
+			)
 		}
 		if (matchesBrowserPopup(submitter ?? owner)) {
 			throw new BrowserError(
 				'ELEMENT',
 				describeBrowserRefusal(
-					this.reference,
+					{ subject: `Element ${renderBrowserElement(this)}` },
 					'UNTRUSTED',
 					'submits into another browsing context, which an untrusted submission cannot open',
 				),
@@ -244,10 +277,14 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		const node = this.#input.node.deref()
 		const view = node?.ownerDocument.defaultView ?? null
 		if (!this.#input.current() || node === undefined || !node.isConnected || view === null) {
-			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'GONE'), {
-				reference: this.reference,
-				reason: 'GONE',
-			})
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'GONE'),
+				{
+					reference: this.reference,
+					reason: 'GONE',
+				},
+			)
 		}
 		return [node, view]
 	}
@@ -257,15 +294,23 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		const current = this.#current(options)
 		const [node] = current
 		if (!node.checkVisibility())
-			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'HIDDEN'), {
-				reference: this.reference,
-				reason: 'HIDDEN',
-			})
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'HIDDEN'),
+				{
+					reference: this.reference,
+					reason: 'HIDDEN',
+				},
+			)
 		if (node.matches(':disabled'))
-			throw new BrowserError('ELEMENT', describeBrowserRefusal(this.reference, 'DISABLED'), {
-				reference: this.reference,
-				reason: 'DISABLED',
-			})
+			throw new BrowserError(
+				'ELEMENT',
+				describeBrowserRefusal({ subject: `Element ${renderBrowserElement(this)}` }, 'DISABLED'),
+				{
+					reference: this.reference,
+					reason: 'DISABLED',
+				},
+			)
 		return current
 	}
 
@@ -275,7 +320,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 			throw new BrowserError(
 				'ELEMENT',
 				describeBrowserRefusal(
-					this.reference,
+					{ subject: `Element ${renderBrowserElement(this)}` },
 					'UNTRUSTED',
 					'opens another browsing context, which an untrusted click cannot do',
 				),
@@ -286,7 +331,7 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 			throw new BrowserError(
 				'ELEMENT',
 				describeBrowserRefusal(
-					this.reference,
+					{ subject: `Element ${renderBrowserElement(this)}` },
 					'UNTRUSTED',
 					'opens a file chooser, which an untrusted click cannot do',
 				),

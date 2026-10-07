@@ -95,7 +95,7 @@ const SMALL_MODEL_LINES: readonly string[] = Object.freeze([
 	"toolset.tools.tools().map((tool) => tool.name) // ['read', 'click', 'type', 'press', 'navigate', 'wait']",
 	"const seeded = await toolset.tools.execute({\n\tid: 'seed',\n\tname: 'read',\n\targuments: { from: 1 },\n})",
 	'const view = seeded.success ? String(seeded.value) : seeded.error',
-	'\tcontent: `What does the Alpine Kettle cost?\\n\\nThe browser shows this page:\\n${view}`,',
+	"\tcontent: `What does the Alpine Kettle cost?\\n\\nThe browser's first read of the page:\\n${view}`,",
 ])
 /** The receipt the guide's Tools section quotes for a `read` call that carries `ref`. */
 const UNADVERTISED_RECEIPT =
@@ -153,6 +153,82 @@ await new GuideCommand({
 	const manifest = parseJSON(requireValue(files['package.json'], 'Missing inventory: package.json'))
 	if (!isRecord(manifest)) throw new Error('Invalid package manifest: package.json')
 	const sources = createSourceManager({ files, modules: MODULES })
+	it('redesign fix: guide framing and refusal and bound prose match the ruled contract', () => {
+		for (const path of [GUIDE_SPEC, 'src/core/factories.ts']) {
+			expect(files[path]).toContain("The browser's first read of the page:")
+			expect(files[path]).not.toContain('The browser shows this page:')
+		}
+		expect(files[GUIDE_SPEC]).toContain('Element ROLE "NAME" [ref=REF]')
+		expect(files[GUIDE_SPEC]).toContain('120 UTF-16 units')
+		expect(files[GUIDE_SPEC]).toContain('the best match is line M.')
+	})
+	it('redesign fix: the guide element row executes in the documented order', async () => {
+		const { renderBrowserOutlineRow } = await import('@src/core')
+		const { createBrowserOutlineNodes } = await import('./setup.js')
+		expect(
+			requireValue(files[GUIDE_SPEC])
+				.split('| A heading row, an element row, and a text row')[1]
+				?.split('\n')[0],
+		).toContain('`ROLE "NAME" [ref=REF]`')
+		const node = requireValue(
+			createBrowserOutlineNodes([
+				{ role: 'textbox', name: 'Name', reference: 'e16', properties: { disabled: true } },
+			])[0],
+		)
+		expect(renderBrowserOutlineRow({ ...node, value: 'Ada' })).toBe(
+			'textbox "Name" [ref=e16] value="Ada" [disabled]',
+		)
+	})
+	it('redesign fix: the guide type receipt executes in the documented order', async () => {
+		const { createBrowserElementFixture } = await import('./setup.js')
+		const { createBrowserToolset } = await import('@src/core')
+		expect(files[GUIDE_SPEC]).toContain('`Typed "TEXT" into ROLE "NAME" [ref=REF].`')
+		const { client, page } = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(page)
+		try {
+			await toolset.start()
+			await toolset.read()
+			const result = await toolset.tools.execute({
+				id: 'type',
+				name: 'type',
+				arguments: { ref: 'e2', text: 'Ada' },
+			})
+			expect(result).toMatchObject({ success: true })
+			expect(result.success && result.value).toMatch(
+				/^Typed "Ada" into textbox "Email" \[ref=e2\]\./,
+			)
+		} finally {
+			await toolset.destroy()
+			await client.close()
+		}
+	})
+	it('redesign fix: the guide focus receipt executes in the documented order', async () => {
+		const { createBrowserElementFixture, buildBrowserButtonTree } = await import('./setup.js')
+		const { createBrowserToolset } = await import('@src/core')
+		expect(files[GUIDE_SPEC]).toContain('`Pressed KEY; focus is on ROLE "NAME" [ref=REF].`')
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(message.id, buildBrowserButtonTree(1, 'button-1')),
+		})
+		const { client, page } = fixture
+		const toolset = createBrowserToolset(page)
+		try {
+			await toolset.start()
+			const result = await toolset.tools.execute({
+				id: 'press',
+				name: 'press',
+				arguments: { key: 'ArrowDown' },
+			})
+			expect(result.success).toBe(true)
+			expect(result.success && result.value).toMatch(
+				/^Pressed ArrowDown; focus is on button "Button 1" \[ref=e1\]\./,
+			)
+		} finally {
+			await toolset.destroy()
+			await client.close()
+		}
+	})
 	it('keeps published prose on the shipped names and owner contracts', () => {
 		const prose = [
 			'src/core/types.ts',
@@ -851,7 +927,7 @@ void [wrapper, origins, isolated, creation, identity]
 			},
 			BROWSER_TOOL_LIMIT,
 		)
-		expect(missing).toContain('No line from 2 on matches "missing".\n2: Workshop details')
+		expect(missing).toContain('No line from 2 to 2 matches "missing".\n2: Workshop details')
 		expect(
 			renderBrowserPassage(
 				{ url: 'about:blank', title: '', lines: [], from: 1, tabs: [], changed: false },

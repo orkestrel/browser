@@ -551,12 +551,19 @@ export function findBrowserText(lines: readonly BrowserLine[], text: string): nu
 }
 
 /** Wraps spans before numbering, marking hard continuations with a leading ↳.
+ * @remarks A soft wrap breaks before the end of a name rather than before its reference span.
  * @param line - Unwrapped semantic row
  * @returns Lines no wider than the projection width, preserving code points and reference tokens
  */
 export function wrapBrowserLine(line: BrowserLine): readonly BrowserLine[] {
 	const text = renderBrowserLine(line)
 	const lines: BrowserLine[] = []
+	const references: Array<readonly [number, number]> = []
+	let boundary = 0
+	for (const span of line.spans) {
+		if (span.category === 'reference') references.push([boundary, boundary + span.text.length])
+		boundary += span.text.length
+	}
 	let offset = 0
 	let continuation = false
 	while (offset < text.length) {
@@ -564,10 +571,20 @@ export function wrapBrowserLine(line: BrowserLine): readonly BrowserLine[] {
 		let end = Math.min(text.length, offset + room)
 		let hard = false
 		if (end < text.length) {
-			const whitespace = text.slice(offset, end + 1).search(/\s+\S*$/u)
+			let whitespace = text.slice(offset, end + 1).search(/\s+\S*$/u)
+			while (
+				whitespace > 0 &&
+				references.some(
+					([start]) =>
+						start > offset + whitespace && /^\s+$/u.test(text.slice(offset + whitespace, start)),
+				)
+			)
+				whitespace = text.slice(offset, offset + whitespace).search(/\s+\S*$/u)
 			if (whitespace > 0) end = offset + whitespace
 			else {
 				hard = true
+				for (const [start, last] of references)
+					if (end >= start - 1 && end < last) end = Math.max(offset + 1, start - 2)
 				if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end -= 1
 			}
 		}
@@ -703,6 +720,7 @@ export function renderBrowserFooter(
 }
 
 /** Renders a shared search header and chooses its context line within the requested range.
+ * @remarks A miss names `to` when it ends before the last line; an unbounded miss keeps its usual wording.
  * @param lines - Wrapped projection
  * @param from - Inclusive first candidate line
  * @param to - Inclusive last candidate line
@@ -723,7 +741,11 @@ export function renderBrowserSearch(
 		? {
 				from,
 				text:
-					from === 1 ? `No line matches ${query}.` : `No line from ${from} on matches ${query}.`,
+					to !== undefined && to < lines.length
+						? `No line from ${from} to ${to} matches ${query}.`
+						: from === 1
+							? `No line matches ${query}.`
+							: `No line from ${from} on matches ${query}.`,
 			}
 		: {
 				from: Math.max(from, first - BROWSER_READ_CONTEXT),
@@ -734,8 +756,9 @@ export function renderBrowserSearch(
 /** Renders a bounded window with numbered rows and an exact continuation.
  * @remarks A partial-view line follows the page header when rows remain after the window.
  * A changed projection carries its change note even from line 1. A search missing its range
- * reports the page-wide best match without moving the window; that note shares the result
- * budget and is bounded when it cannot fit beside the minimum window.
+ * reports the first page-wide best match without moving the window. Its query is abbreviated
+ * to 120 UTF-16 units. The miss sentence is reserved with the minimum window; when the whole
+ * quoted row cannot also fit, only the sentence is shown, ending with a period.
  * @param passage - Projection and contextual metadata
  * @param limit - Whole-result character room
  * @returns A complete window
@@ -772,26 +795,35 @@ export function renderBrowserPassage(passage: BrowserPassage, limit: number): st
 		const match = scanBrowserLines(passage.lines, passage.search)[0]
 		const line = match === undefined ? undefined : passage.lines[match - 1]
 		if (line !== undefined) {
+			const range =
+				passage.to !== undefined && passage.to < total
+					? `from ${passage.from} to ${passage.to}`
+					: `from ${passage.from} on`
+			const sentence = `No line ${range} matches ${JSON.stringify(abbreviateBrowserText(passage.search, 120))}; the best match is line ${match}`
+			search = `${sentence}.`
 			const minimum = renderBrowserWindow(
 				passage.lines,
 				found.from,
 				found.from,
-				header.join('\n'),
+				[...header, search].join('\n'),
 				limit,
+				'read',
+				true,
 			)
-			const room = limit - minimum.length - 1
-			search =
-				room < 1
-					? undefined
-					: boundBrowserText(
-							`No line from ${passage.from} on matches ${JSON.stringify(passage.search)}; the best match is line ${match}:\n${match}: ${renderBrowserLine(line)}`,
-							room,
-							BROWSER_TOOL_CUT_FOOTER,
-						)
+			const quote = `${sentence}:\n${match}: ${renderBrowserLine(line)}`
+			if (minimum.length + quote.length - search.length <= limit) search = quote
 		}
 	}
 	if (search !== undefined) header.push(search)
-	return renderBrowserWindow(passage.lines, found.from, passage.to, header.join('\n'), limit)
+	return renderBrowserWindow(
+		passage.lines,
+		found.from,
+		passage.to,
+		header.join('\n'),
+		limit,
+		'read',
+		true,
+	)
 }
 
 /** Fits an unnumbered receipt and a complete page window inside one result limit.
@@ -817,13 +849,14 @@ export function renderBrowserReceiptWindow(
 }
 
 /** Selects whole addressed rows after reserving the header and exact footer.
- * @remarks A page header for `read` reserves a partial-view line before selecting rows.
+ * @remarks The partial switch reserves a partial-view line before selecting rows, independently of header text.
  * @param lines - Complete projection
  * @param from - Inclusive first line
  * @param to - Inclusive last line, or the default window
  * @param header - Bounded preceding text
  * @param limit - Whole-result room
  * @param tool - Continuation tool. Default: read
+ * @param partial - Whether to show a partial-view line after the first header line. Default: false
  * @returns A complete bounded result
  */
 export function renderBrowserWindow(
@@ -833,6 +866,7 @@ export function renderBrowserWindow(
 	header: string,
 	limit: number,
 	tool = 'read',
+	partial = false,
 ): string {
 	validateBrowserLines(from, to, lines.length)
 	let body = header
@@ -845,7 +879,7 @@ export function renderBrowserWindow(
 		const row = `${index}: ${renderBrowserLine(line)}`
 		const footer = renderBrowserFooter(from, index, lines.length, tool)
 		const heading = header === '' ? [] : header.split(/\r\n|\n/)
-		if (tool === 'read' && heading[0]?.startsWith('page ') && index < lines.length)
+		if (partial && index < lines.length)
 			heading.splice(
 				1,
 				0,

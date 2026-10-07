@@ -10,11 +10,11 @@ import type { ToolManagerInterface } from '@orkestrel/tool'
 import type { FixtureServerInterface } from '../setupServer.js'
 import { BROWSER_READING_HTML, BROWSER_READING_STRUCTURE_HTML } from '../setup.js'
 import { renderBrowserLine } from '@src/core'
-import { writeFileSync } from 'node:fs'
 import {
 	SERVICE_READING_SUBMISSIONS,
 	SERVICE_STORE_PARAGRAPHS,
 	SERVICE_LINE_VIEW_RECORDS,
+	SERVICE_LINE_VIEW_REPLIES,
 } from '../setupService.js'
 import { BROWSER_SUBMIT_KEY } from '@src/core'
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
@@ -317,21 +317,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 	})
 
-	it('audit repair 14: measures an outline capture of 5000 paragraph nodes', async () => {
+	it('audit repair 14: captures all 5000 paragraph nodes repeatedly', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = '<p>Ordinary capture material</p>'.repeat(5000)`)
-		const elapsed: number[] = []
 		for (let sample = 0; sample < 3; sample += 1) {
-			const started = performance.now()
 			const outline = await page.elements.outline({ timeout: 30000 })
-			elapsed.push(performance.now() - started)
 			expect(outline.lines).toHaveLength(5000)
 		}
-		writeFileSync(
-			'tmp/codex/reading-capture-cost.json',
-			JSON.stringify({ paragraphs: 5000, elapsed }),
-		)
 	})
 	it('audit repair 1: the receipt and error redaction layer protects unnumbered text', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
@@ -505,10 +498,6 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await page.evaluate(
 			`document.body.innerHTML = ${JSON.stringify(BROWSER_READING_STRUCTURE_HTML)}`,
 		)
-		writeFileSync(
-			'tmp/codex/reading-structure-source.json',
-			JSON.stringify(await page.accessibility.snapshot(), null, 2),
-		)
 		const lines = (await page.elements.outline()).lines
 			.map(renderBrowserLine)
 			.map(maskBrowserReferences)
@@ -540,7 +529,6 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const masked = seed.replace(/http:\/\/127\.0\.0\.1:\d+/g, 'http://127.0.0.1:PORT')
 			expect(masked).toBe(expected)
 			expect(seed.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
-			writeFileSync(`tmp/codex/redesign-${route === '/' ? 'catalogue' : 'policy'}.txt`, masked)
 			const miss = await toolset.read({ from: 47, search: 'Cedar Tea Tray' })
 			expect(miss).toContain(
 				route === '/'
@@ -553,12 +541,6 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					: /\[lines 47–\d+ of 80; 46 above,/,
 			)
 			expect(miss.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
-			if (route === '/') {
-				writeFileSync(
-					'tmp/codex/redesign-range-miss.txt',
-					miss.replace(/http:\/\/127\.0\.0\.1:\d+/g, 'http://127.0.0.1:PORT'),
-				)
-			}
 			await page.evaluate(
 				'document.querySelector("main").append(document.createTextNode("Changed projection"))',
 			)
@@ -566,6 +548,34 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect(await toolset.read({ from: 1 })).not.toContain('The page changed since the last view')
 		},
 	)
+	it('line redesign: equals the measured cart range-miss reply and type refusal', async () => {
+		const record = requireValue(
+			SERVICE_LINE_VIEW_RECORDS.find((row) => row.record.includes('cart')),
+		)
+		const context = await browser.isolate()
+		contexts.push(context)
+		const page = await context.create({ url: fixtures.url('/form') })
+		opened.push(page)
+		await page.evaluate(
+			`(history.replaceState(null, '', '/'), document.open(), document.write(${JSON.stringify(record.html)}), document.close())`,
+		)
+		const toolset = createBrowserToolset(page)
+		toolsets.push(toolset)
+		await toolset.start()
+		const range = await toolset.read(SERVICE_LINE_VIEW_REPLIES.range.arguments)
+		expect(range.replace(/http:\/\/127\.0\.0\.1:\d+/g, 'http://127.0.0.1:PORT')).toBe(
+			SERVICE_LINE_VIEW_REPLIES.range.expected,
+		)
+		const refused = await toolset.tools.execute({
+			id: 'refusal',
+			name: 'type',
+			arguments: SERVICE_LINE_VIEW_REPLIES.refusal.arguments,
+		})
+		expect(refused).toMatchObject({
+			success: false,
+			error: SERVICE_LINE_VIEW_REPLIES.refusal.expected,
+		})
+	})
 	it('reading campaign: returns complete bounded numbered windows, continuation, search, and a changed continuation', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
@@ -579,10 +589,6 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const from = Number(requireValue(/call read with from (\d+) for more/.exec(first))[1])
 		const continuation = await toolset.read({ from })
 		const search = await toolset.read({ from: 1, search: 'deliver schedule' })
-		writeFileSync(
-			'tmp/codex/reading-examples.json',
-			JSON.stringify({ first, continuation, search }, null, 2),
-		)
 		for (const result of [first, continuation, search]) {
 			expect(result.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			expect(result).toMatch(/\[lines \d+–\d+ of \d+;/)
@@ -962,7 +968,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(click).toSatisfy((receipt: string) =>
 			matchesToolReceipt(receipt, {
-				action: `Clicked textbox "Name" [ref=${name}]; call type with [ref=${name}] to enter text`,
+				action: `Clicked textbox "Name" [ref=${name}]; call type with ${name} to enter text`,
 				view: form,
 			}),
 		)

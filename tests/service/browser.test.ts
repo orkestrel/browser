@@ -997,7 +997,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await expect(covered.click()).rejects.toMatchObject({
 			code: 'ELEMENT',
 			context: { reference: covered.reference, reason: 'OCCLUDED' },
-			message: `Element [ref=${covered.reference}] is covered by div#veil.`,
+			message: `Element ${covered.role}${covered.name === '' ? '' : ` ${JSON.stringify(covered.name)}`} [ref=${covered.reference}] is covered by div#veil.`,
 		})
 		expect(await page.evaluate('document.body.dataset.saved')).toBeUndefined()
 
@@ -1255,7 +1255,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await expect(stale.click()).rejects.toMatchObject({
 			code: 'ELEMENT',
 			context: { reference: stale.reference, reason: 'GONE' },
-			message: `Element [ref=${stale.reference}] is gone because the page changed; call read for fresh refs.`,
+			message: `Element ${stale.role}${stale.name === '' ? '' : ` ${JSON.stringify(stale.name)}`} [ref=${stale.reference}] is gone because the page changed; call read for fresh refs.`,
 		})
 		const next = extractOutlineReferences(
 			(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
@@ -1343,7 +1343,7 @@ describe('Browser proofs against the fixture pages', () => {
 			await expect(removed.click()).rejects.toMatchObject({
 				code: 'ELEMENT',
 				context: { reference: removed.reference, reason: 'GONE' },
-				message: `Element [ref=${removed.reference}] is gone because the page changed; call read for fresh refs.`,
+				message: `Element ${removed.role}${removed.name === '' ? '' : ` ${JSON.stringify(removed.name)}`} [ref=${removed.reference}] is gone because the page changed; call read for fresh refs.`,
 			})
 		})
 	})
