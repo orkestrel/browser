@@ -744,13 +744,15 @@ void [wrapper, origins, isolated, creation, identity]
 			{ spans: [{ category: 'text', text: 'We ship every weekday.' }] },
 			{ spans: [{ category: 'text', text: 'Contact the workshop.' }] },
 		]
-		expect(renderBrowserLine(lines[0] ?? { spans: [] })).toBe('e12345 link "Shipping" /delivery')
+		expect(renderBrowserLine(lines[0] ?? { spans: [] })).toBe(
+			'link "Shipping" [ref=e12345] /delivery',
+		)
 		expect(scanBrowserLines(lines, 'ship')).toEqual([1, 2])
 		expect(scanBrowserLines(lines, 'e12345')).toEqual([])
 		expect(scanBrowserLines(lines, 'delivery', 2)).toEqual([])
 		expect(validateBrowserLines(1, 2, lines.length)).toBeUndefined()
 		expect(renderBrowserWindow(lines, 1, 2, 'Delivery', 4_000)).toBe(
-			'Delivery\n1: e12345 link "Shipping" /delivery\n2: We ship every weekday.\n[lines 1–2 of 3; 1 below; call read with from 3 for more]',
+			'Delivery\n1: link "Shipping" [ref=e12345] /delivery\n2: We ship every weekday.\n[lines 1–2 of 3; 1 below; call read with from 3 for more]',
 		)
 		expect(renderBrowserFooter(3, 3, 3)).toBe('[lines 3–3 of 3; 2 above; end of page]')
 		expect(
@@ -768,7 +770,23 @@ void [wrapper, origins, isolated, creation, identity]
 				4_000,
 			),
 		).toBe(
-			'page "Delivery" https://shop.example.test/ (3 lines)\nThe page changed since the last view; line numbers might differ.\n1 line matches "shipping": 2\n2: We ship every weekday.\n[lines 2–2 of 3; 1 above, 1 below; call read with from 3 for more]',
+			'page "Delivery" https://shop.example.test/ (3 lines)\nThis read shows lines 2–2 of 3; line 3 is not shown yet.\nThe page changed since the last view; line numbers might differ.\n1 line matches "shipping": 2\n2: We ship every weekday.\n[lines 2–2 of 3; 1 above, 1 below; call read with from 3 for more]',
+		)
+		expect(
+			renderBrowserPassage(
+				{
+					url: 'https://shop.example.test/',
+					title: 'Delivery',
+					lines,
+					from: 3,
+					search: 'delivery',
+					tabs: [],
+					changed: false,
+				},
+				4_000,
+			),
+		).toBe(
+			'page "Delivery" https://shop.example.test/ (3 lines)\nNo line from 3 on matches "delivery"; the best match is line 1:\n1: link "Shipping" [ref=e12345] /delivery\n3: Contact the workshop.\n[lines 3–3 of 3; 2 above; end of page]',
 		)
 		expect(
 			wrapBrowserLine({ spans: [{ category: 'text', text: 'x'.repeat(801) }] }).map(
@@ -968,8 +986,8 @@ void [wrapper, origins, isolated, creation, identity]
 			expect(fresh).toContain('\n2: ')
 			expect(fresh).toContain('textbox "Buyer email"')
 			expect(fresh.match(/\be\d+\b/g)).toEqual(next.match(/\be\d+\b/g))
-			const bounded = await toolset.read({ from: 1, limit: 180 })
-			expect(bounded.length).toBeLessThanOrEqual(180)
+			const bounded = await toolset.read({ from: 1, limit: 260 })
+			expect(bounded.length).toBeLessThanOrEqual(260)
 			expect(fresh.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			const seeded = await toolset.tools.execute({
 				id: 'read',
@@ -1227,7 +1245,7 @@ void [wrapper, origins, isolated, creation, identity]
 			const { renderBrowserRun } = await import('@src/core')
 			const { BROWSER_RUN_FIXTURE } = await import('./setup.js')
 			const view =
-				'page "Cart" https://shop.example.test/cart (5 lines)\n1: e40 link "Catalogue" /\n2: e41 link "Cart" /cart\n3: e42 link "Checkout" /checkout\n4: # Your cart\n5: Alpine Kettle\n[lines 1–5 of 5; the whole page]'
+				'page "Cart" https://shop.example.test/cart (5 lines)\n1: link "Catalogue" [ref=e40] /\n2: link "Cart" [ref=e41] /cart\n3: link "Checkout" [ref=e42] /checkout\n4: # Your cart\n5: Alpine Kettle\n[lines 1–5 of 5; the whole page]'
 			const shown = fences.filter((fence) => fence.title === RUN_TITLE)
 			expect(shown).toHaveLength(1)
 			const comment = (shown[0]?.code ?? '')

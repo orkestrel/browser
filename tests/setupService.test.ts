@@ -105,7 +105,7 @@ describe('collectOutlineEntries', () => {
 	it('retains suffixes and duplicate names, deduplicates references, and ignores nonrows', () => {
 		expect(
 			collectOutlineEntries(
-				'2 elements match "Toggle":\r\ne9 button "Toggle" pressed=false\r\npage "Title" url\r (5 lines)\n1: e2 button "Toggle" pressed=true [disabled]\r\n2: e9 button "Toggle" pressed=false\r\n3: # Heading\r\n4: e0 button "Invalid"\r\n5: e3 no-quoted-name\r\n[lines 1–5 of 5; the whole page]',
+				'2 elements match "Toggle":\r\nbutton "Toggle" [ref=e9] pressed=false\r\npage "Title" url\r (5 lines)\n1: button "Toggle" [ref=e2] pressed=true [disabled]\r\n2: button "Toggle" [ref=e9] pressed=false\r\n3: # Heading\r\n4: e0 button "Invalid"\r\n5: e3 no-quoted-name\r\n[lines 1–5 of 5; the whole page]',
 			),
 		).toEqual(['button "Toggle" pressed=false', 'button "Toggle" pressed=true [disabled]'])
 		expect(collectOutlineEntries('page "Title" url\n(0 of 0 elements)')).toEqual([])
@@ -267,7 +267,7 @@ describe('extractOutlineRows', () => {
 	it('reads the rows of a receipt and nothing from heading, text, summary, or unquoted rows', () => {
 		expect(
 			extractOutlineRows(
-				'Clicked e2 button "Keep".\n\npage "Drafts" http://127.0.0.1/confirm (5 lines)\n1: # Drafts\n2: e1 button "Delete"\n3: e0 button "Zero"\n4: e4 option\n5: Leave e7 at the door\n[lines 1–5 of 5; the whole page]',
+				'Clicked button "Keep" [ref=e2].\n\npage "Drafts" http://127.0.0.1/confirm (5 lines)\n1: # Drafts\n2: button "Delete" [ref=e1]\n3: e0 button "Zero"\n4: e4 option\n5: Leave e7 at the door\n[lines 1–5 of 5; the whole page]',
 			),
 		).toStrictEqual([{ reference: 'e1', role: 'button', name: 'Delete' }])
 		expect(extractOutlineRows('')).toStrictEqual([])
@@ -276,7 +276,7 @@ describe('extractOutlineRows', () => {
 	it('reads a read match row that repeats an outline row once, at its first occurrence', () => {
 		expect(
 			extractOutlineRows(
-				'1 element matches "the delete button":\ne1 button "Delete"\n\npage "Drafts" http://127.0.0.1/confirm (2 lines)\n1: e2 button "Keep"\n2: e1 button "Delete"\n[lines 1–2 of 2; the whole page]',
+				'1 element matches "the delete button":\nbutton "Delete" [ref=e1]\n\npage "Drafts" http://127.0.0.1/confirm (2 lines)\n1: button "Keep" [ref=e2]\n2: button "Delete" [ref=e1]\n[lines 1–2 of 2; the whole page]',
 			),
 		).toStrictEqual([
 			{ reference: 'e1', role: 'button', name: 'Delete' },
@@ -288,9 +288,9 @@ describe('extractOutlineRows', () => {
 describe('collectOutlinePairs', () => {
 	it('collects equal sorted lists from two outlines listing the same elements in another order under other references', () => {
 		const cdp =
-			'page "Gift" u (3 lines)\n1: e1 link "Desk"\n2: e2 checkbox "Gift wrap"\n3: e3 button "Apply"\n[lines 1–3 of 3; the whole page]'
+			'page "Gift" u (3 lines)\n1: link "Desk" [ref=e1]\n2: checkbox "Gift wrap" [ref=e2]\n3: button "Apply" [ref=e3]\n[lines 1–3 of 3; the whole page]'
 		const dom =
-			'page "Gift" u (4 lines)\n1: e9 button "Apply"\n2: Gift wrap\n3: e7 checkbox "Gift wrap"\n4: e8 link "Desk"\n[lines 1–4 of 4; the whole page]'
+			'page "Gift" u (4 lines)\n1: button "Apply" [ref=e9]\n2: Gift wrap\n3: checkbox "Gift wrap" [ref=e7]\n4: link "Desk" [ref=e8]\n[lines 1–4 of 4; the whole page]'
 
 		expect(collectOutlinePairs(cdp)).toStrictEqual([
 			'button "Apply"',
@@ -298,26 +298,28 @@ describe('collectOutlinePairs', () => {
 			'link "Desk"',
 		])
 		expect(collectOutlinePairs(dom)).toStrictEqual(collectOutlinePairs(cdp))
-		expect(collectOutlinePairs(`${dom}\ne10 option "Small"`)).not.toStrictEqual(
+		expect(collectOutlinePairs(`${dom}\noption "Small" [ref=e10]`)).not.toStrictEqual(
 			collectOutlinePairs(cdp),
 		)
 		expect(collectOutlinePairs('(0 of 0 elements)')).toStrictEqual([])
 		expect(
-			collectOutlinePairs(`1 element matches "gift wrap":\ne7 checkbox "Gift wrap"\n\n${dom}`),
+			collectOutlinePairs(
+				`1 element matches "gift wrap":\ncheckbox "Gift wrap" [ref=e7]\n\n${dom}`,
+			),
 		).toStrictEqual(collectOutlinePairs(cdp))
 	})
 })
 
 describe('requireOutlineReference', () => {
 	const text =
-		'page "Drafts" u (3 lines)\n1: e1 button "Delete"\n2: e2 button "Keep"\n3: e3 link "Keep"\n[lines 1–3 of 3; the whole page]'
+		'page "Drafts" u (3 lines)\n1: button "Delete" [ref=e1]\n2: button "Keep" [ref=e2]\n3: link "Keep" [ref=e3]\n[lines 1–3 of 3; the whole page]'
 
 	it('returns the reference of the one row with the role and the name', () => {
 		expect(requireOutlineReference(text, 'button', 'Keep')).toBe('e2')
 		expect(requireOutlineReference(text, 'link', 'Keep')).toBe('e3')
 		expect(
 			requireOutlineReference(
-				`2 elements match "keep":\ne2 button "Keep"\ne3 link "Keep"\n\n${text}`,
+				`2 elements match "keep":\nbutton "Keep" [ref=e2]\nlink "Keep" [ref=e3]\n\n${text}`,
 				'button',
 				'Keep',
 			),
@@ -328,9 +330,9 @@ describe('requireOutlineReference', () => {
 		expect(() => requireOutlineReference(text, 'button', 'Save')).toThrow(
 			'Expected one outline row button "Save" and found 0',
 		)
-		expect(() => requireOutlineReference(`${text}\ne4 button "Keep"`, 'button', 'Keep')).toThrow(
-			'Expected one outline row button "Keep" and found 2',
-		)
+		expect(() =>
+			requireOutlineReference(`${text}\nbutton "Keep" [ref=e4]`, 'button', 'Keep'),
+		).toThrow('Expected one outline row button "Keep" and found 2')
 	})
 })
 
@@ -363,36 +365,37 @@ describe('requireToolText', () => {
 
 describe('matchesToolReceipt', () => {
 	const view =
-		'page "Drafts" http://127.0.0.1/confirm (2 lines)\n1: # Drafts\n2: e2 button "Keep"\n[lines 1–2 of 2; the whole page]'
-	const kept = { action: 'Clicked e2 button "Keep"', view }
+		'page "Drafts" http://127.0.0.1/confirm (2 lines)\n1: # Drafts\n2: button "Keep" [ref=e2]\n[lines 1–2 of 2; the whole page]'
+	const kept = { action: 'Clicked button "Keep" [ref=e2]', view }
 	const placed = {
-		action: 'Clicked e1 link "Next"',
+		action: 'Clicked link "Next" [ref=e1]',
 		view: 'page "Next note" http://127.0.0.1/next (1 lines)\n1: # Next note\n[lines 1–1 of 1; the whole page]',
 		url: 'http://127.0.0.1/next',
 	}
 
 	it('accepts the captured view, the deadline note, and for a navigation the still-loading status', () => {
-		expect(matchesToolReceipt(`Clicked e2 button "Keep".\n\n${view}`, kept)).toBe(true)
+		expect(matchesToolReceipt(`Clicked button "Keep" [ref=e2].\n\n${view}`, kept)).toBe(true)
 		expect(
-			matchesToolReceipt(`Clicked e2 button "Keep".\n\n${BROWSER_TOOL_DEADLINE_NOTE}`, kept),
+			matchesToolReceipt(`Clicked button "Keep" [ref=e2].\n\n${BROWSER_TOOL_DEADLINE_NOTE}`, kept),
 		).toBe(true)
 		expect(
 			matchesToolReceipt(
-				`Clicked e1 link "Next"; the page is still loading http://127.0.0.1/next.\n\n${placed.view}`,
+				`Clicked link "Next" [ref=e1]; the page is still loading http://127.0.0.1/next.\n\n${placed.view}`,
 				placed,
 			),
 		).toBe(true)
-		expect(matchesToolReceipt(`Clicked e1 link "Next".\n\n${placed.view}`, placed)).toBe(true)
-		expect(matchesToolReceipt(`Clicked e1 link "Next".\n\n${SERVICE_CHANGED_NOTE}`, placed)).toBe(
-			true,
-		)
+		expect(matchesToolReceipt(`Clicked link "Next" [ref=e1].\n\n${placed.view}`, placed)).toBe(true)
+		expect(
+			matchesToolReceipt(`Clicked link "Next" [ref=e1].\n\n${SERVICE_CHANGED_NOTE}`, placed),
+		).toBe(true)
 		expect(SERVICE_CHANGED_NOTE).toBe(
 			'(The page changed before the view could be read; call read.)',
 		)
 	})
 
 	it('accepts after a still-loading status only the destination view, the changed note, or the deadline note', () => {
-		const loading = 'Clicked e1 link "Next"; the page is still loading http://127.0.0.1/next.\n\n'
+		const loading =
+			'Clicked link "Next" [ref=e1]; the page is still loading http://127.0.0.1/next.\n\n'
 		expect(
 			[placed.view, SERVICE_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE].map((suffix) =>
 				matchesToolReceipt(`${loading}${suffix}`, placed),
@@ -411,32 +414,34 @@ describe('matchesToolReceipt', () => {
 	})
 
 	it('refuses another view, another action, a capture error, a loading status without a navigation, and another URL', () => {
-		expect(matchesToolReceipt(`Clicked e2 button "Keep".\n\n${view}\nextra`, kept)).toBe(false)
-		expect(matchesToolReceipt(`Clicked e3 button "Keep".\n\n${view}`, kept)).toBe(false)
-		expect(
-			matchesToolReceipt(
-				'Clicked e2 button "Keep".\n\n(The view could not be read: gone; call read.)',
-				kept,
-			),
-		).toBe(false)
-		expect(matchesToolReceipt(`Clicked e2 button "Keep".\n\n${SERVICE_CHANGED_NOTE}`, kept)).toBe(
+		expect(matchesToolReceipt(`Clicked button "Keep" [ref=e2].\n\n${view}\nextra`, kept)).toBe(
 			false,
 		)
+		expect(matchesToolReceipt(`Clicked button "Keep" [ref=e3].\n\n${view}`, kept)).toBe(false)
 		expect(
 			matchesToolReceipt(
-				`Clicked e2 button "Keep"; the page is still loading http://127.0.0.1/confirm.\n\n${view}`,
+				'Clicked button "Keep" [ref=e2].\n\n(The view could not be read: gone; call read.)',
+				kept,
+			),
+		).toBe(false)
+		expect(
+			matchesToolReceipt(`Clicked button "Keep" [ref=e2].\n\n${SERVICE_CHANGED_NOTE}`, kept),
+		).toBe(false)
+		expect(
+			matchesToolReceipt(
+				`Clicked button "Keep" [ref=e2]; the page is still loading http://127.0.0.1/confirm.\n\n${view}`,
 				kept,
 			),
 		).toBe(false)
 		expect(
 			matchesToolReceipt(
-				'Clicked e1 link "Next"; the page is still loading http://127.0.0.1/other.\n\n',
+				'Clicked link "Next" [ref=e1]; the page is still loading http://127.0.0.1/other.\n\n',
 				placed,
 			),
 		).toBe(false)
 		expect(
 			matchesToolReceipt(
-				'Clicked e1 link "Next"; it requested http://127.0.0.1/next and the page did not change.\n\n',
+				'Clicked link "Next" [ref=e1]; it requested http://127.0.0.1/next and the page did not change.\n\n',
 				placed,
 			),
 		).toBe(false)

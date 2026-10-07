@@ -1023,7 +1023,7 @@ describe('BrowserJourneyToolset', () => {
 				expect(recorded).toMatchObject({
 					success: true,
 					value:
-						'Recording check-form; each action you take is a step; call save when it is done.\n\npage "Form" https://example.test/form (3 lines)\n1: e1 button "Save"\n2: e2 textbox "Email"\n3: e3 combobox "Size"\n[lines 1–3 of 3; the whole page]',
+						'Recording check-form; each action you take is a step; call save when it is done.\n\npage "Form" https://example.test/form (3 lines)\n1: button "Save" [ref=e1]\n2: textbox "Email" [ref=e2]\n3: combobox "Size" [ref=e3]\n[lines 1–3 of 3; the whole page]',
 				})
 				expect(journeys.recording).toBe('check-form')
 				await toolset.tools.execute({
@@ -1414,7 +1414,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				)
 				expect(results.map((result) => readProperty(result, 'error'))).toEqual([
 					'No journey is named "checkout"; call journeys.',
-					'Element e9 is not in the current view; call read for fresh refs.',
+					'Element [ref=e9] is not in the current view; call read for fresh refs.',
 					'Edit 2 is refused: it names unknown step "s9"; call journeys.',
 					'Edit 1 is refused: it declares "email" but no step binds it; call journeys.',
 					'Edit 1 is refused: its "remove" names no step in "id"; call journeys.',
@@ -1473,15 +1473,8 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				})
 				expect(replayed).toMatchObject({
 					success: true,
-					value: `Replayed check-ready: 2 of 2 steps.
-s1 "Ready" is on the page.
-s2 "Shipped" is on the page.
-
-page "Form" https://example.test/form (3 lines)
-1: e1 button "Save"
-2: e2 textbox "Email"
-3: e3 combobox "Size"
-[lines 1–3 of 3; the whole page]`,
+					value:
+						'Replayed check-ready: 2 of 2 steps.\ns1 "Ready" is on the page.\ns2 "Shipped" is on the page.\n\npage "Form" https://example.test/form (3 lines)\n1: button "Save" [ref=e1]\n2: textbox "Email" [ref=e2]\n3: combobox "Size" [ref=e3]\n[lines 1–3 of 3; the whole page]',
 				})
 				expect(view.calls).toEqual(['wait Ready', 'outline', 'wait Shipped', 'outline', 'outline'])
 				const [run] = (await runs.list('check-ready')).entries
@@ -1985,7 +1978,7 @@ page "Form" https://example.test/form (3 lines)
 				})
 				expect(readProperty<string>(replayed, 'value')).toMatch(
 					new RegExp(
-						`^Replayed sign-in: 1 of 1 steps\\.\\ns1 Typed a secret into ${email.reference} textbox "Email"`,
+						`^Replayed sign-in: 1 of 1 steps\\.\\ns1 Typed a secret into textbox "Email" \\[ref=${email.reference}\\]`,
 					),
 				)
 				for (const result of [saved, listed, replayed]) {

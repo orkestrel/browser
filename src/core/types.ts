@@ -2492,7 +2492,8 @@ export interface BrowserOutline {
  * @remarks
  * - `from` — first line, inclusive. Default: 1
  * - `to` — last line, inclusive. Default: as many lines as fit
- * - `search` — words whose best match opens the window
+ * - `search` — words whose best in-range match opens the window; a range miss reports the
+ *   page-wide best match without moving the window
  * - `limit` — character room including the header and footer. Default: the toolset limit
  */
 export interface BrowserToolsetReadOptions extends BrowserCallOptions {
@@ -3063,7 +3064,7 @@ export interface BrowserToolsetInterface {
  * Describes one tool receipt before rendering.
  *
  * @remarks
- * - `action` — what the tool did, without a closing period, such as `Clicked e4 button "Save"`;
+ * - `action` — what the tool did, without a closing period, such as `Clicked button "Save" [ref=e4]`;
  *   empty when the tool did nothing the receipt names
  * - `status` — a clause joined to the action with a semicolon, such as
  *   `the page is still loading URL`

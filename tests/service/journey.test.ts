@@ -1287,8 +1287,8 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			)
 			expect(maskBrowserReferences(rendered).split('\n').slice(0, 3)).toEqual([
 				'Replayed sign-in: 2 of 2 steps.',
-				's1 Typed a secret into e# textbox "Password".',
-				's2 Clicked e# button "Sign in".',
+				's1 Typed a secret into textbox "Password" [ref=e#].',
+				's2 Clicked button "Sign in" [ref=e#].',
 			])
 			expect(journey.parameters).toEqual({ password: { secret: true } })
 			expect(ids).toHaveLength(1)

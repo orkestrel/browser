@@ -11,7 +11,11 @@ import type { FixtureServerInterface } from '../setupServer.js'
 import { BROWSER_READING_HTML, BROWSER_READING_STRUCTURE_HTML } from '../setup.js'
 import { renderBrowserLine } from '@src/core'
 import { writeFileSync } from 'node:fs'
-import { SERVICE_READING_SUBMISSIONS, SERVICE_STORE_PARAGRAPHS } from '../setupService.js'
+import {
+	SERVICE_READING_SUBMISSIONS,
+	SERVICE_STORE_PARAGRAPHS,
+	SERVICE_LINE_VIEW_RECORDS,
+} from '../setupService.js'
 import { BROWSER_SUBMIT_KEY } from '@src/core'
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
 import { createBrowser, createWebSocketCDPTransport } from '@src/server'
@@ -305,7 +309,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const [first, second] = results.map((result) => maskBrowserReferences(result))
 			expect(second).toBe(first)
 			expect(first).toContain(`The view moved to a new tab: ${child}.`)
-			expect(first).toContain(`Clicked e# link "Open details".\n\npage "Details" ${child}`)
+			expect(first).toContain(`Clicked link "Open details" [ref=e#].\n\npage "Details" ${child}`)
 			expect(actions.map((action) => [action.outcome, action.tab])).toEqual([
 				['done', { url: child, title: 'Details' }],
 				['done', { url: child, title: 'Details' }],
@@ -461,7 +465,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const quoted = requireToolText(
 			await toolset.tools.execute({ id: 'quoted', name: 'wait', arguments: { text: 'Say "yes"' } }),
 		)
-		expect(quoted).toMatch(/\n33: e\d+ button/)
+		expect(quoted).toMatch(/\n33: button "Say \\"yes\\"" \[ref=e\d+\]/)
 		expect(quoted).not.toContain('\n1: ')
 	})
 	it('reading campaign: projects controls, redacts typed secrets in the receipt and the following window', async () => {
@@ -472,7 +476,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		toolsets.push(toolset)
 		await toolset.start()
 		const first = await toolset.read()
-		expect(first).toMatch(/1: ### e\d+ link "Cedar Tea" \/tea\?q=1#cup/)
+		expect(first).toMatch(/1: ### link "Cedar Tea" \[ref=e\d+\] \/tea\?q=1#cup/)
 		expect(first).toContain('- A list entry')
 		expect(first).toContain('Product | Price')
 		expect(first).toContain('Cedar | 41')
@@ -510,14 +514,58 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			.map(maskBrowserReferences)
 		expect(lines).toEqual([
 			'## Menu Tea Elsewhere',
-			'e# link "Tea" /tea',
-			'e# link "Elsewhere" https://else.example/',
+			'link "Tea" [ref=e#] /tea',
+			'link "Elsewhere" [ref=e#] https://else.example/',
 			'###### End',
-			'Before e# link "Buy" /buy after | 9',
+			'Before link "Buy" [ref=e#] /buy after | 9',
 			'image "A \\"quote\\""',
 		])
 	})
 
+	it.each(SERVICE_LINE_VIEW_RECORDS)(
+		'line redesign: equals the measured bytes of $record',
+		async ({ html, expected, record }) => {
+			const route = record.includes('paging') ? '/policy' : '/'
+			const context = await browser.isolate()
+			contexts.push(context)
+			const page = await context.create({ url: fixtures.url('/form') })
+			opened.push(page)
+			await page.evaluate(
+				`(() => { history.replaceState(null, '', ${JSON.stringify(route)}); document.open(); document.write(${JSON.stringify(html)}); document.close() })()`,
+			)
+			const toolset = createBrowserToolset(page)
+			toolsets.push(toolset)
+			await toolset.start()
+			const seed = await toolset.read({ from: 1 })
+			const masked = seed.replace(/http:\/\/127\.0\.0\.1:\d+/g, 'http://127.0.0.1:PORT')
+			expect(masked).toBe(expected)
+			expect(seed.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			writeFileSync(`tmp/codex/redesign-${route === '/' ? 'catalogue' : 'policy'}.txt`, masked)
+			const miss = await toolset.read({ from: 47, search: 'Cedar Tea Tray' })
+			expect(miss).toContain(
+				route === '/'
+					? 'No line from 47 on matches "Cedar Tea Tray"; the best match is line 11:\n11: ### link "Cedar Tea Tray" [ref=e7] /product/p3\n47: '
+					: 'No line from 47 on matches "Cedar Tea Tray".\n47: ',
+			)
+			expect(miss).toMatch(
+				route === '/'
+					? /\[lines 47–52 of 52; 46 above; end of page\]$/
+					: /\[lines 47–\d+ of 80; 46 above,/,
+			)
+			expect(miss.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			if (route === '/') {
+				writeFileSync(
+					'tmp/codex/redesign-range-miss.txt',
+					miss.replace(/http:\/\/127\.0\.0\.1:\d+/g, 'http://127.0.0.1:PORT'),
+				)
+			}
+			await page.evaluate(
+				'document.querySelector("main").append(document.createTextNode("Changed projection"))',
+			)
+			expect(await toolset.read({ from: 1 })).toContain('The page changed since the last view')
+			expect(await toolset.read({ from: 1 })).not.toContain('The page changed since the last view')
+		},
+	)
 	it('reading campaign: returns complete bounded numbered windows, continuation, search, and a changed continuation', async () => {
 		const page = await browser.create({ url: fixtures.url('/form') })
 		opened.push(page)
@@ -892,16 +940,16 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			`page "Delivery form" ${fixtures.url('/form')} (12 lines)`,
 			'1: # Delivery form',
 			'2: Name',
-			`3: ${name} textbox "Name" value="Ada"`,
+			`3: textbox "Name" [ref=${name}] value="Ada"`,
 			'4: Notes',
-			`5: ${notes} textbox "Notes" value="Leave at the door"`,
+			`5: textbox "Notes" [ref=${notes}] value="Leave at the door"`,
 			'6: Speed',
-			`7: ${speed} combobox "Speed" value="Standard" expanded=false`,
-			`8: ${standard} option "Standard" selected=true`,
-			`9: ${express} option "Express" selected=false`,
-			`10: ${submit} button "Submit"`,
-			`11: ${save} button "Save draft"`,
-			`12: ${review} button "Review"`,
+			`7: combobox "Speed" [ref=${speed}] value="Standard" expanded=false`,
+			`8: option "Standard" [ref=${standard}] selected=true`,
+			`9: option "Express" [ref=${express}] selected=false`,
+			`10: button "Submit" [ref=${submit}]`,
+			`11: button "Save draft" [ref=${save}]`,
+			`12: button "Review" [ref=${review}]`,
 			'[lines 1–12 of 12; the whole page]',
 		].join('\n')
 		expect(reading).toBe(form)
@@ -914,7 +962,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(click).toSatisfy((receipt: string) =>
 			matchesToolReceipt(receipt, {
-				action: `Clicked ${name} textbox "Name"; call type with ${name} to enter text`,
+				action: `Clicked textbox "Name" [ref=${name}]; call type with [ref=${name}] to enter text`,
 				view: form,
 			}),
 		)
@@ -938,7 +986,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		].join('\n')
 		expect(typed).toSatisfy((receipt: string) =>
 			matchesToolReceipt(receipt, {
-				action: `Typed "Grace Hopper" into ${name} textbox "Name" and submitted the form`,
+				action: `Typed "Grace Hopper" into textbox "Name" [ref=${name}] and submitted the form`,
 				view: result,
 				url: placed,
 			}),
@@ -978,7 +1026,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await toolset.start()
 			const outline = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			const tracking = requireOutlineReference(outline, 'textbox', 'Tracking number')
-			expect(outline.indexOf(`${tracking} textbox`)).toBeGreaterThan(BROWSER_TOOL_LIMIT)
+			expect(outline.indexOf(`textbox "Tracking number" [ref=${tracking}]`)).toBeGreaterThan(
+				BROWSER_TOOL_LIMIT,
+			)
 
 			const reading = requireToolText(
 				await tools.execute({
@@ -988,7 +1038,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				}),
 			)
 			expect(reading).toContain(`2 lines match "the Tracking number textbox":`)
-			expect(reading).toContain(`${tracking} textbox "Tracking number"`)
+			expect(reading).toContain(`textbox "Tracking number" [ref=${tracking}]`)
 			expect(extractBrowserPage(reading).body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			expect(
 				await tools.execute({
@@ -1009,7 +1059,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				}),
 			)
 			expect(control.startsWith('page "Delivery form" ')).toBe(true)
-			expect(control).not.toContain(`${tracking} textbox`)
+			expect(control).not.toContain(`textbox "Tracking number" [ref=${tracking}]`)
 		})
 
 		it('pages the outline of that page through to its count line', async () => {
@@ -1057,14 +1107,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await tools.execute({ id: 'first', name: 'press', arguments: { key: 'Tab' } }),
 			)
 			expect(first.split('\n', 1)[0]).toBe(
-				`Pressed Tab; focus is on ${name} textbox "Name" value="Ada".`,
+				`Pressed Tab; focus is on textbox "Name" [ref=${name}] value="Ada".`,
 			)
 			expect(await page.evaluate('document.activeElement.id')).toBe('name')
 			const second = requireToolText(
 				await tools.execute({ id: 'second', name: 'press', arguments: { key: 'Tab' } }),
 			)
 			expect(second.split('\n', 1)[0]).toBe(
-				`Pressed Tab; focus is on ${notes} textbox "Notes" value="Leave at the door".`,
+				`Pressed Tab; focus is on textbox "Notes" [ref=${notes}] value="Leave at the door".`,
 			)
 			expect(await page.evaluate('document.activeElement.id')).toBe('notes')
 		})
@@ -1087,7 +1137,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'hold', name: 'click', arguments: { ref: hold } }),
 		)
 		expect(held).toBe(
-			`Clicked ${hold} button "Save for later"; the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect.\n\n${reading}`,
+			`Clicked button "Save for later" [ref=${hold}]; the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect.\n\n${reading}`,
 		)
 		expect(await page.evaluate('document.body.dataset.held')).toBe('yes')
 		expect(page.url).toBe(fixtures.url('/shop'))
@@ -1097,7 +1147,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		expect(added).toBe(
 			[
-				`Clicked ${add} button "Add to cart".`,
+				`Clicked button "Add to cart" [ref=${add}].`,
 				'',
 				`page "Cart" ${fixtures.url('/shop/cart')} (2 lines)`,
 				'1: # Cart',
@@ -1129,10 +1179,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		expect(typed.split('\n', 1)[0]).toBe(
-			`Typed "Ada Lovelace" into ${name} textbox "Name" and submitted the form; the page handled the submission and changed.`,
+			`Typed "Ada Lovelace" into textbox "Name" [ref=${name}] and submitted the form; the page handled the submission and changed.`,
 		)
 		expect(typed).toContain(`\n\npage "Checkout" ${fixtures.url('/checkout')} (`)
-		expect(typed).toContain(`${name} textbox "Name" value="Ada Lovelace"`)
+		expect(typed).toContain(`textbox "Name" [ref=${name}] value="Ada Lovelace"`)
 		expect(typed).toContain(FIXTURE_CHECKOUT_CODE)
 		expect(page.url).toBe(fixtures.url('/checkout'))
 
@@ -1158,7 +1208,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		].join('\n')
 		expect(gift).toSatisfy((receipt: string) =>
 			matchesToolReceipt(receipt, {
-				action: `Typed "Grace Hopper" into ${recipient} textbox "Gift name" and submitted the form`,
+				action: `Typed "Grace Hopper" into textbox "Gift name" [ref=${recipient}] and submitted the form`,
 				view,
 				url: placed,
 			}),
@@ -1184,10 +1234,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(extractBrowserPage(reading).body).toContain(
 			[
 				'Plain notes',
-				`${notes} textbox "Notes"`,
+				`textbox "Notes" [ref=${notes}]`,
 				'Draft',
-				`${bold} button "Bold"`,
-				`${coupon} button "Coupon"`,
+				`button "Bold" [ref=${bold}]`,
+				`button "Coupon" [ref=${coupon}]`,
 			].join('\n'),
 		)
 		expect(extractOutlineRows(reading).map((row) => row.name)).not.toContain('Plain notes')
@@ -1196,7 +1246,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'notes', name: 'type', arguments: { ref: notes, text: 'kettle' } }),
 		).toMatchObject({
 			success: true,
-			value: expect.stringMatching(`^Typed "kettle" into ${notes} textbox "Notes"\\.\\n\\npage "`),
+			value: expect.stringMatching(
+				`^Typed "kettle" into textbox "Notes" \\[ref=${notes}\\]\\.\\n\\npage "`,
+			),
 		})
 		expect(await page.evaluate("document.querySelector('[role=textbox]').textContent")).toBe(
 			'kettle',
@@ -1208,11 +1260,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(refused).toMatchObject([
 			{
 				success: false,
-				error: `Element ${bold} button "Bold" takes no text; call click for a button.`,
+				error: `Element button "Bold" [ref=${bold}] takes no text; call click for a button.`,
 			},
 			{
 				success: false,
-				error: `Element ${coupon} button "Coupon" takes no text; call click for a button.`,
+				error: `Element button "Coupon" [ref=${coupon}] takes no text; call click for a button.`,
 			},
 		])
 		expect(await page.evaluate("document.querySelector('[aria-label=Coupon]').value")).toBe('')
@@ -1233,12 +1285,12 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const drafts = [
 			`page "Drafts" ${fixtures.url('/confirm')} (3 lines)`,
 			'1: # Drafts',
-			`2: ${remove} button "Delete"`,
-			`3: ${keep} button "Keep"`,
+			`2: button "Delete" [ref=${remove}]`,
+			`3: button "Keep" [ref=${keep}]`,
 			'[lines 1–3 of 3; the whole page]',
 		].join('\n')
 		expect(reading).toBe(drafts)
-		const kept = { action: `Clicked ${keep} button "Keep"`, view: drafts }
+		const kept = { action: `Clicked button "Keep" [ref=${keep}]`, view: drafts }
 
 		const plain = requireToolText(
 			await tools.execute({ id: 'keep', name: 'click', arguments: { ref: keep } }),
@@ -1251,7 +1303,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'delete', name: 'click', arguments: { ref: remove } }),
 		)
 		expect(blocked).toBe(
-			`Clicked ${remove} button "Delete". A confirm dialog is open: "Delete the draft?"; call dialog.`,
+			`Clicked button "Delete" [ref=${remove}]. A confirm dialog is open: "Delete the draft?"; call dialog.`,
 		)
 		expect(tools.definitions().map((definition) => definition.name)).toContain('dialog')
 
@@ -1295,7 +1347,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			await tools.execute({ id: 'click', name: 'click', arguments: { ref: next } }),
 		)
 		expect(clicked).toBe(
-			`Clicked ${next} link "Next". A beforeunload dialog is open: ""; call dialog.`,
+			`Clicked link "Next" [ref=${next}]. A beforeunload dialog is open: ""; call dialog.`,
 		)
 		expect(page.url).toBe(fixtures.url('/beforeunload'))
 
@@ -1345,7 +1397,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			),
 		).toSatisfy((receipt: string) =>
 			matchesToolReceipt(receipt, {
-				action: `Clicked ${link} link "Next"`,
+				action: `Clicked link "Next" [ref=${link}]`,
 				view: destination,
 				url: fixtures.url('/beforeunload/next'),
 			}),
@@ -1445,7 +1497,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				await tools.execute({ id: 'click', name: 'click', arguments: { ref: stay } }),
 			),
 		).toSatisfy((receipt: string) =>
-			matchesToolReceipt(receipt, { action: `Clicked ${stay} button "Stay"`, view: catalog }),
+			matchesToolReceipt(receipt, { action: `Clicked button "Stay" [ref=${stay}]`, view: catalog }),
 		)
 		expect(await page.evaluate('document.body.dataset.stayed')).toBe('yes')
 		expect(
@@ -1509,7 +1561,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					await tools.execute({ id: 'like', name: 'click', arguments: { ref: like } }),
 				),
 			).toSatisfy((receipt: string) =>
-				matchesToolReceipt(receipt, { action: `Clicked ${like} button "Like"`, view: details }),
+				matchesToolReceipt(receipt, {
+					action: `Clicked button "Like" [ref=${like}]`,
+					view: details,
+				}),
 			)
 			expect(await detailsPage.evaluate('document.body.dataset.liked')).toBe('yes')
 
@@ -1598,13 +1653,13 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const applied = [
 			`page "Voucher" ${fixtures.url('/frame/voucher')} (4 lines)`,
 			'1: # Voucher',
-			`2: ${frame} Iframe "Voucher form"`,
+			`2: Iframe "Voucher form" [ref=${frame}]`,
 			'3: # Voucher applied',
 			'4: Received key Enter',
 			'[lines 1–4 of 4; the whole page]',
 		].join('\n')
 		expect(receipt).toBe(
-			`Typed "SPRING" into ${code} textbox "Code" and submitted the form.\n\n${applied}`,
+			`Typed "SPRING" into textbox "Code" [ref=${code}] and submitted the form.\n\n${applied}`,
 		)
 		// The frame's keydown listener put the Enter into the submitted query, so the committed
 		// URL is evidence that the key-down reached the frame.
@@ -1656,13 +1711,13 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const applied = [
 			`page "Local voucher" ${fixtures.url('/frame/local')} (4 lines)`,
 			'1: # Local voucher',
-			`2: ${frame} Iframe "Voucher form"`,
+			`2: Iframe "Voucher form" [ref=${frame}]`,
 			'3: # Voucher applied',
 			'4: Received key Enter',
 			'[lines 1–4 of 4; the whole page]',
 		].join('\n')
 		expect(receipt).toBe(
-			`Typed "SPRING" into ${code} textbox "Code" and submitted the form.\n\n${applied}`,
+			`Typed "SPRING" into textbox "Code" [ref=${code}] and submitted the form.\n\n${applied}`,
 		)
 		expect((await page.frames()).map((candidate) => candidate.url)).toContain(
 			fixtures.url('/frame/done?code=SPRING&key=Enter', 'localhost'),
@@ -1705,7 +1760,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		expect(receipt.split('\n', 1)[0]).toBe(
-			`Typed "SPRING" into ${coupon} textbox "Coupon" and submitted the form.`,
+			`Typed "SPRING" into textbox "Coupon" [ref=${coupon}] and submitted the form.`,
 		)
 		const view = receipt.slice(receipt.indexOf('\n\n'))
 		expect(view).toContain('# Voucher applied')
@@ -1733,11 +1788,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const elapsed = performance.now() - started
 		expect(receipt).toBe(
 			[
-				`Clicked ${find} button "Find".`,
+				`Clicked button "Find" [ref=${find}].`,
 				'',
 				`page "Search" ${fixtures.url('/search?q=tray#found')} (2 lines)`,
 				'1: # Search',
-				`2: ${find} button "Find"`,
+				`2: button "Find" [ref=${find}]`,
 				'[lines 1–2 of 2; the whole page]',
 			].join('\n'),
 		)
@@ -1784,7 +1839,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				'[lines 1–2 of 2; the whole page]',
 			].join('\n')
 			expect(typed).toBe(
-				`Typed "Grace Hopper" into ${name} textbox "Name" and submitted the form.\n\n${view}`,
+				`Typed "Grace Hopper" into textbox "Name" [ref=${name}] and submitted the form.\n\n${view}`,
 			)
 			expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
 		})
@@ -1812,7 +1867,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			)
 			const answered = performance.now() - accepting
 			expect(blocked).toBe(
-				`Clicked ${remove} button "Delete". A confirm dialog is open: "Delete the draft?"; call dialog.`,
+				`Clicked button "Delete" [ref=${remove}]. A confirm dialog is open: "Delete the draft?"; call dialog.`,
 			)
 			expect(accepted).toBe(`Accepted the confirm dialog "Delete the draft?".\n\n${drafts}`)
 			expect(clicked).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
@@ -1841,7 +1896,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const elapsed = performance.now() - started
 			expect(clicked).toBe(
 				[
-					`Clicked ${link} link "Next".`,
+					`Clicked link "Next" [ref=${link}].`,
 					'',
 					`page "Next note" ${fixtures.url('/beforeunload/next')} (1 lines)`,
 					'1: # Next note',

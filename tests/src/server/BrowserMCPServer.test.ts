@@ -553,7 +553,7 @@ describe('holders H2', () => {
 				arguments: { ref },
 			})
 			expect(refused.error).toBe(true)
-			expect(refused.text).toContain(`Element ${ref} is not in the current view`)
+			expect(refused.text).toContain(`Element [ref=${ref}] is not in the current view`)
 			expect(
 				peers[2]?.received.some((message) => message.method === 'Input.dispatchMouseEvent'),
 			).toBe(false)
@@ -1197,7 +1197,7 @@ describe('eager U7', () => {
 				expect(result.resolved).toContain('BrowserToolset.#performManaged')
 				expect(delivered).toBe(false)
 				expect(clicked.error).toBe(false)
-				expect(clicked.text).toContain('Clicked e4')
+				expect(clicked.text).toContain('Clicked button "Place order" [ref=e4]')
 				await waitForCondition(
 					'browser disposal after generation cleanup',
 					() => fixture.launcher.browsers[0]?.destroyed === true,
@@ -2524,7 +2524,7 @@ describe('BrowserMCPServer', () => {
 				content: [
 					{
 						type: 'text',
-						text: 'Clicked e4 button "Place order". A confirm dialog is open: "Delete the draft?"; call dialog.',
+						text: 'Clicked button "Place order" [ref=e4]. A confirm dialog is open: "Delete the draft?"; call dialog.',
 					},
 				],
 			})

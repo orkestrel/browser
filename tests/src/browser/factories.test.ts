@@ -39,7 +39,7 @@ describe('createBrowserDOMView', () => {
 		expect(view.trusted).toBe(false)
 		expect(await view.title()).toBe('Cart')
 		expect((await view.elements.outline()).lines.map(renderBrowserLine).join('\n')).toContain(
-			'e1 button "Pay"',
+			'button "Pay" [ref=e1]',
 		)
 	})
 
@@ -134,12 +134,12 @@ describe('createBrowserToolset over a document', () => {
 		expect(Reflect.get(box ?? {}, 'checked')).toBe(true)
 		expect(trusted.calls).toEqual([[false]])
 		expect(clicked).toBe(
-			`Clicked ${gift?.reference} checkbox "Gift wrap". (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
+			`Clicked checkbox "Gift wrap" [ref=${gift?.reference}]. (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
 		)
 		const labelled = await click.execute({ ref: label?.reference }, { signal })
 		expect(Reflect.get(terms ?? {}, 'checked')).toBe(true)
 		expect(labelled).toBe(
-			`Clicked ${label?.reference} button "Terms". (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
+			`Clicked button "Terms" [ref=${label?.reference}]. (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
 		)
 		const typed = await type.execute(
 			{ ref: note?.reference, text: 'sam', submit: true },
@@ -147,7 +147,7 @@ describe('createBrowserToolset over a document', () => {
 		)
 		expect(submits.calls).toEqual([[true]])
 		expect(typed).toBe(
-			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
+			`Typed "sam" into textbox "Note" [ref=${note?.reference}] and submitted the form. (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
 		)
 		await toolset.destroy()
 		toolsetView.destroy()
@@ -166,7 +166,7 @@ describe('createBrowserToolset over a document', () => {
 			),
 		)
 		const [search] = await toolset.view.elements.find({ role: 'textbox', name: 'Search' })
-		expect(reading).toContain(`${search?.reference} textbox "Search"`)
+		expect(reading).toContain(`textbox "Search" [ref=${search?.reference}]`)
 		const refused = await Promise.resolve(
 			requireValue(toolset.tools.tool('type'), 'type').execute(
 				{ ref: search?.reference, text: 'kettle' },
@@ -177,7 +177,7 @@ describe('createBrowserToolset over a document', () => {
 			isBrowserError(refused) &&
 				refused.code === 'ELEMENT' && { message: refused.message, context: refused.context },
 		).toEqual({
-			message: `Element ${search?.reference} is not a text control.`,
+			message: `Element [ref=${search?.reference}] is not a text control.`,
 			context: { reference: search?.reference, reason: 'UNKNOWN' },
 		})
 		await toolset.destroy()
@@ -317,7 +317,7 @@ describe('createBrowserToolset over a document', () => {
 				arguments: { journey: 'save-draft' },
 			})
 			expect(readProperty<string>(replayed, 'value').split('\n\n')[0]).toBe(
-				`Replayed save-draft: 1 of 1 steps.\ns1 Clicked ${reference} button "Save". (untrusted event)`,
+				`Replayed save-draft: 1 of 1 steps.\ns1 Clicked button "Save" [ref=${reference}]. (untrusted event)`,
 			)
 			expect(clicks.calls).toEqual([[false], [false]])
 		} finally {
@@ -362,7 +362,7 @@ describe('document registry conformance', () => {
 		try {
 			const outline = await toolset.view.elements.outline()
 			expect(outline.lines.map(renderBrowserLine).join('\n').split('\n')).toContain(
-				'e5 form "Search cars" [tool=search-cars]',
+				'form "Search cars" [ref=e5] [tool=search-cars]',
 			)
 			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('autosubmit')
 			expect((await toolset.view.elements.outline()).lines.map(renderBrowserLine).join('\n')).toBe(

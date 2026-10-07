@@ -121,7 +121,9 @@ import {
  * recaptures numbered accessibility lines. Inclusive ranges use required tool parameter
  * `from` and optional `to`; search scores text spans and opens near the first best match.
  * Wrapping precedes numbering, and every continuation names the next complete line. An
- * unchanged page keeps its addresses; a changed continuation includes a change note.
+ * unchanged page keeps its addresses; a changed read includes a change note, even from line 1.
+ * A partial-view line follows the page header when rows remain after the window. A search
+ * missing its range reports the page-wide best match without moving that window.
  * A `press` receipt names the referenced element that has focus after the key. A page tool's
  * error message and JSON output reach the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT`
  * (4 096) by the registry, so a `limit` over that shows at most 4 096 characters of either; a page
@@ -861,7 +863,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			const element = this.#element(args['ref'], context.signal)
 			const action = BROWSER_TYPED_ROLES.has(element.role)
-				? `Clicked ${renderBrowserElement(element)}; call type with ${element.reference} to enter text`
+				? `Clicked ${renderBrowserElement(element)}; call type with [ref=${element.reference}] to enter text`
 				: `Clicked ${renderBrowserElement(element)}`
 			const page = this.#page
 			if (page !== undefined) {

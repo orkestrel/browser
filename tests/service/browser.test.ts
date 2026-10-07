@@ -997,7 +997,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await expect(covered.click()).rejects.toMatchObject({
 			code: 'ELEMENT',
 			context: { reference: covered.reference, reason: 'OCCLUDED' },
-			message: `Element ${covered.reference} is covered by div#veil.`,
+			message: `Element [ref=${covered.reference}] is covered by div#veil.`,
 		})
 		expect(await page.evaluate('document.body.dataset.saved')).toBeUndefined()
 
@@ -1255,7 +1255,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await expect(stale.click()).rejects.toMatchObject({
 			code: 'ELEMENT',
 			context: { reference: stale.reference, reason: 'GONE' },
-			message: `Element ${stale.reference} is gone because the page changed; call read for fresh refs.`,
+			message: `Element [ref=${stale.reference}] is gone because the page changed; call read for fresh refs.`,
 		})
 		const next = extractOutlineReferences(
 			(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
@@ -1276,7 +1276,7 @@ describe('Browser proofs against the fixture pages', () => {
 				.map(renderBrowserLine)
 				.join('\n')
 				.split('\n')
-				.filter((row) => row.includes(' button "Old '))
+				.filter((row) => row.startsWith('button "Old '))
 				.join('\n'),
 		)
 		const [first] = await page.elements.find({ role: 'button', name: 'Old 0' })
@@ -1294,7 +1294,7 @@ describe('Browser proofs against the fixture pages', () => {
 				.map(renderBrowserLine)
 				.join('\n')
 				.split('\n')
-				.filter((row) => row.includes(' button "Later '))
+				.filter((row) => row.startsWith('button "Later '))
 				.join('\n'),
 		)
 
@@ -1343,7 +1343,7 @@ describe('Browser proofs against the fixture pages', () => {
 			await expect(removed.click()).rejects.toMatchObject({
 				code: 'ELEMENT',
 				context: { reference: removed.reference, reason: 'GONE' },
-				message: `Element ${removed.reference} is gone because the page changed; call read for fresh refs.`,
+				message: `Element [ref=${removed.reference}] is gone because the page changed; call read for fresh refs.`,
 			})
 		})
 	})

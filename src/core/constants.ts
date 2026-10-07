@@ -487,7 +487,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 	type: Object.freeze({
 		name: 'type',
 		description:
-			'Fills the referenced control, optionally submits its form, settles the action, and returns the page.',
+			'Types into a field such as a search box, optionally submits its form, and returns the page.',
 		parameters: Object.freeze({
 			type: 'object',
 			properties: Object.freeze({

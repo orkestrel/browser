@@ -192,13 +192,13 @@ describe('pinned WebMCP conformance', () => {
 			fixture.transport.event('WebMCP.toolsAdded', { tools: [WEBMCP_TOOL] }, 'session-main')
 			const outline = await fixture.page.elements.outline()
 			expect(outline.lines.map(renderBrowserLine).join('\n').split('\n')).toContain(
-				'e5 form "Search cars" [tool=search-cars]',
+				'form "Search cars" [ref=e5] [tool=search-cars]',
 			)
 			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('autosubmit')
 			disabled = true
 			expect(
 				(await fixture.page.elements.outline()).lines.map(renderBrowserLine).join('\n').split('\n'),
-			).toContain('e5 form "Search cars" [disabled] [tool=search-cars]')
+			).toContain('form "Search cars" [ref=e5] [disabled] [tool=search-cars]')
 			fixture.transport.event(
 				'WebMCP.toolsRemoved',
 				{ tools: [{ name: 'search-cars', frameId: 'main' }] },

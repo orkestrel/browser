@@ -628,7 +628,9 @@ describe('BrowserToolset', () => {
 						outcome: 'done',
 					})
 					expect(performed.action?.arguments).not.toHaveProperty('text')
-					expect(performed.action?.receipt).toMatch(/^Typed a secret into e2 textbox "Email"/)
+					expect(performed.action?.receipt).toMatch(
+						/^Typed a secret into textbox "Email" \[ref=e2\]/,
+					)
 					for (const fragment of ['priv', 'ate-value'])
 						expect(JSON.stringify(performed)).not.toContain(fragment)
 				}
@@ -965,7 +967,7 @@ describe('BrowserToolset', () => {
 			).toEqual({
 				read: 'Shows numbered lines of the page, with references like e4 to act on. Call it to learn a fact or to find an element.',
 				click: 'Clicks the referenced element, settles its action, and returns the page.',
-				type: 'Fills the referenced control, optionally submits its form, settles the action, and returns the page.',
+				type: 'Types into a field such as a search box, optionally submits its form, and returns the page.',
 				press: 'Presses a key or chord, settles its action, and returns the page.',
 				navigate: 'Opens an absolute web address in the current tab and returns the loaded page.',
 				wait: 'Waits for text to appear or leave, then returns the page.',
@@ -1087,7 +1089,7 @@ describe('BrowserToolset', () => {
 				const receipt = await click
 				expect(performance.now() - opened).toBeLessThan(100)
 				expect(receipt).toBe(
-					'Clicked e4 button "Place order". A confirm dialog is open: "Delete the draft?"; call dialog.',
+					'Clicked button "Place order" [ref=e4]. A confirm dialog is open: "Delete the draft?"; call dialog.',
 				)
 				expect(toolset.tools.tool('dialog')?.name).toBe('dialog')
 				const refusals = await toolset.tools.execute([
@@ -1126,7 +1128,7 @@ describe('BrowserToolset', () => {
 				const next = String(
 					await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 				)
-				expect(next.startsWith('Clicked e1 link "Home".\n\npage "Cart"')).toBe(true)
+				expect(next.startsWith('Clicked link "Home" [ref=e1].\n\npage "Cart"')).toBe(true)
 			} finally {
 				await client.close()
 			}
@@ -1173,7 +1175,7 @@ describe('BrowserToolset', () => {
 					'session-main',
 				)
 				expect(await typed).toBe(
-					'Selected "Large" in e2 combobox "Size" (programmatic). An alert dialog is open: "Pick one"; call dialog.',
+					'Selected "Large" in combobox "Size" [ref=e2] (programmatic). An alert dialog is open: "Pick one"; call dialog.',
 				)
 				expect(performance.now() - opened).toBeLessThan(100)
 				expect(toolset.tools.tool('dialog')?.name).toBe('dialog')
@@ -1360,9 +1362,9 @@ describe('BrowserToolset', () => {
 						{ signal },
 					),
 				)
-				expect(typed.startsWith('Typed "sam" into e2 textbox "Email" and pressed Enter.\n\n')).toBe(
-					true,
-				)
+				expect(
+					typed.startsWith('Typed "sam" into textbox "Email" [ref=e2] and pressed Enter.\n\n'),
+				).toBe(true)
 				const methods = transport.sent.slice(sent).map((message) => message.method)
 				expect(methods).toContain('DOM.focus')
 				const selection = transport.sent
@@ -1444,7 +1446,7 @@ describe('BrowserToolset', () => {
 					await toolset.tools.execute({ id: '2', name: 'click', arguments: { ref: 'e99' } }),
 				).toMatchObject({
 					success: false,
-					error: 'Element e99 is not in the current view; call read for fresh refs.',
+					error: 'Element [ref=e99] is not in the current view; call read for fresh refs.',
 				})
 			} finally {
 				await client.close()
@@ -1505,7 +1507,7 @@ describe('BrowserToolset', () => {
 					context: refused.context,
 				},
 			).toEqual({
-				message: 'Element e1 button "Save" takes no text; call click for a button.',
+				message: 'Element button "Save" [ref=e1] takes no text; call click for a button.',
 				code: 'TOOLSET_ROLE',
 				context: { reference: 'e1', role: 'button' },
 			})
@@ -1543,7 +1545,7 @@ describe('BrowserToolset', () => {
 					}),
 				).toMatchObject({
 					success: false,
-					error: 'Element e2 option "Small" takes no text; call click for an option.',
+					error: 'Element option "Small" [ref=e2] takes no text; call click for an option.',
 				})
 				expect(transport.sent.slice(sent)).toEqual([])
 			} finally {
@@ -1570,7 +1572,7 @@ describe('BrowserToolset', () => {
 						name: 'type',
 						arguments: { ref: 'e2', text: 'x', submit: true },
 					}),
-				).toMatchObject({ success: false, error: 'Element e2 is not editable.' })
+				).toMatchObject({ success: false, error: 'Element [ref=e2] is not editable.' })
 				expect(transport.sent.some((message) => message.method === 'Input.insertText')).toBe(false)
 			} finally {
 				await client.close()
@@ -1625,11 +1627,11 @@ describe('BrowserToolset', () => {
 			}
 			const [[recovered = '', reads = 0] = [], changed] = outcomes
 			expect(recovered).toMatch(
-				/^Clicked e1 link "Home"\.\n\npage "Cart" https:\/\/example\.test\/next \(9 lines\)\n/,
+				/^Clicked link "Home" \[ref=e1\]\.\n\npage "Cart" https:\/\/example\.test\/next \(9 lines\)\n/,
 			)
 			expect(reads).toBe(1)
 			expect(changed).toEqual([
-				'Clicked e1 link "Home".\n\n(The page changed before the view could be read; call read.)',
+				'Clicked link "Home" [ref=e1].\n\n(The page changed before the view could be read; call read.)',
 				2,
 			])
 		})
@@ -1687,11 +1689,11 @@ describe('BrowserToolset', () => {
 			}
 			const [[recovered = '', reads = 0] = [], failed] = outcomes
 			expect(recovered).toMatch(
-				/^Clicked e1 link "Home"\.\n\npage "Next" https:\/\/example\.test\/next \(9 lines\)\n/,
+				/^Clicked link "Home" \[ref=e1\]\.\n\npage "Next" https:\/\/example\.test\/next \(9 lines\)\n/,
 			)
 			expect(reads).toBe(2)
 			expect(failed).toEqual([
-				'Clicked e1 link "Home".\n\n(The view could not be read: Cannot find context with specified id; call read.)',
+				'Clicked link "Home" [ref=e1].\n\n(The view could not be read: Cannot find context with specified id; call read.)',
 				1,
 			])
 		})
@@ -1797,7 +1799,7 @@ describe('BrowserToolset', () => {
 					expect(elapsed).toBeLessThan(6_000)
 					expect(
 						result.startsWith(
-							'Clicked e1 link "Home"; it requested https://example.test/next and the page did not change.\n\npage "Cart" https://example.test/cart (9 lines)\n1: # Your cart',
+							'Clicked link "Home" [ref=e1]; it requested https://example.test/next and the page did not change.\n\npage "Cart" https://example.test/cart (9 lines)\n1: # Your cart',
 						),
 					).toBe(true)
 				} finally {
@@ -1853,7 +1855,7 @@ describe('BrowserToolset', () => {
 					expect(elapsed).toBeLessThan(6_000)
 					expect(
 						result.startsWith(
-							'Clicked e1 link "Home"; the page is still loading https://example.test/next.\n\npage "Cart" https://example.test/next (9 lines)\n1: # Your cart',
+							'Clicked link "Home" [ref=e1]; the page is still loading https://example.test/next.\n\npage "Cart" https://example.test/next (9 lines)\n1: # Your cart',
 						),
 					).toBe(true)
 				} finally {
@@ -1908,7 +1910,7 @@ describe('BrowserToolset', () => {
 					expect(elapsed).toBeGreaterThanOrEqual(4_900)
 					expect(elapsed).toBeLessThan(6_000)
 					expect(result).toBe(
-						'Clicked e1 link "Home"; the page is still loading https://example.test/next.\n\n(The view could not be read before the deadline; call read.)',
+						'Clicked link "Home" [ref=e1]; the page is still loading https://example.test/next.\n\n(The view could not be read before the deadline; call read.)',
 					)
 					// Settling the receipt aborted the capture's readiness wait with its timer.
 					expect(
@@ -1979,7 +1981,7 @@ describe('BrowserToolset', () => {
 				expect(performance.now() - loaded).toBeLessThan(1_000)
 				expect(
 					result.startsWith(
-						'Clicked e1 link "Home".\n\npage "Cart" https://example.test/next (9 lines)\n1: # Your cart',
+						'Clicked link "Home" [ref=e1].\n\npage "Cart" https://example.test/next (9 lines)\n1: # Your cart',
 					),
 				).toBe(true)
 			} finally {
@@ -2675,8 +2677,8 @@ describe('BrowserToolset', () => {
 					const inserted = transport.sent.some((message) => message.method === 'Input.insertText')
 					expect([typed.split('\n')[0], inserted]).toEqual(
 						select
-							? ['Selected "Large" in e2 combobox "Size" (programmatic).', false]
-							: ['Typed "Large" into e2 combobox "Size".', true],
+							? ['Selected "Large" in combobox "Size" [ref=e2] (programmatic).', false]
+							: ['Typed "Large" into combobox "Size" [ref=e2].', true],
 					)
 				} finally {
 					await client.close()
@@ -2759,7 +2761,7 @@ describe('BrowserToolset', () => {
 					'session-main',
 				)
 				expect(await clicked).toBe(
-					'Clicked e1 link "Home". An alert dialog is open: "Wait"; call dialog.',
+					'Clicked link "Home" [ref=e1]. An alert dialog is open: "Wait"; call dialog.',
 				)
 				expect(
 					process.getActiveResourcesInfo().filter((resource) => resource === 'Timeout').length,
@@ -2877,7 +2879,7 @@ describe('BrowserToolset', () => {
 			await toolset.start()
 			const signal = new AbortController().signal
 			const outline =
-				'page "Form" https://example.test/form (3 lines)\n1: e1 button "Save"\n2: e2 textbox "Email"\n3: e3 combobox "Size"\n[lines 1–3 of 3; the whole page]'
+				'page "Form" https://example.test/form (3 lines)\n1: button "Save" [ref=e1]\n2: textbox "Email" [ref=e2]\n3: combobox "Size" [ref=e3]\n[lines 1–3 of 3; the whole page]'
 			expect(await requireValue(toolset.tools.tool('read')).execute({ from: 1 }, { signal })).toBe(
 				outline,
 			)
@@ -2889,20 +2891,20 @@ describe('BrowserToolset', () => {
 			).toBe(`"Form body" is on the page.\n\n${outline}`)
 			expect(
 				await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-			).toBe(`Clicked e1 button "Save". (untrusted event)\n\n${outline}`)
+			).toBe(`Clicked button "Save" [ref=e1]. (untrusted event)\n\n${outline}`)
 			expect(
 				await requireValue(toolset.tools.tool('type')).execute(
 					{ ref: 'e2', text: 'sam' },
 					{ signal },
 				),
-			).toBe(`Typed "sam" into e2 textbox "Email". (untrusted event)\n\n${outline}`)
+			).toBe(`Typed "sam" into textbox "Email" [ref=e2]. (untrusted event)\n\n${outline}`)
 			expect(
 				await requireValue(toolset.tools.tool('type')).execute(
 					{ ref: 'e2', text: 'sam', submit: true },
 					{ signal },
 				),
 			).toBe(
-				`Typed "sam" into e2 textbox "Email" and submitted the form. (untrusted event)\n\n${outline}`,
+				`Typed "sam" into textbox "Email" [ref=e2] and submitted the form. (untrusted event)\n\n${outline}`,
 			)
 		})
 
@@ -2913,12 +2915,12 @@ describe('BrowserToolset', () => {
 			const signal = new AbortController().signal
 			const click = requireValue(toolset.tools.tool('click'))
 			const outline =
-				'page "Form" https://example.test/form (3 lines)\n1: e1 button "Save"\n2: e2 textbox "Email"\n3: e3 combobox "Size"\n[lines 1–3 of 3; the whole page]'
+				'page "Form" https://example.test/form (3 lines)\n1: button "Save" [ref=e1]\n2: textbox "Email" [ref=e2]\n3: combobox "Size" [ref=e3]\n[lines 1–3 of 3; the whole page]'
 			expect(await click.execute({ ref: 'e2' }, { signal })).toBe(
-				`Clicked e2 textbox "Email"; call type with e2 to enter text. (untrusted event)\n\n${outline}`,
+				`Clicked textbox "Email" [ref=e2]; call type with [ref=e2] to enter text. (untrusted event)\n\n${outline}`,
 			)
 			expect(await click.execute({ ref: 'e1' }, { signal })).toBe(
-				`Clicked e1 button "Save". (untrusted event)\n\n${outline}`,
+				`Clicked button "Save" [ref=e1]. (untrusted event)\n\n${outline}`,
 			)
 			await toolset.destroy()
 		})
@@ -2934,7 +2936,7 @@ describe('BrowserToolset', () => {
 				)
 				expect(
 					await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
-				).toBe(`Clicked e1 link "Home".\n\n${outline}`)
+				).toBe(`Clicked link "Home" [ref=e1].\n\n${outline}`)
 			} finally {
 				await client.close()
 			}
@@ -3110,7 +3112,7 @@ describe('BrowserToolset', () => {
 				expect(await clicking).toMatchObject({
 					outcome: 'interrupted',
 					receipt:
-						'Clicked e4 button "Place order". A confirm dialog is open: "Continue?"; call dialog.',
+						'Clicked button "Place order" [ref=e4]. A confirm dialog is open: "Continue?"; call dialog.',
 				})
 				const answered = await toolset.follow('s2', {
 					action: 'dialog',

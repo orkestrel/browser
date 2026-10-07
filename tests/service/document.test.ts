@@ -107,15 +107,15 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			)
 			expect(cdp).toEqual([
 				'## A heading',
-				'eREF link "Cedar Tea Tray" /p3',
+				'link "Cedar Tea Tray" [ref=eREF] /p3',
 				'- Free shipping',
 				'First ordinary block',
 				'Second block',
 				'Tea | 41',
 				'image "Tea tin"',
 				'Buyer',
-				'eREF textbox "Buyer" value="Ada"',
-				'eREF button "Save"',
+				'textbox "Buyer" [ref=eREF] value="Ada"',
+				'button "Save" [ref=eREF]',
 			])
 			expect(dom).toEqual(cdp)
 		})
@@ -482,7 +482,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 				),
 			)
 			expect(clicked.split('\n', 1)[0]).toBe(
-				`Clicked ${wrap} checkbox "Gift wrap". (untrusted event)`,
+				`Clicked checkbox "Gift wrap" [ref=${wrap}]. (untrusted event)`,
 			)
 			expect(await page.evaluate('document.body.dataset.trusted')).toBe('false')
 			expect(await page.evaluate("document.getElementById('wrap').checked")).toBe(true)
@@ -505,7 +505,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			const trusted = requireToolText(
 				await tools.execute({ id: 'click', name: 'click', arguments: { ref: reference } }),
 			)
-			expect(trusted.split('\n', 1)[0]).toBe(`Clicked ${reference} checkbox "Gift wrap".`)
+			expect(trusted.split('\n', 1)[0]).toBe(`Clicked checkbox "Gift wrap" [ref=${reference}].`)
 			expect(trusted).not.toContain('(untrusted event)')
 			expect(await page.evaluate('document.body.dataset.trusted')).toBe('false true')
 			expect(await page.evaluate("document.getElementById('wrap').checked")).toBe(false)
@@ -522,10 +522,10 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			expect(extractBrowserPage(reading).body).toContain(
 				[
 					'Plain notes',
-					`${notes} textbox "Notes"`,
+					`textbox "Notes" [ref=${notes}]`,
 					'Draft',
-					`${bold} button "Bold"`,
-					`${coupon} button "Coupon"`,
+					`button "Bold" [ref=${bold}]`,
+					`button "Coupon" [ref=${coupon}]`,
 				].join('\n'),
 			)
 			expect(extractOutlineRows(reading).map((row) => row.name)).not.toContain('Plain notes')
@@ -541,15 +541,15 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			expect(refused).toMatchObject([
 				{
 					success: false,
-					error: `Element ${notes} is contenteditable, which an untrusted event cannot type into.`,
+					error: `Element [ref=${notes}] is contenteditable, which an untrusted event cannot type into.`,
 				},
 				{
 					success: false,
-					error: `Element ${bold} button "Bold" takes no text; call click for a button.`,
+					error: `Element button "Bold" [ref=${bold}] takes no text; call click for a button.`,
 				},
 				{
 					success: false,
-					error: `Element ${coupon} button "Coupon" takes no text; call click for a button.`,
+					error: `Element button "Coupon" [ref=${coupon}] takes no text; call click for a button.`,
 				},
 			])
 			expect(await page.evaluate("document.querySelector('[role=textbox]').textContent")).toBe('')
@@ -573,7 +573,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 						's1',
 						'done',
 						expect.stringMatching(
-							/^Clicked e[1-9]\d* button "Save in frame"\. \(untrusted event\)$/u,
+							/^Clicked button "Save in frame" \[ref=e[1-9]\d*\]\. \(untrusted event\)$/u,
 						),
 					],
 				],

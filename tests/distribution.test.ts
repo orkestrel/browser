@@ -1262,11 +1262,11 @@ describe('packed browse binary', () => {
 				)
 				const view = await callBrowse(client, 'read', { from: 1, search: 'the reveal button' })
 				const ref = requireValue(
-					/\b(e\d+) button "Reveal"/u.exec(view)?.[1],
+					/button "Reveal" \[ref=(e\d+)\]/u.exec(view)?.[1],
 					`no Reveal in ${view}`,
 				)
 				expect(await callBrowse(client, 'click', { ref })).toContain(
-					`Clicked ${ref} button "Reveal"`,
+					`Clicked button "Reveal" [ref=${ref}]`,
 				)
 				expect(await callBrowse(client, 'wait', { text: FIXTURE_LATE_TEXT })).toContain(
 					`"${FIXTURE_LATE_TEXT}" is on the page.`,

@@ -38,6 +38,7 @@ import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RecorderInterface } from '@orkestrel/test'
 import { BrowserPage } from '../src/core/BrowserPage.js'
 import {
+	renderBrowserOutline,
 	BROWSER_CODEGEN_SOURCE,
 	BrowserError,
 	BrowserToolset,
@@ -664,11 +665,17 @@ export const BROWSER_SUBMIT_CASES: ReadonlyArray<
  * for `press`.
  */
 export const BROWSER_SUBMIT_ACTIONS = [
-	['click', { ref: 'e1' }, 'Clicked e1 link "Home"', 'Input.dispatchMouseEvent', ['session-main']],
+	[
+		'click',
+		{ ref: 'e1' },
+		'Clicked link "Home" [ref=e1]',
+		'Input.dispatchMouseEvent',
+		['session-main'],
+	],
 	[
 		'type',
 		{ ref: 'e2', text: 'sam', submit: true },
-		'Typed "sam" into e2 textbox "Email" and submitted the form',
+		'Typed "sam" into textbox "Email" [ref=e2] and submitted the form',
 		'Input.insertText',
 		['session-main'],
 	],
@@ -704,7 +711,7 @@ export const BROWSER_SUBMIT_FOCUS_STEPS: ReadonlyArray<
 		undefined,
 		'type',
 		{ ref: 'e2', text: 'sam', submit: true },
-		'Typed "sam" into e2 textbox "Email" and pressed Enter; no form received the submission.',
+		'Typed "sam" into textbox "Email" [ref=e2] and pressed Enter; no form received the submission.',
 	],
 	[
 		'an Enter in an input a form owns',
@@ -728,7 +735,7 @@ export const BROWSER_SUBMIT_FOCUS_STEPS: ReadonlyArray<
 		undefined,
 		'click',
 		{ ref: 'e1' },
-		'Clicked e1 link "Home".',
+		'Clicked link "Home" [ref=e1].',
 	],
 	[
 		'an Enter in a textarea',
@@ -2812,21 +2819,18 @@ export class BrowserElementManagerDouble implements BrowserElementManagerInterfa
 	async outline(options?: BrowserOutlineOptions): Promise<BrowserOutline> {
 		options?.signal?.throwIfAborted()
 		this.#calls.push(`outline${options?.within === undefined ? '' : ` ${options.within}`}`)
-		return {
-			url: this.#url,
-			title: this.#title,
-			lines: this.#elements.map((element) => ({
-				spans: [
-					{
-						category: 'text',
-						text: `${element.reference} ${element.role} ${JSON.stringify(element.name)}`,
-					},
-				],
-			})),
-			listed: this.#elements.length,
-			found: this.#elements.length,
-			focus: undefined,
-		}
+		return renderBrowserOutline(
+			this.#url,
+			this.#title,
+			createBrowserOutlineNodes(
+				this.#elements.map((element) => ({
+					reference: element.reference,
+					role: element.role,
+					name: element.name,
+				})),
+			),
+			options?.limit ?? 150,
+		)
 	}
 
 	async find(): Promise<readonly BrowserElementInterface[]> {
@@ -3354,13 +3358,8 @@ s4 type "sam@example.test" as email into textbox "Email", submit
 s5 wait "Added to cart"`
 
 /** Supplies the view fence appended to a rendered run. */
-export const BROWSER_RUN_VIEW = `page "Cart" https://shop.example.test/cart
-e40 link "Catalogue"
-e41 link "Cart"
-e42 link "Checkout"
-# Your cart
-Alpine Kettle
-(3 of 3 elements)`
+export const BROWSER_RUN_VIEW =
+	'page "Cart" https://shop.example.test/cart\nlink "Catalogue" [ref=e40]\nlink "Cart" [ref=e41]\nlink "Checkout" [ref=e42]\n# Your cart\nAlpine Kettle\n(3 of 3 elements)'
 
 /** Supplies the completed run printed in the design. */
 export const BROWSER_RUN_FIXTURE: BrowserRun = {
@@ -3386,7 +3385,7 @@ export const BROWSER_RUN_FIXTURE: BrowserRun = {
 			trigger: 'Alpine Kettle',
 			arguments: { ref: 'e12' },
 			outcome: 'done',
-			result: 'Clicked e12 link "Alpine Kettle".',
+			result: 'Clicked link "Alpine Kettle" [ref=e12].',
 			elapsed: 5,
 		},
 		{
@@ -3395,7 +3394,7 @@ export const BROWSER_RUN_FIXTURE: BrowserRun = {
 			trigger: 'Add to cart',
 			arguments: { ref: 'e31' },
 			outcome: 'done',
-			result: 'Clicked e31 button "Add to cart".',
+			result: 'Clicked button "Add to cart" [ref=e31].',
 			elapsed: 5,
 		},
 		{
@@ -3404,7 +3403,7 @@ export const BROWSER_RUN_FIXTURE: BrowserRun = {
 			trigger: 'Email',
 			arguments: { ref: 'e33', text: 'ada@example.test', submit: true },
 			outcome: 'done',
-			result: 'Typed "ada@example.test" into e33 textbox "Email" and submitted the form.',
+			result: 'Typed "ada@example.test" into textbox "Email" [ref=e33] and submitted the form.',
 			elapsed: 5,
 		},
 		{
@@ -3420,20 +3419,8 @@ export const BROWSER_RUN_FIXTURE: BrowserRun = {
 }
 
 /** Supplies the exact run fence from the design. */
-export const BROWSER_RUN_LISTING = `Replayed add-kettle: 5 of 5 steps.
-s1 Navigated to https://shop.example.test/.
-s2 Clicked e12 link "Alpine Kettle".
-s3 Clicked e31 button "Add to cart".
-s4 Typed "ada@example.test" into e33 textbox "Email" and submitted the form.
-s5 "Added to cart" is on the page.
-
-page "Cart" https://shop.example.test/cart
-e40 link "Catalogue"
-e41 link "Cart"
-e42 link "Checkout"
-# Your cart
-Alpine Kettle
-(3 of 3 elements)`
+export const BROWSER_RUN_LISTING =
+	'Replayed add-kettle: 5 of 5 steps.\ns1 Navigated to https://shop.example.test/.\ns2 Clicked link "Alpine Kettle" [ref=e12].\ns3 Clicked button "Add to cart" [ref=e31].\ns4 Typed "ada@example.test" into textbox "Email" [ref=e33] and submitted the form.\ns5 "Added to cart" is on the page.\n\npage "Cart" https://shop.example.test/cart\nlink "Catalogue" [ref=e40]\nlink "Cart" [ref=e41]\nlink "Checkout" [ref=e42]\n# Your cart\nAlpine Kettle\n(3 of 3 elements)'
 
 /** Supplies native and page step renderings, including every template. */
 export const BROWSER_JOURNEY_TEMPLATE_CASES: ReadonlyArray<{
@@ -3800,7 +3787,7 @@ export function createBrowserActionFixture(options?: Partial<BrowserAction>): Br
 		arguments: { ref: 'e1' },
 		target: { role: 'button', name: 'Save', reference: 'e1' },
 		outcome: 'done',
-		receipt: 'Clicked e1 button "Save".',
+		receipt: 'Clicked button "Save" [ref=e1].',
 		elapsed: 1,
 		...options,
 	}

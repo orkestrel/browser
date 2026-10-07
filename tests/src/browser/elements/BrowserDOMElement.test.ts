@@ -68,14 +68,14 @@ describe('BrowserDOMElement', () => {
 				reason: 'UNTRUSTED',
 			})
 			expect(isBrowserError(popup) && popup.code === 'ELEMENT' && popup.message).toBe(
-				`Element ${link.reference} opens another browsing context, which an untrusted click cannot do.`,
+				`Element [ref=${link.reference}] opens another browsing context, which an untrusted click cannot do.`,
 			)
 			expect(isBrowserError(chooser) && chooser.code === 'ELEMENT' && chooser.context).toEqual({
 				reference: file.reference,
 				reason: 'UNTRUSTED',
 			})
 			expect(isBrowserError(chooser) && chooser.code === 'ELEMENT' && chooser.message).toBe(
-				`Element ${file.reference} opens a file chooser, which an untrusted click cannot do.`,
+				`Element [ref=${file.reference}] opens a file chooser, which an untrusted click cannot do.`,
 			)
 			expect(clicks.calls).toEqual([])
 		})
@@ -120,7 +120,7 @@ describe('BrowserDOMElement', () => {
 				reason: 'UNTRUSTED',
 			})
 			expect(isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.message).toBe(
-				`Element ${text.reference} opens a file chooser, which an untrusted click cannot do.`,
+				`Element [ref=${text.reference}] opens a file chooser, which an untrusted click cannot do.`,
 			)
 			expect(clicks.calls).toEqual([])
 		})
@@ -267,7 +267,7 @@ describe('BrowserDOMElement', () => {
 			expect([save.role, save.name]).toEqual(['button', 'Save'])
 			const outline = await view.elements.outline()
 			expect(outline.lines.map(renderBrowserLine).join('\n')).toContain(
-				`${save.reference} button "Store"`,
+				`button "Store" [ref=${save.reference}]`,
 			)
 			expect([save.role, save.name]).toEqual(['button', 'Store'])
 			expect(view.elements.element(save.reference)?.name).toBe('Store')
@@ -327,23 +327,23 @@ describe('BrowserDOMElement', () => {
 			const button = await search.fill('kettle').catch((error: unknown) => error)
 			const fixed = await code.fill('SPRING').catch((error: unknown) => error)
 			expect(isBrowserError(notes) && notes.code === 'ELEMENT' && notes.message).toBe(
-				`Element ${editable.reference} is contenteditable, which an untrusted event cannot type into.`,
+				`Element [ref=${editable.reference}] is contenteditable, which an untrusted event cannot type into.`,
 			)
 			expect(isBrowserError(notes) && notes.code === 'ELEMENT' && notes.context).toMatchObject({
 				reason: 'UNTRUSTED',
 			})
 			expect(probe.querySelector('div')?.textContent).toBe('')
 			expect(isBrowserError(box) && box.code === 'ELEMENT' && box.message).toBe(
-				`Element ${checkbox.reference} is not a text control.`,
+				`Element [ref=${checkbox.reference}] is not a text control.`,
 			)
 			expect(isBrowserError(button) && button.code === 'ELEMENT' && button.message).toBe(
-				`Element ${search.reference} is not a text control.`,
+				`Element [ref=${search.reference}] is not a text control.`,
 			)
 			expect(isBrowserError(button) && button.code === 'ELEMENT' && button.context).toMatchObject({
 				reason: 'UNKNOWN',
 			})
 			expect(isBrowserError(fixed) && fixed.code === 'ELEMENT' && fixed.message).toBe(
-				`Element ${code.reference} is not editable.`,
+				`Element [ref=${code.reference}] is not editable.`,
 			)
 			expect(isBrowserError(box) && box.code === 'ELEMENT' && box.context).toMatchObject({
 				reason: 'UNKNOWN',
@@ -360,7 +360,7 @@ describe('BrowserDOMElement', () => {
 			expect(
 				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.message,
 				'the element must not quote the missing option',
-			).toBe(`Element ${element.reference} has no such option.`)
+			).toBe(`Element [ref=${element.reference}] has no such option.`)
 			const toolset = new BrowserToolset(view)
 			const actions = createRecorder<readonly [BrowserAction]>()
 			toolset.emitter.on('action', actions.handler)
@@ -374,7 +374,9 @@ describe('BrowserDOMElement', () => {
 				})
 				expect(performed.result.success).toBe(false)
 				expect(performed.action).toMatchObject({ outcome: 'refused', secret: true })
-				expect(performed.action?.receipt).toBe(`Element ${element.reference} has no such option.`)
+				expect(performed.action?.receipt).toBe(
+					`Element [ref=${element.reference}] has no such option.`,
+				)
 				expect(JSON.stringify(performed)).not.toContain('Zq7#')
 				const journey = createBrowserJourneyFixture(
 					[
@@ -395,7 +397,7 @@ describe('BrowserDOMElement', () => {
 					},
 				).execute()
 				expect(run.outcome).toBe('stopped')
-				expect(run.steps[0]?.result).toBe(`Element ${element.reference} has no such option.`)
+				expect(run.steps[0]?.result).toBe(`Element [ref=${element.reference}] has no such option.`)
 				expect(runs.writes.count).toBeGreaterThan(0)
 				expect(actions.count).toBe(2)
 				expect(JSON.stringify(actions.calls)).not.toContain('Zq7#')
@@ -427,7 +429,7 @@ describe('BrowserDOMElement', () => {
 					{ signal: new AbortController().signal },
 				)
 				expect(String(result).split('\n')[0]).toBe(
-					`Selected a secret in ${element.reference} combobox "Access level" (programmatic). (untrusted event)`,
+					`Selected a secret in combobox "Access level" [ref=${element.reference}] (programmatic). (untrusted event)`,
 				)
 				expect(select.value).toBe(BROWSER_JOURNEY_SECRET)
 				expect(String(result)).not.toContain('Zq7#')
@@ -457,7 +459,7 @@ describe('BrowserDOMElement', () => {
 			const field = await findProbeElement(view, 'input')
 			const text = await field.select(['x']).catch((error: unknown) => error)
 			expect(isBrowserError(missing) && missing.code === 'ELEMENT' && missing.message).toBe(
-				`Element ${size.reference} has no such option.`,
+				`Element [ref=${size.reference}] has no such option.`,
 			)
 			expect(isBrowserError(text) && text.message).toMatch(/not a select control/)
 			expect(
@@ -557,7 +559,7 @@ describe('BrowserDOMElement', () => {
 				reason: 'UNKNOWN',
 			})
 			expect(isBrowserError(popup) && popup.code === 'ELEMENT' && popup.message).toBe(
-				`Element ${button.reference} submits into another browsing context, which an untrusted submission cannot open.`,
+				`Element [ref=${button.reference}] submits into another browsing context, which an untrusted submission cannot open.`,
 			)
 			expect(isBrowserError(popup) && popup.code === 'ELEMENT' && popup.context).toMatchObject({
 				reason: 'UNTRUSTED',

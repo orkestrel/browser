@@ -319,7 +319,7 @@ describe('element protocol and compiler fixtures', () => {
 		])
 		const outline = await view.elements.outline()
 		expect(outline.lines.map(renderBrowserLine).join('\n')).toBe(
-			'e1 button "Save"\ne2 textbox "Email"\ne3 combobox "Size"',
+			'button "Save" [ref=e1]\ntextbox "Email" [ref=e2]\ncombobox "Size" [ref=e3]',
 		)
 		expect((await view.read()).markdown().text).toContain('Two items')
 		const save = requireValue(view.elements.element('e1'))

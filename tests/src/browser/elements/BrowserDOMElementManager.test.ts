@@ -24,10 +24,10 @@ describe('BrowserDOMElementManager', () => {
 			const view = createBrowserDOMView({ document: probe })
 			expect((await view.elements.outline()).lines.map(renderBrowserLine)).toEqual([
 				'## Menu Tea Elsewhere',
-				`e1 link "Tea" ${new URL('/tea', document.baseURI).href}`,
-				'e2 link "Elsewhere" https://else.example/',
+				`link "Tea" [ref=e1] ${new URL('/tea', document.baseURI).href}`,
+				'link "Elsewhere" [ref=e2] https://else.example/',
 				'###### End',
-				`Before e3 link "Buy" ${new URL('/buy', document.baseURI).href} after | 9`,
+				`Before link "Buy" [ref=e3] ${new URL('/buy', document.baseURI).href} after | 9`,
 				'image "A \\"quote\\""',
 			])
 		})
@@ -36,15 +36,15 @@ describe('BrowserDOMElementManager', () => {
 			const view = createBrowserDOMView({ document: probe })
 			const lines = (await view.elements.outline()).lines.map(renderBrowserLine)
 			expect(lines).toEqual([
-				`### e1 link "Cedar Tea" ${new URL('/tea?q=1#cup', document.baseURI).href}`,
+				`### link "Cedar Tea" [ref=e1] ${new URL('/tea?q=1#cup', document.baseURI).href}`,
 				'- A list entry',
 				'Product | Price',
 				'Cedar | 41',
 				'image "Named image"',
 				'Account',
-				'e2 textbox "Account" value="••••••"',
+				'textbox "Account" [ref=e2] value="••••••"',
 				'Account',
-				'e3 textbox "Account" value="••••••"',
+				'textbox "Account" [ref=e3] value="••••••"',
 			])
 			expect(lines.join('\n')).not.toContain('sample')
 		})
@@ -54,9 +54,9 @@ describe('BrowserDOMElementManager', () => {
 			)
 			const view = createBrowserDOMView({ document: probe })
 			expect((await view.elements.outline()).lines.map(renderBrowserLine)).toEqual([
-				'e1 button "On" pressed=true',
-				'e2 button "Off" pressed=false',
-				'e3 button "Plain"',
+				'button "On" [ref=e1] pressed=true',
+				'button "Off" [ref=e2] pressed=false',
+				'button "Plain" [ref=e3]',
 			])
 		})
 
@@ -66,13 +66,13 @@ describe('BrowserDOMElementManager', () => {
 			const outline = await view.elements.outline()
 			expect(outline.lines.map(renderBrowserLine).join('\n')).toBe(
 				[
-					`e1 link "One" ${new URL('/one', document.baseURI).href}`,
-					`e2 link "Two" ${new URL('/two', document.baseURI).href}`,
+					`link "One" [ref=e1] ${new URL('/one', document.baseURI).href}`,
+					`link "Two" [ref=e2] ${new URL('/two', document.baseURI).href}`,
 					'# Probe page',
 					'A paragraph the reader wants.',
-					'e3 button "Save"',
+					'button "Save" [ref=e3]',
 					'Email',
-					'e4 textbox "Email"',
+					'textbox "Email" [ref=e4]',
 					'Footer chrome nobody reads',
 				].join('\n'),
 			)
@@ -114,10 +114,10 @@ describe('BrowserDOMElementManager', () => {
 			const text = (await view.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			expect(text.split('\n').slice(3)).toEqual([
 				'A paragraph the reader wants.',
-				'e3 button "Save"',
+				'button "Save" [ref=e3]',
 				'Email',
-				'e4 textbox "Email"',
-				'e5 button "Inner"',
+				'textbox "Email" [ref=e4]',
+				'button "Inner" [ref=e5]',
 				'iframe "Fixture" (cross-origin, not readable)',
 				'Footer chrome nobody reads',
 			])
@@ -130,8 +130,8 @@ describe('BrowserDOMElementManager', () => {
 			const view = createBrowserDOMView({ document: probe })
 			const text = (await view.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			expect(text.split('\n')).toEqual([
-				'e1 form "Search cars" [tool=search-cars]',
-				'e2 textbox "Make"',
+				'form "Search cars" [ref=e1] [tool=search-cars]',
+				'textbox "Make" [ref=e2]',
 			])
 		})
 
@@ -147,11 +147,11 @@ describe('BrowserDOMElementManager', () => {
 			)
 			const view = createBrowserDOMView({ document: probe })
 			const rows = (await view.elements.outline()).lines.map(renderBrowserLine)
-			expect(rows).toContain('e1 textbox "Email" value="sam@example.test"')
-			expect(rows).toContain('e2 textbox "Secret" value="•••••••"')
-			expect(rows).toContain('e3 checkbox "Gift wrap" [checked]')
-			expect(rows).toContain('e4 button "Place order" [disabled]')
-			expect(rows).toContain('e5 combobox "Size" value="Large" expanded=false')
+			expect(rows).toContain('textbox "Email" [ref=e1] value="sam@example.test"')
+			expect(rows).toContain('textbox "Secret" [ref=e2] value="•••••••"')
+			expect(rows).toContain('checkbox "Gift wrap" [ref=e3] [checked]')
+			expect(rows).toContain('button "Place order" [ref=e4] [disabled]')
+			expect(rows).toContain('combobox "Size" [ref=e5] value="Large" expanded=false')
 			expect(rows.join('\n')).not.toContain('hunter2')
 		})
 
@@ -169,11 +169,11 @@ describe('BrowserDOMElementManager', () => {
 			const view = createBrowserDOMView({ document: probe })
 			const text = (await view.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			expect(text.split('\n')).toEqual([
-				'e1 combobox "Size" value="Medium size" expanded=false',
-				'e2 option "Small" selected=false',
-				'e3 option "Medium size" selected=true',
-				'e4 option "Large" selected=false [disabled]',
-				'e5 button "Next"',
+				'combobox "Size" [ref=e1] value="Medium size" expanded=false',
+				'option "Small" [ref=e2] selected=false',
+				'option "Medium size" [ref=e3] selected=true',
+				'option "Large" [ref=e4] selected=false [disabled]',
+				'button "Next" [ref=e5]',
 			])
 			const options = await view.elements.find({ role: 'option' })
 			expect(options.map((option) => [option.reference, option.name])).toEqual([
@@ -221,20 +221,20 @@ describe('BrowserDOMElementManager', () => {
 			const view = createBrowserDOMView({ document: probe.document })
 			const bounded = await view.elements.outline({ limit: 1 })
 			expect(bounded).toMatchObject({ listed: 1, found: 4 })
-			expect(bounded.lines.map(renderBrowserLine).join('\n')).not.toContain('e2 link')
+			expect(bounded.lines.map(renderBrowserLine).join('\n')).not.toContain('[ref=e2]')
 			const nav = probe.document.querySelector('nav')
 			nav?.setAttribute('role', 'button')
 			const scoped = await view.elements.outline()
 			const reference = scoped.lines
 				.map(renderBrowserLine)
-				.find((row) => row.endsWith('button "Site"'))
+				.find((row) => row.startsWith('button "Site" [ref='))
 			nav?.removeAttribute('role')
-			const within = reference?.split(' ')[0] ?? ''
+			const within = /\[ref=(e\d+)\]/.exec(reference ?? '')?.[1] ?? ''
 			expect(within).toMatch(/^e\d+$/)
 			const inside = await view.elements.outline({ within })
 			expect(inside.lines.map(renderBrowserLine)).toEqual([
-				`e1 link "One" ${new URL('/one', document.baseURI).href}`,
-				`e2 link "Two" ${new URL('/two', document.baseURI).href}`,
+				`link "One" [ref=e1] ${new URL('/one', document.baseURI).href}`,
+				`link "Two" [ref=e2] ${new URL('/two', document.baseURI).href}`,
 			])
 		})
 
@@ -245,7 +245,7 @@ describe('BrowserDOMElementManager', () => {
 			const empty: readonly string[] = []
 			expect(
 				(await view.elements.outline({ within: 'e3' })).lines.map(renderBrowserLine).join('\n'),
-			).toContain('e3 button "Save"')
+			).toContain('button "Save" [ref=e3]')
 			probe.save.hidden = true
 			expect((await view.elements.outline({ within: 'e3' })).lines.map(renderBrowserLine)).toEqual(
 				empty,
@@ -290,10 +290,10 @@ describe('BrowserDOMElementManager', () => {
 			await loadProbeFrame(probe.document, shadow, '<button>Framed</button>')
 			const view = createBrowserDOMView({ document: probe.document })
 			const rows = (await view.elements.outline()).lines.map(renderBrowserLine)
-			expect(rows.slice(rows.indexOf('e4 textbox "Email"') + 1)).toEqual([
-				'e5 button "Fallback"',
-				`e6 link "Deep" ${new URL('/deep', document.baseURI).href}`,
-				'e7 button "Framed"',
+			expect(rows.slice(rows.indexOf('textbox "Email" [ref=e4]') + 1)).toEqual([
+				'button "Fallback" [ref=e5]',
+				`link "Deep" [ref=e6] ${new URL('/deep', document.baseURI).href}`,
+				'button "Framed" [ref=e7]',
 				'Footer chrome nobody reads',
 			])
 		})
@@ -311,8 +311,8 @@ describe('BrowserDOMElementManager', () => {
 			const text = (await view.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			expect(text.split('\n')).toEqual([
 				'Before',
-				'e1 button "Save"',
-				`e2 link "Slotted" ${new URL('/cars', document.baseURI).href}`,
+				'button "Save" [ref=e1]',
+				`link "Slotted" [ref=e2] ${new URL('/cars', document.baseURI).href}`,
 				'After',
 			])
 		})
@@ -323,7 +323,7 @@ describe('BrowserDOMElementManager', () => {
 			)
 			const view = createBrowserDOMView({ document: probe })
 			const text = (await view.elements.outline()).lines.map(renderBrowserLine).join('\n')
-			expect(text.split('\n')).toEqual(['e1 button "Seen"'])
+			expect(text.split('\n')).toEqual(['button "Seen" [ref=e1]'])
 		})
 
 		it('lists the rows that best match a search past the limit', async () => {
@@ -335,7 +335,7 @@ describe('BrowserDOMElementManager', () => {
 					.map((number) => outline.lines[number - 1])
 					.filter((line) => line !== undefined)
 					.map(renderBrowserLine),
-			).toEqual(['Email', 'e4 textbox "Email"'])
+			).toEqual(['Email', 'textbox "Email" [ref=e4]'])
 			expect(
 				scanBrowserLines((await view.elements.outline({ limit: 1 })).lines, 'Email').length,
 			).toBeGreaterThan(0)
@@ -345,7 +345,7 @@ describe('BrowserDOMElementManager', () => {
 			const probe = await createProbeElements()
 			const view = createBrowserDOMView({ document: probe.document })
 			probe.save.focus()
-			expect((await view.elements.outline({ limit: 0 })).focus).toBe('e3 button "Save"')
+			expect((await view.elements.outline({ limit: 0 })).focus).toBe('button "Save" [ref=e3]')
 			probe.save.blur()
 			expect((await view.elements.outline()).focus).toBeUndefined()
 		})
@@ -358,7 +358,7 @@ describe('BrowserDOMElementManager', () => {
 			const host = requireValue(probe.querySelector('div'), 'shadow host')
 			requireValue(host.shadowRoot?.querySelector('button'), 'inner button').focus()
 			expect(probe.activeElement).toBe(host)
-			expect((await view.elements.outline()).focus).toBe('e2 button "Inner"')
+			expect((await view.elements.outline()).focus).toBe('button "Inner" [ref=e2]')
 		})
 
 		it('discards stale focus in a frame after focus returns to the parent', async () => {
@@ -368,10 +368,10 @@ describe('BrowserDOMElementManager', () => {
 			const button = requireValue(probe.querySelector('button'))
 			const view = createBrowserDOMView({ document: probe })
 			input.focus()
-			expect((await view.elements.outline()).focus).toBe('e2 textbox "Child"')
+			expect((await view.elements.outline()).focus).toBe('textbox "Child" [ref=e2]')
 			button.focus()
 			expect(child.activeElement).toBe(child.body)
-			expect((await view.elements.outline()).focus).toBe('e1 button "Parent"')
+			expect((await view.elements.outline()).focus).toBe('button "Parent" [ref=e1]')
 			button.blur()
 			expect((await view.elements.outline()).focus).toBeUndefined()
 		})
@@ -429,13 +429,13 @@ describe('BrowserDOMElementManager', () => {
 			probe.late.innerHTML = '<button>Added</button>'
 			const second = await view.elements.outline()
 			expect(view.elements.element('[ref=e3]')).toBe(save)
-			expect(second.lines.map(renderBrowserLine).join('\n')).toContain('e3 button "Save"')
-			expect(second.lines.map(renderBrowserLine).join('\n')).toContain('e5 button "Added"')
+			expect(second.lines.map(renderBrowserLine).join('\n')).toContain('button "Save" [ref=e3]')
+			expect(second.lines.map(renderBrowserLine).join('\n')).toContain('button "Added" [ref=e5]')
 			view.elements.clear()
 			expect(view.elements.elements()).toEqual([])
 			expect(view.elements.element('e3')).toBeUndefined()
 			const third = await view.elements.outline()
-			expect(third.lines.map(renderBrowserLine).join('\n')).toContain('e6 link "One"')
+			expect(third.lines.map(renderBrowserLine).join('\n')).toContain('link "One" [ref=e6]')
 			expect(third.lines.map(renderBrowserLine).join('\n')).not.toMatch(/\be[1-5] /)
 		})
 	})

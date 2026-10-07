@@ -303,7 +303,7 @@ describe('BrowserDOMView', () => {
 				isBrowserError(refusal) && refusal.code === 'ELEMENT' && refusal.context,
 			).toMatchObject({ reason: 'GONE' })
 			const outline = await view.elements.outline()
-			expect(outline.lines.map(renderBrowserLine).join('\n')).toContain('e5 button "Next"')
+			expect(outline.lines.map(renderBrowserLine).join('\n')).toContain('button "Next" [ref=e5]')
 		})
 
 		it('stops following the window after destroy', async () => {

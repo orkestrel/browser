@@ -500,7 +500,7 @@ describe('element manager', () => {
 				listed: 6,
 				found: 6,
 				lines:
-					'# Your cart\ne1 link "Home"\ne2 textbox "Email" value="sam@example.test"\ne3 checkbox "Gift wrap" [checked]\ne4 button "Place order" [disabled]\nTwo items, 48.00 total.\ne5 Iframe "Checkout"\ne6 button "Save"\nDelivery included.',
+					'# Your cart\nlink "Home" [ref=e1]\ntextbox "Email" [ref=e2] value="sam@example.test"\ncheckbox "Gift wrap" [ref=e3] [checked]\nbutton "Place order" [ref=e4] [disabled]\nTwo items, 48.00 total.\nIframe "Checkout" [ref=e5]\nbutton "Save" [ref=e6]\nDelivery included.',
 				focus: undefined,
 			})
 			const cut = await page.elements.outline({ limit: 2 })

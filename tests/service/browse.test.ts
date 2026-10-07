@@ -559,7 +559,7 @@ describe('holders H3 built browse', () => {
 				name: 'click',
 				arguments: { ref: seed },
 			}),
-		).rejects.toThrow(`Element ${seed} is not in the current view`)
+		).rejects.toThrow(`Element [ref=${seed}] is not in the current view`)
 		const firstAgain = await callHolderServer(server.client, 'execute', {
 			holder: first,
 			name: 'navigate',

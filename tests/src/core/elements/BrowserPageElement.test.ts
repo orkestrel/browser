@@ -416,7 +416,7 @@ describe('trusted element actions', () => {
 			expect(rejection).toMatchObject({
 				code: 'ELEMENT',
 				context: { reference: 'e1', reason: 'GONE' },
-				message: 'Element e1 is gone because the page changed; call read for fresh refs.',
+				message: 'Element [ref=e1] is gone because the page changed; call read for fresh refs.',
 			})
 		} finally {
 			await client.close()
@@ -459,7 +459,7 @@ describe('trusted element actions', () => {
 			expect(rejection).toMatchObject({
 				code: 'ELEMENT',
 				context: { reference: 'e6', reason: 'GONE' },
-				message: 'Element e6 is gone because the page changed; call read for fresh refs.',
+				message: 'Element [ref=e6] is gone because the page changed; call read for fresh refs.',
 			})
 		} finally {
 			await client.close()
@@ -523,10 +523,10 @@ describe('trusted element actions', () => {
 			}
 		}
 		expect(outcomes).toEqual([
-			{ message: 'Element e2 is disabled.', reason: 'DISABLED' },
-			{ message: 'Element e2 is not editable.', reason: 'UNKNOWN' },
-			{ message: 'Element e2 is not visible.', reason: 'HIDDEN' },
-			{ message: 'Element e2 is not editable.', reason: 'UNKNOWN' },
+			{ message: 'Element [ref=e2] is disabled.', reason: 'DISABLED' },
+			{ message: 'Element [ref=e2] is not editable.', reason: 'UNKNOWN' },
+			{ message: 'Element [ref=e2] is not visible.', reason: 'HIDDEN' },
+			{ message: 'Element [ref=e2] is not editable.', reason: 'UNKNOWN' },
 		])
 	})
 
@@ -616,7 +616,7 @@ describe('trusted element actions', () => {
 				.catch((caught: unknown) => caught)
 			expect(isBrowserError(refused) && refused.code === 'ELEMENT').toBe(true)
 			expect(refused).toMatchObject({
-				message: 'Element e1 is not a text control.',
+				message: 'Element [ref=e1] is not a text control.',
 				context: { reference: 'e1', reason: 'UNKNOWN' },
 			})
 			expect(transport.sent.some((message) => message.method === 'Input.insertText')).toBe(false)

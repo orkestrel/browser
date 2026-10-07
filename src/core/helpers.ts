@@ -145,7 +145,7 @@ export function normalizeBrowserName(value: string): string {
  * @example
  * ```ts
  * describeBrowserRefusal('e4', 'GONE')
- * // 'Element e4 is gone because the page changed; call read for fresh refs.'
+ * // 'Element [ref=e4] is gone because the page changed; call read for fresh refs.'
  * ```
  */
 export function describeBrowserRefusal(
@@ -153,7 +153,7 @@ export function describeBrowserRefusal(
 	reason: BrowserElementReason,
 	detail?: string,
 ): string {
-	const name = isString(subject) ? `Element ${subject}` : subject.subject
+	const name = isString(subject) ? `Element [ref=${subject}]` : subject.subject
 	const text =
 		detail ??
 		(reason === 'GONE'
@@ -189,11 +189,11 @@ export function filterBrowserOutline(
 }
 
 /**
- * Renders one outline row: the node's reference, its role, its quoted accessible name, and the
- * states it carries.
+ * Renders one outline row: the node's role, quoted accessible name, reference, and states.
  *
  * @remarks
- * After the name the row appends `value="V"` when the node carries a non-empty value,
+ * The reference renders as `[ref=eN]` after the name, or after the role when the name is empty.
+ * After the reference the row appends `value="V"` when the node carries a non-empty value,
  * `pressed=true|false|mixed`, `expanded=true|false`, and `selected=true|false` when present,
  * `[checked]` when checked, `[disabled]` when disabled, and `[tool=NAME]` for a page tool's form,
  * in that order. A node without a reference renders without one.
@@ -219,13 +219,13 @@ export function filterBrowserOutline(
  * 	properties: { checked: 'true' },
  * 	session: 'main',
  * 	reference: 'e4',
- * }) // 'e4 checkbox "Gift wrap" [checked]'
+ * }) // 'checkbox "Gift wrap" [ref=e4] [checked]'
  * ```
  */
 export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
-	const name = JSON.stringify(normalizeBrowserName(node.name ?? ''))
+	const name = normalizeBrowserName(node.name ?? '')
 	const role = node.role ?? 'unknown'
-	let row = node.reference === undefined ? `${role} ${name}` : `${node.reference} ${role} ${name}`
+	let row = `${role}${name === '' ? '' : ` ${JSON.stringify(name)}`}${node.reference === undefined ? '' : ` [ref=${node.reference}]`}`
 	if (node.value !== undefined && node.value !== '')
 		row += ` value=${JSON.stringify(String(node.value))}`
 	for (const key of ['pressed', 'expanded', 'selected']) {
@@ -459,14 +459,19 @@ export function renderBrowserSpans(
 	url: string,
 ): readonly BrowserLineSpan[] {
 	const spans: BrowserLineSpan[] = []
+	spans.push({ category: 'syntax', text: node.role ?? 'unknown' })
+	const name = normalizeBrowserName(node.name ?? '')
+	if (name !== '')
+		spans.push(
+			{ category: 'syntax', text: ' "' },
+			{ category: 'text', text: JSON.stringify(name).slice(1, -1) },
+			{ category: 'syntax', text: '"' },
+		)
 	if (node.reference !== undefined)
-		spans.push({ category: 'reference', text: node.reference }, { category: 'syntax', text: ' ' })
-	spans.push(
-		{ category: 'syntax', text: node.role ?? 'unknown' },
-		{ category: 'syntax', text: ' "' },
-		{ category: 'text', text: JSON.stringify(normalizeBrowserName(node.name ?? '')).slice(1, -1) },
-		{ category: 'syntax', text: '"' },
-	)
+		spans.push(
+			{ category: 'syntax', text: ' ' },
+			{ category: 'reference', text: `[ref=${node.reference}]` },
+		)
 	const href = node.properties['url']
 	if (node.role === 'link' && isString(href)) {
 		const address = new URL(href, url)
@@ -727,6 +732,10 @@ export function renderBrowserSearch(
 }
 
 /** Renders a bounded window with numbered rows and an exact continuation.
+ * @remarks A partial-view line follows the page header when rows remain after the window.
+ * A changed projection carries its change note even from line 1. A search missing its range
+ * reports the page-wide best match without moving the window; that note shares the result
+ * budget and is bounded when it cannot fit beside the minimum window.
  * @param passage - Projection and contextual metadata
  * @param limit - Whole-result character room
  * @returns A complete window
@@ -752,9 +761,36 @@ export function renderBrowserPassage(passage: BrowserPassage, limit: number): st
 	}
 	if (passage.note !== undefined && passage.note !== '')
 		header.push(abbreviateBrowserText(passage.note, 200))
-	if (passage.changed && passage.from > 1) header.push(BROWSER_READ_CHANGED_NOTE)
+	if (passage.changed) header.push(BROWSER_READ_CHANGED_NOTE)
 	const found = renderBrowserSearch(passage.lines, passage.from, passage.to, passage.search)
-	if (found.text !== undefined) header.push(found.text)
+	let search = found.text
+	if (
+		passage.search !== undefined &&
+		passage.search !== '' &&
+		scanBrowserLines(passage.lines, passage.search, passage.from, passage.to).length === 0
+	) {
+		const match = scanBrowserLines(passage.lines, passage.search)[0]
+		const line = match === undefined ? undefined : passage.lines[match - 1]
+		if (line !== undefined) {
+			const minimum = renderBrowserWindow(
+				passage.lines,
+				found.from,
+				found.from,
+				header.join('\n'),
+				limit,
+			)
+			const room = limit - minimum.length - 1
+			search =
+				room < 1
+					? undefined
+					: boundBrowserText(
+							`No line from ${passage.from} on matches ${JSON.stringify(passage.search)}; the best match is line ${match}:\n${match}: ${renderBrowserLine(line)}`,
+							room,
+							BROWSER_TOOL_CUT_FOOTER,
+						)
+		}
+	}
+	if (search !== undefined) header.push(search)
 	return renderBrowserWindow(passage.lines, found.from, passage.to, header.join('\n'), limit)
 }
 
@@ -781,6 +817,7 @@ export function renderBrowserReceiptWindow(
 }
 
 /** Selects whole addressed rows after reserving the header and exact footer.
+ * @remarks A page header for `read` reserves a partial-view line before selecting rows.
  * @param lines - Complete projection
  * @param from - Inclusive first line
  * @param to - Inclusive last line, or the default window
@@ -799,6 +836,7 @@ export function renderBrowserWindow(
 ): string {
 	validateBrowserLines(from, to, lines.length)
 	let body = header
+	const rows: string[] = []
 	let end = from - 1
 	const last = Math.min(to ?? lines.length, from + BROWSER_READ_LINES - 1, lines.length)
 	for (let index = from; index <= last; index += 1) {
@@ -806,8 +844,17 @@ export function renderBrowserWindow(
 		if (line === undefined) break
 		const row = `${index}: ${renderBrowserLine(line)}`
 		const footer = renderBrowserFooter(from, index, lines.length, tool)
-		if (body.length + row.length + footer.length + 2 > limit) break
-		body += `${body === '' ? '' : '\n'}${row}`
+		const heading = header === '' ? [] : header.split(/\r\n|\n/)
+		if (tool === 'read' && heading[0]?.startsWith('page ') && index < lines.length)
+			heading.splice(
+				1,
+				0,
+				`This read shows lines ${from}–${index} of ${lines.length}; ${index + 1 === lines.length ? `line ${lines.length} is` : `lines ${index + 1}–${lines.length} are`} not shown yet.`,
+			)
+		const candidate = [...heading, ...rows, row].join('\n')
+		if (candidate.length + footer.length + 1 > limit) break
+		rows.push(row)
+		body = candidate
 		end = index
 	}
 	const footer = renderBrowserFooter(from, end, lines.length, tool)
@@ -1032,21 +1079,21 @@ export function validateBrowserToolArguments(
 }
 
 /**
- * Renders an element as its outline row reads: reference, role, and quoted name.
+ * Renders an element as its outline row reads: role, quoted name, and reference.
  *
  * @param element - The referenced element
- * @returns The element's reference, role, and JSON-quoted name
+ * @returns The role, optional JSON-quoted name, and `[ref=eN]` reference
  *
  * @example
  * ```ts
  * import { renderBrowserElement } from '@orkestrel/browser'
  *
  * const element = page.elements.element('e4')
- * if (element !== undefined) renderBrowserElement(element) // 'e4 button "Place order"'
+ * if (element !== undefined) renderBrowserElement(element) // 'button "Place order" [ref=e4]'
  * ```
  */
 export function renderBrowserElement(element: BrowserElementInterface): string {
-	return `${element.reference} ${element.role} ${JSON.stringify(element.name)}`
+	return `${element.role}${element.name === '' ? '' : ` ${JSON.stringify(element.name)}`} [ref=${element.reference}]`
 }
 
 /**
@@ -1129,10 +1176,10 @@ export function readBrowserToolString(
  * import { renderBrowserReceipt } from '@orkestrel/browser'
  *
  * renderBrowserReceipt({
- * 	action: 'Clicked e7 button "Delete"',
+ * 	action: 'Clicked button "Delete" [ref=e7]',
  * 	dialog: { category: 'confirm', message: 'Delete the draft?' },
  * })
- * // 'Clicked e7 button "Delete". A confirm dialog is open: "Delete the draft?"; call dialog.'
+ * // 'Clicked button "Delete" [ref=e7]. A confirm dialog is open: "Delete the draft?"; call dialog.'
  * ```
  */
 export function renderBrowserReceipt(receipt: BrowserReceipt): string {
