@@ -550,7 +550,7 @@ describe('holders H2', () => {
 			const reading = await fixture.pair.call(10, 'execute', {
 				holder: first['holder'],
 				name: 'read',
-				arguments: {},
+				arguments: { from: 1 },
 			})
 			expect(reading.error).toBe(false)
 			expect(reading.text).toContain(`link "Checkout" [ref=${link}]`)
@@ -571,7 +571,7 @@ describe('holders H2', () => {
 			const destination = await fixture.pair.call(11, 'execute', {
 				holder: first['holder'],
 				name: 'read',
-				arguments: {},
+				arguments: { from: 1 },
 			})
 			expect(destination.error).toBe(false)
 			expect(destination.text).toContain(`link "Checkout" [ref=${link}]`)
