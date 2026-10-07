@@ -132,7 +132,8 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 		)
 			return
 		if (this.#steps.length === 0)
-			this.#start = action.start === '' || action.start.startsWith('about:') ? undefined : action.start
+			this.#start =
+				action.start === '' || action.start.startsWith('about:') ? undefined : action.start
 		if (action.outcome === 'interrupted') {
 			this.#pending = structuredClone(action)
 			return
