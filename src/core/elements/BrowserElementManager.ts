@@ -39,8 +39,9 @@ import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/cont
  * Captures accessibility trees and binds stable references to their owning frame sessions.
  *
  * @remarks
- * A reference is dropped when the page reports its frame's document replaced or detached through
- * `input.steps`, which carries only the steps of each frame's owning session.
+ * A document replacement drops its bindings. A unique link with the same role, accessible name,
+ * and resolved href in consecutive documents of this tab keeps its reference when captured again.
+ * `input.steps` carries only the steps of each frame's owning session.
  */
 export class BrowserElementManager implements BrowserElementManagerInterface<BrowserPageElementInterface> {
 	readonly #input: BrowserElementManagerInput
@@ -53,6 +54,8 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		{ readonly frame: string; readonly session: string; readonly backend: number }
 	>()
 	readonly #lifetime = new AbortController()
+	#links = new Map<string, string | undefined>()
+	#previous = new Map<string, string | undefined>()
 	#sequence = 0
 	readonly #generations = new Map<string, number>()
 	// Counts every generation step across all frames, so a capture can tell whether any frame it
@@ -316,12 +319,51 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		for (const [frame, epoch] of this.#generations) this.#generations.set(frame, epoch + 1)
 		this.#records.clear()
 		this.#owners.clear()
+		this.#previous = new Map()
+		this.#links = new Map()
 	}
 
 	async #capture(options?: BrowserCallOptions): Promise<readonly BrowserOutlineNode[]> {
 		validateBrowserPageOpen(this.#input.page, this.#input.client)
+		const changes = this.#changes
 		const rows = await this.#tree(this.#input.page.id, this.#input.session, new Set(), options)
-		return rows
+		if (changes !== this.#changes)
+			throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'outline' }, 'GONE'), {
+				subject: 'outline',
+				reason: 'GONE',
+			})
+		const counts = new Map<string, number>()
+		const identities = rows.map((row) => {
+			const href = row.properties['url']
+			if (
+				row.role !== 'link' ||
+				row.ignored ||
+				row.backend === undefined ||
+				!isString(href) ||
+				!URL.canParse(href)
+			)
+				return undefined
+			const identity = JSON.stringify(['link', row.name, new URL(href).href])
+			counts.set(identity, (counts.get(identity) ?? 0) + 1)
+			return identity
+		})
+		const links = new Map<string, string | undefined>()
+		const bound = rows.map((row, index) => {
+			const identity = identities[index]
+			const unique = identity !== undefined && counts.get(identity) === 1
+			const node = this.#bind(
+				row,
+				row.frame ?? this.#input.page.id,
+				row.session,
+				false,
+				unique ? this.#previous.get(identity) : undefined,
+			)
+			if (identity !== undefined) links.set(identity, unique ? node.reference : undefined)
+			return node
+		})
+		this.#links = links
+		this.#previous.clear()
+		return bound
 	}
 
 	async #tree(
@@ -354,7 +396,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 			const node = id === undefined ? undefined : nodes.get(id)
 			if (node === undefined || seen.has(node.id)) continue
 			seen.add(node.id)
-			rows.push(this.#bind(node, frame, session))
+			rows.push({ ...node, frame, session, reference: undefined })
 			if (node.role === 'Iframe' && node.backend !== undefined) {
 				const described = await this.#input.client.send(
 					'DOM.describeNode',
@@ -393,7 +435,13 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 			})
 	}
 
-	#bind(node: BrowserAXNode, frame: string, session: string, css = false): BrowserOutlineNode {
+	#bind(
+		node: BrowserAXNode,
+		frame: string,
+		session: string,
+		css = false,
+		carried?: string,
+	): BrowserOutlineNode {
 		const backend = node.backend
 		const tool =
 			backend === undefined
@@ -420,7 +468,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 			this.#records.set(key, { node: row, element: existing.element })
 			return row
 		}
-		const reference = this.#input.reference()
+		const reference = carried ?? this.#input.reference()
 		const row = { ...node, frame, session, reference, ...(tool === undefined ? {} : { tool }) }
 		const element = new BrowserPageElement({
 			...this.#input,
@@ -428,15 +476,15 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 			node: row,
 			backend,
 			frame,
-			current: this.#current.bind(this, key, reference),
+			current: this.#current.bind(this, key, reference, frame, this.#generation(frame)),
 			point: this.#point.bind(this),
 		})
 		this.#records.set(key, { node: row, element })
 		return row
 	}
 
-	#current(key: string, reference: string): boolean {
-		return this.#records.get(key)?.node.reference === reference
+	#current(key: string, reference: string, frame: string, epoch: number): boolean {
+		return this.#generation(frame) === epoch && this.#records.get(key)?.node.reference === reference
 	}
 
 	#description(key: string, fallback: BrowserOutlineNode): BrowserOutlineNode {
@@ -523,7 +571,11 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	}
 
 	#navigate(_url: string, same: boolean): void {
-		if (!same) this.clear()
+		if (!same) {
+			const previous = this.#links
+			this.clear()
+			this.#previous = previous
+		}
 	}
 
 	#commit(frame: string, _url: string, _loader: string | undefined, same: boolean): void {

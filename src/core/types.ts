@@ -2587,7 +2587,12 @@ export interface BrowserElementRefusal {
 	readonly detail: string | undefined
 }
 
-/** Allocates the next reference from the owning browser context. */
+/** Allocates the next reference from the owning browser context.
+ * @remarks
+ * Within a tab, a link retains its previous document's reference when its role, accessible name,
+ * and resolved href match exactly one link in each document. Other elements receive fresh
+ * references after navigation; buttons never carry. Allocation never reuses a number.
+ */
 export type BrowserReferenceFunction = () => string
 
 /** Resolves the page-owned isolated world for a particular frame and session.
@@ -2994,12 +2999,21 @@ export interface BrowserTab extends BrowserJourneyTab {
  * - `view` — the view the tools act on
  */
 export interface BrowserToolsetInterface {
+	/** Describes a missing reference using its last shown role and name, or the unknown-reference refusal.
+	 * @param reference - Canonical element reference
+	 * @returns The refusal text
+	 */
+	describe(reference: string): string
 	/** Redacts registered secrets from unnumbered text before composing a result.
 	 * @param text - Unbounded, unnumbered text
 	 * @returns Text with registered secrets removed
 	 */
 	redact(text: string): string
 	/** Renders a fresh page window, including pending move notes, within the requested limit.
+	 * @remarks
+	 * A unique link with the same role, accessible name, and resolved href in consecutive documents
+	 * of one tab keeps its reference. A successful action still resets the accepted set; carried
+	 * references are accepted again when its result lists them.
 	 * @param options - Inclusive range, search, cancellation, and character room
 	 * @returns Numbered lines with an exact continuation footer
 	 */

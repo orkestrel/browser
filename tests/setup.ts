@@ -1707,6 +1707,34 @@ export function replyOk(
 	transport.onSend(method, (message) => transport.reply(message.id, result))
 }
 
+/** Supplies navigation links and a search field for reference-history proofs. */
+export const BROWSER_STABLE_REFERENCE_ELEMENTS = Object.freeze([
+	{ role: 'link', name: 'Catalogue', href: 'https://example.test/' },
+	{ role: 'link', name: 'Cart', href: 'https://example.test/cart' },
+	{ role: 'link', name: 'Checkout', href: 'https://example.test/checkout' },
+	{ role: 'searchbox', name: 'Search products' },
+])
+
+/** Builds a flat accessibility document with resolved link destinations for reference proofs. */
+export function buildBrowserReferenceTree(
+	elements: ReadonlyArray<{
+		readonly role: string
+		readonly name: string
+		readonly href?: string | undefined
+	}>,
+): unknown {
+	return {
+		nodes: elements.map((element, index) => ({
+			nodeId: String(index),
+			backendDOMNodeId: index + 3,
+			role: { value: element.role },
+			name: { value: element.name },
+			properties:
+				element.href === undefined ? [] : [{ name: 'url', value: { value: element.href } }],
+		})),
+	}
+}
+
 /** Holds a deliberately non-document-ordered AX response including the P8 iframe. */
 export const BROWSER_ELEMENT_AX_FIXTURE = Object.freeze({
 	nodes: [

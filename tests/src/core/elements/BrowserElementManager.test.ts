@@ -18,9 +18,155 @@ import {
 	scriptBrowserElements,
 	scriptCDPAttach,
 	TIMER_LEAD,
+	buildBrowserReferenceTree,
+	emitBrowserNavigation,
 } from '../../../setup.js'
 
 describe('element manager', () => {
+	it.each(['name', 'href', 'role', 'missing href'])(
+		'stable links: allocates a fresh reference for a changed %s',
+		async (changed) => {
+			let navigated = false
+			const fixture = await createBrowserElementFixture({
+				local: true,
+				accessibility: (message) =>
+					fixture.transport.reply(
+						message.id,
+						buildBrowserReferenceTree([
+							{
+								role: navigated && changed === 'role' ? 'button' : 'link',
+								name: navigated && changed === 'name' ? 'Pay' : 'Checkout',
+								href:
+									navigated && changed === 'missing href'
+										? undefined
+										: navigated && changed === 'href'
+											? 'https://example.test/other'
+											: 'https://example.test/checkout',
+							},
+						]),
+					),
+			})
+			try {
+				const before = requireValue((await fixture.page.elements.find({}))[0]).reference
+				navigated = true
+				emitBrowserNavigation(
+					fixture.transport,
+					'session-main',
+					'main',
+					'https://example.test/product',
+					'product',
+				)
+				expect(requireValue((await fixture.page.elements.find({}))[0]).reference).not.toBe(before)
+			} finally {
+				await fixture.client.close()
+			}
+		},
+	)
+
+	it('stable links: carries only from the immediately preceding document', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					buildBrowserReferenceTree([
+						{ role: 'link', name: 'Checkout', href: 'https://example.test/checkout' },
+					]),
+				),
+		})
+		try {
+			const before = requireValue((await fixture.page.elements.find({}))[0]).reference
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/unread',
+				'unread',
+			)
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/product',
+				'product',
+			)
+			expect(requireValue((await fixture.page.elements.find({}))[0]).reference).not.toBe(before)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+	it('stable links: carries a unique destination across documents and clicks its replacement', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					buildBrowserReferenceTree([
+						{ role: 'link', name: 'Checkout', href: 'https://example.test/checkout' },
+						{ role: 'button', name: 'Checkout' },
+					]),
+				),
+		})
+		try {
+			const before = await fixture.page.elements.find({ name: 'Checkout' })
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/product',
+				'product',
+			)
+			const after = await fixture.page.elements.find({ name: 'Checkout' })
+			expect(after.map((element) => element.reference)).toEqual([
+				requireValue(before[0]).reference,
+				'e3',
+			])
+			await expect(requireValue(after[0]).click()).resolves.toBeUndefined()
+			await expect(requireValue(before[0]).click()).rejects.toMatchObject({
+				context: { reason: 'GONE' },
+			})
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it.each(['previous', 'current'])(
+		'stable links: refuses duplicate identities in the %s document',
+		async (duplicate) => {
+			let navigated = false
+			const fixture = await createBrowserElementFixture({
+				local: true,
+				accessibility: (message) =>
+					fixture.transport.reply(
+						message.id,
+						buildBrowserReferenceTree(
+							Array.from({ length: navigated === (duplicate === 'current') ? 2 : 1 }, () => ({
+								role: 'link',
+								name: 'Checkout',
+								href: 'https://example.test/checkout',
+							})),
+						),
+					),
+			})
+			try {
+				const before = await fixture.page.elements.find({ role: 'link' })
+				navigated = true
+				emitBrowserNavigation(
+					fixture.transport,
+					'session-main',
+					'main',
+					'https://example.test/product',
+					'product',
+				)
+				const after = await fixture.page.elements.find({ role: 'link' })
+				expect(after.length).toBeGreaterThan(0)
+				for (const element of after)
+					expect(before.map((entry) => entry.reference)).not.toContain(element.reference)
+			} finally {
+				await fixture.client.close()
+			}
+		},
+	)
 	it.each(['query', 'describe', 'accessibility', 'document'])(
 		'resumes a wait after navigation interrupts %s',
 		async (method) => {

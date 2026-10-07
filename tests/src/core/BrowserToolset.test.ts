@@ -57,9 +57,55 @@ import {
 	readBrowserCompiledTimers,
 	runBrowserCompiledTimers,
 	replyOk,
+	buildBrowserReferenceTree,
+	BROWSER_STABLE_REFERENCE_ELEMENTS,
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it('stable links: carries listed links and names a gone reference while preserving unknown refusals', async () => {
+		let navigated = false
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					buildBrowserReferenceTree(
+						navigated
+							? BROWSER_STABLE_REFERENCE_ELEMENTS.slice(0, 3)
+							: BROWSER_STABLE_REFERENCE_ELEMENTS,
+					),
+				),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			expect(await toolset.read()).toContain('searchbox "Search products" [ref=e4]')
+			navigated = true
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/product',
+				'product',
+			)
+			expect(await toolset.read()).toContain('link "Checkout" [ref=e3]')
+			const context = { signal: new AbortController().signal }
+			const click = requireValue(toolset.tools.tool('click'))
+			expect(await click.execute({ ref: 'e3' }, context)).toContain(
+				'Clicked link "Checkout" [ref=e3].',
+			)
+			await expect(click.execute({ ref: 'e4' }, context)).rejects.toMatchObject({
+				message:
+					'Element e4 (searchbox "Search products") is not on this page; use a reference from the latest result.',
+			})
+			await expect(click.execute({ ref: 'e99' }, context)).rejects.toMatchObject({
+				message: 'Element [ref=e99] is not in the current view; call read for fresh refs.',
+			})
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 	it('small refusals: read defaults to line 1 and parses decimal coordinates', async () => {
 		const fixture = await createBrowserElementFixture()
 		const toolset = createBrowserToolset(fixture.page)

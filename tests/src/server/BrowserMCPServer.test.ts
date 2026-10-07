@@ -29,7 +29,7 @@ import {
 } from '@orkestrel/test'
 import { createLoopback, createScratch, readErrorCode } from '@orkestrel/test/server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createBrowserJourneyFixture, replyOk } from '../../setup.js'
+import { createBrowserJourneyFixture, replyOk, buildBrowserReferenceTree } from '../../setup.js'
 import { BrowseLauncher, requireSystemBrowser } from '../../setupService.js'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
@@ -487,7 +487,7 @@ describe('holders H2', () => {
 		}
 	})
 
-	it('allocates references across real browser contexts and refuses a copied reference', async () => {
+	it('stable links: lists carried references across documents with the server allocator and refuses a copied reference', async () => {
 		const peers = await Promise.all([
 			createCDPTestServer(),
 			createCDPTestServer(),
@@ -514,20 +514,19 @@ describe('holders H2', () => {
 			peer.script('Target.createTarget', { targetId: 'page' })
 			peer.script('Target.attachToTarget', { sessionId: 'session' })
 			peer.script('Page.createIsolatedWorld', { executionContextId: 1 })
-			peer.script('Runtime.evaluate', (params: Readonly<Record<string, unknown>>) => ({
-				result: { value: params['expression'] === 'document.readyState' ? 'complete' : true },
-			}))
-			peer.script('Accessibility.getFullAXTree', {
-				nodes: [
-					{
-						nodeId: 'button',
-						backendDOMNodeId: 3,
-						role: { value: 'button' },
-						name: { value: 'Checkout' },
-						properties: [],
-					},
-				],
+			peer.script('Page.getFrameTree', {
+				frameTree: { frame: { id: 'page', url: 'https://example.test/cart' } },
 			})
+			peer.script('Runtime.evaluate', (params: Readonly<Record<string, unknown>>) => ({
+				result: { value: params['expression'] === 'document.readyState' ? 'complete' : 'Checkout' },
+			}))
+			peer.script(
+				'Accessibility.getFullAXTree',
+				buildBrowserReferenceTree([
+					{ role: 'button', name: 'Checkout' },
+					{ role: 'link', name: 'Checkout', href: 'https://example.test/checkout' },
+				]),
+			)
 		}
 		const fixture = createBrowseFixture({
 			pool: { contexts: 1, size: 3, launch: () => requireValue(browsers[launched++]) },
@@ -547,6 +546,35 @@ describe('holders H2', () => {
 			const others = await other.elements.find({ role: 'button' })
 			const ref = requireValue(elements[0]).reference
 			expect(ref).not.toBe(requireValue(others[0]).reference)
+			const link = requireValue((await page.elements.find({ role: 'link' }))[0]).reference
+			const reading = await fixture.pair.call(10, 'execute', {
+				holder: first['holder'],
+				name: 'read',
+				arguments: {},
+			})
+			expect(reading.error).toBe(false)
+			expect(reading.text).toContain(`link "Checkout" [ref=${link}]`)
+			requireValue(peers[1]).event(
+				'Page.frameNavigated',
+				{ frame: { id: 'page', url: 'https://example.test/product', loaderId: 'product' } },
+				'session',
+			)
+			requireValue(peers[1]).event(
+				'Page.lifecycleEvent',
+				{ frameId: 'page', loaderId: 'product', name: 'DOMContentLoaded' },
+				'session',
+			)
+			await waitForCondition(
+				'the destination document',
+				() => page.url === 'https://example.test/product',
+			)
+			const destination = await fixture.pair.call(11, 'execute', {
+				holder: first['holder'],
+				name: 'read',
+				arguments: {},
+			})
+			expect(destination.error).toBe(false)
+			expect(destination.text).toContain(`link "Checkout" [ref=${link}]`)
 			const refused = await fixture.pair.call(4, 'execute', {
 				holder: second['holder'],
 				name: 'click',

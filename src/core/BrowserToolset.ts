@@ -259,6 +259,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#following: BrowserToolSourceInterface | undefined
 	readonly #secrets = new Set<string>()
 	readonly #projections = new WeakMap<BrowserViewInterface, string>()
+	readonly #descriptions = new Map<string, Pick<BrowserElementInterface, 'role' | 'name'>>()
 	#tail: Promise<void> = Promise.resolve()
 	#pending: Promise<void> | undefined
 	// Numbers each action, so the observer it installs answers only its own read and removal.
@@ -381,6 +382,27 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	redact(text: string): string {
 		return redactBrowserText(text, [...this.#secrets])
+	}
+
+	describe(reference: string): string {
+		const element = this.#descriptions.get(reference)
+		return element === undefined
+			? describeBrowserRefusal(
+					reference,
+					'UNKNOWN',
+					'is not in the current view; call read for fresh refs',
+				)
+			: `Element ${reference} (${element.role} ${JSON.stringify(element.name)}) is not on this page; use a reference from the latest result.`
+	}
+
+	#remember(result: string, view: BrowserViewInterface): void {
+		const references = new Set(
+			[...result.matchAll(/\[ref=(e[1-9]\d*)\]/gu)].map((match) => match[1]),
+		)
+		for (const element of view.elements.elements()) {
+			if (references.has(element.reference))
+				this.#descriptions.set(element.reference, { role: element.role, name: element.name })
+		}
 	}
 
 	#consumeNotes(): string {
@@ -823,6 +845,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				limit,
 			)
 			this.#projections.set(view, projection)
+			this.#remember(result, view)
 			this.#notes.length = 0
 			return result
 		} finally {
@@ -1327,15 +1350,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const reference = requireBrowserReference(value)
 		const element = this.#cursor.elements.element(reference)
 		if (element === undefined) {
-			throw new BrowserError(
-				'ELEMENT',
-				describeBrowserRefusal(
-					reference,
-					'UNKNOWN',
-					'is not in the current view; call read for fresh refs',
-				),
-				{ reference: reference, reason: 'UNKNOWN' },
-			)
+			throw new BrowserError('ELEMENT', this.describe(reference), {
+				reference: reference,
+				reason: 'UNKNOWN',
+			})
 		}
 		const frame = this.#page === undefined ? undefined : this.#resolveFrame(this.#page, reference)
 		this.#actions.set(signal, {
@@ -1971,6 +1989,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		}
 		const result = renderBrowserReceiptWindow(passage, receipt, this.#limit)
 		this.#projections.set(this.#cursor, outline.lines.map(renderBrowserLine).join('\n'))
+		this.#remember(result, this.#cursor)
 		this.#notes.length = 0
 		return result
 	}
@@ -2215,6 +2234,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		await Promise.all([...this.#watches.keys()].map((page) => this.#unwatch(page)))
 		this.#dialogs.clear()
 		this.#adopted.clear()
+		this.#descriptions.clear()
 		this.#emitter.destroy()
 	}
 

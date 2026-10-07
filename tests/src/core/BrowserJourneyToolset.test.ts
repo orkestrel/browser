@@ -42,9 +42,77 @@ import {
 	createBrowserViewDouble,
 	createBrowserPendingToolsetFixture,
 	ignoreCall,
+	buildBrowserReferenceTree,
+	BROWSER_STABLE_REFERENCE_ELEMENTS,
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('stable links: edits with a carried link and refuses a gone reference by its last name', async () => {
+		let navigated = false
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					buildBrowserReferenceTree(
+						navigated
+							? BROWSER_STABLE_REFERENCE_ELEMENTS.slice(0, 3)
+							: BROWSER_STABLE_REFERENCE_ELEMENTS,
+					),
+				),
+		})
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(
+			createBrowserJourneyFixture([
+				{ action: 'click', arguments: {}, target: { role: 'link', name: 'Checkout' } },
+			]),
+		)
+		const toolset = createBrowserToolset(fixture.page, { journeys: { store } })
+		try {
+			await toolset.start()
+			expect(await toolset.read()).toContain('searchbox "Search products" [ref=e4]')
+			navigated = true
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/product',
+				'product',
+			)
+			expect(await toolset.read()).toContain('link "Checkout" [ref=e3]')
+			const edit = requireValue(toolset.tools.tool('edit'))
+			const context = { signal: new AbortController().signal }
+			await edit.execute(
+				{ journey: 'check-ready', edits: [{ operation: 'update', id: 's1', ref: 'e3' }] },
+				context,
+			)
+			expect((await store.get('check-ready'))?.journey.steps[0]?.target).toEqual({
+				role: 'link',
+				name: 'Checkout',
+				reference: 'e3',
+			})
+			await expect(
+				edit.execute(
+					{ journey: 'check-ready', edits: [{ operation: 'update', id: 's1', ref: 'e4' }] },
+					context,
+				),
+			).rejects.toMatchObject({
+				message:
+					'Element e4 (searchbox "Search products") is not on this page; use a reference from the latest result.',
+			})
+			await expect(
+				edit.execute(
+					{ journey: 'check-ready', edits: [{ operation: 'update', id: 's1', ref: 'e99' }] },
+					context,
+				),
+			).rejects.toMatchObject({
+				message: 'Element [ref=e99] is not in the current view; call read for fresh refs.',
+			})
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 	it('small refusals: keeps the recording through empty save and repeated record calls', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		const toolset = new BrowserToolset(createBrowserViewDouble())

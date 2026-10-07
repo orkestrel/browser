@@ -51,7 +51,6 @@ import {
 	requireBrowserReference,
 	validateBrowserToolArguments,
 	validateBrowserJourneyEdit,
-	describeBrowserRefusal,
 } from './helpers.js'
 
 /**
@@ -682,15 +681,10 @@ export class BrowserJourneyToolset {
 		const reference = requireBrowserReference(ref)
 		const element = this.#toolset.view.elements.element(reference)
 		if (element === undefined)
-			throw new BrowserError(
-				'ELEMENT',
-				describeBrowserRefusal(
-					reference,
-					'UNKNOWN',
-					'is not in the current view; call read for fresh refs',
-				),
-				{ reference: reference, reason: 'UNKNOWN' },
-			)
+			throw new BrowserError('ELEMENT', this.#toolset.describe(reference), {
+				reference: reference,
+				reason: 'UNKNOWN',
+			})
 		return { role: element.role, name: element.name, reference: element.reference }
 	}
 
