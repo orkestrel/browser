@@ -100,6 +100,34 @@ describe('BrowserReplay', () => {
 			await fixture.client.close()
 		}
 	})
+	it('journey start: replays in place when the tab is already on the start page', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			evaluation: (message) =>
+				fixture.transport.reply(message.id, { result: { value: fixture.page.url } }),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		const runs = new MemoryBrowserRunStore()
+		const journey = {
+			...createBrowserJourneyFixture([
+				{ action: 'click', arguments: {}, target: { role: 'link', name: 'Home' } },
+			]),
+			start: fixture.page.url,
+		}
+		try {
+			await toolset.start()
+			const run = await new BrowserReplay(toolset, { journey }, { runs }).execute()
+			expect(fixture.transport.sent.some((message) => message.method === 'Page.navigate')).toBe(
+				false,
+			)
+			expect(run.outcome).toBe('complete')
+			expect(run.steps.map((step) => [step.id, step.outcome])).toEqual([['s1', 'done']])
+			expect(run.journey.start).toBe(fixture.page.url)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 	it('journey start: a failed load stops before s1 and persists the navigation failure', async () => {
 		const fixture = await createBrowserElementFixture()
 		const toolset = createBrowserToolset(fixture.page)

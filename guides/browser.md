@@ -2968,7 +2968,7 @@ renderBrowserJourney(journey)
 
 ### Replay a journey
 
-When a journey carries `start`, replay navigates the current tab there before resolving s1 and waits for the same load settlement as `navigate`. The toolset's `schemes` option applies. A refused or unsettled start stops before s1, persists a stopped run with no executed steps, and retains the navigation's failure text. Without `start`, replay begins on the current page.
+When a journey carries `start` and the current tab is on another URL, replay navigates the tab there before resolving s1 and waits for the same load settlement as `navigate`; a tab already on `start` replays in place, so the page's state survives. The toolset's `schemes` option applies. A refused or unsettled start stops before s1, persists a stopped run with no executed steps, and retains the navigation's failure text. Without `start`, replay begins on the current page.
 
 `replay` replays a saved journey as it was recorded, or with `inputs` that replace the parameters' defaults; a parameter without a default, a secret included, needs an input. See [`BrowserReplayInterface`](#browserreplayinterface) for the four stages. The replay resolves each target on the live page by role and exact name, refuses a name that several elements carry or that none carries, and stops at the first step that did not complete, so a step never acts on an element the journey did not name.
 

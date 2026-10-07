@@ -1114,7 +1114,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			})
 			const kept = await writer.get('save-delivery')
 			const listing = [
-				'save-delivery "Save the delivery draft"',
+				`save-delivery "Save the delivery draft" starts at ${fixtures.url('/form')}`,
 				's1 click button "Save draft"',
 				's2 type "Grace" into textbox "Name"',
 			].join('\n')
@@ -1256,7 +1256,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				compileBrowserJourney(journey, { language: 'typescript' }).source,
 			]
 			const listing = [
-				'sign-in "Sign in with the password" (parameters: password (secret))',
+				`sign-in "Sign in with the password" starts at ${fixtures.url('/form')} (parameters: password (secret))`,
 				's1 type (secret) as password into textbox "Password"',
 				's2 click button "Sign in"',
 			].join('\n')

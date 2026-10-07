@@ -91,7 +91,10 @@ export class BrowserReplay implements BrowserReplayInterface {
 				this.#toolset.emitter.on('select', select)
 				cleanup.push(() => this.#toolset.emitter.off('select', select))
 			}
-			if (journey.start !== undefined) {
+			if (
+				journey.start !== undefined &&
+				journey.start !== this.#toolset.redact(this.#toolset.view.url)
+			) {
 				const navigation = await this.#toolset.execute(
 					{ id: 'start', name: 'navigate', arguments: { url: journey.start } },
 					{ caller: hold.token, signal: options?.signal ?? new AbortController().signal },
