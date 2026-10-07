@@ -1,9 +1,10 @@
-import { scanBrowserLines } from '@src/core'
-import { renderBrowserLine } from '@src/core'
 import type { BrowserFrameInterface } from '@src/core'
 import type { CDPSentMessage } from '../../../setup.js'
+import { BrowserPage } from '../../../../src/core/BrowserPage.js'
+import { scanBrowserLines } from '@src/core'
+import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { BrowserContext, BrowserPage } from '@src/core'
+import { BrowserContext } from '@src/core'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,

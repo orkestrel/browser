@@ -52,7 +52,7 @@ import {
 	readBrowserEndpoint,
 	removeBrowserProfile,
 } from './helpers.js'
-import { createCDPTransport, createBrowserWriter } from './factories.js'
+import { createWebSocketCDPTransport, createFileBrowserWriter } from './factories.js'
 
 // === Browser
 
@@ -106,10 +106,9 @@ export class Browser implements BrowserInterface {
 		})
 		this.#options = options ?? {}
 		this.#engine =
-			this.#options.engine ??
-			(this.#options.executable !== undefined
+			this.#options.executable !== undefined
 				? (parseBrowserEngine(this.#options.executable) ?? 'chromium')
-				: 'chromium')
+				: (this.#options.browsers?.engine ?? 'chromium')
 		this.#cdpPort = this.#options.cdp?.port ?? BROWSER_DEFAULT_CDP_PORT
 		this.#cdpHost = this.#options.cdp?.host ?? BROWSER_DEFAULT_HOST
 
@@ -226,7 +225,10 @@ export class Browser implements BrowserInterface {
 
 		let context = this.#contexts[0]
 		if (context === undefined) {
-			context = new BrowserContext(client, undefined, this.#options.viewport, createBrowserWriter())
+			context = new BrowserContext(client, {
+				...(this.#options.viewport === undefined ? {} : { viewport: this.#options.viewport }),
+				writer: createFileBrowserWriter(),
+			})
 			this.#registerContext(context)
 		}
 
@@ -268,6 +270,8 @@ export class Browser implements BrowserInterface {
 			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		}
 		validateBrowserContextOptions(options)
+		if (options?.id !== undefined)
+			throw new BrowserError('ARGUMENT', 'An isolated context receives its id from the browser')
 		const params: Record<string, unknown> = { disposeOnDetach: false }
 		if (options?.proxy !== undefined) {
 			params['proxyServer'] = options.proxy.server
@@ -283,15 +287,14 @@ export class Browser implements BrowserInterface {
 			throw new BrowserError('CONNECTION', 'Failed to create isolated browser context')
 		}
 		const id = result['browserContextId']
-		const context = new BrowserContext(
-			client,
+		const { proxy: _proxy, origins: _origins, ...defaults } = options ?? {}
+		const viewport = options?.viewport ?? options?.emulation?.viewport ?? this.#options.viewport
+		const context = new BrowserContext(client, {
+			...defaults,
 			id,
-			options?.emulation?.viewport ?? this.#options.viewport,
-			createBrowserWriter(),
-			options?.emulation,
-			options?.downloads,
-			options,
-		)
+			...(viewport === undefined ? {} : { viewport }),
+			writer: options?.writer ?? createFileBrowserWriter(),
+		})
 
 		try {
 			if (this.#destroyed || this.#client !== client)
@@ -598,7 +601,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #connectCDP(endpoint: string): Promise<void> {
-		const transport = createCDPTransport({ url: endpoint, timeout: this.#timeout() })
+		const transport = createWebSocketCDPTransport({ url: endpoint, timeout: this.#timeout() })
 		const client = new CDPClient({ transport, timeout: this.#timeout() })
 		const retained = this.#owned === true && this.#endpoint === endpoint
 
@@ -633,7 +636,7 @@ export class Browser implements BrowserInterface {
 			throw new BrowserError('CONNECTION', 'A browser process is already active on this instance')
 		}
 
-		const requestedEngine = this.#options.engine ?? this.#options.browsers?.engine
+		const requestedEngine = this.#options.browsers?.engine
 		let executable = this.#options.executable
 		let resolvedEngine: BrowserEngine | undefined
 
@@ -679,7 +682,7 @@ export class Browser implements BrowserInterface {
 
 		try {
 			const endpoint = await this.#waitForLaunch(process, executable, this.#options.args)
-			const transport = createCDPTransport({ url: endpoint, timeout: this.#timeout() })
+			const transport = createWebSocketCDPTransport({ url: endpoint, timeout: this.#timeout() })
 			client = new CDPClient({ transport, timeout: this.#timeout() })
 			await this.#raceAbort(client.connect())
 			await this.#takeEndpointOwner(process, client)
@@ -876,12 +879,10 @@ export class Browser implements BrowserInterface {
 		}
 		if (pages.length === 0 || this.#contexts.length > 0) return
 
-		const context = new BrowserContext(
-			client,
-			undefined,
-			this.#options.viewport,
-			createBrowserWriter(),
-		)
+		const context = new BrowserContext(client, {
+			...(this.#options.viewport === undefined ? {} : { viewport: this.#options.viewport }),
+			writer: createFileBrowserWriter(),
+		})
 		await context.sync(pages)
 		this.#registerContext(context)
 	}
@@ -974,7 +975,7 @@ export class Browser implements BrowserInterface {
 		let temporary = false
 
 		if (remote === undefined && this.#owned === true && this.#endpoint !== undefined) {
-			const transport = createCDPTransport({
+			const transport = createWebSocketCDPTransport({
 				url: this.#endpoint,
 				timeout: this.#timeout(),
 			})

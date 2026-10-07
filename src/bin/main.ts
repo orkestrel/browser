@@ -55,16 +55,18 @@ try {
 		)
 	await createBrowserMCPServer({
 		...(BROWSE_ROOT === undefined || BROWSE_ROOT === '' ? {} : { root: BROWSE_ROOT }),
-		...(headless === undefined ? {} : { headless }),
-		...(BROWSE_EXECUTABLE === undefined || BROWSE_EXECUTABLE === ''
-			? {}
-			: { executable: BROWSE_EXECUTABLE }),
-		...(readonly === undefined ? {} : { readonly }),
+		browser: {
+			...(headless === undefined ? {} : { headless }),
+			...(BROWSE_EXECUTABLE === undefined || BROWSE_EXECUTABLE === ''
+				? {}
+				: { executable: BROWSE_EXECUTABLE }),
+			...(viewport === undefined ? {} : { viewport }),
+		},
+		journeys: { ...(readonly === undefined ? {} : { readonly }) },
 		pool: {
 			...(size === undefined ? {} : { size }),
 			...(contexts === undefined ? {} : { contexts }),
 		},
-		...(viewport === undefined ? {} : { viewport }),
 	}).start()
 } catch (error) {
 	if (!isBrowserError(error)) throw error

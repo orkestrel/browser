@@ -38,7 +38,7 @@ import {
 	probeProcess,
 	parseBrowserProfileRecord,
 	formatBrowserLockEntry,
-	createCDPTransport,
+	createWebSocketCDPTransport,
 	createFileBrowserJourneyStore,
 	createFileBrowserRunStore,
 	BROWSER_KILL_GRACE_MS,
@@ -101,13 +101,15 @@ describe('contexts C2 built browse on one browser', () => {
 	it('audit repair 9: an adopted page tool may take the removed look name', async () => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 1 },
-			launch: (options) =>
-				launcher.launch({
-					...options,
-					args: [...(options.args ?? []), '--enable-features=WebMCP'],
-				}),
+			browser: { executable: requireSystemBrowser().executable },
+			pool: {
+				size: 1,
+				launch: (options) =>
+					launcher.launch({
+						...options,
+						args: [...(options.args ?? []), '--enable-features=WebMCP'],
+					}),
+			},
 		})
 		try {
 			await fixture.server.start()
@@ -1022,10 +1024,11 @@ describe('eager U7 real browse', () => {
 	it('inherits viewport on isolated pages, popups, spares, and refills', async () => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			viewport: { width: 390, height: 844 },
-			pool: { size: 2 },
-			launch: launcher.launch,
+			browser: {
+				executable: requireSystemBrowser().executable,
+				viewport: { width: 390, height: 844 },
+			},
+			pool: { size: 2, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -1076,9 +1079,8 @@ describe('eager U7 real browse', () => {
 		it(`replaces a killed lease at size ${size} and refuses a stale reference`, async () => {
 			const launcher = new BrowseLauncher()
 			const fixture = createBrowseFixture({
-				executable: requireSystemBrowser().executable,
-				pool: { size },
-				launch: launcher.launch,
+				browser: { executable: requireSystemBrowser().executable },
+				pool: { size, launch: launcher.launch },
 			})
 			const pages = await createFixtureServer()
 			try {
@@ -1126,9 +1128,8 @@ describe('eager U7 real browse', () => {
 	it('keeps the lease when a spare is killed and launches one replacement', async () => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: launcher.launch,
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -1164,9 +1165,8 @@ describe('eager U7 real browse', () => {
 		)
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: launcher.launch,
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -1190,9 +1190,8 @@ describe('eager U7 real browse', () => {
 	it('notes a current renderer crash but ignores a background renderer crash', async () => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: (options) => launcher.launch({ ...options, timeout: 5000 }),
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: (options) => launcher.launch({ ...options, timeout: 5000 }) },
 		})
 		let client: ReturnType<typeof createCDPClient> | undefined
 		try {
@@ -1205,7 +1204,7 @@ describe('eager U7 real browse', () => {
 			const view = requireValue(context.pages()[0], 'view')
 			const background = await context.create()
 			client = createCDPClient({
-				transport: createCDPTransport({ url: requireValue(browser.endpoint, 'endpoint') }),
+				transport: createWebSocketCDPTransport({ url: requireValue(browser.endpoint, 'endpoint') }),
 			})
 			await client.connect()
 			for (const page of [background, view]) {
@@ -1245,9 +1244,8 @@ describe('eager U7 real browse', () => {
 		symlinkSync(dirname(executable), link, 'junction')
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: join(link, basename(executable)),
-			pool: { size: 1 },
-			launch: launcher.launch,
+			browser: { executable: join(link, basename(executable)) },
+			pool: { size: 1, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -1277,9 +1275,8 @@ describe('eager U7 real browse', () => {
 	it('probes SIGSTOP support and recovers a stopped lease within its ping deadlines', async (context) => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: (options) => launcher.launch({ ...options, timeout: 3000 }),
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: (options) => launcher.launch({ ...options, timeout: 3000 }) },
 		})
 		try {
 			await fixture.server.start()
@@ -1320,20 +1317,22 @@ describe('eager U7 real browse', () => {
 		// Exit must follow the ping within half a deadline, before graceful teardown's command waits.
 		const timeout = 2000
 		const fixture = createBrowseFixture({
-			launch: (options) =>
-				launcher.launch(
-					launcher.browsers.length === 0
-						? {
-								...options,
-								executable: process.execPath,
-								args: [
-									fileURLToPath(new URL('../fixtures/hung/main.ts', import.meta.url)),
-									transcript,
-								],
-								timeout,
-							}
-						: { ...options, executable: requireSystemBrowser().executable },
-				),
+			pool: {
+				launch: (options) =>
+					launcher.launch(
+						launcher.browsers.length === 0
+							? {
+									...options,
+									executable: process.execPath,
+									args: [
+										fileURLToPath(new URL('../fixtures/hung/main.ts', import.meta.url)),
+										transcript,
+									],
+									timeout,
+								}
+							: { ...options, executable: requireSystemBrowser().executable },
+					),
+			},
 		})
 		try {
 			await fixture.server.start()
@@ -1377,9 +1376,9 @@ describe('eager U6 real browse', () => {
 		const child = createEagerBrowseChild(scratch.path, executable)
 		const server = createBrowserMCPServer({
 			root: scratch.path,
-			executable,
 			stdio: new MCPStdioPair(),
 			log: new BrowseLog(),
+			browser: { executable },
 		})
 		let orphan: number | undefined
 		try {
@@ -1442,9 +1441,9 @@ describe('eager U6 real browse', () => {
 		const root = scratch.ensure('server')
 		const server = createBrowserMCPServer({
 			root,
-			executable,
 			stdio: new MCPStdioPair(),
 			log: new BrowseLog(),
+			browser: { executable },
 		})
 		try {
 			await browser.connect()
@@ -1494,11 +1493,10 @@ describe('eager U6 real browse', () => {
 		}
 		const server = createBrowserMCPServer({
 			root: scratch.path,
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: launcher.launch,
 			stdio: pair,
 			log,
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: launcher.launch },
 		})
 		const teardown = createTeardown()
 		teardown.add(() => scratch.destroy())
@@ -1565,10 +1563,10 @@ describe('eager U6 real browse', () => {
 		const log = new BrowseLog()
 		const server = createBrowserMCPServer({
 			root: scratch.path,
-			executable: join(scratch.path, 'missing.exe'),
-			launch: launcher.launch,
 			stdio: pair,
 			log,
+			browser: { executable: join(scratch.path, 'missing.exe') },
+			pool: { launch: launcher.launch },
 		})
 		try {
 			await expect(server.start()).rejects.toThrow('ENOENT')
@@ -1596,16 +1594,18 @@ describe('eager U6 real browse', () => {
 			const executable = requireSystemBrowser().executable
 			const server = createBrowserMCPServer({
 				root: scratch.path,
-				executable,
 				stdio: new MCPStdioPair(),
 				log: new BrowseLog(),
-				launch: (options) => {
-					const browser = createBrowser(options)
-					browsers.push(browser)
-					browser.emitter.on('connect', () =>
-						mkdirSync(join(requireValue(options.profile, 'profile'), blocked)),
-					)
-					return browser
+				browser: { executable },
+				pool: {
+					launch: (options) => {
+						const browser = createBrowser(options)
+						browsers.push(browser)
+						browser.emitter.on('connect', () =>
+							mkdirSync(join(requireValue(options.profile, 'profile'), blocked)),
+						)
+						return browser
+					},
 				},
 			})
 			try {

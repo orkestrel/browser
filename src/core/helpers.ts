@@ -1818,6 +1818,7 @@ export function validateBrowserEmulationOptions(options: BrowserEmulationOptions
  */
 export function validateBrowserContextOptions(options?: BrowserContextOptions): void {
 	if (options === undefined) return
+	if (options.viewport !== undefined) validateBrowserViewport(options.viewport)
 	if (options.emulation !== undefined) validateBrowserEmulationOptions(options.emulation)
 	if (options.proxy !== undefined) {
 		if (options.proxy.server.length === 0) {

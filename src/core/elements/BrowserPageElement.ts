@@ -35,11 +35,6 @@ import { isArray, isError, isInteger, isNumber, isRecord, isString } from '@orke
 
 /**
  * Drives a referenced DOM element through its document's isolated world and the page input stream.
- * @example
- * ```ts
- * const element = page.elements.element('e1')
- * await element?.click()
- * ```
  */
 export class BrowserPageElement implements BrowserPageElementInterface {
 	readonly #input: BrowserElementInput

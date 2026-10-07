@@ -47,7 +47,7 @@ import {
 import { version } from '../../package.json'
 import {
 	createBrowser,
-	createCDPTransport,
+	createWebSocketCDPTransport,
 	createFileBrowserJourneyStore,
 	createFileBrowserRunStore,
 } from './factories.js'
@@ -122,7 +122,7 @@ import {
  * ```ts
  * import { BrowserMCPServer } from '@orkestrel/browser/server'
  *
- * const server = new BrowserMCPServer({ root: 'tmp/browsers', readonly: true })
+ * const server = new BrowserMCPServer({ root: 'tmp/browsers', journeys: { readonly: true } })
  * await server.start()
  * await server.destroy()
  * ```
@@ -210,11 +210,11 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			restarts: BROWSER_SERVER_RESTARTS,
 		})
 		this.#root = resolve(options?.root ?? 'tmp/browsers')
-		this.#headless = options?.headless ?? true
-		this.#executable = options?.executable
-		this.#viewport = options?.viewport
-		this.#readonly = options?.readonly ?? false
-		this.#launcher = options?.launch ?? createBrowser
+		this.#headless = options?.browser?.headless ?? true
+		this.#executable = options?.browser?.executable
+		this.#viewport = options?.browser?.viewport
+		this.#readonly = options?.journeys?.readonly ?? false
+		this.#launcher = options?.pool?.launch ?? createBrowser
 		this.#input = options?.stdio?.input ?? process.stdin
 		this.#tools = createToolManager()
 		const names = [...BROWSER_TOOL_NAMES, ...BROWSER_JOURNEY_TOOL_NAMES]
@@ -1108,7 +1108,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 					)
 					if (record === undefined) continue
 					if (probeProcess(record.pid)) {
-						const transport = createCDPTransport({ url: record.endpoint })
+						const transport = createWebSocketCDPTransport({ url: record.endpoint })
 						const client = createCDPClient({ transport })
 						try {
 							// A file read can finish after shutdown; do not start an unobserved connection.

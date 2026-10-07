@@ -1,16 +1,15 @@
-import { renderBrowserLine } from '@src/core'
-import type { BrowserViewInterface } from '@src/core'
 import type { ToolInterface } from '@orkestrel/tool'
+import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_JOURNEY_TOOL_NAMES,
 	createMemoryBrowserJourneyStore,
+	createBrowserToolset,
 	isBrowserError,
 } from '@src/core'
 import {
 	BrowserDOMView,
 	createBrowserDOMView,
-	createDocumentToolset,
 	createSocketCDPTransport,
 	SocketCDPTransport,
 } from '@src/browser'
@@ -60,41 +59,51 @@ describe('createBrowserDOMView', () => {
 	})
 })
 
-describe('createDocumentToolset', () => {
+describe('createBrowserToolset over a document', () => {
 	it('refuses globalThis.document unless own is true, and drives the iframe document', async () => {
-		const refusal = captureError(() => createDocumentToolset({ document: globalThis.document }))
+		const refusal = captureError(() =>
+			createBrowserToolset(createBrowserDOMView({ document: globalThis.document })),
+		)
 		expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_OWN')
-		const own = createDocumentToolset({ document: globalThis.document, own: true })
+		const ownView = createBrowserDOMView({ document: globalThis.document, own: true })
+		const own = createBrowserToolset(ownView)
 		expect(own.view.url).toBe(globalThis.document.URL)
 		await own.destroy()
+		ownView.destroy()
 		const probe = await createProbeElements()
-		const toolset = createDocumentToolset({ document: probe.document })
+		const toolsetView = createBrowserDOMView({ document: probe.document })
+		const toolset = createBrowserToolset(toolsetView)
 		expect(toolset.view).toBeInstanceOf(BrowserDOMView)
 		expect(toolset.view.url).toBe(probe.document.URL)
 		expect(toolset.view.trusted).toBe(false)
 		await toolset.destroy()
+		toolsetView.destroy()
 	})
 
-	it('destroys the view it created on destroy, each time over one document, and when construction throws', async () => {
+	it('keeps the caller-owned view alive after teardown and construction refusal', async () => {
 		const probe = await createProbeElements()
 		const window = requireValue(probe.document.defaultView, 'probe window')
 		const subscriptions = recordProbeSubscriptions(window, 'pagehide')
-		const views: BrowserViewInterface[] = []
-		for (let round = 0; round < 3; round += 1) {
-			const toolset = createDocumentToolset({ document: probe.document })
-			views.push(toolset.view)
-			await toolset.start()
-			await toolset.destroy()
+		const view = createBrowserDOMView({ document: probe.document })
+		try {
+			for (let round = 0; round < 3; round += 1) {
+				const toolset = createBrowserToolset(view)
+				await toolset.start()
+				const closing = toolset.destroy()
+				expect(toolset.destroy()).toBe(closing)
+				await closing
+				expect((await view.read()).url).toBe(view.url)
+			}
+			const refusal = captureError(() => createBrowserToolset(view, { limit: 0 }))
+			expect(isBrowserError(refusal) && refusal.code).toBe('TOOLSET_ARGUMENT')
+			expect((await view.read()).url).toBe(view.url)
+			expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([false])
+		} finally {
+			view.destroy()
 		}
-		for (const view of views) {
-			const refusal = await view.read().catch((error: unknown) => error)
-			expect(isBrowserError(refusal) && refusal.code).toBe('DOCUMENT_DESTROYED')
-		}
-		const refusal = captureError(() =>
-			createDocumentToolset({ document: probe.document, limit: 0 }),
-		)
-		expect(isBrowserError(refusal) && refusal.message).toMatch(/limit must be a positive integer/)
-		expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([true, true, true, true])
+		expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([true])
+		const ended = await view.read().catch((error: unknown) => error)
+		expect(isBrowserError(ended) && ended.code).toBe('DOCUMENT_DESTROYED')
 	})
 
 	it('clicks a checkbox with an untrusted event and ends the click and type receipts with the marker', async () => {
@@ -110,7 +119,8 @@ describe('createDocumentToolset', () => {
 			event.preventDefault()
 			submits.handler(event.isTrusted)
 		})
-		const toolset = createDocumentToolset({ document: probe.document })
+		const toolsetView = createBrowserDOMView({ document: probe.document })
+		const toolset = createBrowserToolset(toolsetView)
 		await toolset.start()
 		const signal = new AbortController().signal
 		const reading = requireValue(toolset.tools.tool('read'), 'reading')
@@ -140,11 +150,13 @@ describe('createDocumentToolset', () => {
 			`Typed "sam" into ${note?.reference} textbox "Note" and submitted the form. (untrusted event)\n\n${String(await reading.execute({ from: 1 }, { signal }))}`,
 		)
 		await toolset.destroy()
+		toolsetView.destroy()
 	})
 
 	it('refuses a button that claims the textbox role UNKNOWN without naming a reference refresh', async () => {
 		const probe = createProbeDocument('<button role="textbox" aria-label="Search">Search</button>')
-		const toolset = createDocumentToolset({ document: probe })
+		const toolsetView = createBrowserDOMView({ document: probe })
+		const toolset = createBrowserToolset(toolsetView)
 		await toolset.start()
 		const signal = new AbortController().signal
 		const reading = String(
@@ -169,11 +181,13 @@ describe('createDocumentToolset', () => {
 			context: { reference: search?.reference, reason: 'UNKNOWN' },
 		})
 		await toolset.destroy()
+		toolsetView.destroy()
 	})
 
 	it('lists exactly the five view tools, reports GONE for a removed element, and wakes within 100 ms of a late element', async () => {
 		const probe = await createProbeElements()
-		const toolset = createDocumentToolset({ document: probe.document })
+		const toolsetView = createBrowserDOMView({ document: probe.document })
+		const toolset = createBrowserToolset(toolsetView)
 		await toolset.start()
 		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(VIEW_TOOLS)
 		expect(toolset.native.map((tool) => tool.name)).toEqual(VIEW_TOOLS)
@@ -215,6 +229,7 @@ describe('createDocumentToolset', () => {
 		const [[at] = [Number.NaN]] = appended.calls
 		expect(resolved - at).toBeLessThan(100)
 		await toolset.destroy()
+		toolsetView.destroy()
 	})
 
 	it('adopts the source tools, re-adopts on change, keeps them out of native, and publishes native beside the registry own tools', async () => {
@@ -226,7 +241,8 @@ describe('createDocumentToolset', () => {
 			annotations: { readOnlyHint: true },
 			execute: async () => 'found',
 		})
-		const toolset = createDocumentToolset({ document: probe.document, source: bridge })
+		const toolsetView = createBrowserDOMView({ document: probe.document })
+		const toolset = createBrowserToolset(toolsetView, { source: bridge })
 		const adopted = createRecorder<[ToolInterface]>()
 		toolset.emitter.on('adopt', adopted.handler)
 		await toolset.start()
@@ -265,6 +281,7 @@ describe('createDocumentToolset', () => {
 		}
 		bridge.destroy()
 		await toolset.destroy()
+		toolsetView.destroy()
 		expect(registry.registrations()).toEqual(own)
 	})
 
@@ -273,7 +290,8 @@ describe('createDocumentToolset', () => {
 		const clicks = createRecorder<[boolean]>()
 		probe.save.addEventListener('click', (event) => clicks.handler(event.isTrusted))
 		const store = createMemoryBrowserJourneyStore()
-		const toolset = createDocumentToolset({ document: probe.document, journeys: { store } })
+		const toolsetView = createBrowserDOMView({ document: probe.document })
+		const toolset = createBrowserToolset(toolsetView, { journeys: { store } })
 		// The core toolset suite pins the journey vocabulary's members and order.
 		expect(toolset.tools.tools().map((tool) => tool.name)).toEqual(BROWSER_JOURNEY_TOOL_NAMES)
 		await toolset.start()
@@ -304,17 +322,22 @@ describe('createDocumentToolset', () => {
 			expect(clicks.calls).toEqual([[false], [false]])
 		} finally {
 			await toolset.destroy()
+			toolsetView.destroy()
 		}
 		const window = requireValue(probe.document.defaultView, 'probe window')
 		const subscriptions = recordProbeSubscriptions(window, 'pagehide')
 		const tools = createToolManager()
 		const held = createTool({ name: 'journeys', execute: () => 'held' })
 		tools.add(held)
+		const refusedView = createBrowserDOMView({ document: probe.document })
 		const refusal = captureError(() =>
-			createDocumentToolset({ document: probe.document, tools, journeys: { store } }),
+			createBrowserToolset(refusedView, { tools, journeys: { store } }),
 		)
 		expect(isBrowserError(refusal) && refusal.code).toBe('TOOLSET_RESERVED')
 		expect(tools.tools()).toEqual([held])
+		expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([false])
+		expect((await refusedView.read()).url).toBe(refusedView.url)
+		refusedView.destroy()
 		expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([true])
 	})
 })
@@ -334,7 +357,8 @@ describe('document registry conformance', () => {
 		const probe = await createProbeElements()
 		probe.document.body.innerHTML =
 			'<button>One</button><button>Two</button><button>Three</button><button>Four</button><form aria-label="Search cars" toolname="search-cars" toolautosubmit></form>'
-		const toolset = createDocumentToolset({ document: probe.document })
+		const toolsetView = createBrowserDOMView({ document: probe.document })
+		const toolset = createBrowserToolset(toolsetView)
 		try {
 			const outline = await toolset.view.elements.outline()
 			expect(outline.lines.map(renderBrowserLine).join('\n').split('\n')).toContain(
@@ -346,6 +370,7 @@ describe('document registry conformance', () => {
 			)
 		} finally {
 			await toolset.destroy()
+			toolsetView.destroy()
 		}
 	})
 })
@@ -356,7 +381,8 @@ describe.runIf(isWebMCPDocument(document))('native document registry composition
 		const registry = document.modelContext
 		const bridge = requireValue(createModelContext({ document }))
 		const lifetime = new AbortController()
-		const toolset = createDocumentToolset({ document, own: true, source: bridge })
+		const toolsetView = createBrowserDOMView({ document, own: true })
+		const toolset = createBrowserToolset(toolsetView, { source: bridge })
 		try {
 			await registry.registerTool(
 				{
@@ -418,6 +444,7 @@ describe.runIf(isWebMCPDocument(document))('native document registry composition
 		} finally {
 			bridge.destroy()
 			await toolset.destroy()
+			toolsetView.destroy()
 			lifetime.abort()
 		}
 	})

@@ -2,7 +2,6 @@ import type {
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserEpochFunction,
-	BrowserToolsetOptions,
 	BrowserViewInterface,
 	CDPTransportEventMap,
 } from '@src/core'
@@ -23,22 +22,6 @@ export interface BrowserDOMViewOptions {
 	readonly document: Document
 	readonly own?: boolean
 }
-
-/**
- * Configures a toolset that drives one browser document.
- *
- * @remarks
- * - `document` and `own` — the driven document and the admission of the realm's own document, as
- *   {@link BrowserDOMViewOptions} describes them
- * - `source` — a source of page tools, such as `@orkestrel/mcp`'s model context bridge; the
- *   toolset adopts its tools and re-adopts on its `change`. Default: no page tools
- * - `tools`, `limit`, `journeys`, `on`, and `error` — as {@link BrowserToolsetOptions}
- *   describes them
- */
-export interface BrowserDocumentToolsetOptions
-	extends
-		BrowserDOMViewOptions,
-		Pick<BrowserToolsetOptions, 'on' | 'error' | 'tools' | 'source' | 'limit' | 'journeys'> {}
 
 /**
  * Carries the accessible-name traversal context.

@@ -1,7 +1,4 @@
 import type { BrowserInterface } from '@src/server'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
-import { BROWSER_LEGACY_JOURNEY_JSON } from '../setup.js'
 import type {
 	BrowserAction,
 	BrowserContextInterface,
@@ -16,6 +13,9 @@ import type {
 	BrowserJourneyStageInterface,
 	FixtureServerInterface,
 } from '../setupServer.js'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { BROWSER_LEGACY_JOURNEY_JSON } from '../setup.js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -34,7 +34,7 @@ import {
 } from '@src/core'
 import {
 	createBrowser,
-	createCDPTransport,
+	createWebSocketCDPTransport,
 	createFileBrowserJourneyStore,
 	createFileBrowserRunStore,
 } from '@src/server'
@@ -111,7 +111,7 @@ describe('journey semantic replay', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		transport = new BrowserJourneyTransportRecorder(createCDPTransport({ url: endpoint }))
+		transport = new BrowserJourneyTransportRecorder(createWebSocketCDPTransport({ url: endpoint }))
 		const client = createCDPClient({ transport })
 		cleanup.add(() => client.close())
 		await client.connect()
@@ -386,7 +386,7 @@ describe('compiled module equality', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		const client = createCDPClient({ transport: createCDPTransport({ url: endpoint }) })
+		const client = createCDPClient({ transport: createWebSocketCDPTransport({ url: endpoint }) })
 		cleanup.add(() => client.close())
 		await client.connect()
 		context = new BrowserContext(client)
@@ -615,7 +615,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		transport = new BrowserJourneyTransportRecorder(createCDPTransport({ url: endpoint }))
+		transport = new BrowserJourneyTransportRecorder(createWebSocketCDPTransport({ url: endpoint }))
 		const client = createCDPClient({ transport })
 		cleanup.add(() => client.close())
 		await client.connect()
@@ -656,7 +656,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				// the foreign answer is sent from the action event itself.
 				if (action.outcome === 'interrupted')
 					dialogs.push(
-						toolset.perform({ id: 'foreign', name: 'dialog', arguments: { accept: false } }),
+						toolset.execute({ id: 'foreign', name: 'dialog', arguments: { accept: false } }),
 					)
 			})
 			const keep = await requireBrowserJourneyElement(page, { role: 'button', name: 'Keep' })
@@ -672,7 +672,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 					},
 				},
 			)
-			const early = toolset.perform({
+			const early = toolset.execute({
 				id: 'early',
 				name: 'click',
 				arguments: { ref: keep.reference },
@@ -765,7 +765,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			expect(await page.evaluate('document.body.dataset.slow')).toBe('done')
 			expect(await page.evaluate('document.body.dataset.kept ?? "none"')).toBe('none')
 			const keep = await requireBrowserJourneyElement(page, { role: 'button', name: 'Keep' })
-			const after = await toolset.perform({
+			const after = await toolset.execute({
 				id: 'after',
 				name: 'click',
 				arguments: { ref: keep.reference },

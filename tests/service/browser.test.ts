@@ -1,14 +1,3 @@
-import { renderBrowserLine } from '@src/core'
-/**
- * Live-browser proofs for the `Browser` façade.
- *
- * Every case here launches or attaches to a real Chromium-family browser process
- * resolved by `tests/setupService.ts`, which hard-requires readiness and throws when the
- * host has none, so a browserless host fails the project. The one skip is the live `WebMCP`
- * case's conditional context skip, taken only after it asserts the protocol reading its
- * reason cites.
- */
-
 import type { BrowserInterface } from '@src/server'
 import type {
 	BrowserPageElementInterface,
@@ -19,11 +8,12 @@ import type {
 	CDPClientInterface,
 } from '@src/core'
 import type { FixtureServerInterface } from '../setupServer.js'
+import { renderBrowserLine } from '@src/core'
 import { describe, it, expect, afterAll, afterEach, beforeAll } from 'vitest'
 import { createServer } from 'node:http'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { createBrowser, createCDPTransport } from '@src/server'
+import { createBrowser, createWebSocketCDPTransport } from '@src/server'
 import {
 	BROWSER_RESULT_LIMIT,
 	BROWSER_REGISTRY_ABSENT_CODE,
@@ -849,7 +839,7 @@ describe('Browser proofs against the fixture pages', () => {
 			if (!isString(endpoint))
 				throw new Error('Precondition failed: Chromium reported no debugger URL.')
 			const client = createCDPClient({
-				transport: createCDPTransport({ url: endpoint }),
+				transport: createWebSocketCDPTransport({ url: endpoint }),
 				timeout: 10_000,
 			})
 			teardown.add(() => client.close())

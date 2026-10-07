@@ -37,7 +37,7 @@ import type {
 	BrowserSnapshotInterface,
 	BrowserSnapshotOptions,
 	BrowserTouchInterface,
-	BrowserWaitUntil,
+	BrowserNavigationCondition,
 	BrowserWorkerCategory,
 	BrowserAccessibilityInterface,
 	CDPClientInterface,
@@ -128,15 +128,6 @@ import { Emitter } from '@orkestrel/emitter'
  * the target; and the second session for one target is detached. A page detaches its own session
  * through the session it was attached through.
  *
- * @example
- * ```ts
- * import { BrowserPage } from '@orkestrel/browser'
- *
- * const page = new BrowserPage(client, 'target-1', 'session-1')
- * await page.navigate('https://example.com')
- * const shot = await page.screenshot({ format: 'png' })
- * await page.close()
- * ```
  */
 export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	// Per client, the pages that hold a target on its current connection and the discovery reports
@@ -2193,7 +2184,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	// A signal ends the load wait with its reason, so an abort after `Page.navigate` replied is
 	// reported as the abort rather than as the navigation timeout.
 	#waitForLoadEvent(
-		condition: BrowserWaitUntil,
+		condition: BrowserNavigationCondition,
 		timeout: number,
 		signal?: AbortSignal,
 	): Promise<void> {

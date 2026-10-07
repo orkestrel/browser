@@ -1,8 +1,8 @@
 /**
  * src/server/factories.ts tests.
  *
- * `createBrowserWriter` writes real bytes to a real temp directory (no
- * fake filesystem). `createCDPTransport` and `createBrowser` are checked for
+ * `createFileBrowserWriter` writes real bytes to a real temp directory (no
+ * fake filesystem). `createWebSocketCDPTransport` and `createBrowser` are checked for
  * shape and real connectivity against the in-process CDP test server.
  */
 
@@ -16,8 +16,8 @@ import {
 	createFileBrowserJourneyStore,
 	createFileBrowserRunStore,
 	createBrowser,
-	createCDPTransport,
-	createBrowserWriter,
+	createWebSocketCDPTransport,
+	createFileBrowserWriter,
 } from '@src/server'
 import { BROWSER_RUN_FIXTURE, createBrowserJourneyFixture } from '../../setup.js'
 import { createCDPTestServer } from '../../setupServer.js'
@@ -32,10 +32,10 @@ afterEach(async () => {
 	scratch = undefined
 })
 
-describe('createBrowserWriter', () => {
+describe('createFileBrowserWriter', () => {
 	it('writes real bytes to a real file, creating parent dirs', async () => {
 		scratch = createScratch({ prefix: 'scsr-screenshot-' })
-		const writer = createBrowserWriter()
+		const writer = createFileBrowserWriter()
 		const path = join(scratch.path, 'nested', 'shot.png')
 		const bytes = new Uint8Array([137, 80, 78, 71])
 
@@ -47,7 +47,7 @@ describe('createBrowserWriter', () => {
 
 	it('overwrites an existing file at the same path', async () => {
 		scratch = createScratch({ prefix: 'scsr-screenshot-' })
-		const writer = createBrowserWriter()
+		const writer = createFileBrowserWriter()
 		const path = join(scratch.path, 'shot.png')
 
 		await writer.write(path, new Uint8Array([1, 2, 3]))
@@ -58,9 +58,9 @@ describe('createBrowserWriter', () => {
 	})
 })
 
-describe('createCDPTransport', () => {
+describe('createWebSocketCDPTransport', () => {
 	it('returns a CDPTransportInterface shape', () => {
-		const transport = createCDPTransport({ url: 'ws://localhost:1/cdp' })
+		const transport = createWebSocketCDPTransport({ url: 'ws://localhost:1/cdp' })
 		expect(transport.emitter).toBeDefined()
 		expect(typeof transport.start).toBe('function')
 		expect(typeof transport.send).toBe('function')
@@ -69,7 +69,7 @@ describe('createCDPTransport', () => {
 
 	it('connects to a real in-process CDP WebSocket endpoint', async () => {
 		server = await createCDPTestServer()
-		const transport = createCDPTransport({ url: server.endpoint })
+		const transport = createWebSocketCDPTransport({ url: server.endpoint })
 		await transport.start()
 		await expect(transport.send('{}')).resolves.toBeUndefined()
 		await transport.close()

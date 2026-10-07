@@ -218,9 +218,9 @@ describe('pinned WebMCP conformance', () => {
 			'src/server/index.ts',
 			'src/browser/index.ts',
 		])
-		expect(exports.get('src/core/index.ts')).toContain('BrowserPage')
+		expect(exports.get('src/core/index.ts')).toContain('createBrowserContext')
 		expect(exports.get('src/server/index.ts')).toContain('Browser')
-		expect(exports.get('src/browser/index.ts')).toContain('createDocumentToolset')
+		expect(exports.get('src/browser/index.ts')).toContain('createBrowserDOMView')
 		for (const names of exports.values()) {
 			expect(names.filter((name) => /WebMCP|ModelContext/.test(name))).toEqual([])
 			expect(names).not.toContain('default')

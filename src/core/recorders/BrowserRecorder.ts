@@ -29,7 +29,7 @@ import {
  * @example
  * const recorder = new BrowserRecorder(toolset)
  * await recorder.start()
- * await toolset.perform(call)
+ * await toolset.execute(call)
  * const steps = await recorder.stop()
  */
 export class BrowserRecorder implements BrowserRecorderInterface {

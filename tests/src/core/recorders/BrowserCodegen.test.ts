@@ -1,6 +1,7 @@
+import { BrowserPage } from '../../../../src/core/BrowserPage.js'
 import { describe, it, expect } from 'vitest'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
-import { BrowserCodegen, BrowserPage, compileBrowserJourney, createCDPClient } from '@src/core'
+import { BrowserCodegen, compileBrowserJourney, createCDPClient } from '@src/core'
 import {
 	captureCodegenSource,
 	createCDPTestTransport,

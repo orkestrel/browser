@@ -165,11 +165,8 @@ export type BrowserEventMap = {
  * - `viewport` — default viewport dimensions for new pages
  * - `signal` — external AbortSignal for cancelling the connection attempt
  * - `args` — additional command-line flags passed to the launched browser process
- * - `engine` — preferred browser engine to launch; narrows system browser
- *   discovery to this engine (ignored when `executable` is given); takes
- *   precedence over `browsers.engine`
  * - `browsers` — candidate-source overrides consulted when `connect()` needs
- *   to launch (same shape `findSystemBrowsers` takes); ignored when
+ *   to launch, with `browsers.engine` selecting the engine; ignored when
  *   `executable` is given, which bypasses discovery entirely
  */
 export interface BrowserOptions {
@@ -183,7 +180,6 @@ export interface BrowserOptions {
 	readonly viewport?: BrowserViewport
 	readonly signal?: AbortSignal
 	readonly args?: readonly string[]
-	readonly engine?: BrowserEngine
 	readonly browsers?: SystemBrowserOptions
 }
 
@@ -406,15 +402,15 @@ export interface BrowserServerWatch {
  * @remarks
  * - `root` — the directory the journeys, the runs, and the browser profiles live under, resolved
  *   against the working directory at construction. Default: `tmp/browsers`
- * - `headless` — if `true`, launches Chromium without a window; if `false`, with one. Default:
+ * - `browser.headless` — if `true`, launches Chromium without a window; if `false`, with one. Default:
  *   `true`
- * - `executable` — the path of the Chromium executable the server launches. Default: the browser
+ * - `browser.executable` — the path of the Chromium executable the server launches. Default: the browser
  *   `findSystemBrowser` finds
- * - `viewport` — the default viewport for every page in each browser's isolated context;
+ * - `browser.viewport` — the default viewport for every page in each browser's isolated context;
  *   omission keeps the browser's launch default
- * - `readonly` — if `true`, refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs;
+ * - `journeys.readonly` — if `true`, refuses `record`, `save`, `edit`, and `forget`, and `replay` still writes runs;
  *   if `false` or omitted, every tool runs
- * - `launch` — creates each browser the pool warms. Default: `createBrowser`
+ * - `pool.launch` — creates each browser the pool warms. Default: `createBrowser`
  * - `stdio` — the streams the server reads requests from and writes answers to; the end of
  *   `input` destroys the server. Default: `process.stdin` and `process.stdout`
  * - `pool.size` — the integer number of browsers kept warm, from 1 through
@@ -422,17 +418,22 @@ export interface BrowserServerWatch {
  * - `pool.contexts` — the integer context capacity per browser, shared holder included, from 1
  *   through `BROWSER_SERVER_CONTEXTS_LIMIT`. Default: `BROWSER_SERVER_CONTEXTS`.
  * - `log` — receives diagnostic lines. Default: `process.stderr`
- * @throws Thrown when `pool.size` or `pool.contexts` is outside its range or is not an integer, with `BROWSER_SERVER_OPTIONS`
+ * @throws Thrown when `pool.size` or `pool.contexts` is outside its range or is not an integer, with `SERVER_OPTIONS`
  */
 export interface BrowserMCPServerOptions {
 	readonly root?: string
-	readonly headless?: boolean
-	readonly executable?: string
-	readonly viewport?: BrowserViewport
-	readonly readonly?: boolean
-	readonly launch?: BrowserLaunchFunction
+	readonly browser?: {
+		readonly headless?: boolean
+		readonly executable?: string
+		readonly viewport?: BrowserViewport
+	}
+	readonly journeys?: { readonly readonly?: boolean }
 	readonly stdio?: StdioServerOptions
-	readonly pool?: { readonly size?: number; readonly contexts?: number }
+	readonly pool?: {
+		readonly size?: number
+		readonly contexts?: number
+		readonly launch?: BrowserLaunchFunction
+	}
 	readonly log?: NodeJS.WritableStream
 }
 

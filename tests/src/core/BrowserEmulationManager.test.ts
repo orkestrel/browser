@@ -1,5 +1,6 @@
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserEmulationManager, BrowserPage, isBrowserError } from '@src/core'
+import { BrowserEmulationManager, isBrowserError } from '@src/core'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserEmulationManager', () => {

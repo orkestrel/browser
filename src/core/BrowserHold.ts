@@ -7,7 +7,7 @@ import type { BrowserHoldInterface } from './types.js'
  * ```ts
  * const hold = await toolset.hold('add-kettle')
  * try {
- * 	await toolset.perform(call, { caller: hold.token, signal })
+ * 	await toolset.execute(call, { caller: hold.token, signal })
  * } finally {
  * 	hold.destroy()
  * }

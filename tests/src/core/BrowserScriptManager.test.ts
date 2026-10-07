@@ -1,5 +1,6 @@
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { waitForCondition } from '@orkestrel/test'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 

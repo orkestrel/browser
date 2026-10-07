@@ -53,6 +53,7 @@ import {
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserHold } from './BrowserHold.js'
 import { BrowserJourneyToolset } from './BrowserJourneyToolset.js'
+import { isBrowserPage } from './validators.js'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_TOOL_NAMES,
@@ -105,7 +106,7 @@ import {
  *
  * @remarks
  * Every toolset advertises `read`, `click`, `type`, and `wait`, which need only the
- * `BrowserViewInterface` it is constructed over. With `options.page` it also advertises `press`
+ * `BrowserViewInterface` it is constructed over. When `isBrowserPage(view)` holds it also advertises `press`
  * and `navigate`, stages the `dialog` tool while a dialog is open on the current page, follows a
  * popup the current page opens and returns to the opener when the popup closes, and adopts
  * `page.registry` by default; with `options.context` as well it advertises `switch` and lists tabs in each window.
@@ -181,13 +182,13 @@ import {
  * earlier one. A page tool whose parameters require nothing advertises a required `purpose`, which
  * is stripped before the tool runs. Every adopted tool is advertised `untrusted`. `destroy()`
  * removes only the tools the manager still holds under the instances the toolset added, never
- * closes a page, and ends only what `options.release` hands over, calling it one time last.
+ * closes or destroys its caller-owned view.
  *
  * @example
  * ```ts
  * import { BrowserToolset } from '@orkestrel/browser'
  *
- * const toolset = new BrowserToolset(page, { page })
+ * const toolset = new BrowserToolset(page)
  * await toolset.start()
  * const result = await toolset.tools.execute({ id: '1', name: 'read', arguments: { from: 1, search: 'cart' } })
  * await toolset.destroy()
@@ -202,7 +203,6 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #context: BrowserContextInterface | undefined
 	readonly #limit: number
 	readonly #schemes: readonly string[]
-	readonly #owned: (() => Promise<void> | void) | undefined
 	readonly #emitter: Emitter<BrowserToolsetEventMap>
 	readonly #lifetime = new AbortController()
 	readonly #native: readonly ToolInterface[]
@@ -250,6 +250,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#destroying: Promise<void> | undefined
 
 	constructor(view: BrowserViewInterface, options?: BrowserToolsetOptions) {
+		const page = isBrowserPage(view) ? view : undefined
 		const limit = options?.limit ?? BROWSER_TOOL_LIMIT
 		if (!isInteger(limit) || limit < 1) {
 			throw new BrowserError(
@@ -260,20 +261,19 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				},
 			)
 		}
-		if (options?.context !== undefined && options.page === undefined) {
+		if (options?.context !== undefined && page === undefined) {
 			throw new BrowserError('TOOLSET_CONTEXT', 'Browser toolset context requires a page')
 		}
 		this.#view = view
 		this.#notices = options?.notes
-		this.#origin = options?.page
-		this.#page = options?.page
+		this.#origin = page
+		this.#page = page
 		this.#tools = options?.tools ?? createToolManager()
 		this.#manager = new Proxy(this.#tools, { get: this.#readManager.bind(this) })
 		this.#source = options?.source
 		this.#context = options?.context
 		this.#limit = Math.min(limit, BROWSER_TOOL_LIMIT)
 		this.#schemes = options?.schemes ?? BROWSER_SCHEMES
-		this.#owned = options?.release
 		this.#emitter = new Emitter({
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
@@ -283,7 +283,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const type = this.#create('type', this.#type.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		const wait = this.#create('wait', this.#wait.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		this.#native = Object.freeze(
-			options?.page === undefined
+			page === undefined
 				? [read, click, type, wait]
 				: [
 						read,
@@ -295,7 +295,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					],
 		)
 		this.#dialogTool =
-			options?.page === undefined
+			page === undefined
 				? undefined
 				: this.#create('dialog', this.#dialog.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		this.#contextTools = Object.freeze(
@@ -306,10 +306,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		this.#journeys =
 			options?.journeys === undefined
 				? undefined
-				: new BrowserJourneyToolset(this, {
-						...options.journeys,
-						limit: options.journeys.limit ?? limit,
-					})
+				: new BrowserJourneyToolset(
+						this,
+						{
+							...options.journeys,
+							limit: options.journeys.limit ?? limit,
+						},
+						this.#consumeNotes.bind(this),
+					)
 	}
 
 	get emitter(): EmitterInterface<BrowserToolsetEventMap> {
@@ -337,8 +341,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		context?: ToolContext,
 	): Promise<ToolResult | readonly ToolResult[]> {
 		if (isArray(calls))
-			return Promise.all(calls.map(async (call) => (await this.perform(call, context)).result))
-		return (await this.perform(calls, context)).result
+			return Promise.all(calls.map(async (call) => (await this.execute(call, context)).result))
+		return (await this.execute(calls, context)).result
 	}
 
 	get native(): readonly ToolInterface[] {
@@ -357,11 +361,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return redactBrowserText(text, [...this.#secrets])
 	}
 
-	notes(): string {
+	#consumeNotes(): string {
 		return this.redact(this.#drain())
 	}
 
-	async perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
+	async execute(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
 		const tool = this.#tools.tool(call.name)
 		const entry =
 			(context === undefined ? undefined : this.#invocations.get(context)) ??
@@ -487,7 +491,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		// Without a context the manager refuses `switch` itself, as it refuses any unadvertised step.
 		if (step.action === 'switch' && step.tab !== undefined && this.#context !== undefined)
 			args = { ...args, tab: await this.#resolveTab(id, step.tab, options) }
-		const performed = await this.perform({ id, name: step.action, arguments: args }, context)
+		const performed = await this.execute({ id, name: step.action, arguments: args }, context)
 		const action = performed.action
 		if (action === undefined)
 			throw new BrowserError(
@@ -558,7 +562,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		if (name !== 'type' || args['secret'] !== true) context.signal.throwIfAborted()
 		const invocation = { ...context }
 		this.#invocations.set(invocation, { handler, clause })
-		const performed = await this.perform({ id: '', name, arguments: args }, invocation)
+		const performed = await this.execute({ id: '', name, arguments: args }, invocation)
 		if (!performed.result.success)
 			throw performed.fault ?? new BrowserError('PROTOCOL', performed.result.error)
 		return performed.result.value
@@ -2146,7 +2150,6 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		this.#dialogs.clear()
 		this.#adopted.clear()
 		this.#emitter.destroy()
-		await this.#owned?.()
 	}
 
 	#handleChange(): void {

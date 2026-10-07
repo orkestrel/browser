@@ -1,24 +1,23 @@
+import type { BrowserDOMElement } from '../../../src/browser/elements/BrowserDOMElement.js'
+import type { BrowserDOMElementManager } from '../../../src/browser/elements/BrowserDOMElementManager.js'
 import type {
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserToolSourceInterface,
 	BrowserToolsetInterface,
+	createBrowserToolset,
 	BrowserViewInterface,
 } from '@src/core'
 import type {
 	BrowserDOMViewOptions,
-	BrowserDocumentToolsetOptions,
-	BrowserDOMElement,
 	BrowserDOMElementInput,
 	BrowserDOMElementInterface,
-	BrowserDOMElementManager,
 	BrowserDOMElementManagerInput,
 	BrowserDOMView,
 	BrowserDOMViewInterface,
 	BrowserDOMWaitInterface,
 	BrowserMutationWait,
 	BrowserNameContext,
-	createDocumentToolset,
 	SocketCDPTransportOptions,
 } from '@src/browser'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -52,13 +51,12 @@ type BrowserFaceContracts = [
 	Assignable<BrowserDOMElement, BrowserDOMElementInterface>,
 	Assignable<BrowserDOMElementManager, BrowserElementManagerInterface>,
 	Assignable<BrowserDOMElementManager, BrowserElementManagerInterface<BrowserDOMElementInterface>>,
-	Assignable<ReturnType<typeof createDocumentToolset>, BrowserToolsetInterface>,
+	Assignable<ReturnType<typeof createBrowserToolset>, BrowserToolsetInterface>,
 ]
 
 /** Holds one `true` per public browser face type the `@src/browser` barrel re-exports. */
 type BrowserFaceExports = [
 	Assignable<BrowserDOMViewOptions, { readonly document: Document }>,
-	Assignable<BrowserDocumentToolsetOptions, BrowserDOMViewOptions>,
 	Assignable<BrowserNameContext, { readonly hidden?: boolean }>,
 	Assignable<BrowserDOMElementInput, { readonly reference: string }>,
 	Assignable<BrowserDOMElementManagerInput, { readonly signal: AbortSignal }>,
@@ -87,8 +85,8 @@ describe('browser face types', () => {
 	})
 
 	it('re-exports the public browser face types from the barrel', () => {
-		const exported: BrowserFaceExports = [true, true, true, true, true, true, true, true]
-		expect(exported).toEqual([true, true, true, true, true, true, true, true])
+		const exported: BrowserFaceExports = [true, true, true, true, true, true, true]
+		expect(exported).toEqual([true, true, true, true, true, true, true])
 	})
 
 	it('refuses a view shape without trusted', () => {

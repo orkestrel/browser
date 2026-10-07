@@ -1,4 +1,5 @@
 import type { ScratchInterface } from '@orkestrel/test/server'
+import { BrowserJourneyToolset } from '../../../../src/core/BrowserJourneyToolset.js'
 import { afterEach, describe, it, expect } from 'vitest'
 import { watch } from 'node:fs'
 import { mkdir, rename, readFile, readdir } from 'node:fs/promises'
@@ -16,7 +17,7 @@ import {
 	supportsFileLinks,
 	supportsDirectoryLinks,
 } from '@orkestrel/test/server'
-import { BrowserJourneyToolset, BrowserToolset } from '@src/core'
+import { BrowserToolset } from '@src/core'
 import {
 	createFileBrowserJourneyStore,
 	FileBrowserJourneyStore,

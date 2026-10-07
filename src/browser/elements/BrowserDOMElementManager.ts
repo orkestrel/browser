@@ -73,12 +73,6 @@ import {
  * at the next observed mutation or `load`, so a match inserted there with no other observed
  * change is not seen before the deadline.
  *
- * @example
- * ```ts
- * const view = createBrowserDOMView({ document: frame.contentDocument })
- * const outline = await view.elements.outline()
- * const [save] = await view.elements.find({ role: 'button', name: 'save' })
- * ```
  */
 export class BrowserDOMElementManager implements BrowserElementManagerInterface<BrowserDOMElementInterface> {
 	readonly #input: BrowserDOMElementManagerInput

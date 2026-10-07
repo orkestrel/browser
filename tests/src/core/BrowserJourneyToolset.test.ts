@@ -1,5 +1,6 @@
 import type { BrowserJourneyRevision, BrowserJourneyStoreInterface } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
+import { BrowserJourneyToolset } from '../../../src/core/BrowserJourneyToolset.js'
 import { describe, expect, it } from 'vitest'
 import { createContract, schemaToShape } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -16,7 +17,6 @@ import {
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
 	BrowserError,
-	BrowserJourneyToolset,
 	BrowserReplay,
 	BrowserToolset,
 	MemoryBrowserRunStore,
@@ -518,7 +518,7 @@ describe('BrowserJourneyToolset', () => {
 				name: 'record',
 				arguments: { journey: 'check-form' },
 			})
-			const waited = await toolset.perform({
+			const waited = await toolset.execute({
 				id: 'wait',
 				name: 'wait',
 				arguments: { text: 'Never appears', timeout: 1 },
@@ -679,7 +679,7 @@ describe('BrowserJourneyToolset', () => {
 			])
 			expect(journeys.recording, 'h2a: the first recorder remains owned').toBe('first-recording')
 			expect(toolset.emitter.count('action')).toBe(listeners + 1)
-			await toolset.perform({ id: 'step', name: 'wait', arguments: { text: 'Ready' } })
+			await toolset.execute({ id: 'step', name: 'wait', arguments: { text: 'Ready' } })
 			expect(
 				await toolset.tools.execute({
 					id: 'save',
@@ -850,12 +850,12 @@ describe('BrowserJourneyToolset', () => {
 				name: 'record',
 				arguments: { journey: 'check-form' },
 			})
-			await toolset.perform({ id: 'before', name: 'wait', arguments: { text: 'Ready' } })
+			await toolset.execute({ id: 'before', name: 'wait', arguments: { text: 'Ready' } })
 			const save = { id: 'save', name: 'save', arguments: { description: 'Check the form' } }
 			expect(await toolset.tools.execute(save)).toMatchObject({ success: false })
 			expect(journeys.recording).toBe('check-form')
 			expect(
-				(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
+				(await toolset.execute({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
 					.success,
 			).toBe(true)
 			expect(await toolset.tools.execute(save)).toMatchObject({ success: true })

@@ -1,6 +1,6 @@
-import { describe, it, expect } from 'vitest'
 import type { BrowserPageInterface, BrowserViewInterface } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
+import { describe, it, expect } from 'vitest'
 import { BrowserContext, createBrowserToolset, isBrowserError } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import {
@@ -48,15 +48,7 @@ describe('BrowserContext', () => {
 						}),
 				})
 				replyOk(transport, 'Target.createTarget', { targetId: 'main' })
-				const context = new BrowserContext(
-					client,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					undefined,
-					options,
-				)
+				const context = new BrowserContext(client, { ...options })
 				try {
 					if (attached) await context.create()
 					else await context.sync([createTarget({ id: 'main' })])
@@ -118,7 +110,7 @@ describe('BrowserContext', () => {
 			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 
-			const context = new BrowserContext(client, 'ctx-1')
+			const context = new BrowserContext(client, { id: 'ctx-1' })
 			await context.create()
 
 			const sent = transport.sent.find((m) => m.method === 'Target.createTarget')
@@ -131,7 +123,7 @@ describe('BrowserContext', () => {
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 			replyOk(transport, 'Emulation.setDeviceMetricsOverride')
 
-			const context = new BrowserContext(client, undefined, { width: 800, height: 600 })
+			const context = new BrowserContext(client, { viewport: { width: 800, height: 600 } })
 			await context.create()
 
 			const sent = transport.sent.find((m) => m.method === 'Emulation.setDeviceMetricsOverride')
@@ -144,7 +136,7 @@ describe('BrowserContext', () => {
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 			replyOk(transport, 'Emulation.setDeviceMetricsOverride')
 
-			const context = new BrowserContext(client, undefined, { width: 800, height: 600 })
+			const context = new BrowserContext(client, { viewport: { width: 800, height: 600 } })
 			await context.create({ viewport: { width: 1024, height: 768 } })
 
 			const sent = transport.sent.find((m) => m.method === 'Emulation.setDeviceMetricsOverride')
@@ -160,8 +152,10 @@ describe('BrowserContext', () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptCDPAttach(transport)
 			replyOk(transport, 'Emulation.setTimezoneOverride')
-			const context = new BrowserContext(client, undefined, undefined, undefined, {
-				timezone: 'America/New_York',
+			const context = new BrowserContext(client, {
+				emulation: {
+					timezone: 'America/New_York',
+				},
 			})
 			await context.sync([createTarget({ id: 'parent' })])
 			const pages = createRecorder<[page: BrowserPageInterface]>()
@@ -333,7 +327,7 @@ describe('BrowserContext', () => {
 			scriptCDPAttach(transport)
 			replyOk(transport, 'Emulation.setDeviceMetricsOverride')
 
-			const context = new BrowserContext(client, undefined, { width: 400, height: 300 })
+			const context = new BrowserContext(client, { viewport: { width: 400, height: 300 } })
 			await context.sync([createTarget({ id: 't1' })])
 
 			const sent = transport.sent.find((m) => m.method === 'Emulation.setDeviceMetricsOverride')
@@ -424,8 +418,8 @@ describe('BrowserContext', () => {
 				created += 1
 				transport.reply(message.id, { targetId: created === 1 ? 'opener' : `tab-${created}` })
 			})
-			const context = new BrowserContext(client, 'ctx-1')
-			const sibling = new BrowserContext(client, 'ctx-2')
+			const context = new BrowserContext(client, { id: 'ctx-1' })
+			const sibling = new BrowserContext(client, { id: 'ctx-2' })
 			try {
 				const opener = await context.create()
 				await sibling.create()
@@ -514,7 +508,7 @@ describe('BrowserContext', () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' })
 			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
-			const context = new BrowserContext(client, 'ctx-1')
+			const context = new BrowserContext(client, { id: 'ctx-1' })
 			try {
 				const opener = await context.create()
 				const popups = createRecorder<[page: BrowserPageInterface]>()
@@ -834,8 +828,10 @@ describe('BrowserContext', () => {
 			scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' })
 			replyOk(transport, 'Target.createTarget', { targetId: 'opener' })
 			replyOk(transport, 'Target.detachFromTarget')
-			const context = new BrowserContext(client, undefined, undefined, undefined, {
-				timezone: 'America/New_York',
+			const context = new BrowserContext(client, {
+				emulation: {
+					timezone: 'America/New_York',
+				},
 			})
 			try {
 				const opener = await context.create()
@@ -1150,8 +1146,10 @@ describe('BrowserContext', () => {
 			})
 			scriptCDPAttach(transport, 'session-1', { b: 'session-b', c: 'session-c' })
 			replyOk(transport, 'Target.createTarget', { targetId: 'a' })
-			const context = new BrowserContext(client, undefined, undefined, undefined, {
-				timezone: 'America/New_York',
+			const context = new BrowserContext(client, {
+				emulation: {
+					timezone: 'America/New_York',
+				},
 			})
 			try {
 				const opener = await context.create()
@@ -1206,8 +1204,10 @@ describe('BrowserContext', () => {
 			})
 			replyOk(transport, 'Target.createTarget', { targetId: 'a' })
 			replyOk(transport, 'Target.detachFromTarget')
-			const context = new BrowserContext(client, undefined, undefined, undefined, {
-				timezone: 'America/New_York',
+			const context = new BrowserContext(client, {
+				emulation: {
+					timezone: 'America/New_York',
+				},
 			})
 			try {
 				const opener = await context.create()
@@ -1338,8 +1338,10 @@ describe('BrowserContext', () => {
 			})
 			replyOk(transport, 'Target.createTarget', { targetId: 'a' })
 			replyOk(transport, 'Target.detachFromTarget')
-			const context = new BrowserContext(client, undefined, undefined, undefined, {
-				timezone: 'America/New_York',
+			const context = new BrowserContext(client, {
+				emulation: {
+					timezone: 'America/New_York',
+				},
 			})
 			const synced: Array<Promise<void>> = []
 			try {
@@ -1613,7 +1615,7 @@ describe('BrowserContext', () => {
 			replyOk(transport, 'Target.createTarget', { targetId: 't' })
 			replyOk(transport, 'Target.detachFromTarget')
 			replyOk(transport, 'Target.closeTarget')
-			const context = new BrowserContext(client, undefined, { width: 800, height: 600 })
+			const context = new BrowserContext(client, { viewport: { width: 800, height: 600 } })
 			const pages = createRecorder<[page: BrowserPageInterface]>()
 			context.emitter.on('page', pages.handler)
 			try {
@@ -1646,7 +1648,7 @@ describe('BrowserContext', () => {
 			transport.onSend('Target.closeTarget', (message) =>
 				transport.fail(message.id, 'page close refused'),
 			)
-			const context = new BrowserContext(client, 'context-disposal')
+			const context = new BrowserContext(client, { id: 'context-disposal' })
 			try {
 				await context.create()
 				await expect(context.close()).resolves.toBeUndefined()
@@ -1667,8 +1669,8 @@ describe('BrowserContext', () => {
 			transport.onSend('Target.disposeBrowserContext', (message) =>
 				transport.fail(message.id, 'disposal refused'),
 			)
-			const closing = new BrowserContext(client, 'refused')
-			const wrapper = new BrowserContext(client, 'wrapper')
+			const closing = new BrowserContext(client, { id: 'refused' })
+			const wrapper = new BrowserContext(client, { id: 'wrapper' })
 			try {
 				await expect(closing.close()).rejects.toThrow('disposal refused')
 				expect(closing.disposal?.confirmed).toBe(false)
@@ -1700,7 +1702,7 @@ describe('BrowserContext', () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Target.disposeBrowserContext')
 
-			const context = new BrowserContext(client, 'ctx-1')
+			const context = new BrowserContext(client, { id: 'ctx-1' })
 			await expect(context.close()).resolves.toBeUndefined()
 
 			expect(transport.sent.some((m) => m.method === 'Target.disposeBrowserContext')).toBe(true)
@@ -1719,7 +1721,7 @@ describe('BrowserContext', () => {
 			scriptCDPAttach(transport)
 			replyOk(transport, 'Target.createTarget', { targetId: 'target-1' })
 			replyOk(transport, 'Target.detachFromTarget')
-			const context = new BrowserContext(client, 'ctx-1')
+			const context = new BrowserContext(client, { id: 'ctx-1' })
 			await context.create()
 
 			await context.destroy()
@@ -1803,15 +1805,9 @@ describe('BrowserContext', () => {
 			const { client } = await createConnectedCDPClient()
 			const closes = createRecorder<[]>()
 			const failures = createRecorder<[error: unknown, event: string]>()
-			const context = new BrowserContext(
-				client,
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-				undefined,
-				{ on: { close: closes.handler }, error: failures.handler },
-			)
+			const context = new BrowserContext(client, {
+				...{ on: { close: closes.handler }, error: failures.handler },
+			})
 			context.emitter.on('close', throwListenerError)
 
 			await context.destroy()

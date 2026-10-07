@@ -1,28 +1,10 @@
+import type { BrowserOutlineNode } from '@src/core'
 import { renderBrowserLine } from '@src/core'
-/**
- * Proof for `tests/setupService.ts`.
- *
- * The subject is the readiness contract the `service` project codes against: the shared
- * container-safe launch flags, the engine narrowing read from the environment, the
- * hard-required resolution that throws rather than skipping, the cited reason a live proof
- * may skip with, and the readers of a protocol domain list, an outline's references and rows,
- * and a tool result's text.
- *
- * Every case runs on any host, browserless included, because this file is collected by
- * the `setup` project that `npm test` runs. The refusal path is driven by handing
- * discovery candidate sources that resolve nothing, so the assertion never depends on
- * what happens to be installed. The last case reads the `tests/service` sources directly
- * and pins that each proof there resolves its browser through `requireSystemBrowser` and
- * that its only skip is conditional on a registry reading and names a reason exported here,
- * which is what keeps a later service proof from reintroducing a silent skip.
- */
-
 import { describe, expect, it } from 'vitest'
 import { spawn } from 'node:child_process'
 import { readdirSync, readFileSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import type { BrowserOutlineNode } from '@src/core'
 import { BROWSER_TOOL_DEADLINE_NOTE, renderBrowserOutline } from '@src/core'
 import { isString } from '@orkestrel/contract'
 import { createTool, createToolManager } from '@orkestrel/tool'
@@ -94,9 +76,11 @@ describe('eager browse service fixtures', () => {
 			const pid = requireValue(child.pid, 'owned record process')
 			const fixture = createBrowseFixture(
 				{
-					launch: (options) => {
-						mkdirSync(join(requireValue(options.profile, 'profile'), blocked))
-						return fixture.launcher.launch(options)
+					pool: {
+						launch: (options) => {
+							mkdirSync(join(requireValue(options.profile, 'profile'), blocked))
+							return fixture.launcher.launch(options)
+						},
 					},
 				},
 				{ pid },

@@ -1,27 +1,10 @@
+import type { BrowserInterface } from '@src/server'
+import type { BrowserPageInterface, BrowserToolsetInterface } from '@src/core'
+import type { FixtureServerInterface } from '../setupServer.js'
 import { extractBrowserPage } from '../setup.js'
 import { scanBrowserLines } from '@src/core'
 import { writeFileSync } from 'node:fs'
 import { renderBrowserLine } from '@src/core'
-/**
- * Live-browser proofs for the DOM placement served from the built `dist/src/browser` bundle.
- *
- * The fixture server's `/document` page imports the bundle through an import map, installs the
- * WebMCP registry double, and publishes `createDocumentToolset({ document, own: true, source })`
- * over its own document on `window.documentToolset`. Each case reads that toolset's results back
- * through `page.evaluate` and compares them with the CDP outline and a CDP toolset over the same
- * page. The bundle is a hard precondition: `requireDocumentBundle` throws naming `npm run build`
- * before a browser launches. The browser is the one `tests/setupService.ts` resolves, launched
- * once for the file; every page a case opens is closed after it.
- *
- * One case is an expected failure: the DOM outline skips a `select` element's subtree, so its
- * `option` rows, which the CDP outline lists under the combobox, are missing from the DOM set.
- * Its block establishes the page, the select, both outlines, and the CDP membership before the one
- * inverted comparison, so a load or reader failure fails the block instead.
- */
-
-import type { BrowserInterface } from '@src/server'
-import type { BrowserPageInterface, BrowserToolsetInterface } from '@src/core'
-import type { FixtureServerInterface } from '../setupServer.js'
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
 import { createBrowser } from '@src/server'
 import { createBrowserToolset } from '@src/core'
@@ -62,7 +45,7 @@ const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 const DOCUMENT_READ =
 	"documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: 'the gift options' } })"
 
-describe('createDocumentToolset served from dist/src/browser against CDP on the same page', () => {
+describe('createBrowserToolset composed with a DOM view from dist against CDP on the same page', () => {
 	const teardown = createTeardown()
 	let fixtures: FixtureServerInterface
 	let browser: BrowserInterface

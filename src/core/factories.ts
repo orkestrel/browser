@@ -6,7 +6,9 @@ import type {
 	BrowserReplayInterface,
 	BrowserReplayOptions,
 	BrowserRunStoreInterface,
-	BrowserPageInterface,
+	BrowserViewInterface,
+	BrowserContextInterface,
+	BrowserContextOptions,
 	BrowserReadingInput,
 	BrowserReadingInterface,
 	BrowserSnapshotInput,
@@ -23,6 +25,7 @@ import { MemoryBrowserRunStore } from './stores/MemoryBrowserRunStore.js'
 import { BrowserReading } from './BrowserReading.js'
 import { BrowserSnapshot } from './BrowserSnapshot.js'
 import { BrowserToolset } from './BrowserToolset.js'
+import { BrowserContext } from './BrowserContext.js'
 import { CDPClient } from './CDPClient.js'
 /**
  * Creates a `CDPClientInterface` bound to the given `CDPTransportInterface`.
@@ -40,6 +43,30 @@ import { CDPClient } from './CDPClient.js'
  */
 export function createCDPClient(options: CDPClientOptions): CDPClientInterface {
 	return new CDPClient(options)
+}
+
+/**
+ * Creates a wrapper over an existing browser context on a CDP client.
+ *
+ * @remarks
+ * `id` selects an existing remote context; omission selects the default context.
+ * The caller owns the client. Use `browser.isolate` to create a remote context with
+ * `proxy` or `origins`; this factory refuses those options.
+ *
+ * @param client - The client whose connection carries the context's pages
+ * @param options - Context identity, page defaults, writer, and event hooks
+ * @returns The context wrapper
+ * @throws Thrown with `ARGUMENT` when `proxy` or `origins` is supplied.
+ * @example
+ * const context = createBrowserContext(client, { viewport: { width: 1280, height: 720 } })
+ * const page = await context.create({ url: 'https://example.com/' })
+ * await context.destroy()
+ */
+export function createBrowserContext(
+	client: CDPClientInterface,
+	options?: BrowserContextOptions,
+): BrowserContextInterface {
+	return new BrowserContext(client, options)
 }
 
 /**
@@ -87,19 +114,17 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
 }
 
 /**
- * Creates a `BrowserToolsetInterface` that publishes the browser vocabulary over one page into a
- * `@orkestrel/tool` manager.
+ * Creates a toolset over a caller-owned view, enabling page tools when the view is a page.
  *
  * @remarks
- * The page is both the toolset's view and its `page` option, so the toolset advertises the seven
- * CDP tools. It registers its tools during `start()`: the generic tools first, then the page
- * tools as their adoption resolves. Its options are described on {@link BrowserToolsetOptions};
- * hand `toolset.tools` to an agent, and publish `toolset.native` to a built-in browser agent.
+ * A structural {@link isBrowserPage} guard selects page features, including navigation,
+ * trusted keyboard input, dialogs, and popup following. Other views publish the document
+ * vocabulary. Tools register during `start()`; `destroy()` leaves the view with its caller.
+ * Hand `toolset.tools` to an agent and publish `toolset.native` to a built-in browser agent.
  *
- * @param page - The page the tools act on first
- * @param options - The manager, page-tool source, context, bound, and schemes; `page` is replaced
- * by the page argument
- * @returns A {@link BrowserToolsetInterface}
+ * @param view - The view the tools act on first
+ * @param options - Tool manager, source, context, bounds, schemes, and journey stores
+ * @returns The toolset
  *
  * @example
  * ```ts
@@ -153,10 +178,10 @@ export function createBrowserReading(input: BrowserReadingInput): BrowserReading
  * ```
  */
 export function createBrowserToolset(
-	page: BrowserPageInterface,
+	view: BrowserViewInterface,
 	options?: BrowserToolsetOptions,
 ): BrowserToolsetInterface {
-	return new BrowserToolset(page, { ...options, page })
+	return new BrowserToolset(view, options)
 }
 
 /**

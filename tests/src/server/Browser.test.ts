@@ -14,7 +14,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { existsSync } from 'node:fs'
 import {
 	createBrowser,
-	createCDPTransport,
+	createWebSocketCDPTransport,
 	BROWSER_PROCESS_EXIT_CAUSE,
 	BROWSER_TRANSPORT_LOSS_CAUSE,
 	BROWSER_TRANSPORT_LOSS_DEFER_MS,
@@ -672,6 +672,12 @@ describe('Browser isolate()', () => {
 		await expect(browser.isolate({ origins: ['ftp://example.com'] })).rejects.toThrow(
 			'absolute HTTP(S) origin',
 		)
+		await expect(browser.isolate({ id: 'existing-context' })).rejects.toThrow(
+			expect.objectContaining({ code: 'ARGUMENT' }),
+		)
+		await expect(browser.isolate({ viewport: { width: 0, height: 480 } })).rejects.toThrow(
+			expect.objectContaining({ code: 'ARGUMENT' }),
+		)
 
 		expect(
 			server.received.some((message) => message.method === 'Target.createBrowserContext'),
@@ -768,11 +774,10 @@ describe('Browser launch path', () => {
 	it('connect() with a requested engine and no matching installed browser rejects with the engine in context', async () => {
 		const browser = createBrowser({
 			cdp: { port: UNUSED_PORT },
-			engine: 'edge',
 			// Forces empty discovery deterministically — on a machine with a real
 			// Edge install, unconstrained discovery would find it and launch it
 			// instead of rejecting.
-			browsers: { env: {}, paths: [], names: [], stores: [] },
+			browsers: { engine: 'edge', env: {}, paths: [], names: [], stores: [] },
 			timeout: 2000,
 		})
 
@@ -1044,7 +1049,7 @@ describe('Browser launch readiness from standard error', () => {
 		})
 
 		await browser.connect()
-		const transport = createCDPTransport({ url: await fake.endpoint(), timeout: 5000 })
+		const transport = createWebSocketCDPTransport({ url: await fake.endpoint(), timeout: 5000 })
 		const client = new CDPClient({ transport, timeout: 5000 })
 		await client.connect()
 		try {
@@ -1587,22 +1592,25 @@ describe('Browser destroy()/close() matrix', () => {
 // === constructor engine seeding (design-5)
 
 describe('Browser constructor engine seeding', () => {
-	it('seeds engine from options.engine when provided', () => {
-		const browser = createBrowser({ engine: 'edge' })
+	it('seeds engine from browsers.engine when provided', () => {
+		const browser = createBrowser({ browsers: { engine: 'edge' } })
 		expect(browser.engine).toBe('edge')
 	})
 
-	it('options.engine takes precedence over the executable-derived engine', () => {
-		const browser = createBrowser({ engine: 'edge', executable: '/usr/bin/google-chrome' })
-		expect(browser.engine).toBe('edge')
+	it('an explicit executable takes precedence over browsers.engine', () => {
+		const browser = createBrowser({
+			browsers: { engine: 'edge' },
+			executable: '/usr/bin/google-chrome',
+		})
+		expect(browser.engine).toBe('chrome')
 	})
 
-	it('falls back to parsing the executable when options.engine is absent', () => {
+	it('derives the engine from the explicit executable', () => {
 		const browser = createBrowser({ executable: '/usr/bin/google-chrome' })
 		expect(browser.engine).toBe('chrome')
 	})
 
-	it('defaults to chromium when neither options.engine nor executable is given', () => {
+	it('defaults to chromium when neither browsers.engine nor executable is given', () => {
 		const browser = createBrowser()
 		expect(browser.engine).toBe('chromium')
 	})

@@ -1,14 +1,10 @@
 import type { BrowserHAR } from '@src/core'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { waitForDelay } from '@orkestrel/test'
 import { parseJSON, isRecord, isString } from '@orkestrel/contract'
-import {
-	browserHARHeadersToRecord,
-	BROWSER_HAR_CREATOR,
-	BrowserPage,
-	validateBrowserHAR,
-} from '@src/core'
+import { browserHARHeadersToRecord, BROWSER_HAR_CREATOR, validateBrowserHAR } from '@src/core'
 import { createConnectedCDPClient, createRecordingWriter, replyOk } from '../../setup.js'
 
 describe('BrowserHARManager', () => {

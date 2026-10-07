@@ -55,7 +55,9 @@ export function describeFileBrowserStores(): void {
 		})
 		it('refuses save when a second store saved the name between record and save', async () => {
 			const { FileBrowserJourneyStore } = await import('@src/server')
-			const { BrowserJourneyToolset, BrowserToolset } = await import('@src/core')
+			const { BrowserToolset } = await import('@src/core')
+			const { BrowserJourneyToolset } =
+				await import('../../../../src/core/BrowserJourneyToolset.js')
 			const scratch = createScratch()
 			const first = new FileBrowserJourneyStore({ root: scratch.path })
 			const second = new FileBrowserJourneyStore({ root: scratch.path })

@@ -294,7 +294,7 @@ export interface BrowserViewport {
 }
 
 /** Names the page load condition for navigation — the CDP load event awaited by `navigate()`. */
-export type BrowserWaitUntil = 'commit' | 'load' | 'domcontentloaded' | 'idle'
+export type BrowserNavigationCondition = 'commit' | 'load' | 'domcontentloaded' | 'idle'
 
 /**
  * Describes the options for creating a `BrowserPage` instance.
@@ -324,7 +324,7 @@ export interface BrowserPageOptions {
  * - `signal` — aborts the `Page.navigate` send
  */
 export interface BrowserNavigationOptions extends BrowserCallOptions {
-	readonly condition?: BrowserWaitUntil
+	readonly condition?: BrowserNavigationCondition
 }
 
 /** Describes the outcome of a top-level navigation command. */
@@ -1677,17 +1677,25 @@ export interface BrowserDownloadOptions {
 }
 
 /**
- * Describes the options for creating and configuring an isolated browser context.
+ * Configures a context wrapper or the remote context that a browser isolates.
  *
  * @remarks
  * - `on` — initial event listeners wired at construction
  * - `error` — observer error handler forwarded to the emitter
- * - `proxy` — proxy server and bypass list for the context
- * - `origins` — origins granted universal network access
+ * - `id` — existing remote context to wrap; omitted for the default context. `isolate` refuses it
+ * - `viewport` and `writer` — page defaults and persistence for the context
+ * - `proxy` — proxy server and bypass list; only `browser.isolate` accepts it
+ * - `origins` — origins granted universal network access; only `browser.isolate` accepts it
  * - `downloads` — download policy for the context
  * - `emulation` — emulation overrides inherited by every page of the context
  */
 export interface BrowserContextOptions {
+	/** Identifies an existing remote context. Omission addresses the default context. */
+	readonly id?: string
+	/** Sets the default viewport for pages this context creates. */
+	readonly viewport?: BrowserViewport
+	/** Persists captures and downloads requested through the context's pages. */
+	readonly writer?: BrowserWriterInterface
 	/** Names each element reference the context's pages issue. Default: a counter the context owns. */
 	readonly reference?: BrowserReferenceFunction
 	readonly on?: EmitterHooks<BrowserContextEventMap>
@@ -3001,22 +3009,17 @@ export type BrowserToolsetEventMap = {
  *
  * @remarks
  * - `tools` — the manager the toolset fills. Default: a manager the toolset creates
- * - `page` — the page behind the view, which adds `press`, `navigate`, the staged `dialog`,
- *   popup following, and the protocol subscriptions; omitting it leaves the view tools
- * - `source` — a fixed source of page tools. Default: `page.registry` when `page` is supplied,
- *   which the toolset starts and which follows the current page; no source otherwise
- * - `context` — the browser context whose pages `read` lists and `switch` selects;
- *   it requires `page`, and omitting it leaves `switch` unadvertised
+ * - `source` — fixed page-tool source. Default: the view's registry when `isBrowserPage` holds;
+ *   the toolset starts that registry and follows the current page; no source for other views
+ * - `context` — context whose pages `read` lists and `switch` selects; requires a page view
  * - `limit` — the most characters of a complete result or error message, including its footer, a positive
  *   integer. Default: `BROWSER_TOOL_LIMIT`
  * - `schemes` — the URL schemes `navigate` accepts, each with its colon. Default:
  *   `BROWSER_SCHEMES`
- * - `release` — releases a resource the caller hands to the toolset, such as a view created for
- *   it alone; `destroy()` calls it one time, after the toolset's own teardown, and rejects with
- *   its rejection. A view or page supplied without it stays the caller's to end. Default: nothing
- *   is released
  * - `journeys` — the stores behind the journey tools, which the toolset registers and reserves
  *   through a journey toolset it constructs; omitting it leaves the journey tools unadvertised
+ *
+ * The caller owns the view and releases it after the toolset is destroyed.
  */
 export interface BrowserToolsetOptions {
 	/** Supplies and consumes host notices before the complete result is budgeted. */
@@ -3024,12 +3027,10 @@ export interface BrowserToolsetOptions {
 	readonly on?: EmitterHooks<BrowserToolsetEventMap>
 	readonly error?: EmitterErrorHandler
 	readonly tools?: ToolManagerInterface
-	readonly page?: BrowserPageInterface
 	readonly source?: BrowserToolSourceInterface
 	readonly context?: BrowserContextInterface
 	readonly limit?: number
 	readonly schemes?: readonly string[]
-	readonly release?: () => Promise<void> | void
 	readonly journeys?: BrowserJourneyOptions
 }
 
@@ -3067,7 +3068,7 @@ export interface BrowserTab extends BrowserJourneyTab {
  *
  * @remarks
  * - `emitter` — emits `adopt`, `skip`, `select`, `action`, `hold`, and `release`
- * - `tools` — the manager the toolset fills, with execution through the `perform` boundary
+ * - `tools` — the manager the toolset fills, with execution through the `execute` boundary
  * - `native` — the generic tools alone, which a consumer publishes to a built-in agent: the
  *   `read`, `click`, `type`, `press`, `navigate`, and `wait` for a page-backed
  *   toolset, and `read`, `click`, `type`, and `wait` for a view-backed one
@@ -3079,8 +3080,6 @@ export interface BrowserToolsetInterface {
 	 * @returns Text with registered secrets removed
 	 */
 	redact(text: string): string
-	/** Consumes pending move and host notes for inclusion inside a result's budget. */
-	notes(): string
 	/** Renders a fresh page window, including pending move notes, within the requested limit.
 	 * @param options - Inclusive range, search, cancellation, and character room
 	 * @returns Numbered lines with an exact continuation footer
@@ -3095,9 +3094,9 @@ export interface BrowserToolsetInterface {
 	/** Names the acquired hold, or returns undefined while no hold owns the toolset. */
 	readonly held: string | undefined
 	/** Performs a tool call and returns its structured action when a handler ran. */
-	perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
+	execute(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult>
 	/**
-	 * Performs one recorded step on the current view through `perform` and returns its action.
+	 * Performs one recorded step on the current view through `execute` and returns its action.
 	 *
 	 * @remarks
 	 * A `click` or `type` step with a target resolves the one element of the current view that
@@ -3150,7 +3149,7 @@ export interface BrowserToolsetInterface {
 	start(options?: BrowserCallOptions): Promise<void>
 	/**
 	 * Stops following the view, rejects queued actions, and removes every tool the toolset added
-	 * that the manager still holds, then calls the `release` option one time; a second call
+	 * that the manager still holds. The caller retains ownership of the view. A second call
 	 * returns the first call's promise.
 	 */
 	destroy(): Promise<void>

@@ -71,9 +71,8 @@ describe('holders H3 journey admission', () => {
 	let id = 1
 	beforeAll(async () => {
 		fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { contexts: 1, size: 3 },
-			launch: launcher.launch,
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { contexts: 1, size: 3, launch: launcher.launch },
 		})
 		await fixture.server.start()
 		const a = parseJSON(
@@ -292,9 +291,12 @@ describe('holders H2', () => {
 			disposal: (message, transport) => transport.fail(message.id, failure.message),
 		})
 		const fixture = createBrowseFixture({
-			pool: { contexts: 1, size: 2 },
-			launch: (options) =>
-				healthy.browsers.length === 0 ? healthy.launch(options) : faulty.launch(options),
+			pool: {
+				contexts: 1,
+				size: 2,
+				launch: (options) =>
+					healthy.browsers.length === 0 ? healthy.launch(options) : faulty.launch(options),
+			},
 		})
 		try {
 			await fixture.server.start()
@@ -525,8 +527,7 @@ describe('holders H2', () => {
 			})
 		}
 		const fixture = createBrowseFixture({
-			pool: { contexts: 1, size: 3 },
-			launch: () => requireValue(browsers[launched++]),
+			pool: { contexts: 1, size: 3, launch: () => requireValue(browsers[launched++]) },
 		})
 		try {
 			await fixture.server.start()
@@ -1665,8 +1666,10 @@ describe('eager U6', () => {
 			pid: process.pid,
 		})
 		const fixture = createBrowseFixture({
-			launch: () => {
-				throw failure
+			pool: {
+				launch: () => {
+					throw failure
+				},
 			},
 		})
 		try {
@@ -2275,7 +2278,7 @@ describe('eager U6', () => {
 describe('BrowserMCPServer', () => {
 	it('forwards viewport to every warm, spare, and refill', async () => {
 		const viewport = { width: 390, height: 844 }
-		const fixture = createBrowseFixture({ viewport, pool: { contexts: 1, size: 2 } })
+		const fixture = createBrowseFixture({ browser: { viewport }, pool: { contexts: 1, size: 2 } })
 		try {
 			await fixture.server.start()
 			await waitForCondition('viewport spare', () => fixture.launcher.browsers.length === 2)
@@ -2295,7 +2298,7 @@ describe('BrowserMCPServer', () => {
 		const root = join(scratch.path, 'tmp/browsers')
 		const launcher = new BrowserLauncher()
 		const pair = new MCPStdioPair()
-		const server = createBrowserMCPServer({ root, launch: launcher.launch, stdio: pair })
+		const server = createBrowserMCPServer({ root, stdio: pair, pool: { launch: launcher.launch } })
 		const teardown = createTeardown()
 		teardown.add(() => scratch.destroy())
 		teardown.add(() => server.destroy())
@@ -2342,10 +2345,9 @@ describe('BrowserMCPServer', () => {
 			const servers = launchers.map((launcher, index) =>
 				createBrowserMCPServer({
 					root,
-					headless: false,
-					executable: '/opt/fixture/chrome',
-					launch: launcher.launch,
 					stdio: requireValue(pairs[index], 'no pair'),
+					browser: { headless: false, executable: '/opt/fixture/chrome' },
+					pool: { launch: launcher.launch },
 				}),
 			)
 			for (const server of servers) teardown.add(() => server.destroy())
@@ -2397,8 +2399,8 @@ describe('BrowserMCPServer', () => {
 		const pair = new MCPStdioPair()
 		const server = createBrowserMCPServer({
 			root: join(scratch.path, 'tmp/browsers'),
-			launch: launcher.launch,
 			stdio: pair,
+			pool: { launch: launcher.launch },
 		})
 		// The same tools over an independent toolset on an identical page are the second mechanism.
 		const direct = new BrowserLauncher().launch({})
@@ -2485,8 +2487,8 @@ describe('BrowserMCPServer', () => {
 		const pair = new MCPStdioPair()
 		const server = createBrowserMCPServer({
 			root: join(scratch.path, 'tmp/browsers'),
-			launch: launcher.launch,
 			stdio: pair,
+			pool: { launch: launcher.launch },
 		})
 		const teardown = createTeardown()
 		teardown.add(() => scratch.destroy())
@@ -2545,8 +2547,8 @@ describe('BrowserMCPServer', () => {
 		const pair = new MCPStdioPair()
 		const server = createBrowserMCPServer({
 			root: join(scratch.path, 'tmp/browsers'),
-			launch: launcher.launch,
 			stdio: pair,
+			pool: { launch: launcher.launch },
 		})
 		const client = createMCPClient({
 			transport: createDuplexClientTransport(pair.transport),
@@ -2629,9 +2631,9 @@ describe('BrowserMCPServer', () => {
 				const pair = new MCPStdioPair()
 				const server = createBrowserMCPServer({
 					root: join(scratch.path, String(readonly)),
-					readonly,
-					launch: new BrowserLauncher().launch,
 					stdio: pair,
+					journeys: { readonly },
+					pool: { launch: new BrowserLauncher().launch },
 				})
 				teardown.add(() => server.destroy())
 				await server.start()
@@ -2707,7 +2709,11 @@ describe('BrowserMCPServer', () => {
 			const root = join(scratch.path, 'tmp/browsers')
 			const launcher = new BrowserLauncher()
 			const pair = new MCPStdioPair()
-			const server = createBrowserMCPServer({ root, launch: launcher.launch, stdio: pair })
+			const server = createBrowserMCPServer({
+				root,
+				stdio: pair,
+				pool: { launch: launcher.launch },
+			})
 			const teardown = createTeardown()
 			teardown.add(() => scratch.destroy())
 			teardown.add(() => server.destroy())
@@ -2752,7 +2758,10 @@ describe('BrowserMCPServer', () => {
 
 		it('refuses to start again after destroy', async () => {
 			const pair = new MCPStdioPair()
-			const server = createBrowserMCPServer({ launch: new BrowserLauncher().launch, stdio: pair })
+			const server = createBrowserMCPServer({
+				stdio: pair,
+				pool: { launch: new BrowserLauncher().launch },
+			})
 			await server.destroy()
 			await expect(server.start()).rejects.toMatchObject({ code: 'TOOLSET_ENDED' })
 			expect(pair.input.listenerCount('data')).toBe(0)
@@ -2976,7 +2985,7 @@ describe('C1 context ownership', () => {
 		const peer = await createCDPTestServer()
 		const browser = createBrowser({ cdp: { endpoint: peer.endpoint, discover: false } })
 		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
-		const fixture = createBrowseFixture({ launch: () => browser })
+		const fixture = createBrowseFixture({ pool: { launch: () => browser } })
 		const starting = fixture.server.start().catch((error: unknown) => error)
 		try {
 			await waitForCondition('construction reached target creation', () =>
@@ -3028,7 +3037,7 @@ describe('C1 context ownership', () => {
 		peer.script('Target.createBrowserContext', { browserContextId: 'shared' })
 		peer.script('Target.createTarget', { targetId: 'page' })
 		peer.script('Target.attachToTarget', { sessionId: 'session' })
-		const fixture = createBrowseFixture({ launch: () => browser })
+		const fixture = createBrowseFixture({ pool: { launch: () => browser } })
 		try {
 			await fixture.server.start()
 			peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
@@ -3072,9 +3081,7 @@ describe('C1 context ownership', () => {
 		peer.script('Target.createBrowserContext', { browserContextId: 'earlier' })
 		await browser.isolate()
 		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
-		const fixture = createBrowseFixture({
-			launch: () => browser,
-		})
+		const fixture = createBrowseFixture({ pool: { launch: () => browser } })
 		const starting = fixture.server.start().catch((error: unknown) => error)
 		try {
 			await waitForCondition('context construction reached the remote page request', () =>
@@ -3102,8 +3109,10 @@ describe('C1 context ownership', () => {
 		)
 		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
 		const fixture = createBrowseFixture({
-			launch: (options) =>
-				createBrowser({ ...options, executable: process.execPath, args: [entry, peer.endpoint] }),
+			pool: {
+				launch: (options) =>
+					createBrowser({ ...options, executable: process.execPath, args: [entry, peer.endpoint] }),
+			},
 		})
 		const starting = fixture.server.start().catch((error: unknown) => error)
 		try {
@@ -3126,7 +3135,9 @@ describe('C1 context ownership', () => {
 		const peer = await createCDPTestServer()
 		peer.script('Target.createBrowserContext', { browserContextId: 'constructing' })
 		const fixture = createBrowseFixture({
-			launch: (options) => createBrowser({ ...options, cdp: { endpoint: peer.endpoint } }),
+			pool: {
+				launch: (options) => createBrowser({ ...options, cdp: { endpoint: peer.endpoint } }),
+			},
 		})
 		const starting = fixture.server.start().catch((error: unknown) => error)
 		try {

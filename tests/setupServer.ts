@@ -69,7 +69,6 @@ import {
 } from '@orkestrel/test'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
-
 import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
 
@@ -1224,12 +1223,14 @@ const DOCUMENT_PAGE = `<!doctype html><html><head><title>Gift options</title>
 document.getElementById('wrap').addEventListener('click', (event) => { document.body.dataset.trusted = [document.body.dataset.trusted, String(event.isTrusted)].filter(Boolean).join(' ') })
 </script>
 <script type="module">
-import { createDocumentToolset } from '/dist/src/browser/index.js'
+import { createBrowserDOMView } from '/dist/src/browser/index.js'
+import { createBrowserToolset } from '/dist/src/core/index.js'
 import { createModelContext } from '@orkestrel/mcp/browser'
 import { installModelContext } from '${FIXTURE_REGISTRY_MODULE}'
 try {
 	installModelContext(document)
-	const toolset = createDocumentToolset({ document, own: true, source: createModelContext({ document }) })
+	const view = createBrowserDOMView({ document, own: true })
+	const toolset = createBrowserToolset(view, { source: createModelContext({ document }) })
 	await toolset.start()
 	window.documentToolset = toolset
 	document.body.dataset.ready = 'yes'
@@ -1306,7 +1307,7 @@ try {
  * - `/popup/child` — the opened tab; its `Like` button sets `document.body.dataset.liked`
  * - `/document` — imports the built `dist/src/browser` bundle through an import map of
  *   {@link FIXTURE_DOCUMENT_IMPORTS}, installs the registry double {@link FIXTURE_REGISTRY_MODULE}
- *   serves, and publishes `createDocumentToolset({ document, own: true, source })` over its own
+ *   serves, and publishes `createBrowserToolset(createBrowserDOMView({ document, own: true }), { source })` over its own
  *   document on `window.documentToolset` after `start()`, then sets
  *   `document.body.dataset.ready`, or `document.body.dataset.failed` with the error; a listener
  *   records each `Gift wrap` checkbox click's `isTrusted` on `document.body.dataset.trusted`
@@ -1869,15 +1870,11 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		const result: unknown = await fixture.client.send('Target.createBrowserContext', {})
 		if (!isRecord(result) || !isString(result['browserContextId']))
 			throw new BrowserError('ARGUMENT', 'The fixture returned no context id')
-		const context = new BrowserContext(
-			fixture.client,
-			result['browserContextId'],
-			undefined,
-			undefined,
-			options?.emulation,
-			options?.downloads,
-			options,
-		)
+		const { proxy: _proxy, origins: _origins, ...defaults } = options ?? {}
+		const context = new BrowserContext(fixture.client, {
+			...defaults,
+			id: result['browserContextId'],
+		})
 		this.#contexts.push(context)
 		return context
 	}
@@ -2007,10 +2004,10 @@ export function createBrowseFixture(
 	const root = join(scratch.path, 'browsers')
 	const server = createBrowserMCPServer({
 		root,
-		launch: launcher.launch,
 		stdio: pair,
 		log,
 		...options,
+		pool: { launch: launcher.launch, ...options?.pool },
 	})
 	const teardown = createTeardown()
 	teardown.add(() => scratch.destroy())
@@ -2567,8 +2564,8 @@ export async function openBrowseSession(): Promise<BrowseSession> {
 	const pair = new MCPStdioPair()
 	const server = createBrowserMCPServer({
 		root: join(scratch.path, 'tmp/browsers'),
-		launch: launcher.launch,
 		stdio: pair,
+		pool: { launch: launcher.launch },
 	})
 	const listeners = {
 		SIGTERM: process.listenerCount('SIGTERM'),
@@ -2592,10 +2589,10 @@ export async function openBrowseSession(): Promise<BrowseSession> {
 // Imports the built package through the staged link, so the browser context it returns and every
 // page that context opens come from the same module instance a generated journey module imports.
 const BROWSER_JOURNEY_HARNESS = `import { BrowserContext, createCDPClient } from '@orkestrel/browser'
-import { createCDPTransport } from '@orkestrel/browser/server'
+import { createWebSocketCDPTransport } from '@orkestrel/browser/server'
 
 export async function connect(url) {
-	const client = createCDPClient({ transport: createCDPTransport({ url }) })
+	const client = createCDPClient({ transport: createWebSocketCDPTransport({ url }) })
 	await client.connect()
 	const context = new BrowserContext(client)
 	return {

@@ -30,12 +30,6 @@ import {
  * capture, and a dropped reference keeps its last capture. Every action on an element removed
  * from its document, collected, or held across a navigation reports `GONE`.
  *
- * @example
- * ```ts
- * const view = createBrowserDOMView({ document: frame.contentDocument })
- * await view.elements.outline()
- * await view.elements.element('e1')?.click()
- * ```
  */
 export class BrowserDOMElement implements BrowserDOMElementInterface {
 	readonly #input: BrowserDOMElementInput

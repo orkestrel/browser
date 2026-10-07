@@ -1,27 +1,9 @@
-import { renderBrowserLine } from '@src/core'
-/**
- * Proof for `tests/setup.ts`.
- *
- * The subject is the exported test infrastructure the workspace's suites drive: the in-memory CDP
- * transport, the scripting helpers layered on it, the protocol fixtures, the encoded constants,
- * the timer lead, and the rewrite that records a generated journey module's actions.
- * Production behavior is not re-proven here — where a case sends a real frame through
- * `createCDPClient`, the client is the driver and the assertion is on what the fixture answered.
- *
- * `tests/setup.ts` is host-independent and declares no DOM-driving export, so this file defers
- * nothing to a browser suite. This package registers no browser project: `vite.config.ts` runs
- * `src:core` and `src:server` in Node with `browser: { enabled: false }`, and the `setup` project
- * that collects this file does the same.
- *
- * Every expected value is derived by a route the module does not share: hand-written protocol
- * literals, a parent-index walk over the raw snapshot columns, `atob` over the base64 constants,
- * hand-written module lines, and real host timers measured on `performance.now()`.
- */
-
 import type { BrowserPageInterface } from '@src/core'
 import type { CDPSentMessage } from './setup.js'
+import { BrowserPage } from '../src/core/BrowserPage.js'
+import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, readBrowserAccessibility } from '@src/core'
+import { readBrowserAccessibility } from '@src/core'
 import {
 	captureError,
 	createRecorder,

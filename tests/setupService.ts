@@ -25,7 +25,7 @@ import type { MCPClientInterface } from '@orkestrel/mcp'
 import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, createCDPClient } from '@src/core'
 import {
 	createBrowser,
-	createCDPTransport,
+	createWebSocketCDPTransport,
 	findSystemBrowser,
 	parseBrowserProfileRecord,
 } from '@src/server'
@@ -174,7 +174,9 @@ export async function findHolderProfile(root: string, url: string) {
 		const profile = join(root, '.profiles', name)
 		const record = parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8'))
 		if (record === undefined) throw new Error('Missing browser record')
-		const client = createCDPClient({ transport: createCDPTransport({ url: record.endpoint }) })
+		const client = createCDPClient({
+			transport: createWebSocketCDPTransport({ url: record.endpoint }),
+		})
 		try {
 			await client.connect()
 			const targets: unknown = await client.send('Target.getTargets')
@@ -302,7 +304,9 @@ export async function callContextTool(
  */
 export async function inspectHolderContext(root: string, url: string) {
 	const profile = await findHolderProfile(root, url)
-	const client = createCDPClient({ transport: createCDPTransport({ url: profile.endpoint }) })
+	const client = createCDPClient({
+		transport: createWebSocketCDPTransport({ url: profile.endpoint }),
+	})
 	await client.connect()
 	try {
 		const result: unknown = await client.send('Target.getTargets')
@@ -357,7 +361,9 @@ export async function downloadContextFile(
 	const record = requireValue(
 		parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8')),
 	)
-	const observer = createCDPClient({ transport: createCDPTransport({ url: record.endpoint }) })
+	const observer = createCDPClient({
+		transport: createWebSocketCDPTransport({ url: record.endpoint }),
+	})
 	await observer.connect()
 	const abort = new AbortController()
 	try {
@@ -468,7 +474,7 @@ export function createEagerBrowseChild(root: string, executable: string): Browse
 	// The source uses the named JSON export the bundler supplies; Node's JSON module has only a default export.
 	writeFileSync(
 		entry,
-		`import { registerHooks } from 'node:module'\nimport { resolve } from 'node:path'\nimport { pathToFileURL } from 'node:url'\n${SOURCE_HOOK}\nregisterHooks({ load(url, context, next) { return url === ${JSON.stringify(manifest)} ? { format: 'module', source: ${JSON.stringify(version)}, shortCircuit: true } : next(url, context) } })\nconst { createBrowserMCPServer } = await import(${JSON.stringify(pathToFileURL(resolve('src/server/index.ts')).href)})\nconst server = createBrowserMCPServer({ root: ${JSON.stringify(root)}, executable: ${JSON.stringify(executable)} })\nawait server.start()\nconsole.log('ready')\n`,
+		`import { registerHooks } from 'node:module'\nimport { resolve } from 'node:path'\nimport { pathToFileURL } from 'node:url'\n${SOURCE_HOOK}\nregisterHooks({ load(url, context, next) { return url === ${JSON.stringify(manifest)} ? { format: 'module', source: ${JSON.stringify(version)}, shortCircuit: true } : next(url, context) } })\nconst { createBrowserMCPServer } = await import(${JSON.stringify(pathToFileURL(resolve('src/server/index.ts')).href)})\nconst server = createBrowserMCPServer({ root: ${JSON.stringify(root)}, browser: { executable: ${JSON.stringify(executable)} } })\nawait server.start()\nconsole.log('ready')\n`,
 	)
 	return new BrowseChild(entry, process.cwd(), {})
 }

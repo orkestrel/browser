@@ -48,7 +48,9 @@ export function createBrowser(options?: BrowserOptions): BrowserInterface {
  * @param options - The CDP WebSocket debugger URL (and optional timeout)
  * @returns A {@link CDPTransportInterface}
  */
-export function createCDPTransport(options: WebSocketCDPTransportOptions): CDPTransportInterface {
+export function createWebSocketCDPTransport(
+	options: WebSocketCDPTransportOptions,
+): CDPTransportInterface {
 	return new WebSocketCDPTransport(options)
 }
 
@@ -58,7 +60,7 @@ export function createCDPTransport(options: WebSocketCDPTransportOptions): CDPTr
  *
  * @returns A {@link BrowserWriterInterface} that persists bytes through `node:fs/promises`
  */
-export function createBrowserWriter(): BrowserWriterInterface {
+export function createFileBrowserWriter(): BrowserWriterInterface {
 	return new FileBrowserWriter()
 }
 
@@ -99,7 +101,7 @@ export function createFileBrowserRunStore(
  * ```ts
  * import { createBrowserMCPServer } from '@orkestrel/browser/server'
  *
- * const server = createBrowserMCPServer({ root: 'tmp/browsers', headless: true })
+ * const server = createBrowserMCPServer({ root: 'tmp/browsers', browser: { headless: true } })
  * await server.start() // resolves after leasing a connected browser
  * await server.destroy()
  * ```

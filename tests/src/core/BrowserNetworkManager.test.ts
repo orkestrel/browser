@@ -1,6 +1,7 @@
 import type { BrowserWebSocketFrame, BrowserWebSocketInterface } from '@src/core'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
 import { createConnectedCDPClient, ignoreAsyncCall, replyOk } from '../../setup.js'
 

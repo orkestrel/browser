@@ -1241,11 +1241,11 @@ describe('renderFixturePage', () => {
 		)
 
 		expect(imports).toStrictEqual({ imports: { ...FIXTURE_DOCUMENT_IMPORTS } })
-		expect(page).toContain("import { createDocumentToolset } from '/dist/src/browser/index.js'")
+		expect(page).toContain("import { createBrowserDOMView } from '/dist/src/browser/index.js'")
 		expect(page).toContain("import { createModelContext } from '@orkestrel/mcp/browser'")
 		expect(page).toContain(`import { installModelContext } from '${FIXTURE_REGISTRY_MODULE}'`)
 		expect(page).toContain(
-			'createDocumentToolset({ document, own: true, source: createModelContext({ document }) })',
+			'createBrowserToolset(view, { source: createModelContext({ document }) })',
 		)
 		expect(page).toContain('window.documentToolset = toolset')
 	})

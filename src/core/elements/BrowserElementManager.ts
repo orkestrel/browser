@@ -40,12 +40,6 @@ import { isArray, isError, isInteger, isRecord, isString } from '@orkestrel/cont
  * @remarks
  * A reference is dropped when the page reports its frame's document replaced or detached through
  * `input.steps`, which carries only the steps of each frame's owning session.
- * @example
- * ```ts
- * const outline = await page.elements.outline()
- * const matches = await page.elements.find({ role: 'button', name: 'save' })
- * await matches[0]?.click()
- * ```
  */
 export class BrowserElementManager implements BrowserElementManagerInterface<BrowserPageElementInterface> {
 	readonly #input: BrowserElementManagerInput

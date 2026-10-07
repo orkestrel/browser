@@ -33,6 +33,13 @@ const MODULES = Object.freeze({
  * here stops being stranded, so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([
+	'class BrowserPage',
+	'class BrowserFrame',
+	'class BrowserJourneyToolset',
+	'class BrowserPageElement',
+	'class BrowserElementManager',
+	'class BrowserDOMElement',
+	'class BrowserDOMElementManager',
 	'class BrowserDialog',
 	'class BrowserDownload',
 	'class BrowserFileChooser',
@@ -389,8 +396,8 @@ await new GuideCommand({
 		expect(bounded).toMatch(/\[lines 1–\d+ of 120; \d+ below; call read with from \d+ for more\]$/)
 	})
 	it('executes the numbered listing and cart-visit edit fence', async () => {
-		const { BrowserToolset, BrowserJourneyToolset, createMemoryBrowserJourneyStore } =
-			await import('@src/core')
+		const { BrowserToolset, createMemoryBrowserJourneyStore } = await import('@src/core')
+		const { BrowserJourneyToolset } = await import('../src/core/BrowserJourneyToolset.js')
 		const { createBrowserJourneyFixture, createBrowserViewDouble } = await import('./setup.js')
 		const fence = requireValue(
 			own.guide.fences().find((entry) => entry.title === 'Edit a saved journey'),

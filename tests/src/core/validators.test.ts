@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
+	isBrowserPage,
 	isBrowserSecretBinding,
 	isBrowserJourneyBinding,
 	isBrowserJourneyTab,
@@ -13,12 +14,56 @@ import {
 	validateBrowserRun,
 } from '@src/core'
 import {
+	createBrowserElementFixture,
+	createBrowserViewDouble,
 	BROWSER_JOURNEY_FIXTURE,
 	BROWSER_JOURNEY_INVALID_CASES,
 	BROWSER_JOURNEY_EDIT_SHAPES,
 	BROWSER_JOURNEY_TEMPLATE_CASES,
 	BROWSER_RUN_FIXTURE,
 } from '../../setup.js'
+
+describe('isBrowserPage', () => {
+	it('accepts a real page through inherited accessors and rejects an incomplete trusted view', async () => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			expect(isBrowserPage(fixture.page)).toBe(true)
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => Reflect.get(target, key, target),
+					}),
+				),
+			).toBe(true)
+			expect(isBrowserPage({ ...createBrowserViewDouble(), trusted: true })).toBe(false)
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => (key === 'navigation' ? {} : Reflect.get(target, key, target)),
+					}),
+				),
+			).toBe(false)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('refuses primitives, revoked proxies, and hostile page accessors without throwing', () => {
+		const proxy = Proxy.revocable({}, {})
+		proxy.revoke()
+		expect(isBrowserPage(proxy.proxy)).toBe(false)
+		expect(isBrowserPage(undefined)).toBe(false)
+		expect(isBrowserPage(null)).toBe(false)
+		expect(isBrowserPage('page')).toBe(false)
+		expect(
+			isBrowserPage({
+				get trusted() {
+					throw new Error('hostile page')
+				},
+			}),
+		).toBe(false)
+	})
+})
 
 describe('journey validators', () => {
 	it('recognizes binding coordinates and contains hostile context reads', () => {

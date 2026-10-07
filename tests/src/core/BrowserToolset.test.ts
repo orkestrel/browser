@@ -66,7 +66,7 @@ describe('BrowserToolset', () => {
 			const toolset = new BrowserToolset(view)
 			try {
 				await toolset.start()
-				const result = await toolset.perform({
+				const result = await toolset.execute({
 					id: 'gone',
 					name: 'wait',
 					arguments: { text: 'Saved', absent: true, timeout: 0.01 },
@@ -76,7 +76,7 @@ describe('BrowserToolset', () => {
 					waited ? '"Saved" is not on the page.' : '"Saved" is still on the page after 0.01 s.',
 				)
 				expect(view.calls).toContain('wait Saved absent')
-				await toolset.perform({
+				await toolset.execute({
 					id: 'present',
 					name: 'wait',
 					arguments: { text: 'Saved', absent: false },
@@ -109,7 +109,7 @@ describe('BrowserToolset', () => {
 		const toolset = createBrowserToolset(fixture.page)
 		try {
 			await toolset.start()
-			const performed = await toolset.perform({
+			const performed = await toolset.execute({
 				id: 'gone',
 				name: 'wait',
 				arguments: { text: 'Saved', absent: true },
@@ -318,7 +318,7 @@ describe('BrowserToolset', () => {
 					arguments: { ref: 'e2', text: BROWSER_SELECT_SECRET, secret: true },
 				}
 				const signal = AbortSignal.abort(message)
-				const performed = await toolset.perform(call, { signal })
+				const performed = await toolset.execute(call, { signal })
 				expect(performed.result.success).toBe(false)
 				expect(performed.action).toBeUndefined()
 				expect(performed.result).toMatchObject({ success: false, error: 'Rejected [redacted]' })
@@ -333,14 +333,14 @@ describe('BrowserToolset', () => {
 					requireValue(toolset.tools.tool('type')).execute(call.arguments, { signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(error, 'message')).toBe('Rejected [redacted]')
-				const ordinary = await toolset.perform({
+				const ordinary = await toolset.execute({
 					...call,
 					arguments: { ...call.arguments, secret: false },
 				})
 				expect(ordinary.result).toMatchObject({ success: false, error: message })
 				const ordinaryAbort = { ...call, arguments: { ...call.arguments, secret: false } }
 				expect(await toolset.tools.execute(ordinaryAbort, { signal })).toEqual(
-					(await toolset.perform(ordinaryAbort, { signal })).result,
+					(await toolset.execute(ordinaryAbort, { signal })).result,
 				)
 				expect(await toolset.tools.execute(ordinaryAbort, { signal })).toMatchObject({
 					success: false,
@@ -368,7 +368,7 @@ describe('BrowserToolset', () => {
 							name: 'type',
 							arguments: { ref: 'e2', text: BROWSER_SELECT_SECRET, secret: true },
 						}
-						const performed = await toolset.perform(call)
+						const performed = await toolset.execute(call)
 						expect(performed.result.success).toBe(false)
 						expect(performed.action).toMatchObject({ secret: true, outcome: 'refused' })
 						expect(performed.action?.arguments).not.toHaveProperty('text')
@@ -455,7 +455,7 @@ describe('BrowserToolset', () => {
 				const order: string[] = []
 				toolset.emitter.on('action', () => order.push('answer'))
 				toolset.emitter.on('hold', () => order.push('hold'))
-				const answering = toolset.perform({
+				const answering = toolset.execute({
 					id: 'answer',
 					name: 'dialog',
 					arguments: { accept: true },
@@ -487,7 +487,7 @@ describe('BrowserToolset', () => {
 				replyOk(fixture.transport, 'Page.handleJavaScriptDialog')
 				await toolset.start()
 				await fixture.page.elements.outline()
-				const acting = toolset.perform({ id: 'click', name: 'click', arguments: { ref: 'e4' } })
+				const acting = toolset.execute({ id: 'click', name: 'click', arguments: { ref: 'e4' } })
 				await waitForCondition('input release withheld', () => withheld.length === 1)
 				fixture.transport.event(
 					'Page.javascriptDialogOpening',
@@ -504,7 +504,7 @@ describe('BrowserToolset', () => {
 					code: 'TOOLSET_DIALOG',
 					message: 'A confirm dialog is open: "Continue?"; call dialog.',
 				})
-				const answered = await toolset.perform({
+				const answered = await toolset.execute({
 					id: 'answer',
 					name: 'dialog',
 					arguments: { accept: true },
@@ -538,7 +538,7 @@ describe('BrowserToolset', () => {
 			await toolset.start()
 			try {
 				const call = { id: 'same', name: 'click', arguments: { ref: 'e1' } }
-				const [first, second] = await Promise.all([toolset.perform(call), toolset.perform(call)])
+				const [first, second] = await Promise.all([toolset.execute(call), toolset.execute(call)])
 				expect(first.action).toMatchObject({
 					action: 'click',
 					arguments: { ref: 'e1' },
@@ -555,13 +555,13 @@ describe('BrowserToolset', () => {
 				expect(direct).toEqual(first.result)
 				expect(actions.calls[2]?.[0].receipt).toBe(first.action?.receipt)
 				expect(
-					(await toolset.perform({ id: 'read', name: 'read', arguments: { from: 1 } })).action,
+					(await toolset.execute({ id: 'read', name: 'read', arguments: { from: 1 } })).action,
 				).toBeUndefined()
 				expect(
-					(await toolset.perform({ id: 'missing', name: 'missing', arguments: {} })).action,
+					(await toolset.execute({ id: 'missing', name: 'missing', arguments: {} })).action,
 				).toBeUndefined()
 				expect(
-					(await toolset.perform({ id: 'refused', name: 'click', arguments: { ref: 'e99' } }))
+					(await toolset.execute({ id: 'refused', name: 'click', arguments: { ref: 'e99' } }))
 						.action?.outcome,
 				).toBe('refused')
 			} finally {
@@ -586,7 +586,7 @@ describe('BrowserToolset', () => {
 			try {
 				await toolset.start()
 				await fixture.page.elements.outline()
-				const performed = await toolset.perform({
+				const performed = await toolset.execute({
 					id: 's1',
 					name: 'click',
 					arguments: { ref: 'e4' },
@@ -617,7 +617,7 @@ describe('BrowserToolset', () => {
 				await toolset.start()
 				await fixture.page.elements.outline()
 				for (const submit of [false, true]) {
-					const performed = await toolset.perform({
+					const performed = await toolset.execute({
 						id: 'secret',
 						name: 'type',
 						arguments: { ref: 'e2', text: 'private-value', secret: true, submit },
@@ -632,7 +632,7 @@ describe('BrowserToolset', () => {
 					for (const fragment of ['priv', 'ate-value'])
 						expect(JSON.stringify(performed)).not.toContain(fragment)
 				}
-				const pressed = await toolset.perform({
+				const pressed = await toolset.execute({
 					id: 'enter',
 					name: 'press',
 					arguments: { key: 'Enter' },
@@ -666,7 +666,7 @@ describe('BrowserToolset', () => {
 			const toolset = new BrowserToolset(createBrowserViewDouble({ waited: false }))
 			await toolset.start()
 			try {
-				const performed = await toolset.perform({
+				const performed = await toolset.execute({
 					id: 's3',
 					name: 'wait',
 					arguments: { text: 'Added to cart', timeout: 0.01 },
@@ -701,7 +701,7 @@ describe('BrowserToolset', () => {
 			await toolset.start()
 			const hold = await toolset.hold('add-kettle')
 			try {
-				const refused = await toolset.perform({
+				const refused = await toolset.execute({
 					id: 'foreign',
 					name: 'checkout',
 					arguments: { search: 'cart' },
@@ -724,10 +724,10 @@ describe('BrowserToolset', () => {
 					{ id: 'plain', name: 'read', arguments: { from: 1 } },
 					{ id: 'wait', name: 'wait', arguments: { text: 'Form' } },
 				])
-					expect((await toolset.perform(call)).result.success).toBe(true)
+					expect((await toolset.execute(call)).result.success).toBe(true)
 				expect(
 					(
-						await toolset.perform(
+						await toolset.execute(
 							{ id: 'owner', name: 'checkout', arguments: { search: 'cart' } },
 							{ caller: hold.token, signal: new AbortController().signal },
 						)
@@ -753,7 +753,7 @@ describe('BrowserToolset', () => {
 			toolset.emitter.on('hold', () => order.push('hold'))
 			await toolset.start()
 			try {
-				const acting = toolset.perform({
+				const acting = toolset.execute({
 					id: 'before',
 					name: 'checkout',
 					arguments: { search: 'cart' },
@@ -779,7 +779,7 @@ describe('BrowserToolset', () => {
 				expect(view.calls).not.toContain('click e1')
 				hold.destroy()
 				expect(
-					(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
+					(await toolset.execute({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
 						.success,
 				).toBe(true)
 			} finally {
@@ -792,7 +792,7 @@ describe('BrowserToolset', () => {
 			const { toolset, pending, invoked } = createBrowserPendingToolsetFixture()
 			await toolset.start()
 			try {
-				const acting = toolset.perform({
+				const acting = toolset.execute({
 					id: 'before',
 					name: 'checkout',
 					arguments: { search: 'cart' },
@@ -804,7 +804,7 @@ describe('BrowserToolset', () => {
 					.catch((error: unknown) => error)
 				abort.abort('cancelled')
 				expect(await abandoned).toBe('cancelled')
-				const foreign = toolset.perform({ id: 'foreign', name: 'click', arguments: { ref: 'e1' } })
+				const foreign = toolset.execute({ id: 'foreign', name: 'click', arguments: { ref: 'e1' } })
 				const order: string[] = []
 				toolset.emitter.on('action', () => order.push('action'))
 				toolset.emitter.on('hold', () => order.push('hold'))
@@ -817,7 +817,7 @@ describe('BrowserToolset', () => {
 				expect(order).toEqual(['action', 'action', 'hold'])
 				hold.destroy()
 				expect(
-					(await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
+					(await toolset.execute({ id: 'after', name: 'click', arguments: { ref: 'e1' } })).result
 						.success,
 				).toBe(true)
 			} finally {
@@ -838,7 +838,7 @@ describe('BrowserToolset', () => {
 				await fixture.page.elements.outline()
 				const hold = await toolset.hold('add-kettle')
 				const context = { signal: new AbortController().signal, caller: hold.token }
-				const acting = toolset.perform(
+				const acting = toolset.execute(
 					{ id: 's1', name: 'click', arguments: { ref: 'e4' } },
 					context,
 				)
@@ -851,7 +851,7 @@ describe('BrowserToolset', () => {
 				const interrupted = await acting
 				expect(interrupted.action?.outcome).toBe('interrupted')
 				expect(interrupted.action?.receipt).toContain('A confirm dialog is open')
-				const refused = await toolset.perform({
+				const refused = await toolset.execute({
 					id: 'foreign',
 					name: 'dialog',
 					arguments: { accept: true },
@@ -865,7 +865,7 @@ describe('BrowserToolset', () => {
 						(message) => message.method === 'Page.handleJavaScriptDialog',
 					),
 				).toHaveLength(0)
-				const answered = await toolset.perform(
+				const answered = await toolset.execute(
 					{ id: 's2', name: 'dialog', arguments: { accept: true } },
 					context,
 				)
@@ -873,7 +873,7 @@ describe('BrowserToolset', () => {
 				fixture.transport.reply(requireValue(withheld[0]).id, {})
 				expect(
 					(
-						await toolset.perform(
+						await toolset.execute(
 							{ id: 's3', name: 'press', arguments: { key: 'Escape' } },
 							context,
 						)
@@ -914,7 +914,7 @@ describe('BrowserToolset', () => {
 		it('catches a tool outside the vocabulary, a native extra, a missing required parameter, a stray annotation, or a long parameter description', async () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
-				const toolset = new BrowserToolset(page, { page })
+			const toolset = new BrowserToolset(page)
 				expect(toolset.tools.count).toBe(0)
 				await toolset.start()
 				const names = ['read', 'click', 'type', 'press', 'navigate', 'wait']
@@ -1456,7 +1456,7 @@ describe('BrowserToolset', () => {
 				const toolset = createBrowserToolset(page)
 				await toolset.start()
 				const call = { id: 'refused', name: 'click', arguments: { ref: 'x12' } }
-				const performed = await toolset.perform(call)
+				const performed = await toolset.execute(call)
 				const copy = { ...performed }
 				expect(copy.result).toMatchObject({
 					success: false,
@@ -1479,7 +1479,7 @@ describe('BrowserToolset', () => {
 				expect(isBrowserError(rejected) && rejected.code === 'ELEMENT' && rejected.code).toBe(
 					'ELEMENT',
 				)
-				const reading = await toolset.perform({ id: 'read', name: 'read', arguments: { from: 1 } })
+				const reading = await toolset.execute({ id: 'read', name: 'read', arguments: { from: 1 } })
 				expect(reading.result.success).toBe(true)
 				expect(reading).not.toHaveProperty('fault')
 			} finally {
@@ -2216,30 +2216,15 @@ describe('BrowserToolset', () => {
 			}
 		})
 
-		it('catches a release the toolset skips, calls twice, calls before its own teardown, or swallows', async () => {
-			const tools = createToolManager()
-			const releases = createRecorder<[number]>()
-			const toolset = new BrowserToolset(createBrowserViewDouble(), {
-				tools,
-				release: () => releases.handler(tools.count),
-			})
+		it('leaves its caller-owned view usable after repeated teardown', async () => {
+			const view = createBrowserViewDouble()
+			const toolset = createBrowserToolset(view)
 			await toolset.start()
-			await Promise.all([toolset.destroy(), toolset.destroy()])
-			await toolset.destroy()
-			expect(releases.calls).toEqual([[0]])
-			const failure = new Error('the view did not release')
-			const refused = createRecorder<[]>()
-			const failing = new BrowserToolset(createBrowserViewDouble(), {
-				release: async () => {
-					refused.handler()
-					throw failure
-				},
-			})
-			await failing.start()
-			expect(await failing.destroy().catch((error: unknown) => error)).toBe(failure)
-			expect(failing.tools.tools()).toEqual([])
-			expect(await failing.destroy().catch((error: unknown) => error)).toBe(failure)
-			expect(refused.count).toBe(1)
+			const closing = toolset.destroy()
+			expect(toolset.destroy()).toBe(closing)
+			await closing
+			expect(toolset.tools.count).toBe(0)
+			expect((await view.elements.outline()).url).toBe(view.url)
 		})
 
 		it('catches a destroyed toolset whose registry, dialog, or navigation subscription outlives it', async () => {
@@ -3186,7 +3171,7 @@ describe('BrowserToolset', () => {
 					),
 				).toBe(false)
 				expect(
-					(await toolset.perform({ id: 'after', name: 'press', arguments: { key: 'Escape' } }))
+					(await toolset.execute({ id: 'after', name: 'press', arguments: { key: 'Escape' } }))
 						.action?.outcome,
 				).toBe('done')
 			} finally {

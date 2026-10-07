@@ -6,7 +6,6 @@ import type {
 	BrowserCookieManagerInterface,
 	BrowserDownloadOptions,
 	BrowserEmulationManagerInterface,
-	BrowserEmulationOptions,
 	BrowserPageEventMap,
 	BrowserPageInterface,
 	BrowserPageOptions,
@@ -45,9 +44,9 @@ import { Emitter, extractKeys } from '@orkestrel/emitter'
  *
  * @example
  * ```ts
- * import { BrowserContext } from '@orkestrel/browser'
+ * import { createBrowserContext } from '@orkestrel/browser'
  *
- * const context = new BrowserContext(client)
+ * const context = createBrowserContext(client)
  * const page = await context.create({ url: 'https://example.com' })
  * await context.destroy()
  * ```
@@ -74,30 +73,25 @@ export class BrowserContext implements BrowserContextInterface {
 	#disposal: BrowserContextDisposal | undefined
 	#reference = 0
 
-	constructor(
-		client: CDPClientInterface,
-		id?: string,
-		viewport?: BrowserViewport,
-		writer?: BrowserWriterInterface,
-		emulation?: BrowserEmulationOptions,
-		downloads?: BrowserDownloadOptions,
-		options?: BrowserContextOptions,
-	) {
+	constructor(client: CDPClientInterface, options?: BrowserContextOptions) {
+		if (options?.proxy !== undefined || options?.origins !== undefined) {
+			throw new BrowserError('ARGUMENT', 'Proxy and origins require browser.isolate')
+		}
 		this.#client = client
-		if (viewport !== undefined) validateBrowserViewport(viewport)
-		this.#id = id
-		this.#viewport = viewport
-		this.#writer = writer
-		this.#downloads = downloads
+		if (options?.viewport !== undefined) validateBrowserViewport(options.viewport)
+		this.#id = options?.id
+		this.#viewport = options?.viewport
+		this.#writer = options?.writer
+		this.#downloads = options?.downloads
 		this.#allocator = options?.reference
 		this.#emitter = new Emitter({
 			...(options?.on !== undefined ? { on: options.on } : {}),
 			...(options?.error !== undefined ? { error: options.error } : {}),
 		})
-		this.#cookies = new BrowserCookieManager(client, id)
-		this.#permissions = new BrowserPermissionManager(client, id)
+		this.#cookies = new BrowserCookieManager(client, options?.id)
+		this.#permissions = new BrowserPermissionManager(client, options?.id)
 		this.#storage = new BrowserStorageManager(this.#cookies, () => this.pages())
-		this.#emulation = new BrowserEmulationManager(() => this.pages(), emulation)
+		this.#emulation = new BrowserEmulationManager(() => this.pages(), options?.emulation)
 	}
 
 	get emitter(): EmitterInterface<BrowserContextEventMap> {

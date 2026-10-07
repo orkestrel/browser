@@ -1,12 +1,6 @@
-/**
- * src/core/BrowserTouch.ts tests.
- *
- * Drives a real `BrowserTouch` over a real `BrowserPage` on the in-memory CDP transport
- * and asserts on the `Input.dispatchTouchEvent` frames the transport recorded.
- */
-
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, BrowserTouch, isBrowserError } from '@src/core'
+import { BrowserTouch, isBrowserError } from '@src/core'
 import {
 	createAttachedPage,
 	createConnectedCDPClient,

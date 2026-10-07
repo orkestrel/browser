@@ -1,8 +1,8 @@
+import { BrowserFrame } from '../../../src/core/BrowserFrame.js'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_RESULT_LIMIT,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
-	BrowserFrame,
 	compileGuardedEvaluateExpression,
 	compileReadFunction,
 	createCDPClient,

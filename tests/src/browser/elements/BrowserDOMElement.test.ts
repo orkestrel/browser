@@ -1,5 +1,6 @@
-import { renderBrowserLine } from '@src/core'
 import type { BrowserAction } from '@src/core'
+import { BrowserDOMElement } from '../../../../src/browser/elements/BrowserDOMElement.js'
+import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_RESULT_LIMIT,
@@ -8,7 +9,7 @@ import {
 	renderBrowserRun,
 	isBrowserError,
 } from '@src/core'
-import { BrowserDOMElement, createBrowserDOMView } from '@src/browser'
+import { createBrowserDOMView } from '@src/browser'
 import { createRecorder, readProperty, requireValue } from '@orkestrel/test'
 import {
 	BROWSER_SECRET_SELECT_HTML,
@@ -366,7 +367,7 @@ describe('BrowserDOMElement', () => {
 			const runs = new RecordingBrowserRunStore()
 			try {
 				await toolset.start()
-				const performed = await toolset.perform({
+				const performed = await toolset.execute({
 					id: 'missing',
 					name: 'type',
 					arguments: { ref: element.reference, text: BROWSER_SELECT_SECRET, secret: true },

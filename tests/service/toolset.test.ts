@@ -1,25 +1,3 @@
-import { BROWSER_READING_HTML, BROWSER_READING_STRUCTURE_HTML } from '../setup.js'
-import { renderBrowserLine } from '@src/core'
-import { writeFileSync } from 'node:fs'
-import { SERVICE_READING_SUBMISSIONS, SERVICE_STORE_PARAGRAPHS } from '../setupService.js'
-import { BROWSER_SUBMIT_KEY } from '@src/core'
-/**
- * Live-browser proofs for `BrowserToolset` over a real page, driven through `@orkestrel/tool`.
- *
- * Every toolset here is registered in a `createToolManager()` manager and every call runs through
- * that manager's `execute`, so a receipt is the text a model would read. The browser is the one
- * `tests/setupService.ts` resolves, launched once for the file with `--site-per-process` so the
- * `localhost` frame of the voucher page renders out of process; every page and context a case
- * opens is closed after it, and every toolset destroyed.
- *
- * A receipt that carries a view is accepted in each form a correct toolset returns when a load or
- * the capture outruns the receipt deadline, and the state the action produced is then read
- * independently; the `performance` block asserts the captured view within the deadline.
- *
- * Chromium 141 attaches no page that `window.open` creates to its opener's session; the page
- * adopts it through target discovery, and the click that opened it settles on it.
- */
-
 import type { BrowserInterface } from '@src/server'
 import type {
 	BrowserAction,
@@ -30,8 +8,13 @@ import type {
 } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type { FixtureServerInterface } from '../setupServer.js'
+import { BROWSER_READING_HTML, BROWSER_READING_STRUCTURE_HTML } from '../setup.js'
+import { renderBrowserLine } from '@src/core'
+import { writeFileSync } from 'node:fs'
+import { SERVICE_READING_SUBMISSIONS, SERVICE_STORE_PARAGRAPHS } from '../setupService.js'
+import { BROWSER_SUBMIT_KEY } from '@src/core'
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
-import { createBrowser, createCDPTransport } from '@src/server'
+import { createBrowser, createWebSocketCDPTransport } from '@src/server'
 import {
 	BROWSER_TOOL_LIMIT,
 	BROWSER_TOOL_TIMEOUT_MS,
@@ -212,7 +195,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 						toolset.emitter.on('action', (action) => observed.push(action))
 						receipts.push(requireToolText(await toolset.tools.execute(call)))
 					} else {
-						const performed = await toolset.perform(call)
+						const performed = await toolset.execute(call)
 						observed.push(requireValue(performed.action))
 						receipts.push(requireToolText(performed.result))
 					}
@@ -239,7 +222,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				toolset.emitter.on('action', (action) => actions.push(action))
 				const call = { id: 's1', name: 'click', arguments: { ref: target.reference } }
 				if (direct) await toolset.tools.execute(call)
-				else await toolset.perform(call)
+				else await toolset.execute(call)
 				expect(actions[0]?.outcome).toBe('interrupted')
 				if (direct)
 					await toolset.tools.execute({ id: 's2', name: 'dialog', arguments: { accept: true } })
@@ -311,7 +294,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					toolset.emitter.on('action', (action) => actions.push(action))
 					results.push(requireToolText(await toolset.tools.execute(call)))
 				} else {
-					const performed = await toolset.perform(call)
+					const performed = await toolset.execute(call)
 					actions.push(requireValue(performed.action))
 					results.push(requireToolText(performed.result))
 				}
@@ -1412,7 +1395,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			if (!isString(endpoint))
 				throw new Error('Precondition failed: Chromium reported no debugger URL.')
 			const client: CDPClientInterface = createCDPClient({
-				transport: createCDPTransport({ url: endpoint }),
+				transport: createWebSocketCDPTransport({ url: endpoint }),
 				timeout: 10_000,
 			})
 			suite.add(() => client.close())

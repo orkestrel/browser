@@ -13,9 +13,9 @@ import type {
 	BrowserWorkerInterface,
 } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, it, expect } from 'vitest'
 import {
-	BrowserPage,
 	createCDPClient,
 	isBrowserError,
 	BROWSER_RESULT_LIMIT,

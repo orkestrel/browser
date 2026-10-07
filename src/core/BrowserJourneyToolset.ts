@@ -62,7 +62,7 @@ import {
  * and owns the recording and the active replay.
  *
  * @remarks
- * The journey toolset composes the toolset's public members: `perform` reads the view a receipt
+ * The journey toolset composes the toolset's public members: `execute` reads the view a receipt
  * carries through `read`, `hold` and `emitter` drive the recorder and the replay, `view` converts
  * an edit's `ref` to a target, and `tools` receives the journey tools at construction, which refuses
  * with `TOOLSET_RESERVED` when the manager already holds one of the names. Every refusal
@@ -83,17 +83,10 @@ import {
  * `destroy()` aborts the active replay and waits for it to finish, stops a recording without
  * saving it, and removes the journey tools the manager still holds under the instances it added.
  *
- * @example
- * ```ts
- * import { BrowserJourneyToolset, createMemoryBrowserJourneyStore } from '@orkestrel/browser'
- *
- * const journeys = new BrowserJourneyToolset(toolset, { store: createMemoryBrowserJourneyStore() })
- * await toolset.tools.execute({ id: '1', name: 'record', arguments: { journey: 'add-kettle' } })
- * await journeys.destroy()
- * ```
  */
 export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	readonly #toolset: BrowserToolsetInterface
+	readonly #notes: (() => string) | undefined
 	readonly #store: BrowserJourneyStoreInterface
 	readonly #runs: BrowserRunStoreInterface | undefined
 	readonly #readonly: boolean
@@ -107,7 +100,11 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	#replay: Promise<void> | undefined
 	#destroying: Promise<void> | undefined
 
-	constructor(toolset: BrowserToolsetInterface, options: BrowserJourneyOptions) {
+	constructor(
+		toolset: BrowserToolsetInterface,
+		options: BrowserJourneyOptions,
+		notes?: () => string,
+	) {
 		const limit = options.limit ?? toolset.limit
 		if (!Number.isSafeInteger(limit) || limit < 1) {
 			throw new BrowserError('JOURNEY_ARGUMENT', 'The journeys limit must be a positive integer', {
@@ -123,6 +120,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			)
 		}
 		this.#toolset = toolset
+		this.#notes = notes
 		this.#store = options.store
 		this.#runs = options.runs
 		this.#readonly = options.readonly === true
@@ -180,7 +178,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	): Promise<string> {
 		if (this.#destroying !== undefined) throw this.#ended()
 		const signal = AbortSignal.any([context.signal, this.#lifetime.signal])
-		const note = abbreviateBrowserText(this.#toolset.notes(), 200)
+		const note = abbreviateBrowserText(this.#notes?.() ?? '', 200)
 		try {
 			validateBrowserToolArguments(BROWSER_TOOL_COPY[name], args)
 			signal.throwIfAborted()

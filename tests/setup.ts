@@ -35,11 +35,11 @@ import type {
 import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { RecorderInterface } from '@orkestrel/test'
+import { BrowserPage } from '../src/core/BrowserPage.js'
 import {
 	BrowserCodegen,
 	BROWSER_CODEGEN_SOURCE,
 	BrowserError,
-	BrowserPage,
 	BrowserToolset,
 	MemoryBrowserRunStore,
 	compileSubmitObserverExpression,

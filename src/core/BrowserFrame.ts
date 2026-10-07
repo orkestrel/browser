@@ -27,14 +27,6 @@ import { isRecord, isString } from '@orkestrel/contract'
  * A standalone frame built with neither returns readings whose `stale` stays `false`, because
  * no navigation counter is available to it, and creates a fresh world for each read.
  *
- * @example
- * ```ts
- * import { BrowserFrame } from '@orkestrel/browser'
- *
- * const frame = new BrowserFrame(client, 'session-1', 'frame-1', 'https://example.com')
- * const title = await frame.title()
- * const reading = await frame.read()
- * ```
  */
 export class BrowserFrame implements BrowserFrameInterface {
 	readonly #client: CDPClientInterface
