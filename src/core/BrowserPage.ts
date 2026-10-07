@@ -79,7 +79,7 @@ import {
 	compileScreenshotPreparationExpression,
 } from './compilers.js'
 import {
-	assertBrowserPage,
+	validateBrowserPageOpen,
 	readBrowserSnapshot,
 	browserPDFToParams,
 	browserScreenshotToParams,
@@ -472,7 +472,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 					{ ...options, timeout: remaining + 1000 },
 				)
 				if (readEvaluationResult(result) !== true)
-					throw new BrowserError('WAIT_TIMEOUT', 'Browser text wait timed out', {
+					throw new BrowserError('TIMEOUT', 'Browser text wait timed out', {
+						operation: 'wait',
 						text,
 						timeout,
 					})
@@ -484,7 +485,8 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				}
 				if (!isError(error) || !BROWSER_CONTEXT_LOSS_PATTERN.test(error.message)) throw error
 				if (performance.now() >= end)
-					throw new BrowserError('WAIT_TIMEOUT', 'Browser text wait timed out', {
+					throw new BrowserError('TIMEOUT', 'Browser text wait timed out', {
+						operation: 'wait',
 						text,
 						timeout,
 					})
@@ -500,7 +502,6 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	get registry(): BrowserRegistryInterface {
-		this.#assert()
 		this.#registry ??= new BrowserRegistry(this, this.#client, this.#sessionId, this.#frameIds)
 		return this.#registry
 	}
@@ -760,7 +761,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 	}
 
 	#assert(): void {
-		assertBrowserPage(this, this.#client)
+		validateBrowserPageOpen(this, this.#client)
 	}
 
 	async #navigate(
@@ -1134,7 +1135,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const timer = setTimeout(
 			() =>
 				this.#settleReadiness(id)?.reject(
-					new BrowserError('WAIT_TIMEOUT', 'Browser DOM readiness timed out'),
+					new BrowserError('TIMEOUT', 'Browser DOM readiness timed out', { operation: 'wait' }),
 				),
 			timeout,
 		)
@@ -2218,7 +2219,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		this.#loadResolve = deferred.resolve
 		this.#loadReject = deferred.reject
 		this.#loadTimer = setTimeout(() => {
-			this.#rejectLoad(new BrowserError('NAVIGATION', `Navigation timeout after ${timeout}ms`))
+			this.#rejectLoad(
+				new BrowserError('TIMEOUT', `Navigation timeout after ${timeout}ms`, {
+					operation: 'navigate',
+					timeout,
+				}),
+			)
 		}, timeout)
 		for (const event of this.#loadEvents) {
 			this.#client.subscribe(event, this.#loadHandler, this.#sessionId)

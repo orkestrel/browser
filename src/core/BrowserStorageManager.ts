@@ -19,14 +19,7 @@ import { attempt } from '@orkestrel/contract'
 /**
  * Imports, exports, and clears cookie and web-storage state for one browser context.
  *
- * @example
- * ```ts
- * import { BrowserStorageManager } from '@orkestrel/browser'
- *
- * const storage = new BrowserStorageManager(context.cookies, () => context.pages())
- * const state = await storage.state({ origins: ['https://example.com'] })
- * await storage.restore(state)
- * ```
+ * @remarks The owner exposes this entity through `context.storage`.
  */
 export class BrowserStorageManager implements BrowserStorageManagerInterface {
 	readonly #cookies: BrowserCookieManagerInterface

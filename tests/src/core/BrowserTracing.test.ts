@@ -1,3 +1,4 @@
+import { BrowserTracing } from '../../../src/core/BrowserTracing.js'
 /**
  * src/core/BrowserTracing.ts tests.
  *
@@ -8,10 +9,25 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BrowserTracing, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createAttachedPage, createRecordingWriter, readCDPParams, replyOk } from '../../setup.js'
 
 describe('BrowserTracing', () => {
+	it('reports a missing trace completion as TIMEOUT', async () => {
+		const { page, client, transport } = await createAttachedPage()
+		replyOk(transport, 'Tracing.start')
+		replyOk(transport, 'Tracing.end')
+		const tracing = new BrowserTracing(page)
+		try {
+			await tracing.start()
+			await expect(tracing.stop()).rejects.toMatchObject({
+				code: 'TIMEOUT',
+				context: { operation: 'stop' },
+			})
+		} finally {
+			await client.close()
+		}
+	}, 40000)
 	it('closes the IO stream and avoids writing when codec refuses a chunk', async () => {
 		const { page, client, transport } = await createAttachedPage()
 		replyOk(transport, 'Tracing.start')

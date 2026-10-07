@@ -4,7 +4,7 @@ import type { ToolDefinition } from '@orkestrel/tool'
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
-	BrowserContextOptions,
+	BrowserIsolateOptions,
 	BrowserPageInterface,
 	BrowserPageOptions,
 	BrowserViewport,
@@ -287,7 +287,7 @@ export interface BrowserInterface {
 	 * Creates and registers an isolated CDP context with validated proxy, download, origin,
 	 * and emulation options.
 	 */
-	isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface>
+	isolate(options?: BrowserIsolateOptions): Promise<BrowserContextInterface>
 	/** Opens a page in the default context. */
 	create(options?: BrowserPageOptions): Promise<BrowserPageInterface>
 	/**
@@ -378,7 +378,7 @@ export type BrowserLaunchFunction = (options: BrowserOptions) => BrowserInterfac
  * - `pool.contexts` — the integer context capacity per browser, shared holder included, from 1
  *   through `BROWSER_SERVER_CONTEXTS_LIMIT`. Default: `BROWSER_SERVER_CONTEXTS`.
  * - `log` — receives diagnostic lines. Default: `process.stderr`
- * @throws Thrown when `pool.size` or `pool.contexts` is outside its range or is not an integer, with `SERVER_OPTIONS`
+ * @throws Thrown when `pool.size` or `pool.contexts` is outside its range or is not an integer, with `ARGUMENT`
  */
 export interface BrowserMCPServerOptions {
 	readonly root?: string
@@ -412,7 +412,7 @@ export interface BrowserMCPServerInterface {
 	 * Serves stdio, sweeps the profiles ended servers left, warms the pool, and resolves after the
 	 * shared holder consumes a prepared context on a warm browser; the legacy handshake and every tool call await the same setup.
 	 * Rejects with `BROWSER_SERVER_UNAVAILABLE` when no browser can serve and with
-	 * `BROWSER_TOOLSET_ENDED` after `destroy()`, and resolves when `destroy()` interrupts setup.
+	 * `CLOSED` after `destroy()`, and resolves when `destroy()` interrupts setup.
 	 */
 	start(): Promise<void>
 	/**

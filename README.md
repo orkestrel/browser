@@ -31,7 +31,12 @@ import { createBrowser } from '@orkestrel/browser/server'
 
 const browser = createBrowser({ headless: true })
 await browser.connect()
-const page = await browser.create({ url: 'https://example.com' })
+const url =
+	'data:text/html,' +
+	encodeURIComponent(
+		'<label>Email<input aria-label="Email"></label><button onclick="document.body.append(&quot;Saved&quot;)">Save</button>',
+	)
+const page = await browser.create({ url })
 const outline = await page.elements.outline() // the page's text and elements, with references such as e4
 const [email] = await page.elements.find({ role: 'textbox', name: 'Email' })
 await email?.fill('sam@example.test')
@@ -74,6 +79,8 @@ const result = await client.send('Page.navigate', { url: 'https://example.com' }
 await client.close()
 ```
 
+Context wrapping uses `BrowserContextOptions`; `browser.isolate` uses `BrowserIsolateOptions` and assigns the context id. The stable `page.recorder` reports `active` and starts explicitly. Network `apply` retains omitted or undefined settings; `clear()` resets headers, offline mode, and credentials. Cookie `remove` requires a nonempty filter; `clear()` removes all cookies.
+
 ## Browse binary
 
 The package ships the `browse` binary, which serves the browser vocabulary and the journey tools over MCP on stdio and starts Chromium when the server starts, before the client's first request, keeping journeys and runs under `tmp/browsers`. Register it for a checkout with `claude mcp add --scope project browse -- node node_modules/@orkestrel/browser/dist/bin/main.js`, which writes the `browse` entry of the project's `.mcp.json`, then start `claude` in the checkout and approve the server; `BROWSE_ROOT`, `BROWSE_HEADLESS`, `BROWSE_EXECUTABLE`, `BROWSE_READONLY`, and `BROWSE_POOL` configure it. See [Register the browse binary with Claude Code](guides/browser.md#register-the-browse-binary-with-claude-code) for the entry, the approval, the startup and recovery behavior, and an illustrative exchange.
@@ -86,7 +93,7 @@ For the full surface of the three faces, the method tables, the toolset vocabula
 
 The `exports` field in `package.json` names three entry points:
 
-- `.`, the core: context and page contracts, elements and readings, the toolset, recorder, replay, memory stores, journey compiler, and their factories. Owners construct pages, frames, and elements and return their public interfaces; `createBrowserContext` constructs a context over an injected CDP client.
+- `.`, the core: context and page contracts, elements and readings, the toolset, recorder, replay, memory stores, journey compiler, and their factories. Owners construct pages, frames, elements, input devices, and managers and return their public interfaces; `createBrowserContext` constructs a context over an injected CDP client.
 - `./browser`, the in-page face: `BrowserDOMView`, `BrowserDOMWait`, `SocketCDPTransport`, `createBrowserDOMView`, and `createSocketCDPTransport`. Compose the view with the core's `createBrowserToolset`.
 - `./server`, the Node runtime: `Browser`, `WebSocketCDPTransport`, `FileBrowserWriter`, the file journey and run stores, `BrowserMCPServer`, and the factories `createBrowser`, `createWebSocketCDPTransport`, `createFileBrowserWriter`, `createFileBrowserJourneyStore`, `createFileBrowserRunStore`, and `createBrowserMCPServer`.
 

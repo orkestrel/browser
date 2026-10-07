@@ -1,3 +1,4 @@
+import type { BrowserWebSocketFrame } from './types.js'
 import { decodeBase64 } from '@orkestrel/codec'
 import type {
 	BrowserCredentials,
@@ -8,7 +9,6 @@ import type {
 	BrowserRouteDefinition,
 	BrowserRouteManagerInterface,
 	BrowserNetworkOptions,
-	BrowserWebSocketDriver,
 	BrowserWriterInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -31,15 +31,7 @@ import { Emitter } from '@orkestrel/emitter'
 /**
  * Drives the page-scoped Network and Fetch domain lifecycle.
  *
- * @example
- * ```ts
- * import { BrowserNetworkManager } from '@orkestrel/browser'
- *
- * const network = new BrowserNetworkManager(page)
- * await network.start()
- * network.emitter.on('response', (response) => log(response.status))
- * await network.destroy()
- * ```
+ * @remarks The owner exposes this entity through `page.network`.
  */
 export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	readonly #frame: BrowserFrameInterface
@@ -47,7 +39,15 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 	readonly #har: BrowserHARManager
 	readonly #routes: BrowserRouteDefinition[] = []
 	readonly #manager: BrowserRouteManager
-	readonly #sockets: Map<string, BrowserWebSocketDriver> = new Map()
+	readonly #sockets: Map<
+		string,
+		{
+			readonly receive: (frame: BrowserWebSocketFrame) => void
+			readonly transmit: (frame: BrowserWebSocketFrame) => void
+			readonly fail: (message: string) => void
+			readonly close: (timestamp: number) => void
+		}
+	> = new Map()
 	#credentials: BrowserCredentials | undefined
 	#started = false
 	#intercepting = false
@@ -97,15 +97,27 @@ export class BrowserNetworkManager implements BrowserNetworkManagerInterface {
 				downloadThroughput: -1,
 				uploadThroughput: -1,
 			})
-		if ('credentials' in options) {
+		if (options.credentials !== undefined) {
 			const previous = this.#credentials
-			this.#credentials = options.credentials === undefined ? undefined : { ...options.credentials }
+			this.#credentials = { ...options.credentials }
 			try {
 				await this.#configure()
 			} catch (error) {
 				this.#credentials = previous
 				throw error
 			}
+		}
+	}
+
+	async clear(): Promise<void> {
+		await this.apply({ headers: {}, offline: false })
+		const previous = this.#credentials
+		this.#credentials = undefined
+		try {
+			await this.#configure()
+		} catch (error) {
+			this.#credentials = previous
+			throw error
 		}
 	}
 

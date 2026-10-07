@@ -75,7 +75,11 @@ export class BrowserContext implements BrowserContextInterface {
 	#reference = 0
 
 	constructor(client: CDPClientInterface, options?: BrowserContextOptions) {
-		if (options?.proxy !== undefined || options?.origins !== undefined) {
+		if (
+			options !== undefined &&
+			(('proxy' in options && options.proxy !== undefined) ||
+				('origins' in options && options.origins !== undefined))
+		) {
 			throw new BrowserError('ARGUMENT', 'Proxy and origins require browser.isolate')
 		}
 		this.#client = client
@@ -141,7 +145,7 @@ export class BrowserContext implements BrowserContextInterface {
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
 		if (this.#shutdown !== undefined)
-			throw new BrowserError('CONTEXT_CLOSED', 'Browser context is closed')
+			throw new BrowserError('CLOSED', 'Browser context is closed', { subject: 'context' })
 
 		const attempt = this.#create(options)
 		this.#creating.add(attempt)
@@ -159,7 +163,7 @@ export class BrowserContext implements BrowserContextInterface {
 			active = this.#syncing.pending
 		}
 		if (this.#shutdown !== undefined)
-			throw new BrowserError('CONTEXT_CLOSED', 'Browser context is closed')
+			throw new BrowserError('CLOSED', 'Browser context is closed', { subject: 'context' })
 
 		await this.#syncing.execute(() => this.#sync(targets))
 	}
@@ -216,7 +220,9 @@ export class BrowserContext implements BrowserContextInterface {
 				})
 			}
 			if (this.#shutdown !== undefined) {
-				throw new BrowserError('CONTEXT_CLOSED', 'Browser context closed during page creation')
+				throw new BrowserError('CLOSED', 'Browser context closed during page creation', {
+					subject: 'context',
+				})
 			}
 
 			if (!this.#publish(page)) throw this.#refuse(targetId)
@@ -461,7 +467,8 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	#refuse(target: string): BrowserError {
-		return new BrowserError('PAGE_CLOSED', 'Browser page closed during creation', {
+		return new BrowserError('CLOSED', 'Browser page closed during creation', {
+			subject: 'page',
 			target,
 		})
 	}

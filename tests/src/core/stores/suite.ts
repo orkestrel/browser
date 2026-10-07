@@ -21,7 +21,6 @@ export function describeBrowserJourneyStore(
 			const journey = createBrowserJourneyFixture()
 			for (const options of [
 				{ revision: 1, exclusive: true },
-				{ revision: 1, exclusive: false },
 				{ revision: 0 },
 				{ revision: -1 },
 				{ revision: 1.5 },
@@ -39,6 +38,15 @@ export function describeBrowserJourneyStore(
 			expect(await store.get(journey.name)).toEqual(saved)
 			expect((await store.set(journey, { exclusive: false })).revision).toBe(2)
 		})
+		it('treats exclusive false as omission with a revision', async () => {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			expect((await store.set(journey, { revision: 1, exclusive: false })).revision).toBe(2)
+			await expect(store.set(journey, { revision: 1, exclusive: false })).rejects.toMatchObject({
+				code: 'JOURNEY_STALE',
+			})
+		})
 		it('accepts exactly one competing exclusive creator and one revision writer', async () => {
 			const store = await factory()
 			const journey = createBrowserJourneyFixture()
@@ -53,7 +61,7 @@ export function describeBrowserJourneyStore(
 				expect(await store.get(journey.name)).toEqual(saved.value)
 				const refused = outcomes.filter((result) => result.status === 'rejected')
 				for (const result of refused)
-					expect(['JOURNEY_STALE', 'JOURNEY_LOCKED']).toContain(result.reason.code)
+					expect(['JOURNEY_STALE', 'STORE_LOCKED']).toContain(result.reason.code)
 			}
 			expect((await store.get(journey.name))?.revision).toBe(2)
 		})
@@ -76,22 +84,22 @@ export function describeBrowserJourneyStore(
 		it('refuses zero journey limits', async () => {
 			const store = await factory()
 			await expect(store.list({ limit: 0 })).rejects.toMatchObject({
-				code: 'JOURNEY_ARGUMENT',
+				code: 'ARGUMENT',
 			})
 			await store.set(createBrowserJourneyFixture())
 			await expect(store.list({ limit: 0 })).rejects.toMatchObject({
-				code: 'JOURNEY_ARGUMENT',
+				code: 'ARGUMENT',
 			})
 		})
 		it('refuses invalid journey names in point operations', async () => {
 			const store = await factory()
 			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
-				await expect(store.get(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
-				await expect(store.delete(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(store.get(invalid)).rejects.toMatchObject({ code: 'STORE_PATH' })
+				await expect(store.delete(invalid)).rejects.toMatchObject({ code: 'STORE_PATH' })
 				const journey = createBrowserJourneyFixture([], { name: invalid })
-				await expect(store.set(journey)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(store.set(journey)).rejects.toMatchObject({ code: 'STORE_PATH' })
 				Reflect.set(journey, 'format', 9)
-				await expect(store.set(journey)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(store.set(journey)).rejects.toMatchObject({ code: 'STORE_PATH' })
 			}
 		})
 		it('owns input, returned values, and listings', async () => {
@@ -158,11 +166,11 @@ export function describeBrowserJourneyStore(
 		it('refuses negative journey paging', async () => {
 			const store = await factory()
 			await expect(store.list({ offset: -1 })).rejects.toMatchObject({
-				code: 'JOURNEY_ARGUMENT',
+				code: 'ARGUMENT',
 				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 			await expect(store.list({ limit: -1 })).rejects.toMatchObject({
-				code: 'JOURNEY_ARGUMENT',
+				code: 'ARGUMENT',
 				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 		})
@@ -191,7 +199,7 @@ export function describeBrowserJourneyStore(
 			const journey = createBrowserJourneyFixture()
 			await store.set(journey)
 			Reflect.set(journey, 'format', 9)
-			await expect(store.set(journey)).rejects.toMatchObject({ code: 'JOURNEY_FORMAT' })
+			await expect(store.set(journey)).rejects.toMatchObject({ code: 'STORE_FORMAT' })
 			expect((await store.get(journey.name))?.revision).toBe(1)
 		})
 		it('honours an aborted signal on every primitive', async () => {
@@ -220,7 +228,7 @@ export function describeBrowserRunStore(
 		it('refuses zero run limits', async () => {
 			const store = await factory()
 			await expect(store.list('add-kettle', { limit: 0 })).rejects.toMatchObject({
-				code: 'JOURNEY_ARGUMENT',
+				code: 'ARGUMENT',
 			})
 		})
 		it('clears saved runs and unsaved slots without touching another journey', async () => {
@@ -234,10 +242,10 @@ export function describeBrowserRunStore(
 			expect(await store.list(journey)).toEqual({ entries: [], truncated: false, faults: [] })
 			for (const slot of [first, unsaved]) {
 				await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
-					code: 'JOURNEY_PATH',
+					code: 'STORE_PATH',
 				})
 				await expect(store.capture(slot, 's1.png', new Uint8Array([1]))).rejects.toMatchObject({
-					code: 'JOURNEY_PATH',
+					code: 'STORE_PATH',
 				})
 			}
 			await store.capture(sibling, 's1.png', new Uint8Array([2]))
@@ -250,21 +258,21 @@ export function describeBrowserRunStore(
 		it('refuses invalid journey names in run operations', async () => {
 			const store = await factory()
 			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
-				await expect(store.create(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
-				await expect(store.clear(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(store.create(invalid)).rejects.toMatchObject({ code: 'STORE_PATH' })
+				await expect(store.clear(invalid)).rejects.toMatchObject({ code: 'STORE_PATH' })
 				await expect(store.get(invalid, BROWSER_RUN_FIXTURE.id)).rejects.toMatchObject({
-					code: 'JOURNEY_PATH',
+					code: 'STORE_PATH',
 				})
 				await expect(store.delete(invalid, BROWSER_RUN_FIXTURE.id)).rejects.toMatchObject({
-					code: 'JOURNEY_PATH',
+					code: 'STORE_PATH',
 				})
-				await expect(store.list(invalid)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(store.list(invalid)).rejects.toMatchObject({ code: 'STORE_PATH' })
 			}
 		})
 		it('refuses writing a run this store never opened', async () => {
 			const store = await factory()
 			await expect(store.set(BROWSER_RUN_FIXTURE)).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 			expect(
 				await store.get(BROWSER_RUN_FIXTURE.journey.name, BROWSER_RUN_FIXTURE.id),
@@ -272,17 +280,17 @@ export function describeBrowserRunStore(
 			const other = await factory()
 			const slot = await other.create(BROWSER_RUN_FIXTURE.journey.name)
 			await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 		})
 		it('refuses negative run paging', async () => {
 			const store = await factory()
 			await expect(store.list('add-kettle', { offset: -1 })).rejects.toMatchObject({
-				code: 'JOURNEY_ARGUMENT',
+				code: 'ARGUMENT',
 				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 			await expect(store.list('add-kettle', { limit: -1 })).rejects.toMatchObject({
-				code: 'JOURNEY_ARGUMENT',
+				code: 'ARGUMENT',
 				message: 'Paging requires a nonnegative integer offset and a positive integer limit',
 			})
 		})
@@ -290,14 +298,14 @@ export function describeBrowserRunStore(
 			const store = await factory()
 			await expect(
 				store.capture({ id: BROWSER_RUN_FIXTURE.id }, 's1.png', new Uint8Array([137, 80])),
-			).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+			).rejects.toMatchObject({ code: 'STORE_PATH' })
 		})
 		it('refuses capture on a slot opened by another store', async () => {
 			const store = await factory()
 			const other = await factory()
 			const slot = await other.create('add-kettle')
 			await expect(store.capture(slot, 's1.png', new Uint8Array([137, 80]))).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 		})
 		it('honours an aborted signal when capturing an opened slot', async () => {
@@ -363,7 +371,7 @@ export function describeBrowserRunStore(
 			const run = { ...structuredClone(BROWSER_RUN_FIXTURE), id: slot.id }
 			await store.set(run)
 			Reflect.set(run, 'format', 9)
-			await expect(store.set(run)).rejects.toMatchObject({ code: 'JOURNEY_FORMAT' })
+			await expect(store.set(run)).rejects.toMatchObject({ code: 'STORE_FORMAT' })
 			expect((await store.get(run.journey.name, run.id))?.format).toBe(1)
 		})
 		it('honours an aborted signal on every primitive', async () => {

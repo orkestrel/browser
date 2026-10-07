@@ -1,3 +1,4 @@
+import { BrowserPermissionManager } from '../../../src/core/BrowserPermissionManager.js'
 /**
  * src/core/BrowserPermissionManager.ts tests.
  *
@@ -7,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BrowserPermissionManager } from '@src/core'
+
 import { createConnectedCDPClient, readCDPParams, replyOk } from '../../setup.js'
 
 describe('BrowserPermissionManager', () => {

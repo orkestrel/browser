@@ -1,12 +1,10 @@
 import type {
 	BrowserEpochFunction,
-	BrowserFrameLocation,
 	BrowserFrameInterface,
 	BrowserHandleInterface,
 	BrowserReadingInterface,
 	BrowserCallOptions,
 	BrowserSessionFunction,
-	BrowserWorldFunction,
 	CDPHandler,
 	CDPClientInterface,
 } from './types.js'
@@ -25,9 +23,7 @@ import { isRecord, isString } from '@orkestrel/contract'
  * The optional `epoch` constructor parameter reads the frame's navigation counter, which lets
  * `read()` mark a reading stale after a later navigation. The optional `world` parameter
  * resolves a cached isolated-world context, which lets a page share one world across reads.
- * A standalone frame built with neither returns readings whose `stale` stays `false`, because
- * no navigation counter is available to it, and creates a fresh world for each read.
- *
+ * The owning page supplies these callbacks for its documents.
  */
 export class BrowserFrame implements BrowserFrameInterface {
 	readonly #client: CDPClientInterface
@@ -37,20 +33,30 @@ export class BrowserFrame implements BrowserFrameInterface {
 	readonly #name: string | undefined
 	readonly #isolated: boolean
 	readonly #epoch: BrowserEpochFunction | undefined
-	readonly #world: BrowserWorldFunction | undefined
+	readonly #world: ((session: string, options?: BrowserCallOptions) => Promise<number>) | undefined
 	readonly #assertion: (() => void) | undefined
-	#url: string | BrowserFrameLocation
+	#url:
+		| string
+		| {
+				readonly get: () => string
+				readonly set: (url: string) => void
+		  }
 
 	constructor(
 		client: CDPClientInterface,
 		session: string | BrowserSessionFunction,
 		id: string,
-		url: string | BrowserFrameLocation,
+		url:
+			| string
+			| {
+					readonly get: () => string
+					readonly set: (url: string) => void
+			  },
 		parent?: string,
 		name?: string,
 		isolated = true,
 		epoch?: BrowserEpochFunction,
-		world?: BrowserWorldFunction,
+		world?: (session: string, options?: BrowserCallOptions) => Promise<number>,
 		assert?: () => void,
 	) {
 		this.#client = client

@@ -89,7 +89,7 @@ describe('BrowserToolset', () => {
 						{ signal: new AbortController().signal },
 					),
 				).rejects.toMatchObject({
-					code: 'TOOLSET_ARGUMENT',
+					code: 'ARGUMENT',
 					context: { key: 'absent' },
 					message: 'The absent parameter must be a boolean.',
 				})
@@ -1013,8 +1013,8 @@ describe('BrowserToolset', () => {
 					{ signal: new AbortController().signal },
 				),
 			).catch((caught: unknown) => caught)
-			expect(readProperty(refused, 'code')).toBe('TOOLSET_ARGUMENT')
-			expect(readProperty(refused, 'context')).toEqual({ key: 'ref' })
+			expect(readProperty(refused, 'code')).toBe('ARGUMENT')
+			expect(readProperty(refused, 'context')).toEqual({ subject: 'toolset', key: 'ref' })
 			await toolset.destroy()
 		})
 
@@ -1045,7 +1045,8 @@ describe('BrowserToolset', () => {
 						'Browser toolset limit must be a positive integer',
 					)
 					expect(captureError(() => createBrowserToolset(page, { limit }))).toMatchObject({
-						code: 'TOOLSET_ARGUMENT',
+						code: 'ARGUMENT',
+						context: { subject: 'toolset', limit },
 					})
 				}
 			} finally {
@@ -2206,7 +2207,7 @@ describe('BrowserToolset', () => {
 					read.execute({ from: 1, search: 'cart' }, { signal: new AbortController().signal }),
 				).catch((caught: unknown) => caught)
 				expect(readProperty(after, 'message')).toBe('the browser session ended')
-				expect(readProperty(after, 'code')).toBe('TOOLSET_ENDED')
+				expect(readProperty(after, 'code')).toBe('CLOSED')
 				expect(
 					readProperty(await toolset.start().catch((caught: unknown) => caught), 'message'),
 				).toBe('the browser session ended')
@@ -3438,7 +3439,7 @@ describe('BrowserToolset', () => {
 				).rejects.toMatchObject({ code: 'TOOLSET_DIALOG' })
 				expect(fronted()).toBe(2)
 				await toolset.destroy()
-				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'TOOLSET_ENDED' })
+				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'CLOSED' })
 				const viewless = createBrowserToolset(first)
 				await viewless.start()
 				expect(await viewless.tabs()).toStrictEqual([])

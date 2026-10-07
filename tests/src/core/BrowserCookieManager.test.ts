@@ -1,8 +1,29 @@
+import { BrowserCookieManager } from '../../../src/core/BrowserCookieManager.js'
+import { BrowserPermissionManager } from '../../../src/core/BrowserPermissionManager.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserCookieManager, BrowserPermissionManager, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserCookieManager', () => {
+	it.each([false, true])(
+		'refuses an empty removal filter with explicit undefined %j before traffic',
+		async (explicit) => {
+			const filter = {}
+			if (explicit)
+				for (const key of ['name', 'domain', 'path']) Reflect.set(filter, key, undefined)
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Storage.getCookies', { cookies: [] })
+			replyOk(transport, 'Storage.clearCookies')
+			try {
+				await expect(new BrowserCookieManager(client).remove(filter)).rejects.toMatchObject({
+					code: 'ARGUMENT',
+				})
+				expect(transport.sent).toEqual([])
+			} finally {
+				await client.close()
+			}
+		},
+	)
 	it('decodes context cookies and filters them by request URL', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Storage.getCookies', {

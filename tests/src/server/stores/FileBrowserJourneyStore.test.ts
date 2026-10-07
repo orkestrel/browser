@@ -2,7 +2,7 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import { BrowserJourneyToolset } from '../../../../src/core/BrowserJourneyToolset.js'
 import { afterEach, describe, it, expect } from 'vitest'
 import { watch } from 'node:fs'
-import { mkdir, rename, readFile, readdir } from 'node:fs/promises'
+import { mkdir, rename, readFile, readdir, writeFile, unlink, rmdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import {
 	BROWSER_JOURNEY_FIXTURE,
@@ -22,6 +22,7 @@ import {
 	createFileBrowserJourneyStore,
 	FileBrowserJourneyStore,
 	FileBrowserRunStore,
+	formatBrowserLockEntry,
 } from '@src/server'
 import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { describeBrowserJourneyStore } from '../../core/stores/suite.js'
@@ -39,6 +40,45 @@ describeBrowserJourneyStore('FileBrowserJourneyStore', () => {
 describeFileBrowserStores()
 
 describe('BrowserJourneyToolset file listing', () => {
+	it('serializes a name across instances before entering the filesystem lock', async () => {
+		const scratch = createScratch()
+		const entered = Promise.withResolvers<void>()
+		const release = Promise.withResolvers<void>()
+		const first = new FileBrowserStore({ root: scratch.path })
+		const second = new FileBrowserStore({ root: scratch.path })
+		const path = join(scratch.path, 'same', 'journey.lock')
+		let finished = false
+		const holding = first.lock(path, async () => {
+			entered.resolve()
+			await release.promise
+			return 'first'
+		})
+		await entered.promise
+		const queued = second
+			.lock(path, async () => 'second')
+			.then(
+				(value) => {
+					finished = true
+					return value
+				},
+				(error) => {
+					finished = true
+					return error
+				},
+			)
+		try {
+			// An independent name can finish while this one waits for its process-local owner.
+			await second.lock(join(scratch.path, 'other', 'journey.lock'), async () => undefined)
+			expect(finished).toBe(false)
+			release.resolve()
+			await expect(holding).resolves.toBe('first')
+			await expect(queued).resolves.toBe('second')
+		} finally {
+			release.resolve()
+			await Promise.allSettled([holding, queued])
+			scratch.destroy()
+		}
+	})
 	it('forget removes file runs and captures, frees the name, and retains its revision', async () => {
 		const scratch = createScratch()
 		const store = new FileBrowserJourneyStore({ root: scratch.path })
@@ -90,20 +130,26 @@ describe('BrowserJourneyToolset file listing', () => {
 		const scratch = createScratch()
 		const store = new FileBrowserJourneyStore({ root: scratch.path })
 		const runs = new FileBrowserRunStore({ root: scratch.path })
-		const files = new FileBrowserStore({ root: scratch.path })
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const journeys = new BrowserJourneyToolset(toolset, { store, runs })
 		try {
 			const saved = await store.set(BROWSER_JOURNEY_FIXTURE)
 			const slot = await runs.create('add-kettle')
 			await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
-			await files.lock(join(scratch.path, 'add-kettle', 'journey.lock'), async () => {
+			const lock = join(scratch.path, 'add-kettle', 'journey.lock')
+			const holder = join(
+				lock,
+				formatBrowserLockEntry(process.pid, '11111111-1111-4111-8111-111111111111'),
+			)
+			await mkdir(lock)
+			await writeFile(holder, '')
+			try {
 				await expect(
 					requireValue(toolset.tools.tool('forget')).execute(
 						{ journey: 'add-kettle' },
 						{ signal: new AbortController().signal },
 					),
-				).rejects.toMatchObject({ code: 'JOURNEY_LOCKED' })
+				).rejects.toMatchObject({ code: 'STORE_LOCKED' })
 				expect(
 					await toolset.tools.execute({
 						id: 'forget',
@@ -114,7 +160,10 @@ describe('BrowserJourneyToolset file listing', () => {
 					success: false,
 					error: 'Journey add-kettle is locked; call forget again.',
 				})
-			})
+			} finally {
+				await unlink(holder)
+				await rmdir(lock)
+			}
 			expect(await store.get('add-kettle')).toEqual(saved)
 			expect((await runs.list('add-kettle')).entries.map((run) => run.id)).toEqual([slot.id])
 			expect(
@@ -185,10 +234,10 @@ describe('FileBrowserJourneyStore filesystem boundaries', () => {
 			)
 			createLink(path, path + '-moved')
 			await expect(store.set(journey, { revision: 1 })).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 			await expect(store.delete(journey.name)).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 		},
 	)

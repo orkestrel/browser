@@ -13,14 +13,7 @@ import {
 /**
  * Sends trusted keyboard input through Chromium's CDP Input domain.
  *
- * @example
- * ```ts
- * import { BrowserKeyboard } from '@orkestrel/browser'
- *
- * const keyboard = new BrowserKeyboard(page)
- * await keyboard.type('orkestrel', { delay: 10 })
- * await keyboard.press('Control+Enter')
- * ```
+ * @remarks The owner exposes this entity through `page.keyboard`.
  */
 export class BrowserKeyboard implements BrowserKeyboardInterface {
 	readonly #frame: BrowserFrameInterface

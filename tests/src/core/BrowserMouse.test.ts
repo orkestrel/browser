@@ -1,6 +1,7 @@
+import { BrowserMouse } from '../../../src/core/BrowserMouse.js'
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserMouse, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import {
 	createAttachedPage,
 	createConnectedCDPClient,

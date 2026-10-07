@@ -547,7 +547,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await page.evaluate('document.querySelector("p").textContent = "Changed paragraph"')
 		expect(await toolset.read({ from })).toContain('changed')
 		for (const args of [{ from: 0 }, { from: 2, to: 1 }, { from: 1.5 }, { from: 99999 }])
-			await expect(toolset.read(args)).rejects.toMatchObject({ code: 'TOOLSET_ARGUMENT' })
+			await expect(toolset.read(args)).rejects.toMatchObject({ code: 'ARGUMENT' })
 		for (const name of ['look', 'plain', 'tabs'])
 			expect((await toolset.tools.execute({ id: name, name, arguments: {} })).success).toBe(false)
 	})

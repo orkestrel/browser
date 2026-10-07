@@ -65,7 +65,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 		const revision = structuredClone(this.#revision)
 		const journey = revision.journey
 		if (this.#toolset.emitter.destroyed)
-			throw new BrowserError('TOOLSET_ENDED', 'The browser session ended')
+			throw new BrowserError('CLOSED', 'The browser session ended', { subject: 'toolset' })
 		const started = performance.now()
 		const secret = Object.values(journey.parameters).some((parameter) => parameter.secret === true)
 		const visible = Object.fromEntries(
@@ -348,7 +348,7 @@ export class BrowserReplay implements BrowserReplayInterface {
 		const deadline = Promise.withResolvers<void>()
 		const abort = deadline.reject.bind(
 			undefined,
-			new BrowserError('JOURNEY_FILE', 'Writing the run timed out'),
+			new BrowserError('STORE_FILE', 'Writing the run timed out'),
 		)
 		signal.addEventListener('abort', abort, { once: true })
 		try {

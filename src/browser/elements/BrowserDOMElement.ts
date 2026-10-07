@@ -1,5 +1,7 @@
+import type { BrowserEpochFunction } from '@src/core'
+import type { BrowserElementInterface } from '@src/core'
 import type { BrowserCallOptions, BrowserReadingInterface } from '@src/core'
-import type { BrowserDOMElementInput, BrowserDOMElementInterface } from '../types.js'
+import type { BrowserDOMElementInterface } from '../types.js'
 import { isString } from '@orkestrel/contract'
 import { BrowserError, createBrowserReading, describeBrowserRefusal } from '@src/core'
 import { BROWSER_TYPED_INPUTS } from '../constants.js'
@@ -32,9 +34,21 @@ import {
  *
  */
 export class BrowserDOMElement implements BrowserDOMElementInterface {
-	readonly #input: BrowserDOMElementInput
+	readonly #input: {
+		readonly reference: string
+		readonly description: () => Pick<BrowserElementInterface, 'role' | 'name'>
+		readonly node: WeakRef<Element>
+		readonly current: () => boolean
+		readonly navigation: BrowserEpochFunction
+	}
 
-	constructor(input: BrowserDOMElementInput) {
+	constructor(input: {
+		readonly reference: string
+		readonly description: () => Pick<BrowserElementInterface, 'role' | 'name'>
+		readonly node: WeakRef<Element>
+		readonly current: () => boolean
+		readonly navigation: BrowserEpochFunction
+	}) {
 		this.#input = input
 	}
 

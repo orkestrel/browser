@@ -890,7 +890,7 @@ export function compileBrowserJourneyValue(
  * @param journey - The journey to compile
  * @param options - The target language
  * @returns The module source and the gap step ids in step order
- * @throws BrowserError - Thrown with `JOURNEY_FORMAT` or `JOURNEY_INVALID` when the
+ * @throws BrowserError - Thrown with `STORE_FORMAT` or `JOURNEY_INVALID` when the
  * journey fails validation, before any source is compiled
  * @example
  * ```ts

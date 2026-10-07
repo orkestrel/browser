@@ -262,7 +262,7 @@ describe('BrowserRecorder', () => {
 		expect(recorder.journey({ name: 'save', description: 'Save' }).steps).toEqual([
 			{ id: 's1', action: 'unresolved', arguments: {}, gap: 'interrupted click' },
 		])
-		expect(recorder.started).toBe(true)
+		expect(recorder.active).toBe(true)
 		expect(recorder.steps(), 'a snapshot preserves the pending dialog continuation').toEqual([])
 		toolset.emitter.emit('action', {
 			action: 'dialog',
@@ -439,7 +439,7 @@ describe('BrowserRecorder', () => {
 		const snapshot = recorder.steps()[0]
 		if (snapshot !== undefined) Reflect.set(snapshot, 'action', 'mutated')
 		expect((await recorder.stop())[0]?.action).toBe('click')
-		expect(recorder.started).toBe(false)
+		expect(recorder.active).toBe(false)
 		toolset.emitter.emit('action', createBrowserActionFixture())
 		expect(recorder.steps()).toHaveLength(1)
 		await recorder.start()

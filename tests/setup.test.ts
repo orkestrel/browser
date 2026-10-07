@@ -328,7 +328,7 @@ describe('element protocol and compiler fixtures', () => {
 		await expect(save.select(['x'])).rejects.toThrow('Element is not a select control')
 		await requireValue(view.elements.element('e3')).select(['Large'])
 		const wait = await view.wait('Paid').catch((caught: unknown) => caught)
-		expect(readProperty(wait, 'code')).toBe('WAIT_TIMEOUT')
+		expect(readProperty(wait, 'code')).toBe('TIMEOUT')
 		expect(view.elements.element('e9')).toBeUndefined()
 		expect(view.calls).toEqual([
 			'outline',
@@ -1042,7 +1042,7 @@ describe('createStartedCodegen', () => {
 	it('returns a codegen already started over the scripted binding handshake for its session', async () => {
 		const { codegen, transport } = await createStartedCodegen('session-4')
 
-		expect(codegen.started).toBe(true)
+		expect(codegen.active).toBe(true)
 		expect(transport.sent.map((message) => message.method)).toContain('Runtime.addBinding')
 		expect(transport.sent.map((message) => message.method)).toContain(
 			'Page.addScriptToEvaluateOnNewDocument',
@@ -1069,7 +1069,7 @@ describe('createStartedCodegen', () => {
 		const { codegen } = await createStartedCodegen()
 
 		await expect(codegen.stop()).resolves.toEqual([])
-		expect(codegen.started).toBe(false)
+		expect(codegen.active).toBe(false)
 	})
 })
 

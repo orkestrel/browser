@@ -50,7 +50,7 @@ export class BrowserCodegen implements BrowserRecorderInterface {
 		}
 	>()
 	readonly #scripts = new Map<string, string>()
-	#started = false
+	#active = false
 	#shutdown: Promise<void> | undefined
 	#queue: Promise<void> = Promise.resolve()
 	#steps: readonly BrowserJourneyStep[] = []
@@ -80,8 +80,8 @@ export class BrowserCodegen implements BrowserRecorderInterface {
 	get emitter(): EmitterInterface<BrowserRecorderEventMap> {
 		return this.#emitter
 	}
-	get started(): boolean {
-		return this.#started
+	get active(): boolean {
+		return this.#active
 	}
 
 	async start(): Promise<void> {
@@ -90,14 +90,14 @@ export class BrowserCodegen implements BrowserRecorderInterface {
 			throw new BrowserError('CLOSED', 'The recorder was destroyed')
 		await this.#stopping.pending
 		if (this.#starting.pending !== undefined) return await this.#starting.pending
-		if (this.#started) return
+		if (this.#active) return
 		await this.#starting.execute(async () => {
 			this.clear()
 			try {
 				await this.#install(this.#session)
 				await Promise.all((this.#frames?.() ?? []).map((session) => this.#install(session)))
 				this.#assertion?.()
-				this.#started = true
+				this.#active = true
 				this.#emitter.emit('start')
 			} catch (error) {
 				await this.#remove()
@@ -107,7 +107,7 @@ export class BrowserCodegen implements BrowserRecorderInterface {
 	}
 	async #attach(session: string): Promise<void> {
 		if (
-			(!this.#started && this.#starting.pending === undefined) ||
+			(!this.#active && this.#starting.pending === undefined) ||
 			this.#stopping.pending !== undefined ||
 			this.#shutdown !== undefined
 		)
@@ -117,13 +117,13 @@ export class BrowserCodegen implements BrowserRecorderInterface {
 	async stop(): Promise<readonly BrowserJourneyStep[]> {
 		await this.#starting.pending?.catch(() => undefined)
 		if (this.#stopping.pending !== undefined) return await this.#stopping.pending
-		if (!this.#started) return this.steps()
+		if (!this.#active) return this.steps()
 		return await this.#stopping.execute(async () => {
 			await this.#remove()
 			await this.#queue
 			this.#flush()
 			this.#enter = undefined
-			this.#started = false
+			this.#active = false
 			const steps = this.steps()
 			this.#emitter.emit('stop', structuredClone(steps))
 			return steps

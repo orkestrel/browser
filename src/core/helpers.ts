@@ -21,7 +21,7 @@ import type {
 	BrowserChord,
 	BrowserCookie,
 	BrowserCookieInput,
-	BrowserContextOptions,
+	BrowserIsolateOptions,
 	BrowserCoverageRange,
 	BrowserDocument,
 	BrowserEmulationOptions,
@@ -29,7 +29,6 @@ import type {
 	BrowserFunctionCoverage,
 	BrowserHAR,
 	BrowserHAREntry,
-	BrowserHARPending,
 	BrowserHARValue,
 	BrowserLayout,
 	BrowserMetric,
@@ -49,6 +48,7 @@ import type {
 	BrowserPDFOptions,
 	BrowserMedia,
 	BrowserRequest,
+	BrowserResponse,
 	BrowserRouteQuery,
 	BrowserQuad,
 	BrowserReadResult,
@@ -644,15 +644,19 @@ export function validateBrowserLines(from: number, to?: number, total?: number):
 		(to !== undefined && (!Number.isSafeInteger(to) || to < 1))
 	)
 		throw new BrowserError(
-			'TOOLSET_ARGUMENT',
+			'ARGUMENT',
 			'The from and to parameters must be positive safe integers.',
+			{ subject: 'toolset' },
 		)
 	if (to !== undefined && to < from)
-		throw new BrowserError('TOOLSET_ARGUMENT', 'The to parameter must not precede from.')
+		throw new BrowserError('ARGUMENT', 'The to parameter must not precede from.', {
+			subject: 'toolset',
+		})
 	if (total !== undefined && total > 0 && from > total)
 		throw new BrowserError(
-			'TOOLSET_ARGUMENT',
+			'ARGUMENT',
 			`Line ${from} is past the end; the page has ${total} lines.`,
+			{ subject: 'toolset' },
 		)
 }
 
@@ -1000,7 +1004,7 @@ export function redactBrowserText(text: string, secrets: readonly string[]): str
  * @param definition - The advertised tool definition whose `parameters.properties` names the
  * accepted keys
  * @param args - The arguments a model supplied
- * @throws Thrown as a `BrowserError` coded `TOOLSET_ARGUMENT`, with the refused key in its
+ * @throws Thrown as a `BrowserError` coded `ARGUMENT`, with the refused key in its
  * context, when an argument key is not an advertised parameter.
  *
  * @example
@@ -1021,9 +1025,9 @@ export function validateBrowserToolArguments(
 	if (key === undefined) return
 	const accepted = new Intl.ListFormat('en', { type: 'conjunction' }).format(keys)
 	throw new BrowserError(
-		'TOOLSET_ARGUMENT',
+		'ARGUMENT',
 		`The ${definition.name} tool takes no ${key} parameter; call ${definition.name} with ${accepted}.`,
-		{ key },
+		{ subject: 'toolset', key },
 	)
 }
 
@@ -1084,7 +1088,7 @@ export function requireBrowserReference(value: unknown): string {
  * @param args - The arguments a model supplied
  * @param key - The parameter name
  * @returns The string the argument holds
- * @throws Thrown as a `BrowserError` coded `TOOLSET_ARGUMENT` when the argument is not a
+ * @throws Thrown as a `BrowserError` coded `ARGUMENT` when the argument is not a
  * string.
  *
  * @example
@@ -1100,7 +1104,8 @@ export function readBrowserToolString(
 ): string {
 	const value = args[key]
 	if (!isString(value))
-		throw new BrowserError('TOOLSET_ARGUMENT', `The ${key} parameter must be a string.`, {
+		throw new BrowserError('ARGUMENT', `The ${key} parameter must be a string.`, {
+			subject: 'toolset',
 			key,
 		})
 	return value
@@ -1182,8 +1187,12 @@ export function readBrowserHeaders(value: unknown): Readonly<Record<string, stri
  * @param error - Optional request failure description
  * @returns HAR 1.2 entry
  */
-export function createBrowserHAREntry(
-	pending: BrowserHARPending,
+export function buildBrowserHAREntry(
+	pending: {
+		readonly request: BrowserRequest
+		readonly started: number
+		readonly response: BrowserResponse | undefined
+	},
 	duration: number,
 	body?: Uint8Array,
 	error?: string,
@@ -1603,7 +1612,7 @@ export function validateBrowserEmulationOptions(options: BrowserEmulationOptions
  *
  * @param options - Public context configuration
  */
-export function validateBrowserContextOptions(options?: BrowserContextOptions): void {
+export function validateBrowserContextOptions(options?: BrowserIsolateOptions): void {
 	if (options === undefined) return
 	if (options.viewport !== undefined) validateBrowserViewport(options.viewport)
 	if (options.emulation !== undefined) validateBrowserEmulationOptions(options.emulation)
@@ -3101,28 +3110,29 @@ export function editBrowserJourney(
 /**
  * Checks a journey name before store access.
  * @param name - Journey name
- * @throws BrowserError - Thrown with JOURNEY_PATH when the name is invalid
+ * @throws BrowserError - Thrown with STORE_PATH when the name is invalid
  * @example
  * validateBrowserJourneyName('add-kettle')
  */
 export function validateBrowserJourneyName(name: string): void {
 	if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-		throw new BrowserError('JOURNEY_PATH', `Refused journey name: ${name}`)
+		throw new BrowserError('STORE_PATH', `Refused journey name: ${name}`)
 }
 
 /**
  * Checks the offset and limit of a store page.
  * @param offset - Nonnegative safe integer offset
  * @param limit - Positive safe integer limit
- * @throws BrowserError - Thrown with JOURNEY_ARGUMENT when either bound is invalid
+ * @throws BrowserError - Thrown with ARGUMENT when either bound is invalid
  * @example
  * validateBrowserStorePage(0, 10)
  */
 export function validateBrowserStorePage(offset: number, limit: number): void {
 	if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
 		throw new BrowserError(
-			'JOURNEY_ARGUMENT',
+			'ARGUMENT',
 			'Paging requires a nonnegative integer offset and a positive integer limit',
+			{ subject: 'store' },
 		)
 }
 
@@ -3474,13 +3484,13 @@ export function validateBrowserJourneyStep(
 /**
  * Validates the journey format and its name, nonempty steps, ids, bindings, secrets, JSON, and actions.
  * @param value - Candidate journey
- * @throws BrowserError - Thrown with JOURNEY_FORMAT for an unknown format, or JOURNEY_INVALID naming the failed invariant
+ * @throws BrowserError - Thrown with STORE_FORMAT for an unknown format, or JOURNEY_INVALID naming the failed invariant
  */
 export function validateBrowserJourney(value: unknown): asserts value is BrowserJourney {
 	if (!isJSONValue(value) || !isRecord(value))
 		throw new BrowserError('JOURNEY_INVALID', 'Invariant 6 (JSON round trip): is not a JSON record')
 	if (value['format'] !== BROWSER_JOURNEY_FORMAT_VERSION)
-		throw new BrowserError('JOURNEY_FORMAT', 'Has an unknown journey format')
+		throw new BrowserError('STORE_FORMAT', 'Has an unknown journey format')
 	if (!isString(value['name']) || !BROWSER_JOURNEY_NAME_PATTERN.test(value['name']))
 		throw new BrowserError('JOURNEY_INVALID', 'Invariant 1 (name): has an invalid journey name')
 	if (!isString(value['description']) || !isArray(value['steps']) || !isRecord(value['parameters']))
@@ -3655,7 +3665,7 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 	if (!isJSONValue(value) || !isRecord(value))
 		throw new BrowserError('JOURNEY_INVALID', 'Run is not a JSON record')
 	if (value['format'] !== BROWSER_JOURNEY_FORMAT_VERSION)
-		throw new BrowserError('JOURNEY_FORMAT', 'Has an unknown run format')
+		throw new BrowserError('STORE_FORMAT', 'Has an unknown run format')
 	validateBrowserJourney(value['journey'])
 	const journey = value['journey']
 	if (
@@ -3788,7 +3798,7 @@ export function validateBrowserJourneyWriteOptions(options?: BrowserJourneyWrite
 		(!Number.isSafeInteger(options.revision) || options.revision < 1)
 	)
 		throw new BrowserError('ARGUMENT', 'A journey revision must be a positive safe integer')
-	if (options?.revision !== undefined && options.exclusive !== undefined)
+	if (options?.revision !== undefined && options.exclusive === true)
 		throw new BrowserError('ARGUMENT', 'A journey write cannot combine revision and exclusive')
 }
 
@@ -3798,9 +3808,12 @@ export function validateBrowserJourneyWriteOptions(options?: BrowserJourneyWrite
  * @param client - The client's connection carrying the page
  * @throws Thrown with CLOSED when the client disconnected or the page closed.
  * @example
- * assertBrowserPage(page, client)
+ * validateBrowserPageOpen(page, client)
  */
-export function assertBrowserPage(page: BrowserPageInterface, client: CDPClientInterface): void {
+export function validateBrowserPageOpen(
+	page: BrowserPageInterface,
+	client: CDPClientInterface,
+): void {
 	if (!client.connected)
 		throw new BrowserError('CLOSED', 'Browser frame is disconnected', { frame: page.id })
 	if (page.closed) throw new BrowserError('CLOSED', 'Browser page is closed')

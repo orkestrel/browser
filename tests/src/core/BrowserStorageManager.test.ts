@@ -1,6 +1,8 @@
+import { BrowserCookieManager } from '../../../src/core/BrowserCookieManager.js'
+import { BrowserStorageManager } from '../../../src/core/BrowserStorageManager.js'
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserCookieManager, BrowserStorageManager, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createConnectedCDPClient, replyOk, scriptEvaluate } from '../../setup.js'
 
 describe('BrowserStorageManager', () => {

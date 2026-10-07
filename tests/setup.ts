@@ -2569,7 +2569,7 @@ export function emitDocumentReady(
  * Configures the scripted results of a {@link BrowserViewDouble}.
  * @remarks
  * `url`, `title`, and `html` describe the document the view reads; `waited` is `false` to make
- * every text wait reject coded `WAIT_TIMEOUT`.
+ * every text wait reject coded `TIMEOUT`.
  */
 export interface BrowserViewDoubleOptions {
 	readonly url?: string
@@ -2900,7 +2900,7 @@ export class BrowserViewDouble implements BrowserViewInterface {
 		options?.signal?.throwIfAborted()
 		this.#calls.push(`wait ${text}${options?.absent === true ? ' absent' : ''}`)
 		if (!this.#waited)
-			throw new BrowserError('WAIT_TIMEOUT', 'Browser text wait timed out', { text })
+			throw new BrowserError('TIMEOUT', 'Browser text wait timed out', { operation: 'wait', text })
 	}
 }
 
@@ -3863,7 +3863,7 @@ export const BROWSER_PREPARATION_CASES: readonly BrowserPreparationCase[] = Obje
 		journey: createBrowserJourneyFixture(),
 		inputs: {},
 		corrupt: ['format', 9],
-		code: 'JOURNEY_FORMAT',
+		code: 'STORE_FORMAT',
 		context: { action: 'replay', placement: 'dom' },
 		sentence: 'Journey check-ready cannot be read: Has an unknown journey format; call journeys.',
 	},

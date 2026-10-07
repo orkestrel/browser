@@ -11,7 +11,7 @@ import type { MCPTransportInterface } from '@orkestrel/mcp'
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
-	BrowserContextOptions,
+	BrowserIsolateOptions,
 	BrowserPageInterface,
 	BrowserStoreOptions,
 } from '@src/core'
@@ -33,10 +33,11 @@ import { addAbortListener } from 'node:events'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough, Writable } from 'node:stream'
-import { createBrowserMCPServer } from '@src/server'
+import { createBrowserMCPServer, formatBrowserLockEntry } from '@src/server'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { open, mkdir, writeFile, unlink, rmdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -71,6 +72,28 @@ import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
 import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
+
+/**
+ * Holds a real file-lock entry outside the store's process-local queue.
+ * @param path - Lock directory under the test's scratch root
+ * @param action - Work that encounters the live holder
+ * @returns Completion after releasing the entry
+ */
+export async function holdBrowserStoreLock(
+	path: string,
+	action: () => Promise<void>,
+): Promise<void> {
+	await mkdir(dirname(path), { recursive: true })
+	await mkdir(path)
+	const entry = join(path, formatBrowserLockEntry(process.pid, randomUUID()))
+	await writeFile(entry, '')
+	try {
+		await action()
+	} finally {
+		await unlink(entry)
+		await rmdir(path)
+	}
+}
 
 /**
  * Reads the loop clock Node stamps on a timer it arms, in whole milliseconds.
@@ -1731,7 +1754,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	}
 
 	async ping(options?: BrowserCallOptions): Promise<void> {
-		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+		if (this.#destroyed) throw new BrowserError('CLOSED', 'Browser has been destroyed')
 		const fixture = this.#fixture
 		if (fixture?.client.connected !== true)
 			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
@@ -1862,7 +1885,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		return this.#contexts
 	}
 
-	async isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
+	async isolate(options?: BrowserIsolateOptions): Promise<BrowserContextInterface> {
 		if ((this.#handlers.broken ?? 0) > 0)
 			throw new BrowserError('PROTOCOL', 'The fixture refused isolation')
 		const fixture = this.#fixture

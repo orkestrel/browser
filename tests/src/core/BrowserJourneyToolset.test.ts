@@ -95,7 +95,7 @@ describe('BrowserJourneyToolset', () => {
 					const context = { signal: new AbortController().signal }
 					for (const args of [{}, { full: 'false' }, { full: 0 }])
 						await expect(tool.execute(args, context)).rejects.toMatchObject({
-							code: 'TOOLSET_ARGUMENT',
+							code: 'ARGUMENT',
 						})
 					await expect(tool.execute({ full: false }, context)).rejects.toMatchObject({
 						code: 'CAPTURE_UNAVAILABLE',
@@ -189,7 +189,7 @@ describe('BrowserJourneyToolset', () => {
 				'2 lines match "Ready": 2, 4',
 			)
 			await expect(tool.execute({ from: 0 }, context)).rejects.toMatchObject({
-				code: 'TOOLSET_ARGUMENT',
+				code: 'ARGUMENT',
 			})
 		} finally {
 			await journeys.destroy()
@@ -251,7 +251,7 @@ describe('BrowserJourneyToolset', () => {
 			})
 			expect(await store.get('add-kettle')).toBeUndefined()
 			await expect(runs.set({ ...BROWSER_RUN_FIXTURE, id: unsaved.id })).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 			expect(await store.get('check-ready')).toEqual(sibling)
 			await expect(runs.capture(other, 's1.png', new Uint8Array())).resolves.toBeUndefined()
@@ -780,7 +780,7 @@ describe('BrowserJourneyToolset', () => {
 					{ from: -1 },
 					{ signal: new AbortController().signal },
 				),
-			).rejects.toMatchObject({ code: 'TOOLSET_ARGUMENT' })
+			).rejects.toMatchObject({ code: 'ARGUMENT' })
 		} finally {
 			await inherited.destroy()
 			await overridden.destroy()
@@ -797,7 +797,7 @@ describe('BrowserJourneyToolset', () => {
 					}),
 			).toThrow(
 				expect.objectContaining({
-					code: 'JOURNEY_ARGUMENT',
+					code: 'ARGUMENT',
 					message: 'The journeys limit must be a positive integer',
 				}),
 			)
@@ -1089,7 +1089,7 @@ describe('BrowserJourneyToolset', () => {
 			const memory = createMemoryBrowserJourneyStore()
 			const store = createBrowserFailingJourneyStore(memory, [
 				new Error('the disk is full.'),
-				new BrowserError('JOURNEY_LOCKED', 'Journey check-form is locked.'),
+				new BrowserError('STORE_LOCKED', 'Journey check-form is locked.'),
 			])
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store })
@@ -1252,7 +1252,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 					'journeys (4 lines)\n3: check-ready "Check readiness"\n4: s1 wait "Ready"\n[lines 3–4 of 4; 2 above; end of listing]',
 				)
 				await expect(tool.execute({ from: 5 }, context)).rejects.toMatchObject({
-					code: 'TOOLSET_ARGUMENT',
+					code: 'ARGUMENT',
 				})
 			} finally {
 				await journeys.destroy()
@@ -1380,7 +1380,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				},
 				set: async (journey, options) => {
 					if (scripted.shift() === 'locked')
-						throw new BrowserError('JOURNEY_LOCKED', 'Journey check-ready is locked.')
+						throw new BrowserError('STORE_LOCKED', 'Journey check-ready is locked.')
 					return memory.set(journey, options)
 				},
 				delete: memory.delete.bind(memory),
@@ -1629,7 +1629,7 @@ page "Form" https://example.test/form (3 lines)
 					if (mode === 'block') await pending.promise
 					if (mode === 'file')
 						throw new BrowserError(
-							'JOURNEY_FILE',
+							'STORE_FILE',
 							'The journey file tmp/browsers/check-ready/journey.json is malformed.',
 						)
 					if (mode === 'format' && read !== undefined)

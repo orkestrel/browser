@@ -3,14 +3,7 @@ import type { BrowserPermissionManagerInterface, CDPClientInterface } from './ty
 /**
  * Applies permission overrides isolated to one browser context.
  *
- * @example
- * ```ts
- * import { BrowserPermissionManager } from '@orkestrel/browser'
- *
- * const permissions = new BrowserPermissionManager(client)
- * await permissions.grant(['geolocation'], 'https://example.com')
- * await permissions.clear()
- * ```
+ * @remarks The owner exposes this entity through `context.permissions`.
  */
 export class BrowserPermissionManager implements BrowserPermissionManagerInterface {
 	readonly #client: CDPClientInterface

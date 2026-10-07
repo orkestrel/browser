@@ -1,6 +1,5 @@
 import type {
 	BrowserWebSocketEventMap,
-	BrowserWebSocketDriver,
 	BrowserWebSocketFrame,
 	BrowserWebSocketInterface,
 } from './types.js'
@@ -17,7 +16,16 @@ export class BrowserWebSocket implements BrowserWebSocketInterface {
 	readonly #url: string
 	#closed = false
 
-	constructor(id: string, url: string, drive: (driver: BrowserWebSocketDriver) => void) {
+	constructor(
+		id: string,
+		url: string,
+		drive: (driver: {
+			readonly receive: (frame: BrowserWebSocketFrame) => void
+			readonly transmit: (frame: BrowserWebSocketFrame) => void
+			readonly fail: (message: string) => void
+			readonly close: (timestamp: number) => void
+		}) => void,
+	) {
 		this.#id = id
 		this.#url = url
 		this.#emitter = new Emitter()

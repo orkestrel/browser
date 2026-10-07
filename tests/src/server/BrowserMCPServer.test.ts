@@ -1,3 +1,4 @@
+import { holdBrowserStoreLock } from '../../setupServer.js'
 import type { CDPSentMessage, CDPTestTransportInterface } from '../../setup.js'
 import type { BrowserPageInterface } from '@src/core'
 import { createHook } from 'node:async_hooks'
@@ -30,7 +31,6 @@ import { createLoopback, createScratch, readErrorCode } from '@orkestrel/test/se
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import { createBrowserJourneyFixture, replyOk } from '../../setup.js'
 import { BrowseLauncher, requireSystemBrowser } from '../../setupService.js'
-import { FileBrowserStore } from '../../../src/server/stores/FileBrowserStore.js'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
 	BROWSER_JOURNEY_READONLY_REFUSAL,
@@ -132,14 +132,14 @@ describe('holders H3 journey admission', () => {
 			])
 			const refused = await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })
 			expect(refused.error).toBe(true)
-			expect(refused.text).toContain('JOURNEY_LOCKED')
+			expect(refused.text).toContain('STORE_LOCKED')
 			const directories = readdirSync(join(fixture.root, 'check-ready', 'runs'))
 			expect(directories).toHaveLength(2)
 			expect(new Set(directories).size).toBe(2)
 			firstRelease.resolve()
 			expect((await a).error).toBe(false)
 			expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).text).toContain(
-				'JOURNEY_LOCKED',
+				'STORE_LOCKED',
 			)
 			release.resolve()
 			for (const result of await Promise.all([a, b])) {
@@ -239,11 +239,14 @@ describe('holders H3 journey admission', () => {
 					).error,
 				).toBe(false)
 			}
-			const files = new FileBrowserStore({ root: fixture.root })
-			locked = files.lock(join(fixture.root, 'same-recording', 'journey.lock'), async () => {
-				entered.resolve()
-				await release.promise
-			})
+
+			locked = holdBrowserStoreLock(
+				join(fixture.root, 'same-recording', 'journey.lock'),
+				async () => {
+					entered.resolve()
+					await release.promise
+				},
+			)
 			await entered.promise
 			const refused = await fixture.pair.call(id++, 'execute', {
 				holder: first,
@@ -1784,7 +1787,7 @@ describe('eager U6', () => {
 	for (const size of [0, 4, 1.5, -1, NaN, Infinity]) {
 		it(`refuses pool size ${size}`, () => {
 			expect(() => createBrowserMCPServer({ pool: { contexts: 1, size } })).toThrow(
-				expect.objectContaining({ code: 'SERVER_OPTIONS' }),
+				expect.objectContaining({ code: 'ARGUMENT' }),
 			)
 		})
 	}
@@ -1851,7 +1854,7 @@ describe('eager U6', () => {
 		try {
 			await fixture.server.destroy()
 			expect(existsSync(fixture.root)).toBe(false)
-			await expect(fixture.server.start()).rejects.toMatchObject({ code: 'TOOLSET_ENDED' })
+			await expect(fixture.server.start()).rejects.toMatchObject({ code: 'CLOSED' })
 		} finally {
 			await fixture.teardown.destroy()
 		}
@@ -2763,7 +2766,7 @@ describe('BrowserMCPServer', () => {
 				pool: { launch: new BrowserLauncher().launch },
 			})
 			await server.destroy()
-			await expect(server.start()).rejects.toMatchObject({ code: 'TOOLSET_ENDED' })
+			await expect(server.start()).rejects.toMatchObject({ code: 'CLOSED' })
 			expect(pair.input.listenerCount('data')).toBe(0)
 		})
 	})

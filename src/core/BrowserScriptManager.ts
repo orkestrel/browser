@@ -15,14 +15,7 @@ import { BrowserError } from './errors.js'
 /**
  * Installs new-document scripts and promise-based host functions for one page.
  *
- * @example
- * ```ts
- * import { BrowserScriptManager } from '@orkestrel/browser'
- *
- * const scripts = new BrowserScriptManager(page)
- * const id = await scripts.add('window.__ready = true')
- * await scripts.remove(id)
- * ```
+ * @remarks The owner exposes this entity through `page.scripts`.
  */
 export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	readonly #frame: BrowserFrameInterface

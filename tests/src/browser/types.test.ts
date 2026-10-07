@@ -10,9 +10,7 @@ import type {
 } from '@src/core'
 import type {
 	BrowserDOMViewOptions,
-	BrowserDOMElementInput,
 	BrowserDOMElementInterface,
-	BrowserDOMElementManagerInput,
 	BrowserDOMView,
 	BrowserDOMViewInterface,
 	BrowserDOMWaitInterface,
@@ -58,8 +56,6 @@ type BrowserFaceContracts = [
 type BrowserFaceExports = [
 	Assignable<BrowserDOMViewOptions, { readonly document: Document }>,
 	Assignable<BrowserNameContext, { readonly hidden?: boolean }>,
-	Assignable<BrowserDOMElementInput, { readonly reference: string }>,
-	Assignable<BrowserDOMElementManagerInput, { readonly signal: AbortSignal }>,
 	Assignable<BrowserMutationWait<string>, { readonly subject: string }>,
 	Assignable<BrowserDOMWaitInterface<string>, { readonly roots: readonly Node[] }>,
 	Assignable<SocketCDPTransportOptions, { readonly url: string }>,
@@ -85,8 +81,8 @@ describe('browser face types', () => {
 	})
 
 	it('re-exports the public browser face types from the barrel', () => {
-		const exported: BrowserFaceExports = [true, true, true, true, true, true, true]
-		expect(exported).toEqual([true, true, true, true, true, true, true])
+		const exported: BrowserFaceExports = [true, true, true, true, true]
+		expect(exported).toEqual([true, true, true, true, true])
 	})
 
 	it('refuses a view shape without trusted', () => {

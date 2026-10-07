@@ -16,7 +16,7 @@ import { isBrowserDocument } from './helpers.js'
  * again after every subscription, and no check runs once the deadline, counted from `start`, has
  * passed, which the wait reads again after `roots` returns. The wait settles one time: on the
  * check's first value, on the signal's abort with its reason, at the deadline with
- * `WAIT_TIMEOUT`, on a `pagehide` in the first root's window with `GONE`, or with whatever
+ * `TIMEOUT`, on a `pagehide` in the first root's window with `GONE`, or with whatever
  * the check or the roots function throws. A signal that aborts while `check` or `roots` runs
  * settles the wait with its reason, and wins over a value that same check returns. Settlement
  * disconnects every observer and removes every listener synchronously, so a mutation queued
@@ -154,7 +154,8 @@ export class BrowserDOMWait<T> implements BrowserDOMWaitInterface<T> {
 
 	#expire(): void {
 		this.#fail(
-			new BrowserError('WAIT_TIMEOUT', `${this.#wait.subject} timed out`, {
+			new BrowserError('TIMEOUT', `${this.#wait.subject} timed out`, {
+				operation: 'wait',
 				timeout: this.#wait.timeout,
 			}),
 		)

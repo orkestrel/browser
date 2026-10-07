@@ -9,14 +9,7 @@ import { mediaToFeatures, validateBrowserEmulationOptions } from './helpers.js'
 /**
  * Applies rendering, identity, location, and network emulation for context pages.
  *
- * @example
- * ```ts
- * import { BrowserEmulationManager } from '@orkestrel/browser'
- *
- * const emulation = new BrowserEmulationManager(() => context.pages())
- * await emulation.apply({ locale: 'en-US', media: { scheme: 'dark' } })
- * await emulation.clear()
- * ```
+ * @remarks The owner exposes this entity through `context.emulation`.
  */
 export class BrowserEmulationManager implements BrowserEmulationManagerInterface {
 	readonly #pages: BrowserPagesFunction
@@ -164,12 +157,15 @@ export class BrowserEmulationManager implements BrowserEmulationManagerInterface
 		if (options.media !== undefined) {
 			await page.send('Emulation.setEmulatedMedia', { media: '', features: [] })
 		}
+		if (options.credentials !== undefined) {
+			await page.network.clear()
+			return
+		}
 		if (options.offline !== undefined) {
 			await page.network.apply({ offline: false })
 		}
 		if (options.headers !== undefined) {
 			await page.network.apply({ headers: {} })
 		}
-		if (options.credentials !== undefined) await page.network.apply({ credentials: undefined })
 	}
 }

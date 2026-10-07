@@ -21,7 +21,7 @@ import {
 } from '../constants.js'
 import { compileQueryWaitExpression } from '../compilers.js'
 import {
-	assertBrowserPage,
+	validateBrowserPageOpen,
 	composeBrowserPoint,
 	filterBrowserOutline,
 	readBrowserAccessibility,
@@ -265,11 +265,11 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				const outcome = await pending
 				if ('error' in outcome) throw outcome.error
 				if (readEvaluationResult(outcome.result) !== true || performance.now() >= end)
-					throw new BrowserError('WAIT_TIMEOUT', 'Element wait timed out')
+					throw new BrowserError('TIMEOUT', 'Element wait timed out', { operation: 'wait' })
 			} catch (error) {
 				signal.throwIfAborted()
 				if (isBrowserError(error) && error.code === 'TIMEOUT')
-					throw new BrowserError('WAIT_TIMEOUT', 'Element wait timed out')
+					throw new BrowserError('TIMEOUT', 'Element wait timed out', { operation: 'wait' })
 				if (
 					this.#input.page.closed ||
 					(this.#changes === changes &&
@@ -297,7 +297,8 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 
 	#remaining(end: number): number {
 		const remaining = end - performance.now()
-		if (remaining <= 0) throw new BrowserError('WAIT_TIMEOUT', 'Element wait timed out')
+		if (remaining <= 0)
+			throw new BrowserError('TIMEOUT', 'Element wait timed out', { operation: 'wait' })
 		return remaining
 	}
 
@@ -318,7 +319,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 	}
 
 	async #capture(options?: BrowserCallOptions): Promise<readonly BrowserOutlineNode[]> {
-		assertBrowserPage(this.#input.page, this.#input.client)
+		validateBrowserPageOpen(this.#input.page, this.#input.client)
 		const rows = await this.#tree(this.#input.page.id, this.#input.session, new Set(), options)
 		return rows
 	}

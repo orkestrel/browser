@@ -371,11 +371,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			throw new BrowserError(
 				BROWSER_SERVER_OPTIONS,
 				`pool.size must be an integer from 1 through ${BROWSER_SERVER_POOL_LIMIT}`,
+				{ subject: 'server' },
 			)
 		if (!isInteger(contexts) || contexts < 1 || contexts > BROWSER_SERVER_CONTEXTS_LIMIT)
 			throw new BrowserError(
 				BROWSER_SERVER_OPTIONS,
 				`pool.contexts must be an integer from 1 through ${BROWSER_SERVER_CONTEXTS_LIMIT}`,
+				{ subject: 'server' },
 			)
 		this.#admission = size * contexts
 		this.#log = options?.log ?? process.stderr
@@ -546,7 +548,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		if (this.#closing !== undefined) throw this.#ended()
 		const purpose = args['purpose']
 		if (!isString(purpose) || purpose.trim().length === 0)
-			throw new BrowserError('TOOLSET_ARGUMENT', 'purpose must describe the work')
+			throw new BrowserError('ARGUMENT', 'purpose must describe the work', { subject: 'toolset' })
 		if (this.#holders.size >= this.#admission)
 			throw new BrowserError(
 				BROWSER_SERVER_BUSY,
@@ -600,7 +602,9 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 		const name = args['name']
 		const parameters = args['arguments']
 		if (!isString(name) || !isRecord(parameters))
-			throw new BrowserError('TOOLSET_ARGUMENT', 'execute requires name and arguments')
+			throw new BrowserError('ARGUMENT', 'execute requires name and arguments', {
+				subject: 'toolset',
+			})
 		return this.#forward(holder, name, parameters, context)
 	}
 
@@ -690,8 +694,8 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			return this.#perform(holder, name, args, context)
 		if (this.#writers.has(journey) || (name === 'forget' && this.#readers.has(journey)))
 			throw new BrowserError(
-				'JOURNEY_LOCKED',
-				`JOURNEY_LOCKED: Journey ${journey} is locked; call ${name} again.`,
+				'STORE_LOCKED',
+				`STORE_LOCKED: Journey ${journey} is locked; call ${name} again.`,
 				{ name: journey },
 			)
 		const reader = Symbol(journey)
@@ -1712,6 +1716,6 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	#ended(): BrowserError {
-		return new BrowserError('TOOLSET_ENDED', 'the browser session ended')
+		return new BrowserError('CLOSED', 'the browser session ended', { subject: 'toolset' })
 	}
 }

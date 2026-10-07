@@ -307,7 +307,7 @@ describe('BrowserNetworkManager', () => {
 				credentials: { username: 'user', password: 'secret' },
 			})
 			const before = transport.sent.length
-			await page.network.apply({})
+			await page.network.apply({ headers: undefined, offline: undefined, credentials: undefined })
 			expect(transport.sent.length).toBe(before)
 			await page.network.apply({ offline: false })
 			expect(transport.sent.at(-1)?.params?.['offline']).toBe(false)
@@ -318,7 +318,16 @@ describe('BrowserNetworkManager', () => {
 			expect(transport.sent.at(-1)?.params).toMatchObject({
 				authChallengeResponse: { username: 'user' },
 			})
-			await page.network.apply({ credentials: undefined })
+			await page.network.clear()
+			expect(
+				transport.sent.filter((message) => message.method === 'Network.setExtraHTTPHeaders').at(-1)
+					?.params,
+			).toEqual({ headers: {} })
+			expect(
+				transport.sent
+					.filter((message) => message.method === 'Network.emulateNetworkConditions')
+					.at(-1)?.params?.['offline'],
+			).toBe(false)
 			expect(transport.sent.at(-1)?.method).toBe('Fetch.disable')
 		} finally {
 			await client.close()

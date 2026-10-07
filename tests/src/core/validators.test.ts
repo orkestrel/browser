@@ -15,6 +15,7 @@ import {
 } from '@src/core'
 import {
 	createBrowserElementFixture,
+	replyOk,
 	createBrowserViewDouble,
 	BROWSER_JOURNEY_FIXTURE,
 	BROWSER_JOURNEY_INVALID_CASES,
@@ -24,6 +25,86 @@ import {
 } from '../../setup.js'
 
 describe('isBrowserPage', () => {
+	it.each([
+		'id',
+		'url',
+		'closed',
+		'trusted',
+		'title',
+		'read',
+		'screenshot',
+		'send',
+		'subscribe',
+		'unsubscribe',
+		'navigate',
+		'frames',
+		'elements',
+		'emitter',
+		'keyboard',
+		'registry',
+		'navigation',
+		'popups',
+	])('requires the toolset capability %s without protocol traffic', async (hidden) => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			const before = fixture.transport.sent.length
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => (key === hidden ? undefined : Reflect.get(target, key, target)),
+					}),
+				),
+			).toBe(false)
+			expect(fixture.transport.sent.length).toBe(before)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+	it.each([
+		'target',
+		'wait',
+		'evaluate',
+		'handle',
+		'reload',
+		'back',
+		'forward',
+		'pdf',
+		'frame',
+		'snapshot',
+		'recorder',
+		'destroy',
+		'close',
+	])('does not require the unused capability %s', async (hidden) => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => (key === hidden ? undefined : Reflect.get(target, key, target)),
+					}),
+				),
+			).toBe(true)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+	it.each(['close', 'disconnect'])(
+		'recognizes a page after %s without protocol traffic',
+		async (operation) => {
+			const fixture = await createBrowserElementFixture()
+			try {
+				if (operation === 'close') {
+					replyOk(fixture.transport, 'Target.closeTarget')
+					await fixture.page.close()
+				} else await fixture.client.close()
+				const before = fixture.transport.sent.length
+				expect(isBrowserPage(fixture.page)).toBe(true)
+				expect(fixture.transport.sent.length).toBe(before)
+			} finally {
+				await fixture.client.close()
+			}
+		},
+	)
 	it('accepts a real page through inherited accessors and rejects an incomplete trusted view', async () => {
 		const fixture = await createBrowserElementFixture()
 		try {
@@ -164,10 +245,10 @@ describe('journey validators', () => {
 	it('refuses unknown formats with the format code', () => {
 		expect(
 			attempt(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, format: 2 })),
-		).toMatchObject({ success: false, error: { code: 'JOURNEY_FORMAT' } })
+		).toMatchObject({ success: false, error: { code: 'STORE_FORMAT' } })
 		expect(attempt(() => validateBrowserRun({ ...BROWSER_RUN_FIXTURE, format: 2 }))).toMatchObject({
 			success: false,
-			error: { code: 'JOURNEY_FORMAT' },
+			error: { code: 'STORE_FORMAT' },
 		})
 	})
 	it('refuses a secret bound to wait.text', () => {

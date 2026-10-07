@@ -6,7 +6,7 @@ import { BrowserWebSocket } from '../../../src/core/BrowserWebSocket.js'
  * the real class and reads what its emitter published.
  */
 
-import type { BrowserWebSocketFrame, BrowserWebSocketDriver } from '@src/core'
+import type { BrowserWebSocketFrame } from '@src/core'
 import { describe, expect, it } from 'vitest'
 
 import { createRecorder, requireValue } from '@orkestrel/test'
@@ -15,7 +15,7 @@ const FRAME: BrowserWebSocketFrame = { opcode: 1, data: 'hello', masked: false, 
 
 describe('BrowserWebSocket', () => {
 	it('reports the identity it was constructed with', () => {
-		const drivers = createRecorder<[BrowserWebSocketDriver]>()
+		const drivers = createRecorder<Parameters<ConstructorParameters<typeof BrowserWebSocket>[2]>>()
 		const socket = new BrowserWebSocket('request-1', 'wss://example.com/live', drivers.handler)
 
 		for (const name of ['receive', 'transmit', 'fail', 'close']) expect(name in socket).toBe(false)
@@ -23,7 +23,7 @@ describe('BrowserWebSocket', () => {
 	})
 
 	it('publishes received and transmitted frames on their own events', () => {
-		const drivers = createRecorder<[BrowserWebSocketDriver]>()
+		const drivers = createRecorder<Parameters<ConstructorParameters<typeof BrowserWebSocket>[2]>>()
 		const socket = new BrowserWebSocket('request-1', 'wss://example.com/live', drivers.handler)
 		const received = createRecorder<[frame: BrowserWebSocketFrame]>()
 		const transmitted = createRecorder<[frame: BrowserWebSocketFrame]>()
@@ -38,7 +38,7 @@ describe('BrowserWebSocket', () => {
 	})
 
 	it('publishes a failure message on the error event', () => {
-		const drivers = createRecorder<[BrowserWebSocketDriver]>()
+		const drivers = createRecorder<Parameters<ConstructorParameters<typeof BrowserWebSocket>[2]>>()
 		const socket = new BrowserWebSocket('request-1', 'wss://example.com/live', drivers.handler)
 		const errors = createRecorder<[message: string]>()
 		socket.emitter.on('error', errors.handler)
@@ -49,7 +49,7 @@ describe('BrowserWebSocket', () => {
 	})
 
 	it('closes once, carrying the timestamp, and destroys its emitter', () => {
-		const drivers = createRecorder<[BrowserWebSocketDriver]>()
+		const drivers = createRecorder<Parameters<ConstructorParameters<typeof BrowserWebSocket>[2]>>()
 		const socket = new BrowserWebSocket('request-1', 'wss://example.com/live', drivers.handler)
 		const closes = createRecorder<[timestamp: number]>()
 		socket.emitter.on('close', closes.handler)
@@ -62,7 +62,7 @@ describe('BrowserWebSocket', () => {
 	})
 
 	it('drops every frame delivered after the close', () => {
-		const drivers = createRecorder<[BrowserWebSocketDriver]>()
+		const drivers = createRecorder<Parameters<ConstructorParameters<typeof BrowserWebSocket>[2]>>()
 		const socket = new BrowserWebSocket('request-1', 'wss://example.com/live', drivers.handler)
 		const received = createRecorder<[frame: BrowserWebSocketFrame]>()
 		const transmitted = createRecorder<[frame: BrowserWebSocketFrame]>()

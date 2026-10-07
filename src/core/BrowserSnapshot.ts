@@ -6,7 +6,7 @@ import type {
 	BrowserSiblingRelation,
 	BrowserSnapshotInput,
 	BrowserSnapshotInterface,
-	BrowserWalkOptions,
+	BrowserTraversalOptions,
 } from './types.js'
 import { isInteger } from '@orkestrel/contract'
 import { BrowserError } from './errors.js'
@@ -197,7 +197,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		return index.get(document)
 	}
 
-	*depth(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown> {
+	*depth(options?: BrowserTraversalOptions): Generator<BrowserNode, void, unknown> {
 		const root = options?.root
 		const visited = new Set<string>()
 		for (const seed of root === undefined ? this.#roots() : [root]) {
@@ -219,7 +219,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		}
 	}
 
-	*breadth(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown> {
+	*breadth(options?: BrowserTraversalOptions): Generator<BrowserNode, void, unknown> {
 		const root = options?.root
 		const visited = new Set<string>()
 		for (const seed of root === undefined ? this.#roots() : [root]) {

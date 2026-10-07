@@ -545,7 +545,7 @@ describe('BrowserDOMElementManager', () => {
 			const expired = await view.elements
 				.wait({ name: 'Never' }, { timeout: 20 })
 				.catch((error: unknown) => error)
-			expect(isBrowserError(expired) && expired.code).toBe('WAIT_TIMEOUT')
+			expect(isBrowserError(expired) && expired.code).toBe('TIMEOUT')
 			const controller = new AbortController()
 			const pending = view.elements.wait({ name: 'Never' }, { signal: controller.signal })
 			controller.abort(new Error('stopped'))

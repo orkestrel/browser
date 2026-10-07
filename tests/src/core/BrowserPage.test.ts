@@ -318,7 +318,7 @@ describe('BrowserPage', () => {
 		})
 		try {
 			await expect(fixture.page.wait('missing')).rejects.toMatchObject({
-				code: 'WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 		} finally {
 			await fixture.client.close()
@@ -570,7 +570,8 @@ describe('BrowserPage', () => {
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 
 			await expect(page.navigate('https://slow.example', { timeout: 20 })).rejects.toMatchObject({
-				code: 'NAVIGATION',
+				code: 'TIMEOUT',
+				context: { operation: 'navigate' },
 				message: 'Navigation timeout after 20ms',
 			})
 		})
@@ -1754,7 +1755,7 @@ describe('BrowserPage', () => {
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			const first = page.recorder
-			expect(first.started).toBe(false)
+			expect(first.active).toBe(false)
 			expect(transport.sent).toEqual([])
 			expect('codegen' in page).toBe(false)
 			expect('attach' in first).toBe(false)
@@ -1763,7 +1764,7 @@ describe('BrowserPage', () => {
 			const second = page.recorder
 			await second.start()
 
-			expect(first.started).toBe(true)
+			expect(first.active).toBe(true)
 			expect(second).toBe(first)
 		})
 	})
@@ -1967,10 +1968,10 @@ describe('BrowserPage', () => {
 			await codegen.start()
 
 			transport.event('Target.targetDestroyed', { targetId: 'target-1' })
-			await waitForCondition('the codegen recorder stopped', () => !codegen.started)
+			await waitForCondition('the codegen recorder stopped', () => !codegen.active)
 			await page.close()
 
-			expect(codegen.started).toBe(false)
+			expect(codegen.active).toBe(false)
 			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(false)
 		})
 
@@ -1992,7 +1993,7 @@ describe('BrowserPage', () => {
 			await codegen.start()
 			await page.close()
 
-			expect(codegen.started).toBe(false)
+			expect(codegen.active).toBe(false)
 		})
 
 		it('shares one target closure across concurrent callers', async () => {

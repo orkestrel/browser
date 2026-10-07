@@ -1,11 +1,46 @@
+import { BrowserEmulationManager } from '../../../src/core/BrowserEmulationManager.js'
 import { createRecorder, requireValue } from '@orkestrel/test'
 import type { BrowserPageInterface } from '@src/core'
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserEmulationManager, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserEmulationManager', () => {
+	it.each(['clear', 'replace'])('resets inherited authentication on %s', async (operation) => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Network.enable',
+			'Fetch.enable',
+			'Fetch.disable',
+			'Network.setExtraHTTPHeaders',
+			'Network.emulateNetworkConditions',
+		])
+			replyOk(transport, method)
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const emulation = new BrowserEmulationManager(() => [page])
+		try {
+			await emulation.apply({
+				credentials: { username: 'user', password: 'password' },
+				headers: { test: 'one' },
+				offline: true,
+			})
+			if (operation === 'clear') await emulation.clear()
+			else await emulation.apply({})
+			expect(transport.sent.some((message) => message.method === 'Fetch.disable')).toBe(true)
+			expect(
+				transport.sent.filter((message) => message.method === 'Network.setExtraHTTPHeaders').at(-1)
+					?.params,
+			).toEqual({ headers: {} })
+			expect(
+				transport.sent
+					.filter((message) => message.method === 'Network.emulateNetworkConditions')
+					.at(-1)?.params?.['offline'],
+			).toBe(false)
+		} finally {
+			await client.close()
+		}
+	})
 	it('applies rendering, locale, location, media, network, and header overrides', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		for (const method of [

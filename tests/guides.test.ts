@@ -36,6 +36,24 @@ const MODULES = Object.freeze({
  * here stops being stranded, so the list cannot rot.
  */
 const INTERNAL: readonly string[] = Object.freeze([
+	'class BrowserClock',
+	'class BrowserCookieManager',
+	'class BrowserEmulationManager',
+	'class BrowserHARManager',
+	'class BrowserNetworkManager',
+	'class BrowserKeyboard',
+	'class BrowserMouse',
+	'class BrowserTouch',
+	'class BrowserNavigationManager',
+	'class BrowserPermissionManager',
+	'class BrowserScriptManager',
+	'class BrowserStorageManager',
+	'class BrowserTracing',
+	'class BrowserCoverage',
+	'class BrowserPerformance',
+	'class BrowserProfiler',
+	'class BrowserDiagnostics',
+	'class BrowserAccessibility',
 	'class BrowserPage',
 	'class BrowserFrame',
 	'class BrowserJourneyToolset',
@@ -135,6 +153,226 @@ await new GuideCommand({
 	const manifest = parseJSON(requireValue(files['package.json'], 'Missing inventory: package.json'))
 	if (!isRecord(manifest)) throw new Error('Invalid package manifest: package.json')
 	const sources = createSourceManager({ files, modules: MODULES })
+	it('keeps published prose on the shipped names and owner contracts', () => {
+		const prose = [
+			'src/core/types.ts',
+			'src/server/types.ts',
+			'src/browser/factories.ts',
+			GUIDE_SPEC,
+		]
+			.map((path) => requireValue(files[path]))
+			.join('\n')
+		for (const stale of [
+			'`BROWSER_TOOLSET_ENDED`',
+			'`BROWSER_DOCUMENT`',
+			'`BROWSER_DOCUMENT_OWN`',
+			'snapshots, codegen',
+			'`codegen` —',
+			'The drive methods are on this contract',
+			'`update` is on this contract',
+			'a standalone `BrowserFrame`',
+			'creating a `BrowserPage` instance',
+			'selectors for clearing',
+		])
+			expect(prose).not.toContain(stale)
+		const types = requireValue(files['src/core/types.ts'])
+		const network = requireValue(
+			types.split('// === Browser network')[1]?.split('// === Browser context state')[0],
+		)
+		const journeys = requireValue(
+			types.split('// === Browser journeys')[1]?.split('// === Browser codegen')[0],
+		)
+		for (const name of ['BrowserNetworkOptions', 'BrowserRouteManagerInterface'])
+			expect(network).toContain('interface ' + name)
+		for (const name of [
+			'BrowserJourneyInput',
+			'BrowserStorePageOptions',
+			'BrowserJourneyWriteOptions',
+		])
+			expect(journeys).toContain('interface ' + name)
+	})
+	it('publishes manager interfaces while keeping their constructors internal', async () => {
+		const core = await import('@src/core')
+		const statement = requireValue(files[GUIDE_SPEC]).split('### Connect')[0]
+		for (const key of INTERNAL.slice(0, 18)) {
+			const name = key.replace('class ', '')
+			expect(name in core, name).toBe(false)
+			expect(statement).toContain('`' + name + '`')
+		}
+	})
+	it('places protocol decoders and compilers in the protocol concept table', () => {
+		const markdown = requireValue(files[GUIDE_SPEC]).replaceAll('\r\n', '\n')
+		const core = requireValue(markdown.split('### Core\n')[1]?.split('### Server\n')[0])
+		const protocol = requireValue(core.split('#### Protocol layer\n')[1])
+		for (const symbol of sources.source(PACKAGE_NAME)?.surface() ?? []) {
+			if (
+				symbol.keyword === 'function' &&
+				/^(?:read|parse|compile)|To(?:Protocol|Params)$|^mediaToFeatures$|^keyToBrowserInput$/u.test(
+					symbol.name,
+				)
+			)
+				expect(protocol, symbol.name).toContain('`' + symbol.name + '`')
+		}
+	})
+
+	it('keeps owner-only types and superseded helper names out of the published contract', () => {
+		const names = own.source.surface().map((symbol) => symbol.name)
+		for (const name of [
+			'BrowserFrameLocation',
+			'BrowserWebSocketDriver',
+			'BrowserElementInput',
+			'BrowserHARPending',
+			'BrowserWorldFunction',
+			'BrowserLoaderFunction',
+			'BrowserElementPointFunction',
+			'BrowserToolsetHandler',
+			'BrowserJourneyToolsetInterface',
+			'BrowserDOMElementInput',
+			'BrowserDOMElementManagerInput',
+			'BrowserWalkOptions',
+			'assertBrowserPage',
+			'createBrowserHAREntry',
+		])
+			expect(names).not.toContain(name)
+		for (const name of [
+			'BrowserIsolateOptions',
+			'BrowserTraversalOptions',
+			'validateBrowserPageOpen',
+			'buildBrowserHAREntry',
+		])
+			expect(names).toContain(name)
+	})
+
+	it('compiles the distinct wrapper and isolate option contracts and rejects its negative control', async () => {
+		const { spawnSync } = await import('node:child_process')
+		const { writeFileSync } = await import('node:fs')
+		const { resolve, join } = await import('node:path')
+		const { createScratch } = await import('@orkestrel/test/server')
+		const scratch = createScratch()
+		const target = join(scratch.path, 'options.ts')
+		const input = `import type { BrowserContextOptions, BrowserIsolateOptions } from ${JSON.stringify(resolve('src/core/types.js').replaceAll('\\', '/'))}
+const wrapper: 'proxy' extends keyof BrowserContextOptions ? false : true = true
+const origins: 'origins' extends keyof BrowserContextOptions ? false : true = true
+const isolated: 'id' extends keyof BrowserIsolateOptions ? false : true = true
+const creation: ('proxy' | 'origins') extends keyof BrowserIsolateOptions ? true : false = true
+const identity: 'id' extends keyof BrowserContextOptions ? true : false = true
+void [wrapper, origins, isolated, creation, identity]
+`
+		try {
+			for (const control of [false, true]) {
+				writeFileSync(
+					target,
+					input + (control ? '\nconst rejected: false = true\nvoid rejected\n' : ''),
+				)
+				const result = spawnSync(
+					process.execPath,
+					[
+						resolve('node_modules/typescript/lib/tsc.js'),
+						'--ignoreConfig',
+						'--noEmit',
+						'--strict',
+						'--skipLibCheck',
+						'--module',
+						'NodeNext',
+						'--target',
+						'ESNext',
+						target,
+					],
+					{ encoding: 'utf8', windowsHide: true, timeout: 20000 },
+				)
+				expect(result.error).toBeUndefined()
+				expect(result.status, result.stdout + result.stderr).toBe(control ? 2 : 0)
+				if (control)
+					expect(result.stdout).toContain("Type 'true' is not assignable to type 'false'")
+			}
+		} finally {
+			scratch.destroy()
+		}
+	}, 30000)
+
+	it('executes the discovery fence against a real CDP endpoint', async () => {
+		const { createCDPTestServer } = await import('./setupServer.js')
+		const { createBrowser } = await import('@src/server')
+		const server = await createCDPTestServer()
+		server.list([])
+		server.script('Browser.getVersion', { product: 'Test/1.0' })
+		const fence = requireValue(own.guide.fences().find((entry) => entry.title === 'Server'))
+		const code = stripTypeScriptTypes(fence.code)
+			.replace(FENCE_IMPORT, '')
+			.replace('port: 9222', 'port')
+		try {
+			const endpoint = await new Function(
+				'createBrowser',
+				'port',
+				`return (async () => {\n${code}\nreturn endpoint\n})()`,
+			)(createBrowser, server.port)
+			expect(endpoint).toBe(server.endpoint)
+		} finally {
+			await server.close()
+		}
+	})
+
+	for (const title of [
+		'BrowserNetworkManagerInterface',
+		'BrowserCookieManagerInterface',
+		'BrowserEmulationManagerInterface',
+	]) {
+		it(`executes the complete ${title} fence over the real manager`, async () => {
+			const { createBrowserContext } = await import('@src/core')
+			const { createBrowserElementFixture, createTarget, replyOk, scriptCDPAttach } =
+				await import('./setup.js')
+			const { createRecorder } = await import('@orkestrel/test')
+			const fixture = await createBrowserElementFixture()
+			const context = createBrowserContext(fixture.client)
+			scriptCDPAttach(fixture.transport)
+			replyOk(fixture.transport, 'Target.detachFromTarget')
+			replyOk(fixture.transport, 'Emulation.setLocaleOverride')
+			if (title === 'BrowserEmulationManagerInterface')
+				await context.sync([createTarget({ id: 'emulated-page' })])
+			for (const method of [
+				'Network.enable',
+				'Network.disable',
+				'Network.setExtraHTTPHeaders',
+				'Network.emulateNetworkConditions',
+				'Fetch.enable',
+				'Fetch.disable',
+				'Storage.setCookies',
+				'Storage.clearCookies',
+			])
+				replyOk(fixture.transport, method)
+			replyOk(fixture.transport, 'Storage.getCookies', { cookies: [] })
+			const log = createRecorder<readonly unknown[]>()
+			const fence = requireValue(own.guide.fences().find((entry) => entry.title === title))
+			const code = stripTypeScriptTypes(fence.code).replace(FENCE_IMPORT, '')
+			try {
+				await new Function('page', 'context', 'log', `return (async () => {\n${code}\n})()`)(
+					fixture.page,
+					context,
+					log.handler,
+				)
+				if (title === 'BrowserNetworkManagerInterface') {
+					expect(
+						fixture.transport.sent
+							.filter((message) => message.method === 'Network.setExtraHTTPHeaders')
+							.at(-1)?.params,
+					).toEqual({ headers: {} })
+					expect(fixture.transport.sent.some((message) => message.method === 'Fetch.disable')).toBe(
+						true,
+					)
+				}
+				if (title === 'BrowserCookieManagerInterface') expect(log.calls).toEqual([[[]]])
+				if (title === 'BrowserEmulationManagerInterface')
+					expect(
+						fixture.transport.sent
+							.filter((message) => message.method === 'Emulation.setLocaleOverride')
+							.map((message) => message.params),
+					).toEqual([{ locale: 'fr-FR' }, { locale: '' }])
+			} finally {
+				await context.destroy()
+				await fixture.client.close()
+			}
+		})
+	}
 
 	it('parses every published TypeScript fence without a syntax error', () => {
 		for (const fence of own.guide.fences()) {
@@ -265,7 +503,7 @@ await new GuideCommand({
 				search: 'cart',
 				ref: 'e1',
 			}),
-		).toThrow(expect.objectContaining({ code: 'TOOLSET_ARGUMENT' }))
+		).toThrow(expect.objectContaining({ code: 'ARGUMENT' }))
 		expect(() => core.validateBrowserJourneyParameter({ secret: true, default: 'x' })).toThrow(
 			expect.objectContaining({ code: 'JOURNEY_INVALID' }),
 		)
@@ -349,7 +587,7 @@ await new GuideCommand({
 			code: 'JOURNEY_STALE',
 		})
 		await expect(
-			store.set(BROWSER_JOURNEY_FIXTURE, { revision: 2, exclusive: false }),
+			store.set(BROWSER_JOURNEY_FIXTURE, { revision: 2, exclusive: true }),
 		).rejects.toMatchObject({ code: 'ARGUMENT' })
 		expect((await store.get('add-kettle'))?.revision).toBe(2)
 		expect((await store.list({ offset: 0, limit: 20 })).faults).toEqual([])
@@ -367,9 +605,9 @@ await new GuideCommand({
 			expect(isBrowserPage(fixture.page)).toBe(true)
 			const recorder = fixture.page.recorder
 			expect(recorder).toBe(fixture.page.recorder)
-			expect(recorder.started).toBe(false)
+			expect(recorder.active).toBe(false)
 			await recorder.start()
-			expect(recorder.started).toBe(true)
+			expect(recorder.active).toBe(true)
 			await recorder.stop()
 			await toolset.start()
 			const result = await toolset.execute({ id: '1', name: 'read', arguments: { from: 1 } })
@@ -606,11 +844,9 @@ await new GuideCommand({
 		expect(renderBrowserFooter(48, 52, 52)).toBe('[lines 48–52 of 52; 47 above; end of page]')
 		for (const from of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1, 121])
 			expect(() => validateBrowserLines(from, undefined, 120)).toThrow(
-				expect.objectContaining({ code: 'TOOLSET_ARGUMENT' }),
+				expect.objectContaining({ code: 'ARGUMENT' }),
 			)
-		expect(() => validateBrowserLines(2, 1)).toThrow(
-			expect.objectContaining({ code: 'TOOLSET_ARGUMENT' }),
-		)
+		expect(() => validateBrowserLines(2, 1)).toThrow(expect.objectContaining({ code: 'ARGUMENT' }))
 		expect(parseBrowserReference('12')).toBeUndefined()
 		expect(parseBrowserReference('e12')).toBe('e12')
 		expect(boundBrowserText('x'.repeat(5_000), 4_000, BROWSER_TOOL_CUT_FOOTER).length).toBe(4_000)

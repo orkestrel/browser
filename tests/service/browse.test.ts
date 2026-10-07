@@ -1187,54 +1187,87 @@ describe('eager U7 real browse', () => {
 		}
 	})
 
-	it('notes a current renderer crash but ignores a background renderer crash', async () => {
-		const launcher = new BrowseLauncher()
-		const fixture = createBrowseFixture({
-			browser: { executable: requireSystemBrowser().executable },
-			pool: { size: 2, launch: (options) => launcher.launch({ ...options, timeout: 5000 }) },
-		})
-		let client: ReturnType<typeof createCDPClient> | undefined
-		try {
-			await fixture.server.start()
-			const browser = requireValue(launcher.browsers[0], 'lease')
-			const context = requireValue(
-				browser.contexts().find((entry) => entry.id !== undefined),
-				'isolated context',
-			)
-			const view = requireValue(context.pages()[0], 'view')
-			const background = await context.create()
-			client = createCDPClient({
-				transport: createWebSocketCDPTransport({ url: requireValue(browser.endpoint, 'endpoint') }),
+	it.each(['launch', 'reverse'])(
+		'notes a current renderer crash but ignores a background renderer crash with %s inventory',
+		async (order) => {
+			const launcher = new BrowseLauncher()
+			const pages = await createFixtureServer()
+			const url = pages.url('/form')
+			const fixture = createBrowseFixture({
+				browser: { executable: requireSystemBrowser().executable },
+				pool: { size: 2, launch: (options) => launcher.launch({ ...options, timeout: 5000 }) },
 			})
-			await client.connect()
-			for (const page of [background, view]) {
-				const crashed = createRecorder<readonly []>()
-				page.emitter.on('crash', crashed.handler)
-				const attached: unknown = await client.send('Target.attachToTarget', {
-					targetId: page.id,
-					flatten: true,
-				})
-				if (!isRecord(attached) || !isString(attached['sessionId']))
-					throw new Error('Missing crash session')
-				await client
-					.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
-					.catch(() => undefined)
+			let client: ReturnType<typeof createCDPClient> | undefined
+			try {
+				await fixture.server.start()
+				expect((await fixture.pair.call(1, 'navigate', { url })).error).toBe(false)
 				await waitForCondition(
-					'renderer crash event without Inspector.enable',
-					() => crashed.count === 1,
+					'both browser contexts prepared',
+					() =>
+						launcher.browsers.length === 2 &&
+						launcher.browsers.every((entry) =>
+							entry
+								.contexts()
+								.some((context) => context.id !== undefined && context.pages().length > 0),
+						),
+					{ budget: 5000 },
 				)
-				const answer = await fixture.pair.call(page === background ? 2 : 3, 'read', {
-					from: 1,
-					search: 'page',
+				const browsers = order === 'launch' ? launcher.browsers : [...launcher.browsers].reverse()
+				const browser = requireValue(
+					browsers.find((entry) =>
+						entry.contexts().some((context) => context.pages().some((page) => page.url === url)),
+					),
+					'lease',
+				)
+				const context = requireValue(
+					browser.contexts().find((entry) => entry.id !== undefined),
+					'isolated context',
+				)
+				const view = requireValue(context.pages()[0], 'view')
+				expect(view.url, 'the crash target must belong to the shared MCP lease').toBe(url)
+				const background = await context.create()
+				client = createCDPClient({
+					transport: createWebSocketCDPTransport({
+						url: requireValue(browser.endpoint, 'endpoint'),
+					}),
 				})
-				expect(answer.error).toBe(false)
-				expect(answer.text.includes('SERVER_CRASH:')).toBe(page === view)
+				await client.connect()
+				for (const page of [background, view]) {
+					const crashed = createRecorder<readonly []>()
+					page.emitter.on('crash', crashed.handler)
+					const attached: unknown = await client.send('Target.attachToTarget', {
+						targetId: page.id,
+						flatten: true,
+					})
+					if (!isRecord(attached) || !isString(attached['sessionId']))
+						throw new Error('Missing crash session')
+					await client
+						.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
+						.catch(() => undefined)
+					await waitForCondition(
+						'renderer crash event without Inspector.enable',
+						() => crashed.count === 1,
+						{ budget: 5000 },
+					).catch((cause: unknown) => {
+						throw new Error(
+							`Expected one ${page === background ? 'background' : 'current'} renderer crash; received ${crashed.count}; closed=${page.closed}`,
+							{ cause },
+						)
+					})
+					const answer = await fixture.pair.call(page === background ? 2 : 3, 'read', {
+						from: 1,
+						search: 'page',
+					})
+					expect(answer.error).toBe(false)
+					expect(answer.text.includes('SERVER_CRASH:')).toBe(page === view)
+				}
+			} finally {
+				await client?.close()
+				await fixture.teardown.destroy()
+				await pages.destroy()
 			}
-		} finally {
-			await client?.close()
-			await fixture.teardown.destroy()
-		}
-	})
+		},
+	)
 
 	it('reports ENOENT after its executable path disappears at size one', async () => {
 		const scratch = createScratch()

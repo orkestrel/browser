@@ -12,7 +12,7 @@ import type {
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
-	BrowserContextOptions,
+	BrowserIsolateOptions,
 	BrowserPageInterface,
 	BrowserPageOptions,
 	CDPTarget,
@@ -144,7 +144,8 @@ export class Browser implements BrowserInterface {
 	}
 
 	async ping(options?: BrowserCallOptions): Promise<void> {
-		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+		if (this.#destroyed)
+			throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 		const client = this.#client
 		if (this.#status !== 'connected' || client === undefined) {
 			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
@@ -159,7 +160,8 @@ export class Browser implements BrowserInterface {
 	}
 
 	async connect(): Promise<void> {
-		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+		if (this.#destroyed)
+			throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 
 		const active = this.#connecting.pending
 		if (active !== undefined) {
@@ -172,7 +174,8 @@ export class Browser implements BrowserInterface {
 	}
 
 	adopt(): void {
-		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+		if (this.#destroyed)
+			throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 		if (
 			this.#status !== 'connected' ||
 			this.#client === undefined ||
@@ -206,7 +209,7 @@ export class Browser implements BrowserInterface {
 		return [...this.#contexts]
 	}
 
-	async isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
+	async isolate(options?: BrowserIsolateOptions): Promise<BrowserContextInterface> {
 		const attempt = this.#isolate(options)
 		this.#isolating.add(attempt)
 		try {
@@ -217,7 +220,8 @@ export class Browser implements BrowserInterface {
 	}
 
 	async create(options?: BrowserPageOptions): Promise<BrowserPageInterface> {
-		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+		if (this.#destroyed)
+			throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 		const client = this.#client
 		if (this.#status !== 'connected' || client === undefined) {
 			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
@@ -263,14 +267,15 @@ export class Browser implements BrowserInterface {
 
 	// === Private helpers
 
-	async #isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
-		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+	async #isolate(options?: BrowserIsolateOptions): Promise<BrowserContextInterface> {
+		if (this.#destroyed)
+			throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 		const client = this.#client
 		if (this.#status !== 'connected' || client === undefined) {
 			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		}
 		validateBrowserContextOptions(options)
-		if (options?.id !== undefined)
+		if (options !== undefined && 'id' in options && options.id !== undefined)
 			throw new BrowserError('ARGUMENT', 'An isolated context receives its id from the browser')
 		const params: Record<string, unknown> = { disposeOnDetach: false }
 		if (options?.proxy !== undefined) {
@@ -298,7 +303,7 @@ export class Browser implements BrowserInterface {
 
 		try {
 			if (this.#destroyed || this.#client !== client)
-				throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+				throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 			if (options?.downloads !== undefined) {
 				await client.send('Browser.setDownloadBehavior', {
 					behavior: options.downloads.named === true ? 'allowAndName' : 'allow',
@@ -308,7 +313,7 @@ export class Browser implements BrowserInterface {
 				})
 			}
 			if (this.#destroyed || this.#client !== client)
-				throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+				throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 		} catch (error) {
 			await context.close().catch(() => undefined)
 			throw error
@@ -322,7 +327,8 @@ export class Browser implements BrowserInterface {
 		const disconnecting = this.#disconnecting.pending
 		if (disconnecting !== undefined) await disconnecting
 		await this.#settleExit()
-		if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+		if (this.#destroyed)
+			throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 		if (this.#status === 'connected') return
 
 		this.#assertNotAborted()
@@ -355,7 +361,8 @@ export class Browser implements BrowserInterface {
 			this.#assertNotAborted()
 			await this.#launch()
 		} catch (error) {
-			if (this.#destroyed) throw new BrowserError('DESTROYED', 'Browser has been destroyed')
+			if (this.#destroyed)
+				throw new BrowserError('CLOSED', 'Browser has been destroyed', { subject: 'browser' })
 
 			this.#status = 'error'
 			this.#emitter.emit('error', error)

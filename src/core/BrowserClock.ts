@@ -7,15 +7,7 @@ import { isFiniteNumber } from '@orkestrel/contract'
 /**
  * Controls the Chromium virtual-time budget for deterministic page timers.
  *
- * @example
- * ```ts
- * import { BrowserClock } from '@orkestrel/browser'
- *
- * const clock = new BrowserClock(page)
- * await clock.start(Date.UTC(2026, 0, 1))
- * await clock.advance(5_000)
- * await clock.stop()
- * ```
+ * @remarks The owner exposes this entity through `page.clock`.
  */
 export class BrowserClock implements BrowserClockInterface {
 	readonly #frame: BrowserFrameInterface
@@ -84,7 +76,12 @@ export class BrowserClock implements BrowserClockInterface {
 			throw error
 		}
 		const timer = setTimeout(() => {
-			deferred.reject(new BrowserError('PROTOCOL', 'Browser virtual-time budget timed out'))
+			deferred.reject(
+				new BrowserError('TIMEOUT', 'Browser virtual-time budget timed out', {
+					operation: 'advance',
+					ms,
+				}),
+			)
 		}, BROWSER_DEFAULT_TIMEOUT_MS)
 		let failure: unknown
 		try {

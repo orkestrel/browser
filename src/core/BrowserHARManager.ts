@@ -4,7 +4,6 @@ import type {
 	BrowserHAREntry,
 	BrowserHARManagerInterface,
 	BrowserHAROptions,
-	BrowserHARPending,
 	BrowserHARReplayOptions,
 	BrowserNetworkManagerInterface,
 	BrowserRequest,
@@ -14,26 +13,26 @@ import type {
 	BrowserWriterInterface,
 } from './types.js'
 import { BROWSER_HAR_CREATOR } from './constants.js'
-import { browserHARHeadersToRecord, createBrowserHAREntry, validateBrowserHAR } from './helpers.js'
+import { browserHARHeadersToRecord, buildBrowserHAREntry, validateBrowserHAR } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { isJSONValue } from '@orkestrel/contract'
 
 /**
  * Records and replays HTTP archives over one page network manager.
  *
- * @example
- * ```ts
- * import { BrowserHARManager } from '@orkestrel/browser'
- *
- * const har = new BrowserHARManager(page.network)
- * await har.start({ content: true })
- * const archive = await har.stop() // { log: { version: '1.2', creator, entries } }
- * ```
+ * @remarks The owner exposes this entity through `page.network.har`.
  */
 export class BrowserHARManager implements BrowserHARManagerInterface {
 	readonly #network: BrowserNetworkManagerInterface
 	readonly #writer: BrowserWriterInterface | undefined
-	readonly #pending: Map<string, BrowserHARPending> = new Map()
+	readonly #pending: Map<
+		string,
+		{
+			readonly request: BrowserRequest
+			readonly started: number
+			readonly response: BrowserResponse | undefined
+		}
+	> = new Map()
 	readonly #entries: BrowserHAREntry[] = []
 	readonly #tasks: Set<Promise<void>> = new Set()
 	#options: BrowserHAROptions | undefined
@@ -92,7 +91,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 				if (pending === undefined) continue
 				this.#pending.delete(id)
 				this.#entries.push(
-					createBrowserHAREntry(
+					buildBrowserHAREntry(
 						pending,
 						Math.max(0, Date.now() - pending.started),
 						undefined,
@@ -173,7 +172,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		if (pending === undefined) return
 		this.#pending.delete(failure.id)
 		this.#entries.push(
-			createBrowserHAREntry(
+			buildBrowserHAREntry(
 				pending,
 				Math.max(0, Date.now() - pending.started),
 				undefined,
@@ -228,7 +227,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 			}
 		}
 		this.#entries.push(
-			createBrowserHAREntry(pending, Math.max(0, Date.now() - pending.started), body),
+			buildBrowserHAREntry(pending, Math.max(0, Date.now() - pending.started), body),
 		)
 	}
 

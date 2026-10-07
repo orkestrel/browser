@@ -315,7 +315,8 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 
 	#expireWait(id: symbol, timeout: number): void {
 		this.#releaseWait(id)?.reject(
-			new BrowserError('NAVIGATION_TIMEOUT', 'Browser navigation wait timed out', {
+			new BrowserError('TIMEOUT', 'Browser navigation wait timed out', {
+				operation: 'wait',
 				frame: this.#frame,
 				timeout,
 			}),

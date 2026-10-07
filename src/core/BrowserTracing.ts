@@ -13,14 +13,7 @@ import { isString } from '@orkestrel/contract'
 /**
  * Captures Chromium traces streamed through the IO domain.
  *
- * @example
- * ```ts
- * import { BrowserTracing } from '@orkestrel/browser'
- *
- * const tracing = new BrowserTracing(page)
- * await tracing.start({ screenshots: true })
- * const trace = await tracing.stop() // { bytes, path }
- * ```
+ * @remarks The owner exposes this entity through `page.diagnostics.tracing`.
  */
 export class BrowserTracing implements BrowserTracingInterface {
 	readonly #frame: BrowserFrameInterface
@@ -114,7 +107,9 @@ export class BrowserTracing implements BrowserTracingInterface {
 	async #wait(promise: Promise<string>): Promise<string> {
 		const deferred = Promise.withResolvers<string>()
 		const timer = setTimeout(() => {
-			deferred.reject(new BrowserError('PROTOCOL', 'Browser trace completion timed out'))
+			deferred.reject(
+				new BrowserError('TIMEOUT', 'Browser trace completion timed out', { operation: 'stop' }),
+			)
 		}, BROWSER_DEFAULT_TIMEOUT_MS)
 		void promise.then(deferred.resolve, deferred.reject)
 		try {

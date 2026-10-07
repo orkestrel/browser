@@ -95,7 +95,7 @@ describe('createBrowserToolset over a document', () => {
 				expect((await view.read()).url).toBe(view.url)
 			}
 			const refusal = captureError(() => createBrowserToolset(view, { limit: 0 }))
-			expect(isBrowserError(refusal) && refusal.code).toBe('TOOLSET_ARGUMENT')
+			expect(isBrowserError(refusal) && refusal.code).toBe('ARGUMENT')
 			expect((await view.read()).url).toBe(view.url)
 			expect(subscriptions.calls.map(([signal]) => signal?.aborted)).toEqual([false])
 		} finally {

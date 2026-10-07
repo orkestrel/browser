@@ -1,7 +1,6 @@
 import type {
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
-	BrowserEpochFunction,
 	BrowserViewInterface,
 	CDPTransportEventMap,
 } from '@src/core'
@@ -54,43 +53,6 @@ export interface BrowserDOMViewInterface extends BrowserViewInterface {
 	readonly elements: BrowserElementManagerInterface<BrowserDOMElementInterface>
 	/** Releases the navigation listeners and every element reference. */
 	destroy(): void
-}
-
-/**
- * Binds a DOM element manager to the view that owns it.
- *
- * @remarks
- * - `document` — returns the document the view drives at the moment of the call
- * - `navigation` — reads the view's navigation epoch, which every reading records
- * - `signal` — the view's lifetime; it aborts when the view is destroyed, every wait and
- *   navigation listener the manager starts ends with it, and after it aborts `outline`, `find`,
- *   and `wait` reject with its reason
- */
-export interface BrowserDOMElementManagerInput {
-	readonly document: () => Document
-	readonly navigation: BrowserEpochFunction
-	readonly signal: AbortSignal
-}
-
-/**
- * Binds a DOM element to its reference and the manager that minted it.
- *
- * @remarks
- * - `reference` — the reference the manager minted for the element
- * - `description` — returns the role and accessible name the latest capture that encountered
- *   the element recorded; after the manager drops the reference it keeps returning that capture
- * - `node` — a weak reference to the element the reference names, so a removed element can be
- *   collected; an element that no longer dereferences reports `GONE`
- * - `current` — true while the manager still holds the reference; false otherwise
- * - `navigation` — reads the epoch of the element's own document, which every reading records;
- *   it advances when that document or the view's document navigates
- */
-export interface BrowserDOMElementInput {
-	readonly reference: string
-	readonly description: () => Pick<BrowserElementInterface, 'role' | 'name'>
-	readonly node: WeakRef<Element>
-	readonly current: () => boolean
-	readonly navigation: BrowserEpochFunction
 }
 
 /**

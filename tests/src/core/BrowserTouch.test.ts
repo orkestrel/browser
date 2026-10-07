@@ -1,6 +1,7 @@
+import { BrowserTouch } from '../../../src/core/BrowserTouch.js'
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserTouch, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import {
 	createAttachedPage,
 	createConnectedCDPClient,

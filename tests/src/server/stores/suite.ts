@@ -158,7 +158,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 				const journey = createBrowserJourneyFixture()
 				const lock = join(scratch.path, journey.name, 'journey.lock')
 				await expect(store.set(journey)).rejects.toMatchObject({
-					code: 'JOURNEY_LOCKED',
+					code: 'STORE_LOCKED',
 					message: `Journey is locked: ${lock}`,
 				})
 				expect((await readdir(lock)).map(parseBrowserLockEntry)).toEqual([child.pid])
@@ -228,7 +228,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 				const refused = waitForBrowserChild(second)
 				second.send('reclaim')
 				expect(await refused, 'the second recoverer cannot enter while the first holds').toBe(
-					'JOURNEY_LOCKED',
+					'STORE_LOCKED',
 				)
 				expect(await readdir(lock), 'reclaim preserves the live winner').toEqual(held)
 				const released = waitForBrowserChild(first)
@@ -325,7 +325,7 @@ process.send?.({ outcome: 'ready' })
 						(value) =>
 							isRecord(value) &&
 							value['outcome'] === 'refused' &&
-							['JOURNEY_LOCKED', 'JOURNEY_STALE'].includes(String(value['code'])),
+							['STORE_LOCKED', 'JOURNEY_STALE'].includes(String(value['code'])),
 					),
 				).toHaveLength(2 - saved.length)
 				expect(await Promise.all(exits)).toEqual([
@@ -405,11 +405,11 @@ process.send?.({ outcome: 'ready' })
 					await writeFile(journeyPath, corrupt)
 					await writeFile(runPath, corrupt)
 					await expect(journeys.get(saved.journey.name)).rejects.toMatchObject({
-						code: 'JOURNEY_FILE',
+						code: 'STORE_FILE',
 						message: expect.stringContaining(journeyPath),
 					})
 					await expect(runs.get(run.journey.name, run.id)).rejects.toMatchObject({
-						code: 'JOURNEY_FILE',
+						code: 'STORE_FILE',
 						message: expect.stringContaining(runPath),
 					})
 				}
@@ -419,11 +419,11 @@ process.send?.({ outcome: 'ready' })
 				)
 				await writeFile(runPath, JSON.stringify({ ...run, format: 9 }))
 				await expect(journeys.get(saved.journey.name)).rejects.toMatchObject({
-					code: 'JOURNEY_FORMAT',
+					code: 'STORE_FORMAT',
 					message: expect.stringContaining(journeyPath),
 				})
 				await expect(runs.get(run.journey.name, run.id)).rejects.toMatchObject({
-					code: 'JOURNEY_FORMAT',
+					code: 'STORE_FORMAT',
 					message: expect.stringContaining(runPath),
 				})
 			} finally {
@@ -523,7 +523,7 @@ console.log(JSON.stringify({
 						gid: gid ?? process.getgid?.(),
 						outcomes: paths.map((path) => ({
 							status: 'rejected',
-							code: 'JOURNEY_ACCESS',
+							code: 'STORE_ACCESS',
 							message: expect.stringContaining(path),
 						})),
 					})
@@ -598,10 +598,10 @@ console.log(JSON.stringify({
 				)
 				await writeFile(entry, '')
 				await expect(store.set(journey, { exclusive: true })).rejects.toMatchObject({
-					code: 'JOURNEY_LOCKED',
+					code: 'STORE_LOCKED',
 				})
 				await expect(store.delete(journey.name)).rejects.toMatchObject({
-					code: 'JOURNEY_LOCKED',
+					code: 'STORE_LOCKED',
 				})
 				await unlink(entry)
 				await rmdir(lock)
@@ -625,7 +625,7 @@ console.log(JSON.stringify({
 				await mkdir(revision)
 				await expect(
 					store.set({ ...journey, description: 'Uncommitted' }, { revision: 1 }),
-				).rejects.toMatchObject({ code: 'JOURNEY_FILE' })
+				).rejects.toMatchObject({ code: 'STORE_FILE' })
 				expect(await store.get(journey.name)).toEqual(saved)
 				expect((await readdir(join(scratch.path, journey.name))).sort()).toEqual([
 					'journey.json',
@@ -665,12 +665,12 @@ console.log(JSON.stringify({
 			const runs = new FileBrowserRunStore({ root: scratch.path })
 			scratch.destroy()
 			for (const name of ['con', 'aux', 'com1', 'lpt9', '../escape', 'two/parts', 'UPPER']) {
-				await expect(journeys.get(name)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(journeys.get(name)).rejects.toMatchObject({ code: 'STORE_PATH' })
 				await expect(journeys.set(createBrowserJourneyFixture([], { name }))).rejects.toMatchObject(
-					{ code: 'JOURNEY_PATH' },
+					{ code: 'STORE_PATH' },
 				)
-				await expect(journeys.delete(name)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
-				await expect(runs.create(name)).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+				await expect(journeys.delete(name)).rejects.toMatchObject({ code: 'STORE_PATH' })
+				await expect(runs.create(name)).rejects.toMatchObject({ code: 'STORE_PATH' })
 			}
 		})
 	})

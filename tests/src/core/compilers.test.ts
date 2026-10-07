@@ -543,7 +543,7 @@ describe('compileBrowserJourney', () => {
 			],
 			[{ ...BROWSER_JOURNEY_FIXTURE, parameters: {} }, 'JOURNEY_INVALID'],
 			// `Object.assign` types the unknown format as the declared literal, as a parsed file reaches the compiler.
-			[Object.assign({ ...BROWSER_JOURNEY_FIXTURE }, { format: 2 }), 'JOURNEY_FORMAT'],
+			[Object.assign({ ...BROWSER_JOURNEY_FIXTURE }, { format: 2 }), 'STORE_FORMAT'],
 		]
 		for (const [journey, code] of cases) {
 			expect(attempt(() => compileBrowserJourney(journey))).toMatchObject({

@@ -1,6 +1,7 @@
+import type { BrowserOutlineNode } from '../types.js'
+import type { BrowserElementManagerInput } from '../types.js'
 import type {
 	BrowserCallOptions,
-	BrowserElementInput,
 	BrowserElementGeometry,
 	BrowserPageElementInterface,
 	BrowserPoint,
@@ -20,7 +21,7 @@ import {
 	compileSelectFunction,
 } from '../compilers.js'
 import {
-	assertBrowserPage,
+	validateBrowserPageOpen,
 	computeBrowserButtons,
 	computeBrowserModifiers,
 	extractBrowserChord,
@@ -38,9 +39,33 @@ import { isArray, isError, isInteger, isNumber, isRecord, isString } from '@orke
  * Drives a referenced DOM element through its document's isolated world and the page input stream.
  */
 export class BrowserPageElement implements BrowserPageElementInterface {
-	readonly #input: BrowserElementInput
+	readonly #input: BrowserElementManagerInput & {
+		readonly description: () => BrowserOutlineNode
+		readonly node: BrowserOutlineNode & { readonly reference: string }
+		readonly backend: number
+		readonly frame: string
+		readonly current: () => boolean
+		readonly point: (
+			frame: string,
+			point: BrowserPoint,
+			options?: BrowserCallOptions,
+		) => Promise<BrowserPoint>
+	}
 
-	constructor(input: BrowserElementInput) {
+	constructor(
+		input: BrowserElementManagerInput & {
+			readonly description: () => BrowserOutlineNode
+			readonly node: BrowserOutlineNode & { readonly reference: string }
+			readonly backend: number
+			readonly frame: string
+			readonly current: () => boolean
+			readonly point: (
+				frame: string,
+				point: BrowserPoint,
+				options?: BrowserCallOptions,
+			) => Promise<BrowserPoint>
+		},
+	) {
 		this.#input = input
 	}
 
@@ -252,7 +277,7 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				describeBrowserRefusal(this.reference, 'GONE', 'is gone because the page changed'),
 				{ reference: this.reference, reason: 'GONE' },
 			)
-		assertBrowserPage(this.#input.page, this.#input.client)
+		validateBrowserPageOpen(this.#input.page, this.#input.client)
 	}
 
 	#epoch(): number {

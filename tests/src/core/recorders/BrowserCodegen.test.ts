@@ -661,6 +661,6 @@ describe('BrowserCodegen', () => {
 		await Promise.all([codegen.start(), codegen.start()])
 		expect(starts.count).toBe(1)
 		await Promise.all([codegen.stop(), codegen.stop()])
-		expect(codegen.started).toBe(false)
+		expect(codegen.active).toBe(false)
 	})
 })

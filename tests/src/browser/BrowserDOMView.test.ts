@@ -24,7 +24,7 @@ describe('BrowserDOMView', () => {
 				const result = await waiting.catch((error: unknown) =>
 					isBrowserError(error) ? error.code : error,
 				)
-				expect(result).toBe(scenario.absent ? undefined : 'WAIT_TIMEOUT')
+				expect(result).toBe(scenario.absent ? undefined : 'TIMEOUT')
 			} finally {
 				view.destroy()
 			}
@@ -36,7 +36,7 @@ describe('BrowserDOMView', () => {
 		try {
 			requireValue(document.querySelector('details')).open = true
 			await expect(view.wait('Wait subject', { absent: true, timeout: 25 })).rejects.toMatchObject({
-				code: 'WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 		} finally {
 			view.destroy()
@@ -77,7 +77,7 @@ describe('BrowserDOMView', () => {
 			await view.wait('Never present', { absent: true, timeout: 0 })
 			document.body.innerHTML = '<p>Saved</p>'
 			await expect(view.wait('Saved', { absent: true, timeout: 25 })).rejects.toMatchObject({
-				code: 'WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 			await view.wait('Saved', { absent: false })
 		} finally {
@@ -338,7 +338,7 @@ describe('BrowserDOMView', () => {
 			const view = createBrowserDOMView({ document: probe.document })
 			await view.wait('Probe page', { timeout: 0 })
 			const expired = await view.wait('Never', { timeout: 20 }).catch((error: unknown) => error)
-			expect(isBrowserError(expired) && expired.code).toBe('WAIT_TIMEOUT')
+			expect(isBrowserError(expired) && expired.code).toBe('TIMEOUT')
 			await expect(view.wait('Never', { timeout: -1 })).rejects.toThrow(/non-negative/)
 		})
 

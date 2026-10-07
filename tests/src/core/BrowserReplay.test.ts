@@ -117,7 +117,7 @@ describe('BrowserReplay', () => {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs }).execute(),
 			).rejects.toMatchObject({
-				code: 'JOURNEY_FORMAT',
+				code: 'STORE_FORMAT',
 				context: { action: 'replay', placement: 'dom' },
 			})
 			expect(holds.count).toBe(0)

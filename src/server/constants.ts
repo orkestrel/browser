@@ -259,7 +259,7 @@ export const BROWSER_SERVER_TEARDOWN = 'SERVER_TEARDOWN'
 /** Names a failed profile sweep. */
 export const BROWSER_SERVER_SWEEP = 'SERVER_SWEEP'
 /** Names a refused browser server option. */
-export const BROWSER_SERVER_OPTIONS = 'SERVER_OPTIONS'
+export const BROWSER_SERVER_OPTIONS = 'ARGUMENT'
 /** Names the notice that a browser and its session state were lost. */
 export const BROWSER_SERVER_CRASH = 'SERVER_CRASH'
 /** Names an interrupted call whose outcome is unknown. */

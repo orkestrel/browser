@@ -59,6 +59,27 @@ const REAL_BROWSER_ARGS = [...SERVICE_BROWSER_ARGS]
 
 describe('Browser real launch', () => {
 	let browser: BrowserInterface | undefined
+	it('executes the README usage fence and observes its saved text', async () => {
+		const markdown = readFileSync('README.md', 'utf8')
+		const fence = requireValue(/```ts\r?\n([\s\S]*?)\r?\n```/u.exec(markdown)?.[1])
+		const code = fence
+			.replace(/^import[^\n]*\n/u, '')
+			.replace('{ headless: true }', 'options')
+			.replace("'example.png'", 'screenshot')
+			.replace("page.wait('Saved')", "page.wait('Saved', { timeout: 1000 })")
+		const run = new Function(
+			'createBrowser',
+			'options',
+			'screenshot',
+			`return (async () => { ${code.replace('await browser.connect()', 'try { await browser.connect()')}\nreturn reading.text()\n} finally { await browser.destroy() } })()`,
+		)
+		const result: unknown = await run(
+			createBrowser,
+			{ headless: true, port: 0, executable: REAL_BROWSER_EXECUTABLE, args: REAL_BROWSER_ARGS },
+			join(createTempDirectory().path, 'example.png'),
+		)
+		expect(result).toMatchObject({ text: expect.stringContaining('Saved') })
+	})
 
 	afterEach(async () => {
 		await browser?.destroy()
@@ -1063,7 +1084,7 @@ describe('Browser proofs against the fixture pages', () => {
 	// one system clock: the page records `performance.timeOrigin + performance.now()` at the
 	// insertion, and this process reads the same sum at resolution; 2 ms covers the rounding each
 	// process applies to its origin.
-	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text stays pending before its deadline, then rejects WAIT_TIMEOUT)', async () => {
+	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text stays pending before its deadline, then rejects TIMEOUT)', async () => {
 		const page = await browser.create({ url: fixtures.url('/late') })
 		opened.push(page)
 		const [reveal] = await page.elements.find({ role: 'button', name: 'Reveal' })
@@ -1091,7 +1112,7 @@ describe('Browser proofs against the fixture pages', () => {
 		// covers the two processes' monotonic clocks.
 		const started = performance.now()
 		await expect(page.wait('Never shown', { timeout: 1_000 })).rejects.toMatchObject({
-			code: 'WAIT_TIMEOUT',
+			code: 'TIMEOUT',
 		})
 		expect(performance.now() - started).toBeGreaterThanOrEqual(1_000 - 2)
 	})
@@ -1109,7 +1130,7 @@ describe('Browser proofs against the fixture pages', () => {
 			const result = await waiting.catch((error: unknown) =>
 				isBrowserError(error) ? error.code : error,
 			)
-			expect(result).toBe(scenario.absent ? undefined : 'WAIT_TIMEOUT')
+			expect(result).toBe(scenario.absent ? undefined : 'TIMEOUT')
 		})
 	}
 	it('opening details makes an absent text wait time out', async () => {
@@ -1118,7 +1139,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_DETAILS_HTML)}`)
 		await page.evaluate("document.querySelector('details').open = true")
 		await expect(page.wait('Wait subject', { absent: true, timeout: 100 })).rejects.toMatchObject({
-			code: 'WAIT_TIMEOUT',
+			code: 'TIMEOUT',
 		})
 	})
 	it('closing a page rejects a pending text wait well before its deadline', async () => {
@@ -1137,7 +1158,7 @@ describe('Browser proofs against the fixture pages', () => {
 		const refusal = await waiting.catch((error: unknown) => error)
 		console.log('close wait', { elapsed: performance.now() - start, refusal })
 		expect(refusal).toBeInstanceOf(Error)
-		expect(isBrowserError(refusal) && refusal.code).not.toBe('WAIT_TIMEOUT')
+		expect(isBrowserError(refusal) && refusal.code).not.toBe('TIMEOUT')
 		expect(performance.now() - start).toBeLessThan(1_000)
 	})
 	it('navigation settles a pending absent element wait', async () => {
@@ -1212,7 +1233,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await page.wait('Never present', { absent: true })
 		await page.evaluate("document.body.innerHTML = '<p>Saved</p>'")
 		await expect(page.wait('Saved', { absent: true, timeout: 100 })).rejects.toMatchObject({
-			code: 'WAIT_TIMEOUT',
+			code: 'TIMEOUT',
 		})
 		await page.wait('Saved', { absent: false })
 	})

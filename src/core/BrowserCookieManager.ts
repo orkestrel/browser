@@ -12,14 +12,7 @@ import { BrowserError } from './errors.js'
 /**
  * Performs cookie operations isolated to one browser context.
  *
- * @example
- * ```ts
- * import { BrowserCookieManager } from '@orkestrel/browser'
- *
- * const cookies = new BrowserCookieManager(client)
- * await cookies.set([{ name: 'session', value: 'value', url: 'https://example.com/' }])
- * const current = await cookies.cookies(['https://example.com/'])
- * ```
+ * @remarks The owner exposes this entity through `context.cookies`.
  */
 export class BrowserCookieManager implements BrowserCookieManagerInterface {
 	readonly #client: CDPClientInterface
@@ -57,6 +50,10 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 	}
 
 	async remove(filter: BrowserCookieFilter): Promise<void> {
+		if (filter.name === undefined && filter.domain === undefined && filter.path === undefined)
+			throw new BrowserError('ARGUMENT', 'Cookie removal requires a name, domain, or path', {
+				operation: 'remove',
+			})
 		const params: Record<string, unknown> = {}
 		if (this.#context !== undefined) params['browserContextId'] = this.#context
 

@@ -43,7 +43,7 @@ describe('bin entry', () => {
 					expect(child.lines).toEqual([])
 					expect(child.stderr).toBe(
 						value === '5'
-							? 'browse: SERVER_OPTIONS: pool.contexts must be an integer from 1 through 4\n'
+							? 'browse: ARGUMENT: pool.contexts must be an integer from 1 through 4\n'
 							: `browse: SERVER_ENVIRONMENT: BROWSE_CONTEXTS must be an integer, not "${value}"\n`,
 					)
 				} finally {
@@ -272,7 +272,7 @@ describe('bin entry', () => {
 				expect(await child.ending).toStrictEqual({ code: 1, signal: null })
 				expect(child.lines).toEqual([])
 				expect(child.stderr).toBe(
-					'browse: SERVER_OPTIONS: pool.size must be an integer from 1 through 3\n',
+					'browse: ARGUMENT: pool.size must be an integer from 1 through 3\n',
 				)
 			} finally {
 				await child.destroy()

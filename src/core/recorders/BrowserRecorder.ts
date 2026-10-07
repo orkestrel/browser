@@ -38,7 +38,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	readonly #emitter: Emitter<BrowserRecorderEventMap>
 	readonly #action = this.#recordAction.bind(this)
 	readonly #hold = this.#recordHold.bind(this)
-	#started = false
+	#active = false
 	#steps: readonly BrowserJourneyStep[] = []
 	#pending: BrowserAction | undefined
 
@@ -55,14 +55,14 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	get emitter(): EmitterInterface<BrowserRecorderEventMap> {
 		return this.#emitter
 	}
-	get started(): boolean {
-		return this.#started
+	get active(): boolean {
+		return this.#active
 	}
 
 	async start(): Promise<void> {
 		if (this.#emitter.destroyed) throw new BrowserError('CLOSED', 'The recorder was destroyed')
 		this.clear()
-		this.#started = true
+		this.#active = true
 		const held = this.#toolset.held
 		if (held !== undefined)
 			this.#append({ action: 'unresolved', arguments: {}, gap: `replayed ${held}` })
@@ -71,7 +71,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 
 	async stop(): Promise<readonly BrowserJourneyStep[]> {
 		this.#flushPending()
-		this.#started = false
+		this.#active = false
 		const steps = this.steps()
 		this.#emitter.emit('stop', structuredClone(steps))
 		return steps
@@ -104,7 +104,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	async destroy(): Promise<void> {
-		this.#started = false
+		this.#active = false
 		this.#pending = undefined
 		this.#toolset.emitter.off('action', this.#action)
 		this.#toolset.emitter.off('hold', this.#hold)
@@ -112,7 +112,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	#recordAction(action: BrowserAction): void {
-		if (!this.#started || this.#toolset.held !== undefined) return
+		if (!this.#active || this.#toolset.held !== undefined) return
 		if (this.#pending !== undefined) {
 			const pending = this.#pending
 			this.#pending = undefined
@@ -178,7 +178,7 @@ export class BrowserRecorder implements BrowserRecorderInterface {
 	}
 
 	#recordHold(name: string): void {
-		if (!this.#started) return
+		if (!this.#active) return
 		this.#flushPending()
 		this.#append({ action: 'unresolved', arguments: {}, gap: `replayed ${name}` })
 	}

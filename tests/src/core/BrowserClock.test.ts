@@ -5,7 +5,21 @@ import { waitForCondition } from '@orkestrel/test'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserClock', () => {
-	it('installs, advances by a budget event, pauses, resumes, and uninstalls virtual time', async () => {
+	it('reports a missing virtual time completion as TIMEOUT', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Emulation.setVirtualTimePolicy')
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		try {
+			await page.clock.start()
+			await expect(page.clock.advance(1)).rejects.toMatchObject({
+				code: 'TIMEOUT',
+				context: { operation: 'advance' },
+			})
+		} finally {
+			await client.close()
+		}
+	}, 40000)
+	it('starts, advances by a budget event, pauses, resumes, and stops virtual time', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		transport.onSend('Emulation.setVirtualTimePolicy', (message) => {
 			transport.reply(message.id, {})

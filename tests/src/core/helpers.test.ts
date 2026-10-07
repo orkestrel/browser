@@ -13,7 +13,7 @@ import type { BrowserLine, BrowserPassage } from '@src/core'
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { readBrowserStreamChunk } from '@src/core'
 import { BROWSER_BASE64_REFUSALS } from '../../setup.js'
-import { assertBrowserPage, validateBrowserJourneyWriteOptions } from '@src/core'
+import { validateBrowserPageOpen, validateBrowserJourneyWriteOptions } from '@src/core'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 import { scanBrowserLines, describeBrowserRefusal, isBrowserError } from '@src/core'
 import { renderBrowserLine } from '@src/core'
@@ -1172,7 +1172,7 @@ describe('journey editing and rendering', () => {
 		expect(() => validateBrowserJourneyName('a'.repeat(64))).not.toThrow()
 		for (const name of [...BROWSER_STORE_INVALID_NAMES, 'a'.repeat(65)])
 			expect(() => validateBrowserJourneyName(name)).toThrow(
-				expect.objectContaining({ code: 'JOURNEY_PATH' }),
+				expect.objectContaining({ code: 'STORE_PATH' }),
 			)
 	})
 	it('checks safe integer paging boundaries with the argument code', () => {
@@ -1186,15 +1186,15 @@ describe('journey editing and rendering', () => {
 			Number.MAX_SAFE_INTEGER + 1,
 		]) {
 			expect(() => validateBrowserStorePage(invalid, 1)).toThrow(
-				expect.objectContaining({ code: 'JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'ARGUMENT', context: { subject: 'store' } }),
 			)
 			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
-				expect.objectContaining({ code: 'JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'ARGUMENT' }),
 			)
 		}
 		for (const invalid of [0, -0])
 			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
-				expect.objectContaining({ code: 'JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'ARGUMENT' }),
 			)
 	})
 	it('attributes an exhausted id counter to the add before later edits', () => {
@@ -1500,23 +1500,19 @@ describe('write conditions and page lifecycle', () => {
 			{ revision: 1 },
 		])
 			expect(() => validateBrowserJourneyWriteOptions(options)).not.toThrow()
-		for (const options of [
-			{ revision: 0 },
-			{ revision: Number.NaN },
-			{ revision: 1, exclusive: false },
-		])
+		for (const options of [{ revision: 0 }, { revision: Number.NaN }])
 			expect(() => validateBrowserJourneyWriteOptions(options)).toThrow(BrowserError)
 	})
 	it('refuses a released page and a disconnected frame before protocol work', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		const page = new BrowserPage(client, 'target', 'session')
-		expect(() => assertBrowserPage(page, client)).not.toThrow()
+		expect(() => validateBrowserPageOpen(page, client)).not.toThrow()
 		expect(transport.sent).toEqual([])
 		replyOk(transport, 'Target.detachFromTarget')
 		await page.destroy()
-		expect(() => assertBrowserPage(page, client)).toThrow('Browser page is closed')
+		expect(() => validateBrowserPageOpen(page, client)).toThrow('Browser page is closed')
 		await client.close()
-		expect(() => assertBrowserPage(page, client)).toThrow('Browser frame is disconnected')
+		expect(() => validateBrowserPageOpen(page, client)).toThrow('Browser frame is disconnected')
 		expect(transport.sent.map((message) => message.method)).toEqual(['Target.detachFromTarget'])
 	})
 })

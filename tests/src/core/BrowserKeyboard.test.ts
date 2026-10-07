@@ -1,6 +1,7 @@
+import { BrowserKeyboard } from '../../../src/core/BrowserKeyboard.js'
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserKeyboard, extractBrowserChord, isBrowserError, keyToBrowserInput } from '@src/core'
+import { extractBrowserChord, isBrowserError, keyToBrowserInput } from '@src/core'
 import {
 	createAttachedPage,
 	createConnectedCDPClient,

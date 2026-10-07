@@ -144,7 +144,7 @@ describe('element manager', () => {
 		})
 		try {
 			await expect(page.elements.wait({ css: '#missing' }, { timeout: 20 })).rejects.toMatchObject({
-				code: 'WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 		} finally {
 			await client.close()
@@ -155,7 +155,7 @@ describe('element manager', () => {
 		const { page, client, transport } = await createBrowserElementFixture({ local: true })
 		try {
 			await expect(page.elements.wait({ css: '#missing' }, { timeout: 0 })).rejects.toMatchObject({
-				code: 'WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 			expect(transport.sent.some((message) => message.method === 'Page.createIsolatedWorld')).toBe(
 				false,

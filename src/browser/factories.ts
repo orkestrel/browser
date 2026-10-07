@@ -13,8 +13,8 @@ import { SocketCDPTransport } from './transports/SocketCDPTransport.js'
  * @param options - The driven document, and `own` to admit the realm's own document
  * @returns A {@link BrowserDOMViewInterface} over the document's window
  * @throws Thrown when `document` is not a document attached to a window, with the code
- * `BROWSER_DOCUMENT`, and when it is `globalThis.document` without `own: true`, with the code
- * `BROWSER_DOCUMENT_OWN`.
+ * `DOCUMENT`, and when it is `globalThis.document` without `own: true`, with the code
+ * `DOCUMENT_OWN`.
  *
  * @example
  * ```ts

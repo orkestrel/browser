@@ -7,7 +7,6 @@ import type {
 	BrowserJourneyStepInput,
 	BrowserJourneyTab,
 	BrowserJourneyTarget,
-	BrowserJourneyToolsetInterface,
 	BrowserToolsetResult,
 	BrowserCallOptions,
 	BrowserContextInterface,
@@ -26,7 +25,6 @@ import type {
 	BrowserToolName,
 	BrowserToolSourceInterface,
 	BrowserToolsetEventMap,
-	BrowserToolsetHandler,
 	BrowserToolsetInterface,
 	BrowserToolsetOptions,
 	BrowserToolsetReason,
@@ -208,7 +206,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #native: readonly ToolInterface[]
 	readonly #dialogTool: ToolInterface | undefined
 	readonly #contextTools: readonly ToolInterface[]
-	readonly #journeys: BrowserJourneyToolsetInterface | undefined
+	readonly #journeys: BrowserJourneyToolset | undefined
 	readonly #added = new Set<ToolInterface>()
 	readonly #adopted = new Map<string, ToolInterface>()
 	readonly #watches = new Map<
@@ -223,12 +221,24 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #dialogs = new Map<BrowserPageInterface, BrowserDialogInterface>()
 	readonly #handlers = new WeakMap<
 		ToolInterface,
-		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
+		{
+			readonly handler: (
+				args: Readonly<Record<string, unknown>>,
+				context: ToolContext,
+			) => Promise<readonly [body: string, footer: string]>
+			readonly clause: string
+		}
 	>()
 	readonly #actions = new WeakMap<AbortSignal, Partial<BrowserAction>>()
 	readonly #invocations = new WeakMap<
 		ToolContext,
-		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
+		{
+			readonly handler: (
+				args: Readonly<Record<string, unknown>>,
+				context: ToolContext,
+			) => Promise<readonly [body: string, footer: string]>
+			readonly clause: string
+		}
 	>()
 	#reservation: BrowserHoldInterface | undefined
 	readonly #holds = new Map<PromiseWithResolvers<void>, BrowserHoldInterface>()
@@ -261,13 +271,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const page = isBrowserPage(view) ? view : undefined
 		const limit = options?.limit ?? BROWSER_TOOL_LIMIT
 		if (!isInteger(limit) || limit < 1) {
-			throw new BrowserError(
-				'TOOLSET_ARGUMENT',
-				'Browser toolset limit must be a positive integer',
-				{
-					limit,
-				},
-			)
+			throw new BrowserError('ARGUMENT', 'Browser toolset limit must be a positive integer', {
+				subject: 'toolset',
+				limit,
+			})
 		}
 		if (options?.context !== undefined && page === undefined) {
 			throw new BrowserError('TOOLSET_CONTEXT', 'Browser toolset context requires a page')
@@ -549,7 +556,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return this.#page ?? this.#view
 	}
 
-	#create(name: BrowserToolName, handler: BrowserToolsetHandler, clause: string): ToolInterface {
+	#create(
+		name: BrowserToolName,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
+		clause: string,
+	): ToolInterface {
 		const validated = this.#validate.bind(this, name, handler)
 		const tool = createTool({
 			...BROWSER_TOOL_COPY[name],
@@ -561,7 +575,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	async #dispatch(
 		name: string,
-		handler: BrowserToolsetHandler,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
 		clause: string,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
@@ -609,7 +626,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// Refuses a parameter the tool does not advertise before its handler reads any argument.
 	#validate(
 		name: BrowserToolName,
-		handler: BrowserToolsetHandler,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
@@ -661,7 +681,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	async #execute(
 		name: string,
 		clause: string,
-		handler: BrowserToolsetHandler,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<string> {
@@ -812,8 +835,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			(search !== undefined && !isString(search))
 		)
 			throw new BrowserError(
-				'TOOLSET_ARGUMENT',
+				'ARGUMENT',
 				'Read requires an integer from, an optional integer to, and optional search text.',
+				{ subject: 'toolset' },
 			)
 		return [
 			await this.read({
@@ -883,11 +907,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const submit = args['submit']
 		const secret = args['secret']
 		if (secret !== undefined && !isBoolean(secret))
-			throw new BrowserError('TOOLSET_ARGUMENT', 'The secret parameter must be a boolean.', {
+			throw new BrowserError('ARGUMENT', 'The secret parameter must be a boolean.', {
+				subject: 'toolset',
 				key: 'secret',
 			})
 		if (submit !== undefined && !isBoolean(submit)) {
-			throw new BrowserError('TOOLSET_ARGUMENT', 'The submit parameter must be a boolean.', {
+			throw new BrowserError('ARGUMENT', 'The submit parameter must be a boolean.', {
+				subject: 'toolset',
 				key: 'submit',
 			})
 		}
@@ -1094,15 +1120,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const seconds = args['timeout']
 		const absent = args['absent']
 		if (absent !== undefined && !isBoolean(absent)) {
-			throw new BrowserError('TOOLSET_ARGUMENT', 'The absent parameter must be a boolean.', {
+			throw new BrowserError('ARGUMENT', 'The absent parameter must be a boolean.', {
+				subject: 'toolset',
 				key: 'absent',
 			})
 		}
 		if (seconds !== undefined && (!isFiniteNumber(seconds) || seconds <= 0)) {
 			throw new BrowserError(
-				'TOOLSET_ARGUMENT',
+				'ARGUMENT',
 				'The timeout parameter must be a positive number of seconds.',
-				{ key: 'timeout' },
+				{ subject: 'toolset', key: 'timeout' },
 			)
 		}
 		const timeout = Math.min(
@@ -1125,7 +1152,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				'',
 			]
 		} catch (error) {
-			if (!context.signal.aborted && isBrowserError(error) && error.code === 'WAIT_TIMEOUT') {
+			if (
+				!context.signal.aborted &&
+				isBrowserError(error) &&
+				error.code === 'TIMEOUT' &&
+				error.context?.['operation'] === 'wait'
+			) {
 				this.#actions.set(context.signal, {
 					...this.#actions.get(context.signal),
 					outcome: 'timeout',
@@ -1151,12 +1183,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const accept = args['accept']
 		const text = args['text']
 		if (!isBoolean(accept)) {
-			throw new BrowserError('TOOLSET_ARGUMENT', 'The accept parameter must be a boolean.', {
+			throw new BrowserError('ARGUMENT', 'The accept parameter must be a boolean.', {
+				subject: 'toolset',
 				key: 'accept',
 			})
 		}
 		if (text !== undefined && !isString(text)) {
-			throw new BrowserError('TOOLSET_ARGUMENT', 'The text parameter must be a string.', {
+			throw new BrowserError('ARGUMENT', 'The text parameter must be a string.', {
+				subject: 'toolset',
 				key: 'text',
 			})
 		}
@@ -1953,7 +1987,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	#ended(): BrowserError {
-		return new BrowserError('TOOLSET_ENDED', 'the browser session ended')
+		return new BrowserError('CLOSED', 'the browser session ended', { subject: 'toolset' })
 	}
 
 	#current(generation: number, source: BrowserToolSourceInterface): boolean {

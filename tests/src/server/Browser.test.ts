@@ -73,7 +73,7 @@ describe('Browser eager U2', () => {
 			await browser.destroy()
 		}
 		expect(browser.endpoint).toBeUndefined()
-		await expect(browser.ping()).rejects.toThrow(expect.objectContaining({ code: 'DESTROYED' }))
+		await expect(browser.ping()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
 	it('uses the command deadline and honors ping cancellation', async () => {
@@ -216,13 +216,13 @@ describe('Browser destroyed state', () => {
 	it('connect() after destroy() throws BrowserError', async () => {
 		const browser = createBrowser()
 		await browser.destroy()
-		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'DESTROYED' }))
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
 	it('create() after destroy() throws BrowserError', async () => {
 		const browser = createBrowser()
 		await browser.destroy()
-		await expect(browser.create()).rejects.toThrow(expect.objectContaining({ code: 'DESTROYED' }))
+		await expect(browser.create()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
 	it('disconnect() is no-op after destroy', async () => {
@@ -418,7 +418,7 @@ describe('Browser connect() through CDP discovery', () => {
 		await browser.destroy()
 		const error = await connecting
 
-		expect(error).toMatchObject({ name: 'BrowserError', code: 'DESTROYED' })
+		expect(error).toMatchObject({ name: 'BrowserError', code: 'CLOSED' })
 		expect(performance.now() - start).toBeLessThan(1000)
 		expect(browser.status).not.toBe('connected')
 	})
@@ -596,7 +596,7 @@ describe('Browser isolate()', () => {
 			if (request === undefined) throw new Error('Missing creation')
 			const ending = browser.destroy()
 			server.reply(request.id, { browserContextId: 'late-context' })
-			expect(await creating).toMatchObject({ name: 'BrowserError', code: 'DESTROYED' })
+			expect(await creating).toMatchObject({ name: 'BrowserError', code: 'CLOSED' })
 			await ending
 			expect(events.count).toBe(0)
 			expect(browser.contexts()).toEqual([])
@@ -672,7 +672,8 @@ describe('Browser isolate()', () => {
 		await expect(browser.isolate({ origins: ['ftp://example.com'] })).rejects.toThrow(
 			'absolute HTTP(S) origin',
 		)
-		await expect(browser.isolate({ id: 'existing-context' })).rejects.toThrow(
+		const suppliedId = { id: 'existing-context', viewport: { width: 640, height: 480 } }
+		await expect(browser.isolate(suppliedId)).rejects.toThrow(
 			expect.objectContaining({ code: 'ARGUMENT' }),
 		)
 		await expect(browser.isolate({ viewport: { width: 0, height: 480 } })).rejects.toThrow(
@@ -1561,7 +1562,7 @@ describe('Browser destroy()/close() matrix', () => {
 		const closeCalls = server.received.filter((m) => m.method === 'Browser.close')
 		expect(closeCalls).toHaveLength(1)
 		expect(browser.status).not.toBe('connected')
-		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'DESTROYED' }))
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
 	it('close() on an owned session results in the process exiting', async () => {

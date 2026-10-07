@@ -1,3 +1,4 @@
+import { holdBrowserStoreLock } from '../../../setupServer.js'
 import type { ScratchInterface } from '@orkestrel/test/server'
 import { afterEach, describe, it, expect } from 'vitest'
 import {
@@ -12,7 +13,6 @@ import { requireValue } from '@orkestrel/test'
 import { createBrowserToolset, createMemoryBrowserJourneyStore } from '@src/core'
 import { createBrowser, FileBrowserRunStore } from '@src/server'
 import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../../../setupService.js'
-import { FileBrowserStore } from '../../../../src/server/stores/FileBrowserStore.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 import { describeBrowserRunStore } from '../../core/stores/suite.js'
 
@@ -49,7 +49,7 @@ describe('FileBrowserRunStore standalone captures', () => {
 		createLink(join(scratch.path, 'runs'), outside)
 		const store = new FileBrowserRunStore({ root: scratch.path })
 		await expect(store.write(new Uint8Array([1]))).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 		expect(await readdir(outside)).toEqual([])
 	})
@@ -138,14 +138,14 @@ describe('FileBrowserRunStore captures', () => {
 		)
 		for (const name of ['../s1.png', 's0.png', 's1.jpg', 's01.png'])
 			await expect(store.capture(slot, name, new Uint8Array())).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 		await expect(store.set(BROWSER_RUN_FIXTURE)).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 		await expect(
 			new FileBrowserRunStore({ root: scratch.path }).set({ ...BROWSER_RUN_FIXTURE, id: slot.id }),
-		).rejects.toMatchObject({ code: 'JOURNEY_PATH' })
+		).rejects.toMatchObject({ code: 'STORE_PATH' })
 	})
 	it('refuses a missing capture directory without recreating it', async () => {
 		const scratch = createScratch()
@@ -155,7 +155,7 @@ describe('FileBrowserRunStore captures', () => {
 		if (slot.directory === undefined) throw new Error('Missing directory')
 		await rename(slot.directory, slot.directory + '-moved')
 		await expect(store.capture(slot, 's1.png', new Uint8Array([1]))).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 		await expect(lstat(slot.directory)).rejects.toMatchObject({ code: 'ENOENT' })
 	})
@@ -183,7 +183,7 @@ describe('FileBrowserRunStore captures', () => {
 			)
 			createLink(path, path + '-moved')
 			await expect(store.capture(slot, 's1.png', new Uint8Array([2]))).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 		},
 	)
@@ -223,8 +223,8 @@ describe('FileBrowserRunStore persisted files', () => {
 		const scratch = createScratch()
 		scratches.push(scratch)
 		const store = new FileBrowserRunStore({ root: scratch.path })
-		const files = new FileBrowserStore({ root: scratch.path })
-		await files.lock(join(scratch.path, 'same-journey', 'journey.lock'), async () => {
+
+		await holdBrowserStoreLock(join(scratch.path, 'same-journey', 'journey.lock'), async () => {
 			const results = await Promise.allSettled([
 				store.create('same-journey'),
 				store.create('same-journey'),
@@ -232,7 +232,7 @@ describe('FileBrowserRunStore persisted files', () => {
 			for (const result of results)
 				expect(result).toMatchObject({
 					status: 'rejected',
-					reason: { code: 'JOURNEY_LOCKED' },
+					reason: { code: 'STORE_LOCKED' },
 				})
 		})
 		const results = await Promise.allSettled([
@@ -259,24 +259,24 @@ describe('FileBrowserRunStore persisted files', () => {
 		expect(await reopened.clear(name)).toBe(3)
 		expect(await readdir(join(scratch.path, name, 'runs'))).toEqual([])
 		await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: unsaved.id })).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 		await expect(store.capture(unsaved, 's1.png', new Uint8Array([2]))).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 	})
 	it('open and clear both refuse the same held lock', async () => {
 		const scratch = createScratch()
 		scratches.push(scratch)
 		const store = new FileBrowserRunStore({ root: scratch.path })
-		const files = new FileBrowserStore({ root: scratch.path })
+
 		const slot = await store.create('add-kettle')
-		await files.lock(join(scratch.path, 'add-kettle', 'journey.lock'), async () => {
+		await holdBrowserStoreLock(join(scratch.path, 'add-kettle', 'journey.lock'), async () => {
 			await expect(store.create('add-kettle')).rejects.toMatchObject({
-				code: 'JOURNEY_LOCKED',
+				code: 'STORE_LOCKED',
 			})
 			await expect(store.clear('add-kettle')).rejects.toMatchObject({
-				code: 'JOURNEY_LOCKED',
+				code: 'STORE_LOCKED',
 			})
 		})
 		await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
@@ -303,7 +303,7 @@ describe('FileBrowserRunStore persisted files', () => {
 			)
 			createLink(path, path + '-moved')
 			await expect(store.clear('check-ready')).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 			expect(new Uint8Array(await readFile(join(slot.directory, 's1.png')))).toEqual(
 				new Uint8Array([1]),
@@ -336,7 +336,7 @@ describe('FileBrowserRunStore persisted files', () => {
 		)
 		await expect(reopened.delete(name, slot.id)).resolves.toBeUndefined()
 		await expect(store.capture(slot, 's3.png', new Uint8Array([5]))).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 	})
 	it('deletes captures from an opened run without a run file and leaves missing runs absent', async () => {
@@ -374,7 +374,7 @@ describe('FileBrowserRunStore persisted files', () => {
 			)
 			createLink(path, path + '-moved')
 			await expect(store.delete('check-ready', slot.id)).rejects.toMatchObject({
-				code: 'JOURNEY_PATH',
+				code: 'STORE_PATH',
 			})
 			expect((await lstat(path)).isSymbolicLink()).toBe(true)
 			expect(new Uint8Array(await readFile(join(slot.directory, 's1.png')))).toEqual(
@@ -422,13 +422,13 @@ describe('FileBrowserRunStore persisted files', () => {
 		await rename(path, path + '-moved')
 		createLink(path, path + '-moved')
 		await expect(store.get(BROWSER_RUN_FIXTURE.journey.name, slot.id)).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 		await expect(store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 		await expect(store.delete(BROWSER_RUN_FIXTURE.journey.name, slot.id)).rejects.toMatchObject({
-			code: 'JOURNEY_PATH',
+			code: 'STORE_PATH',
 		})
 		expect((await store.list(BROWSER_RUN_FIXTURE.journey.name)).faults).toEqual([
 			{ name: slot.id, reason: 'The entry path is refused' },

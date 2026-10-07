@@ -107,15 +107,15 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		try {
 			const value = parseJSON(source)
 			if (!isRecord(value) || !('format' in value))
-				throw new BrowserError('JOURNEY_FILE', 'Missing run format')
+				throw new BrowserError('STORE_FILE', 'Missing run format')
 			if (
 				value['format'] === BROWSER_JOURNEY_FORMAT_VERSION &&
 				(!isRecord(value['journey']) || !('format' in value['journey']))
 			)
-				throw new BrowserError('JOURNEY_FILE', 'Missing run journey format')
+				throw new BrowserError('STORE_FILE', 'Missing run journey format')
 			validateBrowserRun(value)
 			if (value.id !== id || value.journey.name !== name)
-				throw new BrowserError('JOURNEY_FILE', 'Run identity differs from its directory')
+				throw new BrowserError('STORE_FILE', 'Run identity differs from its directory')
 			return value
 		} catch (error) {
 			throw this.#files.translateError(path, error)
@@ -142,7 +142,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		options?.signal?.throwIfAborted()
 		const directory = this.#slots.get(slot)
 		if (directory === undefined || !/^s[1-9]\d*\.png$/.test(name))
-			throw new BrowserError('JOURNEY_PATH', 'Capture requires an opened slot and an sN.png name')
+			throw new BrowserError('STORE_PATH', 'Capture requires an opened slot and an sN.png name')
 		const owned = new Uint8Array(bytes)
 		await this.#requireDirectory(directory, options)
 		await this.#files.write(this.#files.resolvePath(directory, name), owned, options)
@@ -209,7 +209,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 	async #requireDirectory(directory: string, options?: BrowserStoreOptions): Promise<void> {
 		if (!this.#directories.has(directory) || !(await this.#files.check(directory, options)))
 			throw new BrowserError(
-				'JOURNEY_PATH',
+				'STORE_PATH',
 				`Run directory was not opened or is missing: ${directory}`,
 			)
 		try {
@@ -217,7 +217,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 			const status = await lstat(directory)
 			options?.signal?.throwIfAborted()
 			if (!status.isDirectory())
-				throw new BrowserError('JOURNEY_PATH', `Run directory is not a directory: ${directory}`)
+				throw new BrowserError('STORE_PATH', `Run directory is not a directory: ${directory}`)
 		} catch (error) {
 			options?.signal?.throwIfAborted()
 			throw this.#files.translateError(directory, error)

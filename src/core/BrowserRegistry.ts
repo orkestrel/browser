@@ -23,7 +23,7 @@ import {
 } from './constants.js'
 import { BrowserError, isBrowserError } from './errors.js'
 import {
-	assertBrowserPage,
+	validateBrowserPageOpen,
 	renderBrowserToolOutput,
 	deriveBrowserToolSchema,
 	validateBrowserTimeout,
@@ -210,7 +210,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	#assert(): void {
 		if (this.#destroying !== undefined)
 			throw new BrowserError('CLOSED', 'Browser registry is destroyed')
-		assertBrowserPage(this.#page, this.#client)
+		validateBrowserPageOpen(this.#page, this.#client)
 	}
 
 	async #start(options?: BrowserCallOptions): Promise<boolean> {
@@ -441,7 +441,10 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}): void {
 		const id = this.#identifiers.get(pending)
 		if (id !== undefined) this.#abortInvocation(pending.session, id)
-		this.#reject(pending, new BrowserError('PROTOCOL', 'Browser tool invocation timed out'))
+		this.#reject(
+			pending,
+			new BrowserError('TIMEOUT', 'Browser tool invocation timed out', { operation: 'execute' }),
+		)
 	}
 
 	#abort(pending: {

@@ -1,5 +1,6 @@
 import type {
 	BrowserCallOptions,
+	BrowserEpochFunction,
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserElementQuery,
@@ -8,7 +9,7 @@ import type {
 	BrowserOutlineNode,
 	BrowserOutlineOptions,
 } from '@src/core'
-import type { BrowserDOMElementInterface, BrowserDOMElementManagerInput } from '../types.js'
+import type { BrowserDOMElementInterface } from '../types.js'
 import { attempt, isInteger } from '@orkestrel/contract'
 import {
 	BROWSER_INTERACTIVE_ROLES,
@@ -75,7 +76,11 @@ import {
  *
  */
 export class BrowserDOMElementManager implements BrowserElementManagerInterface<BrowserDOMElementInterface> {
-	readonly #input: BrowserDOMElementManagerInput
+	readonly #input: {
+		readonly document: () => Document
+		readonly navigation: BrowserEpochFunction
+		readonly signal: AbortSignal
+	}
 	readonly #records = new Map<
 		string,
 		{ readonly node: WeakRef<Element>; readonly element: BrowserDOMElement }
@@ -90,7 +95,11 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	#count = 0
 	#positions = new WeakMap<Node, string>()
 
-	constructor(input: BrowserDOMElementManagerInput) {
+	constructor(input: {
+		readonly document: () => Document
+		readonly navigation: BrowserEpochFunction
+		readonly signal: AbortSignal
+	}) {
 		this.#input = input
 	}
 

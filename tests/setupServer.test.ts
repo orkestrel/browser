@@ -143,7 +143,7 @@ describe('BrowserLauncher eager U2', () => {
 		try {
 			expect(await child.ending).toEqual({ code: 1, signal: null })
 			expect(child.stderr).toBe(
-				'browse: SERVER_OPTIONS: pool.contexts must be an integer from 1 through 4\n',
+				'browse: ARGUMENT: pool.contexts must be an integer from 1 through 4\n',
 			)
 		} finally {
 			await child.destroy()
@@ -302,7 +302,7 @@ describe('BrowserLauncher eager U2', () => {
 			await browser.destroy()
 			await second.destroy()
 		}
-		await expect(browser.ping()).rejects.toMatchObject({ code: 'DESTROYED' })
+		await expect(browser.ping()).rejects.toMatchObject({ code: 'CLOSED' })
 	})
 
 	it('bounds silent pings and propagates version failures and aborts', async () => {
@@ -545,7 +545,7 @@ describe('readBundleImports', () => {
 			"import { isRecord } from '@orkestrel/contract';",
 			'var BrowserError$1 = class extends Error {};',
 			'function isBrowserErrorLike(value) { return value instanceof BrowserError$1 }',
-			'const BrowserErrorCode = "JOURNEY_FILE";',
+			'const BrowserErrorCode = "STORE_FILE";',
 			'class isRecord {}',
 		].join('\n')
 		expect(readBundleImports(bundle, '../core/index.js')).toStrictEqual({

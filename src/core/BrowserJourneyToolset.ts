@@ -6,7 +6,6 @@ import type {
 	BrowserJourneyRevision,
 	BrowserJourneyStoreInterface,
 	BrowserJourneyTarget,
-	BrowserJourneyToolsetInterface,
 	BrowserRecorderInterface,
 	BrowserRun,
 	BrowserRunStoreInterface,
@@ -84,7 +83,7 @@ import {
  * saving it, and removes the journey tools the manager still holds under the instances it added.
  *
  */
-export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
+export class BrowserJourneyToolset {
 	readonly #toolset: BrowserToolsetInterface
 	readonly #notes: (() => string) | undefined
 	readonly #store: BrowserJourneyStoreInterface
@@ -107,7 +106,8 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	) {
 		const limit = options.limit ?? toolset.limit
 		if (!Number.isSafeInteger(limit) || limit < 1) {
-			throw new BrowserError('JOURNEY_ARGUMENT', 'The journeys limit must be a positive integer', {
+			throw new BrowserError('ARGUMENT', 'The journeys limit must be a positive integer', {
+				subject: 'journey',
 				limit,
 			})
 		}
@@ -205,7 +205,9 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	async #capture(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
 		const full = args['full']
 		if (!isBoolean(full))
-			throw new BrowserError('TOOLSET_ARGUMENT', 'The full parameter must be true or false.')
+			throw new BrowserError('ARGUMENT', 'The full parameter must be true or false.', {
+				subject: 'toolset',
+			})
 		this.#idleReplay()
 		const view = this.#toolset.view
 		if (!view.trusted)
@@ -244,9 +246,9 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			throw new BrowserError('JOURNEY_RECORDING', BROWSER_JOURNEY_RECORDING_REFUSAL)
 		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name)) {
 			throw new BrowserError(
-				'TOOLSET_ARGUMENT',
+				'ARGUMENT',
 				`${JSON.stringify(name)} is not a journey name; use lowercase words joined by hyphens, such as add-kettle.`,
-				{ key: 'journey' },
+				{ subject: 'toolset', key: 'journey' },
 			)
 		}
 		this.#recording = name
@@ -320,10 +322,10 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 					`A journey named "${name}" is saved; call journeys, or record another name.`,
 					{ name },
 				)
-			if (isBrowserError(error) && error.code === 'JOURNEY_LOCKED')
+			if (isBrowserError(error) && error.code === 'STORE_LOCKED')
 				throw new BrowserError(error.code, `Journey ${name} is locked; call save again.`, { name })
 			throw new BrowserError(
-				isBrowserError(error) ? error.code : 'JOURNEY_FILE',
+				isBrowserError(error) ? error.code : 'STORE_FILE',
 				`Saving ${name} failed: ${normalizeBrowserJourneyReason(error)}; call save again.`,
 				{ name },
 			)
@@ -399,8 +401,9 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			(search !== undefined && !isString(search))
 		)
 			throw new BrowserError(
-				'TOOLSET_ARGUMENT',
+				'ARGUMENT',
 				'Journeys requires an integer from, an optional integer to, and optional search text.',
+				{ subject: 'toolset' },
 			)
 		validateBrowserLines(from, to)
 		const lines = await this.#listing(signal)
@@ -436,19 +439,17 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			const parsed = attempt<unknown>(() => JSON.parse(text))
 			if (!parsed.success)
 				throw new BrowserError(
-					'TOOLSET_ARGUMENT',
+					'ARGUMENT',
 					`The edits parameter is not valid JSON: ${normalizeBrowserJourneyReason(parsed.error)}; pass an array or a JSON string of the array.`,
-					{ key: 'edits' },
+					{ subject: 'toolset', key: 'edits' },
 				)
 			requests = parsed.value
 		}
 		if (!isArray(requests)) {
 			throw new BrowserError(
-				'TOOLSET_ARGUMENT',
+				'ARGUMENT',
 				'The edits parameter must be an array or a JSON string of the array.',
-				{
-					key: 'edits',
-				},
+				{ subject: 'toolset', key: 'edits' },
 			)
 		}
 		const revision = await this.#find(name, signal)
@@ -468,14 +469,14 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			})
 		} catch (error) {
 			if (signal.aborted) throw error
-			const code = isBrowserError(error) ? error.code : 'JOURNEY_FILE'
+			const code = isBrowserError(error) ? error.code : 'STORE_FILE'
 			if (code === 'JOURNEY_STALE')
 				throw new BrowserError(
 					code,
 					`Journey ${name} changed since you read it; call journeys, then edit again.`,
 					{ name },
 				)
-			if (code === 'JOURNEY_LOCKED')
+			if (code === 'STORE_LOCKED')
 				throw new BrowserError(code, `Journey ${name} is locked; call edit again.`, { name })
 			throw new BrowserError(
 				code,
@@ -505,8 +506,8 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 			await this.#store.delete(name, { signal })
 		} catch (error) {
 			if (signal.aborted) throw error
-			const code = isBrowserError(error) ? error.code : 'JOURNEY_FILE'
-			if (code === 'JOURNEY_LOCKED')
+			const code = isBrowserError(error) ? error.code : 'STORE_FILE'
+			if (code === 'STORE_LOCKED')
 				throw new BrowserError(code, `Journey ${name} is locked; call forget again.`, { name })
 			throw new BrowserError(
 				code,
@@ -527,11 +528,10 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		const inputs: Record<string, string> = {}
 		const given = args['inputs'] ?? {}
 		if (!isRecord(given) || !Object.values(given).every(isString)) {
-			throw new BrowserError(
-				'TOOLSET_ARGUMENT',
-				'The inputs parameter must be an object of strings.',
-				{ key: 'inputs' },
-			)
+			throw new BrowserError('ARGUMENT', 'The inputs parameter must be an object of strings.', {
+				subject: 'toolset',
+				key: 'inputs',
+			})
 		}
 		for (const [key, value] of Object.entries(given)) if (isString(value)) inputs[key] = value
 		if (this.#recording !== undefined) {
@@ -614,7 +614,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 					error.context,
 				)
 			}
-			case 'JOURNEY_FORMAT':
+			case 'STORE_FORMAT':
 			case 'JOURNEY_INVALID':
 				return new BrowserError(
 					error.code,
@@ -685,7 +685,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 		} catch (error) {
 			if (signal.aborted) throw error
 			throw new BrowserError(
-				isBrowserError(error) ? error.code : 'JOURNEY_FILE',
+				isBrowserError(error) ? error.code : 'STORE_FILE',
 				`Journey ${name} cannot be read: ${normalizeBrowserJourneyReason(error)}; call journeys.`,
 				{ name },
 			)
@@ -715,7 +715,7 @@ export class BrowserJourneyToolset implements BrowserJourneyToolsetInterface {
 	}
 
 	#ended(): BrowserError {
-		return new BrowserError('TOOLSET_ENDED', 'the browser session ended')
+		return new BrowserError('CLOSED', 'the browser session ended', { subject: 'toolset' })
 	}
 
 	async #teardown(): Promise<void> {

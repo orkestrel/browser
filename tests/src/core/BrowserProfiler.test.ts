@@ -1,3 +1,4 @@
+import { BrowserProfiler } from '../../../src/core/BrowserProfiler.js'
 /**
  * src/core/BrowserProfiler.ts tests.
  *
@@ -7,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BrowserProfiler, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createAttachedPage, replyOk } from '../../setup.js'
 
 const PROFILE_RESULT = {

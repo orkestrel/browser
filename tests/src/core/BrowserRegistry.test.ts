@@ -351,7 +351,10 @@ describe('BrowserRegistry', () => {
 				{ tools: [{ name: 'search', description: 'Search', frameId: 'child' }] },
 				'session-1',
 			)
-			await expect(registry.execute(tool, {}, { timeout: 10 })).rejects.toThrow('timed out')
+			await expect(registry.execute(tool, {}, { timeout: 10 })).rejects.toMatchObject({
+				code: 'TIMEOUT',
+				context: { operation: 'execute' },
+			})
 		} finally {
 			await client.close()
 		}

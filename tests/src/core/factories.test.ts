@@ -105,6 +105,19 @@ describe('createBrowserToolset', () => {
 })
 
 describe('createBrowserContext', () => {
+	it.each(['destroy', 'close'] as const)(
+		'leaves the supplied client connected after %s',
+		async (operation) => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Target.disposeBrowserContext')
+			try {
+				await createBrowserContext(client, { id: 'owned-remotely' })[operation]()
+				expect(client.connected).toBe(true)
+			} finally {
+				await client.close()
+			}
+		},
+	)
 	it('threads the context id, viewport, writer, and hooks while leaving the client caller-owned', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		scriptCDPAttach(transport)
@@ -152,10 +165,10 @@ describe('createBrowserContext', () => {
 		try {
 			expect(context.id).toBeUndefined()
 			expect(context.pages()).toEqual([])
-			const proxy = captureError(() =>
-				createBrowserContext(client, { proxy: { server: 'http://proxy.test' } }),
-			)
-			const origins = captureError(() => createBrowserContext(client, { origins: [] }))
+			const proxyOptions = { id: 'wrapped', proxy: { server: 'http://proxy.test' } }
+			const originOptions = { id: 'wrapped', origins: [] }
+			const proxy = captureError(() => createBrowserContext(client, proxyOptions))
+			const origins = captureError(() => createBrowserContext(client, originOptions))
 			const viewport = captureError(() =>
 				createBrowserContext(client, { viewport: { width: 0, height: 480 } }),
 			)
