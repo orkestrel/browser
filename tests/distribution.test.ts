@@ -1277,7 +1277,7 @@ describe('packed browse binary', () => {
 				const listing = await callBrowse(client, 'journeys', { from: 1 })
 				expect(listing.split(/\r\n|\n/u)).toStrictEqual([
 					'journeys (3 lines)',
-					'1: reveal-code "Reveals the confirmation code"',
+					`1: reveal-code "Reveals the confirmation code" starts at ${url}`,
 					'2: s1 click button "Reveal"',
 					`3: s2 wait "${FIXTURE_LATE_TEXT}"`,
 					'[lines 1–3 of 3; the whole listing]',
