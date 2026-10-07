@@ -60,6 +60,47 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it('small refusals: read defaults to line 1 and parses decimal coordinates', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			const tool = requireValue(toolset.tools.tool('read'))
+			const context = { signal: new AbortController().signal }
+			expect(await tool.execute({}, context)).toContain('\n1: ')
+			expect(await tool.execute({}, context)).toBe(await tool.execute({ from: 1 }, context))
+			expect(await tool.execute({ from: '7', to: '7' }, context)).toBe(
+				await tool.execute({ from: 7, to: 7 }, context),
+			)
+			expect(await tool.execute({ from: '7', to: '7' }, context)).toContain('\n7: ')
+			for (const key of ['from', 'to'])
+				for (const value of ['7a', '1.5', '-1', '', '07', null])
+					await expect(tool.execute({ [key]: value }, context)).rejects.toMatchObject({
+						code: 'ARGUMENT',
+						message:
+							'Read requires an integer from, an optional integer to, and optional search text.',
+					})
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('small refusals: definitions advertise optional from with its default', () => {
+		for (const name of ['read', 'journeys'] as const) {
+			const definition = BROWSER_TOOL_COPY[name]
+			expect(readProperty(definition.parameters, 'required')).toEqual([])
+			expect(
+				readProperty(
+					readProperty(readProperty(definition.parameters, 'properties'), 'from'),
+					'description',
+				),
+			).toBe(
+				name === 'read'
+					? "The first line to show: 1 for the top, or the line a reply's footer names. Default: 1."
+					: 'The first line: 1 for the top. Default: 1.',
+			)
+		}
+	})
 	it('reports absence receipts and outcomes, validates absence, and keeps appearance waits', async () => {
 		for (const waited of [true, false]) {
 			const view = createBrowserViewDouble({ waited })
@@ -942,7 +983,7 @@ describe('BrowserToolset', () => {
 						definition.parameters,
 						'properties',
 					)
-					expect(required.length).toBeGreaterThan(0)
+					expect(required.length).toBe(name === 'read' ? 0 : name === 'type' ? 2 : 1)
 					for (const key of required) expect(Object.keys(properties)).toContain(key)
 					for (const property of Object.values(properties))
 						expect(readProperty<string>(property, 'description').length).toBeLessThanOrEqual(100)

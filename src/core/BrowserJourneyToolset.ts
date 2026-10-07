@@ -13,15 +13,7 @@ import type {
 	BrowserToolsetInterface,
 } from './types.js'
 import type { ToolContext, ToolInterface } from '@orkestrel/tool'
-import {
-	attempt,
-	isArray,
-	isBoolean,
-	isInteger,
-	isError,
-	isRecord,
-	isString,
-} from '@orkestrel/contract'
+import { attempt, isArray, isBoolean, isError, isRecord, isString } from '@orkestrel/contract'
 import { createTool } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_EMPTY_LISTING,
@@ -29,12 +21,18 @@ import {
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BROWSER_JOURNEY_READONLY_REFUSAL,
 	BROWSER_JOURNEY_RECORDING_REFUSAL,
+	BROWSER_JOURNEY_EMPTY_REFUSAL,
+	BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL,
+	BROWSER_JOURNEY_RECORD_STEPS_REFUSAL,
+	BROWSER_JOURNEY_EDIT_SAVED_REFUSAL,
+	BROWSER_JOURNEY_EDIT_MISSING_REFUSAL,
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
 	BROWSER_TOOL_CUT_FOOTER,
 	BROWSER_TOOL_LIMIT,
 } from './constants.js'
 import { BrowserError, isBrowserError } from './errors.js'
+import { parseBrowserToolInteger } from './parsers.js'
 import { createBrowserRecorder, createBrowserReplay } from './factories.js'
 import {
 	editBrowserJourney,
@@ -242,8 +240,22 @@ export class BrowserJourneyToolset {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
 		this.#idleReplay()
 		const name = readBrowserToolString(args, 'journey')
-		if (this.#recording !== undefined)
-			throw new BrowserError('JOURNEY_RECORDING', BROWSER_JOURNEY_RECORDING_REFUSAL)
+		if (this.#recording !== undefined) {
+			const count = this.#recorder?.steps().length ?? 0
+			const refusal =
+				name !== this.#recording
+					? BROWSER_JOURNEY_RECORDING_REFUSAL
+					: count === 0
+						? BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL
+						: BROWSER_JOURNEY_RECORD_STEPS_REFUSAL
+			throw new BrowserError(
+				'JOURNEY_RECORDING',
+				refusal
+					.replace('{name}', this.#recording)
+					.replace('{count}', String(count))
+					.replace('{steps}', count === 1 ? 'step' : 'steps'),
+			)
+		}
 		if (!BROWSER_JOURNEY_NAME_PATTERN.test(name)) {
 			throw new BrowserError(
 				'ARGUMENT',
@@ -306,7 +318,7 @@ export class BrowserJourneyToolset {
 			)
 				throw new BrowserError(
 					'JOURNEY_EMPTY',
-					`Nothing is recorded for ${name}: the actions before record are not steps. Perform the flow's actions and call save, or answer the user when the task is done.`,
+					BROWSER_JOURNEY_EMPTY_REFUSAL.replace('{name}', name),
 					{ name },
 				)
 			throw snapshot.error
@@ -400,12 +412,12 @@ export class BrowserJourneyToolset {
 		signal: AbortSignal,
 		note: string,
 	): Promise<string> {
-		const from = args['from']
-		const to = args['to']
+		const from = args['from'] === undefined ? 1 : parseBrowserToolInteger(args['from'])
+		const to = parseBrowserToolInteger(args['to'])
 		const search = args['search']
 		if (
-			!isInteger(from) ||
-			(to !== undefined && !isInteger(to)) ||
+			from === undefined ||
+			(args['to'] !== undefined && to === undefined) ||
 			(search !== undefined && !isString(search))
 		)
 			throw new BrowserError(
@@ -440,6 +452,14 @@ export class BrowserJourneyToolset {
 		note: string,
 	): Promise<string> {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
+		if (!('journey' in args))
+			throw new BrowserError(
+				'ARGUMENT',
+				this.#saved === undefined
+					? BROWSER_JOURNEY_EDIT_MISSING_REFUSAL
+					: BROWSER_JOURNEY_EDIT_SAVED_REFUSAL.replace('{name}', this.#saved),
+				{ subject: 'toolset', key: 'journey' },
+			)
 		const name = readBrowserToolString(args, 'journey')
 		let requests = args['edits']
 		if (isString(requests)) {

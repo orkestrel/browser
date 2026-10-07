@@ -73,6 +73,7 @@ import {
 	BROWSER_TYPED_ROLES,
 } from './constants.js'
 import { BrowserError, BrowserStepError, isBrowserError } from './errors.js'
+import { parseBrowserToolInteger } from './parsers.js'
 import {
 	compileSubmitObserverExpression,
 	compileSubmitReadExpression,
@@ -833,12 +834,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
-		const from = args['from']
-		const to = args['to']
+		const from = args['from'] === undefined ? 1 : parseBrowserToolInteger(args['from'])
+		const to = parseBrowserToolInteger(args['to'])
 		const search = args['search']
 		if (
-			!isInteger(from) ||
-			(to !== undefined && !isInteger(to)) ||
+			from === undefined ||
+			(args['to'] !== undefined && to === undefined) ||
 			(search !== undefined && !isString(search))
 		)
 			throw new BrowserError(

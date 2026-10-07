@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest'
 import {
+	parseBrowserToolInteger,
 	parseBrowserJourney,
 	parseBrowserJourneyEdit,
 	parseBrowserRun,
@@ -22,6 +23,35 @@ import {
 	parseSnapshotString,
 } from '@src/core'
 import { BROWSER_JOURNEY_FIXTURE, BROWSER_RUN_FIXTURE } from '../../setup.js'
+
+describe('small refusals: tool integers', () => {
+	it('accepts integers and canonical unsigned decimal strings', () => {
+		for (const value of [7, '7']) expect(parseBrowserToolInteger(value)).toBe(7)
+		expect(parseBrowserToolInteger('0')).toBe(0)
+		expect(parseBrowserToolInteger(-1)).toBe(-1)
+	})
+	it.each([
+		'7a',
+		'1.5',
+		'-1',
+		'',
+		'07',
+		' 7',
+		'7 ',
+		'+7',
+		'7e0',
+		'0x7',
+		null,
+		undefined,
+		true,
+		{},
+		1.5,
+		NaN,
+		Infinity,
+	])('refuses %j', (value) => {
+		expect(parseBrowserToolInteger(value)).toBeUndefined()
+	})
+})
 
 describe('element references', () => {
 	it('catches accepting invalid references or losing any of the six spellings', () => {

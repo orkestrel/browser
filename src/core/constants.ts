@@ -440,7 +440,7 @@ export const BROWSER_SCHEMES: readonly string[] = Object.freeze(['http:', 'https
  * @remarks
  * Every tool description is at most 25 words and says what the tool shows or does, and for
  * `read` when to call it; every parameter description is at most 100 characters.
- * `read` and `journeys` require `from` and accept optional `to` and `search`; an element's own
+ * `read` and `journeys` default `from` to 1 and accept optional `to` and `search`; an element's own
  * reading is `BrowserElementInterface.read`. `read` and `journeys` annotate `pure` and
  * `untrusted`, `wait` annotates `pure`, and the rest carry no annotation. `type` takes
  * `secret` beside `ref`, `text`, and `submit`. The journey tools `record`, `save`, `journeys`,
@@ -457,7 +457,8 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 			properties: Object.freeze({
 				from: Object.freeze({
 					type: 'integer',
-					description: "The first line to show: 1 for the top, or the line a reply's footer names.",
+					description:
+						"The first line to show: 1 for the top, or the line a reply's footer names. Default: 1.",
 				}),
 				to: Object.freeze({
 					type: 'integer',
@@ -469,7 +470,7 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 						'Words to find; the reply opens one line before the first match at or after from.',
 				}),
 			}),
-			required: Object.freeze(['from']),
+			required: Object.freeze([]),
 		}),
 		annotations: Object.freeze({ pure: true, untrusted: true }),
 	}),
@@ -618,14 +619,14 @@ export const BROWSER_TOOL_COPY: Readonly<Record<BrowserToolName, ToolDefinition>
 				}),
 				from: Object.freeze({
 					type: 'integer',
-					description: 'The first line: 1 for the top.',
+					description: 'The first line: 1 for the top. Default: 1.',
 				}),
 				to: Object.freeze({
 					type: 'integer',
 					description: 'The last line to show. Default: as many lines as fit.',
 				}),
 			}),
-			required: Object.freeze(['from']),
+			required: Object.freeze([]),
 		}),
 		annotations: Object.freeze({ pure: true, untrusted: true }),
 	}),
@@ -837,7 +838,28 @@ export const BROWSER_JOURNEY_STEP_KEYS: readonly string[] = Object.freeze(['ref'
 export const BROWSER_JOURNEY_READONLY_REFUSAL = 'The journeys are read-only; call replay.'
 
 /** Holds the refusal `record` returns while another journey is recording. */
-export const BROWSER_JOURNEY_RECORDING_REFUSAL = 'A journey is recording; call save first.'
+export const BROWSER_JOURNEY_RECORDING_REFUSAL =
+	'{name} is recording; call save before you record another.'
+
+/** Holds the refusal `save` returns while the recording has no steps. */
+export const BROWSER_JOURNEY_EMPTY_REFUSAL =
+	"Nothing is recorded for {name} yet, and it is still recording. Click and type the flow's steps now, then call save."
+
+/** Holds the refusal `record` returns for the same empty recording. */
+export const BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL =
+	"{name} is already recording and has no steps yet. Click and type the flow's steps now, then call save."
+
+/** Holds the refusal `record` returns for the same recording with steps. */
+export const BROWSER_JOURNEY_RECORD_STEPS_REFUSAL =
+	'{name} is already recording with {count} {steps}; call save when the flow is done.'
+
+/** Holds the refusal `edit` returns without a journey after a successful save. */
+export const BROWSER_JOURNEY_EDIT_SAVED_REFUSAL =
+	'Edit requires journey, the saved journey\'s name such as "{name}", beside edits.'
+
+/** Holds the refusal `edit` returns without a journey before any successful save. */
+export const BROWSER_JOURNEY_EDIT_MISSING_REFUSAL =
+	"Edit requires journey, a saved journey's name, beside edits; call journeys."
 
 /** Holds the refusal `save` returns when no journey is recording. */
 export const BROWSER_JOURNEY_IDLE_REFUSAL =

@@ -1036,6 +1036,22 @@ void [wrapper, origins, isolated, creation, identity]
 			await toolset.destroy()
 		}
 	})
+	it('small refusals: pins recording exits, missing edit names, and default coordinates', () => {
+		const guide = requireValue(files[GUIDE_SPEC])
+		for (const text of [
+			"Nothing is recorded for add-kettle yet, and it is still recording. Click and type the flow's steps now, then call save.",
+			"add-kettle is already recording and has no steps yet. Click and type the flow's steps now, then call save.",
+			'add-kettle is already recording with 1 step; call save when the flow is done.',
+			'add-kettle is already recording with 2 steps; call save when the flow is done.',
+			'add-kettle is recording; call save before you record another.',
+			'Edit requires journey, the saved journey\'s name such as "add-kettle", beside edits.',
+			"Edit requires journey, a saved journey's name, beside edits; call journeys.",
+			'The journey parameter must be a string.',
+			'`from` (integer, optional, default 1)',
+			'`"7a"`, `"1.5"`, `"-1"`, `""`, and `"07"`',
+		])
+			expect(guide).toContain(text)
+	})
 	it('recaptures a continuation and keeps unchanged references stable', async () => {
 		const { createBrowserToolset, BROWSER_TOOL_LIMIT } = await import('@src/core')
 		const { createBrowserElementFixture, BROWSER_ELEMENT_AX_FIXTURE } = await import('./setup.js')
@@ -1075,7 +1091,7 @@ void [wrapper, origins, isolated, creation, identity]
 			expect(seeded.success).toBe(true)
 			expect(seeded.success ? seeded.value : seeded.error).toContain('\n1: ')
 			const missing = await toolset.tools.execute({ id: 'missing', name: 'read', arguments: {} })
-			expect(missing).toMatchObject({ success: false })
+			expect(missing).toMatchObject({ success: true, value: expect.stringContaining('\n1: ') })
 		} finally {
 			await toolset.destroy()
 			await fixture.client.close()
@@ -1366,14 +1382,25 @@ void [wrapper, origins, isolated, creation, identity]
 				BROWSER_JOURNEY_IDLE_REFUSAL,
 				BROWSER_JOURNEY_READONLY_REFUSAL,
 				BROWSER_JOURNEY_RECORDING_REFUSAL,
+				BROWSER_JOURNEY_EMPTY_REFUSAL,
+				BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL,
+				BROWSER_JOURNEY_RECORD_STEPS_REFUSAL,
+				BROWSER_JOURNEY_EDIT_SAVED_REFUSAL,
+				BROWSER_JOURNEY_EDIT_MISSING_REFUSAL,
 			} = await import('@src/core')
 			for (const quoted of [
 				BROWSER_JOURNEY_EMPTY_LISTING,
 				BROWSER_JOURNEY_IDLE_REFUSAL,
 				BROWSER_JOURNEY_READONLY_REFUSAL,
 				BROWSER_JOURNEY_RECORDING_REFUSAL,
+				BROWSER_JOURNEY_EMPTY_REFUSAL,
+				BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL,
+				BROWSER_JOURNEY_RECORD_STEPS_REFUSAL.replace('{count}', '1').replace('{steps}', 'step'),
+				BROWSER_JOURNEY_RECORD_STEPS_REFUSAL.replace('{count}', '2').replace('{steps}', 'steps'),
+				BROWSER_JOURNEY_EDIT_SAVED_REFUSAL,
+				BROWSER_JOURNEY_EDIT_MISSING_REFUSAL,
 			])
-				expect(files[GUIDE_SPEC]).toContain(`\`${quoted}\``)
+				expect(files[GUIDE_SPEC]).toContain(`\`${quoted.replace('{name}', 'add-kettle')}\``)
 		})
 	})
 

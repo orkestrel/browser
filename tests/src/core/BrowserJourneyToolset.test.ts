@@ -45,6 +45,110 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it('small refusals: keeps the recording through empty save and repeated record calls', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		const toolset = new BrowserToolset(createBrowserViewDouble())
+		const journeys = new BrowserJourneyToolset(toolset, { store })
+		await toolset.start()
+		try {
+			const context = { signal: new AbortController().signal }
+			const record = requireValue(toolset.tools.tool('record'))
+			const save = requireValue(toolset.tools.tool('save'))
+			await record.execute({ journey: 'check-ready' }, context)
+			await expect(save.execute({ description: 'Check readiness' }, context)).rejects.toMatchObject(
+				{
+					code: 'JOURNEY_EMPTY',
+					message:
+						"Nothing is recorded for check-ready yet, and it is still recording. Click and type the flow's steps now, then call save.",
+				},
+			)
+			await expect(record.execute({ journey: 'check-ready' }, context)).rejects.toMatchObject({
+				code: 'JOURNEY_RECORDING',
+				message:
+					"check-ready is already recording and has no steps yet. Click and type the flow's steps now, then call save.",
+			})
+			expect(journeys.recording).toBe('check-ready')
+			expect(await store.get('check-ready')).toBeUndefined()
+			for (const count of [1, 2]) {
+				await toolset.execute({ id: String(count), name: 'wait', arguments: { text: 'Ready' } })
+				await expect(record.execute({ journey: 'check-ready' }, context)).rejects.toMatchObject({
+					code: 'JOURNEY_RECORDING',
+					message: `check-ready is already recording with ${count} ${count === 1 ? 'step' : 'steps'}; call save when the flow is done.`,
+				})
+			}
+			await expect(record.execute({ journey: 'other-flow' }, context)).rejects.toMatchObject({
+				code: 'JOURNEY_RECORDING',
+				message: 'check-ready is recording; call save before you record another.',
+			})
+			await save.execute({ description: 'Check readiness' }, context)
+			expect((await store.get('check-ready'))?.journey.steps).toHaveLength(2)
+			expect(await store.get('other-flow')).toBeUndefined()
+		} finally {
+			await journeys.destroy()
+			await toolset.destroy()
+		}
+	})
+	it('small refusals: missing edit journey names the last successful save', async () => {
+		const toolset = new BrowserToolset(createBrowserViewDouble(), {
+			journeys: { store: createMemoryBrowserJourneyStore() },
+		})
+		await toolset.start()
+		try {
+			const context = { signal: new AbortController().signal }
+			const edit = requireValue(toolset.tools.tool('edit'))
+			await expect(edit.execute({ edits: [] }, context)).rejects.toMatchObject({
+				code: 'ARGUMENT',
+				message: "Edit requires journey, a saved journey's name, beside edits; call journeys.",
+			})
+			for (const name of ['first-flow', 'last-flow']) {
+				await requireValue(toolset.tools.tool('record')).execute({ journey: name }, context)
+				await toolset.execute({ id: name, name: 'wait', arguments: { text: 'Ready' } })
+				await requireValue(toolset.tools.tool('save')).execute(
+					{ description: 'Check readiness' },
+					context,
+				)
+				await expect(edit.execute({ edits: [] }, context)).rejects.toMatchObject({
+					code: 'ARGUMENT',
+					message: `Edit requires journey, the saved journey's name such as "${name}", beside edits.`,
+				})
+			}
+			for (const journey of [null, 7, false, undefined])
+				await expect(edit.execute({ journey, edits: [] }, context)).rejects.toMatchObject({
+					code: 'ARGUMENT',
+					message: 'The journey parameter must be a string.',
+				})
+		} finally {
+			await toolset.destroy()
+		}
+	})
+	it('small refusals: journeys defaults to line 1 and parses decimal coordinates', async () => {
+		const store = createMemoryBrowserJourneyStore()
+		await store.set(
+			createBrowserJourneyFixture(
+				Array.from({ length: 8 }, () => ({ action: 'wait', arguments: { text: 'Ready' } })),
+			),
+		)
+		const toolset = new BrowserToolset(createBrowserViewDouble(), { journeys: { store } })
+		try {
+			const tool = requireValue(toolset.tools.tool('journeys'))
+			const context = { signal: new AbortController().signal }
+			expect(await tool.execute({}, context)).toBe(await tool.execute({ from: 1 }, context))
+			expect(await tool.execute({}, context)).toContain('\n1: ')
+			expect(await tool.execute({ from: '7', to: '7' }, context)).toBe(
+				await tool.execute({ from: 7, to: 7 }, context),
+			)
+			expect(await tool.execute({ from: '7', to: '7' }, context)).toContain('\n7: ')
+			for (const key of ['from', 'to'])
+				for (const value of ['7a', '1.5', '-1', '', '07', null])
+					await expect(tool.execute({ [key]: value }, context)).rejects.toMatchObject({
+						code: 'ARGUMENT',
+						message:
+							'Journeys requires an integer from, an optional integer to, and optional search text.',
+					})
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	it('journey start: records the first action page, not the record or destination page', async () => {
 		const fixture = await createBrowserElementFixture({
 			evaluation: (message) =>
@@ -580,7 +684,7 @@ describe('BrowserJourneyToolset', () => {
 			).toMatchObject({
 				success: false,
 				error:
-					"Nothing is recorded for check-ready: the actions before record are not steps. Perform the flow's actions and call save, or answer the user when the task is done.",
+					"Nothing is recorded for check-ready yet, and it is still recording. Click and type the flow's steps now, then call save.",
 			})
 			expect(journeys.recording).toBe('check-ready')
 			expect(await store.get('check-ready')).toBeUndefined()
@@ -1019,7 +1123,7 @@ describe('BrowserJourneyToolset', () => {
 			).toEqual({
 				record: ['journey'],
 				save: ['description'],
-				journeys: ['from'],
+				journeys: [],
 				edit: ['journey', 'edits'],
 				replay: ['journey'],
 				forget: ['journey'],
@@ -1182,7 +1286,9 @@ describe('BrowserJourneyToolset', () => {
 					name: 'record',
 					arguments: { journey: 'check-ready' },
 				})
-				expect(readProperty(again, 'error')).toBe('A journey is recording; call save first.')
+				expect(readProperty(again, 'error')).toBe(
+					'brew-tea is recording; call save before you record another.',
+				)
 				expect(journeys.recording).toBe('brew-tea')
 			} finally {
 				await journeys.destroy()

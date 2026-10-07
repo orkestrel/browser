@@ -30,6 +30,7 @@ import {
 	isInteger,
 	isRecord,
 	isString,
+	parseInteger,
 	parseArray,
 	parseEnum,
 	parseJSONAs,
@@ -43,6 +44,16 @@ import {
 	readBrowserRemoteValue,
 	readBrowserStack,
 } from './helpers.js'
+
+/**
+ * Parses an integer or a canonical unsigned decimal string for a tool coordinate.
+ * @param value - The supplied coordinate
+ * @returns The integer, or undefined when the value or spelling is invalid
+ */
+export function parseBrowserToolInteger(value: unknown): number | undefined {
+	if (isString(value) && !/^(?:0|[1-9][0-9]*)$/u.test(value)) return undefined
+	return parseInteger(value)
+}
 
 /**
  * Coerces a WebMCP `Tool` object to its browser-domain representation.
