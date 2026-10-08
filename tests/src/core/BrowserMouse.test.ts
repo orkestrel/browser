@@ -1,13 +1,7 @@
-/**
- * src/core/BrowserMouse.ts tests.
- *
- * Every case drives a real `BrowserMouse` over a real `BrowserPage` attached to the
- * in-memory CDP transport, and asserts on the `Input.dispatchMouseEvent` frames the
- * transport recorded — the protocol the class exists to produce.
- */
-
+import { BrowserMouse } from '../../../src/core/BrowserMouse.js'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserMouse, BrowserPage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import {
 	createAttachedPage,
 	createConnectedCDPClient,

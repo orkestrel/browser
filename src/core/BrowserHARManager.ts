@@ -1,9 +1,9 @@
+import { decodeBase64 } from '@orkestrel/codec'
 import type {
 	BrowserHAR,
 	BrowserHAREntry,
 	BrowserHARManagerInterface,
 	BrowserHAROptions,
-	BrowserHARPending,
 	BrowserHARReplayOptions,
 	BrowserNetworkManagerInterface,
 	BrowserRequest,
@@ -13,31 +13,26 @@ import type {
 	BrowserWriterInterface,
 } from './types.js'
 import { BROWSER_HAR_CREATOR } from './constants.js'
-import {
-	browserHARHeadersToRecord,
-	createBrowserHAREntry,
-	decodeBase64,
-	textToBytes,
-	validateBrowserHAR,
-} from './helpers.js'
+import { browserHARHeadersToRecord, buildBrowserHAREntry, validateBrowserHAR } from './helpers.js'
 import { BrowserError } from './errors.js'
+import { isJSONValue } from '@orkestrel/contract'
 
 /**
  * Records and replays HTTP archives over one page network manager.
  *
- * @example
- * ```ts
- * import { BrowserHARManager } from '@orkestrel/browser'
- *
- * const har = new BrowserHARManager(page.network)
- * await har.start({ content: true })
- * const archive = await har.stop() // { log: { version: '1.2', creator, entries } }
- * ```
+ * @remarks The owner exposes this entity through `page.network.har`.
  */
 export class BrowserHARManager implements BrowserHARManagerInterface {
 	readonly #network: BrowserNetworkManagerInterface
 	readonly #writer: BrowserWriterInterface | undefined
-	readonly #pending: Map<string, BrowserHARPending> = new Map()
+	readonly #pending: Map<
+		string,
+		{
+			readonly request: BrowserRequest
+			readonly started: number
+			readonly response: BrowserResponse | undefined
+		}
+	> = new Map()
 	readonly #entries: BrowserHAREntry[] = []
 	readonly #tasks: Set<Promise<void>> = new Set()
 	#options: BrowserHAROptions | undefined
@@ -56,7 +51,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		this.#writer = writer
 	}
 
-	get recording(): boolean {
+	get active(): boolean {
 		return this.#recording
 	}
 
@@ -96,7 +91,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 				if (pending === undefined) continue
 				this.#pending.delete(id)
 				this.#entries.push(
-					createBrowserHAREntry(
+					buildBrowserHAREntry(
 						pending,
 						Math.max(0, Date.now() - pending.started),
 						undefined,
@@ -106,8 +101,8 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 			}
 		}
 		if (this.#failure !== undefined) {
-			throw new BrowserError('Browser HAR recording failed', 'BROWSER_HAR_ERROR', {
-				error: this.#failure,
+			throw new BrowserError('HAR', 'Browser HAR recording failed', {
+				error: isJSONValue(this.#failure) ? this.#failure : String(this.#failure),
 			})
 		}
 		const har: BrowserHAR = {
@@ -119,20 +114,23 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		}
 		if (this.#options?.path !== undefined) {
 			if (this.#writer === undefined) {
-				throw new BrowserError('Browser HAR path requires a configured writer')
+				throw new BrowserError('ARGUMENT', 'Browser HAR path requires a configured writer')
 			}
-			await this.#writer.write(this.#options.path, textToBytes(JSON.stringify(har, undefined, 2)))
+			await this.#writer.write(
+				this.#options.path,
+				new TextEncoder().encode(JSON.stringify(har, undefined, 2)),
+			)
 		}
 		return har
 	}
 
 	async replay(har: BrowserHAR, options?: BrowserHARReplayOptions): Promise<void> {
 		validateBrowserHAR(har)
-		if (this.#archive !== undefined) await this.#network.unroute(this.#replayHandler)
+		if (this.#archive !== undefined) await this.#network.routes.remove(this.#replayHandler)
 		this.#archive = har
 		this.#fallback = options?.fallback === true
 		try {
-			await this.#network.route({}, this.#replayHandler)
+			await this.#network.routes.add({}, this.#replayHandler)
 		} catch (error) {
 			this.#archive = undefined
 			this.#fallback = false
@@ -145,7 +143,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		const replaying = this.#archive !== undefined
 		this.#archive = undefined
 		this.#fallback = false
-		if (replaying) await this.#network.unroute(this.#replayHandler)
+		if (replaying) await this.#network.routes.remove(this.#replayHandler)
 		this.#entries.length = 0
 		this.#pending.clear()
 	}
@@ -174,7 +172,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		if (pending === undefined) return
 		this.#pending.delete(failure.id)
 		this.#entries.push(
-			createBrowserHAREntry(
+			buildBrowserHAREntry(
 				pending,
 				Math.max(0, Date.now() - pending.started),
 				undefined,
@@ -204,6 +202,10 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 				: entry.response.content.encoding === 'base64'
 					? decodeBase64(entry.response.content.text)
 					: entry.response.content.text
+		if (entry.response.content.text !== undefined && body === undefined) {
+			await route.abort('Failed')
+			return
+		}
 		await route.fulfill({
 			status: entry.response.status,
 			phrase: entry.response.statusText,
@@ -225,7 +227,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 			}
 		}
 		this.#entries.push(
-			createBrowserHAREntry(pending, Math.max(0, Date.now() - pending.started), body),
+			buildBrowserHAREntry(pending, Math.max(0, Date.now() - pending.started), body),
 		)
 	}
 

@@ -25,8 +25,8 @@ import type { MCPClientInterface } from '@orkestrel/mcp'
 import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, createCDPClient } from '@src/core'
 import {
 	createBrowser,
-	createCDPTransport,
-	findSystemBrowser,
+	createWebSocketCDPTransport,
+	findSystemBrowsers,
 	parseBrowserProfileRecord,
 } from '@src/server'
 import { isArray, isRecord, isString } from '@orkestrel/contract'
@@ -174,7 +174,9 @@ export async function findHolderProfile(root: string, url: string) {
 		const profile = join(root, '.profiles', name)
 		const record = parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8'))
 		if (record === undefined) throw new Error('Missing browser record')
-		const client = createCDPClient({ transport: createCDPTransport({ url: record.endpoint }) })
+		const client = createCDPClient({
+			transport: createWebSocketCDPTransport({ url: record.endpoint }),
+		})
 		try {
 			await client.connect()
 			const targets: unknown = await client.send('Target.getTargets')
@@ -227,7 +229,7 @@ export class ContextFixture {
 		} finally {
 			abort.abort()
 		}
-		const text = await callContextTool(client, holder, 'plain', { search: '' })
+		const text = await callContextTool(client, holder, 'read', { from: 1 })
 		const json = requireValue(text.match(/\{"cookie":.*\}/)?.[0], `context state in ${text}`)
 		const state: unknown = JSON.parse(json)
 		if (!isRecord(state)) throw new Error('Invalid context state')
@@ -302,7 +304,9 @@ export async function callContextTool(
  */
 export async function inspectHolderContext(root: string, url: string) {
 	const profile = await findHolderProfile(root, url)
-	const client = createCDPClient({ transport: createCDPTransport({ url: profile.endpoint }) })
+	const client = createCDPClient({
+		transport: createWebSocketCDPTransport({ url: profile.endpoint }),
+	})
 	await client.connect()
 	try {
 		const result: unknown = await client.send('Target.getTargets')
@@ -352,12 +356,14 @@ export async function downloadContextFile(
 	link = 'Download context file',
 	filename = 'context.txt',
 ): Promise<string> {
-	const outline = await callContextTool(client, holder, 'look', { search: '' })
+	const outline = await callContextTool(client, holder, 'read', { from: 1, search: '' })
 	const ref = requireOutlineReference(outline, 'link', link)
 	const record = requireValue(
 		parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8')),
 	)
-	const observer = createCDPClient({ transport: createCDPTransport({ url: record.endpoint }) })
+	const observer = createCDPClient({
+		transport: createWebSocketCDPTransport({ url: record.endpoint }),
+	})
 	await observer.connect()
 	const abort = new AbortController()
 	try {
@@ -468,7 +474,7 @@ export function createEagerBrowseChild(root: string, executable: string): Browse
 	// The source uses the named JSON export the bundler supplies; Node's JSON module has only a default export.
 	writeFileSync(
 		entry,
-		`import { registerHooks } from 'node:module'\nimport { resolve } from 'node:path'\nimport { pathToFileURL } from 'node:url'\n${SOURCE_HOOK}\nregisterHooks({ load(url, context, next) { return url === ${JSON.stringify(manifest)} ? { format: 'module', source: ${JSON.stringify(version)}, shortCircuit: true } : next(url, context) } })\nconst { createBrowserMCPServer } = await import(${JSON.stringify(pathToFileURL(resolve('src/server/index.ts')).href)})\nconst server = createBrowserMCPServer({ root: ${JSON.stringify(root)}, executable: ${JSON.stringify(executable)} })\nawait server.start()\nconsole.log('ready')\n`,
+		`import { registerHooks } from 'node:module'\nimport { resolve } from 'node:path'\nimport { pathToFileURL } from 'node:url'\n${SOURCE_HOOK}\nregisterHooks({ load(url, context, next) { return url === ${JSON.stringify(manifest)} ? { format: 'module', source: ${JSON.stringify(version)}, shortCircuit: true } : next(url, context) } })\nconst { createBrowserMCPServer } = await import(${JSON.stringify(pathToFileURL(resolve('src/server/index.ts')).href)})\nconst server = createBrowserMCPServer({ root: ${JSON.stringify(root)}, browser: { executable: ${JSON.stringify(executable)} } })\nawait server.start()\nconsole.log('ready')\n`,
 	)
 	return new BrowseChild(entry, process.cwd(), {})
 }
@@ -511,7 +517,7 @@ export function resolveServiceEngine(value: string | undefined): BrowserEngine |
  */
 export function requireSystemBrowser(options?: SystemBrowserOptions): SystemBrowser {
 	const engine = resolveServiceEngine(process.env[SERVICE_ENGINE_ENV_KEY])
-	const found = findSystemBrowser(options ?? (engine === undefined ? undefined : { engine }))
+	const found = findSystemBrowsers(options ?? (engine === undefined ? undefined : { engine }))[0]
 	if (found === undefined) {
 		throw new Error(
 			'The service project requires a Chromium-family browser on this host and found none. ' +
@@ -552,11 +558,11 @@ export function parseProtocolDomains(reply: unknown): readonly string[] | undefi
  * Extracts the reference numbers an outline's element rows carry, in row order.
  *
  * @param text - The `text` of a `BrowserOutline`
- * @returns The number after the `e` of each row that opens with a reference such as `e12`;
+ * @returns The number after the `e` in each row’s `[ref=eN]` token;
  * heading, text, and summary rows contribute nothing
  */
 export function extractOutlineReferences(text: string): readonly number[] {
-	return [...text.matchAll(/^e([1-9]\d*) /gm)].map((match) => Number(match[1]))
+	return extractOutlineRows(text).map((row) => Number(row.reference.slice(1)))
 }
 
 /**
@@ -674,14 +680,18 @@ export interface ServiceOutlineRow {
  * Extracts the element rows of a rendered outline, in row order, each reference once.
  *
  * @param text - The `text` of a `BrowserOutline`, or a toolset receipt that carries one
- * @returns The reference, role, and JSON-decoded name of each row that opens with a reference
- * such as `e12` followed by a role and a quoted name, at its first occurrence, so a `look` match
+ * @returns The reference, role, and JSON-decoded name of each row with `[ref=eN]` after its
+ * optional quoted name, at its first occurrence, so a `read` match
  * row that repeats an outline row counts once; heading, text, and summary rows contribute nothing
  */
 export function extractOutlineRows(text: string): readonly ServiceOutlineRow[] {
 	const seen = new Set<string>()
-	return [...text.matchAll(/^(e[1-9]\d*) (\S+) ("(?:[^"\\\n]|\\.)*")/gm)].flatMap((match) => {
-		const [, reference, role, quoted] = match
+	return [
+		...text.matchAll(
+			/^(?:\d+: )?(?:#{1,6} |- )?(\S+)(?: ("(?:[^"\\\n]|\\.)*"))? \[ref=(e[1-9]\d*)\]/gm,
+		),
+	].flatMap((match) => {
+		const [, role, quoted, reference] = match
 		const name: unknown = JSON.parse(quoted ?? '""')
 		if (reference === undefined || role === undefined || !isString(name) || seen.has(reference))
 			return []
@@ -715,9 +725,10 @@ export function collectOutlineEntries(text: string): readonly string[] {
 	return text
 		.split(/\r\n|\n/)
 		.flatMap((line) => {
-			const match = /^(e[1-9]\d*) (\S+ "(?:[^"\\]|\\.)*".*)$/.exec(line)
-			const reference = match?.[1]
-			const entry = match?.[2]
+			const match =
+				/^(?:\d+: )?(?:#{1,6} |- )?(\S+(?: "(?:[^"\\]|\\.)*")?) \[ref=(e[1-9]\d*)\](.*)$/.exec(line)
+			const reference = match?.[2]
+			const entry = match === null ? undefined : `${match[1]}${match[3]}`
 			if (reference === undefined || entry === undefined || seen.has(reference)) return []
 			seen.add(reference)
 			return [entry]
@@ -728,6 +739,36 @@ export function collectOutlineEntries(text: string): readonly string[] {
 /** Supplies toggle, expansion, selection, and absent-state controls for both placements. */
 export const SERVICE_TOGGLE_HTML =
 	'<button aria-pressed="true">Toggle on</button><button aria-pressed="false">Toggle off</button><button aria-pressed="mixed">Toggle mixed</button><button aria-pressed="TRUE">Uppercase toggle</button><button aria-pressed="foo">Unknown toggle</button><button aria-pressed=" false ">Spaced toggle</button><button aria-pressed="">Empty toggle</button><button aria-pressed="undefined">Undefined toggle</button><button aria-expanded="mixed">Mixed expansion</button><button aria-expanded="foo">Unknown expansion</button><button>Plain toggle control</button><button aria-expanded="false">Disclosure</button><a href="#" aria-expanded="true">Expanded link</a><div role="tablist"><button role="tab" aria-selected="true">Selected tab</button><button role="tab" aria-selected="false">Unselected tab</button><button role="tab">Default tab</button></div><div role="tree"><div role="treeitem" aria-selected="true">Selected treeitem</div><div role="treeitem" aria-selected="false">Unselected treeitem</div><div role="treeitem">Default treeitem</div></div><div role="listbox" aria-label="ARIA choices"><div role="option" aria-selected="true">Selected option</div><div role="option" aria-selected="false">Unselected option</div><div role="option">Default option</div><div role="option" aria-selected="">Empty option</div><div role="option" aria-selected="undefined">Undefined option</div></div><select aria-label="Native"><option>Native first</option><option selected>Native chosen</option></select><select aria-label="Override" aria-expanded="true"><option selected aria-selected="false">Native false</option><option aria-selected="true">Native true</option></select>'
+
+/** Defines handled submissions with semantic and unrelated changes after the submit event. */
+export const SERVICE_READING_SUBMISSIONS = [
+	{
+		name: 'synchronous',
+		code: 'document.querySelector("output").textContent = "Order confirmed"',
+		changed: true,
+	},
+	{
+		name: 'delayed',
+		code: 'setTimeout(() => document.querySelector("output").textContent = "Order confirmed", 200)',
+		changed: true,
+	},
+	{
+		name: 'aria-hidden',
+		code: 'setTimeout(() => { const hidden=document.createElement("p"); hidden.setAttribute("aria-hidden","true"); hidden.textContent="Invisible update"; document.body.append(hidden) }, 200)',
+		changed: false,
+	},
+	{ name: 'unchanged', code: '', changed: false },
+	{
+		name: 'bookkeeping',
+		code: 'setTimeout(() => document.body.dataset.tick = "1", 200)',
+		changed: false,
+	},
+	{
+		name: 'hidden',
+		code: 'setTimeout(() => document.querySelector("aside").textContent = "hidden change", 200)',
+		changed: false,
+	},
+]
 
 /**
  * Returns the reference of the one outline row with a role and a name, or throws.
@@ -812,7 +853,7 @@ export const SERVICE_CHANGED_NOTE = BROWSER_TOOL_CHANGED_NOTE
  *
  * @remarks
  * - `action` — the receipt's action sentence without its closing period, such as
- *   `Clicked e1 textbox "Name"`
+ *   `Clicked textbox "Name" [ref=e1]`
  * - `view` — the outline the capture reads
  * - `url` — for an action that navigates, the URL the navigation commits
  */
@@ -885,3 +926,103 @@ export async function requireDocumentToolset(
 	if (failed !== undefined)
 		throw new Error(`Precondition failed: the document toolset did not start: ${String(failed)}`)
 }
+
+/** Supplies ordinary catalogue and policy paragraphs copied from the ollama store fixture on 2026-10-06. */
+export const SERVICE_STORE_PARAGRAPHS: readonly string[] = [
+	'“The kettle has lived on our stove for three winters and still sings like the first morning.” — Maren, Tromsø',
+	'“The board arrived oiled and ready, wrapped in paper with a note from the maker who cut it.” — Idris, Leeds',
+	'“I ordered a mug for my father and the workshop wrote back to ask which glaze he would like.” — Paloma, Seville',
+	'“The apron softened after one wash and the pockets hold a notebook, a pencil, and a phone.” — Kenji, Sapporo',
+	'“Our cafe has used the trays for two years. Not one has warped, even on the terrace.” — Aoife, Galway',
+	'“The spice rack fitted the gap beside the window exactly, and the walnut glows in the evening.” — Tomas, Brno',
+	'“I asked how to restore an old board and the workshop sent a page of notes and a tin of wax.” — Lior, Haifa',
+	'“Every parcel comes in paper and card, and the card goes straight into our recycling.” — Nadia, Casablanca',
+	'“The kettle handle stays cool enough to hold without a cloth, which my hands appreciate.” — Rosa, Porto',
+	'“The mug holds exactly one pot of tea, so nobody in our house argues about the last cup.” — Emeka, Enugu',
+	'“We visited the workshop on the first Saturday and watched a kettle take shape in an hour.” — Sofie, Aarhus',
+	'“The tea tray drains into its hidden reservoir, so the table stays dry through a long afternoon.” — Ravi, Pune',
+	'“The board still looks new after a year of daily bread, onions, and one very sharp knife.” — Hanne, Bergen',
+	'“A replacement for a chipped mug arrived within the week, and they did not ask for the old one.” — Dario, Turin',
+	'“The copper has darkened to a warm brown, and I like it more each month it sits on the hob.” — Ines, Lisbon',
+	'Harbor Goods began as a market stall on the east pier, selling kettles and boards made by three families of makers who shared one workshop behind the fish market.',
+	'Every piece we sell is made in small batches. The kettles are spun and hammered by hand, the boards are cut from trees that fell in winter storms, and the mugs are thrown and glazed in a kiln that runs twice a week.',
+	'We test each kettle on gas, electric, and induction hobs before it leaves the workshop, and we oil each board three times over a week so that it arrives ready for a knife.',
+	'We pack every order in paper and card from the recycling yard down the road. No plastic leaves our workshop, and every box can go straight into your own recycling bin.',
+	'Gift wrapping is free on every order. Choose it at checkout and we will add a handwritten card with any message you like, up to forty words.',
+	'Prices include tax. We do not charge for returns, and we never add a fee at checkout that the product page did not show you first.',
+	'Our workshop opens to visitors on the first Saturday of each month. Come and watch a kettle being hammered, or bring an old board and we will show you how to restore it.',
+	'We donate one percent of every sale to the harbour trust, which keeps the pier, the lighthouse, and the tidal pool in repair for everyone who lives and works here.',
+	'Stock is small and batches sell out. When a piece is gone, the makers start the next batch within a fortnight, and the product page shows the date the batch is due.',
+	'We answer every message ourselves, usually within one working day. Tell us what you cook and how you cook it, and we will suggest the piece that suits your kitchen.',
+	'We ship to every address in the country, including islands and remote postcodes. Parcels to the islands travel by ferry and can take one extra working day. We do not ship to parcel lockers, because a kettle box is too large for most of them.',
+	'Every order is packed by hand in paper and card. Kettles travel in a moulded pulp cradle, boards travel wrapped in kraft paper, and mugs travel in a honeycomb sleeve that protects the glaze. We never use plastic fill.',
+	'Standard parcels travel with the national post. Heavy parcels, over ten kilograms, travel with a courier who books a delivery window by text message. Both carriers give you a tracking link on the day your parcel leaves the workshop.',
+	'Standard delivery takes two to four working days on the mainland. Express delivery takes one working day on the mainland and two to the islands. Delivery times start from the day the parcel leaves the workshop, not from the day you order.',
+	'Standard delivery is free on orders over sixty dollars and costs six dollars below that. Express delivery costs fourteen dollars on every order. Heavy parcels cost the same as standard parcels; the workshop pays the difference.',
+	'Parcels worth more than one hundred dollars need a signature. If nobody is home, the carrier leaves a card and holds the parcel at the nearest depot for ten days. You can name a neighbour at checkout who can sign on your behalf.',
+	'If a parcel returns to us after ten days at the depot, we write to you and send it again once, free of charge. A parcel that returns a second time is refunded in full, minus the delivery price of the second attempt.',
+	'Open your parcel within seven days and check every piece. If anything is damaged, photograph it with the box and write to us. We send a replacement or refund the full price, and you keep the damaged piece; we never ask for it back.',
+	'If tracking shows no movement for five working days, write to us. We open a claim with the carrier and send a replacement the same day, without waiting for the claim to finish. You do not need to contact the carrier yourself.',
+	'You can change the delivery address until the parcel leaves the workshop. After that, the carrier can redirect it for a fee that the carrier sets. Write to us with the order number and the new address and we will arrange it.',
+	'A gift order ships without a price list inside the box. Add the recipient address at checkout and your own address for the receipt. The handwritten card travels inside the box, sealed in its own envelope.',
+	'We do not ship abroad yet. Visitors from abroad can collect an order at the workshop on the first Saturday of each month; choose collection at checkout and bring the order number with you.',
+	'You can collect any order at the workshop on the east pier. Collection is free and the order is ready one working day after you place it. We hold a collection order for thirty days before we refund it.',
+	'To return an unwanted piece, write to us within thirty days. We send a prepaid label by email. Pack the piece in its original box if you still have it, and drop the parcel at any post office. We refund the full price when it reaches us.',
+	'During storms the ferry to the islands can stop for several days, and parcels wait at the harbour depot until it runs again. Between the last week of December and the first working day of January the workshop is closed and nothing ships.',
+	'The tracking link arrives by email on the day the parcel leaves the workshop. It shows each scan the carrier records: collection, the sorting depot, the local depot, and the delivery van. A parcel can go a day without a scan while it travels between depots.',
+	'You can send an order to a workplace. Add the company name on the address line and the floor or department on the second line, so the post room can find you. Most post rooms sign for parcels, so a workplace delivery rarely misses.',
+	'At checkout you can name a safe place, such as a porch or a shed, where the carrier may leave a parcel that needs no signature. The carrier photographs the parcel where it was left, and the photograph appears on the tracking page.',
+	'When part of an order is waiting for a new batch, we ship the pieces that are ready and send the rest when the batch is finished. You pay delivery once, and each parcel carries its own tracking link.',
+	'Cake stands, serving platters, and shelving travel with the courier because they need two people to carry or careful handling. The courier books a delivery window with you by text message the day before.',
+	'You can add or remove pieces until the order is packed. Write to us with the order number and the change. When a change lowers the price, we refund the difference; when it raises the price, we send a payment link for the difference.',
+	'You can cancel an order at any time before it leaves the workshop, and we refund the full price the same day. After it leaves, the returns section applies, and the prepaid return label is still free.',
+	'Refunds go back to the card or account you paid with. Most banks show a refund within three working days of the day we send it; some take up to ten. We write to you on the day we send each refund.',
+	'Every order ships from and to an address in this country, so no customs forms or duties apply. When we begin to ship abroad, this section will state the duties each destination charges.',
+	'Write to the workshop by email or through the contact form. We answer every message ourselves, usually within one working day. Include the order number when you have one, so we can find your order quickly.',
+	'Before a parcel leaves the bench, a second packer checks the piece against the packing slip. They inspect handles, lids, edges, and glaze, and replace any wrapping that has shifted. The signed slip travels inside the box so a recipient can see who checked the contents.',
+	'A clean carton from an incoming supply can carry an outgoing parcel when its walls remain firm. Old address labels are removed and seams receive fresh paper tape. A reused carton receives the same inspection and protection as a carton cut for the first time.',
+	'Orders placed close together can travel in one box when their destinations agree. Write before packing begins and include both order numbers. Each piece stays on its own packing slip, and any delivery charge saved by combining the parcels goes back to the original payment.',
+	'A carrier needs a clear route to the entrance. Include gate instructions and a working contact number when you order. If a road closes after dispatch, contact the carrier through the tracking link to agree on an accessible meeting place or a later delivery day.',
+	'Set a parcel on a firm table before cutting the tape. Lift the paper layers apart instead of pulling on handles or rims. Keep the cradle until every piece has been checked, because the shaped supports make a return trip less likely to damage the contents.',
+	'Paper sleeves can be flattened and kept for storing pieces between uses. Keep them dry and away from a cooker. Pulp cradles fit in paper recycling where that service accepts moulded paper, and the workshop can take clean cradles back during collection hours.',
+	'The label states the packed weight, which includes the carton and its protective supports. It may differ from the weight listed for an individual piece. Heavy cartons carry a handling mark and remain within the limits agreed with the carrier for a safe lift.',
+	'Keep the receipt until every piece has arrived and been checked. If an email goes missing, send the order number and the address used at checkout. The workshop can send another copy to that address without changing the contents or the date of the original receipt.',
+	'During wet months each carton receives an extra folded paper liner. During hot months waxed boards are wrapped only after cooling on the shelf. These changes protect the pieces in transit and do not change the delivery price or the return period.',
+	'A recipient can request care notes without seeing the price paid for a gift. The packing slip names the piece and its maker. If a gift needs a replacement, either the sender or the recipient can contact the workshop with the number printed on that slip.',
+	'Take the delivery card and the identification the carrier requests when collecting from a depot. A person collecting on your behalf may need a signed note. Check the opening hours on the carrier notice before travelling, because depot hours differ from post office hours.',
+	'Keep photographs and tracking notices together while an enquiry is open. The workshop records each reply with the order, so a later message can continue the same conversation. Tell the workshop when a delayed parcel arrives so the carrier can close its enquiry.',
+]
+
+/** Carries Harbor Goods HTML and approved, port-masked seed bytes from the named ollama records.
+ * @remarks The policy seed omits its trailing heading under the approved heading-boundary rule.
+ */
+export const SERVICE_LINE_VIEW_RECORDS = Object.freeze([
+	{
+		record: 'validate-4/2b/T1+P1/attempts/inputs/49171-cart.json',
+		html: '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<link rel="icon" href="data:,">\n<title>Harbor Goods — Catalogue</title>\n</head>\n<body>\n<header>\n<nav aria-label="Store">\n<a href="/">Catalogue</a>\n<a href="/cart">Cart</a>\n<a href="/checkout">Checkout</a>\n</nav>\n</header>\n<main>\n<h1>Harbor Goods</h1>\n<form action="/search" method="get" role="search">\n<label for="q">Search products</label>\n<input id="q" type="search" name="q">\n<button type="submit">Search</button>\n</form>\n<h2>Featured products</h2>\n<ul>\n<li><h3><a href="/product/p2">Birch Cutting Board</a></h3><p>$22.50. An end-grain birch board with a juice groove on one face.</p></li>\n<li><h3><a href="/product/p3">Cedar Tea Tray</a></h3><p>$41.00. A slatted cedar tray that drains into a hidden reservoir.</p></li>\n<li><h3><a href="/product/p5">Linen Apron</a></h3><p>$18.00. A washed linen apron with two deep pockets and cross-back straps.</p></li>\n<li><h3><a href="/product/p6">Stoneware Mug</a></h3><p>$12.00. A speckled stoneware mug that holds 350 millilitres.</p></li>\n<li><h3><a href="/product/p7">Walnut Spice Rack</a></h3><p>$29.00. A three-tier walnut rack that holds eighteen standard jars.</p></li>\n<li><h3><a href="/product/p8">Oak Bread Bin</a></h3><p>$46.00. A roll-top oak bin that keeps two loaves fresh for four days.</p></li>\n<li><h3><a href="/product/p9">Wool Tea Cosy</a></h3><p>$16.00. A felted wool cosy that keeps a six-cup pot hot for an hour.</p></li>\n</ul>\n<p>Search to see the whole range.</p>\n<aside>\n<p>What customers say</p>\n<p>“The kettle has lived on our stove for three winters and still sings like the first morning.” — Maren, Tromsø</p>\n<p>“The board arrived oiled and ready, wrapped in paper with a note from the maker who cut it.” — Idris, Leeds</p>\n<p>“I ordered a mug for my father and the workshop wrote back to ask which glaze he would like.” — Paloma, Seville</p>\n<p>“The apron softened after one wash and the pockets hold a notebook, a pencil, and a phone.” — Kenji, Sapporo</p>\n<p>“Our cafe has used the trays for two years. Not one has warped, even on the terrace.” — Aoife, Galway</p>\n<p>“The spice rack fitted the gap beside the window exactly, and the walnut glows in the evening.” — Tomas, Brno</p>\n<p>“I asked how to restore an old board and the workshop sent a page of notes and a tin of wax.” — Lior, Haifa</p>\n<p>“Every parcel comes in paper and card, and the card goes straight into our recycling.” — Nadia, Casablanca</p>\n<p>“The kettle handle stays cool enough to hold without a cloth, which my hands appreciate.” — Rosa, Porto</p>\n<p>“The mug holds exactly one pot of tea, so nobody in our house argues about the last cup.” — Emeka, Enugu</p>\n<p>“We visited the workshop on the first Saturday and watched a kettle take shape in an hour.” — Sofie, Aarhus</p>\n<p>“The tea tray drains into its hidden reservoir, so the table stays dry through a long afternoon.” — Ravi, Pune</p>\n<p>“The board still looks new after a year of daily bread, onions, and one very sharp knife.” — Hanne, Bergen</p>\n<p>“A replacement for a chipped mug arrived within the week, and they did not ask for the old one.” — Dario, Turin</p>\n<p>“The copper has darkened to a warm brown, and I like it more each month it sits on the hob.” — Ines, Lisbon</p>\n</aside>\n<h2>Our story</h2>\n<p>Harbor Goods began as a market stall on the east pier, selling kettles and boards made by three families of makers who shared one workshop behind the fish market.</p>\n<p>Every piece we sell is made in small batches. The kettles are spun and hammered by hand, the boards are cut from trees that fell in winter storms, and the mugs are thrown and glazed in a kiln that runs twice a week.</p>\n<p>We test each kettle on gas, electric, and induction hobs before it leaves the workshop, and we oil each board three times over a week so that it arrives ready for a knife.</p>\n<p>We pack every order in paper and card from the recycling yard down the road. No plastic leaves our workshop, and every box can go straight into your own recycling bin.</p>\n<p>Gift wrapping is free on every order. Choose it at checkout and we will add a handwritten card with any message you like, up to forty words.</p>\n<p>Prices include tax. We do not charge for returns, and we never add a fee at checkout that the product page did not show you first.</p>\n<p>Our workshop opens to visitors on the first Saturday of each month. Come and watch a kettle being hammered, or bring an old board and we will show you how to restore it.</p>\n<p>We donate one percent of every sale to the harbour trust, which keeps the pier, the lighthouse, and the tidal pool in repair for everyone who lives and works here.</p>\n<p>Stock is small and batches sell out. When a piece is gone, the makers start the next batch within a fortnight, and the product page shows the date the batch is due.</p>\n<p>We answer every message ourselves, usually within one working day. Tell us what you cook and how you cook it, and we will suggest the piece that suits your kitchen.</p>\n<h2>Shipping</h2>\n<p>Orders placed before 2:40 PM ship the same working day. Orders placed later ship the next working day.</p>\n</main>\n\n</body>\n</html>\n',
+		expected:
+			'page "Harbor Goods — Catalogue" http://127.0.0.1:PORT/ (52 lines)\nThis read shows lines 1–45 of 52; lines 46–52 are not shown yet.\n1: link "Catalogue" [ref=e1] /\n2: link "Cart" [ref=e2] /cart\n3: link "Checkout" [ref=e3] /checkout\n4: # Harbor Goods\n5: Search products\n6: searchbox "Search products" [ref=e4]\n7: button "Search" [ref=e5]\n8: ## Featured products\n9: ### link "Birch Cutting Board" [ref=e6] /product/p2\n10: - $22.50. An end-grain birch board with a juice groove on one face.\n11: ### link "Cedar Tea Tray" [ref=e7] /product/p3\n12: - $41.00. A slatted cedar tray that drains into a hidden reservoir.\n13: ### link "Linen Apron" [ref=e8] /product/p5\n14: - $18.00. A washed linen apron with two deep pockets and cross-back straps.\n15: ### link "Stoneware Mug" [ref=e9] /product/p6\n16: - $12.00. A speckled stoneware mug that holds 350 millilitres.\n17: ### link "Walnut Spice Rack" [ref=e10] /product/p7\n18: - $29.00. A three-tier walnut rack that holds eighteen standard jars.\n19: ### link "Oak Bread Bin" [ref=e11] /product/p8\n20: - $46.00. A roll-top oak bin that keeps two loaves fresh for four days.\n21: ### link "Wool Tea Cosy" [ref=e12] /product/p9\n22: - $16.00. A felted wool cosy that keeps a six-cup pot hot for an hour.\n23: Search to see the whole range.\n24: What customers say\n25: “The kettle has lived on our stove for three winters and still sings like the first morning.” — Maren, Tromsø\n26: “The board arrived oiled and ready, wrapped in paper with a note from the maker who cut it.” — Idris, Leeds\n27: “I ordered a mug for my father and the workshop wrote back to ask which glaze he would like.” — Paloma, Seville\n28: “The apron softened after one wash and the pockets hold a notebook, a pencil, and a phone.” — Kenji, Sapporo\n29: “Our cafe has used the trays for two years. Not one has warped, even on the terrace.” — Aoife, Galway\n30: “The spice rack fitted the gap beside the window exactly, and the walnut glows in the evening.” — Tomas, Brno\n31: “I asked how to restore an old board and the workshop sent a page of notes and a tin of wax.” — Lior, Haifa\n32: “Every parcel comes in paper and card, and the card goes straight into our recycling.” — Nadia, Casablanca\n33: “The kettle handle stays cool enough to hold without a cloth, which my hands appreciate.” — Rosa, Porto\n34: “The mug holds exactly one pot of tea, so nobody in our house argues about the last cup.” — Emeka, Enugu\n35: “We visited the workshop on the first Saturday and watched a kettle take shape in an hour.” — Sofie, Aarhus\n36: “The tea tray drains into its hidden reservoir, so the table stays dry through a long afternoon.” — Ravi, Pune\n37: “The board still looks new after a year of daily bread, onions, and one very sharp knife.” — Hanne, Bergen\n38: “A replacement for a chipped mug arrived within the week, and they did not ask for the old one.” — Dario, Turin\n39: “The copper has darkened to a warm brown, and I like it more each month it sits on the hob.” — Ines, Lisbon\n40: ## Our story\n41: Harbor Goods began as a market stall on the east pier, selling kettles and boards made by three families of makers who shared one workshop behind the fish market.\n42: Every piece we sell is made in small batches. The kettles are spun and hammered by hand, the boards are cut from trees that fell in winter storms, and the mugs are thrown and glazed in a kiln that runs twice a week.\n43: We test each kettle on gas, electric, and induction hobs before it leaves the workshop, and we oil each board three times over a week so that it arrives ready for a knife.\n44: We pack every order in paper and card from the recycling yard down the road. No plastic leaves our workshop, and every box can go straight into your own recycling bin.\n45: Gift wrapping is free on every order. Choose it at checkout and we will add a handwritten card with any message you like, up to forty words.\n[lines 1–45 of 52; 7 below; call read with from 46 for more]',
+	},
+	{
+		record: 'validate-2/2b/C2/inputs/49171-paging.json',
+		html: '<!doctype html>\n<html lang="en">\n<head>\n<meta charset="utf-8">\n<link rel="icon" href="data:,">\n<title>Shipping policy</title>\n</head>\n<body>\n<header>\n<nav aria-label="Store">\n<a href="/">Catalogue</a>\n<a href="/cart">Cart</a>\n<a href="/checkout">Checkout</a>\n</nav>\n</header>\n<main>\n<article>\n<h1>Shipping policy</h1>\n<h2>Where we ship</h2>\n<p>We ship to every address in the country, including islands and remote postcodes. Parcels to the islands travel by ferry and can take one extra working day. We do not ship to parcel lockers, because a kettle box is too large for most of them.</p>\n<h2>How we pack</h2>\n<p>Every order is packed by hand in paper and card. Kettles travel in a moulded pulp cradle, boards travel wrapped in kraft paper, and mugs travel in a honeycomb sleeve that protects the glaze. We never use plastic fill.</p>\n<h2>Carriers</h2>\n<p>Standard parcels travel with the national post. Heavy parcels, over ten kilograms, travel with a courier who books a delivery window by text message. Both carriers give you a tracking link on the day your parcel leaves the workshop.</p>\n<h2>Delivery times</h2>\n<p>Standard delivery takes two to four working days on the mainland. Express delivery takes one working day on the mainland and two to the islands. Delivery times start from the day the parcel leaves the workshop, not from the day you order.</p>\n<h2>Delivery prices</h2>\n<p>Standard delivery is free on orders over sixty dollars and costs six dollars below that. Express delivery costs fourteen dollars on every order. Heavy parcels cost the same as standard parcels; the workshop pays the difference.</p>\n<h2>Signing for a parcel</h2>\n<p>Parcels worth more than one hundred dollars need a signature. If nobody is home, the carrier leaves a card and holds the parcel at the nearest depot for ten days. You can name a neighbour at checkout who can sign on your behalf.</p>\n<h2>Missed deliveries</h2>\n<p>If a parcel returns to us after ten days at the depot, we write to you and send it again once, free of charge. A parcel that returns a second time is refunded in full, minus the delivery price of the second attempt.</p>\n<h2>Damaged parcels</h2>\n<p>Open your parcel within seven days and check every piece. If anything is damaged, photograph it with the box and write to us. We send a replacement or refund the full price, and you keep the damaged piece; we never ask for it back.</p>\n<h2>Lost parcels</h2>\n<p>If tracking shows no movement for five working days, write to us. We open a claim with the carrier and send a replacement the same day, without waiting for the claim to finish. You do not need to contact the carrier yourself.</p>\n<h2>Changing an address</h2>\n<p>You can change the delivery address until the parcel leaves the workshop. After that, the carrier can redirect it for a fee that the carrier sets. Write to us with the order number and the new address and we will arrange it.</p>\n<h2>Gift orders</h2>\n<p>A gift order ships without a price list inside the box. Add the recipient address at checkout and your own address for the receipt. The handwritten card travels inside the box, sealed in its own envelope.</p>\n<h2>Orders from abroad</h2>\n<p>We do not ship abroad yet. Visitors from abroad can collect an order at the workshop on the first Saturday of each month; choose collection at checkout and bring the order number with you.</p>\n<h2>Collection</h2>\n<p>You can collect any order at the workshop on the east pier. Collection is free and the order is ready one working day after you place it. We hold a collection order for thirty days before we refund it.</p>\n<h2>Returns by post</h2>\n<p>To return an unwanted piece, write to us within thirty days. We send a prepaid label by email. Pack the piece in its original box if you still have it, and drop the parcel at any post office. We refund the full price when it reaches us.</p>\n<h2>Weather and holidays</h2>\n<p>During storms the ferry to the islands can stop for several days, and parcels wait at the harbour depot until it runs again. Between the last week of December and the first working day of January the workshop is closed and nothing ships.</p>\n<h2>Tracking your parcel</h2>\n<p>The tracking link arrives by email on the day the parcel leaves the workshop. It shows each scan the carrier records: collection, the sorting depot, the local depot, and the delivery van. A parcel can go a day without a scan while it travels between depots.</p>\n<h2>Delivery to a workplace</h2>\n<p>You can send an order to a workplace. Add the company name on the address line and the floor or department on the second line, so the post room can find you. Most post rooms sign for parcels, so a workplace delivery rarely misses.</p>\n<h2>Safe places</h2>\n<p>At checkout you can name a safe place, such as a porch or a shed, where the carrier may leave a parcel that needs no signature. The carrier photographs the parcel where it was left, and the photograph appears on the tracking page.</p>\n<h2>Split orders</h2>\n<p>When part of an order is waiting for a new batch, we ship the pieces that are ready and send the rest when the batch is finished. You pay delivery once, and each parcel carries its own tracking link.</p>\n<h2>Large and fragile pieces</h2>\n<p>Cake stands, serving platters, and shelving travel with the courier because they need two people to carry or careful handling. The courier books a delivery window with you by text message the day before.</p>\n<h2>Changing an order</h2>\n<p>You can add or remove pieces until the order is packed. Write to us with the order number and the change. When a change lowers the price, we refund the difference; when it raises the price, we send a payment link for the difference.</p>\n<h2>Cancelling an order</h2>\n<p>You can cancel an order at any time before it leaves the workshop, and we refund the full price the same day. After it leaves, the returns section applies, and the prepaid return label is still free.</p>\n<h2>Refund times</h2>\n<p>Refunds go back to the card or account you paid with. Most banks show a refund within three working days of the day we send it; some take up to ten. We write to you on the day we send each refund.</p>\n<h2>Customs and duties</h2>\n<p>Every order ships from and to an address in this country, so no customs forms or duties apply. When we begin to ship abroad, this section will state the duties each destination charges.</p>\n<h2>Contacting the workshop</h2>\n<p>Write to the workshop by email or through the contact form. We answer every message ourselves, usually within one working day. Include the order number when you have one, so we can find your order quickly.</p>\n<h2>Packing inspection</h2>\n<p>Before a parcel leaves the bench, a second packer checks the piece against the packing slip. They inspect handles, lids, edges, and glaze, and replace any wrapping that has shifted. The signed slip travels inside the box so a recipient can see who checked the contents.</p>\n<h2>Reused cartons</h2>\n<p>A clean carton from an incoming supply can carry an outgoing parcel when its walls remain firm. Old address labels are removed and seams receive fresh paper tape. A reused carton receives the same inspection and protection as a carton cut for the first time.</p>\n<h2>Combining parcels</h2>\n<p>Orders placed close together can travel in one box when their destinations agree. Write before packing begins and include both order numbers. Each piece stays on its own packing slip, and any delivery charge saved by combining the parcels goes back to the original payment.</p>\n<h2>Access instructions</h2>\n<p>A carrier needs a clear route to the entrance. Include gate instructions and a working contact number when you order. If a road closes after dispatch, contact the carrier through the tracking link to agree on an accessible meeting place or a later delivery day.</p>\n<h2>Opening the box</h2>\n<p>Set a parcel on a firm table before cutting the tape. Lift the paper layers apart instead of pulling on handles or rims. Keep the cradle until every piece has been checked, because the shaped supports make a return trip less likely to damage the contents.</p>\n<h2>Caring for wrapping</h2>\n<p>Paper sleeves can be flattened and kept for storing pieces between uses. Keep them dry and away from a cooker. Pulp cradles fit in paper recycling where that service accepts moulded paper, and the workshop can take clean cradles back during collection hours.</p>\n<h2>Parcel weights</h2>\n<p>The label states the packed weight, which includes the carton and its protective supports. It may differ from the weight listed for an individual piece. Heavy cartons carry a handling mark and remain within the limits agreed with the carrier for a safe lift.</p>\n<h2>Receipt copies</h2>\n<p>Keep the receipt until every piece has arrived and been checked. If an email goes missing, send the order number and the address used at checkout. The workshop can send another copy to that address without changing the contents or the date of the original receipt.</p>\n<h2>Seasonal packaging</h2>\n<p>During wet months each carton receives an extra folded paper liner. During hot months waxed boards are wrapped only after cooling on the shelf. These changes protect the pieces in transit and do not change the delivery price or the return period.</p>\n<h2>Handing over gifts</h2>\n<p>A recipient can request care notes without seeing the price paid for a gift. The packing slip names the piece and its maker. If a gift needs a replacement, either the sender or the recipient can contact the workshop with the number printed on that slip.</p>\n<h2>Depot collection documents</h2>\n<p>Take the delivery card and the identification the carrier requests when collecting from a depot. A person collecting on your behalf may need a signed note. Check the opening hours on the carrier notice before travelling, because depot hours differ from post office hours.</p>\n<h2>Parcel enquiries</h2>\n<p>Keep photographs and tracking notices together while an enquiry is open. The workshop records each reply with the order, so a later message can continue the same conversation. Tell the workshop when a delayed parcel arrives so the carrier can close its enquiry.</p>\n<h2>Quoting this version</h2>\n<p>Quote HARBOR-TIDE-7153 when you write to us, so our workshop can match a message to this version of these terms.</p>\n</article>\n</main>\n\n</body>\n</html>\n',
+		expected:
+			'page "Shipping policy" http://127.0.0.1:PORT/policy (80 lines)\nThis read shows lines 1–32 of 80; lines 33–80 are not shown yet.\n1: link "Catalogue" [ref=e1] /\n2: link "Cart" [ref=e2] /cart\n3: link "Checkout" [ref=e3] /checkout\n4: # Shipping policy\n5: ## Where we ship\n6: We ship to every address in the country, including islands and remote postcodes. Parcels to the islands travel by ferry and can take one extra working day. We do not ship to parcel lockers, because a kettle box is too large for most of them.\n7: ## How we pack\n8: Every order is packed by hand in paper and card. Kettles travel in a moulded pulp cradle, boards travel wrapped in kraft paper, and mugs travel in a honeycomb sleeve that protects the glaze. We never use plastic fill.\n9: ## Carriers\n10: Standard parcels travel with the national post. Heavy parcels, over ten kilograms, travel with a courier who books a delivery window by text message. Both carriers give you a tracking link on the day your parcel leaves the workshop.\n11: ## Delivery times\n12: Standard delivery takes two to four working days on the mainland. Express delivery takes one working day on the mainland and two to the islands. Delivery times start from the day the parcel leaves the workshop, not from the day you order.\n13: ## Delivery prices\n14: Standard delivery is free on orders over sixty dollars and costs six dollars below that. Express delivery costs fourteen dollars on every order. Heavy parcels cost the same as standard parcels; the workshop pays the difference.\n15: ## Signing for a parcel\n16: Parcels worth more than one hundred dollars need a signature. If nobody is home, the carrier leaves a card and holds the parcel at the nearest depot for ten days. You can name a neighbour at checkout who can sign on your behalf.\n17: ## Missed deliveries\n18: If a parcel returns to us after ten days at the depot, we write to you and send it again once, free of charge. A parcel that returns a second time is refunded in full, minus the delivery price of the second attempt.\n19: ## Damaged parcels\n20: Open your parcel within seven days and check every piece. If anything is damaged, photograph it with the box and write to us. We send a replacement or refund the full price, and you keep the damaged piece; we never ask for it back.\n21: ## Lost parcels\n22: If tracking shows no movement for five working days, write to us. We open a claim with the carrier and send a replacement the same day, without waiting for the claim to finish. You do not need to contact the carrier yourself.\n23: ## Changing an address\n24: You can change the delivery address until the parcel leaves the workshop. After that, the carrier can redirect it for a fee that the carrier sets. Write to us with the order number and the new address and we will arrange it.\n25: ## Gift orders\n26: A gift order ships without a price list inside the box. Add the recipient address at checkout and your own address for the receipt. The handwritten card travels inside the box, sealed in its own envelope.\n27: ## Orders from abroad\n28: We do not ship abroad yet. Visitors from abroad can collect an order at the workshop on the first Saturday of each month; choose collection at checkout and bring the order number with you.\n29: ## Collection\n30: You can collect any order at the workshop on the east pier. Collection is free and the order is ready one working day after you place it. We hold a collection order for thirty days before we refund it.\n31: ## Returns by post\n32: To return an unwanted piece, write to us within thirty days. We send a prepaid label by email. Pack the piece in its original box if you still have it, and drop the parcel at any post office. We refund the full price when it reaches us.\n[lines 1–32 of 80; 48 below; call read with from 33 for more]',
+	},
+])
+
+/** Pins the measured cart range-miss reply and type refusal, with only the loopback port masked. */
+export const SERVICE_LINE_VIEW_REPLIES = Object.freeze({
+	range: {
+		record: 'validate-4/2b/T1+P1/attempts/inputs/49171-cart-calls.jsonl',
+		arguments: { from: 46, to: 52, search: 'Cedar Tea Tray' },
+		expected:
+			'page "Harbor Goods — Catalogue" http://127.0.0.1:PORT/ (52 lines)\nNo line from 46 on matches "Cedar Tea Tray"; the best match is line 11:\n11: ### link "Cedar Tea Tray" [ref=e7] /product/p3\n46: Prices include tax. We do not charge for returns, and we never add a fee at checkout that the product page did not show you first.\n47: Our workshop opens to visitors on the first Saturday of each month. Come and watch a kettle being hammered, or bring an old board and we will show you how to restore it.\n48: We donate one percent of every sale to the harbour trust, which keeps the pier, the lighthouse, and the tidal pool in repair for everyone who lives and works here.\n49: Stock is small and batches sell out. When a piece is gone, the makers start the next batch within a fortnight, and the product page shows the date the batch is due.\n50: We answer every message ourselves, usually within one working day. Tell us what you cook and how you cook it, and we will suggest the piece that suits your kitchen.\n51: ## Shipping\n52: Orders placed before 2:40 PM ship the same working day. Orders placed later ship the next working day.\n[lines 46–52 of 52; 45 above; end of page]',
+	},
+	refusal: {
+		record: 'validate-4/2b/T1/attempts/inputs/49171-cart-calls.jsonl',
+		arguments: { ref: 'e7', text: 'Cedar Tea Tray', submit: true },
+		expected:
+			'Element link "Cedar Tea Tray" [ref=e7] takes no text; to type, use searchbox "Search products" [ref=e4].',
+	},
+})

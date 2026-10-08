@@ -1,15 +1,15 @@
 import type { CDPTransportEventMap, CDPTransportInterface } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type { SocketCDPTransportOptions } from '../types.js'
-import { attempt, isString } from '@orkestrel/contract'
+import { attempt, isString, isJSONValue } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserConnectionError, BrowserTransition } from '@src/core'
+import { BROWSER_DEFAULT_TIMEOUT_MS, BrowserTransition, BrowserError } from '@src/core'
 
 /**
  * Provides a raw CDP text transport over the browser's native `WebSocket`.
  *
  * @remarks
- * `start()` resolves on the socket's `open` event and rejects with a `BrowserConnectionError`
+ * `start()` resolves on the socket's `open` event and rejects with a `BrowserError`
  * carrying `url` for a URL whose scheme is not `ws:` or `wss:`, for a URL the `WebSocket`
  * constructor refuses (one with a fragment), for a socket that fails or closes before it opens,
  * and at the `timeout` deadline. Concurrent and repeated `start()` and `close()`
@@ -61,7 +61,7 @@ export class SocketCDPTransport implements CDPTransportInterface {
 	async send(data: string): Promise<void> {
 		const socket = this.#socket
 		if (socket === undefined || socket.readyState !== WebSocket.OPEN) {
-			throw new BrowserConnectionError('Socket CDP transport is not open', { url: this.#url })
+			throw new BrowserError('CONNECTION', 'Socket CDP transport is not open', { url: this.#url })
 		}
 		socket.send(data)
 	}
@@ -73,22 +73,23 @@ export class SocketCDPTransport implements CDPTransportInterface {
 	async #start(): Promise<void> {
 		const parsed = attempt(() => new URL(this.#url))
 		if (!parsed.success) {
-			throw new BrowserConnectionError(`Socket CDP URL is invalid: ${this.#url}`, {
+			throw new BrowserError('CONNECTION', `Socket CDP URL is invalid: ${this.#url}`, {
 				url: this.#url,
-				error: parsed.error,
+				error: isJSONValue(parsed.error) ? parsed.error : String(parsed.error),
 			})
 		}
 		if (parsed.value.protocol !== 'ws:' && parsed.value.protocol !== 'wss:') {
-			throw new BrowserConnectionError(
+			throw new BrowserError(
+				'CONNECTION',
 				`Socket CDP connection requires a ws: or wss: URL: ${this.#url}`,
 				{ url: this.#url },
 			)
 		}
 		const created = attempt(() => new WebSocket(this.#url))
 		if (!created.success) {
-			throw new BrowserConnectionError(`Socket CDP connection to ${this.#url} could not open`, {
+			throw new BrowserError('CONNECTION', `Socket CDP connection to ${this.#url} could not open`, {
 				url: this.#url,
-				error: created.error,
+				error: isJSONValue(created.error) ? created.error : String(created.error),
 			})
 		}
 		const socket = created.value
@@ -153,8 +154,8 @@ export class SocketCDPTransport implements CDPTransportInterface {
 		})
 	}
 
-	#refuse(reason: string): BrowserConnectionError {
-		return new BrowserConnectionError(`Socket CDP connection to ${this.#url} ${reason}`, {
+	#refuse(reason: string): BrowserError {
+		return new BrowserError('CONNECTION', `Socket CDP connection to ${this.#url} ${reason}`, {
 			url: this.#url,
 		})
 	}

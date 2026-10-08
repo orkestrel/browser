@@ -1,3 +1,4 @@
+import { renderBrowserLine } from '@src/core'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
@@ -28,6 +29,11 @@ import {
 } from './setupConformance.js'
 
 describe('pinned WebMCP conformance', () => {
+	it('redesign fix: service tests keep author evidence capture outside the committed suite', () => {
+		const source = readFileSync(new URL('./service/toolset.test.ts', import.meta.url), 'utf8')
+		expect(source).not.toContain('tmp/codex/')
+		expect(source).not.toContain('writeFileSync')
+	})
 	it.each([...WEBMCP_DOMAIN_ROWS, ...WEBMCP_SOURCE_ROWS, ...WEBMCP_WEBREF_ROWS, ...WEBMCP_GAPS])(
 		'$symbol ($ruling)',
 		(row) => {
@@ -190,18 +196,22 @@ describe('pinned WebMCP conformance', () => {
 			await fixture.page.registry.start()
 			fixture.transport.event('WebMCP.toolsAdded', { tools: [WEBMCP_TOOL] }, 'session-main')
 			const outline = await fixture.page.elements.outline()
-			expect(outline.text.split('\n')).toContain('e5 form "Search cars" [tool=search-cars]')
-			expect(outline.text).not.toContain('autosubmit')
-			disabled = true
-			expect((await fixture.page.elements.outline()).text.split('\n')).toContain(
-				'e5 form "Search cars" [disabled] [tool=search-cars]',
+			expect(outline.lines.map(renderBrowserLine).join('\n').split('\n')).toContain(
+				'form "Search cars" [ref=e5] [tool=search-cars]',
 			)
+			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('autosubmit')
+			disabled = true
+			expect(
+				(await fixture.page.elements.outline()).lines.map(renderBrowserLine).join('\n').split('\n'),
+			).toContain('form "Search cars" [ref=e5] [disabled] [tool=search-cars]')
 			fixture.transport.event(
 				'WebMCP.toolsRemoved',
 				{ tools: [{ name: 'search-cars', frameId: 'main' }] },
 				'session-main',
 			)
-			expect((await fixture.page.elements.outline()).text).not.toContain('[tool=')
+			expect(
+				(await fixture.page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
+			).not.toContain('[tool=')
 		} finally {
 			await fixture.client.close()
 		}
@@ -213,9 +223,9 @@ describe('pinned WebMCP conformance', () => {
 			'src/server/index.ts',
 			'src/browser/index.ts',
 		])
-		expect(exports.get('src/core/index.ts')).toContain('BrowserPage')
+		expect(exports.get('src/core/index.ts')).toContain('createBrowserContext')
 		expect(exports.get('src/server/index.ts')).toContain('Browser')
-		expect(exports.get('src/browser/index.ts')).toContain('createDocumentToolset')
+		expect(exports.get('src/browser/index.ts')).toContain('createBrowserDOMView')
 		for (const names of exports.values()) {
 			expect(names.filter((name) => /WebMCP|ModelContext/.test(name))).toEqual([])
 			expect(names).not.toContain('default')

@@ -1,15 +1,16 @@
 import type { BrowserHAR } from '@src/core'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { waitForDelay } from '@orkestrel/test'
+import { requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { parseJSON, isRecord, isString } from '@orkestrel/contract'
+import { browserHARHeadersToRecord, BROWSER_HAR_CREATOR, validateBrowserHAR } from '@src/core'
 import {
-	browserHARHeadersToRecord,
-	BROWSER_HAR_CREATOR,
-	BrowserPage,
-	validateBrowserHAR,
-} from '@src/core'
-import { createConnectedCDPClient, createRecordingWriter, replyOk } from '../../setup.js'
+	BROWSER_BASE64_REFUSALS,
+	createConnectedCDPClient,
+	createRecordingWriter,
+	replyOk,
+} from '../../setup.js'
 
 describe('BrowserHARManager', () => {
 	it('stamps archives with the version the manifest declares', () => {
@@ -33,7 +34,7 @@ describe('BrowserHARManager', () => {
 
 		await expect(page.network.har.start()).rejects.toThrow('network failed')
 
-		expect(page.network.har.recording).toBe(false)
+		expect(page.network.har.active).toBe(false)
 		expect(page.network.emitter.count()).toBe(baseline)
 	})
 
@@ -105,6 +106,7 @@ describe('BrowserHARManager', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Network.enable')
 		replyOk(transport, 'Fetch.enable')
+		replyOk(transport, 'Fetch.disable')
 		replyOk(transport, 'Fetch.fulfillRequest')
 		replyOk(transport, 'Fetch.failRequest')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -218,6 +220,72 @@ describe('BrowserHARManager', () => {
 				},
 			}),
 		).toThrow('Browser HAR response content is malformed')
+
+		const entry = requireValue(har.log.entries[0], 'replayed entry')
+		for (const text of BROWSER_BASE64_REFUSALS) {
+			const malformed = {
+				...har,
+				log: {
+					...har.log,
+					entries: [
+						{
+							...entry,
+							response: { ...entry.response, content: { ...entry.response.content, text } },
+						},
+					],
+				},
+			}
+			await expect(page.network.har.replay(malformed)).rejects.toMatchObject({
+				code: 'ARGUMENT',
+				context: { index: 0 },
+			})
+		}
+
+		// The caller still owns the archive object after validation; a later mutation must fail closed.
+		await page.network.har.replay(har, { fallback: true })
+		Object.assign(entry.response.content, { text: 'aa==' })
+		transport.event(
+			'Fetch.requestPaused',
+			{
+				requestId: 'fetch-corrupt',
+				request: { url: entry.request.url, method: 'GET', headers: {} },
+			},
+			'session-1',
+		)
+		await waitForCondition('corrupt HAR response aborted', () =>
+			transport.sent.some(
+				(message) =>
+					message.method === 'Fetch.failRequest' &&
+					message.params?.['requestId'] === 'fetch-corrupt',
+			),
+		)
+		expect(
+			transport.sent.filter((message) => message.params?.['requestId'] === 'fetch-corrupt'),
+		).toMatchObject([{ method: 'Fetch.failRequest', params: { errorReason: 'Failed' } }])
+
+		Object.assign(entry.response.content, { text: '' })
+		transport.event(
+			'Fetch.requestPaused',
+			{
+				requestId: 'fetch-empty',
+				request: { url: entry.request.url, method: 'GET', headers: {} },
+			},
+			'session-1',
+		)
+		await waitForCondition('empty HAR response fulfilled', () =>
+			transport.sent.some(
+				(message) =>
+					message.method === 'Fetch.fulfillRequest' &&
+					message.params?.['requestId'] === 'fetch-empty',
+			),
+		)
+		expect(
+			transport.sent.find((message) => message.params?.['requestId'] === 'fetch-empty'),
+		).toMatchObject({
+			method: 'Fetch.fulfillRequest',
+			params: { body: '' },
+		})
+		await client.close()
 	})
 
 	it('preserves hostile header names as own replay values without prototype mutation', () => {

@@ -12,14 +12,7 @@ import { BrowserError } from './errors.js'
 /**
  * Performs cookie operations isolated to one browser context.
  *
- * @example
- * ```ts
- * import { BrowserCookieManager } from '@orkestrel/browser'
- *
- * const cookies = new BrowserCookieManager(client)
- * await cookies.set([{ name: 'session', value: 'value', url: 'https://example.com/' }])
- * const current = await cookies.cookies(['https://example.com/'])
- * ```
+ * @remarks The owner exposes this entity through `context.cookies`.
  */
 export class BrowserCookieManager implements BrowserCookieManagerInterface {
 	readonly #client: CDPClientInterface
@@ -49,13 +42,20 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 		await this.#client.send('Storage.setCookies', params)
 	}
 
-	async clear(filter?: BrowserCookieFilter): Promise<void> {
+	async clear(): Promise<void> {
+		await this.#client.send(
+			'Storage.clearCookies',
+			this.#context === undefined ? {} : { browserContextId: this.#context },
+		)
+	}
+
+	async remove(filter: BrowserCookieFilter): Promise<void> {
+		if (filter.name === undefined && filter.domain === undefined && filter.path === undefined)
+			throw new BrowserError('ARGUMENT', 'Cookie removal requires a name, domain, or path', {
+				operation: 'remove',
+			})
 		const params: Record<string, unknown> = {}
 		if (this.#context !== undefined) params['browserContextId'] = this.#context
-		if (filter === undefined) {
-			await this.#client.send('Storage.clearCookies', params)
-			return
-		}
 
 		const retained = (await this.cookies()).filter((cookie) => {
 			if (filter.name !== undefined && cookie.name !== filter.name) return true
@@ -82,7 +82,7 @@ export class BrowserCookieManager implements BrowserCookieManagerInterface {
 		if (this.#context !== undefined) restore['browserContextId'] = this.#context
 		const result = await this.#client.send('Storage.setCookies', restore)
 		if (result !== undefined && !isRecord(result)) {
-			throw new BrowserError('Browser cookie restore returned a malformed result')
+			throw new BrowserError('PROTOCOL', 'Browser cookie restore returned a malformed result')
 		}
 	}
 }

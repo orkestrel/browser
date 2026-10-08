@@ -22,8 +22,9 @@ import {
 	isString,
 	parseInteger,
 	parseJSON,
+	isJSONValue,
 } from '@orkestrel/contract'
-import { BrowserConnectionError, BrowserError, isBrowserError } from '@src/core'
+import { BrowserError, isBrowserError } from '@src/core'
 import {
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_CDP_LIST_PATH,
@@ -115,7 +116,7 @@ export function parseBrowserProfileRecord(text: string): BrowserProfileRecord | 
  * @param url - The lost page's last URL, when known
  * @returns The coded diagnostic and any operation-lifecycle guidance
  * @example
- * describeBrowserServerLoss('BROWSER_SERVER_UNAVAILABLE', new Error('Browser exited'))
+ * describeBrowserServerLoss('SERVER_UNAVAILABLE', new Error('Browser exited'))
  */
 export function describeBrowserServerLoss(code: string, cause: unknown, url?: string): string {
 	const pid = isBrowserError(cause) ? cause.context?.['pid'] : undefined
@@ -123,7 +124,7 @@ export function describeBrowserServerLoss(code: string, cause: unknown, url?: st
 		cause === undefined ? 'Browser session lost' : isError(cause) ? cause.message : String(cause)
 	const message = `${code}: ${detail.replace(/\.+$/u, '')}${isNumber(pid) ? ` (pid ${pid})` : ''}.`
 	if (code !== BROWSER_SERVER_CRASH && code !== BROWSER_SERVER_UNRESOLVED) return message
-	const lost = `Lost the page${url === undefined ? '' : ` at ${url}`}, its tabs, every element reference, the retained reading, dialogs, holds, an unsaved recording, the active replay, and the isolated context's cookies.`
+	const lost = `Lost the page${url === undefined ? '' : ` at ${url}`}, its tabs, every element reference, the last projection, dialogs, holds, an unsaved recording, the active replay, and the isolated context's cookies.`
 	const next = `The next call acquires a browser that starts at about:blank, or answers ${BROWSER_SERVER_UNAVAILABLE} when none can serve.`
 	return code === BROWSER_SERVER_UNRESOLVED
 		? `${message} The outcome is unknown. ${lost} Browse did not repeat the call. ${next}`
@@ -219,17 +220,6 @@ export function findSystemBrowsers(options?: SystemBrowserOptions): readonly Sys
 }
 
 /**
- * Locates a Chrome/Chromium/Edge executable on this machine — the first entry
- * of {@link findSystemBrowsers}.
- *
- * @param options - Overrides for the candidate sources; see {@link SystemBrowserOptions}
- * @returns The first discovered browser, or undefined
- */
-export function findSystemBrowser(options?: SystemBrowserOptions): SystemBrowser | undefined {
-	return findSystemBrowsers(options)[0]
-}
-
-/**
  * Classifies an executable path/name into a {@link BrowserEngine} by
  * case-insensitive hint, checked in the order edge → chromium → chrome.
  *
@@ -286,7 +276,7 @@ export async function removeBrowserProfile(profile: BrowserProfileResult): Promi
 	const path = resolve(profile.path)
 	const temporary = resolve(tmpdir())
 	if (dirname(path) !== temporary || !basename(path).startsWith(BROWSER_PROFILE_PREFIX)) {
-		throw new BrowserError('Refusing to remove an unsafe browser profile path', undefined, {
+		throw new BrowserError('ARGUMENT', 'Refusing to remove an unsafe browser profile path', {
 			path,
 		})
 	}
@@ -523,7 +513,8 @@ export function readBrowserEndpoint(stream: Readable, signal: AbortSignal): Prom
 		if (endpoint !== undefined) read.resolve(endpoint)
 		else {
 			read.reject(
-				new BrowserConnectionError(
+				new BrowserError(
+					'CONNECTION',
 					'Browser closed its standard error before reporting a CDP endpoint',
 				),
 			)
@@ -535,12 +526,12 @@ export function readBrowserEndpoint(stream: Readable, signal: AbortSignal): Prom
 
 /**
  * Fetches the current CDP target list from a browser's `/json/list` endpoint, as a `Result`
- * carrying either the targets or a coded `BrowserConnectionError`.
+ * carrying either the targets or a coded `BrowserError`.
  *
  * @remarks
  * The endpoint is a network boundary, so an unreachable host, a non-2xx
  * response, and a body that is not a JSON array each come back as a failed
- * `Result` carrying a coded `BrowserConnectionError`. An entry missing a
+ * `Result` carrying a coded `BrowserError`. An entry missing a
  * required string field is skipped rather than failing the whole list.
  *
  * @param port - Port the browser exposes its CDP endpoint on
@@ -572,7 +563,7 @@ export async function fetchCDPTargets(
 		if (!response.ok) {
 			return {
 				success: false,
-				error: new BrowserConnectionError('CDP target list request was refused', {
+				error: new BrowserError('CONNECTION', 'CDP target list request was refused', {
 					url,
 					status: response.status,
 				}),
@@ -583,7 +574,7 @@ export async function fetchCDPTargets(
 		if (!isArray(list)) {
 			return {
 				success: false,
-				error: new BrowserConnectionError('CDP target list is not a JSON array', { url }),
+				error: new BrowserError('CONNECTION', 'CDP target list is not a JSON array', { url }),
 			}
 		}
 
@@ -611,7 +602,10 @@ export async function fetchCDPTargets(
 	} catch (error) {
 		return {
 			success: false,
-			error: new BrowserConnectionError('CDP target list is unreachable', { url, error }),
+			error: new BrowserError('CONNECTION', 'CDP target list is unreachable', {
+				url,
+				error: isJSONValue(error) ? error : String(error),
+			}),
 		}
 	} finally {
 		clearTimeout(timer)

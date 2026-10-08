@@ -11,7 +11,7 @@ import type { MCPTransportInterface } from '@orkestrel/mcp'
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
-	BrowserContextOptions,
+	BrowserIsolateOptions,
 	BrowserPageInterface,
 	BrowserStoreOptions,
 } from '@src/core'
@@ -33,10 +33,11 @@ import { addAbortListener } from 'node:events'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough, Writable } from 'node:stream'
-import { createBrowserMCPServer } from '@src/server'
+import { createBrowserMCPServer, formatBrowserLockEntry } from '@src/server'
 import { createConnection, createServer as createNetServer } from 'node:net'
 import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
-import { open } from 'node:fs/promises'
+import { open, mkdir, writeFile, unlink, rmdir } from 'node:fs/promises'
+import { randomUUID } from 'node:crypto'
 import { dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
@@ -69,9 +70,30 @@ import {
 } from '@orkestrel/test'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserContext, BrowserError } from '@src/core'
-import { BrowserDestroyedError, BrowserNotConnectedError } from '@src/server'
 import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
+
+/**
+ * Holds a real file-lock entry outside the store's process-local queue.
+ * @param path - Lock directory under the test's scratch root
+ * @param action - Work that encounters the live holder
+ * @returns Completion after releasing the entry
+ */
+export async function holdBrowserStoreLock(
+	path: string,
+	action: () => Promise<void>,
+): Promise<void> {
+	await mkdir(dirname(path), { recursive: true })
+	await mkdir(path)
+	const entry = join(path, formatBrowserLockEntry(process.pid, randomUUID()))
+	await writeFile(entry, '')
+	try {
+		await action()
+	} finally {
+		await unlink(entry)
+		await rmdir(path)
+	}
+}
 
 /**
  * Reads the loop clock Node stamps on a timer it arms, in whole milliseconds.
@@ -1224,12 +1246,14 @@ const DOCUMENT_PAGE = `<!doctype html><html><head><title>Gift options</title>
 document.getElementById('wrap').addEventListener('click', (event) => { document.body.dataset.trusted = [document.body.dataset.trusted, String(event.isTrusted)].filter(Boolean).join(' ') })
 </script>
 <script type="module">
-import { createDocumentToolset } from '/dist/src/browser/index.js'
+import { createBrowserDOMView } from '/dist/src/browser/index.js'
+import { createBrowserToolset } from '/dist/src/core/index.js'
 import { createModelContext } from '@orkestrel/mcp/browser'
 import { installModelContext } from '${FIXTURE_REGISTRY_MODULE}'
 try {
 	installModelContext(document)
-	const toolset = createDocumentToolset({ document, own: true, source: createModelContext({ document }) })
+	const view = createBrowserDOMView({ document, own: true })
+	const toolset = createBrowserToolset(view, { source: createModelContext({ document }) })
 	await toolset.start()
 	window.documentToolset = toolset
 	document.body.dataset.ready = 'yes'
@@ -1306,7 +1330,7 @@ try {
  * - `/popup/child` — the opened tab; its `Like` button sets `document.body.dataset.liked`
  * - `/document` — imports the built `dist/src/browser` bundle through an import map of
  *   {@link FIXTURE_DOCUMENT_IMPORTS}, installs the registry double {@link FIXTURE_REGISTRY_MODULE}
- *   serves, and publishes `createDocumentToolset({ document, own: true, source })` over its own
+ *   serves, and publishes `createBrowserToolset(createBrowserDOMView({ document, own: true }), { source })` over its own
  *   document on `window.documentToolset` after `start()`, then sets
  *   `document.body.dataset.ready`, or `document.body.dataset.failed` with the error; a listener
  *   records each `Gift wrap` checkbox click's `isTrusted` on `document.body.dataset.trusted`
@@ -1730,9 +1754,10 @@ export class BrowserLaunchDouble implements BrowserInterface {
 	}
 
 	async ping(options?: BrowserCallOptions): Promise<void> {
-		if (this.#destroyed) throw new BrowserDestroyedError()
+		if (this.#destroyed) throw new BrowserError('CLOSED', 'Browser has been destroyed')
 		const fixture = this.#fixture
-		if (fixture?.client.connected !== true) throw new BrowserNotConnectedError()
+		if (fixture?.client.connected !== true)
+			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		const timeout = options?.timeout ?? this.#handlers.timeout
 		await fixture.client.send('Browser.getVersion', undefined, {
 			...options,
@@ -1860,23 +1885,19 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		return this.#contexts
 	}
 
-	async isolate(options?: BrowserContextOptions): Promise<BrowserContextInterface> {
+	async isolate(options?: BrowserIsolateOptions): Promise<BrowserContextInterface> {
 		if ((this.#handlers.broken ?? 0) > 0)
-			throw new BrowserError('The fixture refused isolation', 'BROWSER_FIXTURE_ISOLATE')
+			throw new BrowserError('PROTOCOL', 'The fixture refused isolation')
 		const fixture = this.#fixture
-		if (fixture === undefined) throw new BrowserError('The double is not connected')
+		if (fixture === undefined) throw new BrowserError('ARGUMENT', 'The double is not connected')
 		const result: unknown = await fixture.client.send('Target.createBrowserContext', {})
 		if (!isRecord(result) || !isString(result['browserContextId']))
-			throw new BrowserError('The fixture returned no context id')
-		const context = new BrowserContext(
-			fixture.client,
-			result['browserContextId'],
-			undefined,
-			undefined,
-			options?.emulation,
-			options?.downloads,
-			options,
-		)
+			throw new BrowserError('ARGUMENT', 'The fixture returned no context id')
+		const { proxy: _proxy, origins: _origins, ...defaults } = options ?? {}
+		const context = new BrowserContext(fixture.client, {
+			...defaults,
+			id: result['browserContextId'],
+		})
 		this.#contexts.push(context)
 		return context
 	}
@@ -1892,7 +1913,7 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		await this.#fixture?.client.close()
 		if (this.#handlers.cleanup !== undefined) throw this.#handlers.cleanup
 		if ((this.#handlers.survivors ?? 0) > 0)
-			throw new BrowserError('The fixture termination is unconfirmed', 'BROWSER_FIXTURE_TEARDOWN')
+			throw new BrowserError('CONNECTION', 'The fixture termination is unconfirmed')
 	}
 
 	async close(): Promise<void> {
@@ -1935,7 +1956,7 @@ export class BrowserLauncher {
 		return (options) => {
 			const failure =
 				this.#failures > 0 || (this.#browsers.length >= this.#refusing && this.#refusals > 0)
-					? new BrowserError('The fixture refused the launch', 'BROWSER_FIXTURE_LAUNCH')
+					? new BrowserError('CONNECTION', 'The fixture refused the launch')
 					: undefined
 			if (this.#failures > 0) this.#failures -= 1
 			if (this.#browsers.length >= this.#refusing) this.#refusals -= 1
@@ -2006,10 +2027,10 @@ export function createBrowseFixture(
 	const root = join(scratch.path, 'browsers')
 	const server = createBrowserMCPServer({
 		root,
-		launch: launcher.launch,
 		stdio: pair,
 		log,
 		...options,
+		pool: { launch: launcher.launch, ...options?.pool },
 	})
 	const teardown = createTeardown()
 	teardown.add(() => scratch.destroy())
@@ -2164,16 +2185,13 @@ export class MCPStdioPair {
  * `dialog` included, then the journey tools.
  */
 export const BROWSE_VOCABULARY: readonly string[] = Object.freeze([
-	'look',
 	'read',
-	'plain',
 	'click',
 	'type',
 	'press',
 	'navigate',
 	'wait',
 	'dialog',
-	'tabs',
 	'switch',
 	'record',
 	'save',
@@ -2301,11 +2319,11 @@ export function endBrowseChild(child: BrowseChild, ending: BrowseEnding): void {
 }
 
 /**
- * Opens the protocol on a browse child and makes its first `look` call, which launches the
+ * Opens the protocol on a browse child and makes its first `read` call, which launches the
  * child's Chromium.
  *
  * @param child - The spawned child
- * @returns The text the `look` call answered
+ * @returns The text the `read` call answered
  * @throws Thrown when the call answers an error, or when no answer arrives within 60 seconds
  */
 export async function startBrowseChild(child: BrowseChild): Promise<string> {
@@ -2324,11 +2342,11 @@ export async function startBrowseChild(child: BrowseChild): Promise<string> {
 			jsonrpc: '2.0',
 			id: 2,
 			method: 'tools/call',
-			params: { name: 'look', arguments: { search: 'the page' } },
+			params: { name: 'read', arguments: { from: 1, search: 'the page' } },
 		},
 	)
 	const answer = await retryUntil(
-		'the answer to the first look',
+		'the answer to the first read',
 		() =>
 			child.lines
 				.map((line): unknown => parseJSON(line))
@@ -2341,7 +2359,7 @@ export async function startBrowseChild(child: BrowseChild): Promise<string> {
 	const first: unknown = isArray(content) ? content[0] : undefined
 	const text = isRecord(first) ? first['text'] : undefined
 	if (!isString(text) || !isRecord(result) || result['isError'] === true)
-		throw new Error(`the first look answered ${JSON.stringify(answer)}`)
+		throw new Error(`the first read answered ${JSON.stringify(answer)}`)
 	return text
 }
 
@@ -2543,7 +2561,7 @@ export function readBundleImports(bundle: string, specifier: string): BundleImpo
  * Holds a browse server launched over a {@link BrowserLauncher} and an {@link MCPStdioPair}.
  *
  * @remarks
- * - `browser` — the one launch its first `look` made
+ * - `browser` — the one launch its first `read` made
  * - `profile` — the profile directory that launch was given, which exists
  * - `listeners` — the `SIGTERM` and `SIGINT` listener counts from before `start()`
  * - `teardown` — removes the scratch root and destroys the server
@@ -2558,10 +2576,10 @@ export interface BrowseSession {
 }
 
 /**
- * Starts a browse server under a scratch root and launches it with one `look`.
+ * Starts a browse server under a scratch root and launches it with one `read`.
  *
  * @returns The started session
- * @throws Thrown when the `look` fails or the launch made no profile
+ * @throws Thrown when the `read` fails or the launch made no profile
  */
 export async function openBrowseSession(): Promise<BrowseSession> {
 	const scratch = createScratch()
@@ -2569,8 +2587,8 @@ export async function openBrowseSession(): Promise<BrowseSession> {
 	const pair = new MCPStdioPair()
 	const server = createBrowserMCPServer({
 		root: join(scratch.path, 'tmp/browsers'),
-		launch: launcher.launch,
 		stdio: pair,
+		pool: { launch: launcher.launch },
 	})
 	const listeners = {
 		SIGTERM: process.listenerCount('SIGTERM'),
@@ -2581,8 +2599,8 @@ export async function openBrowseSession(): Promise<BrowseSession> {
 	teardown.add(() => server.destroy())
 	await server.start()
 	await pair.initialize()
-	const looked = await pair.call(2, 'look', { search: 'the cart' })
-	if (looked.error) throw new Error(looked.text)
+	const reading = await pair.call(2, 'read', { from: 1, search: 'the cart' })
+	if (reading.error) throw new Error(reading.text)
 	const browser = requireValue(launcher.browsers[0], 'no launch was recorded')
 	const profile = requireValue(browser.options.profile, 'the launch named no profile')
 	if (!existsSync(profile)) throw new Error(`the launch made no profile at ${profile}`)
@@ -2594,10 +2612,10 @@ export async function openBrowseSession(): Promise<BrowseSession> {
 // Imports the built package through the staged link, so the browser context it returns and every
 // page that context opens come from the same module instance a generated journey module imports.
 const BROWSER_JOURNEY_HARNESS = `import { BrowserContext, createCDPClient } from '@orkestrel/browser'
-import { createCDPTransport } from '@orkestrel/browser/server'
+import { createWebSocketCDPTransport } from '@orkestrel/browser/server'
 
 export async function connect(url) {
-	const client = createCDPClient({ transport: createCDPTransport({ url }) })
+	const client = createCDPClient({ transport: createWebSocketCDPTransport({ url }) })
 	await client.connect()
 	const context = new BrowserContext(client)
 	return {

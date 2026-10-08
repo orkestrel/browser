@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
+	isBrowserPage,
 	isBrowserSecretBinding,
 	isBrowserJourneyBinding,
 	isBrowserJourneyTab,
@@ -13,6 +14,9 @@ import {
 	validateBrowserRun,
 } from '@src/core'
 import {
+	createBrowserElementFixture,
+	replyOk,
+	createBrowserViewDouble,
 	BROWSER_JOURNEY_FIXTURE,
 	BROWSER_JOURNEY_INVALID_CASES,
 	BROWSER_JOURNEY_EDIT_SHAPES,
@@ -20,7 +24,140 @@ import {
 	BROWSER_RUN_FIXTURE,
 } from '../../setup.js'
 
+describe('isBrowserPage', () => {
+	it.each([
+		'id',
+		'url',
+		'closed',
+		'trusted',
+		'title',
+		'read',
+		'screenshot',
+		'send',
+		'subscribe',
+		'unsubscribe',
+		'navigate',
+		'frames',
+		'elements',
+		'emitter',
+		'keyboard',
+		'registry',
+		'navigation',
+		'popups',
+	])('requires the toolset capability %s without protocol traffic', async (hidden) => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			const before = fixture.transport.sent.length
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => (key === hidden ? undefined : Reflect.get(target, key, target)),
+					}),
+				),
+			).toBe(false)
+			expect(fixture.transport.sent.length).toBe(before)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+	it.each([
+		'target',
+		'wait',
+		'evaluate',
+		'handle',
+		'reload',
+		'back',
+		'forward',
+		'pdf',
+		'frame',
+		'snapshot',
+		'recorder',
+		'destroy',
+		'close',
+	])('does not require the unused capability %s', async (hidden) => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => (key === hidden ? undefined : Reflect.get(target, key, target)),
+					}),
+				),
+			).toBe(true)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+	it.each(['close', 'disconnect'])(
+		'recognizes a page after %s without protocol traffic',
+		async (operation) => {
+			const fixture = await createBrowserElementFixture()
+			try {
+				if (operation === 'close') {
+					replyOk(fixture.transport, 'Target.closeTarget')
+					await fixture.page.close()
+				} else await fixture.client.close()
+				const before = fixture.transport.sent.length
+				expect(isBrowserPage(fixture.page)).toBe(true)
+				expect(fixture.transport.sent.length).toBe(before)
+			} finally {
+				await fixture.client.close()
+			}
+		},
+	)
+	it('accepts a real page through inherited accessors and rejects an incomplete trusted view', async () => {
+		const fixture = await createBrowserElementFixture()
+		try {
+			expect(isBrowserPage(fixture.page)).toBe(true)
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => Reflect.get(target, key, target),
+					}),
+				),
+			).toBe(true)
+			expect(isBrowserPage({ ...createBrowserViewDouble(), trusted: true })).toBe(false)
+			expect(
+				isBrowserPage(
+					new Proxy(fixture.page, {
+						get: (target, key) => (key === 'navigation' ? {} : Reflect.get(target, key, target)),
+					}),
+				),
+			).toBe(false)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it('refuses primitives, revoked proxies, and hostile page accessors without throwing', () => {
+		const proxy = Proxy.revocable({}, {})
+		proxy.revoke()
+		expect(isBrowserPage(proxy.proxy)).toBe(false)
+		expect(isBrowserPage(undefined)).toBe(false)
+		expect(isBrowserPage(null)).toBe(false)
+		expect(isBrowserPage('page')).toBe(false)
+		expect(
+			isBrowserPage({
+				get trusted() {
+					throw new Error('hostile page')
+				},
+			}),
+		).toBe(false)
+	})
+})
+
 describe('journey validators', () => {
+	it('journey start: accepts format 1 with or without a string start and refuses other values', () => {
+		expect(() => validateBrowserJourney(BROWSER_JOURNEY_FIXTURE)).not.toThrow()
+		expect(() =>
+			validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, start: 'https://shop.example.test/' }),
+		).not.toThrow()
+		for (const start of [null, 42, false, [], {}]) {
+			expect(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, start })).toThrow(
+				'has malformed journey fields',
+			)
+		}
+	})
 	it('recognizes binding coordinates and contains hostile context reads', () => {
 		expect(
 			isBrowserJourneyValidationContext({ parameter: 'email', step: 's4', field: 'text' }),
@@ -92,7 +229,7 @@ describe('journey validators', () => {
 	it.each(BROWSER_JOURNEY_EDIT_SHAPES)('names the operation and field for %j', (value, message) => {
 		expect(attempt(() => validateBrowserJourneyEdit(value))).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_EDIT', message },
+			error: { code: 'JOURNEY_EDIT', message },
 		})
 	})
 	it('refuses an empty journey with the invalid code', () => {
@@ -100,7 +237,7 @@ describe('journey validators', () => {
 			attempt(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, steps: [] })),
 		).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_INVALID', message: 'Invariant 2 (ids): has no steps' },
+			error: { code: 'JOURNEY_INVALID', message: 'Invariant 2 (ids): has no steps' },
 		})
 	})
 	it.each(BROWSER_JOURNEY_INVALID_CASES)(
@@ -110,7 +247,7 @@ describe('journey validators', () => {
 			expect(result).toMatchObject({
 				success: false,
 				error: {
-					code: 'BROWSER_JOURNEY_INVALID',
+					code: 'JOURNEY_INVALID',
 					message: expect.stringContaining(`Invariant ${invariant}`),
 				},
 			})
@@ -119,10 +256,10 @@ describe('journey validators', () => {
 	it('refuses unknown formats with the format code', () => {
 		expect(
 			attempt(() => validateBrowserJourney({ ...BROWSER_JOURNEY_FIXTURE, format: 2 })),
-		).toMatchObject({ success: false, error: { code: 'BROWSER_JOURNEY_FORMAT' } })
+		).toMatchObject({ success: false, error: { code: 'STORE_FORMAT' } })
 		expect(attempt(() => validateBrowserRun({ ...BROWSER_RUN_FIXTURE, format: 2 }))).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_FORMAT' },
+			error: { code: 'STORE_FORMAT' },
 		})
 	})
 	it('refuses a secret bound to wait.text', () => {
@@ -137,7 +274,7 @@ describe('journey validators', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_INVALID',
+				code: 'JOURNEY_INVALID',
 				message: 'Invariant 5 (secrets): binds secret "password" outside type.text',
 				context: { parameter: 'password', step: 's1', field: 'text' },
 			},

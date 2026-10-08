@@ -5,7 +5,6 @@ import type {
 	BrowserReadingInterface,
 	BrowserCallOptions,
 	BrowserSessionFunction,
-	BrowserWorldFunction,
 	CDPHandler,
 	CDPClientInterface,
 } from './types.js'
@@ -24,17 +23,7 @@ import { isRecord, isString } from '@orkestrel/contract'
  * The optional `epoch` constructor parameter reads the frame's navigation counter, which lets
  * `read()` mark a reading stale after a later navigation. The optional `world` parameter
  * resolves a cached isolated-world context, which lets a page share one world across reads.
- * A standalone frame built with neither returns readings whose `stale` stays `false`, because
- * no navigation counter is available to it, and creates a fresh world for each read.
- *
- * @example
- * ```ts
- * import { BrowserFrame } from '@orkestrel/browser'
- *
- * const frame = new BrowserFrame(client, 'session-1', 'frame-1', 'https://example.com')
- * const title = await frame.title()
- * const reading = await frame.read()
- * ```
+ * The owning page supplies these callbacks for its documents.
  */
 export class BrowserFrame implements BrowserFrameInterface {
 	readonly #client: CDPClientInterface
@@ -44,19 +33,31 @@ export class BrowserFrame implements BrowserFrameInterface {
 	readonly #name: string | undefined
 	readonly #isolated: boolean
 	readonly #epoch: BrowserEpochFunction | undefined
-	readonly #world: BrowserWorldFunction | undefined
-	#url: string
+	readonly #world: ((session: string, options?: BrowserCallOptions) => Promise<number>) | undefined
+	readonly #assertion: (() => void) | undefined
+	#url:
+		| string
+		| {
+				readonly get: () => string
+				readonly set: (url: string) => void
+		  }
 
 	constructor(
 		client: CDPClientInterface,
 		session: string | BrowserSessionFunction,
 		id: string,
-		url: string,
+		url:
+			| string
+			| {
+					readonly get: () => string
+					readonly set: (url: string) => void
+			  },
 		parent?: string,
 		name?: string,
 		isolated = true,
 		epoch?: BrowserEpochFunction,
-		world?: BrowserWorldFunction,
+		world?: (session: string, options?: BrowserCallOptions) => Promise<number>,
+		assert?: () => void,
 	) {
 		this.#client = client
 		this.#session = session
@@ -67,6 +68,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#isolated = isolated
 		this.#epoch = epoch
 		this.#world = world
+		this.#assertion = assert
 	}
 
 	get id(): string {
@@ -82,17 +84,17 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	get url(): string {
-		return this.#url
+		return isString(this.#url) ? this.#url : this.#url.get()
 	}
 
 	async title(options?: BrowserCallOptions): Promise<string> {
-		this.assert()
+		this.#assert()
 		const result = await this.#evaluate('document.title', options)
 		return requireBrowserString(result, 'Document title')
 	}
 
 	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
-		this.assert()
+		this.#assert()
 		// The epoch is sampled before the capture is issued, so a navigation that lands while the
 		// evaluation is in flight leaves the reading stale rather than current.
 		const epoch = this.#epoch?.()
@@ -122,10 +124,13 @@ export class BrowserFrame implements BrowserFrameInterface {
 			!isString(capture['title']) ||
 			!isString(capture['html'])
 		) {
-			throw new BrowserError('Browser read capture is malformed', undefined, { frame: this.#id })
+			throw new BrowserError('PROTOCOL', 'Browser read capture is malformed', { frame: this.#id })
 		}
 		// A capture that a navigation overtook must not regress the frame URL the navigation set.
-		if (this.#epoch === undefined || this.#epoch() === epoch) this.#url = capture['url']
+		if (this.#epoch === undefined || this.#epoch() === epoch) {
+			if (isString(this.#url)) this.#url = capture['url']
+			else this.#url.set(capture['url'])
+		}
 		return new BrowserReading({
 			url: capture['url'],
 			title: capture['title'],
@@ -137,7 +142,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	async evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {
-		this.assert()
+		this.#assert()
 		return await this.#evaluate(
 			compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT),
 			options,
@@ -145,7 +150,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	async handle(expression: string, options?: BrowserCallOptions): Promise<BrowserHandleInterface> {
-		this.assert()
+		this.#assert()
 		const session = await this.#sessionId()
 		const params: Record<string, unknown> = {
 			expression,
@@ -163,7 +168,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 			!isRecord(result['result']) ||
 			!isString(result['result']['objectId'])
 		) {
-			throw new BrowserError('Browser expression did not resolve to an object handle', undefined, {
+			throw new BrowserError('PROTOCOL', 'Browser expression did not resolve to an object handle', {
 				frame: this.#id,
 			})
 		}
@@ -175,7 +180,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		params?: Readonly<Record<string, unknown>>,
 		options?: BrowserCallOptions,
 	): Promise<unknown> {
-		this.assert()
+		this.#assert()
 		return await this.#client.send(method, params, {
 			session: await this.#sessionId(),
 			...options,
@@ -183,7 +188,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 	}
 
 	async subscribe(method: string, handler: CDPHandler): Promise<void> {
-		this.assert()
+		this.#assert()
 		this.#client.subscribe(method, handler, await this.#sessionId())
 	}
 
@@ -191,19 +196,11 @@ export class BrowserFrame implements BrowserFrameInterface {
 		this.#client.unsubscribe(method, handler, await this.#sessionId())
 	}
 
-	async save(path: string, _bytes: Uint8Array): Promise<void> {
-		// Frames satisfy the persistence contract, but only top-level pages receive a writer.
-		throw new BrowserError('Browser frame has no configured file writer', undefined, { path })
-	}
-
-	assert(): void {
+	#assert(): void {
+		this.#assertion?.()
 		if (!this.#client.connected) {
-			throw new BrowserError('Browser frame is disconnected', undefined, { frame: this.#id })
+			throw new BrowserError('CLOSED', 'Browser frame is disconnected', { frame: this.#id })
 		}
-	}
-
-	update(url: string): void {
-		this.#url = url
 	}
 
 	async #evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown> {

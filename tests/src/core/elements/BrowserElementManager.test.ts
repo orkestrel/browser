@@ -1,7 +1,10 @@
 import type { BrowserFrameInterface } from '@src/core'
 import type { CDPSentMessage } from '../../../setup.js'
+import { BrowserPage } from '../../../../src/core/BrowserPage.js'
+import { scanBrowserLines } from '@src/core'
+import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { BrowserContext, BrowserPage } from '@src/core'
+import { BrowserContext } from '@src/core'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
@@ -15,9 +18,155 @@ import {
 	scriptBrowserElements,
 	scriptCDPAttach,
 	TIMER_LEAD,
+	buildBrowserReferenceTree,
+	emitBrowserNavigation,
 } from '../../../setup.js'
 
 describe('element manager', () => {
+	it.each(['name', 'href', 'role', 'missing href'])(
+		'stable links: allocates a fresh reference for a changed %s',
+		async (changed) => {
+			let navigated = false
+			const fixture = await createBrowserElementFixture({
+				local: true,
+				accessibility: (message) =>
+					fixture.transport.reply(
+						message.id,
+						buildBrowserReferenceTree([
+							{
+								role: navigated && changed === 'role' ? 'button' : 'link',
+								name: navigated && changed === 'name' ? 'Pay' : 'Checkout',
+								href:
+									navigated && changed === 'missing href'
+										? undefined
+										: navigated && changed === 'href'
+											? 'https://example.test/other'
+											: 'https://example.test/checkout',
+							},
+						]),
+					),
+			})
+			try {
+				const before = requireValue((await fixture.page.elements.find({}))[0]).reference
+				navigated = true
+				emitBrowserNavigation(
+					fixture.transport,
+					'session-main',
+					'main',
+					'https://example.test/product',
+					'product',
+				)
+				expect(requireValue((await fixture.page.elements.find({}))[0]).reference).not.toBe(before)
+			} finally {
+				await fixture.client.close()
+			}
+		},
+	)
+
+	it('stable links: carries only from the immediately preceding document', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					buildBrowserReferenceTree([
+						{ role: 'link', name: 'Checkout', href: 'https://example.test/checkout' },
+					]),
+				),
+		})
+		try {
+			const before = requireValue((await fixture.page.elements.find({}))[0]).reference
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/unread',
+				'unread',
+			)
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/product',
+				'product',
+			)
+			expect(requireValue((await fixture.page.elements.find({}))[0]).reference).not.toBe(before)
+		} finally {
+			await fixture.client.close()
+		}
+	})
+	it('stable links: carries a unique destination across documents and clicks its replacement', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			accessibility: (message) =>
+				fixture.transport.reply(
+					message.id,
+					buildBrowserReferenceTree([
+						{ role: 'link', name: 'Checkout', href: 'https://example.test/checkout' },
+						{ role: 'button', name: 'Checkout' },
+					]),
+				),
+		})
+		try {
+			const before = await fixture.page.elements.find({ name: 'Checkout' })
+			emitBrowserNavigation(
+				fixture.transport,
+				'session-main',
+				'main',
+				'https://example.test/product',
+				'product',
+			)
+			const after = await fixture.page.elements.find({ name: 'Checkout' })
+			expect(after.map((element) => element.reference)).toEqual([
+				requireValue(before[0]).reference,
+				'e3',
+			])
+			await expect(requireValue(after[0]).click()).resolves.toBeUndefined()
+			await expect(requireValue(before[0]).click()).rejects.toMatchObject({
+				context: { reason: 'GONE' },
+			})
+		} finally {
+			await fixture.client.close()
+		}
+	})
+
+	it.each(['previous', 'current'])(
+		'stable links: refuses duplicate identities in the %s document',
+		async (duplicate) => {
+			let navigated = false
+			const fixture = await createBrowserElementFixture({
+				local: true,
+				accessibility: (message) =>
+					fixture.transport.reply(
+						message.id,
+						buildBrowserReferenceTree(
+							Array.from({ length: navigated === (duplicate === 'current') ? 2 : 1 }, () => ({
+								role: 'link',
+								name: 'Checkout',
+								href: 'https://example.test/checkout',
+							})),
+						),
+					),
+			})
+			try {
+				const before = await fixture.page.elements.find({ role: 'link' })
+				navigated = true
+				emitBrowserNavigation(
+					fixture.transport,
+					'session-main',
+					'main',
+					'https://example.test/product',
+					'product',
+				)
+				const after = await fixture.page.elements.find({ role: 'link' })
+				expect(after.length).toBeGreaterThan(0)
+				for (const element of after)
+					expect(before.map((entry) => entry.reference)).not.toContain(element.reference)
+			} finally {
+				await fixture.client.close()
+			}
+		},
+	)
 	it.each(['query', 'describe', 'accessibility', 'document'])(
 		'resumes a wait after navigation interrupts %s',
 		async (method) => {
@@ -89,7 +238,7 @@ describe('element manager', () => {
 		const { page, client } = fixture
 		try {
 			await expect(page.elements.wait({ css: '[' }, { timeout: 500 })).rejects.toMatchObject({
-				code: 'BROWSER_CDP_ERROR',
+				code: 'REMOTE',
 				message: 'Selector is invalid',
 			})
 			expect(attempts).toBe(2)
@@ -141,7 +290,7 @@ describe('element manager', () => {
 		})
 		try {
 			await expect(page.elements.wait({ css: '#missing' }, { timeout: 20 })).rejects.toMatchObject({
-				code: 'BROWSER_WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 		} finally {
 			await client.close()
@@ -152,7 +301,7 @@ describe('element manager', () => {
 		const { page, client, transport } = await createBrowserElementFixture({ local: true })
 		try {
 			await expect(page.elements.wait({ css: '#missing' }, { timeout: 0 })).rejects.toMatchObject({
-				code: 'BROWSER_WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 			expect(transport.sent.some((message) => message.method === 'Page.createIsolatedWorld')).toBe(
 				false,
@@ -183,7 +332,7 @@ describe('element manager', () => {
 			const started = performance.now()
 			await fixture.page.close()
 			expect(await Promise.race([pending, waitForDelay(200)])).toMatchObject({
-				code: 'BROWSER_ERROR',
+				code: 'CLOSED',
 			})
 			expect(performance.now() - started).toBeLessThan(500)
 		} finally {
@@ -266,7 +415,9 @@ describe('element manager', () => {
 		try {
 			await fixture.page.elements.outline()
 			navigate = true
-			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('title', 'Cart')
+			await expect(fixture.page.elements.outline()).rejects.toMatchObject({
+				context: { reason: 'GONE' },
+			})
 			expect(fixture.page.elements.element('e6')).toBeUndefined()
 			expect(fixture.page.elements.element('e1')?.name).toBe('Home')
 		} finally {
@@ -364,9 +515,9 @@ describe('element manager', () => {
 			const outline = await fixture.page.elements.outline({
 				within: requireValue(found[0]).reference,
 			})
-			expect(outline.text).toContain('\nDelivery included.\n')
-			expect(outline.text).not.toContain('Home')
-			expect(outline.count).toBe(0)
+			expect(outline.lines.map(renderBrowserLine)).toEqual(['Delivery included.'])
+			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('Home')
+			expect(outline.listed).toBe(0)
 		} finally {
 			await fixture.client.close()
 		}
@@ -489,21 +640,23 @@ describe('element manager', () => {
 		const { page, client } = await createBrowserElementFixture()
 		try {
 			const outline = await page.elements.outline()
-			expect(outline).toEqual({
+			expect({ ...outline, lines: outline.lines.map(renderBrowserLine).join('\n') }).toEqual({
 				url: 'https://example.test/cart',
 				title: 'Cart',
-				count: 6,
-				total: 6,
-				text: 'page "Cart" https://example.test/cart\n# Your cart\ne1 link "Home"\ne2 textbox "Email" value="sam@example.test"\ne3 checkbox "Gift wrap" [checked]\ne4 button "Place order" [disabled]\nTwo items, 48.00 total.\ne5 Iframe "Checkout"\ne6 button "Save"\nDelivery included.\n(6 of 6 elements)',
-				matches: [],
+				listed: 6,
+				found: 6,
+				lines:
+					'# Your cart\nlink "Home" [ref=e1]\ntextbox "Email" [ref=e2] value="sam@example.test"\ncheckbox "Gift wrap" [ref=e3] [checked]\nbutton "Place order" [ref=e4] [disabled]\nTwo items, 48.00 total.\nIframe "Checkout" [ref=e5]\nbutton "Save" [ref=e6]\nDelivery included.',
 				focus: undefined,
 			})
-			const cut = await page.elements.outline({ limit: 2, search: 'the save button' })
-			expect(cut.matches).toEqual(['e6 button "Save"'])
-			expect(cut.count).toBe(2)
-			expect(cut.total).toBe(6)
-			expect(cut.text).toContain('Two items, 48.00 total.')
-			expect(cut.text).not.toContain('e3')
+			const cut = await page.elements.outline({ limit: 2 })
+			expect(scanBrowserLines((await page.elements.outline()).lines, 'the save button')).toEqual([
+				8,
+			])
+			expect(cut.listed).toBe(2)
+			expect(cut.found).toBe(6)
+			expect(cut.lines.map(renderBrowserLine).join('\n')).toContain('Two items, 48.00 total.')
+			expect(cut.lines.map(renderBrowserLine).join('\n')).not.toContain('e3')
 		} finally {
 			await client.close()
 		}
@@ -579,9 +732,9 @@ describe('element manager', () => {
 			)
 			expect(page.elements.element('e1')).toBeUndefined()
 			await expect(first.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reason: 'GONE' },
-				message: expect.stringContaining('look'),
+				message: expect.stringContaining('read'),
 			})
 			transport.event(
 				'Page.lifecycleEvent',
@@ -608,7 +761,7 @@ describe('element manager', () => {
 			transport.event('Page.frameDetached', { frameId: 'child', reason: 'remove' }, 'session-child')
 			expect(page.elements.element('e6')).toBeUndefined()
 			await expect(child.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reason: 'GONE' },
 			})
 			expect(page.elements.element('e1')).toBe(main)
@@ -740,7 +893,7 @@ describe('element manager', () => {
 			transport.event('Page.frameDetached', { frameId: 'child', reason: 'remove' }, 'session-main')
 			expect(page.elements.element(child.reference)).toBeUndefined()
 			await expect(child.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reason: 'GONE' },
 			})
 			expect(page.elements.element('e1')).toBe(main)
@@ -825,7 +978,7 @@ describe('element manager', () => {
 				{ frameId: 'main', loaderId: 'loading', name: 'DOMContentLoaded' },
 				'session-main',
 			)
-			expect((await pending).count).toBe(6)
+			expect((await pending).listed).toBe(6)
 			expect(performance.now() - started).toBeGreaterThanOrEqual(20 - TIMER_LEAD)
 		} finally {
 			await client.close()

@@ -1,6 +1,7 @@
 import type { BrowserNavigationResult } from '@src/core'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { waitForDelay } from '@orkestrel/test'
 import {
 	RecordingCDPClient,

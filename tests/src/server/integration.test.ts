@@ -1,5 +1,6 @@
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, createCDPClient } from '@src/core'
+import { createCDPClient } from '@src/core'
 import { WebSocketCDPTransport } from '@src/server'
 import { requireValue, waitForCondition } from '@orkestrel/test'
 import { createCDPTestServer } from '../../setupServer.js'

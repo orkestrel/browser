@@ -1,10 +1,25 @@
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { waitForCondition } from '@orkestrel/test'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserClock', () => {
-	it('installs, advances by a budget event, pauses, resumes, and uninstalls virtual time', async () => {
+	it('reports a missing virtual time completion as TIMEOUT', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Emulation.setVirtualTimePolicy')
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		try {
+			await page.clock.start()
+			await expect(page.clock.advance(1)).rejects.toMatchObject({
+				code: 'TIMEOUT',
+				context: { operation: 'advance' },
+			})
+		} finally {
+			await client.close()
+		}
+	}, 40000)
+	it('starts, advances by a budget event, pauses, resumes, and stops virtual time', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		transport.onSend('Emulation.setVirtualTimePolicy', (message) => {
 			transport.reply(message.id, {})
@@ -14,14 +29,14 @@ describe('BrowserClock', () => {
 		})
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
-		await page.clock.install(1_000)
-		expect(page.clock.installed).toBe(true)
+		await page.clock.start(1_000)
+		expect(page.clock.active).toBe(true)
 		await page.clock.advance(50)
 		await page.clock.pause()
 		await page.clock.resume()
-		await page.clock.uninstall()
+		await page.clock.stop()
 
-		expect(page.clock.installed).toBe(false)
+		expect(page.clock.active).toBe(false)
 		expect(transport.sent[0]?.params).toEqual({
 			policy: 'pause',
 			initialVirtualTime: 1,
@@ -38,7 +53,7 @@ describe('BrowserClock', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Emulation.setVirtualTimePolicy')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		await page.clock.install(1_000)
+		await page.clock.start(1_000)
 
 		await expect(page.clock.advance(0)).resolves.toBeUndefined()
 
@@ -50,7 +65,7 @@ describe('BrowserClock', () => {
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
 		await expect(page.clock.advance(1)).rejects.toSatisfy(isBrowserError)
-		await expect(page.clock.install(-1)).rejects.toSatisfy(isBrowserError)
+		await expect(page.clock.start(-1)).rejects.toSatisfy(isBrowserError)
 		expect(transport.sent).toEqual([])
 	})
 
@@ -64,7 +79,7 @@ describe('BrowserClock', () => {
 			transport.reply(message.id, {})
 		})
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		await page.clock.install(1_000)
+		await page.clock.start(1_000)
 
 		await expect(page.clock.advance(10)).rejects.toThrow('budget failed')
 
@@ -78,7 +93,7 @@ describe('BrowserClock', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Emulation.setVirtualTimePolicy')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		await page.clock.install(1_000)
+		await page.clock.start(1_000)
 
 		const active = page.clock.advance(10)
 		await waitForCondition('a virtual time budget of 10 was sent', () =>
@@ -87,7 +102,7 @@ describe('BrowserClock', () => {
 
 		await expect(page.clock.advance(1)).rejects.toThrow('already active')
 		await expect(page.clock.pause()).rejects.toThrow('already active')
-		await expect(page.clock.uninstall()).rejects.toThrow('already active')
+		await expect(page.clock.stop()).rejects.toThrow('already active')
 
 		transport.event('Emulation.virtualTimeBudgetExpired', {}, 'session-1')
 		await expect(active).resolves.toBeUndefined()

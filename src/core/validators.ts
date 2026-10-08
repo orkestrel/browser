@@ -1,11 +1,64 @@
 import type {
+	BrowserPageInterface,
 	BrowserJourneyBinding,
 	BrowserJourneyTarget,
 	BrowserJourneyTab,
 	BrowserJourneyValidationContext,
 } from './types.js'
-import { attempt, isRecord, isString } from '@orkestrel/contract'
+import {
+	attempt,
+	isRecord,
+	isString,
+	isBoolean,
+	isFunction,
+	isTrue,
+	objectOf,
+} from '@orkestrel/contract'
 import { BROWSER_JOURNEY_PARAMETER_PATTERN } from './constants.js'
+
+/**
+ * Checks whether a value exposes the page capabilities used by a browser toolset.
+ *
+ * @remarks
+ * Reads structural members, including inherited accessors, without invoking page operations.
+ * A trusted view alone is insufficient. Hostile getters and revoked proxies return false.
+ *
+ * @param value - The candidate page or view
+ * @returns True if the value exposes the page's protocol and toolset capabilities; false otherwise
+ * @example
+ * isBrowserPage(page) // true
+ * isBrowserPage(view) // false for a DOM document view
+ */
+export function isBrowserPage(value: unknown): value is BrowserPageInterface {
+	const result = attempt(() =>
+		objectOf({
+			trusted: isTrue,
+			id: isString,
+			url: isString,
+			closed: isBoolean,
+			title: isFunction,
+			read: isFunction,
+			send: isFunction,
+			subscribe: isFunction,
+			unsubscribe: isFunction,
+			navigate: isFunction,
+			screenshot: isFunction,
+			frames: isFunction,
+			elements: objectOf({ element: isFunction, find: isFunction, outline: isFunction }),
+			emitter: objectOf({ on: isFunction, off: isFunction }),
+			keyboard: objectOf({ press: isFunction }),
+			registry: objectOf({
+				start: isFunction,
+				adopt: isFunction,
+				tools: isFunction,
+				emitter: objectOf({ on: isFunction, off: isFunction }),
+			}),
+			navigation: objectOf({ record: isFunction }),
+			popups: objectOf({ record: isFunction }),
+		})(value),
+	)
+	return result.success && result.value
+}
 
 /**
  * Checks whether a validation context identifies a parameter, step, and field.

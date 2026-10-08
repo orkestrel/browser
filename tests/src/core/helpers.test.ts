@@ -1,3 +1,25 @@
+import {
+	BROWSER_READ_WIDTH,
+	BROWSER_TOOL_LIMIT,
+	wrapBrowserLine,
+	renderBrowserPassage,
+	renderBrowserFooter,
+	validateBrowserLines,
+	redactBrowserText,
+	BROWSER_TOOL_COPY,
+	renderBrowserReceiptWindow,
+	renderBrowserWindow,
+	renderBrowserSearch,
+	abbreviateBrowserText,
+} from '@src/core'
+import type { BrowserLine, BrowserPassage } from '@src/core'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
+import { readBrowserStreamChunk } from '@src/core'
+import { BROWSER_BASE64_REFUSALS } from '../../setup.js'
+import { validateBrowserPageOpen, validateBrowserJourneyWriteOptions } from '@src/core'
+import { createConnectedCDPClient, replyOk } from '../../setup.js'
+import { scanBrowserLines, describeBrowserRefusal, isBrowserError } from '@src/core'
+import { renderBrowserLine } from '@src/core'
 /**
  * src/core/helpers.ts tests.
  */
@@ -23,10 +45,7 @@ import {
 	resolveBrowserJourneyBinding,
 	composeBrowserPoint,
 	filterBrowserOutline,
-	scanBrowserOutline,
 	collectBrowserWords,
-	scanBrowserText,
-	renderBrowserMatches,
 	normalizeBrowserKey,
 	normalizeBrowserName,
 	readBrowserAccessibility,
@@ -36,18 +55,14 @@ import {
 	renderBrowserToolOutput,
 	deriveBrowserToolSchema,
 	BROWSER_REGISTRY_OUTPUT_LIMIT,
-	BrowserResultLimitError,
-	decodeBase64,
 	extractBrowserSlice,
 	readBrowserAttributes,
 	readBrowserSnapshot,
 	readRareBooleanData,
 	readRareIntegerData,
 	readRareStringData,
-	encodeBase64,
 	isBrowserNodeQuery,
 	isBrowserNodeVisible,
-	isBrowserResultLimitError,
 	matchesBrowserNode,
 	settleBrowserTeardown,
 	readBrowserFrames,
@@ -57,13 +72,11 @@ import {
 	readEvaluationResult,
 	requireBrowserString,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
-	BASE64_CHARS,
 	boundBrowserText,
 	requireBrowserReference,
 	readBrowserToolString,
 	renderBrowserElement,
 	renderBrowserReceipt,
-	isBrowserElementError,
 } from '@src/core'
 import { readProperty, requireValue } from '@orkestrel/test'
 import {
@@ -82,41 +95,66 @@ import {
 	BROWSER_ELEMENT_NAME_AX_FIXTURE,
 	createBrowserElementFixture,
 	createDOMSnapshotResult,
-	JPEG_BASE64,
-	PNG_BASE64,
 	createBrowserOutlineNodes,
 } from '../../setup.js'
 
+describe('element refusals', () => {
+	it('keeps element references, named subjects, details, and punctuation', () => {
+		expect(describeBrowserRefusal('e4', 'GONE')).toBe(
+			'Element [ref=e4] is gone because the page changed; call read for fresh refs.',
+		)
+		expect(describeBrowserRefusal({ subject: 'outline' }, 'GONE', 'changed during capture')).toBe(
+			'outline changed during capture; call read for fresh refs.',
+		)
+		expect(describeBrowserRefusal({ subject: 'Upload' }, 'UNTRUSTED')).toBe(
+			'Upload needs a trusted event.',
+		)
+		expect(
+			describeBrowserRefusal(
+				'e4',
+				'UNTRUSTED',
+				'opens a file chooser, which an untrusted click cannot do',
+			),
+		).toBe('Element [ref=e4] opens a file chooser, which an untrusted click cannot do.')
+		expect(describeBrowserRefusal('e4', 'UNKNOWN', 'is not editable')).toBe(
+			'Element [ref=e4] is not editable.',
+		)
+		expect(describeBrowserRefusal('e4', 'DISABLED', 'is disabled')).toBe(
+			'Element [ref=e4] is disabled.',
+		)
+		expect(describeBrowserRefusal('e4', 'HIDDEN')).toBe('Element [ref=e4] hidden.')
+		expect(describeBrowserRefusal('e4', 'OCCLUDED', 'is covered by div#veil')).toBe(
+			'Element [ref=e4] is covered by div#veil.',
+		)
+		expect(describeBrowserRefusal('e4', 'UNKNOWN', '')).toBe('Element [ref=e4] .')
+	})
+})
+
+describe('IO stream base64 boundary', () => {
+	it.each(BROWSER_BASE64_REFUSALS)('refuses malformed encoded stream data %j', (data) => {
+		expect(() => readBrowserStreamChunk({ data, base64Encoded: true, eof: true })).toThrow(
+			expect.objectContaining({
+				code: 'PROTOCOL',
+				message: 'Browser IO stream chunk has malformed base64 data',
+			}),
+		)
+	})
+	it('decodes canonical bytes and preserves empty and plain UTF-8 chunks', () => {
+		expect(readBrowserStreamChunk({ data: 'AAH+', base64Encoded: true, eof: false })).toEqual({
+			bytes: new Uint8Array([0, 1, 254]),
+			eof: false,
+		})
+		expect(readBrowserStreamChunk({ data: '', base64Encoded: true, eof: true })).toEqual({
+			bytes: new Uint8Array(),
+			eof: true,
+		})
+		expect(
+			new TextDecoder().decode(readBrowserStreamChunk({ data: 'caf\u00e9 \u{1f600}' }).bytes),
+		).toBe('caf\u00e9 \u{1f600}')
+	})
+})
+
 describe('reading matches', () => {
-	it('bounds matches, cuts a long first row safely, and skips later long rows', () => {
-		expect(renderBrowserMatches('Matches:', ['x'.repeat(100), 'y'.repeat(100), 'last'], 48)).toBe(
-			'Matches:\nxxxxxxx…\nlast\n\n',
-		)
-		expect(renderBrowserMatches('Matches:', ['a😀tail'], 28)).toBe('Matches:\na…\n\n')
-		expect(renderBrowserMatches('Matches:', ['short', 'x'.repeat(100), 'last'], 48)).toBe(
-			'Matches:\nshort\nlast\n\n',
-		)
-		expect(renderBrowserMatches('Matches:', [], 100)).toBe('')
-		expect(renderBrowserMatches('Matches:', ['row'], 10)).toBe('')
-	})
-	it('preserves the first offset or reference when a later row nearly fills the room', () => {
-		expect(renderBrowserMatches('Matches:', [`[120] ${'x'.repeat(100)}`, 'y'.repeat(11)], 48)).toBe(
-			`Matches:\n[120] ${'x'.repeat(6)}…\n\n`,
-		)
-		expect(renderBrowserMatches('Matches:', [`[812] ${'x'.repeat(100)}`, 'y'.repeat(6)], 48)).toBe(
-			`Matches:\n[812] ${'x'.repeat(6)}…\n\n`,
-		)
-		expect(renderBrowserMatches('Matches:', [`e12 ${'x'.repeat(100)}`, 'y'.repeat(8)], 48)).toBe(
-			`Matches:\ne12 ${'x'.repeat(8)}…\n\n`,
-		)
-		expect(renderBrowserMatches('Matches:', [`[120] ${'x'.repeat(100)}`, 'y'.repeat(5)], 48)).toBe(
-			'Matches:\n[120] …\nyyyyy\n\n',
-		)
-	})
-	it('omits a block with no room for a character before the ellipsis', () => {
-		expect(renderBrowserMatches('Matches:', ['row'], 24)).toBe('')
-		expect(renderBrowserMatches('Matches:', ['😀tail'], 26)).toBe('')
-	})
 	it('collects distinct whole Unicode words and digits of at least three characters', () => {
 		expect([...collectBrowserWords('Cart CART cartwheel a to 12 123 café 中文字')]).toEqual([
 			'cart',
@@ -125,15 +163,6 @@ describe('reading matches', () => {
 			'café',
 			'中文字',
 		])
-	})
-	it('keeps only the top-scoring lines and preserves duplicate offsets', () => {
-		expect(scanBrowserText('cart\nBlue cart\ncartwheel\r\nBlue cart', 'BLUE cart blue')).toEqual([
-			{ offset: 5, text: 'Blue cart' },
-			{ offset: 26, text: 'Blue cart' },
-		])
-		expect(scanBrowserText('cart', 'a to 12')).toEqual([])
-		expect(scanBrowserText('cartwheel', 'cart')).toEqual([])
-		expect(scanBrowserText('', 'cart')).toEqual([])
 	})
 })
 
@@ -210,18 +239,18 @@ describe('element helpers', () => {
 				properties: { pressed: 0, expanded: null, selected: {} },
 			},
 		]).map((node) => (node.reference === 'e6' ? { ...node, value: 'V', tool: 'act' } : node))
-		const outline = renderBrowserOutline('url', 'title', nodes, 150, 'Mixed')
-		expect(outline.text.split('\n').slice(1, -1)).toEqual([
-			'e1 button "Off" pressed=false',
-			'e2 button "Mixed" pressed=mixed expanded=false',
-			'e3 option "Chosen" selected=true',
-			'e4 checkbox "Flags" [checked] [disabled]',
-			'e5 button "Plain"',
-			'e6 button "All" value="V" pressed=true expanded=false selected=false [checked] [disabled] [tool=act]',
-			'e7 button "Invalid"',
+		const outline = renderBrowserOutline('url', 'title', nodes, 150)
+		expect(outline.lines.map(renderBrowserLine)).toEqual([
+			'button "Off" [ref=e1] pressed=false',
+			'button "Mixed" [ref=e2] pressed=mixed expanded=false',
+			'option "Chosen" [ref=e3] selected=true',
+			'checkbox "Flags" [ref=e4] [checked] [disabled]',
+			'button "Plain" [ref=e5]',
+			'button "All" [ref=e6] value="V" pressed=true expanded=false selected=false [checked] [disabled] [tool=act]',
+			'button "Invalid" [ref=e7]',
 		])
-		expect(outline.matches).toEqual(['e2 button "Mixed" pressed=mixed expanded=false'])
-		expect(outline.focus).toBe('e2 button "Mixed" pressed=mixed expanded=false')
+		expect(scanBrowserLines(outline.lines, 'Mixed')).toEqual([2])
+		expect(outline.focus).toBe('button "Mixed" [ref=e2] pressed=mixed expanded=false')
 	})
 
 	it('reads each text node parent from its own session, by first match, before or after the text', () => {
@@ -258,13 +287,14 @@ describe('element helpers', () => {
 				reference: node.id === 'link' ? 'e4' : undefined,
 			})),
 		]
-		expect(renderBrowserOutline('url', 'title', rows, 150)).toEqual({
+		const projected = renderBrowserOutline('url', 'title', rows, 150)
+		expect({ ...projected, lines: projected.lines.map(renderBrowserLine).join('\n') }).toEqual({
 			url: 'url',
 			title: 'title',
-			text: 'page "title" url\ne1 link "Home"\ne2 link "Child"\nHome\ne3 link "Other home"\ne4 link "Later"\n(4 of 4 elements)',
-			count: 4,
-			total: 4,
-			matches: [],
+			lines:
+				'link "Home" [ref=e1]\nlink "Child" [ref=e2]\nlink "Other home" [ref=e3]\nlink "Later" [ref=e4]',
+			listed: 4,
+			found: 4,
 			focus: undefined,
 		})
 	})
@@ -310,72 +340,14 @@ describe('element helpers', () => {
 			filterBrowserOutline(rows, { role: 'button', name: 'order' }).map((node) => node.id),
 		).toEqual(['order'])
 		expect(renderBrowserOutline('url', 'title', rows, 0)).toMatchObject({
-			count: 0,
-			total: 1,
-			matches: [],
+			listed: 0,
+			found: 1,
 			focus: undefined,
 		})
 	})
 })
 
 describe('outline search and focus helpers', () => {
-	const dialog = createBrowserOutlineNodes([
-		{ role: 'heading', name: 'Archive dialog', reference: 'e9' },
-		{ role: 'button', name: 'Close', reference: 'e1' },
-		{ role: 'button', name: 'Archive', reference: 'e2' },
-		{ role: 'StaticText', name: 'Archive dialog button', reference: 'e8' },
-		{ role: 'generic', name: 'Archive dialog', reference: 'e10' },
-		{ role: 'button', name: 'Archive dialog button', reference: 'e3', ignored: true },
-		{ role: 'textbox', name: 'Tracking number', reference: 'e4' },
-		{ role: 'link', name: 'Other', reference: 'e5' },
-		{ role: 'link', name: 'Go to top', reference: 'e6' },
-		{ role: 'link', name: 'Cart', reference: 'e7' },
-	])
-
-	it('ranks the row that shares the most whole search words above rows that share fewer', () => {
-		expect(
-			scanBrowserOutline(dialog, 'archive dialog button').map((node) => node.reference),
-		).toEqual(['e2'])
-		expect(
-			scanBrowserOutline(dialog, 'the Tracking number textbox').map((node) => node.reference),
-		).toEqual(['e4'])
-	})
-
-	it('keeps tied rows in document order', () => {
-		expect(scanBrowserOutline(dialog, 'BUTTON').map((node) => node.reference)).toEqual(['e1', 'e2'])
-	})
-
-	it('counts distinct search words and preserves non-ASCII whole words', () => {
-		const nodes = createBrowserOutlineNodes([
-			{ role: 'link', name: 'Cart', reference: 'e1' },
-			{ role: 'link', name: 'Checkout', reference: 'e2' },
-			{ role: 'button', name: 'Zurück', reference: 'e3' },
-			{ role: 'button', name: 'Zurich', reference: 'e4' },
-			{ role: 'button', name: '日本語', reference: 'e5' },
-		])
-		expect(scanBrowserOutline(nodes, 'cart cart checkout').map((node) => node.reference)).toEqual([
-			'e1',
-			'e2',
-		])
-		expect(scanBrowserOutline(nodes, 'zurück').map((node) => node.reference)).toEqual(['e3'])
-		expect(scanBrowserOutline(nodes, '日本語').map((node) => node.reference)).toEqual(['e5'])
-	})
-
-	it('ignores words under 3 characters and never matches a word inside another word', () => {
-		expect(scanBrowserOutline(dialog, 'go to cart').map((node) => node.reference)).toEqual(['e7'])
-		expect(scanBrowserOutline(dialog, 'the')).toEqual([])
-		expect(scanBrowserOutline(dialog, 'arch')).toEqual([])
-	})
-
-	it('returns nothing for an empty or wordless search', () => {
-		expect(scanBrowserOutline(dialog, '')).toEqual([])
-		expect(scanBrowserOutline(dialog, 'a to - !')).toEqual([])
-	})
-
-	it('never matches an ignored node, a heading, or a text row', () => {
-		expect(scanBrowserOutline(dialog, 'dialog')).toEqual([])
-	})
-
 	it('renders a row with its reference, role, quoted name, and states in order', () => {
 		expect(
 			createBrowserOutlineNodes([
@@ -387,7 +359,7 @@ describe('outline search and focus helpers', () => {
 				},
 				{ role: 'button', name: 'Save' },
 			]).map(renderBrowserOutlineRow),
-		).toEqual(['e4 checkbox "Gift \\"wrap\\"" [checked] [disabled]', 'button "Save"'])
+		).toEqual(['checkbox "Gift \\"wrap\\"" [ref=e4] [checked] [disabled]', 'button "Save"'])
 	})
 
 	it('lists matches and the focused row past the limit', () => {
@@ -396,16 +368,18 @@ describe('outline search and focus helpers', () => {
 			{ role: 'button', name: 'Cancel', reference: 'e2' },
 			{ role: 'button', name: 'Archive', reference: 'e3', properties: { focused: true } },
 		])
-		expect(renderBrowserOutline('url', 'title', nodes, 1, 'archive button')).toEqual({
+		const projected = renderBrowserOutline('url', 'title', nodes, 1)
+		expect({ ...projected, lines: projected.lines.map(renderBrowserLine).join('\n') }).toEqual({
 			url: 'url',
 			title: 'title',
-			text: 'page "title" url\ne1 button "Close"\n(1 of 3 elements)',
-			count: 1,
-			total: 3,
-			matches: ['e3 button "Archive"'],
-			focus: 'e3 button "Archive"',
+			lines: 'button "Close" [ref=e1]',
+			listed: 1,
+			found: 3,
+			focus: 'button "Archive" [ref=e3]',
 		})
-		expect(renderBrowserOutline('url', 'title', nodes, 1).matches).toEqual([])
+		expect(
+			scanBrowserLines(renderBrowserOutline('url', 'title', nodes, 150).lines, 'archive button'),
+		).toEqual([3])
 	})
 
 	it('names the last focused referenced row and none when only an unreferenced row has focus', () => {
@@ -420,7 +394,7 @@ describe('outline search and focus helpers', () => {
 				]),
 				150,
 			).focus,
-		).toBe('e2 button "Inner"')
+		).toBe('button "Inner" [ref=e2]')
 		expect(
 			renderBrowserOutline(
 				'url',
@@ -494,18 +468,10 @@ describe('toolset helpers', () => {
 	it('catches a bound that cuts a string within the limit, keeps more than the limit, splits a surrogate pair, or drops the footer it is given', () => {
 		const footer = "the rest was cut; call read for the page's text"
 		expect(boundBrowserText('abc', 3, footer)).toBe('abc')
-		expect(boundBrowserText('abcdef', 4, footer)).toBe(
-			"abcd\n[characters 0–4 of 6; the rest was cut; call read for the page's text]",
-		)
-		expect(boundBrowserText('abcdef', 4, 'the rest was cut')).toBe(
-			'abcd\n[characters 0–4 of 6; the rest was cut]',
-		)
-		expect(boundBrowserText('ab\u{1F600}cd', 3, 'the rest was cut')).toBe(
-			'ab\n[characters 0–2 of 6; the rest was cut]',
-		)
-		expect(boundBrowserText('\u{1F600}\u{1F600}', 1, 'the rest was cut')).toBe(
-			'\n[characters 0–0 of 4; the rest was cut]',
-		)
+		expect(boundBrowserText('abcdef', 4, footer)).toBe('abc…')
+		expect(boundBrowserText('abcdef', 4, 'the rest was cut')).toBe('abc…')
+		expect(boundBrowserText('ab\u{1F600}cd', 3, 'the rest was cut')).toBe('ab…')
+		expect(boundBrowserText('\u{1F600}\u{1F600}', 1, 'the rest was cut')).toBe('…')
 		for (const limit of [0, -1, 1.5, Number.NaN])
 			expect(() => boundBrowserText('abc', limit, footer)).toThrow(
 				'Browser tool limit must be a positive integer',
@@ -513,22 +479,22 @@ describe('toolset helpers', () => {
 	})
 
 	it('catches a receipt that drops the status, the dialog article, or the blank line before the view', () => {
-		expect(renderBrowserReceipt({ action: 'Clicked e4 button "Place order"', view: 'page' })).toBe(
-			'Clicked e4 button "Place order".\n\npage',
-		)
+		expect(
+			renderBrowserReceipt({ action: 'Clicked button "Place order" [ref=e4]', view: 'page' }),
+		).toBe('Clicked button "Place order" [ref=e4].\n\npage')
 		expect(
 			renderBrowserReceipt({
-				action: 'Clicked e3 link "Next"',
+				action: 'Clicked link "Next" [ref=e3]',
 				status: 'the page is still loading https://example.test/next',
 			}),
-		).toBe('Clicked e3 link "Next"; the page is still loading https://example.test/next.')
+		).toBe('Clicked link "Next" [ref=e3]; the page is still loading https://example.test/next.')
 		expect(
 			renderBrowserReceipt({
-				action: 'Clicked e7 button "Delete"',
+				action: 'Clicked button "Delete" [ref=e7]',
 				dialog: { category: 'confirm', message: 'Delete the draft?' },
 			}),
 		).toBe(
-			'Clicked e7 button "Delete". A confirm dialog is open: "Delete the draft?"; call dialog.',
+			'Clicked button "Delete" [ref=e7]. A confirm dialog is open: "Delete the draft?"; call dialog.',
 		)
 		expect(
 			renderBrowserReceipt({ action: '', dialog: { category: 'alert', message: 'Line\n"two"' } }),
@@ -538,22 +504,26 @@ describe('toolset helpers', () => {
 
 	it('catches an untrusted click or type receipt without its marker, or a trusted one with it', () => {
 		for (const [action, status, line] of [
-			['Clicked e1 button "Save"', undefined, 'Clicked e1 button "Save".'],
-			['Typed "sam" into e2 textbox "Email"', undefined, 'Typed "sam" into e2 textbox "Email".'],
+			['Clicked button "Save" [ref=e1]', undefined, 'Clicked button "Save" [ref=e1].'],
 			[
-				'Typed "sam" into e2 textbox "Email" and submitted the form',
+				'Typed "sam" into textbox "Email" [ref=e2]',
 				undefined,
-				'Typed "sam" into e2 textbox "Email" and submitted the form.',
+				'Typed "sam" into textbox "Email" [ref=e2].',
 			],
 			[
-				'Selected "Large" in e3 combobox "Size" (programmatic)',
+				'Typed "sam" into textbox "Email" [ref=e2] and submitted the form',
 				undefined,
-				'Selected "Large" in e3 combobox "Size" (programmatic).',
+				'Typed "sam" into textbox "Email" [ref=e2] and submitted the form.',
 			],
 			[
-				'Clicked e3 link "Next"',
+				'Selected "Large" in combobox "Size" [ref=e3] (programmatic)',
+				undefined,
+				'Selected "Large" in combobox "Size" [ref=e3] (programmatic).',
+			],
+			[
+				'Clicked link "Next" [ref=e3]',
 				'the page is still loading https://example.test/next',
-				'Clicked e3 link "Next"; the page is still loading https://example.test/next.',
+				'Clicked link "Next" [ref=e3]; the page is still loading https://example.test/next.',
 			],
 		] as const) {
 			expect(
@@ -582,26 +552,28 @@ describe('toolset helpers', () => {
 		const { client, page } = await createBrowserElementFixture()
 		try {
 			const outline = await page.elements.outline()
-			const rows = outline.text.split('\n')
+			const rows = outline.lines.map(renderBrowserLine).join('\n').split('\n')
 			for (const reference of ['e1', 'e2', 'e4']) {
 				const rendered = renderBrowserElement(requireValue(page.elements.element(reference)))
 				expect(rows.some((row) => row.startsWith(rendered))).toBe(true)
 			}
-			expect(renderBrowserElement(requireValue(page.elements.element('e1')))).toBe('e1 link "Home"')
+			expect(renderBrowserElement(requireValue(page.elements.element('e1')))).toBe(
+				'link "Home" [ref=e1]',
+			)
 		} finally {
 			await client.close()
 		}
 	})
 
 	it('catches a reference reader that accepts a non-reference or names no next call', () => {
-		for (const value of ['e12', 'E12', '12', '[e12]', 'ref=e12', '[ref=e12]'])
+		for (const value of ['e12', 'E12', '[e12]', 'ref=e12', '[ref=e12]'])
 			expect(requireBrowserReference(value)).toBe('e12')
-		for (const value of ['x12', 'e0', '', 12, undefined]) {
+		for (const value of ['12', 'x12', 'e0', '', 12, undefined]) {
 			const outcome = attempt(() => requireBrowserReference(value))
 			expect(outcome.success).toBe(false)
 			const error = readProperty(outcome, 'error')
-			expect(isBrowserElementError(error)).toBe(true)
-			expect(String(error)).toContain('is not a reference such as e12; call look')
+			expect(isBrowserError(error) && error.code === 'ELEMENT').toBe(true)
+			expect(String(error)).toContain('is not a reference such as e12; call read')
 		}
 	})
 
@@ -613,46 +585,6 @@ describe('toolset helpers', () => {
 			expect(() => readBrowserToolString(args, 'url')).toThrow(
 				'The url parameter must be a string.',
 			)
-	})
-})
-
-describe('decodeBase64', () => {
-	it('decodes a small literal to its exact bytes', () => {
-		expect(decodeBase64('AQID')).toEqual(new Uint8Array([1, 2, 3]))
-	})
-
-	it('decodes the documented example', () => {
-		expect(decodeBase64('aGVsbG8=')).toEqual(new Uint8Array([104, 101, 108, 108, 111]))
-	})
-
-	it('returns an empty array for an empty string', () => {
-		expect(decodeBase64('')).toEqual(new Uint8Array([]))
-	})
-
-	it('decodes padded and unpadded forms identically', () => {
-		expect(decodeBase64('AQID')).toEqual(decodeBase64('AQID=='))
-	})
-
-	it('ignores whitespace interspersed in the input', () => {
-		expect(decodeBase64('AQ ID\n')).toEqual(new Uint8Array([1, 2, 3]))
-	})
-
-	it('skips invalid characters rather than throwing', () => {
-		expect(decodeBase64('AQ!ID')).toEqual(new Uint8Array([1, 2, 3]))
-	})
-
-	it('decodes the PNG fixture to its documented signature-prefixed bytes', () => {
-		expect(decodeBase64(PNG_BASE64)).toEqual(new Uint8Array([137, 80, 78, 71, 13]))
-	})
-
-	it('decodes the JPEG fixture to its documented signature-prefixed bytes', () => {
-		expect(decodeBase64(JPEG_BASE64)).toEqual(new Uint8Array([255, 216, 255, 224]))
-	})
-
-	// decodeBase64 reads BASE64_LOOKUP and encodeBase64 reads BASE64_CHARS, so decoding the whole
-	// alphabet and re-encoding it fails on any single character where the two disagree.
-	it('agrees with encodeBase64 across every character of the alphabet', () => {
-		expect(encodeBase64(decodeBase64(BASE64_CHARS))).toBe(BASE64_CHARS)
 	})
 })
 
@@ -810,7 +742,7 @@ describe('evaluation result helpers', () => {
 		expect(readEvaluationResult({ result: {} })).toBeUndefined()
 	})
 
-	it('maps the result-limit sentinel to BrowserResultLimitError', () => {
+	it('maps the result-limit sentinel to BrowserError', () => {
 		const result = attempt(() =>
 			readEvaluationResult({
 				exceptionDetails: {
@@ -823,9 +755,11 @@ describe('evaluation result helpers', () => {
 
 		expect(result.success).toBe(false)
 		if (result.success) return
-		expect(isBrowserResultLimitError(result.error)).toBe(true)
+		expect(isBrowserError(result.error) && result.error.code === 'RESULT_LIMIT').toBe(true)
 		expect(
-			isBrowserResultLimitError(result.error) ? result.error.context : undefined,
+			isBrowserError(result.error) && result.error.code === 'RESULT_LIMIT'
+				? result.error.context
+				: undefined,
 		).toMatchObject({
 			length: 1234,
 		})
@@ -1041,10 +975,13 @@ describe('snapshot decoders', () => {
 
 	it('rejects invalid limits and enforces the aggregate node limit', () => {
 		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], -1)).toThrow(
-			'Browser snapshot limit must be a non-negative integer',
+			expect.objectContaining({
+				code: 'ARGUMENT',
+				message: 'Browser snapshot limit must be a non-negative integer',
+			}),
 		)
 		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], 8)).toThrow(
-			BrowserResultLimitError,
+			expect.objectContaining({ code: 'RESULT_LIMIT' }),
 		)
 		expect(() => readBrowserSnapshot(createDOMSnapshotResult(), [], 9)).not.toThrow()
 	})
@@ -1197,6 +1134,23 @@ describe('settleBrowserTeardown', () => {
 })
 
 describe('journey editing and rendering', () => {
+	it('journey start: removing s1 retains the start and renders it before parameters', () => {
+		const journey = { ...BROWSER_JOURNEY_FIXTURE, start: 'https://shop.example.test/catalogue' }
+		const edited = editBrowserJourney(journey, [{ operation: 'remove', id: 's1' }])
+		expect(edited.start).toBe(journey.start)
+		expect(edited.steps[0]?.id).toBe('s2')
+		expect(renderBrowserJourney(edited).split('\n')[0]).toBe(
+			'add-kettle "Add the Alpine Kettle to the cart" starts at https://shop.example.test/catalogue (parameters: email)',
+		)
+		expect(
+			renderBrowserJourney({
+				...journey,
+				start: 'https://shop.example.test/' + 'x'.repeat(200),
+			}).split('\n')[0],
+		).toContain(
+			`starts at ${abbreviateBrowserText('https://shop.example.test/' + 'x'.repeat(200), 160)} (parameters: email)`,
+		)
+	})
 	it('attributes an empty result to the removal even before a later declaration', () => {
 		const journey = {
 			...BROWSER_JOURNEY_FIXTURE,
@@ -1213,7 +1167,7 @@ describe('journey editing and rendering', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				message: 'Edit 1 is refused: it removes the last step',
 				context: { index: 1 },
 			},
@@ -1247,7 +1201,7 @@ describe('journey editing and rendering', () => {
 		expect(() => validateBrowserJourneyName('a'.repeat(64))).not.toThrow()
 		for (const name of [...BROWSER_STORE_INVALID_NAMES, 'a'.repeat(65)])
 			expect(() => validateBrowserJourneyName(name)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_PATH' }),
+				expect.objectContaining({ code: 'STORE_PATH' }),
 			)
 	})
 	it('checks safe integer paging boundaries with the argument code', () => {
@@ -1261,15 +1215,15 @@ describe('journey editing and rendering', () => {
 			Number.MAX_SAFE_INTEGER + 1,
 		]) {
 			expect(() => validateBrowserStorePage(invalid, 1)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'ARGUMENT', context: { subject: 'store' } }),
 			)
 			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'ARGUMENT' }),
 			)
 		}
 		for (const invalid of [0, -0])
 			expect(() => validateBrowserStorePage(0, invalid)).toThrow(
-				expect.objectContaining({ code: 'BROWSER_JOURNEY_ARGUMENT' }),
+				expect.objectContaining({ code: 'ARGUMENT' }),
 			)
 	})
 	it('attributes an exhausted id counter to the add before later edits', () => {
@@ -1292,7 +1246,7 @@ describe('journey editing and rendering', () => {
 		const before = structuredClone(BROWSER_JOURNEY_FIXTURE)
 		expect(attempt(() => editBrowserJourney(BROWSER_JOURNEY_FIXTURE, edits))).toMatchObject({
 			success: false,
-			error: { code: 'BROWSER_JOURNEY_EDIT', context: { index } },
+			error: { code: 'JOURNEY_EDIT', context: { index } },
 		})
 		expect(BROWSER_JOURNEY_FIXTURE).toEqual(before)
 	})
@@ -1317,7 +1271,7 @@ describe('journey editing and rendering', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				context: { index: 1 },
 				message: 'Edit 1 is refused: it binds undeclared parameter "missing"',
 			},
@@ -1341,7 +1295,7 @@ describe('journey editing and rendering', () => {
 		).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				message: 'Edit 1 is refused: it declares "unused" but no step binds it',
 				context: { index: 1, reason: 'declares "unused" but no step binds it' },
 			},
@@ -1402,7 +1356,7 @@ describe('journey editing and rendering', () => {
 		expect(result).toMatchObject({
 			success: false,
 			error: {
-				code: 'BROWSER_JOURNEY_EDIT',
+				code: 'JOURNEY_EDIT',
 				message: expect.stringMatching(/^Edit 2 is refused: its? [^\n]+[^.]$/),
 			},
 		})
@@ -1497,19 +1451,17 @@ describe('run rendering', () => {
 				},
 			],
 		}
-		expect(renderBrowserRun(run))
-			.toBe(`Replay of add-kettle stopped at s3 of 5: Step s3 names button "Add to cart", which no element carries.
-s1 Navigated to https://shop.example.test/.
-s2 Clicked e12 link "Alpine Kettle".
-s3 Step s3 names button "Add to cart", which no element carries.`)
+		expect(renderBrowserRun(run)).toBe(
+			'Replay of add-kettle stopped at s3 of 5: Step s3 names button "Add to cart", which no element carries.\ns1 Navigated to https://shop.example.test/.\ns2 Clicked link "Alpine Kettle" [ref=e12].\ns3 Step s3 names button "Add to cart", which no element carries.',
+		)
 	})
 	it('keeps directive-like quoted text and strips appended receipt views', () => {
 		expect(
 			renderBrowserRunResult(
-				'Typed "text; call save" into e1 textbox "Note"; call look.\n\npage "Notes"',
+				'Typed "text; call save" into textbox "Note" [ref=e1]; call read.\n\npage "Notes"',
 			),
-		).toBe('Typed "text; call save" into e1 textbox "Note".')
-		expect(renderBrowserRunResult('Clicked button "Say \\"hi; call save\\""; call look.')).toBe(
+		).toBe('Typed "text; call save" into textbox "Note" [ref=e1].')
+		expect(renderBrowserRunResult('Clicked button "Say \\"hi; call save\\""; call read.')).toBe(
 			'Clicked button "Say \\"hi; call save\\"".',
 		)
 	})
@@ -1562,5 +1514,666 @@ describe('buildBrowserJourney', () => {
 				description: '',
 			}),
 		).toThrow('Invariant 2')
+	})
+})
+
+describe('write conditions and page lifecycle', () => {
+	it('validates journey write conditions independently of a backend', () => {
+		for (const options of [
+			undefined,
+			{},
+			{ exclusive: true },
+			{ exclusive: false },
+			{ revision: 1 },
+		])
+			expect(() => validateBrowserJourneyWriteOptions(options)).not.toThrow()
+		for (const options of [{ revision: 0 }, { revision: Number.NaN }])
+			expect(() => validateBrowserJourneyWriteOptions(options)).toThrow(BrowserError)
+	})
+	it('refuses a released page and a disconnected frame before protocol work', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const page = new BrowserPage(client, 'target', 'session')
+		expect(() => validateBrowserPageOpen(page, client)).not.toThrow()
+		expect(transport.sent).toEqual([])
+		replyOk(transport, 'Target.detachFromTarget')
+		await page.destroy()
+		expect(() => validateBrowserPageOpen(page, client)).toThrow('Browser page is closed')
+		await client.close()
+		expect(() => validateBrowserPageOpen(page, client)).toThrow('Browser frame is disconnected')
+		expect(transport.sent.map((message) => message.method)).toEqual(['Target.detachFromTarget'])
+	})
+})
+
+describe('line projection and whole windows', () => {
+	it('miss placement: reserves the plain miss immediately before the footer', () => {
+		const lines: readonly BrowserLine[] = [
+			'Policy details',
+			'Other details',
+			'Last details '.repeat(30),
+		].map((text) => ({ spans: [{ category: 'text', text }] }))
+		const passage: BrowserPassage = {
+			title: 'Policy',
+			url: '/',
+			lines,
+			from: 2,
+			tabs: [],
+			changed: false,
+			search: 'policy token',
+		}
+		const expected =
+			'page "Policy" / (3 lines)\nThis read shows lines 2–2 of 3; line 3 is not shown yet.\n2: Other details\nNo line from 2 on matches "policy token".\n[lines 2–2 of 3; 1 above, 1 below; call read with from 3 for more]'
+		expect(renderBrowserPassage(passage, expected.length)).toBe(expected)
+		expect(() => renderBrowserPassage(passage, expected.length - 1)).toThrow('cannot hold')
+		expect(renderBrowserPassage({ ...passage, to: 2 }, 4000)).toContain(
+			'\n2: Other details\nNo line from 2 to 2 matches "policy token".\n[lines 2–2',
+		)
+		expect(renderBrowserPassage({ ...passage, from: 1, search: 'missing' }, 4000)).toContain(
+			'\nNo line matches "missing".\n[lines 1–3',
+		)
+	})
+	it('miss placement: leaves an in-range hit under the header unchanged', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Policy details' }] },
+			{ spans: [{ category: 'text', text: 'Other details' }] },
+		]
+		expect(
+			renderBrowserPassage(
+				{ title: 'Policy', url: '/', lines, from: 1, tabs: [], changed: false, search: 'policy' },
+				4000,
+			),
+		).toBe(
+			'page "Policy" / (2 lines)\n1 line matches "policy": 1\n1: Policy details\n2: Other details\n[lines 1–2 of 2; the whole page]',
+		)
+	})
+	it('heading boundary: leaves the last fitting heading for the next read', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Body before' }] },
+			{
+				spans: [
+					{ category: 'syntax', text: '## ' },
+					{ category: 'text', text: 'Next section' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Section body '.repeat(30) }] },
+		]
+		const limit = [
+			'page',
+			'This read shows lines 1–2 of 3; line 3 is not shown yet.',
+			'1: Body before',
+			'2: ## Next section',
+			'[lines 1–2 of 3; 1 below; call read with from 3 for more]',
+		].join('\n').length
+		for (const to of [undefined, 2]) {
+			const result = renderBrowserWindow(lines, 1, to, 'page', limit, 'read', true)
+			expect(result).toBe(
+				'page\nThis read shows lines 1–1 of 3; lines 2–3 are not shown yet.\n1: Body before\n[lines 1–1 of 3; 2 below; call read with from 2 for more]',
+			)
+			expect(result.length).toBeLessThanOrEqual(limit)
+		}
+		const next = renderBrowserWindow(lines, 2, undefined, 'page', 4000, 'read', true)
+		expect(next).toContain('page\n2: ## Next section\n3: Section body')
+		expect(next).toMatch(/\[lines 2–3 of 3; 1 above; end of page\]$/)
+	})
+	it('heading boundary: keeps a heading when it is the only row in the window', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'syntax', text: '# ' },
+					{ category: 'text', text: 'Only heading' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Body' }] },
+		]
+		expect(renderBrowserWindow(lines, 1, 1, 'page', 4000, 'read', true)).toBe(
+			'page\nThis read shows lines 1–1 of 2; line 2 is not shown yet.\n1: # Only heading\n[lines 1–1 of 2; 1 below; call read with from 2 for more]',
+		)
+	})
+	it('heading boundary: keeps a heading at the end of the page', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Body' }] },
+			{
+				spans: [
+					{ category: 'syntax', text: '###### ' },
+					{ category: 'text', text: 'Last heading' },
+				],
+			},
+		]
+		expect(renderBrowserWindow(lines, 1, undefined, 'page', 4000, 'read', true)).toBe(
+			'page\n1: Body\n2: ###### Last heading\n[lines 1–2 of 2; the whole page]',
+		)
+	})
+	it('element best-match: text-only winners keep the plain miss, including ties and reference-shaped text', () => {
+		const lines: readonly BrowserLine[] = [
+			{ spans: [{ category: 'text', text: 'Shipping policy [ref=e9]' }] },
+			{
+				spans: [
+					{ category: 'text', text: 'Shipping policy' },
+					{ category: 'reference', text: ' [ref=e1]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other details' }] },
+			{ spans: [{ category: 'text', text: 'End' }] },
+		]
+		expect(scanBrowserLines(lines, 'policy token')).toEqual([1, 2])
+		for (const to of [3, 4]) {
+			const result = renderBrowserPassage(
+				{
+					title: 'Policy',
+					url: '/',
+					lines,
+					from: 3,
+					to,
+					tabs: [],
+					changed: false,
+					search: 'policy token',
+				},
+				4000,
+			)
+			expect(result).toContain(
+				`No line from 3 ${to === 3 ? 'to 3' : 'on'} matches "policy token".\n[lines 3–${to}`,
+			)
+			expect(result).not.toContain('best match')
+			expect(result).not.toMatch(/^[12]: /m)
+		}
+	})
+	it('element best-match: element winners outside the range are quoted with the window unmoved', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other products' }] },
+		]
+		const result = renderBrowserPassage(
+			{
+				title: 'Shop',
+				url: '/',
+				lines,
+				from: 2,
+				tabs: [],
+				changed: false,
+				search: 'Cedar Tea Tray',
+			},
+			4000,
+		)
+		expect(result).toContain(
+			'No line from 2 on matches "Cedar Tea Tray"; the best match is line 1:\n1: Cedar Tea Tray [ref=e7]\n2: Other products',
+		)
+		expect(result).toMatch(/\[lines 2–2 of 2; 1 above; end of page\]$/)
+	})
+	it('redesign fix: abbreviates the best-match query before reserving the sentence', () => {
+		const search = 'Cedar Tea Tray ' + 'zzzz '.repeat(700)
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other products' }] },
+		]
+		const result = renderBrowserPassage(
+			{ title: 'Shop', url: '/', lines, from: 2, tabs: [], changed: false, search },
+			4000,
+		)
+		expect(result).toContain(
+			`No line from 2 on matches ${JSON.stringify(abbreviateBrowserText(search, 120))}; the best match is line 1:\n1: Cedar Tea Tray [ref=e7]\n2: Other products`,
+		)
+		expect(result.length).toBeLessThanOrEqual(4000)
+	})
+	it('redesign fix: omits a best-match row whole and reserves the miss sentence', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar ' + 'x'.repeat(690) },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other ' + 'y'.repeat(690) }] },
+		]
+		const passage: BrowserPassage = {
+			title: 'Shop',
+			url: '/',
+			lines,
+			from: 2,
+			tabs: [],
+			changed: false,
+			search: 'Cedar',
+		}
+		const result = renderBrowserPassage(passage, 1200)
+		expect(result).toContain(
+			'No line from 2 on matches "Cedar"; the best match is line 1.\n[lines 2–2',
+		)
+		expect(result).not.toMatch(/^1: /m)
+		expect(result).not.toContain('[characters')
+		expect(result).toContain('2: ' + renderBrowserLine(requireValue(lines[1])))
+		expect(result.length).toBeLessThanOrEqual(1200)
+		const minimum = renderBrowserPassage({ ...passage, search: '' }, 4000).length
+		expect(() => renderBrowserPassage(passage, minimum)).toThrow('cannot hold')
+	})
+	it('redesign fix: selects the first of tied page-wide best matches', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray first' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray second' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other products' }] },
+		]
+		expect(scanBrowserLines(lines, 'Cedar Tea Tray')).toEqual([1, 2])
+		expect(
+			renderBrowserPassage(
+				{
+					title: 'Shop',
+					url: '/',
+					lines,
+					from: 3,
+					tabs: [],
+					changed: false,
+					search: 'Cedar Tea Tray',
+				},
+				4000,
+			),
+		).toContain('the best match is line 1:\n1: Cedar Tea Tray first [ref=e7]\n3: Other products')
+	})
+	it('redesign fix: names an explicit shortened range in both miss sentences only', () => {
+		const lines: readonly BrowserLine[] = ['One', 'Two', 'Cedar'].map((text) => ({
+			spans: [
+				{ category: 'text', text },
+				{ category: 'reference', text: ' [ref=e7]' },
+			],
+		}))
+		for (const from of [1, 2]) {
+			expect(renderBrowserSearch(lines, from, 2, 'Missing').text).toBe(
+				`No line from ${from} to 2 matches "Missing".`,
+			)
+			expect(
+				renderBrowserPassage(
+					{
+						title: 'Shop',
+						url: '/',
+						lines,
+						from,
+						to: 2,
+						tabs: [],
+						changed: false,
+						search: 'Cedar',
+					},
+					4000,
+				),
+			).toContain(`No line from ${from} to 2 matches "Cedar"; the best match is line 3:`)
+		}
+		for (const to of [undefined, 3, 99]) {
+			expect(renderBrowserSearch(lines, 2, to, 'Missing').text).toBe(
+				'No line from 2 on matches "Missing".',
+			)
+			expect(renderBrowserSearch(lines, 1, to, 'Missing').text).toBe('No line matches "Missing".')
+			expect(
+				renderBrowserPassage(
+					{
+						title: 'Shop',
+						url: '/',
+						lines,
+						from: 2,
+						...(to === undefined ? {} : { to }),
+						tabs: [],
+						changed: false,
+						search: 'One',
+					},
+					4000,
+				),
+			).toContain('No line from 2 on matches "One"; the best match is line 1:')
+		}
+	})
+	it('redesign fix: soft wraps keep the reference with the end of its name', () => {
+		for (const length of [780, 785, 790, 795, 800, 1590]) {
+			const name = 'Cedar Tea Tray '.repeat(120).slice(0, length).trimEnd()
+			const line: BrowserLine = {
+				spans: [
+					{ category: 'syntax', text: 'link ' },
+					{ category: 'text', text: JSON.stringify(name) },
+					{ category: 'syntax', text: ' ' },
+					{ category: 'reference', text: '[ref=e7]' },
+					{ category: 'text', text: ' /product/p3' },
+				],
+			}
+			const wrapped = wrapBrowserLine(line)
+			const reference = requireValue(
+				wrapped.find((row) => row.spans.some((span) => span.category === 'reference')),
+			)
+			expect(renderBrowserLine(reference)).toMatch(/\S" \[ref=e7\]/)
+			for (const row of wrapped)
+				expect(renderBrowserLine(row).length).toBeLessThanOrEqual(BROWSER_READ_WIDTH)
+			expect(
+				wrapped
+					.flatMap((row) => row.spans.filter((span) => span.category === 'reference'))
+					.map((span) => span.text),
+			).toEqual(['[ref=e7]'])
+		}
+	})
+	it('redesign fix: partial headers use a boolean independent of header and tool text', () => {
+		const lines: readonly BrowserLine[] = ['One', 'Two', 'Three'].map((text) => ({
+			spans: [{ category: 'text', text }],
+		}))
+		expect(renderBrowserWindow(lines, 1, 1, 'page custom', 4000)).not.toContain('This read')
+		expect(renderBrowserWindow(lines, 1, 1, 'Custom header', 4000, 'read', true)).toContain(
+			'Custom header\nThis read shows lines 1–1 of 3; lines 2–3 are not shown yet.',
+		)
+		expect(renderBrowserWindow(lines, 1, 1, 'page custom', 4000, 'read', false)).not.toContain(
+			'This read',
+		)
+		expect(renderBrowserWindow(lines, 1, 3, 'Custom header', 4000, 'read', true)).not.toContain(
+			'This read',
+		)
+	})
+	it('line redesign: references follow names in rows and inline spans and never score', () => {
+		const nodes = createBrowserOutlineNodes([
+			{ role: 'link', name: 'Cedar Tea Tray', reference: 'e7', properties: { url: '/product/p3' } },
+			{ role: 'textbox', name: 'Name', reference: 'e16' },
+			{ role: 'button', name: '', reference: 'e17' },
+		]).map((node) => (node.reference === 'e16' ? { ...node, value: 'Ada Lovelace' } : node))
+		const outline = renderBrowserOutline('https://shop.test/', '', nodes, 100)
+		expect(outline.lines.map(renderBrowserLine)).toEqual([
+			'link "Cedar Tea Tray" [ref=e7] /product/p3',
+			'textbox "Name" [ref=e16] value="Ada Lovelace"',
+			'button [ref=e17]',
+		])
+		expect(renderBrowserOutlineRow(requireValue(nodes[1]))).toBe(
+			'textbox "Name" [ref=e16] value="Ada Lovelace"',
+		)
+		for (const search of ['ref', 'e16', '[ref=e17]'])
+			expect(scanBrowserLines(outline.lines, search)).toEqual([])
+		expect(scanBrowserLines(outline.lines, 'Ada')).toEqual([2])
+		expect(describeBrowserRefusal('e7', 'GONE')).toBe(
+			'Element [ref=e7] is gone because the page changed; call read for fresh refs.',
+		)
+	})
+	it('line redesign: partial headers reserve room, name the actual window, and use singular only for one remaining line', () => {
+		const lines: readonly BrowserLine[] = Array.from({ length: 12 }, (_, index) => ({
+			spans: [{ category: 'text', text: `Paragraph ${index + 1}` }],
+		}))
+		const passage: BrowserPassage = {
+			title: 'Shop',
+			url: 'https://shop.test/',
+			lines,
+			from: 1,
+			tabs: [],
+			changed: false,
+		}
+		expect(renderBrowserPassage({ ...passage, to: 10 }, 4000).split('\n')[1]).toBe(
+			'This read shows lines 1–10 of 12; lines 11–12 are not shown yet.',
+		)
+		expect(renderBrowserPassage({ ...passage, to: 11 }, 4000).split('\n')[1]).toBe(
+			'This read shows lines 1–11 of 12; line 12 is not shown yet.',
+		)
+		expect(renderBrowserPassage(passage, 4000)).not.toContain('This read')
+		expect(renderBrowserPassage({ ...passage, from: 12 }, 4000)).not.toContain('This read')
+		expect(renderBrowserPassage({ ...passage, lines: [] }, 4000)).not.toContain('This read')
+		for (const result of [
+			renderBrowserPassage(passage, 250),
+			renderBrowserReceiptWindow(passage, 'Clicked.', 250),
+		]) {
+			expect(result.length).toBeLessThanOrEqual(250)
+			const end = Number(requireValue(/\[lines 1–(\d+) of 12;/.exec(result))[1])
+			expect(result).toContain(
+				`This read shows lines 1–${end} of 12; lines ${end + 1}–12 are not shown yet.`,
+			)
+			expect(result).toContain(`call read with from ${end + 1} for more]`)
+		}
+	})
+	it('line redesign: range misses show the page best match without moving the window and bound long notes', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{
+				spans: [
+					{ category: 'text', text: 'Cedar Tea Tray' },
+					{ category: 'reference', text: ' [ref=e7]' },
+				],
+			},
+			{ spans: [{ category: 'text', text: 'Other products' }] },
+			{ spans: [{ category: 'text', text: 'Shipping' }] },
+		]
+		const passage: BrowserPassage = {
+			title: 'Shop',
+			url: 'https://shop.test/',
+			lines,
+			from: 3,
+			to: 3,
+			tabs: [],
+			changed: false,
+			search: 'Cedar Tea Tray',
+		}
+		const result = renderBrowserPassage(passage, 4000)
+		expect(result).toContain(
+			'This read shows lines 3–3 of 4; line 4 is not shown yet.\nNo line from 3 to 3 matches "Cedar Tea Tray"; the best match is line 2:\n2: Cedar Tea Tray [ref=e7]\n3: Other products',
+		)
+		expect(result).toMatch(/\[lines 3–3 of 4; 2 above, 1 below; call read with from 4 for more\]$/)
+		expect(renderBrowserPassage({ ...passage, from: 1 }, 4000)).not.toContain('best match')
+		expect(
+			renderBrowserPassage({ ...passage, from: 1, to: 1, search: 'Tea Tray' }, 4000),
+		).toContain(
+			'No line from 1 to 1 matches "Tea Tray"; the best match is line 2:\n2: Cedar Tea Tray [ref=e7]\n1: Cedar',
+		)
+		expect(renderBrowserPassage({ ...passage, search: 'Absent' }, 4000)).toContain(
+			'No line from 3 to 3 matches "Absent".',
+		)
+		expect(renderBrowserPassage({ ...passage, search: 'Absent' }, 4000)).not.toContain('best match')
+		const bounded = renderBrowserPassage({ ...passage, search: 'Cedar '.repeat(2000) }, 400)
+		expect(bounded.length).toBeLessThanOrEqual(400)
+		expect(bounded).toContain('\n3: Other products\n[lines 3–3')
+	})
+	it('line redesign: changed projections carry the change note from line one', () => {
+		const passage: BrowserPassage = {
+			title: 'Shop',
+			url: 'https://shop.test/',
+			lines: [{ spans: [{ category: 'text', text: 'Changed' }] }],
+			from: 1,
+			tabs: [],
+			changed: true,
+		}
+		expect(renderBrowserPassage(passage, 4000)).toContain('The page changed')
+		expect(renderBrowserPassage({ ...passage, changed: false }, 4000)).not.toContain(
+			'The page changed',
+		)
+	})
+	it('audit repair 13: extreme passages and receipt windows keep the bound and every addressed row whole', () => {
+		for (const title of ['Title', '\u0000'.repeat(5000), '𐐷'.repeat(2500)]) {
+			for (const receipt of ['Clicked.', '𐐷'.repeat(5000)]) {
+				const lines: readonly BrowserLine[] = [
+					...wrapBrowserLine({ spans: [{ category: 'text', text: '𐐷'.repeat(5000) }] }),
+					...Array.from({ length: 500 }, (): BrowserLine => ({
+						spans: [{ category: 'text', text: 'Matching prose' }],
+					})),
+				]
+				const passage: BrowserPassage = {
+					title,
+					url: 'https://example.test/' + 'x'.repeat(5000),
+					lines,
+					from: 1,
+					search: 'Matching',
+					changed: true,
+					note: 'Moved '.repeat(1000),
+					tabs: Array.from({ length: 400 }, (_, index) => ({
+						id: 't' + index,
+						title,
+						url: 'https://example.test/',
+						current: index === 0,
+					})),
+				}
+				for (const result of [
+					renderBrowserPassage(passage, 4000),
+					renderBrowserReceiptWindow({ ...passage, search: '' }, receipt, 4000),
+				]) {
+					expect(result.length).toBeLessThanOrEqual(4000)
+					expect(result.isWellFormed()).toBe(true)
+					const rows = [...result.matchAll(/^(\d+): (.*)$/gm)]
+					expect(rows.length).toBeGreaterThan(0)
+					for (const row of rows)
+						expect(row[2]).toBe(renderBrowserLine(lines[Number(row[1]) - 1] ?? { spans: [] }))
+					expect(result).toMatch(/\[lines \d+–\d+ of \d+;.*\]$/)
+				}
+			}
+		}
+	})
+	it('audit repair 10: copy explains line coordinates and the search opening within the journey bound', () => {
+		const definitions = Object.values(BROWSER_TOOL_COPY).map(
+			({ name, description, parameters }) => ({ name, description, parameters }),
+		)
+		const journeys = definitions.filter(({ name }) =>
+			['record', 'save', 'journeys', 'edit', 'replay', 'forget', 'capture'].includes(name),
+		)
+		expect(JSON.stringify(BROWSER_TOOL_COPY.read.parameters)).toContain(
+			'Words to find; the reply opens one line before the first match at or after from.',
+		)
+		expect(BROWSER_TOOL_COPY.journeys.description).toContain('as numbered lines')
+		expect(JSON.stringify(BROWSER_TOOL_COPY.journeys.parameters)).toContain('1 for the top')
+		expect(JSON.stringify(BROWSER_TOOL_COPY.journeys.parameters)).toContain(
+			'Default: as many lines as fit.',
+		)
+		expect(
+			JSON.stringify(journeys).length +
+				JSON.stringify({
+					secret: readProperty(
+						readProperty(BROWSER_TOOL_COPY.type.parameters, 'properties'),
+						'secret',
+					),
+				}).length,
+		).toBeLessThanOrEqual(3400)
+	})
+	it('audit repair 1: redacts raw and normalized secrets before a hard wrap can split them', () => {
+		const secret = 'private'.repeat(150)
+		const outline = renderBrowserOutline(
+			'https://example.test/',
+			'',
+			createBrowserOutlineNodes([{ role: 'textbox', reference: 'e1', name: '  Tide  4821  ' }]).map(
+				(node) => ({ ...node, value: secret }),
+			),
+			100,
+			[secret, '  Tide  4821  '],
+		)
+		expect(outline.lines.map(renderBrowserLine)).toEqual([
+			'textbox "[redacted]" [ref=e1] value="[redacted]"',
+		])
+		expect(redactBrowserText('Tide 4821', ['  Tide  4821  '])).toBe('[redacted]')
+	})
+	it('audit repair 4: role and state words never score as text', () => {
+		const outline = renderBrowserOutline(
+			'https://example.test/',
+			'',
+			createBrowserOutlineNodes([
+				{ role: 'button', reference: 'e1', name: 'Save', properties: { pressed: true } },
+				{ role: 'textbox', reference: 'e2', name: 'Buyer' },
+				{ role: 'checkbox', reference: 'e3', name: 'Agree', properties: { checked: true } },
+			]),
+			100,
+		)
+		for (const word of ['button', 'text', 'check', 'true', 'pressed'])
+			expect(scanBrowserLines(outline.lines, word)).toEqual([])
+		expect(scanBrowserLines(outline.lines, 'Save')).toEqual([1])
+	})
+	it('wraps whitespace and hard tokens before numbering without splitting a code point', () => {
+		const paragraph = 'An ordinary paragraph. '.repeat(50).trim()
+		const ordinary = wrapBrowserLine({ spans: [{ category: 'text', text: paragraph }] })
+		expect(ordinary.map(renderBrowserLine).join(' ')).toBe(paragraph)
+		const token = '𐐷'.repeat(1200)
+		const hard = wrapBrowserLine({ spans: [{ category: 'text', text: token }] })
+		expect(
+			hard
+				.map(renderBrowserLine)
+				.map((line) => line.replace(/^↳/, ''))
+				.join(''),
+		).toBe(token)
+		for (const line of [...ordinary, ...hard].map(renderBrowserLine)) {
+			expect(line.length).toBeLessThanOrEqual(BROWSER_READ_WIDTH)
+			expect(line.isWellFormed()).toBe(true)
+		}
+		expect(hard.slice(1).every((line) => renderBrowserLine(line).startsWith('↳'))).toBe(true)
+	})
+	it('searches only text spans, uses best scores, Unicode words, and prefixes of at least four letters', () => {
+		const lines: readonly BrowserLine[] = [
+			{
+				spans: [
+					{ category: 'reference', text: 'e12345' },
+					{ category: 'syntax', text: ' value="' },
+					{ category: 'text', text: 'Cedar schedules 日本語' },
+					{ category: 'syntax', text: '"' },
+				],
+			},
+			{ spans: [{ category: 'text', text: '/delivery?season=winter' }] },
+			{ spans: [{ category: 'text', text: 'Cedar schedule' }] },
+		]
+		expect(scanBrowserLines(lines, 'e12345 value')).toEqual([])
+		expect(scanBrowserLines(lines, 'cedar schedule')).toEqual([1, 3])
+		expect(scanBrowserLines(lines, 'deliver')).toEqual([2])
+		expect(scanBrowserLines(lines, 'ced')).toEqual([])
+		expect(scanBrowserLines(lines, '日本語')).toEqual([1])
+		expect(scanBrowserLines(lines, 'cedar schedule', 2)).toEqual([3])
+	})
+	it('bounds metadata, matching numbers and complete rows together without changing addresses', () => {
+		const lines: readonly BrowserLine[] = Array.from({ length: 120 }, () => ({
+			spans: [{ category: 'text', text: 'Matching ' + '𐐷'.repeat(300) }],
+		}))
+		const passage: BrowserPassage = {
+			url: 'https://example.test/' + 'u'.repeat(5000),
+			title: '"'.repeat(5000),
+			lines,
+			from: 40,
+			search: 'matching ' + 'a'.repeat(5000),
+			changed: true,
+			note: 'm'.repeat(5000),
+			tabs: Array.from({ length: 100 }, (_, i) => ({
+				id: 't' + i,
+				title: 't'.repeat(500),
+				url: 'https://example.test/',
+				current: i === 0,
+			})),
+		}
+		const window = renderBrowserPassage(passage, BROWSER_TOOL_LIMIT)
+		expect(window.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		expect(window).toContain('\n40: Matching')
+		expect(window).not.toContain('\n39:')
+		expect(window).toContain('more tabs omitted')
+		expect(window).toContain('and 31 more; add words to narrow')
+		expect(window).toContain('changed')
+		expect(window).toMatch(/call read with from \d+ for more\]$/)
+	})
+	it('renders each footer form, clamps at the end and refuses invalid ranges', () => {
+		expect(renderBrowserFooter(1, 2, 2)).toBe('[lines 1–2 of 2; the whole page]')
+		expect(renderBrowserFooter(2, 2, 2)).toBe('[lines 2–2 of 2; 1 above; end of page]')
+		expect(renderBrowserFooter(1, 1, 2)).toBe(
+			'[lines 1–1 of 2; 1 below; call read with from 2 for more]',
+		)
+		expect(renderBrowserFooter(1, 0, 0)).toBe('[empty page; the whole page]')
+		for (const from of [0, -1, 0.5, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1])
+			expect(() => validateBrowserLines(from)).toThrow(/line|Line|from|to/)
+		expect(() => validateBrowserLines(2, 1)).toThrow(/line|Line|from|to/)
+		expect(() => validateBrowserLines(3, undefined, 2)).toThrow(/line|Line|from|to/)
+		const lines: readonly BrowserLine[] = [{ spans: [{ category: 'text', text: 'Only row' }] }]
+		expect(
+			renderBrowserPassage(
+				{ url: 'about:blank', title: '', lines, from: 1, to: 100, tabs: [], changed: false },
+				4000,
+			),
+		).toContain('[lines 1–1 of 1; the whole page]')
+		expect(() =>
+			renderBrowserPassage(
+				{ url: 'about:blank', title: '', lines, from: 1, tabs: [], changed: false },
+				20,
+			),
+		).toThrow('next complete line')
 	})
 })

@@ -7,19 +7,11 @@ import { isFiniteNumber } from '@orkestrel/contract'
 /**
  * Controls the Chromium virtual-time budget for deterministic page timers.
  *
- * @example
- * ```ts
- * import { BrowserClock } from '@orkestrel/browser'
- *
- * const clock = new BrowserClock(page)
- * await clock.install(Date.UTC(2026, 0, 1))
- * await clock.advance(5_000)
- * await clock.uninstall()
- * ```
+ * @remarks The owner exposes this entity through `page.clock`.
  */
 export class BrowserClock implements BrowserClockInterface {
 	readonly #frame: BrowserFrameInterface
-	#installed = false
+	#active = false
 	#advancing = false
 	#budgetResolve: (() => void) | undefined
 	readonly #budgetHandler = this.#handleBudget.bind(this)
@@ -28,14 +20,14 @@ export class BrowserClock implements BrowserClockInterface {
 		this.#frame = frame
 	}
 
-	get installed(): boolean {
-		return this.#installed
+	get active(): boolean {
+		return this.#active
 	}
 
-	async install(time = Date.now()): Promise<void> {
-		if (this.#installed) throw new BrowserError('Browser clock is already installed')
+	async start(time = Date.now()): Promise<void> {
+		if (this.#active) throw new BrowserError('ARGUMENT', 'Browser clock is already active')
 		if (!isFiniteNumber(time) || time < 0) {
-			throw new BrowserError('Browser clock time must be a non-negative finite epoch', undefined, {
+			throw new BrowserError('ARGUMENT', 'Browser clock time must be a non-negative finite epoch', {
 				time,
 			})
 		}
@@ -43,7 +35,7 @@ export class BrowserClock implements BrowserClockInterface {
 			policy: 'pause',
 			initialVirtualTime: time / 1000,
 		})
-		this.#installed = true
+		this.#active = true
 	}
 
 	async pause(): Promise<void> {
@@ -65,7 +57,7 @@ export class BrowserClock implements BrowserClockInterface {
 		this.#assert()
 		this.#idle()
 		if (!isFiniteNumber(ms) || ms < 0) {
-			throw new BrowserError('Browser clock advance must be non-negative and finite', undefined, {
+			throw new BrowserError('ARGUMENT', 'Browser clock advance must be non-negative and finite', {
 				ms,
 			})
 		}
@@ -84,7 +76,12 @@ export class BrowserClock implements BrowserClockInterface {
 			throw error
 		}
 		const timer = setTimeout(() => {
-			deferred.reject(new BrowserError('Browser virtual-time budget timed out'))
+			deferred.reject(
+				new BrowserError('TIMEOUT', 'Browser virtual-time budget timed out', {
+					operation: 'advance',
+					ms,
+				}),
+			)
 		}, BROWSER_DEFAULT_TIMEOUT_MS)
 		let failure: unknown
 		try {
@@ -109,22 +106,23 @@ export class BrowserClock implements BrowserClockInterface {
 		if (failure !== undefined) throw failure
 	}
 
-	async uninstall(): Promise<void> {
-		if (!this.#installed) return
+	async stop(): Promise<void> {
+		if (!this.#active) return
 		this.#idle()
 		await this.#frame.send('Emulation.setVirtualTimePolicy', {
 			policy: 'advance',
 			maxVirtualTimeTaskStarvationCount: 10_000,
 		})
-		this.#installed = false
+		this.#active = false
 	}
 
 	#assert(): void {
-		if (!this.#installed) throw new BrowserError('Browser clock is not installed')
+		if (!this.#active) throw new BrowserError('ARGUMENT', 'Browser clock is not active')
 	}
 
 	#idle(): void {
-		if (this.#advancing) throw new BrowserError('Browser clock advance is already active')
+		if (this.#advancing)
+			throw new BrowserError('ARGUMENT', 'Browser clock advance is already active')
 	}
 
 	#handleBudget(): void {

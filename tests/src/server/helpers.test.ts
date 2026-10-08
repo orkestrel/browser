@@ -2,8 +2,8 @@
  * src/server/helpers.ts tests.
  *
  * `fetchCDPTargets` is exercised against a real
- * in-process HTTP server (`createCDPTestServer`). `findSystemBrowsers` /
- * `findSystemBrowser` are exercised through their `SystemBrowserOptions`
+ * in-process HTTP server (`createCDPTestServer`). `findSystemBrowsers`
+ * is exercised through its `SystemBrowserOptions`
  * override bag with real temp files/dirs (`node:fs`) so every assertion is
  * deterministic across machines — no mocking, no dependency on what happens
  * to be installed. `launchBrowserProcess` argument construction is verified
@@ -23,7 +23,6 @@ import { createScratch, readErrorCode } from '@orkestrel/test/server'
 import {
 	createBrowserProfile,
 	findSystemBrowsers,
-	findSystemBrowser,
 	findStorePaths,
 	parseBrowserEngine,
 	launchBrowserProcess,
@@ -43,7 +42,7 @@ import {
 	BROWSER_SERVER_UNAVAILABLE,
 	BROWSER_SERVER_UNRESOLVED,
 } from '@src/server'
-import { BrowserConnectionError, isBrowserConnectionError } from '@src/core'
+import { BrowserError, isBrowserError } from '@src/core'
 import { createCDPTestServer, readExitedProcessId } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
@@ -113,7 +112,7 @@ describe('eager U4 profile and loss helpers', () => {
 				BROWSER_SERVER_UNAVAILABLE,
 				new Error('No Chromium browser found.'),
 			),
-		).toBe('BROWSER_SERVER_UNAVAILABLE: No Chromium browser found.')
+		).toBe('SERVER_UNAVAILABLE: No Chromium browser found.')
 	})
 	it('distinguishes the live process from an exited child', async () => {
 		expect(probeProcess(process.pid)).toBe(true)
@@ -144,7 +143,7 @@ describe('eager U4 profile and loss helpers', () => {
 	})
 
 	it('codes loss messages and names the unknown outcome, lost state, and conditional recovery', () => {
-		const cause = new BrowserConnectionError('Browser process did not exit after SIGKILL', {
+		const cause = new BrowserError('CONNECTION', 'Browser process did not exit after SIGKILL', {
 			pid: 4242,
 		})
 		for (const code of [
@@ -166,13 +165,13 @@ describe('eager U4 profile and loss helpers', () => {
 		expect(text).toContain('The outcome is unknown')
 		expect(text).toContain('Browse did not repeat the call')
 		expect(text).toContain(
-			'The next call acquires a browser that starts at about:blank, or answers BROWSER_SERVER_UNAVAILABLE when none can serve',
+			'The next call acquires a browser that starts at about:blank, or answers SERVER_UNAVAILABLE when none can serve',
 		)
 		for (const state of [
 			'https://example.test/cart',
 			'tabs',
 			'every element reference',
-			'retained reading',
+			'last projection',
 			'dialogs',
 			'holds',
 			'unsaved recording',
@@ -239,9 +238,9 @@ afterEach(async () => {
 	for (const scratch of scratches.splice(0)) scratch.destroy()
 })
 
-describe('findSystemBrowser', () => {
-	it('returns undefined when every candidate source is empty', () => {
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [] })
+describe('findSystemBrowsers first candidate', () => {
+	it('leaves the first candidate undefined when every source is empty', () => {
+		const found = findSystemBrowsers({ env: {}, paths: [], names: [], stores: [] })[0]
 		expect(found).toBeUndefined()
 	})
 
@@ -251,7 +250,7 @@ describe('findSystemBrowser', () => {
 		const file = join(scratch.path, 'chrome')
 		scratch.write('chrome', '')
 
-		const found = findSystemBrowser({ env: {}, paths: [file], names: [], stores: [] })
+		const found = findSystemBrowsers({ env: {}, paths: [file], names: [], stores: [] })[0]
 
 		expect(found).toEqual({ executable: file, engine: 'chrome' })
 	})
@@ -264,12 +263,12 @@ describe('findSystemBrowser', () => {
 		scratch.write('env-chrome', '')
 		scratch.write('path-chrome', '')
 
-		const found = findSystemBrowser({
+		const found = findSystemBrowsers({
 			env: { PLAYWRIGHT_EXECUTABLE_PATH: envFile },
 			paths: [pathFile],
 			names: [],
 			stores: [],
-		})
+		})[0]
 
 		expect(found?.executable).toBe(envFile)
 	})
@@ -280,12 +279,12 @@ describe('findSystemBrowser', () => {
 		const chromePathFile = join(scratch.path, 'chrome-path-chrome')
 		scratch.write('chrome-path-chrome', '')
 
-		const found = findSystemBrowser({
+		const found = findSystemBrowsers({
 			env: { CHROME_PATH: chromePathFile },
 			paths: [],
 			names: [],
 			stores: [],
-		})
+		})[0]
 
 		expect(found?.executable).toBe(chromePathFile)
 	})
@@ -307,7 +306,7 @@ describe('findSystemBrowser', () => {
 		scratch.write(relative, '')
 		const binary = join(scratch.path, relative)
 
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [scratch.path] })
+		const found = findSystemBrowsers({ env: {}, paths: [], names: [], stores: [scratch.path] })[0]
 
 		expect(found).toEqual({ executable: binary, engine: 'chromium' })
 	})
@@ -318,7 +317,7 @@ describe('findSystemBrowser', () => {
 		const link = join(scratch.path, 'chromium')
 		scratch.write('chromium', '')
 
-		const found = findSystemBrowser({ env: {}, paths: [], names: [], stores: [scratch.path] })
+		const found = findSystemBrowsers({ env: {}, paths: [], names: [], stores: [scratch.path] })[0]
 
 		expect(found).toEqual({ executable: link, engine: 'chromium' })
 	})
@@ -563,7 +562,7 @@ describe('readBrowserEndpoint', () => {
 		const pending = readBrowserEndpoint(stream, new AbortController().signal)
 		stream.end('[noise] starting\n')
 		await expect(pending).rejects.toThrow(/before reporting a CDP endpoint/)
-		await expect(pending).rejects.toSatisfy(isBrowserConnectionError)
+		await expect(pending).rejects.toMatchObject({ name: 'BrowserError', code: 'CONNECTION' })
 	})
 
 	it('rejects with the reason when the signal aborts', async () => {
@@ -599,8 +598,8 @@ describe('fetchCDPTargets', () => {
 		const result = await fetchCDPTargets(19_993, 100)
 		expect(result.success).toBe(false)
 		if (result.success) throw new Error('An unreachable endpoint must not succeed')
-		expect(isBrowserConnectionError(result.error)).toBe(true)
-		expect(result.error.code).toBe('BROWSER_CONNECTION_ERROR')
+		expect(isBrowserError(result.error) && result.error.code === 'CONNECTION').toBe(true)
+		expect(result.error.code).toBe('CONNECTION')
 	})
 
 	it('accepts targets with empty title/url', async () => {

@@ -95,7 +95,7 @@ describe('BrowserWorker', () => {
 			'https://example.com/w.js',
 			'worker',
 		)
-		detachedWorker.detach()
+		detachedWorker.destroy()
 
 		const closed = await createConnectedCDPClient()
 		replyOk(closed.transport, 'Target.closeTarget')

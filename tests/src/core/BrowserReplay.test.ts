@@ -12,7 +12,7 @@ import type { CDPSentMessage } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool } from '@orkestrel/tool'
-import { createRecorder, requireValue, waitForCondition } from '@orkestrel/test'
+import { createRecorder, readProperty, requireValue, waitForCondition } from '@orkestrel/test'
 import {
 	BrowserContext,
 	BrowserReplay,
@@ -21,6 +21,7 @@ import {
 	createBrowserToolset,
 	renderBrowserRun,
 	validateBrowserRun,
+	parseBrowserJourney,
 } from '@src/core'
 import {
 	BROWSER_SELECT_SECRET,
@@ -31,10 +32,161 @@ import {
 	createBrowserJourneyMalformedInputs,
 	createBrowserViewDouble,
 	PNG_BASE64,
+	BROWSER_ELEMENT_AX_FIXTURE,
+	BROWSER_LEGACY_JOURNEY_JSON,
+	emitBrowserNavigation,
 	replyOk,
 } from '../../setup.js'
 
 describe('BrowserReplay', () => {
+	it('journey start: navigates from another page and waits for load before resolving s1', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			evaluation: (message) =>
+				fixture.transport.reply(message.id, { result: { value: fixture.page.url } }),
+			accessibility: (message) =>
+				fixture.transport.reply(message.id, {
+					nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.filter(
+						(node) =>
+							message.params?.['frameId'] !== 'child' &&
+							(fixture.page.url === 'https://example.test/catalogue' || node.nodeId !== 'link'),
+					),
+				}),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		const runs = new MemoryBrowserRunStore()
+		const journey = {
+			...createBrowserJourneyFixture([
+				{ action: 'click', arguments: {}, target: { role: 'link', name: 'Home' } },
+			]),
+			start: 'https://example.test/catalogue',
+		}
+		try {
+			await toolset.start()
+			expect((await fixture.page.elements.find({ role: 'link', name: 'Home' })).length).toBe(0)
+			fixture.transport.onSend('Page.navigate', (message) => {
+				fixture.transport.reply(message.id, { frameId: 'main', loaderId: 'catalogue' })
+				emitBrowserNavigation(
+					fixture.transport,
+					'session-main',
+					'main',
+					journey.start,
+					'catalogue',
+					['request', 'start', 'commit'],
+				)
+			})
+			const replaying = new BrowserReplay(toolset, { journey }, { runs }).execute()
+			await waitForCondition(
+				'replay starts navigation',
+				() => fixture.transport.sent.some((message) => message.method === 'Page.navigate'),
+				{ budget: 1000 },
+			)
+			expect(
+				fixture.transport.sent.some((message) => message.method === 'Input.dispatchMouseEvent'),
+			).toBe(false)
+			emitBrowserNavigation(fixture.transport, 'session-main', 'main', journey.start, 'catalogue', [
+				'load',
+			])
+			fixture.transport.event('Page.loadEventFired', { timestamp: 1 }, 'session-main')
+			const run = await replaying
+			expect(run.outcome).toBe('complete')
+			expect(run.steps.map((step) => step.id)).toEqual(['s1'])
+			expect(run.steps[0]?.result).toContain('Clicked link "Home"')
+			expect(run.journey.start).toBe(journey.start)
+			expect((await runs.get(journey.name, run.id))?.journey.start).toBe(journey.start)
+			expect(() => validateBrowserRun(run)).not.toThrow()
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: replays in place when the tab is already on the start page', async () => {
+		const fixture = await createBrowserElementFixture({
+			local: true,
+			evaluation: (message) =>
+				fixture.transport.reply(message.id, { result: { value: fixture.page.url } }),
+		})
+		const toolset = createBrowserToolset(fixture.page)
+		const runs = new MemoryBrowserRunStore()
+		const journey = {
+			...createBrowserJourneyFixture([
+				{ action: 'click', arguments: {}, target: { role: 'link', name: 'Home' } },
+			]),
+			start: fixture.page.url,
+		}
+		try {
+			await toolset.start()
+			const run = await new BrowserReplay(toolset, { journey }, { runs }).execute()
+			expect(fixture.transport.sent.some((message) => message.method === 'Page.navigate')).toBe(
+				false,
+			)
+			expect(run.outcome).toBe('complete')
+			expect(run.steps.map((step) => [step.id, step.outcome])).toEqual([['s1', 'done']])
+			expect(run.journey.start).toBe(fixture.page.url)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: a failed load stops before s1 and persists the navigation failure', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		const runs = new MemoryBrowserRunStore()
+		const journey = { ...createBrowserJourneyFixture(), start: 'https://example.test/unreachable' }
+		try {
+			await toolset.start()
+			fixture.transport.onSend('Page.navigate', (message) =>
+				fixture.transport.reply(message.id, { errorText: 'net::ERR_CONNECTION_REFUSED' }),
+			)
+			replyOk(fixture.transport, 'Page.stopLoading')
+			const run = await new BrowserReplay(toolset, { journey }, { runs }).execute()
+			expect(run.outcome).toBe('stopped')
+			expect(run.steps).toEqual([])
+			expect(renderBrowserRun(run)).toBe(
+				'Replay of check-ready stopped before s1 of 1: its start page https://example.test/unreachable did not load: Navigation failed: net::ERR_CONNECTION_REFUSED.',
+			)
+			expect(await runs.get(journey.name, run.id)).toEqual(run)
+			expect(() => validateBrowserRun(run)).not.toThrow()
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: enforces the toolset schemes before s1', async () => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page, { schemes: ['https:'] })
+		const journey = { ...createBrowserJourneyFixture(), start: 'http://example.test/' }
+		try {
+			await toolset.start()
+			const run = await new BrowserReplay(toolset, { journey }).execute()
+			expect(run.outcome).toBe('stopped')
+			expect(run.steps).toEqual([])
+			expect(renderBrowserRun(run)).toBe(
+				'Replay of check-ready stopped before s1 of 1: its start page http://example.test/ did not load: Navigation refused: the http: scheme is not allowed; use https:.',
+			)
+			expect(fixture.transport.sent.some((message) => message.method === 'Page.navigate')).toBe(
+				false,
+			)
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+	it('journey start: an older file loads and replays on the current page', async () => {
+		const stored: unknown = JSON.parse(BROWSER_LEGACY_JOURNEY_JSON)
+		const journey = requireValue(parseBrowserJourney(readProperty(stored, 'journey')))
+		const view = createBrowserViewDouble()
+		const toolset = createBrowserToolset(view)
+		try {
+			await toolset.start()
+			const run = await new BrowserReplay(toolset, { journey }).execute()
+			expect(journey).not.toHaveProperty('start')
+			expect(run.outcome).toBe('complete')
+			expect(view.calls).toEqual(['wait Legacy ready', 'outline'])
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	it('keeps an upstream secret select refusal out of the recorded run and render', async () => {
 		const fixture = await createBrowserSecretSelectFixture(
 			`No option ${JSON.stringify(BROWSER_SELECT_SECRET)} or ${BROWSER_SELECT_SECRET}`,
@@ -94,7 +246,7 @@ describe('BrowserReplay', () => {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs, inputs: { password: 'Ready' } }).execute(),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_INVALID',
+				code: 'JOURNEY_INVALID',
 				context: { parameter: 'password' },
 			})
 			expect(holds.count).toBe(0)
@@ -117,7 +269,7 @@ describe('BrowserReplay', () => {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs }).execute(),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_FORMAT',
+				code: 'STORE_FORMAT',
 				context: { action: 'replay', placement: 'dom' },
 			})
 			expect(holds.count).toBe(0)
@@ -142,7 +294,7 @@ describe('BrowserReplay', () => {
 		try {
 			await expect(
 				new BrowserReplay(toolset, { journey }, { runs }).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'status' } })
+			).rejects.toMatchObject({ code: 'JOURNEY_INPUT', context: { parameter: 'status' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			await expect(
@@ -152,7 +304,7 @@ describe('BrowserReplay', () => {
 					{ runs, inputs: { status: 'Ready', extra: 'unknown' } },
 				).execute(),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_INPUT',
+				code: 'JOURNEY_INPUT',
 				context: { parameter: 'extra' },
 				message: 'Journey check-ready has no parameter named "extra".',
 			})
@@ -164,7 +316,7 @@ describe('BrowserReplay', () => {
 			])
 			await expect(
 				new BrowserReplay(toolset, { journey: gap }, { runs }).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_GAP', context: { step: 's2' } })
+			).rejects.toMatchObject({ code: 'JOURNEY_GAP', context: { step: 's2' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			expect((await runs.list(journey.name)).entries).toEqual([])
@@ -190,7 +342,7 @@ describe('BrowserReplay', () => {
 					{ journey },
 					{ inputs: createBrowserJourneyMalformedInputs('status', 42) },
 				).execute(),
-			).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_INPUT', context: { parameter: 'status' } })
+			).rejects.toMatchObject({ code: 'JOURNEY_INPUT', context: { parameter: 'status' } })
 			expect(holds.count).toBe(0)
 			expect(view.calls).toEqual([])
 			const omitted = await new BrowserReplay(
@@ -199,7 +351,7 @@ describe('BrowserReplay', () => {
 				{ inputs: createBrowserJourneyMalformedInputs('status', undefined) },
 			).execute()
 			expect(omitted).toMatchObject({ inputs: { status: 'Ready' }, outcome: 'complete' })
-			expect(view.calls).toEqual(['wait Ready'])
+			expect(view.calls).toEqual(['wait Ready', 'outline'])
 		} finally {
 			await toolset.destroy()
 		}
@@ -227,7 +379,7 @@ describe('BrowserReplay', () => {
 			])
 			try {
 				await expect(new BrowserReplay(toolset, { journey }).execute()).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_PLACEMENT',
+					code: 'JOURNEY_PLACEMENT',
 					context: { step: 's2', action, placement: 'dom' },
 				})
 				expect(holds.count).toBe(0)
@@ -263,7 +415,7 @@ describe('BrowserReplay', () => {
 					},
 				},
 			).execute()
-			expect(view.calls).toEqual(['wait Ready'])
+			expect(view.calls).toEqual(['wait Ready', 'outline'])
 			expect(run).toMatchObject({
 				revision: 7,
 				inputs: { status: 'Ready' },
@@ -295,7 +447,7 @@ describe('BrowserReplay', () => {
 			expect(run.outcome).toBe('stopped')
 			expect(run.steps).toHaveLength(1)
 			expect(run.steps[0]?.outcome).toBe('timeout')
-			expect(view.calls).toEqual(['wait Absent'])
+			expect(view.calls).toEqual(['wait Absent', 'outline'])
 		} finally {
 			await toolset.destroy()
 		}
@@ -492,8 +644,8 @@ describe('BrowserReplay', () => {
 				},
 				{
 					runs: {
-						open: async (name, options) => ({
-							...(await memory.open(name, options)),
+						create: async (name, options) => ({
+							...(await memory.create(name, options)),
 							directory: '/opened-run',
 						}),
 						capture: async (_slot, name) => {
@@ -697,7 +849,7 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: runs.capture.bind(runs),
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
@@ -772,7 +924,7 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: runs.capture.bind(runs),
 						get: runs.get.bind(runs),
 						list: runs.list.bind(runs),
@@ -804,7 +956,7 @@ describe('BrowserReplay', () => {
 		await toolset.start()
 		replyOk(fixture.transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
 		const runs = new MemoryBrowserRunStore()
-		const slot = { ...(await runs.open('check-ready')), directory: '/opened-run' }
+		const slot = { ...(await runs.create('check-ready')), directory: '/opened-run' }
 		const signal = new AbortController().signal
 		try {
 			const run = await new BrowserReplay(
@@ -814,7 +966,7 @@ describe('BrowserReplay', () => {
 				},
 				{
 					runs: {
-						open: async () => slot,
+						create: async () => slot,
 						capture: async (opened, name, bytes, options) => {
 							captures.handler(opened, name, bytes, options)
 							return 'stored.png'
@@ -879,8 +1031,8 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: async (name, options) => ({
-							...(await runs.open(name, options)),
+						create: async (name, options) => ({
+							...(await runs.create(name, options)),
 							directory: '/opened-run',
 						}),
 						capture: async (slot, name, bytes) => {
@@ -941,7 +1093,7 @@ describe('BrowserReplay', () => {
 						},
 					},
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: async (_slot, name, bytes) => {
 							captures.handler(name, bytes)
 							return name
@@ -1021,7 +1173,7 @@ describe('BrowserReplay', () => {
 				{ journey: createBrowserJourneyFixture() },
 				{
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: async (_slot, name) => {
 							captures.handler(name)
 							return name
@@ -1062,7 +1214,7 @@ describe('BrowserReplay', () => {
 				{
 					on: { step: emitted.handler },
 					runs: {
-						open: runs.open.bind(runs),
+						create: runs.create.bind(runs),
 						capture: async () => {
 							throw new Error('capture refused')
 						},
@@ -1167,8 +1319,8 @@ describe('BrowserReplay', () => {
 				{
 					inputs: { password: 'private-replay-value' },
 					runs: {
-						open: async (name, options) => ({
-							...(await runs.open(name, options)),
+						create: async (name, options) => ({
+							...(await runs.create(name, options)),
 							directory: '/secret-run',
 						}),
 						capture: runs.capture.bind(runs),

@@ -32,7 +32,7 @@ import {
  * fires none of those events, so a reading there stays current across it. A cross-document
  * navigation also clears every element reference. `destroy()` releases the listeners and every
  * reference, and fails every pending wait with a `BrowserError` coded
- * `BROWSER_DOCUMENT_DESTROYED`; after it, `title()`, `read()`, `wait()`, and the element manager's
+ * `DOCUMENT_DESTROYED`; after it, `title()`, `read()`, `wait()`, and the element manager's
  * `outline()`, `find()`, and `wait()` reject with that error, and a second `destroy()` does
  * nothing more. `trusted` is `false`: no action grants user activation, and
  * every event the view's actions dispatch themselves carries `isTrusted` `false`. The `submit`
@@ -59,14 +59,14 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 		const document = options.document
 		if (!isBrowserDocument(document) || document.defaultView === null) {
 			throw new BrowserError(
+				'DOCUMENT',
 				'Browser DOM view requires a document attached to a window',
-				'BROWSER_DOCUMENT',
 			)
 		}
 		if (document === globalThis.document && options.own !== true) {
 			throw new BrowserError(
+				'DOCUMENT_OWN',
 				'Browser DOM view drives globalThis.document only with own: true, because an action that navigates the realm it runs in cannot return',
-				'BROWSER_DOCUMENT_OWN',
 			)
 		}
 		this.#window = document.defaultView
@@ -126,9 +126,7 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 	}
 
 	destroy(): void {
-		this.#release.abort(
-			new BrowserError('Browser DOM view was destroyed', 'BROWSER_DOCUMENT_DESTROYED'),
-		)
+		this.#release.abort(new BrowserError('DOCUMENT_DESTROYED', 'Browser DOM view was destroyed'))
 		this.#listeners.abort()
 		this.#elements.clear()
 	}

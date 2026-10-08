@@ -143,7 +143,7 @@ describe('BrowserLauncher eager U2', () => {
 		try {
 			expect(await child.ending).toEqual({ code: 1, signal: null })
 			expect(child.stderr).toBe(
-				'browse: BROWSER_SERVER_OPTIONS: pool.contexts must be an integer from 1 through 4\n',
+				'browse: ARGUMENT: pool.contexts must be an integer from 1 through 4\n',
 			)
 		} finally {
 			await child.destroy()
@@ -184,13 +184,13 @@ describe('BrowserLauncher eager U2', () => {
 			first.emitter.on('disconnect', killed.handler)
 			requireValue(launcher.browsers[0], 'first double').kill()
 			expect(killed.count).toBe(1)
-			await expect(first.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+			await expect(first.ping()).rejects.toMatchObject({ code: 'DISCONNECTED' })
 			await second.connect()
 			const dropped = createRecorder<readonly []>()
 			second.emitter.on('disconnect', dropped.handler)
 			requireValue(launcher.browsers[1], 'second double').drop()
 			expect(dropped.count).toBe(0)
-			await expect(second.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+			await expect(second.ping()).rejects.toMatchObject({ code: 'DISCONNECTED' })
 			await waitForCondition('deferred disconnect', () => dropped.count === 1)
 		} finally {
 			await Promise.all(launcher.browsers.map((browser) => browser.destroy()))
@@ -287,7 +287,7 @@ describe('BrowserLauncher eager U2', () => {
 		const second = launcher.launch({})
 		try {
 			expect(browser.endpoint).toBeUndefined()
-			await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+			await expect(browser.ping()).rejects.toMatchObject({ code: 'DISCONNECTED' })
 			await browser.connect()
 			expect(browser.endpoint).toMatch(/^ws:\/\/127\.0\.0\.1\/devtools\/browser\//)
 			await browser.ping()
@@ -297,12 +297,12 @@ describe('BrowserLauncher eager U2', () => {
 			expect(calls.calls).toEqual([[1], [2], [1]])
 			await browser.disconnect()
 			expect(browser.endpoint).toBeUndefined()
-			await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_NOT_CONNECTED_ERROR' })
+			await expect(browser.ping()).rejects.toMatchObject({ code: 'DISCONNECTED' })
 		} finally {
 			await browser.destroy()
 			await second.destroy()
 		}
-		await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_DESTROYED_ERROR' })
+		await expect(browser.ping()).rejects.toMatchObject({ code: 'CLOSED' })
 	})
 
 	it('bounds silent pings and propagates version failures and aborts', async () => {
@@ -317,7 +317,7 @@ describe('BrowserLauncher eager U2', () => {
 		const refusing = launcher.launch({})
 		try {
 			await silent.connect()
-			await expect(silent.ping()).rejects.toMatchObject({ code: 'BROWSER_CDP_TIMEOUT_ERROR' })
+			await expect(silent.ping()).rejects.toMatchObject({ code: 'TIMEOUT' })
 			const controller = new AbortController()
 			const pending = silent.ping({ signal: controller.signal })
 			const reason = new Error('ping aborted')
@@ -475,13 +475,13 @@ describe('waitForProcessExit', () => {
 })
 
 describe('startBrowseChild', () => {
-	it('refuses a first look that answers an error, and the child exits 1 at the end of its input', async () => {
+	it('refuses a first read that answers an error, and the child exits 1 at the end of its input', async () => {
 		const scratch = createTempDirectory()
 		const child = new BrowseChild(join(WORKSPACE, 'dist/bin/main.js'), scratch.path, {
 			BROWSE_EXECUTABLE: join(scratch.path, 'missing/chrome'),
 		})
 		try {
-			await expect(startBrowseChild(child)).rejects.toThrow(/^the first look answered .*ENOENT/u)
+			await expect(startBrowseChild(child)).rejects.toThrow(/^the first read answered .*ENOENT/u)
 			endBrowseChild(child, 'EOF')
 			expect(await child.ending).toStrictEqual({ code: 1, signal: null })
 		} finally {
@@ -545,7 +545,7 @@ describe('readBundleImports', () => {
 			"import { isRecord } from '@orkestrel/contract';",
 			'var BrowserError$1 = class extends Error {};',
 			'function isBrowserErrorLike(value) { return value instanceof BrowserError$1 }',
-			'const BrowserErrorCode = "BROWSER_JOURNEY_FILE";',
+			'const BrowserErrorCode = "STORE_FILE";',
 			'class isRecord {}',
 		].join('\n')
 		expect(readBundleImports(bundle, '../core/index.js')).toStrictEqual({
@@ -1241,11 +1241,11 @@ describe('renderFixturePage', () => {
 		)
 
 		expect(imports).toStrictEqual({ imports: { ...FIXTURE_DOCUMENT_IMPORTS } })
-		expect(page).toContain("import { createDocumentToolset } from '/dist/src/browser/index.js'")
+		expect(page).toContain("import { createBrowserDOMView } from '/dist/src/browser/index.js'")
 		expect(page).toContain("import { createModelContext } from '@orkestrel/mcp/browser'")
 		expect(page).toContain(`import { installModelContext } from '${FIXTURE_REGISTRY_MODULE}'`)
 		expect(page).toContain(
-			'createDocumentToolset({ document, own: true, source: createModelContext({ document }) })',
+			'createBrowserToolset(view, { source: createModelContext({ document }) })',
 		)
 		expect(page).toContain('window.documentToolset = toolset')
 	})

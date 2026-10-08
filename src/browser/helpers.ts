@@ -1,7 +1,7 @@
 import type { BrowserReadingInput } from '@src/core'
 import type { BrowserNameContext } from './types.js'
 import { attempt, isObject, isString } from '@orkestrel/contract'
-import { BROWSER_RESULT_LIMIT, BrowserResultLimitError, normalizeBrowserName } from '@src/core'
+import { BROWSER_RESULT_LIMIT, normalizeBrowserName, BrowserError } from '@src/core'
 import {
 	BROWSER_CONTENT_NAMED_ROLES,
 	BROWSER_CONTEXT_TARGETS,
@@ -41,7 +41,7 @@ export function isBrowserDocument(value: unknown): value is Document {
  * @param node - The root whose rendered markup is captured; its owner document supplies `URL`
  * and `title`
  * @returns The capture's `url`, `title`, and `html`
- * @throws Thrown as a `BrowserResultLimitError` when the serialized capture is longer than
+ * @throws Thrown as a `BrowserError` when the serialized capture is longer than
  * `BROWSER_RESULT_LIMIT` characters, with `length` and `limit` in its context.
  */
 export function readBrowserCapture(node: Element): BrowserReadingInput {
@@ -384,7 +384,7 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 	capture.html = root?.outerHTML ?? ''
 	const length = JSON.stringify(capture).length
 	if (length > BROWSER_RESULT_LIMIT) {
-		throw new BrowserResultLimitError('Document capture exceeds BROWSER_RESULT_LIMIT', {
+		throw new BrowserError('RESULT_LIMIT', 'Document capture exceeds BROWSER_RESULT_LIMIT', {
 			length,
 			limit: BROWSER_RESULT_LIMIT,
 		})

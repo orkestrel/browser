@@ -1,4 +1,13 @@
+import { decodeBase64, encodeBase64 } from '@orkestrel/codec'
 import type {
+	BrowserJourneyInput,
+	BrowserPageInterface,
+	CDPClientInterface,
+	BrowserJourneyWriteOptions,
+	BrowserLine,
+	BrowserLineSpan,
+	BrowserPassage,
+	BrowserSearch,
 	BrowserJourney,
 	BrowserStoreFault,
 	BrowserJourneyEdit,
@@ -12,7 +21,7 @@ import type {
 	BrowserChord,
 	BrowserCookie,
 	BrowserCookieInput,
-	BrowserContextOptions,
+	BrowserIsolateOptions,
 	BrowserCoverageRange,
 	BrowserDocument,
 	BrowserEmulationOptions,
@@ -20,7 +29,6 @@ import type {
 	BrowserFunctionCoverage,
 	BrowserHAR,
 	BrowserHAREntry,
-	BrowserHARPending,
 	BrowserHARValue,
 	BrowserLayout,
 	BrowserMetric,
@@ -40,10 +48,10 @@ import type {
 	BrowserPDFOptions,
 	BrowserMedia,
 	BrowserRequest,
+	BrowserResponse,
 	BrowserRouteQuery,
 	BrowserQuad,
 	BrowserReadResult,
-	BrowserReadMatch,
 	BrowserReceipt,
 	BrowserElementInterface,
 	BrowserSnapshotInput,
@@ -56,6 +64,8 @@ import type {
 	BrowserStyleCoverage,
 	BrowserTeardownFunction,
 	BrowserViewport,
+	BrowserElementReason,
+	BrowserElementSubject,
 } from './types.js'
 import type { ToolDefinition } from '@orkestrel/tool'
 import {
@@ -73,6 +83,12 @@ import {
 } from '@orkestrel/contract'
 import {
 	BROWSER_TOOL_COPY,
+	BROWSER_READ_WIDTH,
+	BROWSER_TOOL_CUT_FOOTER,
+	BROWSER_READ_LINES,
+	BROWSER_READ_MATCHES,
+	BROWSER_READ_CONTEXT,
+	BROWSER_READ_CHANGED_NOTE,
 	BROWSER_ACTION_OUTCOMES,
 	BROWSER_ACTION_STAGES,
 	BROWSER_NAVIGATION_REASONS,
@@ -83,10 +99,8 @@ import {
 	BROWSER_JOURNEY_FORMAT_VERSION,
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BROWSER_JOURNEY_PARAMETER_PATTERN,
-	BASE64_CHARS,
 	BROWSER_OUTLINE_OMITTED_ROLES,
 	BROWSER_SEARCH_PATTERN,
-	BASE64_LOOKUP,
 	BROWSER_RESULT_LIMIT,
 	BROWSER_REGISTRY_OUTPUT_LIMIT,
 	BROWSER_RESULT_LIMIT_PATTERN,
@@ -101,12 +115,7 @@ import {
 	isBrowserJourneyTab,
 	isBrowserSecretBinding,
 } from './validators.js'
-import {
-	BrowserElementError,
-	BrowserError,
-	BrowserResultLimitError,
-	isBrowserError,
-} from './errors.js'
+import { BrowserError, isBrowserError } from './errors.js'
 import {
 	parseBrowserAXString,
 	parseBrowserCookiePartition,
@@ -123,6 +132,36 @@ import {
  */
 export function normalizeBrowserName(value: string): string {
 	return value.trim().replace(/\s+/g, ' ')
+}
+
+/**
+ * Describes an element refusal, adding a fresh-reference instruction for `GONE`.
+ *
+ * @param subject - Element reference or named subject
+ * @param reason - Reason the operation was refused
+ * @param detail - Specific explanation replacing the default reason text
+ * @returns The refusal message with its final punctuation
+ *
+ * @example
+ * ```ts
+ * describeBrowserRefusal('e4', 'GONE')
+ * // 'Element [ref=e4] is gone because the page changed; call read for fresh refs.'
+ * ```
+ */
+export function describeBrowserRefusal(
+	subject: string | BrowserElementSubject,
+	reason: BrowserElementReason,
+	detail?: string,
+): string {
+	const name = isString(subject) ? `Element [ref=${subject}]` : subject.subject
+	const text =
+		detail ??
+		(reason === 'GONE'
+			? 'is gone because the page changed'
+			: reason === 'UNTRUSTED'
+				? 'needs a trusted event'
+				: reason.toLowerCase())
+	return `${name} ${text}${reason === 'GONE' ? '; call read for fresh refs.' : '.'}`
 }
 
 /**
@@ -150,11 +189,11 @@ export function filterBrowserOutline(
 }
 
 /**
- * Renders one outline row: the node's reference, its role, its quoted accessible name, and the
- * states it carries.
+ * Renders one outline row: the node's role, quoted accessible name, reference, and states.
  *
  * @remarks
- * After the name the row appends `value="V"` when the node carries a non-empty value,
+ * The reference renders as `[ref=eN]` after the name, or after the role when the name is empty.
+ * After the reference the row appends `value="V"` when the node carries a non-empty value,
  * `pressed=true|false|mixed`, `expanded=true|false`, and `selected=true|false` when present,
  * `[checked]` when checked, `[disabled]` when disabled, and `[tool=NAME]` for a page tool's form,
  * in that order. A node without a reference renders without one.
@@ -180,13 +219,13 @@ export function filterBrowserOutline(
  * 	properties: { checked: 'true' },
  * 	session: 'main',
  * 	reference: 'e4',
- * }) // 'e4 checkbox "Gift wrap" [checked]'
+ * }) // 'checkbox "Gift wrap" [ref=e4] [checked]'
  * ```
  */
 export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
-	const name = JSON.stringify(normalizeBrowserName(node.name ?? ''))
+	const name = normalizeBrowserName(node.name ?? '')
 	const role = node.role ?? 'unknown'
-	let row = node.reference === undefined ? `${role} ${name}` : `${node.reference} ${role} ${name}`
+	let row = `${role}${name === '' ? '' : ` ${JSON.stringify(name)}`}${node.reference === undefined ? '' : ` [ref=${node.reference}]`}`
 	if (node.value !== undefined && node.value !== '')
 		row += ` value=${JSON.stringify(String(node.value))}`
 	for (const key of ['pressed', 'expanded', 'selected']) {
@@ -198,72 +237,6 @@ export function renderBrowserOutlineRow(node: BrowserOutlineNode): string {
 	if (node.properties['disabled'] === true) row += ' [disabled]'
 	if (node.tool !== undefined) row += ` [tool=${node.tool}]`
 	return row
-}
-
-/**
- * Returns the referenced outline nodes whose role and accessible name share the most words with a
- * search, in document order.
- *
- * @remarks
- * The search and each node's role and name are lowercased and split into whole words by
- * `BROWSER_SEARCH_PATTERN`, so a word shorter than 3 letters or digits never counts, and words
- * compare whole, with no substring or prefix match. A node scores the number of distinct search
- * words equal to one of its words, and every node with the highest score above 0 matches. Only a
- * node an outline renders as a referenced row takes part: one that is not ignored, carries a
- * reference, and whose role is not omitted, a heading, or text.
- *
- * @param nodes - Ordered accessibility rows
- * @param search - The words to match
- * @returns The best-matching nodes in document order; empty when no node shares a word
- *
- * @example
- * ```ts
- * import { scanBrowserOutline } from '@orkestrel/browser'
- *
- * const node = {
- * 	parent: undefined,
- * 	children: [],
- * 	backend: undefined,
- * 	frame: undefined,
- * 	ignored: false,
- * 	description: undefined,
- * 	value: undefined,
- * 	properties: {},
- * 	session: 'main',
- * }
- * const nodes = [
- * 	{ ...node, id: '1', role: 'button', name: 'Close', reference: 'e1' },
- * 	{ ...node, id: '2', role: 'button', name: 'Archive', reference: 'e2' },
- * ]
- * scanBrowserOutline(nodes, 'archive dialog button').map((match) => match.reference) // ['e2']
- * ```
- */
-export function scanBrowserOutline(
-	nodes: readonly BrowserOutlineNode[],
-	search: string,
-): readonly BrowserOutlineNode[] {
-	const words = collectBrowserWords(search)
-	if (words.size === 0) return []
-	let best = 0
-	const scored: Array<{ readonly node: BrowserOutlineNode; readonly score: number }> = []
-	for (const node of nodes) {
-		const role = node.role ?? ''
-		if (
-			node.ignored ||
-			node.reference === undefined ||
-			BROWSER_OUTLINE_OMITTED_ROLES.has(role) ||
-			role === 'heading' ||
-			role === 'StaticText'
-		)
-			continue
-		const own = collectBrowserWords(`${role} ${node.name ?? ''}`)
-		let score = 0
-		for (const word of words) if (own.has(word)) score += 1
-		if (score === 0) continue
-		best = Math.max(best, score)
-		scored.push({ node, score })
-	}
-	return scored.filter((entry) => entry.score === best).map((entry) => entry.node)
 }
 
 /**
@@ -284,179 +257,662 @@ export function collectBrowserWords(text: string): ReadonlySet<string> {
 	)
 }
 
-/**
- * Matches the lines sharing the most distinct search words, in document order.
- *
- * @param text - The complete projection
- * @param search - Words to match, using the outline's word rule
- * @returns The best-scoring lines and their original UTF-16 offsets; empty without a shared word
- *
- * @example
- * ```ts
- * import { scanBrowserText } from '@orkestrel/browser'
- * scanBrowserText('Cart\nBlue kettle', 'kettle') // [{ offset: 5, text: 'Blue kettle' }]
- * ```
- */
-export function scanBrowserText(text: string, search: string): readonly BrowserReadMatch[] {
-	const words = collectBrowserWords(search)
-	if (words.size === 0) return []
-	let best = 0
-	const scored: Array<{ readonly match: BrowserReadMatch; readonly score: number }> = []
-	for (const line of text.matchAll(/[^\r\n]+/g)) {
-		const own = collectBrowserWords(line[0])
-		let score = 0
-		for (const word of words) if (own.has(word)) score += 1
-		if (score === 0) continue
-		best = Math.max(best, score)
-		scored.push({ match: { offset: line.index, text: line[0] }, score })
-	}
-	return scored.filter((entry) => entry.score === best).map((entry) => entry.match)
-}
-
-/**
- * Renders matching rows in at most half the available reply room.
- *
- * @remarks
- * An oversized first row is cut with an ellipsis without splitting a surrogate pair, reserving
- * room for the first later row that can fit beside it only when the cut keeps the leading token
- * through its first space. Otherwise it cuts without reserving. Later rows that do not fit are
- * skipped. An empty collection or a cut with no character before the ellipsis produces no block.
- *
- * @param heading - The match count and search, ending with a colon
- * @param rows - Matching rows in document order
- * @param room - Characters available in the reply
- * @returns The bounded block with a trailing blank line, or an empty string
- *
- * @example
- * ```ts
- * import { renderBrowserMatches } from '@orkestrel/browser'
- * renderBrowserMatches('Matches:', ['[5] Cart'], 100) // 'Matches:\n[5] Cart\n\n'
- * ```
- */
-export function renderBrowserMatches(
-	heading: string,
-	rows: readonly string[],
-	room: number,
-): string {
-	const half = Math.floor(room / 2)
-	let text = `${heading}\n`
-	let count = 0
-	for (const row of rows) {
-		const space = half - text.length - 2
-		if (space < 1) break
-		if (row.length > space) {
-			if (count > 0) continue
-			let end = space - 1
-			const later = rows.slice(1).find((candidate) => candidate.length + 2 <= space)
-			if (later !== undefined && end - later.length - 1 >= row.indexOf(' ') + 1)
-				end -= later.length + 1
-			const last = row.charCodeAt(end - 1)
-			if (last >= 0xd800 && last <= 0xdbff) end -= 1
-			if (end < 1) break
-			text += `${row.slice(0, end)}…\n`
-		} else text += `${row}\n`
-		count += 1
-	}
-	return count === 0 ? '' : `${text}\n`
-}
-
-/**
- * Renders document-order text and referenced elements with a bounded element count.
- *
- * @remarks
- * Each referenced row renders through `renderBrowserOutlineRow`, and the closing
- * `(COUNT of TOTAL elements)` line counts the rows included and available. `matches` holds the
- * rows `scanBrowserOutline` returns for `search`, and `focus` the last referenced row whose node
- * carries a `focused` property of `true`; both reach past `limit`.
- *
+/** Renders document-order accessibility lines with a bounded element count.
  * @param url - Document address
  * @param title - Document title
- * @param nodes - Ordered accessibility rows
- * @param limit - Maximum referenced rows to include
- * @param search - The words whose best-matching rows `matches` lists. Default: none, which lists
- * none
- * @returns Outline text, element counts, matching rows, and the focused row
- *
+ * @param nodes - Ordered accessibility nodes from one capture
+ * @param limit - Maximum referenced elements
+ * @param secrets - Registered text to redact before wrapping
+ * @returns Wrapped lines, element counts, and the focused element
  * @example
  * ```ts
- * import { renderBrowserOutline } from '@orkestrel/browser'
- *
- * const node = {
- * 	parent: undefined,
- * 	children: [],
- * 	backend: undefined,
- * 	frame: undefined,
- * 	ignored: false,
- * 	description: undefined,
- * 	value: undefined,
- * 	session: 'main',
- * }
- * const outline = renderBrowserOutline(
- * 	'https://shop.example/cart',
- * 	'Cart',
- * 	[
- * 		{ ...node, id: '1', role: 'button', name: 'Close', properties: {}, reference: 'e1' },
- * 		{ ...node, id: '2', role: 'button', name: 'Archive', properties: { focused: true }, reference: 'e2' },
- * 	],
- * 	1,
- * 	'archive button',
- * )
- * outline.text // 'page "Cart" https://shop.example/cart\ne1 button "Close"\n(1 of 2 elements)'
- * outline.matches // ['e2 button "Archive"']
- * outline.focus // 'e2 button "Archive"'
+ * const outline = renderBrowserOutline('https://shop.example/', 'Shop', [], 150)
+ * outline.lines // []
  * ```
  */
 export function renderBrowserOutline(
 	url: string,
 	title: string,
-	nodes: readonly BrowserOutlineNode[],
+	source: readonly BrowserOutlineNode[],
 	limit: number,
-	search?: string,
+	secrets: readonly string[] = [],
 ): BrowserOutline {
-	const rows = [`page ${JSON.stringify(title)} ${url}`]
-	const sessions = new Map<string, Map<string, BrowserOutlineNode>>()
-	for (const node of nodes) {
-		let parents = sessions.get(node.session)
-		if (parents === undefined) {
-			parents = new Map<string, BrowserOutlineNode>()
-			sessions.set(node.session, parents)
-		}
-		if (!parents.has(node.id)) parents.set(node.id, node)
-	}
+	const nodes = source.map((node) => ({
+		...node,
+		name: node.name === undefined ? undefined : redactBrowserText(node.name, secrets),
+		value: node.value === undefined ? undefined : redactBrowserText(String(node.value), secrets),
+	}))
+	const indexed = new Map<string, BrowserOutlineNode>()
+	for (const node of nodes)
+		if (!indexed.has(`${node.session}:${node.id}`)) indexed.set(`${node.session}:${node.id}`, node)
+	const omitted = new Set<BrowserOutlineNode>()
+	const rows: BrowserLine[] = []
 	let count = 0
 	let total = 0
-	let focus: BrowserOutlineNode | undefined
-	for (const node of nodes) {
-		if (node.ignored || BROWSER_OUTLINE_OMITTED_ROLES.has(node.role ?? '')) continue
+	let focus: string | undefined
+	for (const [position, node] of nodes.entries()) {
+		if (node.ignored) continue
+		if (node.reference !== undefined) {
+			total += 1
+			if (node.properties['focused'] === true) focus = renderBrowserOutlineRow(node)
+		}
+		if (omitted.has(node)) continue
 		const name = normalizeBrowserName(node.name ?? '')
+		const parent = indexed.get(`${node.session}:${node.parent}`)
+		let spans: readonly BrowserLineSpan[] = []
 		if (node.role === 'heading') {
-			rows.push(`# ${name}`)
-			continue
+			const children = nodes.filter((candidate) => belongsBrowserOutline(candidate, node, indexed))
+			const references = children.filter((child) => child.reference !== undefined && !child.ignored)
+			const folded = references.length === 1 ? references[0] : undefined
+			const level = node.properties['level']
+			spans = [
+				{
+					category: 'syntax',
+					text: `${'#'.repeat(isInteger(level) && level > 0 ? Math.min(level, 6) : 1)} `,
+				},
+			]
+			if (
+				folded !== undefined &&
+				normalizeBrowserName(folded.name ?? '') === name &&
+				count < limit
+			) {
+				spans = [...spans, ...renderBrowserSpans(folded, url)]
+				count += 1
+				for (const child of children) omitted.add(child)
+			} else {
+				spans = [...spans, { category: 'text', text: name }]
+				for (const child of children) if (child.role === 'StaticText') omitted.add(child)
+			}
+		} else if (node.role === 'row' || node.role === 'LayoutTableRow') {
+			const children = nodes.filter((candidate) => belongsBrowserOutline(candidate, node, indexed))
+			const cells = children.filter((child) =>
+				['cell', 'gridcell', 'columnheader', 'rowheader', 'LayoutTableCell'].includes(
+					child.role ?? '',
+				),
+			)
+			const joined: BrowserLineSpan[] = []
+			for (const cell of cells) {
+				if (joined.length > 0) joined.push({ category: 'syntax', text: ' | ' })
+				const controls = children.filter(
+					(child) => child.reference !== undefined && belongsBrowserOutline(child, cell, indexed),
+				)
+				if (controls.length === 0)
+					joined.push({ category: 'text', text: normalizeBrowserName(cell.name ?? '') })
+				else {
+					const contents = children.filter(
+						(child) =>
+							belongsBrowserOutline(child, cell, indexed) &&
+							(child.reference !== undefined || child.role === 'StaticText'),
+					)
+					for (const control of contents) {
+						if (controls.some((owner) => belongsBrowserOutline(control, owner, indexed))) continue
+						if (control.reference === undefined) {
+							joined.push(
+								{ category: 'text', text: normalizeBrowserName(control.name ?? '') },
+								{ category: 'syntax', text: ' ' },
+							)
+							continue
+						}
+						if (count >= limit) continue
+						joined.push(...renderBrowserSpans(control, url))
+						joined.push({ category: 'syntax', text: ' ' })
+						count += 1
+					}
+					if (joined.at(-1)?.text === ' ') joined.pop()
+				}
+			}
+			spans = joined
+			for (const child of children) omitted.add(child)
+		} else if (node.role === 'image' || node.role === 'img') {
+			if (name !== '')
+				spans = [
+					{ category: 'syntax', text: 'image "' },
+					{ category: 'text', text: JSON.stringify(name).slice(1, -1) },
+					{ category: 'syntax', text: '"' },
+				]
+		} else if (node.role === 'StaticText') {
+			let owner = parent
+			const visited = new Set<string>()
+			while (owner !== undefined && owner.reference === undefined && !visited.has(owner.id)) {
+				visited.add(owner.id)
+				owner = indexed.get(`${owner.session}:${owner.parent}`)
+			}
+			if (
+				name !== '' &&
+				!(owner !== undefined && normalizeBrowserName(owner.name ?? '') !== '') &&
+				name !== normalizeBrowserName(parent?.name ?? '') &&
+				name !== normalizeBrowserName(String(owner?.value ?? ''))
+			) {
+				let text = node.name ?? ''
+				for (let index = position + 1; index < nodes.length; index += 1) {
+					if (parent === undefined) break
+					const next = nodes[index]
+					if (next?.role === 'InlineTextBox') continue
+					if (
+						next?.role !== 'StaticText' ||
+						next.parent !== node.parent ||
+						next.session !== node.session
+					)
+						break
+					text += next.name ?? ''
+					omitted.add(next)
+				}
+				spans = [{ category: 'text', text: normalizeBrowserName(redactBrowserText(text, secrets)) }]
+			}
+		} else if (node.reference !== undefined && count < limit) {
+			spans = renderBrowserSpans(node, url)
+			count += 1
 		}
-		if (node.role === 'StaticText') {
-			const parent =
-				node.parent === undefined ? undefined : sessions.get(node.session)?.get(node.parent)
-			if (name !== '' && name !== normalizeBrowserName(parent?.name ?? '')) rows.push(name)
-			continue
+		if (spans.length === 0) continue
+		const list = nodes.find(
+			(candidate) =>
+				candidate.role === 'listitem' && belongsBrowserOutline(node, candidate, indexed),
+		)
+		if (list !== undefined && !omitted.has(list) && node.role !== 'heading') {
+			spans = [{ category: 'syntax', text: '- ' }, ...spans]
+			omitted.add(list)
 		}
-		if (node.reference === undefined) continue
-		total += 1
-		if (node.properties['focused'] === true) focus = node
-		if (count >= limit) continue
-		count += 1
-		rows.push(renderBrowserOutlineRow(node))
+		rows.push(
+			...wrapBrowserLine({
+				spans: spans.map((span) => ({ ...span, text: redactBrowserText(span.text, secrets) })),
+			}),
+		)
 	}
-	rows.push(`(${count} of ${total} elements)`)
 	return {
-		url,
-		title,
-		text: rows.join('\n'),
-		count,
-		total,
-		matches:
-			search === undefined ? [] : scanBrowserOutline(nodes, search).map(renderBrowserOutlineRow),
-		focus: focus === undefined ? undefined : renderBrowserOutlineRow(focus),
+		url: redactBrowserText(url, secrets),
+		title: redactBrowserText(title, secrets),
+		lines: rows,
+		listed: count,
+		found: total,
+		focus: focus === undefined ? undefined : redactBrowserText(focus, secrets),
 	}
+}
+
+/** Checks whether a node descends from another within one session's captured tree.
+ * @param node - Candidate descendant
+ * @param ancestor - Owning node
+ * @param indexed - Nodes indexed by session and accessibility identity
+ * @returns True if the node descends from the ancestor; false otherwise
+ */
+export function belongsBrowserOutline(
+	node: BrowserOutlineNode,
+	ancestor: BrowserOutlineNode,
+	indexed: ReadonlyMap<string, BrowserOutlineNode>,
+): boolean {
+	const seen = new Set<string>()
+	let parent = node.parent
+	while (parent !== undefined && !seen.has(parent)) {
+		if (node.session === ancestor.session && parent === ancestor.id) return true
+		seen.add(parent)
+		parent = indexed.get(`${node.session}:${parent}`)?.parent
+	}
+	return false
+}
+
+/** Renders an element as searchable text separated from references and syntax.
+ * @param node - Captured element
+ * @param url - Owning document address
+ * @returns Ordered row spans
+ */
+export function renderBrowserSpans(
+	node: BrowserOutlineNode,
+	url: string,
+): readonly BrowserLineSpan[] {
+	const spans: BrowserLineSpan[] = []
+	spans.push({ category: 'syntax', text: node.role ?? 'unknown' })
+	const name = normalizeBrowserName(node.name ?? '')
+	if (name !== '')
+		spans.push(
+			{ category: 'syntax', text: ' "' },
+			{ category: 'text', text: JSON.stringify(name).slice(1, -1) },
+			{ category: 'syntax', text: '"' },
+		)
+	if (node.reference !== undefined)
+		spans.push(
+			{ category: 'syntax', text: ' ' },
+			{ category: 'reference', text: `[ref=${node.reference}]` },
+		)
+	const href = node.properties['url']
+	if (node.role === 'link' && isString(href)) {
+		const address = new URL(href, url)
+		spans.push(
+			{ category: 'syntax', text: ' ' },
+			{
+				category: 'text',
+				text:
+					address.origin === new URL(url).origin
+						? `${address.pathname}${address.search}${address.hash}`
+						: address.href,
+			},
+		)
+	}
+	if (node.value !== undefined && node.value !== '') {
+		spans.push(
+			{ category: 'syntax', text: ' value="' },
+			{
+				category: 'text',
+				text: JSON.stringify(normalizeBrowserName(String(node.value))).slice(1, -1),
+			},
+			{ category: 'syntax', text: '"' },
+		)
+	}
+	for (const key of ['pressed', 'expanded', 'selected']) {
+		const value = node.properties[key]
+		if (isString(value) || isBoolean(value))
+			spans.push(
+				{ category: 'syntax', text: ` ${key}=` },
+				{ category: 'syntax', text: String(value) },
+			)
+	}
+	if (node.properties['checked'] === true || node.properties['checked'] === 'true')
+		spans.push({ category: 'syntax', text: ' [checked]' })
+	if (node.properties['disabled'] === true) spans.push({ category: 'syntax', text: ' [disabled]' })
+	if (node.tool !== undefined)
+		spans.push(
+			{ category: 'syntax', text: ' [tool=' },
+			{ category: 'text', text: node.tool },
+			{ category: 'syntax', text: ']' },
+		)
+	return spans
+}
+
+/** Joins a projected line's spans without adding an address.
+ * @param line - Projected line
+ * @returns Rendered content
+ */
+export function renderBrowserLine(line: BrowserLine): string {
+	return line.spans.map((span) => span.text).join('')
+}
+
+/** Finds the first line contributing a whitespace-normalized match across consecutive text spans.
+ * @param lines - Wrapped projection
+ * @param text - Visible text to locate
+ * @returns One-based opening line, or 1 when no match exists
+ */
+export function findBrowserText(lines: readonly BrowserLine[], text: string): number {
+	const ends: number[] = []
+	let joined = ''
+	for (const line of lines) {
+		if (joined !== '' && line.spans[0]?.text !== '↳') joined += ' '
+		joined += normalizeBrowserName(
+			line.spans
+				.filter((span) => span.category === 'text')
+				.map((span) =>
+					span.text.replace(/\\(?:["\\/bfnrt]|u[\da-fA-F]{4})/g, (escape) =>
+						String(JSON.parse('"' + escape + '"')),
+					),
+				)
+				.join(' '),
+		)
+		ends.push(joined.length)
+	}
+	const match = joined.indexOf(normalizeBrowserName(text))
+	return match < 0 ? 1 : Math.max(1, ends.findIndex((end) => end > match) + 1)
+}
+
+/** Wraps spans before numbering, marking hard continuations with a leading ↳.
+ * @remarks A soft wrap breaks before the end of a name rather than before its reference span.
+ * @param line - Unwrapped semantic row
+ * @returns Lines no wider than the projection width, preserving code points and reference tokens
+ */
+export function wrapBrowserLine(line: BrowserLine): readonly BrowserLine[] {
+	const text = renderBrowserLine(line)
+	const lines: BrowserLine[] = []
+	const references: Array<readonly [number, number]> = []
+	let boundary = 0
+	for (const span of line.spans) {
+		if (span.category === 'reference') references.push([boundary, boundary + span.text.length])
+		boundary += span.text.length
+	}
+	let offset = 0
+	let continuation = false
+	while (offset < text.length) {
+		const room = BROWSER_READ_WIDTH - (continuation ? 1 : 0)
+		let end = Math.min(text.length, offset + room)
+		let hard = false
+		if (end < text.length) {
+			let whitespace = text.slice(offset, end + 1).search(/\s+\S*$/u)
+			while (
+				whitespace > 0 &&
+				references.some(
+					([start]) =>
+						start > offset + whitespace && /^\s+$/u.test(text.slice(offset + whitespace, start)),
+				)
+			)
+				whitespace = text.slice(offset, offset + whitespace).search(/\s+\S*$/u)
+			if (whitespace > 0) end = offset + whitespace
+			else {
+				hard = true
+				for (const [start, last] of references)
+					if (end >= start - 1 && end < last) end = Math.max(offset + 1, start - 2)
+				if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end -= 1
+			}
+		}
+		const spans: BrowserLineSpan[] = continuation ? [{ category: 'syntax', text: '↳' }] : []
+		let position = 0
+		for (const span of line.spans) {
+			const last = position + span.text.length
+			if (last > offset && position < end)
+				spans.push({
+					category: span.category,
+					text: span.text.slice(Math.max(0, offset - position), end - position),
+				})
+			position = last
+		}
+		lines.push({ spans })
+		offset = end
+		if (!hard) while (offset < text.length && /\s/u.test(text.charAt(offset))) offset += 1
+		continuation = hard
+	}
+	return lines
+}
+
+/** Finds the highest-scoring text lines within an inclusive range using whole words and prefixes.
+ * @param lines - Complete wrapped projection
+ * @param search - Words to find
+ * @param from - First candidate line. Default: 1
+ * @param to - Last candidate line. Default: the end
+ * @returns One-based best-scoring line numbers
+ */
+export function scanBrowserLines(
+	lines: readonly BrowserLine[],
+	search: string,
+	from = 1,
+	to = lines.length,
+): readonly number[] {
+	const words = collectBrowserWords(search)
+	const matches: number[] = []
+	let best = 0
+	for (let index = from - 1; index < Math.min(to, lines.length); index += 1) {
+		const line = lines[index]
+		if (line === undefined) continue
+		const own = [
+			...collectBrowserWords(
+				line.spans
+					.filter((span) => span.category === 'text')
+					.map((span) => span.text)
+					.join(' '),
+			),
+		]
+		let score = 0
+		for (const word of words)
+			if (
+				own.some(
+					(candidate) =>
+						word === candidate ||
+						(Math.min(word.length, candidate.length) >= 4 &&
+							(word.startsWith(candidate) || candidate.startsWith(word))),
+				)
+			)
+				score += 1
+		if (score === 0 || score < best) continue
+		if (score > best) matches.length = 0
+		best = score
+		matches.push(index + 1)
+	}
+	return matches
+}
+
+/** Refuses invalid line coordinates before selecting content.
+ * @param from - Inclusive first line
+ * @param to - Optional inclusive last line
+ * @param total - Available lines, when captured
+ * @returns Nothing
+ */
+export function validateBrowserLines(from: number, to?: number, total?: number): void {
+	if (
+		!Number.isSafeInteger(from) ||
+		from < 1 ||
+		(to !== undefined && (!Number.isSafeInteger(to) || to < 1))
+	)
+		throw new BrowserError(
+			'ARGUMENT',
+			'The from and to parameters must be positive safe integers.',
+			{ subject: 'toolset' },
+		)
+	if (to !== undefined && to < from)
+		throw new BrowserError('ARGUMENT', 'The to parameter must not precede from.', {
+			subject: 'toolset',
+		})
+	if (total !== undefined && total > 0 && from > total)
+		throw new BrowserError(
+			'ARGUMENT',
+			`Line ${from} is past the end; the page has ${total} lines.`,
+			{ subject: 'toolset' },
+		)
+}
+
+/** Abbreviates displayed metadata without splitting a Unicode code point.
+ * @param text - Metadata text
+ * @param limit - Available UTF-16 units
+ * @returns Normalized text with an ellipsis when abbreviated
+ */
+export function abbreviateBrowserText(text: string, limit: number): string {
+	const normalized = normalizeBrowserName(text)
+	if (normalized.length <= limit) return normalized
+	let end = Math.max(0, limit - 1)
+	if (normalized.charCodeAt(end - 1) >= 0xd800 && normalized.charCodeAt(end - 1) <= 0xdbff) end -= 1
+	return `${normalized.slice(0, end)}…`
+}
+
+/** Renders an exact addressed-range footer, including the next line when content remains.
+ * @param from - First returned line
+ * @param to - Last returned line
+ * @param total - Total projected lines
+ * @param tool - Tool that serves the continuation. Default: read
+ * @returns Complete footer
+ */
+export function renderBrowserFooter(
+	from: number,
+	to: number,
+	total: number,
+	tool = 'read',
+): string {
+	const subject = tool === 'journeys' ? 'listing' : 'page'
+	if (total === 0) return `[empty ${subject}; the whole ${subject}]`
+	const above = from - 1
+	const below = total - to
+	const counts = [
+		above > 0 ? `${above} above` : undefined,
+		below > 0 ? `${below} below` : undefined,
+	].filter((value) => value !== undefined)
+	return `[lines ${from}–${to} of ${total}; ${counts.length > 0 ? `${counts.join(', ')}; ` : ''}${below > 0 ? `call ${tool} with from ${to + 1} for more` : above > 0 ? `end of ${subject}` : `the whole ${subject}`}]`
+}
+
+/** Renders shared search text and chooses its context line within the requested range.
+ * @remarks A miss names `to` when it ends before the last line; an unbounded miss keeps its usual wording.
+ * @param lines - Wrapped projection
+ * @param from - Inclusive first candidate line
+ * @param to - Inclusive last candidate line
+ * @param search - Optional words to find
+ * @returns Opening line and optional match or miss text
+ */
+export function renderBrowserSearch(
+	lines: readonly BrowserLine[],
+	from: number,
+	to?: number,
+	search?: string,
+): BrowserSearch {
+	if (search === undefined || search === '') return { from }
+	const matches = scanBrowserLines(lines, search, from, to)
+	const first = matches[0]
+	const query = JSON.stringify(abbreviateBrowserText(search, 120))
+	return first === undefined
+		? {
+				from,
+				text:
+					to !== undefined && to < lines.length
+						? `No line from ${from} to ${to} matches ${query}.`
+						: from === 1
+							? `No line matches ${query}.`
+							: `No line from ${from} on matches ${query}.`,
+			}
+		: {
+				from: Math.max(from, first - BROWSER_READ_CONTEXT),
+				text: `${matches.length} ${matches.length === 1 ? 'line matches' : 'lines match'} ${query}: ${matches.slice(0, BROWSER_READ_MATCHES).join(', ')}${matches.length > BROWSER_READ_MATCHES ? `, … and ${matches.length - BROWSER_READ_MATCHES} more; add words to narrow` : ''}`,
+			}
+}
+
+/** Renders a bounded window with numbered rows and an exact continuation.
+ * @remarks A partial-view line follows the page header when rows remain after the window.
+ * A changed projection carries its change note even from line 1. A search missing its range
+ * reports the first page-wide best match only when that line carries an element reference,
+ * without moving the window; otherwise it keeps the plain miss. Its query is abbreviated
+ * to 120 UTF-16 units. The miss sentence is reserved with the minimum window; when the whole
+ * quoted row cannot also fit, only the sentence is shown, ending with a period.
+ * An unquoted miss is reserved before fitting and appears immediately before the footer.
+ * Quoted best matches and in-range hits remain under the header.
+ * @param passage - Projection and contextual metadata
+ * @param limit - Whole-result character room
+ * @returns A complete window
+ * @throws Thrown when the range is invalid or room cannot hold metadata and a complete row
+ */
+export function renderBrowserPassage(passage: BrowserPassage, limit: number): string {
+	const total = passage.lines.length
+	validateBrowserLines(passage.from, passage.to, total)
+	const header = [
+		`page ${JSON.stringify(abbreviateBrowserText(passage.title, 120))} ${abbreviateBrowserText(passage.url, 160)} (${total} lines)`,
+	]
+	if (passage.tabs.length > 1) {
+		const tabs: string[] = []
+		for (const tab of passage.tabs) {
+			const entry = `${tab.id} ${JSON.stringify(abbreviateBrowserText(tab.title, 60))}${tab.current ? ' (current)' : ''}`
+			if (tabs.join(', ').length + entry.length > Math.min(400, Math.floor(limit / 8))) break
+			tabs.push(entry)
+		}
+		const left = passage.tabs.length - tabs.length
+		header.push(
+			`tabs: ${tabs.join(', ')}${left > 0 ? `${tabs.length > 0 ? '; ' : ''}${left} more tabs omitted` : ''}`,
+		)
+	}
+	if (passage.note !== undefined && passage.note !== '')
+		header.push(abbreviateBrowserText(passage.note, 200))
+	if (passage.changed) header.push(BROWSER_READ_CHANGED_NOTE)
+	const found = renderBrowserSearch(passage.lines, passage.from, passage.to, passage.search)
+	let search = found.text
+	const missing =
+		passage.search !== undefined &&
+		passage.search !== '' &&
+		scanBrowserLines(passage.lines, passage.search, passage.from, passage.to).length === 0
+	if (missing) {
+		const match = scanBrowserLines(passage.lines, passage.search)[0]
+		const line = match === undefined ? undefined : passage.lines[match - 1]
+		if (line !== undefined && line.spans.some((span) => span.category === 'reference')) {
+			const range =
+				passage.to !== undefined && passage.to < total
+					? `from ${passage.from} to ${passage.to}`
+					: `from ${passage.from} on`
+			const sentence = `No line ${range} matches ${JSON.stringify(abbreviateBrowserText(passage.search, 120))}; the best match is line ${match}`
+			search = `${sentence}.`
+			const minimum = renderBrowserWindow(
+				passage.lines,
+				found.from,
+				found.from,
+				[...header, search].join('\n'),
+				limit,
+				'read',
+				true,
+			)
+			const quote = `${sentence}:\n${match}: ${renderBrowserLine(line)}`
+			if (minimum.length + quote.length - search.length <= limit) search = quote
+		}
+	}
+	const tail = missing && search !== undefined && !search.includes('\n') ? search : undefined
+	if (search !== undefined && tail === undefined) header.push(search)
+	const result = renderBrowserWindow(
+		passage.lines,
+		found.from,
+		passage.to,
+		header.join('\n'),
+		limit - (tail === undefined ? 0 : tail.length + 1),
+		'read',
+		true,
+	)
+	if (tail === undefined) return result
+	const footer = result.lastIndexOf('\n')
+	return `${result.slice(0, footer)}\n${tail}${result.slice(footer)}`
+}
+
+/** Fits an unnumbered receipt and a complete page window inside one result limit.
+ * @param passage - Redacted projection and metadata, with the opening line already selected
+ * @param receipt - Redacted unnumbered status
+ * @param limit - Whole-result character room
+ * @returns Receipt followed by complete addressed rows and their exact footer
+ */
+export function renderBrowserReceiptWindow(
+	passage: BrowserPassage,
+	receipt: string,
+	limit: number,
+): string {
+	const minimum = renderBrowserPassage({ ...passage, to: passage.from }, limit)
+	const room = limit - minimum.length - 2
+	if (room < 1)
+		throw new BrowserError(
+			'TOOLSET_LIMIT',
+			'The result limit cannot hold the receipt and page window.',
+		)
+	const prefix = boundBrowserText(receipt, room, BROWSER_TOOL_CUT_FOOTER)
+	return prefix + '\n\n' + renderBrowserPassage(passage, limit - prefix.length - 2)
+}
+
+/** Selects whole addressed rows after reserving the header and exact footer.
+ * @remarks The partial switch reserves a partial-view line before selecting rows, independently of header text.
+ * A trailing heading opens the next window unless it is the only row or ends the page.
+ * @param lines - Complete projection
+ * @param from - Inclusive first line
+ * @param to - Inclusive last line, or the default window
+ * @param header - Bounded preceding text
+ * @param limit - Whole-result room
+ * @param tool - Continuation tool. Default: read
+ * @param partial - Whether to show a partial-view line after the first header line. Default: false
+ * @returns A complete bounded result
+ */
+export function renderBrowserWindow(
+	lines: readonly BrowserLine[],
+	from: number,
+	to: number | undefined,
+	header: string,
+	limit: number,
+	tool = 'read',
+	partial = false,
+): string {
+	validateBrowserLines(from, to, lines.length)
+	let body = header
+	const rows: string[] = []
+	let end = from - 1
+	const last = Math.min(to ?? lines.length, from + BROWSER_READ_LINES - 1, lines.length)
+	for (let index = from; index <= last; index += 1) {
+		const line = lines[index - 1]
+		if (line === undefined) break
+		const row = `${index}: ${renderBrowserLine(line)}`
+		const footer = renderBrowserFooter(from, index, lines.length, tool)
+		const heading = header === '' ? [] : header.split(/\r\n|\n/)
+		if (partial && index < lines.length)
+			heading.splice(
+				1,
+				0,
+				`This read shows lines ${from}–${index} of ${lines.length}; ${index + 1 === lines.length ? `line ${lines.length} is` : `lines ${index + 1}–${lines.length} are`} not shown yet.`,
+			)
+		const candidate = [...heading, ...rows, row].join('\n')
+		if (candidate.length + footer.length + 1 > limit) break
+		rows.push(row)
+		if (
+			index > from &&
+			index < lines.length &&
+			line.spans[0]?.category === 'syntax' &&
+			/^#{1,6} $/.test(line.spans[0].text)
+		)
+			continue
+		body = candidate
+		end = index
+	}
+	const footer = renderBrowserFooter(from, end, lines.length, tool)
+	if ((lines.length > 0 && end < from) || body.length + footer.length + 1 > limit)
+		throw new BrowserError(
+			'TOOLSET_LIMIT',
+			'The result limit cannot hold the header, footer, and next complete line.',
+		)
+	return `${body}\n${footer}`
 }
 
 /**
@@ -526,10 +982,11 @@ export function normalizeBrowserKey(value: string): string {
 	try {
 		const chord = extractBrowserChord(normalized.join('+'))
 		keyToBrowserInput(chord.key)
-		if (parts.some((part) => part === '')) throw new BrowserError('Empty key')
+		if (parts.some((part) => part === '')) throw new BrowserError('ARGUMENT', 'Empty key')
 		return normalized.join('+')
 	} catch {
 		throw new BrowserError(
+			'ARGUMENT',
 			`Unknown browser key ${JSON.stringify(value)}. Accepted names: ${accepted.join(', ')}, a single character, and modifier chords such as Control+a.`,
 		)
 	}
@@ -584,15 +1041,13 @@ export function deriveBrowserToolSchema(
  * caller's closing clause.
  *
  * @remarks
- * A string within the limit returns unchanged. A longer one keeps its first `limit` UTF-16 code
- * units, one fewer when the last would split a surrogate pair (so a limit of 1 before a pair keeps
- * nothing), followed by `\n[characters 0–END of TOTAL; FOOTER]`. The footer has no default, so
- * every caller states what the cut result's reader does next: the toolset passes
- * `BROWSER_TOOL_VIEW_FOOTER` for an action or `dialog` receipt that carries a view and
- * `BROWSER_TOOL_CUT_FOOTER` for any other result, including `look` and `read` results.
+ * A string within the limit returns unchanged. Otherwise the cut text plus footer fits `limit`
+ * UTF-16 code units, without splitting a surrogate pair. When the character-range footer cannot
+ * fit, the result ends with an ellipsis instead. The footer has no default: each caller states
+ * what the reader does next. Numbered windows select whole rows through `renderBrowserWindow`.
  *
  * @param text - The page-authored or composed string
- * @param limit - The most characters kept before the footer, a positive integer
+ * @param limit - The whole-result character limit, a positive integer
  * @param footer - The clause that closes the footer after the character range
  * @returns The string, cut and footed when it exceeds the limit
  * @throws Thrown when `limit` is not a positive integer.
@@ -601,18 +1056,41 @@ export function deriveBrowserToolSchema(
  * ```ts
  * import { boundBrowserText } from '@orkestrel/browser'
  *
- * boundBrowserText('abcdef', 4, 'the rest was cut') // 'abcd\n[characters 0–4 of 6; the rest was cut]'
+ * boundBrowserText('abcdef', 4, 'the rest was cut') // 'abc…'
  * boundBrowserText('abc', 4, 'the rest was cut') // 'abc'
  * ```
  */
 export function boundBrowserText(text: string, limit: number, footer: string): string {
 	if (!isInteger(limit) || limit < 1) {
-		throw new BrowserError('Browser tool limit must be a positive integer', undefined, { limit })
+		throw new BrowserError('ARGUMENT', 'Browser tool limit must be a positive integer', { limit })
 	}
 	if (text.length <= limit) return text
-	const last = text.charCodeAt(limit - 1)
-	const end = last >= 0xd800 && last <= 0xdbff ? limit - 1 : limit
-	return `${text.slice(0, end)}\n[characters 0–${end} of ${text.length}; ${footer}]`
+	let end = limit
+	for (;;) {
+		const suffix = `\n[characters 0–${end} of ${text.length}; ${footer}]`
+		if (suffix.length >= limit) return abbreviateBrowserText(text, limit)
+		if (end + suffix.length <= limit) return `${text.slice(0, end)}${suffix}`
+		end = Math.max(0, limit - suffix.length)
+		if (text.charCodeAt(end - 1) >= 0xd800 && text.charCodeAt(end - 1) <= 0xdbff) end -= 1
+	}
+}
+
+/** Redacts registered secrets before projection wrapping or output clipping.
+ * @param text - Unbounded text
+ * @param secrets - Registered secret values
+ * @returns Text with literal and JSON-escaped secret occurrences replaced
+ */
+export function redactBrowserText(text: string, secrets: readonly string[]): string {
+	for (const secret of [
+		...new Set(secrets.flatMap((value) => [value, normalizeBrowserName(value)])),
+	].sort((left, right) => right.length - left.length)) {
+		if (secret === '') continue
+		text = text
+			.replaceAll(JSON.stringify(secret), '[redacted]')
+			.replaceAll(JSON.stringify(secret).slice(1, -1), '[redacted]')
+			.replaceAll(secret, '[redacted]')
+	}
+	return text
 }
 
 /**
@@ -622,15 +1100,15 @@ export function boundBrowserText(text: string, limit: number, footer: string): s
  * @param definition - The advertised tool definition whose `parameters.properties` names the
  * accepted keys
  * @param args - The arguments a model supplied
- * @throws Thrown as a `BrowserError` coded `BROWSER_TOOLSET_ARGUMENT`, with the refused key in its
+ * @throws Thrown as a `BrowserError` coded `ARGUMENT`, with the refused key in its
  * context, when an argument key is not an advertised parameter.
  *
  * @example
  * ```ts
  * import { BROWSER_TOOL_COPY, validateBrowserToolArguments } from '@orkestrel/browser'
  *
- * validateBrowserToolArguments(BROWSER_TOOL_COPY.look, { search: 'cart', ref: 'e1' })
- * // throws 'The look tool takes no ref parameter; call look with search and offset.'
+ * validateBrowserToolArguments(BROWSER_TOOL_COPY.read, { search: 'cart', ref: 'e1' })
+ * // throws 'The read tool takes no ref parameter; call read with from, to, and search.'
  * ```
  */
 export function validateBrowserToolArguments(
@@ -643,28 +1121,28 @@ export function validateBrowserToolArguments(
 	if (key === undefined) return
 	const accepted = new Intl.ListFormat('en', { type: 'conjunction' }).format(keys)
 	throw new BrowserError(
+		'ARGUMENT',
 		`The ${definition.name} tool takes no ${key} parameter; call ${definition.name} with ${accepted}.`,
-		'BROWSER_TOOLSET_ARGUMENT',
-		{ key },
+		{ subject: 'toolset', key },
 	)
 }
 
 /**
- * Renders an element as its outline row reads: reference, role, and quoted name.
+ * Renders an element as its outline row reads: role, quoted name, and reference.
  *
  * @param element - The referenced element
- * @returns The element's reference, role, and JSON-quoted name
+ * @returns The role, optional JSON-quoted name, and `[ref=eN]` reference
  *
  * @example
  * ```ts
  * import { renderBrowserElement } from '@orkestrel/browser'
  *
  * const element = page.elements.element('e4')
- * if (element !== undefined) renderBrowserElement(element) // 'e4 button "Place order"'
+ * if (element !== undefined) renderBrowserElement(element) // 'button "Place order" [ref=e4]'
  * ```
  */
 export function renderBrowserElement(element: BrowserElementInterface): string {
-	return `${element.reference} ${element.role} ${JSON.stringify(element.name)}`
+	return `${element.role}${element.name === '' ? '' : ` ${JSON.stringify(element.name)}`} [ref=${element.reference}]`
 }
 
 /**
@@ -673,8 +1151,8 @@ export function renderBrowserElement(element: BrowserElementInterface): string {
  *
  * @param value - The argument a model supplied
  * @returns The canonical reference, such as `e12`
- * @throws Thrown as a `BrowserElementError` with reason `UNKNOWN` when the value is not a
- * reference, naming `look` as the next call.
+ * @throws Thrown as a `BrowserError` with reason `UNKNOWN` when the value is not a
+ * reference, naming `read` as the next call.
  *
  * @example
  * ```ts
@@ -685,12 +1163,18 @@ export function renderBrowserElement(element: BrowserElementInterface): string {
  */
 export function requireBrowserReference(value: unknown): string {
 	const reference = isString(value) ? parseBrowserReference(value) : undefined
-	if (reference === undefined)
-		throw new BrowserElementError(
-			{ subject: `Reference ${JSON.stringify(value)}` },
-			'UNKNOWN',
-			'is not a reference such as e12; call look for fresh refs',
+	if (reference === undefined) {
+		const subject = `Reference ${JSON.stringify(value)}`
+		throw new BrowserError(
+			'ELEMENT',
+			describeBrowserRefusal(
+				{ subject },
+				'UNKNOWN',
+				'is not a reference such as e12; call read for fresh refs',
+			),
+			{ subject, reason: 'UNKNOWN' },
 		)
+	}
 	return reference
 }
 
@@ -700,7 +1184,7 @@ export function requireBrowserReference(value: unknown): string {
  * @param args - The arguments a model supplied
  * @param key - The parameter name
  * @returns The string the argument holds
- * @throws Thrown as a `BrowserError` coded `BROWSER_TOOLSET_ARGUMENT` when the argument is not a
+ * @throws Thrown as a `BrowserError` coded `ARGUMENT` when the argument is not a
  * string.
  *
  * @example
@@ -716,7 +1200,8 @@ export function readBrowserToolString(
 ): string {
 	const value = args[key]
 	if (!isString(value))
-		throw new BrowserError(`The ${key} parameter must be a string.`, 'BROWSER_TOOLSET_ARGUMENT', {
+		throw new BrowserError('ARGUMENT', `The ${key} parameter must be a string.`, {
+			subject: 'toolset',
 			key,
 		})
 	return value
@@ -740,10 +1225,10 @@ export function readBrowserToolString(
  * import { renderBrowserReceipt } from '@orkestrel/browser'
  *
  * renderBrowserReceipt({
- * 	action: 'Clicked e7 button "Delete"',
+ * 	action: 'Clicked button "Delete" [ref=e7]',
  * 	dialog: { category: 'confirm', message: 'Delete the draft?' },
  * })
- * // 'Clicked e7 button "Delete". A confirm dialog is open: "Delete the draft?"; call dialog.'
+ * // 'Clicked button "Delete" [ref=e7]. A confirm dialog is open: "Delete the draft?"; call dialog.'
  * ```
  */
 export function renderBrowserReceipt(receipt: BrowserReceipt): string {
@@ -759,77 +1244,6 @@ export function renderBrowserReceipt(receipt: BrowserReceipt): string {
 	const line = `${sentences.join(' ')}${receipt.trusted === false ? ' (untrusted event)' : ''}`
 	if (receipt.view === undefined) return line
 	return line === '' ? receipt.view : `${line}\n\n${receipt.view}`
-}
-
-/**
- * Decodes a base64-encoded string into raw bytes.
- *
- * @remarks
- * Pure JS implementation — no `Buffer`, no `atob` (DOM-only) — so it runs
- * identically in Node and browser environments. Whitespace and `=` padding
- * are ignored; invalid characters are skipped.
- *
- * @param text - Base64-encoded input string
- * @returns Decoded bytes
- *
- * @example
- * ```ts
- * decodeBase64('aGVsbG8=') // Uint8Array [104, 101, 108, 108, 111]
- * ```
- */
-export function decodeBase64(text: string): Uint8Array {
-	const clean = text.replace(/[^A-Za-z0-9+/]/g, '')
-	const bytes: number[] = []
-
-	let buffer = 0
-	let bits = 0
-
-	for (const char of clean) {
-		const value = BASE64_LOOKUP[char]
-		if (value === undefined) continue
-
-		buffer = (buffer << 6) | value
-		bits += 6
-
-		if (bits >= 8) {
-			bits -= 8
-			bytes.push((buffer >> bits) & 0xff)
-		}
-	}
-
-	return new Uint8Array(bytes)
-}
-
-/**
- * Encodes raw bytes as base64 without relying on Node or DOM globals.
- *
- * @param bytes - Raw input bytes
- * @returns Base64 text
- */
-export function encodeBase64(bytes: Uint8Array): string {
-	let result = ''
-	for (let index = 0; index < bytes.length; index += 3) {
-		const first = bytes[index]
-		const second = bytes[index + 1]
-		const third = bytes[index + 2]
-		if (first === undefined) break
-		const value = (first << 16) | ((second ?? 0) << 8) | (third ?? 0)
-		result += BASE64_CHARS[(value >> 18) & 63] ?? ''
-		result += BASE64_CHARS[(value >> 12) & 63] ?? ''
-		result += second === undefined ? '=' : (BASE64_CHARS[(value >> 6) & 63] ?? '')
-		result += third === undefined ? '=' : (BASE64_CHARS[value & 63] ?? '')
-	}
-	return result
-}
-
-/** Encodes UTF-8 text as bytes. */
-export function textToBytes(value: string): Uint8Array {
-	return new TextEncoder().encode(value)
-}
-
-/** Decodes UTF-8 bytes as text. */
-export function bytesToText(value: Uint8Array): string {
-	return new TextDecoder().decode(value)
 }
 
 /**
@@ -869,8 +1283,12 @@ export function readBrowserHeaders(value: unknown): Readonly<Record<string, stri
  * @param error - Optional request failure description
  * @returns HAR 1.2 entry
  */
-export function createBrowserHAREntry(
-	pending: BrowserHARPending,
+export function buildBrowserHAREntry(
+	pending: {
+		readonly request: BrowserRequest
+		readonly started: number
+		readonly response: BrowserResponse | undefined
+	},
 	duration: number,
 	body?: Uint8Array,
 	error?: string,
@@ -932,7 +1350,7 @@ export function createBrowserHAREntry(
 					}
 				: {}),
 			headersSize: -1,
-			bodySize: post === undefined ? 0 : textToBytes(post).byteLength,
+			bodySize: post === undefined ? 0 : new TextEncoder().encode(post).byteLength,
 		},
 		response: {
 			status: response?.status ?? 0,
@@ -998,7 +1416,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 		!isString(value['log']['creator']['version']) ||
 		!isArray(value['log']['entries'])
 	) {
-		throw new BrowserError('Browser HAR document is malformed')
+		throw new BrowserError('ARGUMENT', 'Browser HAR document is malformed')
 	}
 	for (const [index, entry] of value['log']['entries'].entries()) {
 		if (
@@ -1036,7 +1454,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 			!isRecord(entry['cache']) ||
 			!isRecord(entry['timings'])
 		) {
-			throw new BrowserError('Browser HAR entry is malformed', undefined, { index })
+			throw new BrowserError('ARGUMENT', 'Browser HAR entry is malformed', { index })
 		}
 		for (const [cookieIndex, cookie] of entry['request']['cookies'].entries()) {
 			if (
@@ -1049,7 +1467,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 				(cookie['httpOnly'] !== undefined && !isBoolean(cookie['httpOnly'])) ||
 				(cookie['secure'] !== undefined && !isBoolean(cookie['secure']))
 			) {
-				throw new BrowserError('Browser HAR request cookie is malformed', undefined, {
+				throw new BrowserError('ARGUMENT', 'Browser HAR request cookie is malformed', {
 					index,
 					cookie: cookieIndex,
 				})
@@ -1057,7 +1475,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 		}
 		for (const [headerIndex, header] of entry['request']['headers'].entries()) {
 			if (!isRecord(header) || !isString(header['name']) || !isString(header['value'])) {
-				throw new BrowserError('Browser HAR request header is malformed', undefined, {
+				throw new BrowserError('ARGUMENT', 'Browser HAR request header is malformed', {
 					index,
 					header: headerIndex,
 				})
@@ -1065,7 +1483,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 		}
 		for (const [queryIndex, query] of entry['request']['queryString'].entries()) {
 			if (!isRecord(query) || !isString(query['name']) || !isString(query['value'])) {
-				throw new BrowserError('Browser HAR query value is malformed', undefined, {
+				throw new BrowserError('ARGUMENT', 'Browser HAR query value is malformed', {
 					index,
 					query: queryIndex,
 				})
@@ -1076,7 +1494,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 			post !== undefined &&
 			(!isRecord(post) || !isString(post['mimeType']) || !isString(post['text']))
 		) {
-			throw new BrowserError('Browser HAR request body is malformed', undefined, { index })
+			throw new BrowserError('ARGUMENT', 'Browser HAR request body is malformed', { index })
 		}
 		for (const [cookieIndex, cookie] of entry['response']['cookies'].entries()) {
 			if (
@@ -1089,7 +1507,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 				(cookie['httpOnly'] !== undefined && !isBoolean(cookie['httpOnly'])) ||
 				(cookie['secure'] !== undefined && !isBoolean(cookie['secure']))
 			) {
-				throw new BrowserError('Browser HAR response cookie is malformed', undefined, {
+				throw new BrowserError('ARGUMENT', 'Browser HAR response cookie is malformed', {
 					index,
 					cookie: cookieIndex,
 				})
@@ -1097,7 +1515,7 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 		}
 		for (const [headerIndex, header] of entry['response']['headers'].entries()) {
 			if (!isRecord(header) || !isString(header['name']) || !isString(header['value'])) {
-				throw new BrowserError('Browser HAR response header is malformed', undefined, {
+				throw new BrowserError('ARGUMENT', 'Browser HAR response header is malformed', {
 					index,
 					header: headerIndex,
 				})
@@ -1111,16 +1529,14 @@ export function validateBrowserHAR(value: unknown): asserts value is BrowserHAR 
 			!isString(entry['response']['content']['mimeType']) ||
 			(text !== undefined && !isString(text)) ||
 			(encoding !== undefined && encoding !== 'base64') ||
-			(encoding === 'base64' &&
-				(text === undefined ||
-					!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(text)))
+			(encoding === 'base64' && (text === undefined || decodeBase64(text) === undefined))
 		) {
-			throw new BrowserError('Browser HAR response content is malformed', undefined, { index })
+			throw new BrowserError('ARGUMENT', 'Browser HAR response content is malformed', { index })
 		}
 		for (const name of ['blocked', 'dns', 'connect', 'send', 'wait', 'receive', 'ssl']) {
 			const timing = entry['timings'][name]
 			if (!isFiniteNumber(timing) || timing < -1) {
-				throw new BrowserError('Browser HAR timing is malformed', undefined, {
+				throw new BrowserError('ARGUMENT', 'Browser HAR timing is malformed', {
 					index,
 					timing: name,
 				})
@@ -1168,7 +1584,7 @@ export function matchesBrowserURL(url: string, pattern: string): boolean {
  */
 export function readBrowserScriptIdentifier(value: unknown): string {
 	if (!isRecord(value) || !isString(value['identifier'])) {
-		throw new BrowserError('Browser init script identifier is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser init script identifier is malformed')
 	}
 	return value['identifier']
 }
@@ -1180,7 +1596,9 @@ export function readBrowserScriptIdentifier(value: unknown): string {
  */
 export function validateBrowserPoint(point: BrowserPoint): void {
 	if (!isFiniteNumber(point.x) || !isFiniteNumber(point.y)) {
-		throw new BrowserError('Browser input coordinates must be finite', undefined, { point })
+		throw new BrowserError('ARGUMENT', 'Browser input coordinates must be finite', {
+			point: { ...point },
+		})
 	}
 }
 
@@ -1195,17 +1613,17 @@ export function validateBrowserPoint(point: BrowserPoint): void {
  */
 export function validateBrowserInputOptions(options?: BrowserOperationOptions): void {
 	if (options?.delay !== undefined && (!isFiniteNumber(options.delay) || options.delay < 0)) {
-		throw new BrowserError('Browser input delay must be non-negative and finite', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser input delay must be non-negative and finite', {
 			delay: options.delay,
 		})
 	}
 	if (options?.count !== undefined && (!isInteger(options.count) || options.count <= 0)) {
-		throw new BrowserError('Browser click count must be a positive integer', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser click count must be a positive integer', {
 			count: options.count,
 		})
 	}
 	if (options?.steps !== undefined && (!isInteger(options.steps) || options.steps <= 0)) {
-		throw new BrowserError('Browser drag steps must be a positive integer', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser drag steps must be a positive integer', {
 			steps: options.steps,
 		})
 	}
@@ -1218,7 +1636,7 @@ export function validateBrowserInputOptions(options?: BrowserOperationOptions): 
  */
 export function validateBrowserTimeout(timeout: number): void {
 	if (!isFiniteNumber(timeout) || timeout < 0) {
-		throw new BrowserError('Browser timeout must be a non-negative finite number', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser timeout must be a non-negative finite number', {
 			timeout,
 		})
 	}
@@ -1236,12 +1654,12 @@ export function validateBrowserViewport(viewport: BrowserViewport): void {
 		!isInteger(viewport.height) ||
 		viewport.height <= 0
 	) {
-		throw new BrowserError('Browser viewport dimensions must be positive integers', undefined, {
-			viewport,
+		throw new BrowserError('ARGUMENT', 'Browser viewport dimensions must be positive integers', {
+			viewport: { ...viewport },
 		})
 	}
 	if (viewport.scale !== undefined && (!isFiniteNumber(viewport.scale) || viewport.scale <= 0)) {
-		throw new BrowserError('Browser viewport scale must be positive and finite', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser viewport scale must be positive and finite', {
 			scale: viewport.scale,
 		})
 	}
@@ -1255,13 +1673,13 @@ export function validateBrowserViewport(viewport: BrowserViewport): void {
 export function validateBrowserEmulationOptions(options: BrowserEmulationOptions): void {
 	if (options.viewport !== undefined) validateBrowserViewport(options.viewport)
 	if (options.user !== undefined && options.user.value.length === 0) {
-		throw new BrowserError('Browser user agent cannot be empty')
+		throw new BrowserError('ARGUMENT', 'Browser user agent cannot be empty')
 	}
 	if (options.locale !== undefined && options.locale.length === 0) {
-		throw new BrowserError('Browser locale cannot be empty')
+		throw new BrowserError('ARGUMENT', 'Browser locale cannot be empty')
 	}
 	if (options.timezone !== undefined && options.timezone.length === 0) {
-		throw new BrowserError('Browser timezone cannot be empty')
+		throw new BrowserError('ARGUMENT', 'Browser timezone cannot be empty')
 	}
 	if (options.geolocation !== undefined) {
 		const location = options.geolocation
@@ -1275,13 +1693,13 @@ export function validateBrowserEmulationOptions(options: BrowserEmulationOptions
 			(location.accuracy !== undefined &&
 				(!isFiniteNumber(location.accuracy) || location.accuracy < 0))
 		) {
-			throw new BrowserError('Browser geolocation is outside valid coordinate bounds', undefined, {
-				location,
+			throw new BrowserError('ARGUMENT', 'Browser geolocation is outside valid coordinate bounds', {
+				location: { ...location },
 			})
 		}
 	}
 	for (const name of Object.keys(options.headers ?? {})) {
-		if (name.length === 0) throw new BrowserError('Browser header name cannot be empty')
+		if (name.length === 0) throw new BrowserError('ARGUMENT', 'Browser header name cannot be empty')
 	}
 }
 
@@ -1290,21 +1708,22 @@ export function validateBrowserEmulationOptions(options: BrowserEmulationOptions
  *
  * @param options - Public context configuration
  */
-export function validateBrowserContextOptions(options?: BrowserContextOptions): void {
+export function validateBrowserContextOptions(options?: BrowserIsolateOptions): void {
 	if (options === undefined) return
+	if (options.viewport !== undefined) validateBrowserViewport(options.viewport)
 	if (options.emulation !== undefined) validateBrowserEmulationOptions(options.emulation)
 	if (options.proxy !== undefined) {
 		if (options.proxy.server.length === 0) {
-			throw new BrowserError('Browser proxy server cannot be empty')
+			throw new BrowserError('ARGUMENT', 'Browser proxy server cannot be empty')
 		}
 		if (options.proxy.bypass?.some((entry) => entry.length === 0) === true) {
-			throw new BrowserError('Browser proxy bypass entries cannot be empty')
+			throw new BrowserError('ARGUMENT', 'Browser proxy bypass entries cannot be empty')
 		}
 	}
 	for (const origin of options.origins ?? []) {
 		const result = attempt(() => new URL(origin))
 		if (!result.success) {
-			throw new BrowserError('Browser context origin must be valid', undefined, { origin })
+			throw new BrowserError('ARGUMENT', 'Browser context origin must be valid', { origin })
 		}
 		const url = result.value
 		if (
@@ -1312,8 +1731,8 @@ export function validateBrowserContextOptions(options?: BrowserContextOptions): 
 			url.origin !== origin.replace(/\/$/, '')
 		) {
 			throw new BrowserError(
+				'ARGUMENT',
 				'Browser context origin must be an absolute HTTP(S) origin',
-				undefined,
 				{
 					origin,
 				},
@@ -1321,7 +1740,7 @@ export function validateBrowserContextOptions(options?: BrowserContextOptions): 
 		}
 	}
 	if (options.downloads !== undefined && options.downloads.path.length === 0) {
-		throw new BrowserError('Browser download path cannot be empty')
+		throw new BrowserError('ARGUMENT', 'Browser download path cannot be empty')
 	}
 }
 
@@ -1332,14 +1751,14 @@ export function validateBrowserContextOptions(options?: BrowserContextOptions): 
  */
 export function validateBrowserAccessibilityOptions(options?: BrowserAccessibilityOptions): void {
 	if (options?.root !== undefined && (!isInteger(options.root) || options.root <= 0)) {
-		throw new BrowserError('Browser accessibility root must be a positive integer', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser accessibility root must be a positive integer', {
 			root: options.root,
 		})
 	}
 	if (options?.depth !== undefined && (!isInteger(options.depth) || options.depth < 0)) {
 		throw new BrowserError(
+			'ARGUMENT',
 			'Browser accessibility depth must be a non-negative integer',
-			undefined,
 			{ depth: options.depth },
 		)
 	}
@@ -1394,14 +1813,20 @@ export function browserScreenshotToParams(
 	const format = options?.format ?? 'png'
 	if (options?.quality !== undefined) {
 		if (format !== 'jpeg') {
-			throw new BrowserError('Browser screenshot quality is only valid for JPEG')
+			throw new BrowserError('ARGUMENT', 'Browser screenshot quality is only valid for JPEG')
 		}
 		if (!isInteger(options.quality) || options.quality < 0 || options.quality > 100) {
-			throw new BrowserError('Browser screenshot quality must be an integer from 0 to 100')
+			throw new BrowserError(
+				'ARGUMENT',
+				'Browser screenshot quality must be an integer from 0 to 100',
+			)
 		}
 	}
 	if (options?.full === true && options.clip !== undefined) {
-		throw new BrowserError('Browser screenshot cannot combine full-page and clip capture')
+		throw new BrowserError(
+			'ARGUMENT',
+			'Browser screenshot cannot combine full-page and clip capture',
+		)
 	}
 	const params: Record<string, unknown> = {
 		format,
@@ -1441,7 +1866,7 @@ export function validateBrowserRange(
 		(inclusive ? value < minimum : value <= minimum) ||
 		value > maximum
 	) {
-		throw new BrowserError(`${field} is outside its valid range`, undefined, {
+		throw new BrowserError('ARGUMENT', `${field} is outside its valid range`, {
 			value,
 			minimum,
 			maximum,
@@ -1459,12 +1884,12 @@ export function validateBrowserRange(
  */
 export function readBrowserAccessibility(value: unknown): BrowserAccessibilitySnapshot {
 	if (!isRecord(value) || !isArray(value['nodes'])) {
-		throw new BrowserError('Browser accessibility tree is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser accessibility tree is malformed')
 	}
 	const nodes: BrowserAXNode[] = []
 	for (const [index, candidate] of value['nodes'].entries()) {
 		if (!isRecord(candidate) || !isString(candidate['nodeId'])) {
-			throw new BrowserError('Browser accessibility node is malformed', undefined, { index })
+			throw new BrowserError('PROTOCOL', 'Browser accessibility node is malformed', { index })
 		}
 		const children = isArray(candidate['childIds']) ? candidate['childIds'].filter(isString) : []
 		const properties: Record<string, unknown> = {}
@@ -1529,11 +1954,16 @@ export function concatBytes(chunks: readonly Uint8Array[]): Uint8Array {
  */
 export function readBrowserStreamChunk(value: unknown): BrowserStreamChunk {
 	if (!isRecord(value) || !isString(value['data'])) {
-		throw new BrowserError('Browser IO stream chunk is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser IO stream chunk is malformed')
 	}
+	const bytes =
+		value['base64Encoded'] === true
+			? decodeBase64(value['data'])
+			: new TextEncoder().encode(value['data'])
+	if (bytes === undefined)
+		throw new BrowserError('PROTOCOL', 'Browser IO stream chunk has malformed base64 data')
 	return {
-		bytes:
-			value['base64Encoded'] === true ? decodeBase64(value['data']) : textToBytes(value['data']),
+		bytes,
 		eof: value['eof'] === true,
 	}
 }
@@ -1546,7 +1976,7 @@ export function readBrowserStreamChunk(value: unknown): BrowserStreamChunk {
  */
 export function readBrowserScriptCoverage(value: unknown): readonly BrowserScriptCoverage[] {
 	if (!isRecord(value) || !isArray(value['result'])) {
-		throw new BrowserError('Browser JavaScript coverage is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser JavaScript coverage is malformed')
 	}
 	return value['result'].map((script, index) => {
 		if (
@@ -1555,11 +1985,11 @@ export function readBrowserScriptCoverage(value: unknown): readonly BrowserScrip
 			!isString(script['url']) ||
 			!isArray(script['functions'])
 		) {
-			throw new BrowserError('Browser script coverage entry is malformed', undefined, { index })
+			throw new BrowserError('PROTOCOL', 'Browser script coverage entry is malformed', { index })
 		}
 		const functions: BrowserFunctionCoverage[] = script['functions'].map((entry, functionIndex) => {
 			if (!isRecord(entry) || !isString(entry['functionName']) || !isArray(entry['ranges'])) {
-				throw new BrowserError('Browser function coverage entry is malformed', undefined, {
+				throw new BrowserError('PROTOCOL', 'Browser function coverage entry is malformed', {
 					index,
 					function: functionIndex,
 				})
@@ -1586,7 +2016,7 @@ export function readBrowserScriptCoverage(value: unknown): readonly BrowserScrip
  */
 export function readBrowserStyleCoverage(value: unknown): readonly BrowserStyleCoverage[] {
 	if (!isRecord(value) || !isArray(value['ruleUsage'])) {
-		throw new BrowserError('Browser CSS coverage is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser CSS coverage is malformed')
 	}
 	const styles = new Map<string, BrowserCoverageRange[]>()
 	for (const [index, entry] of value['ruleUsage'].entries()) {
@@ -1598,7 +2028,7 @@ export function readBrowserStyleCoverage(value: unknown): readonly BrowserStyleC
 			!isInteger(entry['endOffset']) ||
 			entry['endOffset'] < entry['startOffset']
 		) {
-			throw new BrowserError('Browser CSS coverage entry is malformed', undefined, { index })
+			throw new BrowserError('PROTOCOL', 'Browser CSS coverage entry is malformed', { index })
 		}
 		const ranges = styles.get(entry['styleSheetId']) ?? []
 		ranges.push({
@@ -1623,7 +2053,7 @@ export function readBrowserCoverageRanges(
 	script: number,
 ): readonly BrowserCoverageRange[] {
 	if (!isArray(value)) {
-		throw new BrowserError('Browser coverage ranges are malformed', undefined, { script })
+		throw new BrowserError('PROTOCOL', 'Browser coverage ranges are malformed', { script })
 	}
 	return value.map((range, index) => {
 		if (
@@ -1635,7 +2065,7 @@ export function readBrowserCoverageRanges(
 			!isInteger(range['count']) ||
 			range['count'] < 0
 		) {
-			throw new BrowserError('Browser coverage range is malformed', undefined, {
+			throw new BrowserError('PROTOCOL', 'Browser coverage range is malformed', {
 				script,
 				index,
 			})
@@ -1656,11 +2086,11 @@ export function readBrowserCoverageRanges(
  */
 export function readBrowserMetrics(value: unknown): readonly BrowserMetric[] {
 	if (!isRecord(value) || !isArray(value['metrics'])) {
-		throw new BrowserError('Browser performance metrics are malformed')
+		throw new BrowserError('PROTOCOL', 'Browser performance metrics are malformed')
 	}
 	return value['metrics'].map((metric, index) => {
 		if (!isRecord(metric) || !isString(metric['name']) || !isFiniteNumber(metric['value'])) {
-			throw new BrowserError('Browser performance metric is malformed', undefined, { index })
+			throw new BrowserError('PROTOCOL', 'Browser performance metric is malformed', { index })
 		}
 		return { name: metric['name'], value: metric['value'] }
 	})
@@ -1674,7 +2104,7 @@ export function readBrowserMetrics(value: unknown): readonly BrowserMetric[] {
  */
 export function readBrowserProfile(value: unknown): BrowserProfile {
 	if (!isRecord(value) || !isRecord(value['profile'])) {
-		throw new BrowserError('Browser CPU profile is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser CPU profile is malformed')
 	}
 	const profile = value['profile']
 	if (
@@ -1683,7 +2113,7 @@ export function readBrowserProfile(value: unknown): BrowserProfile {
 		profile['endTime'] < profile['startTime'] ||
 		!isArray(profile['nodes'])
 	) {
-		throw new BrowserError('Browser CPU profile metadata is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser CPU profile metadata is malformed')
 	}
 	const nodes: BrowserProfileNode[] = profile['nodes'].map((node, index) => {
 		if (
@@ -1692,11 +2122,11 @@ export function readBrowserProfile(value: unknown): BrowserProfile {
 			node['id'] < 0 ||
 			(node['hitCount'] !== undefined && (!isInteger(node['hitCount']) || node['hitCount'] < 0))
 		) {
-			throw new BrowserError('Browser CPU profile node is malformed', undefined, { index })
+			throw new BrowserError('PROTOCOL', 'Browser CPU profile node is malformed', { index })
 		}
 		const children = node['children'] === undefined ? [] : parseArray(node['children'], isInteger)
 		if (children === undefined || children.some((child) => child < 0)) {
-			throw new BrowserError('Browser CPU profile node is malformed', undefined, { index })
+			throw new BrowserError('PROTOCOL', 'Browser CPU profile node is malformed', { index })
 		}
 		return {
 			id: node['id'],
@@ -1707,12 +2137,12 @@ export function readBrowserProfile(value: unknown): BrowserProfile {
 	})
 	const samples = profile['samples'] === undefined ? [] : parseArray(profile['samples'], isInteger)
 	if (samples === undefined || samples.some((sample) => sample < 0)) {
-		throw new BrowserError('Browser CPU profile samples are malformed')
+		throw new BrowserError('PROTOCOL', 'Browser CPU profile samples are malformed')
 	}
 	const deltas =
 		profile['timeDeltas'] === undefined ? [] : parseArray(profile['timeDeltas'], isFiniteNumber)
 	if (deltas === undefined || deltas.some((delta) => delta < 0)) {
-		throw new BrowserError('Browser CPU profile deltas are malformed')
+		throw new BrowserError('PROTOCOL', 'Browser CPU profile deltas are malformed')
 	}
 	return {
 		start: profile['startTime'],
@@ -1739,7 +2169,7 @@ export function readBrowserProfileFrame(value: unknown, node: number): BrowserPr
 		!isInteger(value['lineNumber']) ||
 		!isInteger(value['columnNumber'])
 	) {
-		throw new BrowserError('Browser CPU profile call frame is malformed', undefined, { node })
+		throw new BrowserError('PROTOCOL', 'Browser CPU profile call frame is malformed', { node })
 	}
 	return {
 		function: value['functionName'],
@@ -1757,20 +2187,21 @@ export function readBrowserProfileFrame(value: unknown, node: number): BrowserPr
  * @returns Protocol cookie record
  */
 export function cookieToProtocol(cookie: BrowserCookieInput): Readonly<Record<string, unknown>> {
-	if (cookie.name.length === 0) throw new BrowserError('Browser cookie name cannot be empty')
+	if (cookie.name.length === 0)
+		throw new BrowserError('ARGUMENT', 'Browser cookie name cannot be empty')
 	if (cookie.url === undefined && (cookie.domain === undefined || cookie.path === undefined)) {
-		throw new BrowserError('Browser cookie requires either url or domain with path', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser cookie requires either url or domain with path', {
 			name: cookie.name,
 		})
 	}
 	if (cookie.url !== undefined && !URL.canParse(cookie.url)) {
-		throw new BrowserError('Browser cookie URL must be valid', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser cookie URL must be valid', {
 			name: cookie.name,
 			url: cookie.url,
 		})
 	}
 	if (cookie.expires !== undefined && !isFiniteNumber(cookie.expires)) {
-		throw new BrowserError('Browser cookie expiry must be finite', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser cookie expiry must be finite', {
 			name: cookie.name,
 			expires: cookie.expires,
 		})
@@ -1804,7 +2235,7 @@ export function cookieToProtocol(cookie: BrowserCookieInput): Readonly<Record<st
  */
 export function readBrowserCookies(value: unknown): readonly BrowserCookie[] {
 	if (!isRecord(value) || !isArray(value['cookies'])) {
-		throw new BrowserError('Browser cookie result is malformed')
+		throw new BrowserError('PROTOCOL', 'Browser cookie result is malformed')
 	}
 	return value['cookies'].map((candidate, index) => readBrowserCookie(candidate, index))
 }
@@ -1827,11 +2258,11 @@ export function readBrowserCookie(value: unknown, index: number): BrowserCookie 
 		!isBoolean(value['httpOnly']) ||
 		!isBoolean(value['secure'])
 	) {
-		throw new BrowserError('Browser cookie is malformed', undefined, { index })
+		throw new BrowserError('PROTOCOL', 'Browser cookie is malformed', { index })
 	}
 	const sameSite = parseEnum(value['sameSite'], ['Strict', 'Lax', 'None'])
 	if (value['sameSite'] !== undefined && sameSite === undefined) {
-		throw new BrowserError('Browser cookie same-site policy is malformed', undefined, { index })
+		throw new BrowserError('PROTOCOL', 'Browser cookie same-site policy is malformed', { index })
 	}
 	return {
 		name: value['name'],
@@ -1856,7 +2287,7 @@ export function readBrowserCookie(value: unknown, index: number): BrowserCookie 
 export function matchesBrowserCookieURL(cookie: BrowserCookie, value: string): boolean {
 	const result = attempt(() => new URL(value))
 	if (!result.success) {
-		throw new BrowserError('Browser cookie URL must be valid', undefined, { url: value })
+		throw new BrowserError('ARGUMENT', 'Browser cookie URL must be valid', { url: value })
 	}
 	const url = result.value
 	const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain
@@ -1878,7 +2309,7 @@ export function matchesBrowserCookieURL(cookie: BrowserCookie, value: string): b
  */
 export function readBrowserStorageOrigin(value: unknown, origin: string): BrowserStorageOrigin {
 	if (!isRecord(value))
-		throw new BrowserError('Browser storage result is malformed', undefined, { origin })
+		throw new BrowserError('PROTOCOL', 'Browser storage result is malformed', { origin })
 	return {
 		origin,
 		local: readBrowserStorageEntries(value['local'], origin, 'local'),
@@ -1900,11 +2331,11 @@ export function readBrowserStorageEntries(
 	storage: 'local' | 'session',
 ): readonly BrowserStorageEntry[] {
 	if (!isArray(value)) {
-		throw new BrowserError('Browser storage entries are malformed', undefined, { origin, storage })
+		throw new BrowserError('PROTOCOL', 'Browser storage entries are malformed', { origin, storage })
 	}
 	return value.map((entry, index) => {
 		if (!isRecord(entry) || !isString(entry['name']) || !isString(entry['value'])) {
-			throw new BrowserError('Browser storage entry is malformed', undefined, {
+			throw new BrowserError('PROTOCOL', 'Browser storage entry is malformed', {
 				origin,
 				storage,
 				index,
@@ -1986,7 +2417,7 @@ export function readBrowserRemoteValue(value: unknown): unknown {
 
 /**
  * Decodes one CDP `Runtime.evaluate` result, throwing a `BrowserError` on a failed evaluation
- * and a `BrowserResultLimitError` past the guarded result size.
+ * and a `BrowserError` past the guarded result size.
  *
  * @param value - Unknown CDP result
  * @returns The returned by-value payload, or undefined
@@ -2000,14 +2431,14 @@ export function readEvaluationResult(value: unknown): unknown {
 			const description = details['exception']['description']
 			const limitMatch = BROWSER_RESULT_LIMIT_PATTERN.exec(description)
 			if (limitMatch !== null) {
-				throw new BrowserResultLimitError('Evaluation result exceeds BROWSER_RESULT_LIMIT', {
+				throw new BrowserError('RESULT_LIMIT', 'Evaluation result exceeds BROWSER_RESULT_LIMIT', {
 					length: Number(limitMatch[1]),
 					limit: BROWSER_RESULT_LIMIT,
 				})
 			}
-			throw new BrowserError(description)
+			throw new BrowserError('PROTOCOL', description)
 		}
-		throw new BrowserError('JavaScript evaluation failed')
+		throw new BrowserError('PROTOCOL', 'JavaScript evaluation failed')
 	}
 
 	const remoteObject = value['result']
@@ -2024,7 +2455,7 @@ export function readEvaluationResult(value: unknown): unknown {
  */
 export function requireBrowserString(value: unknown, field: string): string {
 	if (isString(value)) return value
-	throw new BrowserError(`${field} failed: no string value returned`)
+	throw new BrowserError('PROTOCOL', `${field} failed: no string value returned`)
 }
 
 /**
@@ -2039,7 +2470,7 @@ export function readBrowserWorld(value: unknown, frame: string): number {
 	if (isRecord(value) && isInteger(value['executionContextId'])) {
 		return value['executionContextId']
 	}
-	throw new BrowserError('Failed to create frame execution context', undefined, { frame })
+	throw new BrowserError('PROTOCOL', 'Failed to create frame execution context', { frame })
 }
 
 /**
@@ -2068,12 +2499,12 @@ export function readBrowserWorld(value: unknown, frame: string): number {
  */
 export function extractBrowserSlice(text: string, offset = 0, limit?: number): BrowserReadResult {
 	if (!isInteger(offset) || offset < 0) {
-		throw new BrowserError('Browser read offset must be a non-negative integer', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser read offset must be a non-negative integer', {
 			offset,
 		})
 	}
 	if (limit !== undefined && (!isInteger(limit) || limit < 1)) {
-		throw new BrowserError('Browser read limit must be a positive integer', undefined, { limit })
+		throw new BrowserError('ARGUMENT', 'Browser read limit must be a positive integer', { limit })
 	}
 	const total = text.length
 	if (limit === undefined || offset + limit >= total) {
@@ -2142,11 +2573,11 @@ export function readBrowserFrames(
  */
 export function readBrowserQuad(value: unknown): BrowserQuad {
 	if (!isRecord(value) || !isArray(value['quads'])) {
-		throw new BrowserError('Element has no content quad')
+		throw new BrowserError('PROTOCOL', 'Element has no content quad')
 	}
 	const points = parseNumberArray(value['quads'][0])
 	if (points === undefined || points.length !== 8) {
-		throw new BrowserError('Element has a malformed content quad')
+		throw new BrowserError('PROTOCOL', 'Element has a malformed content quad')
 	}
 	const x1 = points[0]
 	const y1 = points[1]
@@ -2166,7 +2597,7 @@ export function readBrowserQuad(value: unknown): BrowserQuad {
 		x4 === undefined ||
 		y4 === undefined
 	) {
-		throw new BrowserError('Element has a malformed content quad')
+		throw new BrowserError('PROTOCOL', 'Element has a malformed content quad')
 	}
 	return {
 		points: [x1, y1, x2, y2, x3, y3, x4, y4],
@@ -2188,7 +2619,7 @@ export function readBrowserQuad(value: unknown): BrowserQuad {
 export function extractBrowserChord(value: string): BrowserChord {
 	const parts = value.split('+').filter((part) => part.length > 0)
 	const key = parts.pop()
-	if (key === undefined) throw new BrowserError('Browser key chord is empty')
+	if (key === undefined) throw new BrowserError('ARGUMENT', 'Browser key chord is empty')
 	const modifiers = parts.map((modifier) => {
 		switch (modifier) {
 			case 'Ctrl':
@@ -2202,7 +2633,7 @@ export function extractBrowserChord(value: string): BrowserChord {
 	})
 	for (const modifier of modifiers) {
 		if (BROWSER_KEY_MODIFIERS[modifier] === undefined) {
-			throw new BrowserError(`Unsupported browser key modifier: ${modifier}`)
+			throw new BrowserError('ARGUMENT', `Unsupported browser key modifier: ${modifier}`)
 		}
 	}
 	return { modifiers, key }
@@ -2261,9 +2692,10 @@ export function keyToBrowserInput(value: string): BrowserKey {
 	}
 	const matched = named[value]
 	if (matched !== undefined) return matched
-	if ([...value].length !== 1) throw new BrowserError(`Unsupported browser key: ${value}`)
+	if ([...value].length !== 1)
+		throw new BrowserError('ARGUMENT', `Unsupported browser key: ${value}`)
 	const character = [...value][0]
-	if (character === undefined) throw new BrowserError('Browser key is empty')
+	if (character === undefined) throw new BrowserError('ARGUMENT', 'Browser key is empty')
 	const upper = character.toUpperCase()
 	const letter = /^[A-Z]$/.test(upper)
 	const digit = /^[0-9]$/.test(character)
@@ -2360,7 +2792,7 @@ export function readBrowserAttributes(
 
 /**
  * Decodes a CDP `DOMSnapshot.captureSnapshot` result into a serializable
- * `BrowserSnapshotInput`, throwing a `BrowserError` off-shape and a `BrowserResultLimitError`
+ * `BrowserSnapshotInput`, throwing a `BrowserError` off-shape and a `BrowserError`
  * past the configured node limit.
  *
  * @param value - Unknown CDP result
@@ -2374,16 +2806,16 @@ export function readBrowserSnapshot(
 	limit = BROWSER_SNAPSHOT_NODE_LIMIT,
 ): BrowserSnapshotInput {
 	if (!isInteger(limit) || limit < 0) {
-		throw new BrowserError('Browser snapshot limit must be a non-negative integer', undefined, {
+		throw new BrowserError('ARGUMENT', 'Browser snapshot limit must be a non-negative integer', {
 			limit,
 		})
 	}
 	if (!isRecord(value) || !isArray(value['strings']) || !isArray(value['documents'])) {
-		throw new BrowserError('Malformed DOMSnapshot.captureSnapshot result')
+		throw new BrowserError('PROTOCOL', 'Malformed DOMSnapshot.captureSnapshot result')
 	}
 	const strings = parseArray(value['strings'], isString)
 	if (strings === undefined) {
-		throw new BrowserError('Malformed DOMSnapshot string table')
+		throw new BrowserError('PROTOCOL', 'Malformed DOMSnapshot string table')
 	}
 	let count = 0
 	for (const document of value['documents']) {
@@ -2391,7 +2823,7 @@ export function readBrowserSnapshot(
 		count += parseNumberArray(document['nodes']['nodeType'])?.length ?? 0
 	}
 	if (count > limit) {
-		throw new BrowserResultLimitError('DOM snapshot exceeds the configured node limit', {
+		throw new BrowserError('RESULT_LIMIT', 'DOM snapshot exceeds the configured node limit', {
 			length: count,
 			limit,
 		})
@@ -2401,7 +2833,7 @@ export function readBrowserSnapshot(
 	for (let documentIndex = 0; documentIndex < value['documents'].length; documentIndex += 1) {
 		const rawDocument = value['documents'][documentIndex]
 		if (!isRecord(rawDocument) || !isRecord(rawDocument['nodes'])) {
-			throw new BrowserError('Malformed DOM snapshot document', undefined, {
+			throw new BrowserError('PROTOCOL', 'Malformed DOM snapshot document', {
 				document: documentIndex,
 			})
 		}
@@ -2412,7 +2844,7 @@ export function readBrowserSnapshot(
 		const title =
 			rawDocument['title'] === -1 ? '' : parseSnapshotString(strings, rawDocument['title'])
 		if (frame === undefined || url === undefined || title === undefined) {
-			throw new BrowserError('Malformed DOM snapshot document metadata', undefined, {
+			throw new BrowserError('PROTOCOL', 'Malformed DOM snapshot document metadata', {
 				document: documentIndex,
 			})
 		}
@@ -2420,7 +2852,7 @@ export function readBrowserSnapshot(
 		const names = parseNumberArray(rawNodes['nodeName'])
 		const values = parseNumberArray(rawNodes['nodeValue'])
 		if (types === undefined || names === undefined || values === undefined) {
-			throw new BrowserError('Malformed DOM snapshot node table', undefined, {
+			throw new BrowserError('PROTOCOL', 'Malformed DOM snapshot node table', {
 				document: documentIndex,
 			})
 		}
@@ -2480,7 +2912,7 @@ export function readBrowserSnapshot(
 			const nodeValue =
 				values[nodeIndex] === -1 ? '' : parseSnapshotString(strings, values[nodeIndex])
 			if (category === undefined || name === undefined || nodeValue === undefined) {
-				throw new BrowserError('Malformed DOM snapshot node', undefined, {
+				throw new BrowserError('PROTOCOL', 'Malformed DOM snapshot node', {
 					document: documentIndex,
 					index: nodeIndex,
 				})
@@ -2662,7 +3094,7 @@ export function collectBrowserJourneyBindings(
  * @param journey - Valid journey to edit
  * @param edits - Edits in application order
  * @returns The edited journey, with unbound parameters removed
- * @throws BrowserError - Thrown with BROWSER_JOURNEY_EDIT, a one-based index, and a reason clause when the batch fails
+ * @throws BrowserError - Thrown with JOURNEY_EDIT, a one-based index, and a reason clause when the batch fails
  */
 export function editBrowserJourney(
 	journey: BrowserJourney,
@@ -2686,11 +3118,11 @@ export function editBrowserJourney(
 					const anchor = edit.before ?? edit.after
 					const position =
 						anchor === undefined ? steps.length : steps.findIndex((step) => step.id === anchor)
-					if (position < 0) throw new BrowserError(`names unknown anchor "${anchor}"`)
+					if (position < 0) throw new BrowserError('ARGUMENT', `names unknown anchor "${anchor}"`)
 					const step = { ...edit.step, id: `s${next}` }
 					next += 1
 					if (!Number.isSafeInteger(next))
-						throw new BrowserError('Invariant 2 (ids): has an invalid next counter')
+						throw new BrowserError('ARGUMENT', 'Invariant 2 (ids): has an invalid next counter')
 					for (const field of [...Object.keys(step.arguments), 'target.name'])
 						origins.set(step.id + '.' + field, index)
 					steps.splice(position + (edit.after === undefined ? 0 : 1), 0, step)
@@ -2700,7 +3132,8 @@ export function editBrowserJourney(
 				case 'update': {
 					const position = steps.findIndex((step) => step.id === edit.id)
 					const step = steps[position]
-					if (step === undefined) throw new BrowserError(`names unknown step "${edit.id}"`)
+					if (step === undefined)
+						throw new BrowserError('ARGUMENT', `names unknown step "${edit.id}"`)
 					if (edit.operation === 'remove') {
 						steps.splice(position, 1)
 						removal = index
@@ -2734,13 +3167,13 @@ export function editBrowserJourney(
 		}
 		if (steps.length === 0) {
 			index = removal
-			throw new BrowserError('removes the last step')
+			throw new BrowserError('ARGUMENT', 'removes the last step')
 		}
 		const bindings = collectBrowserJourneyBindings(steps)
 		for (const [name, declaration] of declarations) {
 			if (!bindings.has(name)) {
 				index = declaration
-				throw new BrowserError(`declares "${name}" but no step binds it`)
+				throw new BrowserError('ARGUMENT', `declares "${name}" but no step binds it`)
 			}
 		}
 		parameters = Object.fromEntries(
@@ -2760,8 +3193,8 @@ export function editBrowserJourney(
 	} catch (error) {
 		const reason = normalizeBrowserJourneyReason(error)
 		throw new BrowserError(
+			'JOURNEY_EDIT',
 			`Edit ${index} is refused: ${reason.startsWith('its ') ? reason : `it ${reason}`}`,
-			'BROWSER_JOURNEY_EDIT',
 			{
 				index,
 				reason,
@@ -2773,28 +3206,29 @@ export function editBrowserJourney(
 /**
  * Checks a journey name before store access.
  * @param name - Journey name
- * @throws BrowserError - Thrown with BROWSER_JOURNEY_PATH when the name is invalid
+ * @throws BrowserError - Thrown with STORE_PATH when the name is invalid
  * @example
  * validateBrowserJourneyName('add-kettle')
  */
 export function validateBrowserJourneyName(name: string): void {
 	if (!BROWSER_JOURNEY_NAME_PATTERN.test(name))
-		throw new BrowserError(`Refused journey name: ${name}`, 'BROWSER_JOURNEY_PATH')
+		throw new BrowserError('STORE_PATH', `Refused journey name: ${name}`)
 }
 
 /**
  * Checks the offset and limit of a store page.
  * @param offset - Nonnegative safe integer offset
  * @param limit - Positive safe integer limit
- * @throws BrowserError - Thrown with BROWSER_JOURNEY_ARGUMENT when either bound is invalid
+ * @throws BrowserError - Thrown with ARGUMENT when either bound is invalid
  * @example
  * validateBrowserStorePage(0, 10)
  */
 export function validateBrowserStorePage(offset: number, limit: number): void {
 	if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
 		throw new BrowserError(
+			'ARGUMENT',
 			'Paging requires a nonnegative integer offset and a positive integer limit',
-			'BROWSER_JOURNEY_ARGUMENT',
+			{ subject: 'store' },
 		)
 }
 
@@ -2842,7 +3276,7 @@ export function resolveBrowserJourneyBinding(
 		const input = inputs[value.parameter]
 		if (input !== undefined) return input
 	}
-	throw new BrowserError('A journey binding has no value', 'BROWSER_JOURNEY_INPUT')
+	throw new BrowserError('JOURNEY_INPUT', 'A journey binding has no value')
 }
 
 /**
@@ -2856,7 +3290,7 @@ export function renderBrowserJourney(journey: BrowserJourney): string {
 	const defaults = Object.fromEntries(
 		parameters.map(([name, parameter]) => [name, parameter.default ?? name]),
 	)
-	const heading = `${journey.name} ${JSON.stringify(journey.description)}${parameters.length === 0 ? '' : ` (parameters: ${parameters.map(([name, parameter]) => `${name}${parameter.secret === true ? ' (secret)' : ''}`).join(', ')})`}`
+	const heading = `${journey.name} ${JSON.stringify(journey.description)}${journey.start === undefined ? '' : ` starts at ${abbreviateBrowserText(journey.start, 160)}`}${parameters.length === 0 ? '' : ` (parameters: ${parameters.map(([name, parameter]) => `${name}${parameter.secret === true ? ' (secret)' : ''}`).join(', ')})`}`
 	const lines = journey.steps.map((step) => {
 		const name =
 			step.target === undefined
@@ -3029,7 +3463,9 @@ export function renderBrowserRun(run: BrowserRun, view?: string): string {
 		run.outcome === 'complete'
 			? `Replayed ${run.journey.name}: ${run.steps.length} of ${run.journey.steps.length} steps.`
 			: run.outcome === 'stopped'
-				? `Replay of ${run.journey.name} stopped at ${at} of ${run.journey.steps.length}: ${reason}.`
+				? run.steps.length === 0 && run.journey.start !== undefined && run.fault !== undefined
+					? `Replay of ${run.journey.name} stopped before s1 of ${run.journey.steps.length}: ${run.fault.replace(/\.+$/, '')}.`
+					: `Replay of ${run.journey.name} stopped at ${at} of ${run.journey.steps.length}: ${reason}.`
 				: `Replay of ${run.journey.name} aborted at ${at} of ${run.journey.steps.length}.`
 	const lines = [
 		heading,
@@ -3054,14 +3490,14 @@ export function validateBrowserJourneyParameter(
 		(value['secret'] !== undefined && !isBoolean(value['secret']))
 	) {
 		throw new BrowserError(
+			'JOURNEY_INVALID',
 			'Invariant 5 (secrets): has a malformed parameter declaration',
-			'BROWSER_JOURNEY_INVALID',
 		)
 	}
 	if (value['secret'] === true && value['default'] !== undefined)
 		throw new BrowserError(
+			'JOURNEY_INVALID',
 			'Invariant 5 (secrets): declares a secret with a default',
-			'BROWSER_JOURNEY_INVALID',
 		)
 }
 
@@ -3079,15 +3515,12 @@ export function validateBrowserJourneyStep(
 		!isString(value['action']) ||
 		!isRecord(value['arguments'])
 	)
-		throw new BrowserError(
-			'Invariant 6 (JSON round trip): has a malformed step',
-			'BROWSER_JOURNEY_INVALID',
-		)
+		throw new BrowserError('JOURNEY_INVALID', 'Invariant 6 (JSON round trip): has a malformed step')
 	const action = value['action']
 	if (action.length === 0 || BROWSER_JOURNEY_NON_STEP_TOOLS.includes(action))
 		throw new BrowserError(
+			'JOURNEY_INVALID',
 			'Invariant 7 (actions): uses an observation or journey tool as a step',
-			'BROWSER_JOURNEY_INVALID',
 		)
 	const native = BROWSER_JOURNEY_ACTIONS.some((name) => name === action)
 	const targeted = action === 'click' || action === 'type'
@@ -3096,24 +3529,21 @@ export function validateBrowserJourneyStep(
 		(action === 'switch' ? !isBrowserJourneyTab(value['tab']) : value['tab'] !== undefined)
 	)
 		throw new BrowserError(
+			'JOURNEY_INVALID',
 			'Invariant 3 (targets and tabs): has an incompatible target or tab',
-			'BROWSER_JOURNEY_INVALID',
 		)
 	const args = value['arguments']
 	if (native && ('ref' in args || 'tab' in args))
 		throw new BrowserError(
+			'JOURNEY_INVALID',
 			'Invariant 3 (targets and tabs): carries ref or tab in native arguments',
-			'BROWSER_JOURNEY_INVALID',
 		)
 	if (
 		action === 'unresolved'
 			? !isString(value['gap']) || value['gap'].length === 0
 			: value['gap'] !== undefined
 	)
-		throw new BrowserError(
-			'Invariant 7 (actions): has an incompatible gap',
-			'BROWSER_JOURNEY_INVALID',
-		)
+		throw new BrowserError('JOURNEY_INVALID', 'Invariant 7 (actions): has an incompatible gap')
 	if (!native) return
 	const name = BROWSER_JOURNEY_ACTIONS.find((candidate) => candidate === action)
 	if (name === undefined) return
@@ -3144,43 +3574,39 @@ export function validateBrowserJourneyStep(
 		})
 	)
 		throw new BrowserError(
+			'JOURNEY_INVALID',
 			'Invariant 7 (actions): has malformed native arguments',
-			'BROWSER_JOURNEY_INVALID',
 		)
 }
 
 /**
  * Validates the journey format and its name, nonempty steps, ids, bindings, secrets, JSON, and actions.
  * @param value - Candidate journey
- * @throws BrowserError - Thrown with BROWSER_JOURNEY_FORMAT for an unknown format, or BROWSER_JOURNEY_INVALID naming the failed invariant
+ * @throws BrowserError - Thrown with STORE_FORMAT for an unknown format, or JOURNEY_INVALID naming the failed invariant
  */
 export function validateBrowserJourney(value: unknown): asserts value is BrowserJourney {
 	if (!isJSONValue(value) || !isRecord(value))
-		throw new BrowserError(
-			'Invariant 6 (JSON round trip): is not a JSON record',
-			'BROWSER_JOURNEY_INVALID',
-		)
+		throw new BrowserError('JOURNEY_INVALID', 'Invariant 6 (JSON round trip): is not a JSON record')
 	if (value['format'] !== BROWSER_JOURNEY_FORMAT_VERSION)
-		throw new BrowserError('Has an unknown journey format', 'BROWSER_JOURNEY_FORMAT')
+		throw new BrowserError('STORE_FORMAT', 'Has an unknown journey format')
 	if (!isString(value['name']) || !BROWSER_JOURNEY_NAME_PATTERN.test(value['name']))
+		throw new BrowserError('JOURNEY_INVALID', 'Invariant 1 (name): has an invalid journey name')
+	if (
+		!isString(value['description']) ||
+		(value['start'] !== undefined && !isString(value['start'])) ||
+		!isArray(value['steps']) ||
+		!isRecord(value['parameters'])
+	)
 		throw new BrowserError(
-			'Invariant 1 (name): has an invalid journey name',
-			'BROWSER_JOURNEY_INVALID',
-		)
-	if (!isString(value['description']) || !isArray(value['steps']) || !isRecord(value['parameters']))
-		throw new BrowserError(
+			'JOURNEY_INVALID',
 			'Invariant 6 (JSON round trip): has malformed journey fields',
-			'BROWSER_JOURNEY_INVALID',
 		)
 	if (value['steps'].length === 0)
-		throw new BrowserError('Invariant 2 (ids): has no steps', 'BROWSER_JOURNEY_INVALID', {
+		throw new BrowserError('JOURNEY_INVALID', 'Invariant 2 (ids): has no steps', {
 			field: 'steps',
 		})
 	if (!Number.isSafeInteger(value['next']) || !isFiniteNumber(value['next']) || value['next'] < 1)
-		throw new BrowserError(
-			'Invariant 2 (ids): has an invalid next counter',
-			'BROWSER_JOURNEY_INVALID',
-		)
+		throw new BrowserError('JOURNEY_INVALID', 'Invariant 2 (ids): has an invalid next counter')
 	const ids = new Set<string>()
 	const steps: BrowserJourneyStep[] = []
 	for (const step of value['steps']) {
@@ -3194,8 +3620,8 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 			ids.has(step.id)
 		)
 			throw new BrowserError(
+				'JOURNEY_INVALID',
 				'Invariant 2 (ids): repeats an id or exceeds the next counter',
-				'BROWSER_JOURNEY_INVALID',
 			)
 		ids.add(step.id)
 		steps.push({ ...step, id: step.id })
@@ -3204,14 +3630,14 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 	for (const [name, parameter] of Object.entries(value['parameters'])) {
 		if (!BROWSER_JOURNEY_PARAMETER_PATTERN.test(name))
 			throw new BrowserError(
+				'JOURNEY_INVALID',
 				'Invariant 4 (bindings): has an invalid parameter name',
-				'BROWSER_JOURNEY_INVALID',
 			)
 		validateBrowserJourneyParameter(parameter)
 		if (!bindings.has(name))
 			throw new BrowserError(
+				'JOURNEY_INVALID',
 				`Invariant 4 (bindings): declares "${name}" but no step binds it`,
-				'BROWSER_JOURNEY_INVALID',
 			)
 	}
 	for (const name of bindings.keys()) {
@@ -3225,8 +3651,8 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 				const context = { parameter: name, step: step.id, field }
 				if (!declared)
 					throw new BrowserError(
+						'JOURNEY_INVALID',
 						`Invariant 4 (bindings): binds undeclared parameter "${name}"`,
-						'BROWSER_JOURNEY_INVALID',
 						context,
 					)
 				if (
@@ -3235,8 +3661,8 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 					(step.action !== 'type' || field !== 'text')
 				)
 					throw new BrowserError(
+						'JOURNEY_INVALID',
 						`Invariant 5 (secrets): binds secret "${name}" outside type.text`,
-						'BROWSER_JOURNEY_INVALID',
 						context,
 					)
 			}
@@ -3251,7 +3677,7 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
  */
 export function validateBrowserJourneyEdit(value: unknown): asserts value is BrowserJourneyEdit {
 	if (!isRecord(value))
-		throw new BrowserError('has no edit object with an "operation" field', 'BROWSER_JOURNEY_EDIT')
+		throw new BrowserError('JOURNEY_EDIT', 'has no edit object with an "operation" field')
 	const operation = value['operation']
 	const fields =
 		operation === 'add'
@@ -3265,71 +3691,68 @@ export function validateBrowserJourneyEdit(value: unknown): asserts value is Bro
 						: undefined
 	if (fields === undefined)
 		throw new BrowserError(
+			'JOURNEY_EDIT',
 			'names no operation among add, update, remove, and declare',
-			'BROWSER_JOURNEY_EDIT',
 		)
 	for (const [field, content] of Object.entries(value)) {
 		if (!fields.includes(field))
 			throw new BrowserError(
+				'JOURNEY_EDIT',
 				`its "${operation}" carries an unknown field ${JSON.stringify(field)}`,
-				'BROWSER_JOURNEY_EDIT',
 			)
 		if (!isJSONValue(content))
 			throw new BrowserError(
+				'JOURNEY_EDIT',
 				`its "${operation}" has non-JSON content in ${JSON.stringify(field)}`,
-				'BROWSER_JOURNEY_EDIT',
 			)
 	}
 	switch (operation) {
 		case 'add':
 			if (value['before'] !== undefined && value['after'] !== undefined)
-				throw new BrowserError(
-					'its "add" carries both "before" and "after"',
-					'BROWSER_JOURNEY_EDIT',
-				)
+				throw new BrowserError('JOURNEY_EDIT', 'its "add" carries both "before" and "after"')
 			for (const field of ['before', 'after']) {
 				if (value[field] !== undefined && (!isString(value[field]) || value[field].length === 0))
-					throw new BrowserError(`its "add" has no step id in "${field}"`, 'BROWSER_JOURNEY_EDIT')
+					throw new BrowserError('JOURNEY_EDIT', `its "add" has no step id in "${field}"`)
 			}
 			try {
 				validateBrowserJourneyStep(value['step'])
 			} catch (error) {
 				throw new BrowserError(
+					'JOURNEY_EDIT',
 					`its "add" has an invalid "step": ${normalizeBrowserJourneyReason(error)}`,
-					'BROWSER_JOURNEY_EDIT',
 				)
 			}
 			if ('id' in value['step'])
 				throw new BrowserError(
+					'JOURNEY_EDIT',
 					'its "add" supplies "step.id", which is assigned automatically',
-					'BROWSER_JOURNEY_EDIT',
 				)
 			return
 		case 'remove':
 			if (!isString(value['id']) || value['id'].length === 0)
-				throw new BrowserError('its "remove" names no step in "id"', 'BROWSER_JOURNEY_EDIT')
+				throw new BrowserError('JOURNEY_EDIT', 'its "remove" names no step in "id"')
 			return
 		case 'update':
 			if (!isString(value['id']) || value['id'].length === 0)
-				throw new BrowserError('its "update" names no step in "id"', 'BROWSER_JOURNEY_EDIT')
+				throw new BrowserError('JOURNEY_EDIT', 'its "update" names no step in "id"')
 			if (value['arguments'] !== undefined && !isRecord(value['arguments']))
-				throw new BrowserError('its "update" has no object in "arguments"', 'BROWSER_JOURNEY_EDIT')
+				throw new BrowserError('JOURNEY_EDIT', 'its "update" has no object in "arguments"')
 			if (value['target'] !== undefined && !isBrowserJourneyTarget(value['target']))
-				throw new BrowserError('its "update" has an invalid "target"', 'BROWSER_JOURNEY_EDIT')
+				throw new BrowserError('JOURNEY_EDIT', 'its "update" has an invalid "target"')
 			if (value['tab'] !== undefined && !isBrowserJourneyTab(value['tab']))
-				throw new BrowserError('its "update" has an invalid "tab"', 'BROWSER_JOURNEY_EDIT')
+				throw new BrowserError('JOURNEY_EDIT', 'its "update" has an invalid "tab"')
 			return
 		case 'declare':
 			if (!isString(value['name']) || value['name'].length === 0)
-				throw new BrowserError('its "declare" has no "name"', 'BROWSER_JOURNEY_EDIT')
+				throw new BrowserError('JOURNEY_EDIT', 'its "declare" has no "name"')
 			if (!BROWSER_JOURNEY_PARAMETER_PATTERN.test(value['name']))
-				throw new BrowserError('its "declare" has an invalid "name"', 'BROWSER_JOURNEY_EDIT')
+				throw new BrowserError('JOURNEY_EDIT', 'its "declare" has an invalid "name"')
 			try {
 				validateBrowserJourneyParameter(value['parameter'])
 			} catch (error) {
 				throw new BrowserError(
+					'JOURNEY_EDIT',
 					`its "declare" has an invalid "parameter": ${normalizeBrowserJourneyReason(error)}`,
-					'BROWSER_JOURNEY_EDIT',
 				)
 			}
 			return
@@ -3343,9 +3766,9 @@ export function validateBrowserJourneyEdit(value: unknown): asserts value is Bro
  */
 export function validateBrowserRun(value: unknown): asserts value is BrowserRun {
 	if (!isJSONValue(value) || !isRecord(value))
-		throw new BrowserError('Run is not a JSON record', 'BROWSER_JOURNEY_INVALID')
+		throw new BrowserError('JOURNEY_INVALID', 'Run is not a JSON record')
 	if (value['format'] !== BROWSER_JOURNEY_FORMAT_VERSION)
-		throw new BrowserError('Has an unknown run format', 'BROWSER_JOURNEY_FORMAT')
+		throw new BrowserError('STORE_FORMAT', 'Has an unknown run format')
 	validateBrowserJourney(value['journey'])
 	const journey = value['journey']
 	if (
@@ -3365,7 +3788,7 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 		(value['output'] !== undefined &&
 			(!isArray(value['output']) || !value['output'].every(isString)))
 	)
-		throw new BrowserError('Run has malformed fields', 'BROWSER_JOURNEY_INVALID')
+		throw new BrowserError('JOURNEY_INVALID', 'Run has malformed fields')
 	for (const [index, step] of value['steps'].entries()) {
 		const source = journey.steps[index]
 		if (
@@ -3386,8 +3809,8 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 				parseEnum(step['reason'], BROWSER_NAVIGATION_REASONS) === undefined)
 		)
 			throw new BrowserError(
+				'JOURNEY_INVALID',
 				'Run has a malformed step or is not a journey prefix',
-				'BROWSER_JOURNEY_INVALID',
 			)
 	}
 	for (const [name, parameter] of Object.entries(journey.parameters)) {
@@ -3398,12 +3821,12 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 				value['steps'].some((step) => isRecord(step) && step['capture'] !== undefined))
 		)
 			throw new BrowserError(
+				'JOURNEY_INVALID',
 				'Invariant 5 (secrets): run retains secret inputs, output, or captures',
-				'BROWSER_JOURNEY_INVALID',
 			)
 	}
 	if (Object.keys(value['inputs']).some((name) => !Object.hasOwn(journey.parameters, name)))
-		throw new BrowserError('Run has an unknown input', 'BROWSER_JOURNEY_INVALID')
+		throw new BrowserError('JOURNEY_INVALID', 'Run has an unknown input')
 	if (
 		value['outcome'] === 'complete' &&
 		(value['steps'].length !== journey.steps.length ||
@@ -3417,7 +3840,7 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 				)
 			}))
 	)
-		throw new BrowserError('Run completion does not match its steps', 'BROWSER_JOURNEY_INVALID')
+		throw new BrowserError('JOURNEY_INVALID', 'Run completion does not match its steps')
 	for (const [index, source] of journey.steps.entries()) {
 		const step = value['steps'][index]
 		if (
@@ -3427,8 +3850,8 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 			Object.hasOwn(step['arguments'], 'text')
 		)
 			throw new BrowserError(
+				'JOURNEY_INVALID',
 				'Invariant 5 (secrets): run retains secret type.text',
-				'BROWSER_JOURNEY_INVALID',
 			)
 	}
 }
@@ -3442,7 +3865,7 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
  */
 export function buildBrowserJourney(
 	steps: readonly BrowserJourneyStep[],
-	options: Pick<BrowserJourney, 'name' | 'description'>,
+	options: BrowserJourneyInput,
 ): BrowserJourney {
 	const parameters: Record<string, BrowserJourneyParameter> = {}
 	for (const step of steps) {
@@ -3463,4 +3886,38 @@ export function buildBrowserJourney(
 	}
 	validateBrowserJourney(journey)
 	return journey
+}
+
+/**
+ * Validates the mutually exclusive conditions of a journey write before side effects.
+ * @param options - Conditional write and cancellation options
+ * @throws Thrown with ARGUMENT for conflicting conditions or an invalid revision.
+ * @example
+ * validateBrowserJourneyWriteOptions({ exclusive: true })
+ */
+export function validateBrowserJourneyWriteOptions(options?: BrowserJourneyWriteOptions): void {
+	if (
+		options?.revision !== undefined &&
+		(!Number.isSafeInteger(options.revision) || options.revision < 1)
+	)
+		throw new BrowserError('ARGUMENT', 'A journey revision must be a positive safe integer')
+	if (options?.revision !== undefined && options.exclusive === true)
+		throw new BrowserError('ARGUMENT', 'A journey write cannot combine revision and exclusive')
+}
+
+/**
+ * Refuses work on a disconnected or closed page.
+ * @param page - The page whose lifecycle permits the operation
+ * @param client - The client's connection carrying the page
+ * @throws Thrown with CLOSED when the client disconnected or the page closed.
+ * @example
+ * validateBrowserPageOpen(page, client)
+ */
+export function validateBrowserPageOpen(
+	page: BrowserPageInterface,
+	client: CDPClientInterface,
+): void {
+	if (!client.connected)
+		throw new BrowserError('CLOSED', 'Browser frame is disconnected', { frame: page.id })
+	if (page.closed) throw new BrowserError('CLOSED', 'Browser page is closed')
 }

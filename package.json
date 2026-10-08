@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/browser",
-	"version": "0.0.26",
+	"version": "0.0.27",
 	"description": "Chrome DevTools Protocol browser automation with an environment-agnostic core. Part of the @orkestrel line.",
 	"keywords": [
 		"automation",
@@ -102,6 +102,7 @@
 		"test:setup:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup:browser"
 	},
 	"dependencies": {
+		"@orkestrel/codec": "^0.0.5",
 		"@orkestrel/contract": "^0.0.19",
 		"@orkestrel/emitter": "^0.0.11",
 		"@orkestrel/html": "^0.0.12",
@@ -117,13 +118,13 @@
 		"@microsoft/api-extractor": "^7.59.4",
 		"@orkestrel/guide": "^0.0.24",
 		"@orkestrel/probe": "^0.0.21",
-		"@orkestrel/scaffold": "^0.0.93",
+		"@orkestrel/scaffold": "^0.0.94",
 		"@orkestrel/test": "^0.0.24",
 		"@types/node": "^26.6.4",
 		"@vitest/browser-playwright": "^4.1.11",
 		"oxfmt": "^0.72.0",
 		"oxlint": "^1.87.0",
-		"playwright": "^1.63.0",
+		"playwright": "^1.64.0",
 		"typescript": "^6.0.3",
 		"vite": "^8.3.3",
 		"vitest": "^4.1.11"

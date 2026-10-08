@@ -13,15 +13,11 @@ import type {
 	BrowserWorkerInterface,
 } from '@src/core'
 import type { CDPSentMessage } from '../../setup.js'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, it, expect } from 'vitest'
 import {
-	BrowserPage,
 	createCDPClient,
 	isBrowserError,
-	isBrowserElementError,
-	isBrowserResultLimitError,
-	isCDPTimeoutError,
-	BrowserResultLimitError,
 	BROWSER_RESULT_LIMIT,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
 	BROWSER_STOP_LOADING_TIMEOUT_MS,
@@ -63,6 +59,7 @@ import {
 	BROWSER_PENDING_REQUEST_CASES,
 	JPEG_BASE64,
 	PNG_BASE64,
+	BROWSER_BASE64_REFUSALS,
 	throwListenerError,
 	TIMER_LEAD,
 } from '../../setup.js'
@@ -92,7 +89,7 @@ describe('BrowserPage', () => {
 			const second = fixture.page.elements.outline({ timeout: 200 })
 			const outcome = second.catch((error: unknown) => error)
 			fixture.transport.reply(seed, { result: { value: 'complete' } })
-			expect(await outcome).toHaveProperty('count', 6)
+			expect(await outcome).toHaveProperty('listed', 6)
 			expect(attempts).toBe(1)
 		} finally {
 			await fixture.client.close()
@@ -111,7 +108,7 @@ describe('BrowserPage', () => {
 		})
 		try {
 			await expect(fixture.page.elements.outline()).rejects.toThrow('Readiness unavailable')
-			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('count', 6)
+			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('listed', 6)
 			expect(attempts).toBe(2)
 		} finally {
 			await fixture.client.close()
@@ -321,7 +318,7 @@ describe('BrowserPage', () => {
 		})
 		try {
 			await expect(fixture.page.wait('missing')).rejects.toMatchObject({
-				code: 'BROWSER_WAIT_TIMEOUT',
+				code: 'TIMEOUT',
 			})
 		} finally {
 			await fixture.client.close()
@@ -425,7 +422,7 @@ describe('BrowserPage', () => {
 			).toBe(false)
 			fixture.transport.reply(requireValue(cleanups[0]), { result: { value: false } })
 			await closing
-			expect(await pending).toMatchObject({ code: 'BROWSER_ERROR' })
+			expect(await pending).toMatchObject({ code: 'CLOSED' })
 			expect(
 				fixture.transport.sent.some((message) => message.method === 'Target.detachFromTarget'),
 			).toBe(true)
@@ -516,7 +513,7 @@ describe('BrowserPage', () => {
 			scriptEvaluate(transport, (expression) => expression === 'document.title', undefined)
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.title()).rejects.toSatisfy(isBrowserError)
+			await expect(page.title()).rejects.toMatchObject({ code: 'PROTOCOL' })
 		})
 	})
 
@@ -549,7 +546,7 @@ describe('BrowserPage', () => {
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 
-			await expect(page.navigate('https://example.com')).rejects.toSatisfy(isBrowserError)
+			await expect(page.navigate('https://example.com')).rejects.toMatchObject({ code: 'PROTOCOL' })
 			expect(page.url).toBe('about:blank')
 		})
 
@@ -559,7 +556,10 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Page.stopLoading', {})
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			await expect(page.navigate('https://bad.example')).rejects.toSatisfy(isBrowserError)
+			await expect(page.navigate('https://bad.example')).rejects.toMatchObject({
+				code: 'NAVIGATION',
+				message: 'Navigation failed: net::ERR_FAILED',
+			})
 		})
 
 		it('rejects with a timeout error when the load event never fires', async () => {
@@ -569,9 +569,11 @@ describe('BrowserPage', () => {
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 
-			await expect(page.navigate('https://slow.example', { timeout: 20 })).rejects.toThrow(
-				'Navigation timeout',
-			)
+			await expect(page.navigate('https://slow.example', { timeout: 20 })).rejects.toMatchObject({
+				code: 'TIMEOUT',
+				context: { operation: 'navigate' },
+				message: 'Navigation timeout after 20ms',
+			})
 		})
 
 		it('subscribes to Page.domContentEventFired and resolves for the domcontentloaded condition', async () => {
@@ -630,7 +632,7 @@ describe('BrowserPage', () => {
 				.catch((caught: unknown) => caught)
 			const elapsed = performance.now() - started
 
-			expect(isCDPTimeoutError(thrown)).toBe(true)
+			expect(isBrowserError(thrown) && thrown.code === 'TIMEOUT').toBe(true)
 			// The 10s client-wide default never bounded this send.
 			expect(elapsed).toBeLessThan(1_000)
 		})
@@ -678,7 +680,7 @@ describe('BrowserPage', () => {
 				.navigate('https://slow.example', { timeout: 20 })
 				.catch((caught: unknown) => caught)
 
-			expect(isCDPTimeoutError(thrown)).toBe(true)
+			expect(isBrowserError(thrown) && thrown.code === 'TIMEOUT').toBe(true)
 			expect(transport.sent.some((m) => m.method === 'Page.stopLoading')).toBe(true)
 		})
 
@@ -1162,7 +1164,7 @@ describe('BrowserPage', () => {
 			expect(page.url).toBe('https://example.com/b')
 		})
 
-		it('maps an oversized capture to a coded BrowserResultLimitError', async () => {
+		it('maps an oversized capture to a coded BrowserError', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 5 })
 			transport.onSend('Runtime.evaluate', (message) => {
@@ -1183,9 +1185,11 @@ describe('BrowserPage', () => {
 				compileGuardedEvaluateExpression(`(${compileReadFunction()})()`, BROWSER_RESULT_LIMIT),
 			)
 
-			expect(isBrowserResultLimitError(thrown)).toBe(true)
+			expect(isBrowserError(thrown) && thrown.code === 'RESULT_LIMIT').toBe(true)
 			expect(
-				thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined,
+				isBrowserError(thrown) && thrown.code === 'RESULT_LIMIT'
+					? thrown.context?.['length']
+					: undefined,
 			).toBe(3500000)
 		})
 
@@ -1202,6 +1206,51 @@ describe('BrowserPage', () => {
 	})
 
 	describe('screenshot()', () => {
+		it.each(BROWSER_BASE64_REFUSALS)(
+			'refuses malformed screenshot and PDF base64 %j before writing',
+			async (data) => {
+				const { client, transport } = await createConnectedCDPClient()
+				const writer = createRecordingWriter()
+				replyOk(transport, 'Page.captureScreenshot', { data })
+				replyOk(transport, 'Page.printToPDF', { data })
+				replyOk(transport, 'Emulation.setDefaultBackgroundColorOverride')
+				const page = new BrowserPage(client, 'target-1', 'session-1', writer)
+				try {
+					await expect(
+						page.screenshot({ path: 'shot.png', transparent: true }),
+					).rejects.toMatchObject({
+						code: 'PROTOCOL',
+						message: 'Screenshot failed: malformed base64 data',
+					})
+					await expect(page.pdf({ path: 'report.pdf' })).rejects.toMatchObject({
+						code: 'PROTOCOL',
+						message: 'PDF failed: malformed base64 data',
+					})
+					expect(writer.calls).toEqual([])
+					const backgrounds = transport.sent.filter(
+						(message) => message.method === 'Emulation.setDefaultBackgroundColorOverride',
+					)
+					expect(backgrounds).toHaveLength(2)
+					expect(backgrounds[0]?.params).toEqual({ color: { r: 0, g: 0, b: 0, a: 0 } })
+					expect(backgrounds[1]?.params).toBeUndefined()
+				} finally {
+					await client.close()
+				}
+			},
+		)
+
+		it('keeps an empty base64 result distinct from refusal', async () => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Page.captureScreenshot', { data: '' })
+			replyOk(transport, 'Page.printToPDF', { data: '' })
+			const page = new BrowserPage(client, 'target-1', 'session-1')
+			try {
+				expect((await page.screenshot()).bytes).toEqual(new Uint8Array())
+				expect((await page.pdf()).bytes).toEqual(new Uint8Array())
+			} finally {
+				await client.close()
+			}
+		})
 		it('decodes PNG bytes by default with no writer', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			replyOk(transport, 'Page.captureScreenshot', { data: PNG_BASE64 })
@@ -1340,7 +1389,10 @@ describe('BrowserPage', () => {
 			await page.elements.outline()
 			const secret = requireValue(page.elements.element('e1'))
 
-			await expect(page.screenshot({ mask: [secret] })).rejects.toSatisfy(isBrowserElementError)
+			await expect(page.screenshot({ mask: [secret] })).rejects.toMatchObject({
+				name: 'BrowserError',
+				code: 'ELEMENT',
+			})
 
 			expect(transport.sent.some((message) => message.method === 'Page.captureScreenshot')).toBe(
 				false,
@@ -1475,7 +1527,7 @@ describe('BrowserPage', () => {
 			expect(expression).toContain(String(BROWSER_RESULT_LIMIT))
 		})
 
-		it('maps an oversized result exception to a coded BrowserResultLimitError with length/limit context', async () => {
+		it('maps an oversized result exception to a coded BrowserError with length/limit context', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			transport.onSend('Runtime.evaluate', (message) => {
 				transport.reply(message.id, {
@@ -1490,12 +1542,16 @@ describe('BrowserPage', () => {
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			const thrown: unknown = await page.evaluate('bigObject').catch((caught: unknown) => caught)
 
-			expect(isBrowserResultLimitError(thrown)).toBe(true)
+			expect(isBrowserError(thrown) && thrown.code === 'RESULT_LIMIT').toBe(true)
 			expect(
-				thrown instanceof BrowserResultLimitError ? thrown.context?.['length'] : undefined,
+				isBrowserError(thrown) && thrown.code === 'RESULT_LIMIT'
+					? thrown.context?.['length']
+					: undefined,
 			).toBe(4200000)
 			expect(
-				thrown instanceof BrowserResultLimitError ? thrown.context?.['limit'] : undefined,
+				isBrowserError(thrown) && thrown.code === 'RESULT_LIMIT'
+					? thrown.context?.['limit']
+					: undefined,
 			).toBe(BROWSER_RESULT_LIMIT)
 		})
 	})
@@ -1670,7 +1726,10 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'DOMSnapshot.captureSnapshot', createDOMSnapshotResult())
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 
-			await expect(page.snapshot({ limit: 8 })).rejects.toBeInstanceOf(BrowserResultLimitError)
+			await expect(page.snapshot({ limit: 8 })).rejects.toMatchObject({
+				name: 'BrowserError',
+				code: 'RESULT_LIMIT',
+			})
 		})
 
 		it('rejects malformed protocol results instead of returning partial data', async () => {
@@ -1682,8 +1741,8 @@ describe('BrowserPage', () => {
 		})
 	})
 
-	describe('codegen()', () => {
-		it('starts a recorder and returns the same instance on repeat calls', async () => {
+	describe('recorder', () => {
+		it('keeps a dormant recorder until explicitly started and returns the same instance', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptFrameTree(transport)
 			replyOk(transport, 'Runtime.enable')
@@ -1695,10 +1754,17 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Runtime.evaluate')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const first = await page.codegen()
-			const second = await page.codegen()
+			const first = page.recorder
+			expect(first.active).toBe(false)
+			expect(transport.sent).toEqual([])
+			expect('codegen' in page).toBe(false)
+			expect('attach' in first).toBe(false)
+			expect('script' in first).toBe(false)
+			await first.start()
+			const second = page.recorder
+			await second.start()
 
-			expect(first.started).toBe(true)
+			expect(first.active).toBe(true)
 			expect(second).toBe(first)
 		})
 	})
@@ -1898,13 +1964,14 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Runtime.evaluate')
 			replyOk(transport, 'Runtime.removeBinding')
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const codegen = await page.codegen()
+			const codegen = page.recorder
+			await codegen.start()
 
 			transport.event('Target.targetDestroyed', { targetId: 'target-1' })
-			await waitForCondition('the codegen recorder stopped', () => !codegen.started)
+			await waitForCondition('the codegen recorder stopped', () => !codegen.active)
 			await page.close()
 
-			expect(codegen.started).toBe(false)
+			expect(codegen.active).toBe(false)
 			expect(transport.sent.some((message) => message.method === 'Target.closeTarget')).toBe(false)
 		})
 
@@ -1922,10 +1989,11 @@ describe('BrowserPage', () => {
 			replyOk(transport, 'Target.closeTarget')
 
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			const codegen = await page.codegen()
+			const codegen = page.recorder
+			await codegen.start()
 			await page.close()
 
-			expect(codegen.started).toBe(false)
+			expect(codegen.active).toBe(false)
 		})
 
 		it('shares one target closure across concurrent callers', async () => {
@@ -1965,7 +2033,7 @@ describe('BrowserPage', () => {
 			const sent = transport.sent.length
 
 			await expect(page.title()).rejects.toSatisfy(isBrowserError)
-			await expect(page.codegen()).rejects.toSatisfy(isBrowserError)
+			await expect(page.recorder.start()).rejects.toSatisfy(isBrowserError)
 			expect(transport.sent).toHaveLength(sent)
 		})
 	})
@@ -2514,7 +2582,7 @@ describe('BrowserPage events', () => {
 					reference,
 				),
 		)
-		expect(isBrowserError(refusal) && refusal.code).toBe('BROWSER_TARGET_HELD')
+		expect(isBrowserError(refusal) && refusal.code).toBe('TARGET_HELD')
 		transport.event('Target.targetCreated', {
 			targetInfo: { targetId: 'popup', type: 'page', url: '', attached: false, openerId: 'later' },
 		})
@@ -3213,9 +3281,9 @@ describe('BrowserPage out-of-process frame sessions', () => {
 
 			expect(page.elements.element('e6')).toBeUndefined()
 			await expect(child.click()).rejects.toMatchObject({
-				code: 'BROWSER_ELEMENT_ERROR',
+				code: 'ELEMENT',
 				context: { reference: 'e6', reason: 'GONE' },
-				message: expect.stringContaining('look'),
+				message: expect.stringContaining('read'),
 			})
 			expect(page.elements.element('e1')).toBe(main)
 			const captures = transport.sent.length

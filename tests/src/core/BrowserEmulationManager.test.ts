@@ -1,8 +1,46 @@
+import { BrowserEmulationManager } from '../../../src/core/BrowserEmulationManager.js'
+import { createRecorder, requireValue } from '@orkestrel/test'
+import type { BrowserPageInterface } from '@src/core'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserEmulationManager, BrowserPage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
 
 describe('BrowserEmulationManager', () => {
+	it.each(['clear', 'replace'])('resets inherited authentication on %s', async (operation) => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Network.enable',
+			'Fetch.enable',
+			'Fetch.disable',
+			'Network.setExtraHTTPHeaders',
+			'Network.emulateNetworkConditions',
+		])
+			replyOk(transport, method)
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		const emulation = new BrowserEmulationManager(() => [page])
+		try {
+			await emulation.apply({
+				credentials: { username: 'user', password: 'password' },
+				headers: { test: 'one' },
+				offline: true,
+			})
+			if (operation === 'clear') await emulation.clear()
+			else await emulation.apply({})
+			expect(transport.sent.some((message) => message.method === 'Fetch.disable')).toBe(true)
+			expect(
+				transport.sent.filter((message) => message.method === 'Network.setExtraHTTPHeaders').at(-1)
+					?.params,
+			).toEqual({ headers: {} })
+			expect(
+				transport.sent
+					.filter((message) => message.method === 'Network.emulateNetworkConditions')
+					.at(-1)?.params?.['offline'],
+			).toBe(false)
+		} finally {
+			await client.close()
+		}
+	})
 	it('applies rendering, locale, location, media, network, and header overrides', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		for (const method of [
@@ -20,7 +58,8 @@ describe('BrowserEmulationManager', () => {
 			replyOk(transport, method)
 		}
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const emulation = new BrowserEmulationManager(() => [page])
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => [page], undefined, drivers.handler)
 
 		await emulation.apply({
 			viewport: {
@@ -71,7 +110,8 @@ describe('BrowserEmulationManager', () => {
 			replyOk(transport, method)
 		}
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const emulation = new BrowserEmulationManager(() => [page])
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => [page], undefined, drivers.handler)
 
 		await emulation.apply({ offline: true, headers: { 'x-test': 'one' } })
 
@@ -96,7 +136,8 @@ describe('BrowserEmulationManager', () => {
 			replyOk(transport, method)
 		}
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const emulation = new BrowserEmulationManager(() => [page])
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => [page], undefined, drivers.handler)
 
 		await emulation.apply({ offline: true, headers: { 'x-test': 'one' } })
 		await emulation.apply({ locale: 'fr-FR' })
@@ -117,10 +158,12 @@ describe('BrowserEmulationManager', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Emulation.setLocaleOverride')
 		const pages: BrowserPage[] = []
-		const emulation = new BrowserEmulationManager(() => pages, { locale: 'de-DE' })
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => pages, { locale: 'de-DE' }, drivers.handler)
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
-		await emulation.attach(page)
+		expect('attach' in emulation).toBe(false)
+		await requireValue(drivers.calls[0]?.[0])(page)
 
 		expect(transport.sent[0]?.params).toEqual({ locale: 'de-DE' })
 	})
@@ -132,9 +175,11 @@ describe('BrowserEmulationManager', () => {
 			else transport.reply(message.id, {})
 		})
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const emulation = new BrowserEmulationManager(() => [], { locale: 'fr-FR' })
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => [], { locale: 'fr-FR' }, drivers.handler)
 
-		await expect(emulation.attach(page)).rejects.toThrow('locale failed')
+		expect('attach' in emulation).toBe(false)
+		await expect(requireValue(drivers.calls[0]?.[0])(page)).rejects.toThrow('locale failed')
 
 		expect(
 			transport.sent
@@ -146,7 +191,8 @@ describe('BrowserEmulationManager', () => {
 	it('rejects invalid viewport and geolocation bounds before partial application', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const emulation = new BrowserEmulationManager(() => [page])
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => [page], undefined, drivers.handler)
 
 		await expect(emulation.apply({ viewport: { width: 0, height: 600 } })).rejects.toSatisfy(
 			isBrowserError,
@@ -163,7 +209,8 @@ describe('BrowserEmulationManager', () => {
 		replyOk(transport, 'Emulation.setLocaleOverride')
 		replyOk(transport, 'Emulation.setTimezoneOverride')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const emulation = new BrowserEmulationManager(() => [page])
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => [page], undefined, drivers.handler)
 
 		await emulation.apply({ timezone: 'Europe/Paris' })
 		await emulation.apply({ locale: 'fr-FR' })
@@ -190,11 +237,12 @@ describe('BrowserEmulationManager', () => {
 			transport.reply(message.id, {})
 		})
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		const emulation = new BrowserEmulationManager(() => [page])
+		const drivers = createRecorder<[(page: BrowserPageInterface) => Promise<void>]>()
+		const emulation = new BrowserEmulationManager(() => [page], undefined, drivers.handler)
 		await emulation.apply({ locale: 'de-DE' })
 
 		await expect(emulation.apply({ locale: 'fr-FR' })).rejects.toThrow('locale failed')
-		await emulation.attach(page)
+		await requireValue(drivers.calls[0]?.[0])(page)
 
 		const locales = transport.sent
 			.filter((message) => message.method === 'Emulation.setLocaleOverride')

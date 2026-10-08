@@ -21,7 +21,7 @@ import {
 	BROWSER_EXPANDED_ROLES,
 	skipBrowserSubtree,
 } from '@src/browser'
-import { BROWSER_RESULT_LIMIT, createBrowserReading, isBrowserResultLimitError } from '@src/core'
+import { BROWSER_RESULT_LIMIT, createBrowserReading, isBrowserError } from '@src/core'
 import {
 	RENDERED_PAGE,
 	RENDERED_TEXT,
@@ -796,10 +796,9 @@ describe('readBrowserCapture', () => {
 		})
 		paragraph.textContent = 'x'.repeat(room + 1)
 		const refusal = captureError(() => readBrowserCapture(paragraph))
-		expect(isBrowserResultLimitError(refusal) && [refusal.code, refusal.context]).toEqual([
-			'BROWSER_RESULT_LIMIT_ERROR',
-			{ length: BROWSER_RESULT_LIMIT + 1, limit: BROWSER_RESULT_LIMIT },
-		])
+		expect(
+			isBrowserError(refusal) && refusal.code === 'RESULT_LIMIT' && [refusal.code, refusal.context],
+		).toEqual(['RESULT_LIMIT', { length: BROWSER_RESULT_LIMIT + 1, limit: BROWSER_RESULT_LIMIT }])
 	})
 
 	it('catches a capture measured by its characters rather than its serialized escapes', () => {
@@ -808,7 +807,7 @@ describe('readBrowserCapture', () => {
 		paragraph.textContent = `${'x'.repeat(room - 1)}"`
 		expect(paragraph.outerHTML.length).toBe(room + '<p></p>'.length)
 		const refusal = captureError(() => readBrowserCapture(paragraph))
-		expect(isBrowserResultLimitError(refusal) && refusal.context).toEqual({
+		expect(isBrowserError(refusal) && refusal.code === 'RESULT_LIMIT' && refusal.context).toEqual({
 			length: BROWSER_RESULT_LIMIT + 1,
 			limit: BROWSER_RESULT_LIMIT,
 		})

@@ -1,5 +1,6 @@
 import type {
 	BrowserCallOptions,
+	BrowserEpochFunction,
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserElementQuery,
@@ -8,19 +9,19 @@ import type {
 	BrowserOutlineNode,
 	BrowserOutlineOptions,
 } from '@src/core'
-import type { BrowserDOMElementInterface, BrowserDOMElementManagerInput } from '../types.js'
+import type { BrowserDOMElementInterface } from '../types.js'
 import { attempt, isInteger } from '@orkestrel/contract'
 import {
 	BROWSER_INTERACTIVE_ROLES,
 	BROWSER_OUTLINE_LIMIT,
 	BROWSER_REFERENCE_PREFIX,
-	BrowserElementError,
 	BrowserError,
 	filterBrowserOutline,
 	normalizeBrowserName,
 	parseBrowserReference,
 	renderBrowserOutline,
 	validateBrowserTimeout,
+	describeBrowserRefusal,
 } from '@src/core'
 import { BrowserDOMElement } from './BrowserDOMElement.js'
 import { BrowserDOMWait } from '../BrowserDOMWait.js'
@@ -73,15 +74,13 @@ import {
  * at the next observed mutation or `load`, so a match inserted there with no other observed
  * change is not seen before the deadline.
  *
- * @example
- * ```ts
- * const view = createBrowserDOMView({ document: frame.contentDocument })
- * const outline = await view.elements.outline()
- * const [save] = await view.elements.find({ role: 'button', name: 'save' })
- * ```
  */
 export class BrowserDOMElementManager implements BrowserElementManagerInterface<BrowserDOMElementInterface> {
-	readonly #input: BrowserDOMElementManagerInput
+	readonly #input: {
+		readonly document: () => Document
+		readonly navigation: BrowserEpochFunction
+		readonly signal: AbortSignal
+	}
 	readonly #records = new Map<
 		string,
 		{ readonly node: WeakRef<Element>; readonly element: BrowserDOMElement }
@@ -94,8 +93,13 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	readonly #epochs = new WeakMap<Document, number>()
 	readonly #watched = new WeakSet<Document>()
 	#count = 0
+	#positions = new WeakMap<Node, string>()
 
-	constructor(input: BrowserDOMElementManagerInput) {
+	constructor(input: {
+		readonly document: () => Document
+		readonly navigation: BrowserEpochFunction
+		readonly signal: AbortSignal
+	}) {
 		this.#input = input
 	}
 
@@ -103,12 +107,18 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		this.#input.signal.throwIfAborted()
 		const limit = options?.limit ?? BROWSER_OUTLINE_LIMIT
 		if (!isInteger(limit) || limit < 0) {
-			throw new BrowserError('Outline limit must be a nonnegative integer', undefined, { limit })
+			throw new BrowserError('ARGUMENT', 'Outline limit must be a nonnegative integer', { limit })
 		}
 		options?.signal?.throwIfAborted()
 		const document = this.#input.document()
+		const epoch = this.#epoch(new WeakRef(document))
 		const rows = this.#capture(this.#root(document, options?.within), options?.within)
-		return renderBrowserOutline(document.URL, document.title, rows, limit, options?.search)
+		if (document !== this.#input.document() || epoch !== this.#epoch(new WeakRef(document)))
+			throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'outline' }, 'GONE'), {
+				subject: 'outline',
+				reason: 'GONE',
+			})
+		return renderBrowserOutline(document.URL, document.title, rows, limit, options?.secrets)
 	}
 
 	async find(
@@ -178,7 +188,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		if (css === undefined) return matches
 		const selected = attempt(() => Array.from(root.querySelectorAll(css)))
 		if (!selected.success) {
-			throw new BrowserError(`CSS query is invalid: ${css}`, 'BROWSER_ELEMENT_QUERY', { css })
+			throw new BrowserError('ELEMENT_QUERY', `CSS query is invalid: ${css}`, { css })
 		}
 		const bound = selected.value.map((element) => {
 			const role = computeBrowserRole(element) ?? 'generic'
@@ -191,6 +201,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	// Walks one scope; a scope root in an omitted subtree yields no row.
 	#capture(root: Element, within?: string): readonly BrowserOutlineNode[] {
 		const rows: BrowserOutlineNode[] = []
+		this.#positions = new WeakMap()
 		if (within === undefined || !matchesBrowserOmitted(root)) this.#walk(root, rows, false)
 		return rows
 	}
@@ -200,7 +211,10 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		if (within === undefined) return document.documentElement
 		const node = this.#records.get(parseBrowserReference(within) ?? '')?.node.deref()
 		if (node === undefined || !node.isConnected || node.ownerDocument.defaultView === null) {
-			throw new BrowserElementError(within, 'GONE')
+			throw new BrowserError('ELEMENT', describeBrowserRefusal(within, 'GONE'), {
+				reference: within,
+				reason: 'GONE',
+			})
 		}
 		return node
 	}
@@ -245,7 +259,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 				) {
 					const container = readBrowserBlock(parent, root)
 					if (!blank) {
-						if (block !== undefined && block !== container) text = this.#flush(rows, text)
+						if (block !== undefined && block !== container) text = this.#flush(rows, text, block)
 						text += data
 						block = container
 					} else if (container === block) text += data
@@ -262,7 +276,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 				continue
 			}
 			if (node instanceof view.HTMLIFrameElement) {
-				text = this.#flush(rows, text)
+				text = this.#flush(rows, text, block)
 				const child = node.contentDocument
 				if (invisible) {
 					node = skipBrowserSubtree(walker)
@@ -280,7 +294,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 				continue
 			}
 			if (node instanceof view.HTMLSlotElement) {
-				text = this.#flush(rows, text)
+				text = this.#flush(rows, text, block)
 				for (const assigned of node.assignedNodes({ flatten: true })) {
 					if (assigned instanceof view.Element) this.#walk(assigned, rows, quiet)
 					else if (!quiet) this.#flush(rows, assigned.textContent ?? '')
@@ -293,11 +307,30 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			if (
 				!invisible &&
 				role !== undefined &&
-				(BROWSER_INTERACTIVE_ROLES.has(role) || role === 'heading' || tool !== '')
+				(BROWSER_INTERACTIVE_ROLES.has(role) ||
+					[
+						'heading',
+						'image',
+						'img',
+						'listitem',
+						'row',
+						'cell',
+						'gridcell',
+						'columnheader',
+						'rowheader',
+					].includes(role) ||
+					tool !== '')
 			) {
-				text = this.#flush(rows, text)
-				rows.push(this.#row(node, role, view, String(rows.length)))
-				if (silenced === undefined && BROWSER_CONTENT_NAMED_ROLES.has(role)) silenced = node
+				text = this.#flush(rows, text, block)
+				const row = this.#row(node, role, view, String(rows.length))
+				rows.push(row)
+				this.#positions.set(node, row.id)
+				if (
+					silenced === undefined &&
+					BROWSER_CONTENT_NAMED_ROLES.has(role) &&
+					!['row', 'cell', 'gridcell', 'columnheader', 'rowheader'].includes(role)
+				)
+					silenced = node
 				if (node.localName === 'textarea') {
 					node = skipBrowserSubtree(walker)
 					continue
@@ -305,14 +338,14 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			}
 			const shadow = node.shadowRoot
 			if (shadow !== null) {
-				text = this.#flush(rows, text)
+				text = this.#flush(rows, text, block)
 				this.#walk(shadow, rows, muted || silenced !== undefined)
 				node = skipBrowserSubtree(walker)
 				continue
 			}
 			node = walker.nextNode()
 		}
-		this.#flush(rows, text)
+		this.#flush(rows, text, block)
 	}
 
 	// Subscribes one time to a walked document's navigation events.
@@ -346,15 +379,15 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	}
 
 	// Emits the pending text as one row and returns the emptied buffer.
-	#flush(rows: BrowserOutlineNode[], text: string): string {
-		if (normalizeBrowserName(text) !== '') this.#text(rows, text)
+	#flush(rows: BrowserOutlineNode[], text: string, parent?: Node): string {
+		if (normalizeBrowserName(text) !== '') this.#text(rows, text, parent)
 		return ''
 	}
 
-	#text(rows: BrowserOutlineNode[], text: string): void {
+	#text(rows: BrowserOutlineNode[], text: string, parent?: Node): void {
 		rows.push({
 			id: String(rows.length),
-			parent: undefined,
+			parent: parent === undefined ? undefined : this.#parent(parent),
 			children: [],
 			backend: undefined,
 			frame: undefined,
@@ -377,7 +410,10 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	): BrowserOutlineNode {
 		const name = computeBrowserName(element, role)
 		const tool = element.localName === 'form' ? element.getAttribute('toolname') : null
-		const reference = role === 'heading' ? undefined : this.#bind(element, role, name).reference
+		const reference =
+			BROWSER_INTERACTIVE_ROLES.has(role) || tool !== null
+				? this.#bind(element, role, name).reference
+				: undefined
 		const input = element instanceof view.HTMLInputElement ? element : undefined
 		const checked =
 			input !== undefined && (input.type === 'checkbox' || input.type === 'radio')
@@ -393,6 +429,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		if (element instanceof view.HTMLSelectElement)
 			value = Array.from(element.selectedOptions, (option) => option.label).join(', ')
 		else if (element instanceof view.HTMLTextAreaElement) value = element.value
+		else if (input?.type === 'password') value = '•'.repeat(input.value.length)
 		else if (
 			input !== undefined &&
 			input.type !== 'password' &&
@@ -401,7 +438,7 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			value = input.value
 		return {
 			id: reference ?? id,
-			parent: undefined,
+			parent: this.#parent(element.parentNode),
 			children: [],
 			backend: undefined,
 			frame: undefined,
@@ -411,6 +448,12 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			description: undefined,
 			value,
 			properties: {
+				level:
+					role === 'heading'
+						? Number(element.getAttribute('aria-level') ?? element.localName.slice(1))
+						: undefined,
+				url: element instanceof view.HTMLAnchorElement ? element.href : undefined,
+				password: input?.type === 'password',
 				checked,
 				disabled: element.matches(':disabled'),
 				focused,
@@ -420,6 +463,15 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 			session: '',
 			reference,
 		}
+	}
+
+	#parent(node: Node | null): string | undefined {
+		while (node !== null) {
+			const id = this.#positions.get(node)
+			if (id !== undefined) return id
+			node = node.parentNode
+		}
+		return undefined
 	}
 
 	#bind(element: Element, role: string, name: string): BrowserDOMElement {

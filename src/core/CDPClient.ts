@@ -7,11 +7,12 @@ import type {
 	CDPTransportInterface,
 } from './types.js'
 import type { EmitterErrorHandler, EmitterInterface } from '@orkestrel/emitter'
+import type { JSONValue } from '@orkestrel/contract'
 import { BrowserTransition } from './BrowserTransition.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
-import { CDPConnectionError, CDPError, CDPTimeoutError } from './errors.js'
+import { BrowserError } from './errors.js'
 import { Emitter } from '@orkestrel/emitter'
-import { isInteger, isRecord, isString, parseJSON } from '@orkestrel/contract'
+import { isInteger, isRecord, isString, parseJSON, isJSONValue } from '@orkestrel/contract'
 
 // === CDPClient
 
@@ -117,7 +118,7 @@ export class CDPClient implements CDPClientInterface {
 		options?: CDPSendOptions,
 	): Promise<unknown> {
 		if (!this.#connected) {
-			throw new CDPConnectionError('CDP client is not connected', { method })
+			throw new BrowserError('DISCONNECTED', 'CDP client is not connected', { method })
 		}
 		if (options?.signal?.aborted === true) throw options.signal.reason
 
@@ -138,7 +139,7 @@ export class CDPClient implements CDPClientInterface {
 		return new Promise<unknown>((resolve, reject) => {
 			const timer = setTimeout(() => {
 				this.#settle(id)?.reject(
-					new CDPTimeoutError(`CDP request timed out: ${method}`, {
+					new BrowserError('TIMEOUT', `CDP request timed out: ${method}`, {
 						method,
 						timeout: effectiveTimeout,
 					}),
@@ -225,7 +226,7 @@ export class CDPClient implements CDPClientInterface {
 				this.#active = false
 			}
 			this.#emitter.emit('close')
-			throw new CDPConnectionError('CDP client was closed while connecting', {
+			throw new BrowserError('DISCONNECTED', 'CDP client was closed while connecting', {
 				method: 'connect',
 			})
 		}
@@ -253,7 +254,7 @@ export class CDPClient implements CDPClientInterface {
 		// Reject all pending requests
 		for (const [id, entry] of this.#pending) {
 			this.#settle(id)?.reject(
-				new CDPConnectionError('CDP connection closed', { method: entry.method }),
+				new BrowserError('DISCONNECTED', 'CDP connection closed', { method: entry.method }),
 			)
 		}
 
@@ -301,7 +302,7 @@ export class CDPClient implements CDPClientInterface {
 		// Reject all pending requests
 		for (const [id, entry] of this.#pending) {
 			this.#settle(id)?.reject(
-				new CDPConnectionError('CDP connection closed', { method: entry.method }),
+				new BrowserError('DISCONNECTED', 'CDP connection closed', { method: entry.method }),
 			)
 		}
 		if (!this.#expected) this.#emitter.emit('drop')
@@ -311,9 +312,9 @@ export class CDPClient implements CDPClientInterface {
 		this.#connected = false
 		for (const [id, entry] of this.#pending) {
 			this.#settle(id)?.reject(
-				new CDPConnectionError(`CDP connection failed: ${String(error)}`, {
+				new BrowserError('DISCONNECTED', `CDP connection failed: ${String(error)}`, {
 					method: entry.method,
-					error,
+					error: isJSONValue(error) ? error : String(error),
 				}),
 			)
 		}
@@ -332,11 +333,11 @@ export class CDPClient implements CDPClientInterface {
 				const errorValue = parsed['error']
 				if (isRecord(errorValue)) {
 					const message = isString(errorValue['message']) ? errorValue['message'] : 'CDP error'
-					const context: Record<string, unknown> = { method: entry.method }
-					if ('code' in errorValue) context['code'] = errorValue['code']
+					const context: Record<string, JSONValue> = { method: entry.method }
+					if (isJSONValue(errorValue['code'])) context['code'] = errorValue['code']
 					context['message'] = message
-					if ('data' in errorValue) context['data'] = errorValue['data']
-					entry.reject(new CDPError(message, context))
+					if (isJSONValue(errorValue['data'])) context['data'] = errorValue['data']
+					entry.reject(new BrowserError('REMOTE', message, context))
 				} else {
 					entry.resolve('result' in parsed ? parsed['result'] : undefined)
 				}
@@ -357,7 +358,7 @@ export class CDPClient implements CDPClientInterface {
 				for (const [id, entry] of this.#pending) {
 					if (entry.session !== detached) continue
 					this.#settle(id)?.reject(
-						new CDPConnectionError('CDP session detached', {
+						new BrowserError('DISCONNECTED', 'CDP session detached', {
 							method: entry.method,
 							session: detached,
 						}),

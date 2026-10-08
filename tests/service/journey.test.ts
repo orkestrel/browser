@@ -13,6 +13,9 @@ import type {
 	BrowserJourneyStageInterface,
 	FixtureServerInterface,
 } from '../setupServer.js'
+import { mkdirSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { BROWSER_LEGACY_JOURNEY_JSON } from '../setup.js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -20,6 +23,7 @@ import { createRecorder, createTeardown, requireValue, waitForCondition } from '
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	BrowserContext,
+	BROWSER_TOOL_LIMIT,
 	compileBrowserJourney,
 	createBrowserRecorder,
 	createBrowserReplay,
@@ -30,7 +34,7 @@ import {
 } from '@src/core'
 import {
 	createBrowser,
-	createCDPTransport,
+	createWebSocketCDPTransport,
 	createFileBrowserJourneyStore,
 	createFileBrowserRunStore,
 } from '@src/server'
@@ -107,7 +111,7 @@ describe('journey semantic replay', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		transport = new BrowserJourneyTransportRecorder(createCDPTransport({ url: endpoint }))
+		transport = new BrowserJourneyTransportRecorder(createWebSocketCDPTransport({ url: endpoint }))
 		const client = createCDPClient({ transport })
 		cleanup.add(() => client.close())
 		await client.connect()
@@ -125,6 +129,131 @@ describe('journey semantic replay', () => {
 	})
 	afterAll(async () => {
 		await cleanup.destroy()
+	})
+
+	it('audit repair 13: loads and replays a file written by the published 0.0.26 store', async () => {
+		const directory = createTempDirectory('reading-legacy-')
+		try {
+			mkdirSync(join(directory.path, 'legacy-ready'))
+			writeFileSync(
+				join(directory.path, 'legacy-ready', 'journey.json'),
+				BROWSER_LEGACY_JOURNEY_JSON,
+			)
+			const store = createFileBrowserJourneyStore({ root: directory.path })
+			expect(await store.get('legacy-ready')).toMatchObject({
+				revision: 1,
+				journey: { format: 1, name: 'legacy-ready' },
+			})
+			await toolset.destroy()
+			toolset = createBrowserToolset(page, { journeys: { store } })
+			await toolset.start()
+			await page.evaluate(`document.body.innerHTML = '<p>Legacy ready</p>'`)
+			const result = requireToolText(
+				await toolset.tools.execute({
+					id: 'legacy',
+					name: 'replay',
+					arguments: { journey: 'legacy-ready' },
+				}),
+			)
+			expect(result).toContain('Replayed legacy-ready: 1 of 1 steps.')
+			expect(result).toContain('Legacy ready')
+		} finally {
+			directory.destroy()
+		}
+	})
+	it('audit repair 2: journey listings budget and consume host notes before rendering', async () => {
+		await toolset.destroy()
+		let note = ''
+		const store = createMemoryBrowserJourneyStore()
+		await store.set({
+			...createBrowserJourneyFixture([{ action: 'wait', arguments: { text: 'Ready' } }]),
+			description: 'Material '.repeat(1000),
+		})
+		toolset = createBrowserToolset(page, {
+			journeys: { store },
+			notes: () => {
+				const result = note
+				note = ''
+				return result
+			},
+		})
+		await toolset.start()
+		note = 'Recovered the browser. ' + 'Details '.repeat(1000)
+		const result = requireToolText(
+			await toolset.tools.execute({ id: 'listing', name: 'journeys', arguments: { from: 1 } }),
+		)
+		expect(result).toContain('Recovered the browser.')
+		expect(result.length).toBeLessThanOrEqual(4000)
+		expect(result).toMatch(/call journeys with from \d+ for more\]$/)
+		expect(await toolset.read()).not.toContain('Recovered the browser.')
+	})
+	it('bounds the complete saved journey and exposes an exact line continuation', async () => {
+		await toolset.destroy()
+		toolset = createBrowserToolset(page, { journeys: { store: createMemoryBrowserJourneyStore() } })
+		await toolset.start()
+		await page.evaluate('document.body.innerHTML = "<button>Keep</button>"')
+		await toolset.tools.execute({
+			id: 'record',
+			name: 'record',
+			arguments: { journey: 'long-description' },
+		})
+		const [button] = await page.elements.find({ role: 'button', name: 'Keep' })
+		await toolset.tools.execute({
+			id: 'click',
+			name: 'click',
+			arguments: { ref: requireValue(button).reference },
+		})
+		const saved = requireToolText(
+			await toolset.tools.execute({
+				id: 'save',
+				name: 'save',
+				arguments: {
+					description: 'A recorded journey with ordinary descriptive text. '.repeat(150),
+				},
+			}),
+		)
+		expect(saved.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		expect(saved).toMatch(/call journeys with from \d+ for more/)
+		const from = Number(requireValue(/call journeys with from (\d+) for more/.exec(saved))[1])
+		const continued = requireToolText(
+			await toolset.tools.execute({ id: 'continue', name: 'journeys', arguments: { from } }),
+		)
+		expect(continued).toContain(`\n${from}: `)
+		expect(continued.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		const edited = requireToolText(
+			await toolset.tools.execute({
+				id: 'edit',
+				name: 'edit',
+				arguments: {
+					journey: 'long-description',
+					edits: [
+						{
+							operation: 'add',
+							after: 's1',
+							step: { action: 'wait', arguments: { text: 'Keep' } },
+						},
+					],
+				},
+			}),
+		)
+		expect(edited.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		expect(edited).toMatch(/call journeys with from \d+ for more/)
+		const replay = requireToolText(
+			await toolset.tools.execute({
+				id: 'replay',
+				name: 'replay',
+				arguments: { journey: 'long-description' },
+			}),
+		)
+		expect(replay.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+		expect(replay).toContain('page ')
+		const failure = await toolset.tools.execute({
+			id: 'error',
+			name: 'journeys',
+			arguments: { from: 1, ['unknown'.repeat(1000)]: true },
+		})
+		expect(failure).toMatchObject({ success: false })
+		expect(failure.success ? '' : failure.error).toHaveLength(BROWSER_TOOL_LIMIT)
 	})
 
 	describe('claim 3: changed markup and duplicate refusal', () => {
@@ -174,7 +303,7 @@ describe('journey semantic replay', () => {
 						arguments: {},
 						target: { role: 'button', name: 'Delete' },
 					}),
-				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_AMBIGUOUS' })
+				).rejects.toMatchObject({ code: 'JOURNEY_AMBIGUOUS' })
 				expect(
 					transport.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
 				).toEqual([])
@@ -204,7 +333,7 @@ describe('journey semantic replay', () => {
 			await expect(
 				toolset.follow('s1', { action: 'click', arguments: {}, target }),
 			).rejects.toMatchObject({
-				code: 'BROWSER_JOURNEY_TARGET',
+				code: 'JOURNEY_TARGET',
 			})
 			const run = await createBrowserReplay(toolset, { journey }).execute()
 			expect(run.outcome).toBe('stopped')
@@ -257,7 +386,7 @@ describe('compiled module equality', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		const client = createCDPClient({ transport: createCDPTransport({ url: endpoint }) })
+		const client = createCDPClient({ transport: createWebSocketCDPTransport({ url: endpoint }) })
 		cleanup.add(() => client.close())
 		await client.connect()
 		context = new BrowserContext(client)
@@ -369,7 +498,7 @@ describe('compiled module equality', () => {
 		expect(failure).toMatchObject({
 			message: 's2: the element is in a child frame; handle it here',
 		})
-		expect(refusal).toMatchObject({ code: 'BROWSER_JOURNEY_GAP' })
+		expect(refusal).toMatchObject({ code: 'JOURNEY_GAP' })
 		expect(
 			await readBrowserJourneyOutcome(built.context.pages(), clicked, scenario.state),
 		).toStrictEqual([{ clicks: 'save:true submit:true', saved: 'yes' }])
@@ -486,7 +615,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		transport = new BrowserJourneyTransportRecorder(createCDPTransport({ url: endpoint }))
+		transport = new BrowserJourneyTransportRecorder(createWebSocketCDPTransport({ url: endpoint }))
 		const client = createCDPClient({ transport })
 		cleanup.add(() => client.close())
 		await client.connect()
@@ -502,7 +631,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 	})
 
 	describe('claim 6: a replay hold admits only its own actions', () => {
-		it('refuses a foreign click, dialog, and adopted page tool while look, read, tabs, and wait pass, after an action admitted before the hold completes first', async () => {
+		it('refuses a foreign click, dialog, and adopted page tool while read and wait pass, after an action admitted before the hold completes first', async () => {
 			const page = await context.create({ url: fixtures.url('/confirm') })
 			pages.push(page)
 			const invoked = createRecorder<[]>()
@@ -527,7 +656,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				// the foreign answer is sent from the action event itself.
 				if (action.outcome === 'interrupted')
 					dialogs.push(
-						toolset.perform({ id: 'foreign', name: 'dialog', arguments: { accept: false } }),
+						toolset.execute({ id: 'foreign', name: 'dialog', arguments: { accept: false } }),
 					)
 			})
 			const keep = await requireBrowserJourneyElement(page, { role: 'button', name: 'Keep' })
@@ -543,7 +672,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 					},
 				},
 			)
-			const early = toolset.perform({
+			const early = toolset.execute({
 				id: 'early',
 				name: 'click',
 				arguments: { ref: keep.reference },
@@ -563,16 +692,23 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				}),
 			]
 			const passed = [
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'drafts' } }),
-				await toolset.tools.execute({ id: 'read', name: 'read', arguments: { search: 'drafts' } }),
-				await toolset.tools.execute({ id: 'tabs', name: 'tabs', arguments: { search: 'tabs' } }),
+				await toolset.tools.execute({
+					id: 'reading',
+					name: 'read',
+					arguments: { from: 1, search: 'drafts' },
+				}),
+				await toolset.tools.execute({
+					id: 'read',
+					name: 'read',
+					arguments: { from: 1, search: 'drafts' },
+				}),
 				await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Drafts' } }),
 			]
 			await page.evaluate(
 				`document.querySelector('main').insertAdjacentHTML('beforeend', '<p>Draft deleted</p>')`,
 			)
 			const run = await running
-			const busy = 'The toolset is replaying delete-draft until it finishes; call look.'
+			const busy = 'The toolset is replaying delete-draft until it finishes; call read.'
 
 			expect((await early).action?.outcome).toBe('done')
 			expect(events.slice(0, 5)).toEqual([
@@ -590,8 +726,8 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				{ success: false, error: busy },
 				{ success: false, error: busy },
 			])
-			expect(passed.map((result) => result.success)).toEqual([true, true, true, true])
-			expect(requireToolText(passed[3])).toBe('"Drafts" is on the page.')
+			expect(passed.map((result) => result.success)).toEqual([true, true, true])
+			expect(requireToolText(passed[2])).toContain('"Drafts" is on the page.\n\npage ')
 			expect(invoked.count).toBe(0)
 			expect(run.outcome).toBe('complete')
 			expect(run.steps.map((step) => step.outcome)).toEqual(['interrupted', 'done', 'done'])
@@ -629,7 +765,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			expect(await page.evaluate('document.body.dataset.slow')).toBe('done')
 			expect(await page.evaluate('document.body.dataset.kept ?? "none"')).toBe('none')
 			const keep = await requireBrowserJourneyElement(page, { role: 'button', name: 'Keep' })
-			const after = await toolset.perform({
+			const after = await toolset.execute({
 				id: 'after',
 				name: 'click',
 				arguments: { ref: keep.reference },
@@ -741,13 +877,13 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				journey: BROWSER_JOURNEY_TIMEOUT_CONTROL,
 			}).execute()
 
-			expect(direct).toBe('"Order shipped" did not appear within 5 s.')
+			expect(direct).toContain('"Order shipped" did not appear within 5 s.\n\npage ')
 			expect(run.outcome).toBe('stopped')
 			expect(run.steps.map((step) => [step.id, step.outcome])).toEqual([
 				['s1', 'done'],
 				['s2', 'timeout'],
 			])
-			expect(run.steps[1]?.result).toBe(direct)
+			expect(run.steps[1]?.result).toBe(direct.split('\n')[0])
 			expect(renderBrowserRun(run).split('\n')[0]).toBe(
 				'Replay of review-draft stopped at s2 of 3: "Order shipped" did not appear within 5 s.',
 			)
@@ -848,7 +984,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 
 			expect(refused).toEqual({
 				refusal: {
-					code: 'BROWSER_JOURNEY_PLACEMENT',
+					code: 'JOURNEY_PLACEMENT',
 					message: 'Step s2 cannot execute press in this placement.',
 				},
 				events: '0',
@@ -883,7 +1019,10 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 					const read = await files.get(name, options)
 					// A second store over the same root saves the journey between this read and the
 					// edit's write.
-					if (read !== undefined && concurrent) await writer.set(read.journey, read.revision)
+					if (read !== undefined && concurrent)
+						await writer.set(read.journey, {
+							...(read.revision === undefined ? {} : { revision: read.revision }),
+						})
 					return read
 				},
 				set: files.set.bind(files),
@@ -906,9 +1045,9 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			)
 			const view = requireToolText(
 				await toolset.tools.execute({
-					id: 'look',
-					name: 'look',
-					arguments: { search: 'the form' },
+					id: 'reading',
+					name: 'read',
+					arguments: { from: 1 },
 				}),
 			)
 			requireToolText(
@@ -936,14 +1075,14 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				await toolset.tools.execute({
 					id: 'journeys',
 					name: 'journeys',
-					arguments: { search: 'saved journeys' },
+					arguments: { from: 1 },
 				}),
 			)
 			const current = requireToolText(
 				await toolset.tools.execute({
-					id: 'look',
-					name: 'look',
-					arguments: { search: 'the form' },
+					id: 'reading',
+					name: 'read',
+					arguments: { from: 1 },
 				}),
 			)
 			const review = requireOutlineReference(current, 'button', 'Review')
@@ -975,7 +1114,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			})
 			const kept = await writer.get('save-delivery')
 			const listing = [
-				'save-delivery "Save the delivery draft"',
+				`save-delivery "Save the delivery draft" starts at ${fixtures.url('/form')}`,
 				's1 click button "Save draft"',
 				's2 type "Grace" into textbox "Name"',
 			].join('\n')
@@ -983,9 +1122,24 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			expect(recording).toBe(
 				`Recording save-delivery; each action you take is a step; call save when it is done.\n\n${view}`,
 			)
-			expect(saved).toBe(`Saved save-delivery with 2 steps.\n\n${listing}`)
-			expect(listed).toBe(listing)
-			expect(edited).toBe(`Edited save-delivery.\n\n${listing}\ns3 click button "Review"`)
+			expect(saved).toBe(
+				`Saved save-delivery with 2 steps.\n${listing
+					.split('\n')
+					.map((line, index) => `${index + 1}: ${line}`)
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
+			)
+			expect(listed).toBe(
+				`journeys (3 lines)\n${listing
+					.split('\n')
+					.map((line, index) => `${index + 1}: ${line}`)
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
+			)
+			expect(edited).toBe(
+				`Edited save-delivery.\n${listing
+					.split('\n')
+					.map((line, index) => `${index + 1}: ${line}`)
+					.join('\n')}\n4: s3 click button "Review"\n[lines 1–4 of 4; the whole listing]`,
+			)
 			expect(added).toMatchObject({
 				revision: 2,
 				journey: {
@@ -1038,7 +1192,11 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				),
 			]
 			const view = requireToolText(
-				await toolset.tools.execute({ id: 'look', name: 'look', arguments: { search: 'sign in' } }),
+				await toolset.tools.execute({
+					id: 'reading',
+					name: 'read',
+					arguments: { from: 1, search: 'sign in' },
+				}),
 			)
 			receipts.push(
 				view,
@@ -1073,7 +1231,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				await toolset.tools.execute({
 					id: 'journeys',
 					name: 'journeys',
-					arguments: { search: 'saved journeys' },
+					arguments: { from: 1 },
 				}),
 			)
 			await page.evaluate(
@@ -1098,7 +1256,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				compileBrowserJourney(journey, { language: 'typescript' }).source,
 			]
 			const listing = [
-				'sign-in "Sign in with the password" (parameters: password (secret))',
+				`sign-in "Sign in with the password" starts at ${fixtures.url('/form')} (parameters: password (secret))`,
 				's1 type (secret) as password into textbox "Password"',
 				's2 click button "Sign in"',
 			].join('\n')
@@ -1115,12 +1273,22 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 
 			expect(recorded).toBe(String(BROWSER_JOURNEY_SECRET.length))
 			expect(replayed).toBe(String(BROWSER_JOURNEY_SECRET.length))
-			expect(saved).toBe(`Saved sign-in with 2 steps.\n\n${listing}`)
-			expect(listed).toBe(listing)
+			expect(saved).toBe(
+				`Saved sign-in with 2 steps.\n${listing
+					.split('\n')
+					.map((line, index) => `${index + 1}: ${line}`)
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
+			)
+			expect(listed).toBe(
+				`journeys (3 lines)\n${listing
+					.split('\n')
+					.map((line, index) => `${index + 1}: ${line}`)
+					.join('\n')}\n[lines 1–3 of 3; the whole listing]`,
+			)
 			expect(maskBrowserReferences(rendered).split('\n').slice(0, 3)).toEqual([
 				'Replayed sign-in: 2 of 2 steps.',
-				's1 Typed a secret into e# textbox "Password".',
-				's2 Clicked e# button "Sign in".',
+				's1 Typed a secret into textbox "Password" [ref=e#].',
+				's2 Clicked button "Sign in" [ref=e#].',
 			])
 			expect(journey.parameters).toEqual({ password: { secret: true } })
 			expect(ids).toHaveLength(1)

@@ -1,21 +1,7 @@
-/**
- * src/core/BrowserKeyboard.ts tests.
- *
- * Every case drives a real `BrowserKeyboard` over a real `BrowserPage` attached to the
- * in-memory CDP transport, and asserts on the `Input.dispatchKeyEvent` and
- * `Input.insertText` frames the transport recorded. The chord split and the key
- * normalization the class composes are covered here too, because no other suite drives
- * `extractBrowserChord` or `keyToBrowserInput`.
- */
-
+import { BrowserKeyboard } from '../../../src/core/BrowserKeyboard.js'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import {
-	BrowserKeyboard,
-	BrowserPage,
-	extractBrowserChord,
-	isBrowserError,
-	keyToBrowserInput,
-} from '@src/core'
+import { extractBrowserChord, isBrowserError, keyToBrowserInput } from '@src/core'
 import {
 	createAttachedPage,
 	createConnectedCDPClient,

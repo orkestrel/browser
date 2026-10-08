@@ -3,11 +3,14 @@ import type {
 	BrowserJourneyRevision,
 	BrowserJourneyStoreInterface,
 	BrowserStoreOptions,
+	BrowserStorePageOptions,
+	BrowserJourneyWriteOptions,
 	BrowserStorePage,
 } from '../types.js'
 import { BrowserError } from '../errors.js'
 import {
 	validateBrowserJourney,
+	validateBrowserJourneyWriteOptions,
 	validateBrowserJourneyName,
 	validateBrowserStorePage,
 } from '../helpers.js'
@@ -33,18 +36,19 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 
 	async set(
 		journey: BrowserJourney,
-		expected?: number,
-		options?: BrowserStoreOptions,
+		options?: BrowserJourneyWriteOptions,
 	): Promise<BrowserJourneyRevision> {
 		options?.signal?.throwIfAborted()
+		validateBrowserJourneyWriteOptions(options)
 		validateBrowserJourneyName(journey.name)
 		validateBrowserJourney(journey)
 		const previous = this.#revisions.get(journey.name)
-		if (expected !== undefined && expected !== (this.#journeys.get(journey.name)?.revision ?? 0))
-			throw new BrowserError(
-				`Journey ${journey.name} changed since you read it`,
-				'BROWSER_JOURNEY_STALE',
-			)
+		if (
+			(options?.exclusive === true && this.#journeys.get(journey.name) !== undefined) ||
+			(options?.revision !== undefined &&
+				options.revision !== this.#journeys.get(journey.name)?.revision)
+		)
+			throw new BrowserError('JOURNEY_STALE', `Journey ${journey.name} changed since you read it`)
 		const revision = (previous ?? 0) + 1
 		const saved = structuredClone({ journey, revision })
 		this.#journeys.set(journey.name, saved)
@@ -58,9 +62,7 @@ export class MemoryBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		this.#journeys.delete(name)
 	}
 
-	async list(
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
-	): Promise<BrowserStorePage<BrowserJourneyRevision>> {
+	async list(options?: BrowserStorePageOptions): Promise<BrowserStorePage<BrowserJourneyRevision>> {
 		options?.signal?.throwIfAborted()
 		const entries = [...this.#journeys.entries()]
 			.sort(([left], [right]) => (left < right ? -1 : left > right ? 1 : 0))

@@ -6,14 +6,7 @@ import { isInteger } from '@orkestrel/contract'
 /**
  * Records sampled JavaScript CPU profiles over one frame's Profiler domain.
  *
- * @example
- * ```ts
- * import { BrowserProfiler } from '@orkestrel/browser'
- *
- * const profiler = new BrowserProfiler(page)
- * await profiler.start(100)
- * const profile = await profiler.stop() // { start, end, nodes, samples, deltas }
- * ```
+ * @remarks The owner exposes this entity through `page.diagnostics.profiler`.
  */
 export class BrowserProfiler implements BrowserProfilerInterface {
 	readonly #frame: BrowserFrameInterface
@@ -28,12 +21,12 @@ export class BrowserProfiler implements BrowserProfilerInterface {
 	}
 
 	async start(interval?: number): Promise<void> {
-		if (this.#active) throw new BrowserError('Browser CPU profiling is already active')
+		if (this.#active) throw new BrowserError('ARGUMENT', 'Browser CPU profiling is already active')
 		if (interval !== undefined) {
 			if (!isInteger(interval) || interval <= 0) {
 				throw new BrowserError(
+					'ARGUMENT',
 					'Browser CPU sampling interval must be a positive integer',
-					undefined,
 					{
 						interval,
 					},
@@ -52,7 +45,7 @@ export class BrowserProfiler implements BrowserProfilerInterface {
 	}
 
 	async stop(): Promise<BrowserProfile> {
-		if (!this.#active) throw new BrowserError('Browser CPU profiling is not active')
+		if (!this.#active) throw new BrowserError('ARGUMENT', 'Browser CPU profiling is not active')
 		this.#active = false
 		let result: unknown
 		try {

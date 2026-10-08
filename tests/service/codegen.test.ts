@@ -6,7 +6,7 @@ import { isArray, isRecord, isString } from '@orkestrel/contract'
 import { createRecorder, createTeardown, requireValue, waitForCondition } from '@orkestrel/test'
 import { createLoopback } from '@orkestrel/test/server'
 import { BrowserContext, createCDPClient } from '@src/core'
-import { createBrowser, createCDPTransport } from '@src/server'
+import { createBrowser, createWebSocketCDPTransport } from '@src/server'
 import { createTempDirectory, reservePort } from '../setupServer.js'
 import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../setupService.js'
 import { BROWSER_CODEGEN_FIXTURE, BROWSER_CODEGEN_ORACLE, projectCodegenOracle } from '../setup.js'
@@ -52,7 +52,7 @@ describe('claim 12: page recorder against the fixture event log', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		const transport = createCDPTransport({ url: endpoint })
+		const transport = createWebSocketCDPTransport({ url: endpoint })
 		transport.emitter.on('message', inbound.handler)
 		const client = createCDPClient({ transport })
 		cleanup.add(() => client.close())
@@ -72,7 +72,8 @@ describe('claim 12: page recorder against the fixture event log', () => {
 	})
 
 	it('projects trusted edits, Enter, selects, both frame kinds, dialog answers, and password markers', async () => {
-		const recorder = await page.codegen()
+		const recorder = page.recorder
+		await recorder.start()
 		await requireValue((await page.elements.find({ css: '#add' }))[0]).click()
 		await requireValue((await page.elements.find({ css: '#title' }))[0]).click()
 		await page.keyboard.type('Pasta night')
@@ -152,7 +153,8 @@ describe('claim 12: page recorder against the fixture event log', () => {
 	})
 
 	it('closes edits at submission, focus departure, navigation, and stop, including contenteditable', async () => {
-		const recorder = await page.codegen()
+		const recorder = page.recorder
+		await recorder.start()
 		await page.evaluate("document.querySelector('#title').focus()")
 		await page.keyboard.insert('first')
 		await page.keyboard.press('Enter')

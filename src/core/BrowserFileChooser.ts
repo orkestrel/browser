@@ -24,7 +24,7 @@ export class BrowserFileChooser implements BrowserFileChooserInterface {
 	async upload(files: readonly string[]): Promise<void> {
 		this.#assert()
 		if (!this.#multiple && files.length > 1) {
-			throw new BrowserError('Single file chooser cannot accept multiple files')
+			throw new BrowserError('ARGUMENT', 'Single file chooser cannot accept multiple files')
 		}
 		this.#handling = true
 		try {
@@ -54,7 +54,7 @@ export class BrowserFileChooser implements BrowserFileChooserInterface {
 
 	#assert(): void {
 		if (this.#handled || this.#handling) {
-			throw new BrowserError('Browser file chooser is already handled')
+			throw new BrowserError('CLOSED', 'Browser file chooser is already handled')
 		}
 	}
 }

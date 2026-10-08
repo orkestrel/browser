@@ -1,3 +1,4 @@
+import { BrowserCoverage } from '../../../src/core/BrowserCoverage.js'
 /**
  * src/core/BrowserCoverage.ts tests.
  *
@@ -7,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BrowserCoverage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createAttachedPage, replyOk } from '../../setup.js'
 
 const SCRIPT_COVERAGE = {

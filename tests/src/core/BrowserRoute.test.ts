@@ -8,7 +8,9 @@
 
 import type { BrowserRequest } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { decodeBase64, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
+import { decodeBase64 } from '@orkestrel/codec'
+import { requireValue } from '@orkestrel/test'
 import { BrowserRoute } from '../../../src/core/BrowserRoute.js'
 import { createAttachedPage, readCDPParams, replyOk } from '../../setup.js'
 
@@ -73,7 +75,11 @@ describe('BrowserRoute', () => {
 		expect(params['url']).toBe('https://example.com/other')
 		expect(params['method']).toBe('POST')
 		expect(params['headers']).toStrictEqual([{ name: 'x-test', value: 'one' }])
-		expect(new TextDecoder().decode(decodeBase64(String(params['postData'])))).toBe('body')
+		expect(
+			new TextDecoder().decode(
+				requireValue(decodeBase64(String(params['postData'])), 'canonical base64 body'),
+			),
+		).toBe('body')
 	})
 
 	it('fulfills with the default status and with an explicit status, phrase, headers, and body', async () => {
@@ -97,7 +103,11 @@ describe('BrowserRoute', () => {
 		expect(params['responseCode']).toBe(404)
 		expect(params['responsePhrase']).toBe('Not Found')
 		expect(params['responseHeaders']).toStrictEqual([{ name: 'content-type', value: 'text/plain' }])
-		expect(new TextDecoder().decode(decodeBase64(String(params['body'])))).toBe('missing')
+		expect(
+			new TextDecoder().decode(
+				requireValue(decodeBase64(String(params['body'])), 'canonical base64 body'),
+			),
+		).toBe('missing')
 	})
 
 	it('fulfills a byte body without re-encoding it as text', async () => {
@@ -109,7 +119,9 @@ describe('BrowserRoute', () => {
 		})
 
 		const params = readCDPParams(transport, 'Fetch.fulfillRequest')[0] ?? {}
-		expect([...decodeBase64(String(params['body']))]).toStrictEqual([0, 1, 254])
+		expect([
+			...requireValue(decodeBase64(String(params['body'])), 'canonical base64 body'),
+		]).toStrictEqual([0, 1, 254])
 	})
 
 	it('accepts the status boundaries and refuses anything outside them', async () => {

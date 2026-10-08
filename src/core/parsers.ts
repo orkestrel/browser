@@ -30,6 +30,7 @@ import {
 	isInteger,
 	isRecord,
 	isString,
+	parseInteger,
 	parseArray,
 	parseEnum,
 	parseJSONAs,
@@ -43,6 +44,16 @@ import {
 	readBrowserRemoteValue,
 	readBrowserStack,
 } from './helpers.js'
+
+/**
+ * Parses an integer or a canonical unsigned decimal string for a tool coordinate.
+ * @param value - The supplied coordinate
+ * @returns The integer, or undefined when the value or spelling is invalid
+ */
+export function parseBrowserToolInteger(value: unknown): number | undefined {
+	if (isString(value) && !/^(?:0|[1-9][0-9]*)$/u.test(value)) return undefined
+	return parseInteger(value)
+}
 
 /**
  * Coerces a WebMCP `Tool` object to its browser-domain representation.
@@ -708,8 +719,7 @@ export function parseBrowserRect(value: unknown): BrowserRect | undefined {
  * @returns Canonical reference, or undefined for an invalid spelling
  */
 export function parseBrowserReference(value: string): string | undefined {
-	const match =
-		/^(?:e([1-9]\d*)|([1-9]\d*)|\[e([1-9]\d*)\]|ref=e([1-9]\d*)|\[ref=e([1-9]\d*)\])$/i.exec(value)
+	const match = /^(?:e([1-9]\d*)|\[e([1-9]\d*)\]|ref=e([1-9]\d*)|\[ref=e([1-9]\d*)\])$/i.exec(value)
 	const number = match?.slice(1).find((part) => part !== undefined)
 	return number === undefined ? undefined : `e${number}`
 }

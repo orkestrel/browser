@@ -10,7 +10,7 @@ export class BrowserHandle implements BrowserHandleInterface {
 	readonly #client: CDPClientInterface
 	readonly #session: string
 	readonly #id: string
-	#disposed = false
+	#destroyed = false
 
 	constructor(client: CDPClientInterface, session: string, id: string) {
 		this.#client = client
@@ -74,14 +74,14 @@ export class BrowserHandle implements BrowserHandleInterface {
 			options,
 		)
 		if (!isRecord(value)) {
-			throw new BrowserError('Browser handle properties did not resolve to an object')
+			throw new BrowserError('PROTOCOL', 'Browser handle properties did not resolve to an object')
 		}
 		return value
 	}
 
-	async dispose(): Promise<void> {
-		if (this.#disposed) return
-		this.#disposed = true
+	async destroy(): Promise<void> {
+		if (this.#destroyed) return
+		this.#destroyed = true
 		if (!this.#client.connected) return
 		try {
 			await this.#client.send(
@@ -97,7 +97,7 @@ export class BrowserHandle implements BrowserHandleInterface {
 	}
 
 	#assert(): void {
-		if (this.#disposed) throw new BrowserError('Browser handle is disposed')
-		if (!this.#client.connected) throw new BrowserError('Browser handle is disconnected')
+		if (this.#destroyed) throw new BrowserError('CLOSED', 'Browser handle is destroyed')
+		if (!this.#client.connected) throw new BrowserError('CLOSED', 'Browser handle is disconnected')
 	}
 }

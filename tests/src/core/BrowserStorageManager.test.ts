@@ -1,5 +1,8 @@
+import { BrowserCookieManager } from '../../../src/core/BrowserCookieManager.js'
+import { BrowserStorageManager } from '../../../src/core/BrowserStorageManager.js'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserCookieManager, BrowserPage, BrowserStorageManager, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createConnectedCDPClient, replyOk, scriptEvaluate } from '../../setup.js'
 
 describe('BrowserStorageManager', () => {
@@ -19,7 +22,7 @@ describe('BrowserStorageManager', () => {
 		)
 		const storage = new BrowserStorageManager(new BrowserCookieManager(client), () => [page])
 
-		await expect(storage.state()).resolves.toEqual({
+		await expect(storage.snapshot()).resolves.toEqual({
 			cookies: [],
 			origins: [
 				{
@@ -64,7 +67,7 @@ describe('BrowserStorageManager', () => {
 		replyOk(transport, 'Storage.getCookies', { cookies: [] })
 		const storage = new BrowserStorageManager(new BrowserCookieManager(client), () => [])
 
-		await expect(storage.state({ origins: ['https://missing.test'] })).rejects.toSatisfy(
+		await expect(storage.snapshot({ origins: ['https://missing.test'] })).rejects.toSatisfy(
 			isBrowserError,
 		)
 		expect(transport.sent).toEqual([])

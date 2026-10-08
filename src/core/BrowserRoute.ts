@@ -1,3 +1,4 @@
+import { encodeBase64 } from '@orkestrel/codec'
 import type {
 	BrowserFrameInterface,
 	BrowserRequest,
@@ -5,7 +6,7 @@ import type {
 	BrowserRouteFulfillOptions,
 	BrowserRouteInterface,
 } from './types.js'
-import { browserHeadersToProtocol, encodeBase64, textToBytes } from './helpers.js'
+import { browserHeadersToProtocol } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { isInteger, isString } from '@orkestrel/contract'
 
@@ -60,7 +61,7 @@ export class BrowserRoute implements BrowserRouteInterface {
 			params['headers'] = browserHeadersToProtocol(options.headers)
 		}
 		if (options?.post !== undefined) {
-			params['postData'] = encodeBase64(textToBytes(options.post))
+			params['postData'] = encodeBase64(new TextEncoder().encode(options.post))
 		}
 		this.#handling = true
 		try {
@@ -75,9 +76,13 @@ export class BrowserRoute implements BrowserRouteInterface {
 		this.#assert()
 		const status = options.status ?? 200
 		if (!isInteger(status) || status < 100 || status > 999) {
-			throw new BrowserError('Browser route status must be an integer from 100 to 999', undefined, {
-				status,
-			})
+			throw new BrowserError(
+				'ARGUMENT',
+				'Browser route status must be an integer from 100 to 999',
+				{
+					status,
+				},
+			)
 		}
 		const params: Record<string, unknown> = {
 			requestId: this.#id,
@@ -89,7 +94,7 @@ export class BrowserRoute implements BrowserRouteInterface {
 		}
 		if (options.body !== undefined) {
 			params['body'] = encodeBase64(
-				isString(options.body) ? textToBytes(options.body) : options.body,
+				isString(options.body) ? new TextEncoder().encode(options.body) : options.body,
 			)
 		}
 		this.#handling = true
@@ -102,6 +107,7 @@ export class BrowserRoute implements BrowserRouteInterface {
 	}
 
 	#assert(): void {
-		if (this.#handled || this.#handling) throw new BrowserError('Browser route is already handled')
+		if (this.#handled || this.#handling)
+			throw new BrowserError('CLOSED', 'Browser route is already handled')
 	}
 }

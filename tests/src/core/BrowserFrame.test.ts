@@ -1,14 +1,12 @@
+import { BrowserFrame } from '../../../src/core/BrowserFrame.js'
 import { describe, expect, it } from 'vitest'
 import {
 	BROWSER_RESULT_LIMIT,
 	BROWSER_RESULT_LIMIT_SENTINEL_PREFIX,
-	BrowserFrame,
 	compileGuardedEvaluateExpression,
 	compileReadFunction,
 	createCDPClient,
 	isBrowserError,
-	isBrowserResultLimitError,
-	isCDPTimeoutError,
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
 import {
@@ -49,12 +47,13 @@ describe('BrowserFrame', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
 		scriptEvaluate(transport, (expression) => expression.includes('2 + 2'), 4)
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		expect(await frame.evaluate('2 + 2')).toBe(4)
 
@@ -120,12 +119,13 @@ describe('BrowserFrame', () => {
 	it('throws a coded browser error when the isolated world is malformed', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', {})
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		await expect(frame.evaluate('1')).rejects.toSatisfy(isBrowserError)
 	})
@@ -134,12 +134,13 @@ describe('BrowserFrame', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
 		scriptEvaluate(transport, (expression) => expression === 'document.title', 'Frame title')
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		expect(await frame.title()).toBe('Frame title')
 	})
@@ -152,12 +153,13 @@ describe('BrowserFrame', () => {
 			title: 'Frame title',
 			html: '<main><p>Frame body</p></main>',
 		})
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		const reading = await frame.read()
 
@@ -183,12 +185,13 @@ describe('BrowserFrame', () => {
 			title: 'Paragraphs',
 			html: `<main>${'<p>One paragraph of the frame document.</p>'.repeat(40)}</main>`,
 		})
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		const reading = await frame.read()
 		const handle = reading.html
@@ -215,14 +218,15 @@ describe('BrowserFrame', () => {
 				},
 			})
 		})
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
-		await expect(frame.read()).rejects.toSatisfy(isBrowserResultLimitError)
+		await expect(frame.read()).rejects.toMatchObject({ name: 'BrowserError', code: 'RESULT_LIMIT' })
 		expect(frame.url).toBe('https://example.com/frame')
 		const evaluation = transport.sent.find((message) => message.method === 'Runtime.evaluate')
 		expect(evaluation?.params?.['expression']).toBe(
@@ -256,24 +260,26 @@ describe('BrowserFrame', () => {
 			url: 'https://example.com/frame',
 			title: 'No html',
 		})
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		await expect(frame.read()).rejects.toSatisfy(isBrowserError)
 	})
 
 	it('rejects a read with an aborted signal with its reason before any protocol work', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 		const reason = new Error('tool cancelled')
 		const controller = new AbortController()
 		controller.abort(reason)
@@ -323,15 +329,16 @@ describe('BrowserFrame', () => {
 			title: 'Frame title',
 			html: '<p>Frame body</p>',
 		})
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		const reading = await frame.read()
-		frame.update('https://example.com/frame/next')
+		url = 'https://example.com/frame/next'
 
 		expect(reading.stale).toBe(false)
 	})
@@ -339,12 +346,13 @@ describe('BrowserFrame', () => {
 	it('sends arbitrary CDP methods through the resolved frame session', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'DOM.getDocument', { root: { nodeId: 1 } })
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
 		await expect(frame.send('DOM.getDocument', { depth: 1 })).resolves.toEqual({
 			root: { nodeId: 1 },
@@ -360,26 +368,29 @@ describe('BrowserFrame', () => {
 		// per-call argument can settle this never-answered request.
 		const client = createCDPClient({ transport, timeout: 600_000 })
 		await client.connect()
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
-		await expect(frame.send('DOM.getDocument', undefined, { timeout: 20 })).rejects.toSatisfy(
-			isCDPTimeoutError,
-		)
+		await expect(frame.send('DOM.getDocument', undefined, { timeout: 20 })).rejects.toMatchObject({
+			name: 'BrowserError',
+			code: 'TIMEOUT',
+		})
 	})
 
 	it('rejects operations after the CDP client disconnects', async () => {
 		const { client } = await createConnectedCDPClient()
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 		await client.close()
 
 		await expect(frame.evaluate('1')).rejects.toSatisfy(isBrowserError)
@@ -387,40 +398,43 @@ describe('BrowserFrame', () => {
 
 	it('asserts a disconnected frame is unusable before any protocol work', async () => {
 		const { client } = await createConnectedCDPClient()
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
-		expect(() => frame.assert()).not.toThrow()
+		for (const name of ['assert', 'update', 'save']) expect(name in frame).toBe(false)
 		await client.close()
-		expect(() => frame.assert()).toThrow('Browser frame is disconnected')
+		await expect(frame.title()).rejects.toThrow('Browser frame is disconnected')
 	})
 
 	it('records an externally observed url as the frame url', async () => {
 		const { client } = await createConnectedCDPClient()
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
-		frame.update('https://example.com/frame/next')
+		url = 'https://example.com/frame/next'
 
 		expect(frame.url).toBe('https://example.com/frame/next')
 	})
 	it('forwards a signal from send, evaluate, and handle to the client', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 		const reason = new Error('tool cancelled')
 		const controller = new AbortController()
 		const settled = [
@@ -437,13 +451,17 @@ describe('BrowserFrame', () => {
 	it('keeps the evaluate timeout behavior', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-		const frame = new BrowserFrame(
-			client,
-			'session-child',
-			'frame-child',
-			'https://example.com/frame',
-		)
+		let url = 'https://example.com/frame'
+		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
+			get: () => url,
+			set: (value) => {
+				url = value
+			},
+		})
 
-		await expect(frame.evaluate('1', { timeout: 20 })).rejects.toSatisfy(isCDPTimeoutError)
+		await expect(frame.evaluate('1', { timeout: 20 })).rejects.toMatchObject({
+			name: 'BrowserError',
+			code: 'TIMEOUT',
+		})
 	})
 })

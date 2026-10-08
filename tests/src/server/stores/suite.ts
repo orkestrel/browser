@@ -55,7 +55,9 @@ export function describeFileBrowserStores(): void {
 		})
 		it('refuses save when a second store saved the name between record and save', async () => {
 			const { FileBrowserJourneyStore } = await import('@src/server')
-			const { BrowserJourneyToolset, BrowserToolset } = await import('@src/core')
+			const { BrowserToolset } = await import('@src/core')
+			const { BrowserJourneyToolset } =
+				await import('../../../../src/core/BrowserJourneyToolset.js')
 			const scratch = createScratch()
 			const first = new FileBrowserJourneyStore({ root: scratch.path })
 			const second = new FileBrowserJourneyStore({ root: scratch.path })
@@ -156,7 +158,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 				const journey = createBrowserJourneyFixture()
 				const lock = join(scratch.path, journey.name, 'journey.lock')
 				await expect(store.set(journey)).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_LOCKED',
+					code: 'STORE_LOCKED',
 					message: `Journey is locked: ${lock}`,
 				})
 				expect((await readdir(lock)).map(parseBrowserLockEntry)).toEqual([child.pid])
@@ -226,7 +228,7 @@ await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async 
 				const refused = waitForBrowserChild(second)
 				second.send('reclaim')
 				expect(await refused, 'the second recoverer cannot enter while the first holds').toBe(
-					'BROWSER_JOURNEY_LOCKED',
+					'STORE_LOCKED',
 				)
 				expect(await readdir(lock), 'reclaim preserves the live winner').toEqual(held)
 				const released = waitForBrowserChild(first)
@@ -259,7 +261,7 @@ const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/serv
 const store = new FileBrowserJourneyStore({ root: process.argv[2] })
 process.once('message', async (journey) => {
 	try {
-		const saved = await store.set(journey, 1)
+		const saved = await store.set(journey, { revision: 1 })
 		process.send?.({ outcome: 'saved', revision: saved.revision })
 	} catch (error) {
 		process.send?.({ outcome: 'refused', code: error.code })
@@ -323,7 +325,7 @@ process.send?.({ outcome: 'ready' })
 						(value) =>
 							isRecord(value) &&
 							value['outcome'] === 'refused' &&
-							['BROWSER_JOURNEY_LOCKED', 'BROWSER_JOURNEY_STALE'].includes(String(value['code'])),
+							['STORE_LOCKED', 'JOURNEY_STALE'].includes(String(value['code'])),
 					),
 				).toHaveLength(2 - saved.length)
 				expect(await Promise.all(exits)).toEqual([
@@ -333,9 +335,11 @@ process.send?.({ outcome: 'ready' })
 				expect((await store.get(journey.name))?.revision).toBe(1 + saved.length)
 				// Publication can overlap and make both holders refuse. A later uncontended
 				// write must still advance exactly once, then reject the stale expectation.
-				expect((await store.set(journey, 1 + saved.length)).revision).toBe(2 + saved.length)
-				await expect(store.set(journey, 1 + saved.length)).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_STALE',
+				expect((await store.set(journey, { revision: 1 + saved.length })).revision).toBe(
+					2 + saved.length,
+				)
+				await expect(store.set(journey, { revision: 1 + saved.length })).rejects.toMatchObject({
+					code: 'JOURNEY_STALE',
 				})
 			} finally {
 				for (const child of children) {
@@ -367,7 +371,7 @@ process.send?.({ outcome: 'ready' })
 				const runs = new FileBrowserRunStore(options)
 				const journey = createBrowserJourneyFixture()
 				const saved = await journeys.set(journey)
-				const slot = await runs.open(BROWSER_RUN_FIXTURE.journey.name)
+				const slot = await runs.create(BROWSER_RUN_FIXTURE.journey.name)
 				const run = { ...BROWSER_RUN_FIXTURE, id: slot.id }
 				await runs.set(run)
 				expect(await new FileBrowserJourneyStore(options).get(journey.name)).toEqual(saved)
@@ -385,7 +389,7 @@ process.send?.({ outcome: 'ready' })
 				const journeys = new FileBrowserJourneyStore({ root: scratch.path })
 				const runs = new FileBrowserRunStore({ root: scratch.path })
 				const saved = await journeys.set(createBrowserJourneyFixture())
-				const slot = await runs.open(BROWSER_RUN_FIXTURE.journey.name)
+				const slot = await runs.create(BROWSER_RUN_FIXTURE.journey.name)
 				const run = { ...BROWSER_RUN_FIXTURE, id: slot.id }
 				await runs.set(run)
 				const journeyPath = join(scratch.path, saved.journey.name, 'journey.json')
@@ -401,11 +405,11 @@ process.send?.({ outcome: 'ready' })
 					await writeFile(journeyPath, corrupt)
 					await writeFile(runPath, corrupt)
 					await expect(journeys.get(saved.journey.name)).rejects.toMatchObject({
-						code: 'BROWSER_JOURNEY_FILE',
+						code: 'STORE_FILE',
 						message: expect.stringContaining(journeyPath),
 					})
 					await expect(runs.get(run.journey.name, run.id)).rejects.toMatchObject({
-						code: 'BROWSER_JOURNEY_FILE',
+						code: 'STORE_FILE',
 						message: expect.stringContaining(runPath),
 					})
 				}
@@ -415,11 +419,11 @@ process.send?.({ outcome: 'ready' })
 				)
 				await writeFile(runPath, JSON.stringify({ ...run, format: 9 }))
 				await expect(journeys.get(saved.journey.name)).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_FORMAT',
+					code: 'STORE_FORMAT',
 					message: expect.stringContaining(journeyPath),
 				})
 				await expect(runs.get(run.journey.name, run.id)).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_FORMAT',
+					code: 'STORE_FORMAT',
 					message: expect.stringContaining(runPath),
 				})
 			} finally {
@@ -457,7 +461,7 @@ process.send?.({ outcome: 'ready' })
 				const journeys = new FileBrowserJourneyStore({ root: scratch.path })
 				const runs = new FileBrowserRunStore({ root: scratch.path })
 				const saved = await journeys.set(createBrowserJourneyFixture())
-				const slot = await runs.open(BROWSER_RUN_FIXTURE.journey.name)
+				const slot = await runs.create(BROWSER_RUN_FIXTURE.journey.name)
 				await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
 				const paths = [
 					join(scratch.path, saved.journey.name, 'journey.json'),
@@ -519,7 +523,7 @@ console.log(JSON.stringify({
 						gid: gid ?? process.getgid?.(),
 						outcomes: paths.map((path) => ({
 							status: 'rejected',
-							code: 'BROWSER_JOURNEY_ACCESS',
+							code: 'STORE_ACCESS',
 							message: expect.stringContaining(path),
 						})),
 					})
@@ -531,6 +535,25 @@ console.log(JSON.stringify({
 			}
 		})
 
+		it('allows one exclusive creator across independent file store instances', async () => {
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const first = new FileBrowserJourneyStore({ root: scratch.path })
+				const second = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				const results = await Promise.allSettled([
+					first.set(journey, { exclusive: true }),
+					second.set({ ...journey, description: 'Second' }, { exclusive: true }),
+				])
+				expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1)
+				expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1)
+				expect((await first.get(journey.name))?.revision).toBe(1)
+				expect(await first.get(journey.name)).toEqual(await second.get(journey.name))
+			} finally {
+				scratch.destroy()
+			}
+		})
 		it('refuses a lost update across instances and preserves revisions after deletion', async () => {
 			const { FileBrowserJourneyStore } = await import('@src/server')
 			const scratch = createScratch()
@@ -540,16 +563,20 @@ console.log(JSON.stringify({
 				const journey = createBrowserJourneyFixture()
 				await first.set(journey)
 				const outcomes = await Promise.allSettled([
-					first.set({ ...journey, description: 'First' }, 1),
-					second.set({ ...journey, description: 'Second' }, 1),
+					first.set({ ...journey, description: 'First' }, { revision: 1 }),
+					second.set({ ...journey, description: 'Second' }, { revision: 1 }),
 				])
 				expect(outcomes.filter((outcome) => outcome.status === 'fulfilled')).toHaveLength(1)
 				expect(outcomes.filter((outcome) => outcome.status === 'rejected')).toHaveLength(1)
 				expect((await first.get(journey.name))?.revision).toBe(2)
 				await second.delete(journey.name)
-				await expect(first.set(journey, 2)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
+				await expect(first.set(journey, { revision: 2 })).rejects.toMatchObject({
+					code: 'JOURNEY_STALE',
+				})
 				expect((await second.set(journey)).revision).toBe(3)
-				await expect(first.set(journey, 2)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_STALE' })
+				await expect(first.set(journey, { revision: 2 })).rejects.toMatchObject({
+					code: 'JOURNEY_STALE',
+				})
 			} finally {
 				scratch.destroy()
 			}
@@ -570,15 +597,15 @@ console.log(JSON.stringify({
 					formatBrowserLockEntry(process.pid, '11111111-1111-4111-8111-111111111111'),
 				)
 				await writeFile(entry, '')
-				await expect(store.set(journey, 0)).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_LOCKED',
+				await expect(store.set(journey, { exclusive: true })).rejects.toMatchObject({
+					code: 'STORE_LOCKED',
 				})
 				await expect(store.delete(journey.name)).rejects.toMatchObject({
-					code: 'BROWSER_JOURNEY_LOCKED',
+					code: 'STORE_LOCKED',
 				})
 				await unlink(entry)
 				await rmdir(lock)
-				expect((await store.set(journey, 1)).revision).toBe(2)
+				expect((await store.set(journey, { revision: 1 })).revision).toBe(2)
 			} finally {
 				scratch.destroy()
 			}
@@ -597,8 +624,8 @@ console.log(JSON.stringify({
 				await unlink(revision)
 				await mkdir(revision)
 				await expect(
-					store.set({ ...journey, description: 'Uncommitted' }, 1),
-				).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_FILE' })
+					store.set({ ...journey, description: 'Uncommitted' }, { revision: 1 }),
+				).rejects.toMatchObject({ code: 'STORE_FILE' })
 				expect(await store.get(journey.name)).toEqual(saved)
 				expect((await readdir(join(scratch.path, journey.name))).sort()).toEqual([
 					'journey.json',
@@ -638,12 +665,12 @@ console.log(JSON.stringify({
 			const runs = new FileBrowserRunStore({ root: scratch.path })
 			scratch.destroy()
 			for (const name of ['con', 'aux', 'com1', 'lpt9', '../escape', 'two/parts', 'UPPER']) {
-				await expect(journeys.get(name)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+				await expect(journeys.get(name)).rejects.toMatchObject({ code: 'STORE_PATH' })
 				await expect(journeys.set(createBrowserJourneyFixture([], { name }))).rejects.toMatchObject(
-					{ code: 'BROWSER_JOURNEY_PATH' },
+					{ code: 'STORE_PATH' },
 				)
-				await expect(journeys.delete(name)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
-				await expect(runs.open(name)).rejects.toMatchObject({ code: 'BROWSER_JOURNEY_PATH' })
+				await expect(journeys.delete(name)).rejects.toMatchObject({ code: 'STORE_PATH' })
+				await expect(runs.create(name)).rejects.toMatchObject({ code: 'STORE_PATH' })
 			}
 		})
 	})

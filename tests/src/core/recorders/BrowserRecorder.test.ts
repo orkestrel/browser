@@ -28,7 +28,7 @@ describe('BrowserRecorder', () => {
 			try {
 				await toolset.start()
 				await recorder.start()
-				await toolset.perform({
+				await toolset.execute({
 					id: 'gone',
 					name: 'wait',
 					arguments: { text: 'Saved', absent: true },
@@ -49,7 +49,7 @@ describe('BrowserRecorder', () => {
 		const recorder = new BrowserRecorder(toolset)
 		try {
 			await recorder.start()
-			await toolset.perform(
+			await toolset.execute(
 				{ id: 'held', name: 'click', arguments: { ref: 'e1' } },
 				{ caller: hold.token, signal: new AbortController().signal },
 			)
@@ -57,7 +57,7 @@ describe('BrowserRecorder', () => {
 				'replayed add-kettle',
 			])
 			hold.destroy()
-			await toolset.perform({ id: 'after', name: 'click', arguments: { ref: 'e1' } })
+			await toolset.execute({ id: 'after', name: 'click', arguments: { ref: 'e1' } })
 			expect(recorder.steps().map((step) => step.gap ?? step.action)).toEqual([
 				'replayed add-kettle',
 				'click',
@@ -73,11 +73,11 @@ describe('BrowserRecorder', () => {
 		const recorder = new BrowserRecorder(toolset)
 		try {
 			await recorder.start()
-			toolset.emitter.emit('action', createBrowserActionFixture({ action: 'look' }))
+			toolset.emitter.emit('action', createBrowserActionFixture({ action: 'read' }))
 			expect.soft(recorder.steps(), 'recorder reads the non-step home').toEqual([])
 			expect
 				.soft(
-					() => validateBrowserJourneyStep({ id: 's1', action: 'look', arguments: {} }),
+					() => validateBrowserJourneyStep({ id: 's1', action: 'read', arguments: {} }),
 					'validator reads the non-step home',
 				)
 				.toThrow('uses an observation or journey tool as a step')
@@ -179,7 +179,7 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it('records the opener click after settlement moves the view to the popup', async () => {
+	it('journey start: records the opener click after settlement moves the view to the popup', async () => {
 		const fixture = await createBrowserPopupFixture()
 		const toolset = createBrowserToolset(fixture.page)
 		const recorder = new BrowserRecorder(toolset)
@@ -189,7 +189,7 @@ describe('BrowserRecorder', () => {
 			await toolset.start()
 			await fixture.page.elements.outline()
 			await recorder.start()
-			const performed = await toolset.perform({
+			const performed = await toolset.execute({
 				id: 's1',
 				name: 'click',
 				arguments: { ref: 'e4' },
@@ -199,6 +199,9 @@ describe('BrowserRecorder', () => {
 			expect(views.calls[0]?.[0]).toBe(toolset.view)
 			expect(views.calls[0]?.[0]).not.toBe(fixture.page)
 			expect(toolset.view.url).toBe('https://example.test/popup')
+			expect(
+				recorder.journey({ name: 'open-details', description: 'Open the details' }).start,
+			).toBe('https://example.test/cart')
 			expect(recorder.steps(), 'popup settlement preserves the opener click').toEqual([
 				{
 					id: 's1',
@@ -240,7 +243,7 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it.each(['look', 'read', 'tabs', 'record', 'save', 'journeys', 'edit', 'replay'])(
+	it.each(['read', 'record', 'save', 'journeys', 'edit', 'replay'])(
 		'never records %s',
 		async (action) => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
@@ -262,7 +265,7 @@ describe('BrowserRecorder', () => {
 		expect(recorder.journey({ name: 'save', description: 'Save' }).steps).toEqual([
 			{ id: 's1', action: 'unresolved', arguments: {}, gap: 'interrupted click' },
 		])
-		expect(recorder.started).toBe(true)
+		expect(recorder.active).toBe(true)
 		expect(recorder.steps(), 'a snapshot preserves the pending dialog continuation').toEqual([])
 		toolset.emitter.emit('action', {
 			action: 'dialog',
@@ -279,7 +282,7 @@ describe('BrowserRecorder', () => {
 		await toolset.destroy()
 	})
 
-	it.each(['click', 'look', 'refused', 'stop'])(
+	it.each(['click', 'read', 'refused', 'stop'])(
 		'turns interruption into a gap before %s',
 		async (next) => {
 			const toolset = new BrowserToolset(createBrowserViewDouble())
@@ -321,7 +324,7 @@ describe('BrowserRecorder', () => {
 				(await fixture.page.elements.find({ role: 'button', name: 'Save' }))[0],
 			)
 			await recorder.start()
-			const performed = await toolset.perform({
+			const performed = await toolset.execute({
 				id: 's1',
 				name: 'click',
 				arguments: { ref: element.reference },
@@ -439,7 +442,7 @@ describe('BrowserRecorder', () => {
 		const snapshot = recorder.steps()[0]
 		if (snapshot !== undefined) Reflect.set(snapshot, 'action', 'mutated')
 		expect((await recorder.stop())[0]?.action).toBe('click')
-		expect(recorder.started).toBe(false)
+		expect(recorder.active).toBe(false)
 		toolset.emitter.emit('action', createBrowserActionFixture())
 		expect(recorder.steps()).toHaveLength(1)
 		await recorder.start()

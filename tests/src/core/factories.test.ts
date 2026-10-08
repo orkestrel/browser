@@ -19,6 +19,8 @@ import {
 	createMemoryBrowserRunStore,
 	BrowserToolset,
 	createBrowserToolset,
+	createBrowserContext,
+	isBrowserError,
 	createCDPClient,
 } from '@src/core'
 import {
@@ -27,7 +29,11 @@ import {
 	createBrowserElementFixture,
 	createCDPTestTransport,
 	replyOk,
+	createConnectedCDPClient,
+	scriptCDPAttach,
+	createRecordingWriter,
 } from '../../setup.js'
+import { captureError } from '@orkestrel/test'
 import { describe, it, expect } from 'vitest'
 import { createToolManager } from '@orkestrel/tool'
 describe('createCDPClient', () => {
@@ -94,6 +100,85 @@ describe('createBrowserToolset', () => {
 			expect(tools.count).toBe(0)
 		} finally {
 			await client.close()
+		}
+	})
+})
+
+describe('createBrowserContext', () => {
+	it.each(['destroy', 'close'] as const)(
+		'leaves the supplied client connected after %s',
+		async (operation) => {
+			const { client, transport } = await createConnectedCDPClient()
+			replyOk(transport, 'Target.disposeBrowserContext')
+			try {
+				await createBrowserContext(client, { id: 'owned-remotely' })[operation]()
+				expect(client.connected).toBe(true)
+			} finally {
+				await client.close()
+			}
+		},
+	)
+	it('threads the context id, viewport, writer, and hooks while leaving the client caller-owned', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		scriptCDPAttach(transport)
+		replyOk(transport, 'Target.createTarget', { targetId: 'factory-page' })
+		replyOk(transport, 'Emulation.setDeviceMetricsOverride')
+		replyOk(transport, 'Target.detachFromTarget')
+		const writer = createRecordingWriter()
+		let announced = ''
+		const context = createBrowserContext(client, {
+			id: 'factory-context',
+			viewport: { width: 640, height: 480 },
+			writer,
+			on: {
+				page: (page) => {
+					announced = page.target
+				},
+			},
+		})
+		try {
+			const page = await context.create()
+			expect(announced).toBe('factory-page')
+			expect(context.id).toBe('factory-context')
+			expect(
+				transport.sent.find((entry) => entry.method === 'Target.createTarget')?.params,
+			).toEqual({ url: 'about:blank', browserContextId: 'factory-context' })
+			expect(
+				transport.sent.find((entry) => entry.method === 'Emulation.setDeviceMetricsOverride')
+					?.params,
+			).toMatchObject({ width: 640, height: 480 })
+			const bytes = new Uint8Array([7, 8])
+			replyOk(transport, 'Page.captureScreenshot', { data: 'Bwg=' })
+			await page.screenshot({ path: 'capture.bin' })
+			expect(writer.calls).toEqual([{ path: 'capture.bin', data: bytes }])
+			await context.destroy()
+			expect(client.connected).toBe(true)
+		} finally {
+			await client.close()
+			await context.destroy()
+		}
+	})
+
+	it('wraps the default context and refuses creation-only options before protocol work', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		const context = createBrowserContext(client)
+		try {
+			expect(context.id).toBeUndefined()
+			expect(context.pages()).toEqual([])
+			const proxyOptions = { id: 'wrapped', proxy: { server: 'http://proxy.test' } }
+			const originOptions = { id: 'wrapped', origins: [] }
+			const proxy = captureError(() => createBrowserContext(client, proxyOptions))
+			const origins = captureError(() => createBrowserContext(client, originOptions))
+			const viewport = captureError(() =>
+				createBrowserContext(client, { viewport: { width: 0, height: 480 } }),
+			)
+			expect(isBrowserError(proxy) && proxy.code).toBe('ARGUMENT')
+			expect(isBrowserError(origins) && origins.code).toBe('ARGUMENT')
+			expect(isBrowserError(viewport) && viewport.code).toBe('ARGUMENT')
+			expect(transport.sent).toEqual([])
+		} finally {
+			await client.close()
+			await context.destroy()
 		}
 	})
 })

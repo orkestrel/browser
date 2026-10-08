@@ -1,3 +1,4 @@
+import { BrowserPerformance } from '../../../src/core/BrowserPerformance.js'
 /**
  * src/core/BrowserPerformance.ts tests.
  *
@@ -7,7 +8,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
-import { BrowserPerformance, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createAttachedPage, replyOk } from '../../setup.js'
 
 describe('BrowserPerformance', () => {

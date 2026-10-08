@@ -1,11 +1,12 @@
 import type {
+	CDPHandler,
+	BrowserCaptureResult,
 	BrowserAction,
 	BrowserFollowOptions,
 	BrowserHoldInterface,
 	BrowserJourneyStepInput,
 	BrowserJourneyTab,
 	BrowserJourneyTarget,
-	BrowserJourneyToolsetInterface,
 	BrowserToolsetResult,
 	BrowserCallOptions,
 	BrowserContextInterface,
@@ -17,18 +18,16 @@ import type {
 	BrowserNavigationRecordInterface,
 	BrowserPageInterface,
 	BrowserPopupRecordInterface,
-	BrowserReadingInterface,
-	BrowserReadResult,
+	BrowserOutline,
+	BrowserToolsetReadOptions,
 	BrowserTab,
 	BrowserTool,
 	BrowserToolName,
 	BrowserToolSourceInterface,
 	BrowserToolsetEventMap,
-	BrowserToolsetHandler,
 	BrowserToolsetInterface,
 	BrowserToolsetOptions,
 	BrowserToolsetReason,
-	BrowserToolsetWatch,
 	BrowserViewInterface,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
@@ -52,6 +51,7 @@ import {
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserHold } from './BrowserHold.js'
 import { BrowserJourneyToolset } from './BrowserJourneyToolset.js'
+import { isBrowserPage } from './validators.js'
 import { createTool, createToolManager } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_TOOL_NAMES,
@@ -63,29 +63,32 @@ import {
 	BROWSER_TOOL_CUT_FOOTER,
 	BROWSER_TOOL_DEADLINE_NOTE,
 	BROWSER_TOOL_HANDLED_STATUS,
+	BROWSER_TOOL_UNCHANGED_STATUS,
 	BROWSER_TOOL_LIMIT,
 	BROWSER_TOOL_NAMES,
 	BROWSER_TOOL_PENDING_NOTE,
 	BROWSER_TOOL_NAME_PATTERN,
 	BROWSER_TOOL_TIMEOUT_LIMIT_MS,
 	BROWSER_TOOL_TIMEOUT_MS,
-	BROWSER_TOOL_VIEW_FOOTER,
 	BROWSER_TYPED_ROLES,
 } from './constants.js'
+import { BrowserError, BrowserStepError, isBrowserError } from './errors.js'
+import { parseBrowserToolInteger } from './parsers.js'
 import {
-	BrowserElementError,
-	BrowserError,
-	BrowserStepError,
-	isBrowserElementError,
-	isBrowserError,
-} from './errors.js'
-import { compileSubmitObserverExpression, compileSubmitReadExpression } from './compilers.js'
+	compileSubmitObserverExpression,
+	compileSubmitReadExpression,
+	compileSubmitWaitExpression,
+	compileSubmitReleaseExpression,
+} from './compilers.js'
 import {
 	boundBrowserText,
+	redactBrowserText,
 	deriveBrowserToolSchema,
-	extractBrowserSlice,
-	scanBrowserText,
-	renderBrowserMatches,
+	renderBrowserPassage,
+	renderBrowserReceiptWindow,
+	renderBrowserLine,
+	findBrowserText,
+	validateBrowserLines,
 	normalizeBrowserKey,
 	readBrowserToolString,
 	renderBrowserElement,
@@ -93,6 +96,7 @@ import {
 	renderBrowserToolOutput,
 	requireBrowserReference,
 	validateBrowserToolArguments,
+	describeBrowserRefusal,
 } from './helpers.js'
 
 /**
@@ -100,11 +104,11 @@ import {
  * view's own tools beside them.
  *
  * @remarks
- * Every toolset advertises `look`, `read`, `plain`, `click`, `type`, and `wait`, which need only the
- * `BrowserViewInterface` it is constructed over. With `options.page` it also advertises `press`
+ * Every toolset advertises `read`, `click`, `type`, and `wait`, which need only the
+ * `BrowserViewInterface` it is constructed over. When `isBrowserPage(view)` holds it also advertises `press`
  * and `navigate`, stages the `dialog` tool while a dialog is open on the current page, follows a
  * popup the current page opens and returns to the opener when the popup closes, and adopts
- * `page.registry` by default; with `options.context` as well it advertises `tabs` and `switch`.
+ * `page.registry` by default; with `options.context` as well it advertises `switch` and lists tabs in each window.
  * With `options.journeys` the constructor constructs a `BrowserJourneyToolset`, which adds
  * `record`, `save`, `journeys`, `edit`, and `replay` to the manager and reserves those names, and
  * `destroy()` destroys it first. The result that carries the view after a move names the move.
@@ -113,13 +117,18 @@ import {
  * `the browser session ended` after `destroy()`, refuses an aborted signal before the tool runs,
  * refuses every tool but `dialog` while a dialog is open, forwards `ToolContext.signal` into every
  * protocol call, refuses a call to a toolset tool that carries a parameter the tool does not
- * advertise, and cuts every returned string and every thrown message at `limit` characters plus
- * a footer; the footer of a cut action or `dialog` receipt that carries a view names `look` as the next
- * call. `look`, `read`, and `plain` read the page and return pages of at most `limit`
- * characters and name the offset the next page starts at. A page ends after the last line break
- * in its window that lies past the page's start, or at the window's end when no such break fits,
- * without splitting a surrogate pair. The last page ends at the end of the outline or reading. A `look` whose
- * `search` matches referenced rows lists those rows first, and its pages reach every referenced row.
+ * advertise, and bounds every complete result and thrown message, including its footer, by
+ * the smaller of the configured limit and 4,000 UTF-16 units. Every read and action window
+ * recaptures numbered accessibility lines. Inclusive ranges use required tool parameter
+ * `from` and optional `to`; search scores text spans and opens near the first best match.
+ * Wrapping precedes numbering, and every continuation names the next complete line. An
+ * unchanged page keeps its addresses; a changed read includes a change note, even from line 1.
+ * A trailing heading opens the next window unless it is the only row or ends the page.
+ * A partial-view line follows the page header when rows remain after the window. A search
+ * missing its range reports the first page-wide best match only when that line carries an
+ * element reference, without moving that window; otherwise it keeps the plain miss.
+ * An unquoted miss appears immediately before the footer, with its space reserved before
+ * fitting rows. Quoted best matches and in-range hits remain under the header.
  * A `press` receipt names the referenced element that has focus after the key. A page tool's
  * error message and JSON output reach the toolset already cut at `BROWSER_REGISTRY_OUTPUT_LIMIT`
  * (4 096) by the registry, so a `limit` over that shows at most 4 096 characters of either; a page
@@ -144,20 +153,21 @@ import {
  * navigation record opens, `click` and `type` with `submit` install a `submit` observer in the
  * isolated world of the element's document, and `press` in every document one `page.frames()`
  * call lists; an action whose input
- * document cannot be observed is refused with `BROWSER_TOOLSET_OBSERVE` before any input, and a
+ * document cannot be observed is refused with `TOOLSET_OBSERVE` before any input, and a
  * document `press` did not list is not observed. A navigation that starts in the input's frame or
  * an ancestor before the input settles is followed; when the input settles first, each observed
  * submission that kept its default action names its destination frame, and the receipt waits for
  * the navigation the record selects to commit and load under the receipt's deadline; a submission
- * every listener prevented adds no wait. When the reads name no surviving destination and no
- * navigation followed, the receipt's status is `BROWSER_TOOL_HANDLED_STATUS`, which names `wait` as
- * the next call, after a prevented submission, and `no form received the submission` when `type`
+ * every listener prevented waits for a rendered change, navigation, dialog, abort, or detachment.
+ * Change observation starts in capture-phase submit before application handlers. Reading its
+ * state preserves it, and every exit releases it. Hidden and bookkeeping mutations do not count.
+ * The status is `BROWSER_TOOL_HANDLED_STATUS` after a change or `BROWSER_TOOL_UNCHANGED_STATUS`
+ * at the deadline. The status is `no form received the submission` when `type`
  * with `submit`, or a `press` of Enter that an input a form owns received, recorded none. The
  * page placement's `type` with `submit` ends its action with `and submitted the form` when a read
  * recorded a submission, or when the navigation the receipt settled names `formSubmissionGet` or
  * `formSubmissionPost` as its reason, whatever the read answered, and with `and pressed Enter`
- * otherwise. A `read` or `plain`
- * at an offset at or past its retained reading's end restarts that reading at 0. A receipt that
+ * otherwise. A receipt that
  * waits for a requested navigation shares one `BROWSER_TOOL_TIMEOUT_MS` deadline between that
  * wait and its view capture, of which `BROWSER_TOOL_CAPTURE_MS` is reserved for the capture. The
  * deadline runs from the moment the receipt starts waiting, after any time the action spent
@@ -165,7 +175,8 @@ import {
  * receipt aborts the capture. A capture that the page's change makes stale waits for the page's
  * readiness and reads the view once more inside the same deadline, and reports
  * `BROWSER_TOOL_CHANGED_NOTE` when that read fails too. `type` refuses an element whose role is
- * not in `BROWSER_TYPED_ROLES` before it sends anything, naming `click` as the next call. A `click` on an element whose role is in `BROWSER_TYPED_ROLES`
+ * not in `BROWSER_TYPED_ROLES` before it sends anything, naming the view's text-taking fields,
+ * or `click` when there are none. A `click` on an element whose role is in `BROWSER_TYPED_ROLES`
  * adds `; call type with REF to enter text` to its receipt line. A click
  * or type over a view whose `trusted` is `false` ends its receipt line with ` (untrusted event)`.
  *
@@ -177,15 +188,15 @@ import {
  * earlier one. A page tool whose parameters require nothing advertises a required `purpose`, which
  * is stripped before the tool runs. Every adopted tool is advertised `untrusted`. `destroy()`
  * removes only the tools the manager still holds under the instances the toolset added, never
- * closes a page, and ends only what `options.release` hands over, calling it one time last.
+ * closes or destroys its caller-owned view.
  *
  * @example
  * ```ts
  * import { BrowserToolset } from '@orkestrel/browser'
  *
- * const toolset = new BrowserToolset(page, { page })
+ * const toolset = new BrowserToolset(page)
  * await toolset.start()
- * const result = await toolset.tools.execute({ id: '1', name: 'look', arguments: { search: 'cart' } })
+ * const result = await toolset.tools.execute({ id: '1', name: 'read', arguments: { from: 1, search: 'cart' } })
  * await toolset.destroy()
  * ```
  */
@@ -198,42 +209,58 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #context: BrowserContextInterface | undefined
 	readonly #limit: number
 	readonly #schemes: readonly string[]
-	readonly #owned: (() => Promise<void> | void) | undefined
 	readonly #emitter: Emitter<BrowserToolsetEventMap>
 	readonly #lifetime = new AbortController()
 	readonly #native: readonly ToolInterface[]
 	readonly #dialogTool: ToolInterface | undefined
 	readonly #contextTools: readonly ToolInterface[]
-	readonly #journeys: BrowserJourneyToolsetInterface | undefined
+	readonly #journeys: BrowserJourneyToolset | undefined
 	readonly #added = new Set<ToolInterface>()
 	readonly #adopted = new Map<string, ToolInterface>()
-	readonly #watches = new Map<BrowserPageInterface, BrowserToolsetWatch>()
+	readonly #watches = new Map<
+		BrowserPageInterface,
+		{
+			readonly dialog: (dialog: BrowserDialogInterface) => void
+			readonly popup: (page: BrowserPageInterface) => void
+			readonly close: () => void
+			readonly closed: CDPHandler
+		}
+	>()
 	readonly #dialogs = new Map<BrowserPageInterface, BrowserDialogInterface>()
 	readonly #handlers = new WeakMap<
 		ToolInterface,
-		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
+		{
+			readonly handler: (
+				args: Readonly<Record<string, unknown>>,
+				context: ToolContext,
+			) => Promise<readonly [body: string, footer: string]>
+			readonly clause: string
+		}
 	>()
 	readonly #actions = new WeakMap<AbortSignal, Partial<BrowserAction>>()
 	readonly #invocations = new WeakMap<
 		ToolContext,
-		{ readonly handler: BrowserToolsetHandler; readonly clause: string }
+		{
+			readonly handler: (
+				args: Readonly<Record<string, unknown>>,
+				context: ToolContext,
+			) => Promise<readonly [body: string, footer: string]>
+			readonly clause: string
+		}
 	>()
 	#reservation: BrowserHoldInterface | undefined
 	readonly #holds = new Map<PromiseWithResolvers<void>, BrowserHoldInterface>()
 	readonly #interrupts = new Map<PromiseWithResolvers<never>, string>()
 	readonly #notes: string[] = []
+	readonly #notices: (() => string) | undefined
 	readonly #changeHandler = this.#handleChange.bind(this)
 	readonly #removeHandler = this.#handleRemove.bind(this)
 	readonly #clearHandler = this.#handleClear.bind(this)
 	#page: BrowserPageInterface | undefined
 	#following: BrowserToolSourceInterface | undefined
-	#reading:
-		| {
-				readonly view: BrowserViewInterface
-				readonly reading: BrowserReadingInterface
-				readonly name: 'read' | 'plain'
-		  }
-		| undefined
+	readonly #secrets = new Set<string>()
+	readonly #projections = new WeakMap<BrowserViewInterface, string>()
+	readonly #descriptions = new Map<string, Pick<BrowserElementInterface, 'role' | 'name'>>()
 	#tail: Promise<void> = Promise.resolve()
 	#pending: Promise<void> | undefined
 	// Numbers each action, so the observer it installs answers only its own read and removal.
@@ -250,80 +277,67 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#destroying: Promise<void> | undefined
 
 	constructor(view: BrowserViewInterface, options?: BrowserToolsetOptions) {
+		const page = isBrowserPage(view) ? view : undefined
 		const limit = options?.limit ?? BROWSER_TOOL_LIMIT
 		if (!isInteger(limit) || limit < 1) {
-			throw new BrowserError(
-				'Browser toolset limit must be a positive integer',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{
-					limit,
-				},
-			)
+			throw new BrowserError('ARGUMENT', 'Browser toolset limit must be a positive integer', {
+				subject: 'toolset',
+				limit,
+			})
 		}
-		if (options?.context !== undefined && options.page === undefined) {
-			throw new BrowserError('Browser toolset context requires a page', 'BROWSER_TOOLSET_CONTEXT')
+		if (options?.context !== undefined && page === undefined) {
+			throw new BrowserError('TOOLSET_CONTEXT', 'Browser toolset context requires a page')
 		}
 		this.#view = view
-		this.#origin = options?.page
-		this.#page = options?.page
+		this.#notices = options?.notes
+		this.#origin = page
+		this.#page = page
 		this.#tools = options?.tools ?? createToolManager()
 		this.#manager = new Proxy(this.#tools, { get: this.#readManager.bind(this) })
 		this.#source = options?.source
 		this.#context = options?.context
-		this.#limit = limit
+		this.#limit = Math.min(limit, BROWSER_TOOL_LIMIT)
 		this.#schemes = options?.schemes ?? BROWSER_SCHEMES
-		this.#owned = options?.release
 		this.#emitter = new Emitter({
 			...(options?.on === undefined ? {} : { on: options.on }),
 			...(options?.error === undefined ? {} : { error: options.error }),
 		})
-		const look = this.#create('look', this.#look.bind(this), BROWSER_TOOL_CUT_FOOTER)
-		const read = this.#create(
-			'read',
-			this.#read.bind(this, 'read', (reading) => reading.markdown()),
-			BROWSER_TOOL_CUT_FOOTER,
-		)
-		const plain = this.#create(
-			'plain',
-			this.#read.bind(this, 'plain', (reading) => reading.text()),
-			BROWSER_TOOL_CUT_FOOTER,
-		)
-		const click = this.#create('click', this.#click.bind(this), BROWSER_TOOL_VIEW_FOOTER)
-		const type = this.#create('type', this.#type.bind(this), BROWSER_TOOL_VIEW_FOOTER)
+		const read = this.#create('read', this.#read.bind(this), BROWSER_TOOL_CUT_FOOTER)
+		const click = this.#create('click', this.#click.bind(this), BROWSER_TOOL_CUT_FOOTER)
+		const type = this.#create('type', this.#type.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		const wait = this.#create('wait', this.#wait.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		this.#native = Object.freeze(
-			options?.page === undefined
-				? [look, read, plain, click, type, wait]
+			page === undefined
+				? [read, click, type, wait]
 				: [
-						look,
 						read,
-						plain,
 						click,
 						type,
-						this.#create('press', this.#press.bind(this), BROWSER_TOOL_VIEW_FOOTER),
-						this.#create('navigate', this.#navigate.bind(this), BROWSER_TOOL_VIEW_FOOTER),
+						this.#create('press', this.#press.bind(this), BROWSER_TOOL_CUT_FOOTER),
+						this.#create('navigate', this.#navigate.bind(this), BROWSER_TOOL_CUT_FOOTER),
 						wait,
 					],
 		)
 		this.#dialogTool =
-			options?.page === undefined
+			page === undefined
 				? undefined
-				: this.#create('dialog', this.#dialog.bind(this), BROWSER_TOOL_VIEW_FOOTER)
+				: this.#create('dialog', this.#dialog.bind(this), BROWSER_TOOL_CUT_FOOTER)
 		this.#contextTools = Object.freeze(
 			options?.context === undefined
 				? []
-				: [
-						this.#create('tabs', this.#tabs.bind(this), BROWSER_TOOL_CUT_FOOTER),
-						this.#create('switch', this.#switch.bind(this), BROWSER_TOOL_VIEW_FOOTER),
-					],
+				: [this.#create('switch', this.#switch.bind(this), BROWSER_TOOL_CUT_FOOTER)],
 		)
 		this.#journeys =
 			options?.journeys === undefined
 				? undefined
-				: new BrowserJourneyToolset(this, {
-						...options.journeys,
-						limit: options.journeys.limit ?? limit,
-					})
+				: new BrowserJourneyToolset(
+						this,
+						{
+							...options.journeys,
+							limit: options.journeys.limit ?? limit,
+						},
+						this.#consumeNotes.bind(this),
+					)
 	}
 
 	get emitter(): EmitterInterface<BrowserToolsetEventMap> {
@@ -351,8 +365,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		context?: ToolContext,
 	): Promise<ToolResult | readonly ToolResult[]> {
 		if (isArray(calls))
-			return Promise.all(calls.map(async (call) => (await this.perform(call, context)).result))
-		return (await this.perform(calls, context)).result
+			return Promise.all(calls.map(async (call) => (await this.execute(call, context)).result))
+		return (await this.execute(calls, context)).result
 	}
 
 	get native(): readonly ToolInterface[] {
@@ -367,7 +381,36 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return this.#reservation?.name
 	}
 
-	async perform(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
+	redact(text: string): string {
+		return redactBrowserText(text, [...this.#secrets])
+	}
+
+	describe(reference: string): string {
+		const element = this.#descriptions.get(reference)
+		return element === undefined
+			? describeBrowserRefusal(
+					reference,
+					'UNKNOWN',
+					'is not in the current view; call read for fresh refs',
+				)
+			: `Element ${reference} (${element.role} ${JSON.stringify(element.name)}) is not on this page; use a reference from the latest result.`
+	}
+
+	#remember(result: string, view: BrowserViewInterface): void {
+		const references = new Set(
+			[...result.matchAll(/\[ref=(e[1-9]\d*)\]/gu)].map((match) => match[1]),
+		)
+		for (const element of view.elements.elements()) {
+			if (references.has(element.reference))
+				this.#descriptions.set(element.reference, { role: element.role, name: element.name })
+		}
+	}
+
+	#consumeNotes(): string {
+		return this.redact(this.#drain())
+	}
+
+	async execute(call: ToolCall, context?: ToolContext): Promise<BrowserToolsetResult> {
 		const tool = this.#tools.tool(call.name)
 		const entry =
 			(context === undefined ? undefined : this.#invocations.get(context)) ??
@@ -382,11 +425,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				result: result.success
 					? {
 							...result,
-							value: isString(result.value)
-								? this.#boundReceipt(result.value, secret)
-								: result.value,
+							value:
+								isString(result.value) &&
+								!BROWSER_JOURNEY_TOOL_NAMES.some((name) => name === call.name)
+									? this.#boundReceipt(result.value, secret)
+									: result.value,
 						}
-					: { ...result, error: this.#boundReceipt(result.error, secret) },
+					: { ...result, error: this.#boundReceipt(result.error, secret, BROWSER_TOOL_CUT_FOOTER) },
 			}
 		}
 		const signal = AbortSignal.any([
@@ -402,6 +447,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				const secret = call.name === 'type' && call.arguments['secret'] === true
 				this.#actions.set(signal, {
 					action: call.name,
+					start: this.redact(this.#cursor.url),
 					arguments: cloneJSONRecord(
 						Object.fromEntries(
 							Object.entries(call.arguments).filter(([key]) => !secret || key !== 'text'),
@@ -491,10 +537,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		// Without a context the manager refuses `switch` itself, as it refuses any unadvertised step.
 		if (step.action === 'switch' && step.tab !== undefined && this.#context !== undefined)
 			args = { ...args, tab: await this.#resolveTab(id, step.tab, options) }
-		const performed = await this.perform({ id, name: step.action, arguments: args }, context)
+		const performed = await this.execute({ id, name: step.action, arguments: args }, context)
 		const action = performed.action
 		if (action === undefined)
 			throw new BrowserError(
+				'PROTOCOL',
 				`${id}: ${performed.result.success ? String(performed.result.value) : performed.result.error}`,
 			)
 		if (
@@ -540,7 +587,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		return this.#page ?? this.#view
 	}
 
-	#create(name: BrowserToolName, handler: BrowserToolsetHandler, clause: string): ToolInterface {
+	#create(
+		name: BrowserToolName,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
+		clause: string,
+	): ToolInterface {
 		const validated = this.#validate.bind(this, name, handler)
 		const tool = createTool({
 			...BROWSER_TOOL_COPY[name],
@@ -552,7 +606,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	async #dispatch(
 		name: string,
-		handler: BrowserToolsetHandler,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
 		clause: string,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
@@ -561,8 +618,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		if (name !== 'type' || args['secret'] !== true) context.signal.throwIfAborted()
 		const invocation = { ...context }
 		this.#invocations.set(invocation, { handler, clause })
-		const performed = await this.perform({ id: '', name, arguments: args }, invocation)
-		if (!performed.result.success) throw performed.fault ?? new BrowserError(performed.result.error)
+		const performed = await this.execute({ id: '', name, arguments: args }, invocation)
+		if (!performed.result.success)
+			throw performed.fault ?? new BrowserError('PROTOCOL', performed.result.error)
 		return performed.result.value
 	}
 
@@ -570,8 +628,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const hold = this.#reservation ?? this.#holds.values().next().value
 		if (hold !== undefined && caller !== hold.token && category !== 'observation')
 			throw new BrowserError(
-				`The toolset is replaying ${hold.name} until it finishes; call look.`,
-				'BROWSER_TOOLSET_BUSY',
+				'TOOLSET_BUSY',
+				`The toolset is replaying ${hold.name} until it finishes; call read.`,
 			)
 	}
 
@@ -579,10 +637,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
 		if (dialog !== undefined || this.#pending !== undefined)
 			throw new BrowserError(
+				'TOOLSET_DIALOG',
 				dialog === undefined
 					? BROWSER_TOOL_PENDING_NOTE
 					: renderBrowserReceipt({ action: '', dialog }),
-				'BROWSER_TOOLSET_DIALOG',
 			)
 	}
 
@@ -599,7 +657,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// Refuses a parameter the tool does not advertise before its handler reads any argument.
 	#validate(
 		name: BrowserToolName,
-		handler: BrowserToolsetHandler,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
@@ -617,8 +678,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		})
 		if (conflict !== undefined) {
 			throw new BrowserError(
+				'TOOLSET_RESERVED',
 				`The tool manager already holds a tool named ${conflict}, a name the browser toolset reserves`,
-				'BROWSER_TOOLSET_RESERVED',
 				{ name: conflict },
 			)
 		}
@@ -651,13 +712,17 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	async #execute(
 		name: string,
 		clause: string,
-		handler: BrowserToolsetHandler,
+		handler: (
+			args: Readonly<Record<string, unknown>>,
+			context: ToolContext,
+		) => Promise<readonly [body: string, footer: string]>,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<string> {
 		if (this.#destroying !== undefined) throw this.#ended()
 		const signal = context.signal
 		const secret = name === 'type' && args['secret'] === true ? args['text'] : undefined
+		if (isString(secret) && secret !== '') this.#secrets.add(secret)
 		try {
 			signal.throwIfAborted()
 			this.#admit(
@@ -666,8 +731,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			)
 			if (name !== 'dialog') this.#refuseDialog()
 			const [content, suffix] = await handler(args, { ...context, signal })
-			const body = this.#boundReceipt(content, secret)
-			const footer = this.#boundReceipt(suffix, secret)
+			const body = BROWSER_TOOL_NAMES.some((reserved) => reserved === name)
+				? content
+				: this.#boundReceipt(content, secret)
+			const footer = suffix
 			// A cancellation that lands while the handler finishes wins over its result.
 			signal.throwIfAborted()
 			const state = this.#actions.get(signal)
@@ -676,20 +743,22 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					...state,
 					receipt: boundBrowserText(body.split('\n\n')[0] ?? body, this.#limit, clause),
 				})
-			return `${this.#boundReceipt(`${this.#drain()}${body}`, secret, clause)}${footer}`
+			return BROWSER_TOOL_NAMES.some((reserved) => reserved === name)
+				? `${body}${footer}`
+				: this.#boundReceipt(`${this.#drain()}${body}${footer}`, secret, clause)
 		} catch (error) {
 			const original = isError(error) ? error.message : String(error)
 			const message = this.#boundReceipt(original, secret)
 			if (context.signal.aborted && error === context.signal.reason && message === original)
 				throw error
-			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
+			if (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT') {
 				this.#actions.set(signal, { ...this.#actions.get(signal), outcome: 'interrupted' })
 				return this.#boundReceipt(`${this.#drain()}${message}`, secret, BROWSER_TOOL_CUT_FOOTER)
 			}
 			if (message === original && message.length <= this.#limit) throw error
 			throw new BrowserError(
+				isBrowserError(error) ? error.code : 'PROTOCOL',
 				boundBrowserText(message, this.#limit, BROWSER_TOOL_CUT_FOOTER),
-				isBrowserError(error) ? error.code : undefined,
 				isBrowserError(error) ? error.context : undefined,
 			)
 		}
@@ -702,135 +771,114 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				.replaceAll(JSON.stringify(secret), '[redacted]')
 				.replaceAll(secret, '[redacted]')
 		}
+		message = redactBrowserText(message, [...this.#secrets])
 		return clause === undefined ? message : boundBrowserText(message, this.#limit, clause)
 	}
 
-	async #look(
-		args: Readonly<Record<string, unknown>>,
-		context: ToolContext,
-	): Promise<readonly [string, string]> {
-		const offset = this.#readOffset(args)
-		const search = isString(args['search']) ? args['search'] : ''
-		// The outline carries the signal, so an abort rejects with its own pending protocol
-		// entry's reason rather than a toolset-level copy of it. Every referenced row is listed,
-		// because the pages reach past the default cap.
-		const outline = await this.#race(
-			this.#cursor.elements.outline({
-				signal: context.signal,
-				limit: Number.MAX_SAFE_INTEGER,
-				search,
-			}),
-			'',
-		)
-		const total = outline.text.length
-		// Each call captures afresh; an unchanged page renders the same text, so a line-ended page
-		// continues exactly, and an offset at or past the end restarts at 0.
-		const start = offset < total ? offset : 0
-		const note = this.#drainNote()
-		const room = this.#limit - note.length
-		// The matches stay outside the paged text, so an offset never depends on `search`.
-		const count = outline.matches.length
-		const block =
-			start === 0
-				? renderBrowserMatches(
-						`${count} ${count === 1 ? 'element matches' : 'elements match'} ${JSON.stringify(search)}:`,
-						outline.matches,
-						room,
+	async read(options?: BrowserToolsetReadOptions): Promise<string> {
+		this.#live()
+		this.#refuseDialog()
+		const from = options?.from ?? 1
+		validateBrowserLines(from, options?.to)
+		const limit = Math.min(options?.limit ?? this.#limit, this.#limit)
+		const capture = new AbortController()
+		const signal = AbortSignal.any([
+			capture.signal,
+			this.#lifetime.signal,
+			...(options?.signal === undefined ? [] : [options.signal]),
+		])
+		try {
+			const view = this.#cursor
+			const deadline = performance.now() + (options?.timeout ?? BROWSER_TOOL_CAPTURE_MS)
+			let outline: BrowserOutline | undefined
+			for (let attempt = 0; attempt < 2; attempt += 1) {
+				try {
+					outline = await this.#bounded(
+						view.elements.outline({
+							...options,
+							timeout: Math.max(0, deadline - performance.now()),
+							signal,
+							limit: Number.MAX_SAFE_INTEGER,
+							secrets: [...this.#secrets],
+						}),
+						deadline,
+						'',
+						signal,
 					)
-				: ''
-		const space = room - block.length
-		const slice =
-			space < 1
-				? { text: '', offset: start, total }
-				: extractBrowserSlice(outline.text, start, space)
-		return this.#pageSlice('look', note, slice, block)
+					if (outline === undefined)
+						return boundBrowserText(BROWSER_TOOL_DEADLINE_NOTE, limit, BROWSER_TOOL_CUT_FOOTER)
+					break
+				} catch (error) {
+					if (
+						signal.aborted ||
+						!(isBrowserError(error) && error.code === 'ELEMENT') ||
+						error.context?.['reason'] !== 'GONE'
+					)
+						throw error
+					if (attempt === 1)
+						return boundBrowserText(BROWSER_TOOL_CHANGED_NOTE, limit, BROWSER_TOOL_CUT_FOOTER)
+				}
+			}
+			if (outline === undefined)
+				throw new BrowserError('TOOLSET_CAPTURE', 'The page could not be captured; call read.')
+			const projection = outline.lines.map(renderBrowserLine).join('\n')
+			const previous = this.#projections.get(view)
+			const tabs =
+				this.#context === undefined
+					? []
+					: ((await this.#bounded(this.#list(signal, true), deadline, '', signal)) ?? [])
+			const result = renderBrowserPassage(
+				{
+					...outline,
+					from,
+					...(options?.to === undefined ? {} : { to: options.to }),
+					...(options?.search === undefined
+						? {}
+						: { search: this.#boundReceipt(options.search, undefined) }),
+					tabs: tabs.map((tab) => ({
+						...tab,
+						title: this.#boundReceipt(tab.title, undefined),
+						url: this.#boundReceipt(tab.url, undefined),
+					})),
+					changed: previous !== undefined && previous !== projection,
+					note: this.#boundReceipt(this.#peek(), undefined),
+				},
+				limit,
+			)
+			this.#projections.set(view, projection)
+			this.#remember(result, view)
+			this.#notes.length = 0
+			return result
+		} finally {
+			capture.abort(new BrowserError('TOOLSET_SETTLED', 'the read settled'))
+		}
 	}
 
 	async #read(
-		name: 'read' | 'plain',
-		project: (reading: BrowserReadingInterface) => BrowserReadResult,
 		args: Readonly<Record<string, unknown>>,
 		context: ToolContext,
 	): Promise<readonly [string, string]> {
-		const offset = this.#readOffset(args)
-		const view = this.#cursor
-		const retained = this.#reading
-		let reading = retained?.reading
-		// A continuation reuses the capture it continues; a changed view or a navigation recaptures.
-		// The slice restarts at 0 after a recapture and at an offset at or past the retained
-		// reading's end, so the footer shows the reset.
+		const from = parseBrowserToolInteger(args['from'])
+		const to = parseBrowserToolInteger(args['to'])
+		const search = args['search']
 		if (
-			offset === 0 ||
-			retained === undefined ||
-			reading === undefined ||
-			retained.name !== name ||
-			retained.view !== view ||
-			reading.stale
-		) {
-			reading = await this.#race(view.read({ signal: context.signal }), '', context.signal)
-			this.#reading = { view, reading, name }
-		}
-		const whole = project(reading)
-		const start = reading === retained?.reading && offset < whole.total ? offset : 0
-		const note = this.#drainNote()
-		const room = this.#limit - note.length
-		const search = isString(args['search']) ? args['search'] : ''
-		const matches = start === 0 ? scanBrowserText(whole.text, search) : []
-		const count = matches.length
-		const block = renderBrowserMatches(
-			`${count} ${count === 1 ? 'line matches' : 'lines match'} ${JSON.stringify(search)}:`,
-			matches.map((match) => `[${match.offset}] ${match.text}`),
-			room,
+			from === undefined ||
+			(args['to'] !== undefined && to === undefined) ||
+			(search !== undefined && !isString(search))
 		)
-		const space = room - block.length
-		const slice =
-			space < 1
-				? { text: '', offset: start, total: whole.total }
-				: extractBrowserSlice(whole.text, start, space)
-		return this.#pageSlice(name, note, slice, block)
-	}
-
-	// Reads the `offset` argument before the tool captures anything.
-	#readOffset(args: Readonly<Record<string, unknown>>): number {
-		const offset = args['offset'] ?? 0
-		if (!isInteger(offset) || offset < 0) {
 			throw new BrowserError(
-				'The offset parameter must be a non-negative integer.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'offset' },
+				'ARGUMENT',
+				'Read requires an integer from, an optional integer to, and optional search text.',
+				{ subject: 'toolset' },
 			)
-		}
-		return offset
-	}
-
-	// A move note shares the limit with the page, so the continuation offset counts only the
-	// paged characters a result carries.
-	#drainNote(): string {
-		return boundBrowserText(this.#drain(), Math.max(1, this.#limit - 1), BROWSER_TOOL_CUT_FOOTER)
-	}
-
-	// Returns one page: the note, the block, and the slice as the body, and the
-	// footer that names the range and the next offset, absent when the whole text fits at offset 0.
-	#pageSlice(
-		name: 'look' | 'read' | 'plain',
-		note: string,
-		slice: BrowserReadResult,
-		block = '',
-	): readonly [string, string] {
-		// A limit that cannot hold the next code point would never advance the continuation.
-		if (note === '' && slice.text === '' && slice.offset < slice.total) {
-			throw new BrowserError(
-				`The ${name} limit of ${this.#limit} characters cannot hold the next character at offset ${slice.offset}; raise the toolset limit.`,
-				'BROWSER_TOOLSET_LIMIT',
-				{ limit: this.#limit, offset: slice.offset },
-			)
-		}
-		const end = slice.offset + slice.text.length
-		const more = end < slice.total
-		if (slice.offset === 0 && !more) return [`${note}${block}${slice.text}`, '']
 		return [
-			`${note}${block}${slice.text}`,
-			`\n\n[characters ${slice.offset}–${end} of ${slice.total}${more ? `; call ${name} with offset ${end} for more` : ''}]`,
+			await this.read({
+				from,
+				...(to === undefined ? {} : { to }),
+				...(search === undefined ? {} : { search }),
+				signal: context.signal,
+			}),
+			'',
 		]
 	}
 
@@ -891,17 +939,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const submit = args['submit']
 		const secret = args['secret']
 		if (secret !== undefined && !isBoolean(secret))
-			throw new BrowserError(
-				'The secret parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'secret' },
-			)
+			throw new BrowserError('ARGUMENT', 'The secret parameter must be a boolean.', {
+				subject: 'toolset',
+				key: 'secret',
+			})
 		if (submit !== undefined && !isBoolean(submit)) {
-			throw new BrowserError(
-				'The submit parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'submit' },
-			)
+			throw new BrowserError('ARGUMENT', 'The submit parameter must be a boolean.', {
+				subject: 'toolset',
+				key: 'submit',
+			})
 		}
 
 		const turn = await this.#acquire(context.signal)
@@ -913,9 +959,20 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			// The role the latest capture recorded decides, so a control that takes no text is
 			// refused before any protocol command reaches it.
 			if (!BROWSER_TYPED_ROLES.has(element.role)) {
+				const projection = this.#projections.get(this.#cursor)
+				const fields = this.#cursor.elements
+					.elements()
+					.filter((candidate) => BROWSER_TYPED_ROLES.has(candidate.role))
+					.map((candidate) => ({
+						element: candidate,
+						position: projection?.indexOf(`[ref=${candidate.reference}]`) ?? 0,
+					}))
+					.filter((candidate) => candidate.position >= 0)
+					.sort((left, right) => left.position - right.position)
+					.map((candidate) => renderBrowserElement(candidate.element))
 				throw new BrowserError(
-					`Element ${renderBrowserElement(element)} takes no text; call click for ${/^[aeiou]/i.test(element.role) ? 'an' : 'a'} ${element.role}.`,
-					'BROWSER_TOOLSET_ROLE',
+					'TOOLSET_ROLE',
+					`Element ${renderBrowserElement(element)} takes no text; ${fields.length > 0 ? `to type, use ${fields.join(' or ')}` : `call click for ${/^[aeiou]/i.test(element.role) ? 'an' : 'a'} ${element.role}`}.`,
 					{ reference: element.reference, role: element.role },
 				)
 			}
@@ -1059,15 +1116,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const parsed = URL.canParse(url) ? new URL(url) : undefined
 		if (parsed === undefined) {
 			throw new BrowserError(
+				'TOOLSET_SCHEME',
 				`Navigation refused: ${JSON.stringify(url)} is not an absolute URL.`,
-				'BROWSER_TOOLSET_SCHEME',
 				{ url },
 			)
 		}
 		if (!this.#schemes.includes(parsed.protocol)) {
 			throw new BrowserError(
+				'TOOLSET_SCHEME',
 				`Navigation refused: the ${parsed.protocol} scheme is not allowed; use ${this.#schemes.join(' or ')}.`,
-				'BROWSER_TOOLSET_SCHEME',
 				{ url },
 			)
 		}
@@ -1088,7 +1145,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			})
 			const action = `Navigated to ${result.url}`
 			return [
-				renderBrowserReceipt({ action, view: (await this.#capture(action, context.signal)).view }),
+				this.#window(await this.#capture(action, context.signal), renderBrowserReceipt({ action })),
 				'',
 			]
 		} finally {
@@ -1106,17 +1163,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const seconds = args['timeout']
 		const absent = args['absent']
 		if (absent !== undefined && !isBoolean(absent)) {
-			throw new BrowserError(
-				'The absent parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'absent' },
-			)
+			throw new BrowserError('ARGUMENT', 'The absent parameter must be a boolean.', {
+				subject: 'toolset',
+				key: 'absent',
+			})
 		}
 		if (seconds !== undefined && (!isFiniteNumber(seconds) || seconds <= 0)) {
 			throw new BrowserError(
+				'ARGUMENT',
 				'The timeout parameter must be a positive number of seconds.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'timeout' },
+				{ subject: 'toolset', key: 'timeout' },
 			)
 		}
 		const timeout = Math.min(
@@ -1130,21 +1186,32 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				`Waited for ${quoted}${absent === true ? ' to leave' : ''}`,
 				context.signal,
 			)
-			return [`${quoted} is ${absent === true ? 'not ' : ''}on the page.`, '']
+			return [
+				this.#window(
+					await this.#capture('', context.signal),
+					`${quoted} is ${absent === true ? 'not ' : ''}on the page.`,
+					absent === true ? undefined : text,
+				),
+				'',
+			]
 		} catch (error) {
 			if (
 				!context.signal.aborted &&
 				isBrowserError(error) &&
-				error.code === 'BROWSER_WAIT_TIMEOUT'
+				error.code === 'TIMEOUT' &&
+				error.context?.['operation'] === 'wait'
 			) {
 				this.#actions.set(context.signal, {
 					...this.#actions.get(context.signal),
 					outcome: 'timeout',
 				})
 				return [
-					absent === true
-						? `${quoted} is still on the page after ${timeout / 1000} s.`
-						: `${quoted} did not appear within ${timeout / 1000} s.`,
+					this.#window(
+						await this.#capture('', context.signal),
+						absent === true
+							? `${quoted} is still on the page after ${timeout / 1000} s.`
+							: `${quoted} did not appear within ${timeout / 1000} s.`,
+					),
 					'',
 				]
 			}
@@ -1159,14 +1226,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const accept = args['accept']
 		const text = args['text']
 		if (!isBoolean(accept)) {
-			throw new BrowserError(
-				'The accept parameter must be a boolean.',
-				'BROWSER_TOOLSET_ARGUMENT',
-				{ key: 'accept' },
-			)
+			throw new BrowserError('ARGUMENT', 'The accept parameter must be a boolean.', {
+				subject: 'toolset',
+				key: 'accept',
+			})
 		}
 		if (text !== undefined && !isString(text)) {
-			throw new BrowserError('The text parameter must be a string.', 'BROWSER_TOOLSET_ARGUMENT', {
+			throw new BrowserError('ARGUMENT', 'The text parameter must be a string.', {
+				subject: 'toolset',
 				key: 'text',
 			})
 		}
@@ -1175,7 +1242,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const page = this.#paged()
 			const dialog = this.#dialogs.get(page)
 			if (dialog === undefined) {
-				throw new BrowserError('No dialog is open; call look.', 'BROWSER_TOOLSET_DIALOG')
+				throw new BrowserError('TOOLSET_DIALOG', 'No dialog is open; call read.')
 			}
 			context.signal.throwIfAborted()
 			if (accept) await dialog.accept(text)
@@ -1184,35 +1251,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			this.#stage()
 			const action = `${accept ? 'Accepted' : 'Dismissed'} the ${dialog.category} dialog ${JSON.stringify(dialog.message)}`
 			return [
-				renderBrowserReceipt({ action, view: (await this.#capture(action, context.signal)).view }),
+				this.#window(await this.#capture(action, context.signal), renderBrowserReceipt({ action })),
 				'',
 			]
 		} finally {
 			turn.resolve()
 		}
-	}
-
-	async #tabs(
-		args: Readonly<Record<string, unknown>>,
-		context: ToolContext,
-	): Promise<readonly [string, string]> {
-		const tabs = await this.#list(context.signal, true)
-		const text = tabs
-			.map(
-				(tab) =>
-					`${tab.id} ${JSON.stringify(tab.title)} ${tab.url}${tab.current ? ' (current)' : ''}`,
-			)
-			.join('\n')
-		const search = isString(args['search']) ? args['search'] : ''
-		const matches = scanBrowserText(text, search)
-		const count = matches.length
-		const note = this.#drainNote()
-		const block = renderBrowserMatches(
-			`${count} ${count === 1 ? 'tab matches' : 'tabs match'} ${JSON.stringify(search)}:`,
-			matches.map((match) => match.text),
-			this.#limit - note.length,
-		)
-		return [`${note}${block}${text}`, '']
 	}
 
 	async #switch(
@@ -1227,8 +1271,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const page = match === null ? undefined : pages[Number(match[1]) - 1]
 			if (page === undefined) {
 				throw new BrowserError(
-					`Tab ${JSON.stringify(tab)} is not open; call tabs.`,
-					'BROWSER_TOOLSET_TAB',
+					'TOOLSET_TAB',
+					`Tab ${JSON.stringify(tab)} is not open; call read.`,
 					{ tab },
 				)
 			}
@@ -1241,7 +1285,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const front = page.send('Page.bringToFront', undefined, { signal: context.signal })
 			await this.#command(front, action, front)
 			return [
-				renderBrowserReceipt({ action, view: (await this.#capture(action, context.signal)).view }),
+				this.#window(await this.#capture(action, context.signal), renderBrowserReceipt({ action })),
 				'',
 			]
 		} finally {
@@ -1268,8 +1312,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		}
 	}
 
-	// Lists the context's tabs; `interruptible` lets a dialog that opens meanwhile end the `tabs`
-	// tool with its receipt.
+	// Lists context tabs; a dialog can interrupt a window while its tab titles are being read.
 	#list(signal: AbortSignal, interruptible: boolean): Promise<readonly BrowserTab[]> {
 		const pages = this.#context?.pages() ?? []
 		return this.#race(
@@ -1295,7 +1338,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#refuseDialog(): void {
 		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
 		if (dialog !== undefined)
-			throw new BrowserError(renderBrowserReceipt({ action: '', dialog }), 'BROWSER_TOOLSET_DIALOG')
+			throw new BrowserError('TOOLSET_DIALOG', renderBrowserReceipt({ action: '', dialog }))
 	}
 
 	async #choose(
@@ -1319,11 +1362,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const reference = requireBrowserReference(value)
 		const element = this.#cursor.elements.element(reference)
 		if (element === undefined) {
-			throw new BrowserElementError(
-				reference,
-				'UNKNOWN',
-				'is not in the current view; call look for fresh refs',
-			)
+			throw new BrowserError('ELEMENT', this.describe(reference), {
+				reference: reference,
+				reason: 'UNKNOWN',
+			})
 		}
 		const frame = this.#page === undefined ? undefined : this.#resolveFrame(this.#page, reference)
 		this.#actions.set(signal, {
@@ -1340,7 +1382,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	#paged(): BrowserPageInterface {
 		if (this.#page === undefined) {
-			throw new BrowserError('This view has no page', 'BROWSER_TOOLSET_PAGE')
+			throw new BrowserError('TOOLSET_PAGE', 'This view has no page')
 		}
 		return this.#page
 	}
@@ -1360,10 +1402,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const pending = this.#pending
 			if (!answer && pending !== undefined) await this.#race(pending, '', signal, !answer)
 			if (!answer && this.#pending === pending) this.#pending = undefined
+			const action = this.#actions.get(signal)
+			if (action !== undefined)
+				this.#actions.set(signal, { ...action, start: this.redact(this.#cursor.url) })
 		} catch (error) {
 			turn.resolve()
-			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT') {
-				throw new BrowserError(error.message, 'BROWSER_TOOLSET_DIALOG')
+			if (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT') {
+				throw new BrowserError('TOOLSET_DIALOG', error.message)
 			}
 			throw error
 		}
@@ -1415,7 +1460,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				first || observation === undefined
 					? { destinations: [], prevented: false, submitted: undefined, implicit: false }
 					: await this.#readSubmissions(observation, action, signal, bound)
-			const settled =
+			let settled =
 				record === undefined
 					? undefined
 					: await this.#race(
@@ -1439,22 +1484,30 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			signal.throwIfAborted()
 			const popup = opened.find((page) => !page.closed)
 			if (popup !== undefined) await this.#followPopup(popup, action, signal, bound)
+			// Without a surviving destination and a navigation, the observer names what became of the
+			// submission: a listener handled it, or no form received the Enter the action asked for.
+			const unmoved = settled === undefined && submissions.destinations.length === 0
+			const changed =
+				unmoved && submissions.prevented && observation !== undefined
+					? await this.#waitSubmission(observation, record, action, signal, bound)
+					: false
+			if (changed && record !== undefined)
+				settled = await record.settle({ timeout: Math.max(0, bound - performance.now()), signal })
 			if (settled !== undefined)
 				this.#actions.set(signal, {
 					...this.#actions.get(signal),
 					stage: settled.stage,
 					...(settled.reason === undefined ? {} : { reason: settled.reason }),
 				})
-			// Without a surviving destination and a navigation, the observer names what became of the
-			// submission: a listener handled it, or no form received the Enter the action asked for.
-			const unmoved = settled === undefined && submissions.destinations.length === 0
 			const status =
 				settled?.stage === 'committed'
 					? `the page is still loading ${settled.url}`
 					: settled?.stage === 'requested'
 						? `it requested ${settled.url} and the page did not change`
 						: unmoved && submissions.prevented
-							? BROWSER_TOOL_HANDLED_STATUS
+							? changed
+								? BROWSER_TOOL_HANDLED_STATUS
+								: BROWSER_TOOL_UNCHANGED_STATUS
 							: unmoved &&
 								  submissions.submitted === false &&
 								  (enter?.explicit === true || (enter !== undefined && submissions.implicit))
@@ -1471,12 +1524,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			const clause =
 				focus && captured.focus !== undefined ? `focus is on ${captured.focus}` : undefined
 			const parts = [status, clause].filter((part) => part !== undefined)
-			return renderBrowserReceipt({
-				action: line,
-				trusted,
-				...(parts.length === 0 ? {} : { status: parts.join('; ') }),
-				view: captured.view,
-			})
+			return this.#window(
+				captured,
+				renderBrowserReceipt({
+					action: line,
+					trusted,
+					...(parts.length === 0 ? {} : { status: parts.join('; ') }),
+				}),
+			)
 		} finally {
 			record?.destroy()
 			if (observation !== undefined) await this.#unobserve(observation, signal, deadline)
@@ -1534,8 +1589,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			return await this.#race(step, action, signal)
 		} catch (error) {
-			if (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')
-				this.#parkInput(command)
+			if (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT') this.#parkInput(command)
 			throw error
 		}
 	}
@@ -1563,8 +1617,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const name = target.name
 		if (!isString(name))
 			throw new BrowserError(
+				'JOURNEY_INPUT',
 				`Step ${id} binds its target name to parameter ${JSON.stringify(name.parameter)}; pass the name itself.`,
-				'BROWSER_JOURNEY_INPUT',
 				{ step: id, parameter: name.parameter },
 			)
 		const matches = await this.#cursor.elements.find(
@@ -1574,8 +1628,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const [element] = matches
 		if (matches.length === 1 && element !== undefined) return element.reference
 		throw new BrowserError(
+			matches.length === 0 ? 'JOURNEY_TARGET' : 'JOURNEY_AMBIGUOUS',
 			`Step ${id} names ${target.role} ${JSON.stringify(name)}, which ${matches.length === 0 ? 'no element carries' : `${matches.length} elements carry`}; call edit to remove or replace ${id}.`,
-			matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
 		)
 	}
 
@@ -1591,8 +1645,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const [match] = matches
 		if (matches.length === 1 && match !== undefined) return match.id
 		throw new BrowserError(
-			`${id}: The tab ${JSON.stringify(tab.title)} at ${tab.url} ${matches.length === 0 ? 'is not open' : 'is ambiguous'}; call tabs.`,
-			matches.length === 0 ? 'BROWSER_JOURNEY_TARGET' : 'BROWSER_JOURNEY_AMBIGUOUS',
+			matches.length === 0 ? 'JOURNEY_TARGET' : 'JOURNEY_AMBIGUOUS',
+			`${id}: The tab ${JSON.stringify(tab.title)} at ${tab.url} ${matches.length === 0 ? 'is not open' : 'is ambiguous'}; call read.`,
 		)
 	}
 
@@ -1628,8 +1682,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const installed = await this.#race(Promise.all(installs), '', signal)
 		if (!frames.some((frame, index) => frame.id === required && installed[index] === true))
 			throw new BrowserError(
-				`The action was not sent: frame ${required}, which receives the input, could not be observed for a form submission; call look.`,
-				'BROWSER_TOOLSET_OBSERVE',
+				'TOOLSET_OBSERVE',
+				`The action was not sent: frame ${required}, which receives the input, could not be observed for a form submission; call read.`,
 				{ frame: required },
 			)
 	}
@@ -1707,8 +1761,6 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				action,
 				signal,
 			)
-			// A read that answered removed the observer, or found none to remove.
-			if (read !== undefined) observation.frames.delete(frame)
 			if (!isRecord(read)) return undefined
 			const { destinations, prevented, submitted, implicit } = read
 			if (
@@ -1731,11 +1783,48 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				implicit,
 			}
 		} catch (error) {
-			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
+			if (signal.aborted || (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT')) {
 				throw error
 			}
 			return undefined
 		}
+	}
+
+	async #waitSubmission(
+		observation: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
+		record: BrowserNavigationRecordInterface | undefined,
+		action: string,
+		signal: AbortSignal,
+		bound: number,
+	): Promise<boolean> {
+		const remaining = Math.max(0, bound - performance.now())
+		const waits = [...observation.frames].map((frame) =>
+			frame
+				.evaluate(compileSubmitWaitExpression(observation.token, remaining), {
+					signal,
+					timeout: remaining + BROWSER_TOOL_CAPTURE_MS,
+				})
+				.then(
+					(value) => (value === true ? true : new Promise<boolean>(() => undefined)),
+					async (error: unknown) => {
+						if (signal.aborted) throw error
+						const frames = await this.#page?.frames()
+						return frames?.some(
+							(current) => current.id === frame.id && current.url === frame.url,
+						) === true
+							? new Promise<boolean>(() => undefined)
+							: true
+					},
+				),
+		)
+		if (record !== undefined)
+			waits.push(
+				record.wait({ signal }).then(
+					() => true,
+					() => new Promise<boolean>(() => undefined),
+				),
+			)
+		return (await this.#bounded(Promise.race(waits), bound, action, signal)) === true
 	}
 
 	// Sends the removal of every observer the action still owns, without the action's signal, and
@@ -1754,7 +1843,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		if (frames.length === 0) return
 		const removal = Promise.allSettled(
 			frames.map((frame) =>
-				frame.evaluate(compileSubmitReadExpression(observation.token), {
+				frame.evaluate(compileSubmitReleaseExpression(observation.token), {
 					timeout: BROWSER_TOOL_CAPTURE_MS,
 				}),
 			),
@@ -1800,7 +1889,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	#interrupt(dialog: BrowserDialogInterface): void {
 		for (const [interrupt, action] of this.#interrupts) {
 			interrupt.reject(
-				new BrowserError(renderBrowserReceipt({ action, dialog }), 'BROWSER_TOOLSET_RECEIPT'),
+				new BrowserError('TOOLSET_RECEIPT', renderBrowserReceipt({ action, dialog })),
 			)
 		}
 	}
@@ -1831,9 +1920,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		action: string,
 		signal: AbortSignal,
 		deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS,
-	): Promise<{ readonly view: string; readonly focus: string | undefined }> {
+	): Promise<BrowserCaptureResult> {
 		if (deadline - performance.now() < 1)
-			return { view: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined }
+			return { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
 		// The capture belongs to the receipt: settling the receipt aborts it, so no readiness wait
 		// or protocol call outlives the receipt. The deadline alone ends the capture; the outline's
 		// own timeout sits past it, so a capture that runs out always reports the deadline note.
@@ -1843,20 +1932,28 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const options = {
 			signal: AbortSignal.any([signal, receipt.signal]),
 			timeout: BROWSER_TOOL_TIMEOUT_MS,
+			limit: Number.MAX_SAFE_INTEGER,
+			secrets: [...this.#secrets],
 		}
+		let tabs: readonly BrowserTab[] = []
 		try {
+			tabs = (await this.#bounded(this.#list(options.signal, true), deadline, action, signal)) ?? []
 			const outline = await this.#bounded(this.#cursor.elements.outline(options), deadline, action)
 			return outline === undefined
-				? { view: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined }
-				: { view: outline.text, focus: outline.focus }
+				? { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
+				: { outline, focus: outline.focus, tabs }
 		} catch (error) {
-			if (signal.aborted || (isBrowserError(error) && error.code === 'BROWSER_TOOLSET_RECEIPT')) {
+			if (signal.aborted || (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT')) {
 				throw error
 			}
-			if (!isBrowserElementError(error) || error.context?.['reason'] !== 'GONE') {
+			if (
+				!(isBrowserError(error) && error.code === 'ELEMENT') ||
+				error.context?.['reason'] !== 'GONE'
+			) {
 				return {
-					view: `(The view could not be read: ${isError(error) ? error.message : String(error)}; call look.)`,
+					note: `(The view could not be read: ${isError(error) ? error.message : String(error)}; call read.)`,
 					focus: undefined,
+					tabs,
 				}
 			}
 			// A navigation replaced the document mid-capture; the outline waits for the replacing
@@ -1868,23 +1965,58 @@ export class BrowserToolset implements BrowserToolsetInterface {
 					action,
 				)
 				return outline === undefined
-					? { view: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined }
-					: { view: outline.text, focus: outline.focus }
+					? { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
+					: { outline, focus: outline.focus, tabs }
 			} catch (retry) {
-				if (signal.aborted || (isBrowserError(retry) && retry.code === 'BROWSER_TOOLSET_RECEIPT')) {
+				if (signal.aborted || (isBrowserError(retry) && retry.code === 'TOOLSET_RECEIPT')) {
 					throw retry
 				}
-				return { view: BROWSER_TOOL_CHANGED_NOTE, focus: undefined }
+				return { note: BROWSER_TOOL_CHANGED_NOTE, focus: undefined, tabs: [] }
 			}
 		} finally {
-			receipt.abort(new BrowserError('the receipt settled', 'BROWSER_TOOLSET_SETTLED'))
+			receipt.abort(new BrowserError('TOOLSET_SETTLED', 'the receipt settled'))
 		}
+	}
+
+	#window(captured: BrowserCaptureResult, receipt: string, text?: string): string {
+		receipt = this.#boundReceipt(receipt, undefined)
+		const outline = captured.outline
+		if (outline === undefined)
+			return this.#boundReceipt(
+				receipt + '\n\n' + (captured.note ?? BROWSER_TOOL_CHANGED_NOTE),
+				undefined,
+				BROWSER_TOOL_CUT_FOOTER,
+			)
+		const from = text === undefined ? 1 : findBrowserText(outline.lines, text)
+		const passage = {
+			...outline,
+			from,
+			tabs: captured.tabs.map((tab) => ({
+				...tab,
+				title: this.#boundReceipt(tab.title, undefined),
+				url: this.#boundReceipt(tab.url, undefined),
+			})),
+			changed: false,
+			note: this.#boundReceipt(this.#peek(), undefined),
+		}
+		const result = renderBrowserReceiptWindow(passage, receipt, this.#limit)
+		this.#projections.set(this.#cursor, outline.lines.map(renderBrowserLine).join('\n'))
+		this.#remember(result, this.#cursor)
+		this.#notes.length = 0
+		return result
+	}
+
+	#peek(): string {
+		const supplied = this.#notices?.()
+		if (supplied) this.#notes.push(supplied)
+		return this.#notes.length === 0 ? '' : `${this.#notes.join(' ')}\n\n`
 	}
 
 	// Returns the pending move notes as a block that leads the next result, and forgets them.
 	#drain(): string {
-		const notes = this.#notes.splice(0)
-		return notes.length === 0 ? '' : `${notes.join(' ')}\n\n`
+		const notes = this.#peek()
+		this.#notes.length = 0
+		return notes
 	}
 
 	// A failed startup lets a later `start()` try again, unless `destroy()` ended the toolset.
@@ -1897,7 +2029,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	}
 
 	#ended(): BrowserError {
-		return new BrowserError('the browser session ended', 'BROWSER_TOOLSET_ENDED')
+		return new BrowserError('CLOSED', 'the browser session ended', { subject: 'toolset' })
 	}
 
 	#current(generation: number, source: BrowserToolSourceInterface): boolean {
@@ -2058,7 +2190,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	async #watch(page: BrowserPageInterface): Promise<void> {
 		if (this.#watches.has(page)) return
-		const watch: BrowserToolsetWatch = {
+		const watch: {
+			readonly dialog: (dialog: BrowserDialogInterface) => void
+			readonly popup: (page: BrowserPageInterface) => void
+			readonly close: () => void
+			readonly closed: CDPHandler
+		} = {
 			dialog: this.#handleDialog.bind(this, page),
 			popup: this.#handlePopup.bind(this, page),
 			close: this.#handleClose.bind(this, page),
@@ -2080,7 +2217,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		await this.#release(page, watch)
 	}
 
-	async #release(page: BrowserPageInterface, watch: BrowserToolsetWatch): Promise<void> {
+	async #release(
+		page: BrowserPageInterface,
+		watch: {
+			readonly dialog: (dialog: BrowserDialogInterface) => void
+			readonly popup: (page: BrowserPageInterface) => void
+			readonly close: () => void
+			readonly closed: CDPHandler
+		},
+	): Promise<void> {
 		page.emitter.off('dialog', watch.dialog)
 		page.emitter.off('popup', watch.popup)
 		page.emitter.off('close', watch.close)
@@ -2101,9 +2246,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		await Promise.all([...this.#watches.keys()].map((page) => this.#unwatch(page)))
 		this.#dialogs.clear()
 		this.#adopted.clear()
-		this.#reading = undefined
+		this.#descriptions.clear()
 		this.#emitter.destroy()
-		await this.#owned?.()
 	}
 
 	#handleChange(): void {

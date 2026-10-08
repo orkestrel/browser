@@ -14,14 +14,7 @@ import { BrowserError } from './errors.js'
 /**
  * Collects JavaScript precise coverage and CSS rule usage for one page target.
  *
- * @example
- * ```ts
- * import { BrowserCoverage } from '@orkestrel/browser'
- *
- * const coverage = new BrowserCoverage(page)
- * await coverage.start({ javascript: true, css: true })
- * const usage = await coverage.stop() // { scripts, styles }
- * ```
+ * @remarks The owner exposes this entity through `page.diagnostics.coverage`.
  */
 export class BrowserCoverage implements BrowserCoverageInterface {
 	readonly #frame: BrowserFrameInterface
@@ -37,11 +30,11 @@ export class BrowserCoverage implements BrowserCoverageInterface {
 	}
 
 	async start(options?: BrowserCoverageOptions): Promise<void> {
-		if (this.#active) throw new BrowserError('Browser coverage is already active')
+		if (this.#active) throw new BrowserError('ARGUMENT', 'Browser coverage is already active')
 		const javascript = options?.javascript ?? true
 		const css = options?.css ?? true
 		if (!javascript && !css) {
-			throw new BrowserError('Browser coverage requires JavaScript, CSS, or both')
+			throw new BrowserError('ARGUMENT', 'Browser coverage requires JavaScript, CSS, or both')
 		}
 		let profiler = false
 		let precise = false
@@ -84,7 +77,7 @@ export class BrowserCoverage implements BrowserCoverageInterface {
 	}
 
 	async stop(): Promise<BrowserCoverageResult> {
-		if (!this.#active) throw new BrowserError('Browser coverage is not active')
+		if (!this.#active) throw new BrowserError('ARGUMENT', 'Browser coverage is not active')
 		this.#active = false
 		const javascript = this.#options?.javascript ?? true
 		const css = this.#options?.css ?? true

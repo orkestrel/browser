@@ -237,9 +237,9 @@ export const BROWSER_RUN_DIRECTORY = 'runs'
 export const BROWSER_FILE_STORE_LIMIT = 100
 
 /** Names the refusal when no browser can serve a call. */
-export const BROWSER_SERVER_UNAVAILABLE = 'BROWSER_SERVER_UNAVAILABLE'
+export const BROWSER_SERVER_UNAVAILABLE = 'SERVER_UNAVAILABLE'
 /** Names a failed attempt to warm a browser. */
-export const BROWSER_SERVER_LAUNCH = 'BROWSER_SERVER_LAUNCH'
+export const BROWSER_SERVER_LAUNCH = 'SERVER_LAUNCH'
 /** Sets the default number of warm browsers to 1. */
 export const BROWSER_SERVER_POOL_SIZE = 1
 /** Sets the default context capacity per browser, including the shared holder. */
@@ -253,22 +253,22 @@ export const BROWSER_SERVER_RESTARTS = 1
 /** Names the browser process record in each profile. */
 export const BROWSER_SERVER_RECORD = 'browse.json'
 /** Names the diagnostic when the warm floor spends its restart bound. */
-export const BROWSER_SERVER_EXHAUSTED = 'BROWSER_SERVER_EXHAUSTED'
+export const BROWSER_SERVER_EXHAUSTED = 'SERVER_EXHAUSTED'
 /** Names a failed browser server teardown. */
-export const BROWSER_SERVER_TEARDOWN = 'BROWSER_SERVER_TEARDOWN'
+export const BROWSER_SERVER_TEARDOWN = 'SERVER_TEARDOWN'
 /** Names a failed profile sweep. */
-export const BROWSER_SERVER_SWEEP = 'BROWSER_SERVER_SWEEP'
+export const BROWSER_SERVER_SWEEP = 'SERVER_SWEEP'
 /** Names a refused browser server option. */
-export const BROWSER_SERVER_OPTIONS = 'BROWSER_SERVER_OPTIONS'
+export const BROWSER_SERVER_OPTIONS = 'ARGUMENT'
 /** Names the notice that a browser and its session state were lost. */
-export const BROWSER_SERVER_CRASH = 'BROWSER_SERVER_CRASH'
+export const BROWSER_SERVER_CRASH = 'SERVER_CRASH'
 /** Names an interrupted call whose outcome is unknown. */
-export const BROWSER_SERVER_UNRESOLVED = 'BROWSER_SERVER_UNRESOLVED'
+export const BROWSER_SERVER_UNRESOLVED = 'SERVER_UNRESOLVED'
 
 /** Names the refusal when every browser is admitted to a holder. */
-export const BROWSER_SERVER_BUSY = 'BROWSER_SERVER_BUSY'
+export const BROWSER_SERVER_BUSY = 'SERVER_BUSY'
 /** Names the refusal for an unknown or ended holder. */
-export const BROWSER_SERVER_HOLDER = 'BROWSER_SERVER_HOLDER'
+export const BROWSER_SERVER_HOLDER = 'SERVER_HOLDER'
 
 /** Defines the holder tools independently of the shared browser's vocabulary. */
 export const BROWSER_SERVER_COPY: Readonly<Record<BrowserServerToolName, ToolDefinition>> =

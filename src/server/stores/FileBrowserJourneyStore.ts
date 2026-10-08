@@ -3,6 +3,8 @@ import type {
 	BrowserJourneyRevision,
 	BrowserJourneyStoreInterface,
 	BrowserStoreOptions,
+	BrowserStorePageOptions,
+	BrowserJourneyWriteOptions,
 	BrowserStorePage,
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
@@ -11,6 +13,7 @@ import {
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BrowserError,
 	validateBrowserJourney,
+	validateBrowserJourneyWriteOptions,
 	normalizeBrowserJourneyReason,
 } from '@src/core'
 import {
@@ -51,16 +54,16 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 				!Number.isSafeInteger(value['revision']) ||
 				value['revision'] < 1
 			)
-				throw new BrowserError('Malformed journey revision', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('STORE_FILE', 'Malformed journey revision')
 			if (!isRecord(value['journey']) || !('format' in value['journey']))
-				throw new BrowserError('Missing journey format', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('STORE_FILE', 'Missing journey format')
 			validateBrowserJourney(value['journey'])
 			if (value['journey'].name !== name)
-				throw new BrowserError('Journey name differs from its directory', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('STORE_FILE', 'Journey name differs from its directory')
 			return { journey: value['journey'], revision: value['revision'] }
 		} catch (error) {
 			const translated = this.#files.translateError(path, error)
-			throw new BrowserError(translated.message, translated.code, {
+			throw new BrowserError(translated.code, translated.message, {
 				...translated.context,
 				reason: normalizeBrowserJourneyReason(error),
 			})
@@ -69,10 +72,11 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 
 	async set(
 		journey: BrowserJourney,
-		expected?: number,
-		options?: BrowserStoreOptions,
+		options?: BrowserJourneyWriteOptions,
 	): Promise<BrowserJourneyRevision> {
 		options?.signal?.throwIfAborted()
+		validateBrowserJourneyWriteOptions(options)
+		const condition = { revision: options?.revision, exclusive: options?.exclusive }
 		this.#files.validateName(journey.name)
 		validateBrowserJourney(journey)
 		const owned = structuredClone(journey)
@@ -82,18 +86,18 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			this.#files.resolvePath(owned.name, BROWSER_JOURNEY_LOCK_DIRECTORY),
 			async () => {
 				const current = await this.get(owned.name, options)
-				if (expected !== undefined && expected !== (current?.revision ?? 0))
-					throw new BrowserError(
-						`Journey ${owned.name} changed since you read it`,
-						'BROWSER_JOURNEY_STALE',
-					)
+				if (
+					(condition.exclusive === true && current !== undefined) ||
+					(condition.revision !== undefined && condition.revision !== current?.revision)
+				)
+					throw new BrowserError('JOURNEY_STALE', `Journey ${owned.name} changed since you read it`)
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
 				if (!Number.isSafeInteger(previous) || previous < 0 || source?.trim() === '')
-					throw new BrowserError(`Malformed revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
+					throw new BrowserError('STORE_FILE', `Malformed revision: ${counter}`)
 				const revision = Math.max(previous, current?.revision ?? 0) + 1
 				if (!Number.isSafeInteger(revision))
-					throw new BrowserError(`Exhausted revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
+					throw new BrowserError('STORE_FILE', `Exhausted revision: ${counter}`)
 				const saved = { journey: owned, revision }
 				await this.#files.write(path, JSON.stringify(saved), options)
 				try {
@@ -122,7 +126,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
 				if (!Number.isSafeInteger(previous) || previous < 0 || source?.trim() === '')
-					throw new BrowserError(`Malformed revision: ${counter}`, 'BROWSER_JOURNEY_FILE')
+					throw new BrowserError('STORE_FILE', `Malformed revision: ${counter}`)
 				// Preserve the committed revision even if a process exited before updating its counter.
 				await this.#files.write(counter, String(Math.max(previous, current.revision ?? 0)), options)
 				await this.#files.remove(
@@ -134,9 +138,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 		)
 	}
 
-	async list(
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
-	): Promise<BrowserStorePage<BrowserJourneyRevision>> {
+	async list(options?: BrowserStorePageOptions): Promise<BrowserStorePage<BrowserJourneyRevision>> {
 		options?.signal?.throwIfAborted()
 		return this.#files.list(
 			this.#files.resolvePath(),

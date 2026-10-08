@@ -17,7 +17,7 @@ describe('BrowserSnapshot', () => {
 		const snapshot = createBrowserSnapshot(
 			readBrowserSnapshot(createDOMSnapshotResult(), ['color']),
 		)
-		const walked = [...snapshot.walk()]
+		const walked = [...snapshot.depth()]
 
 		expect(walked).toHaveLength(9)
 		expect(walked.map((node) => `${node.document}:${node.index}`)).toEqual([
@@ -66,7 +66,7 @@ describe('BrowserSnapshot', () => {
 		const body = snapshot.documents[0]?.nodes[2]
 		if (body === undefined) throw new Error('Snapshot fixture is malformed')
 
-		expect([...snapshot.walk({ root: body })].map((node) => node.name)).toEqual([
+		expect([...snapshot.depth({ root: body })].map((node) => node.name)).toEqual([
 			'BODY',
 			'DIV',
 			'#text',
@@ -110,7 +110,7 @@ describe('BrowserSnapshot', () => {
 			throw new Error('Snapshot fixture is malformed')
 		}
 
-		expect([...snapshot.walk({ root: body, order: 'breadth' })].map((node) => node.name)).toEqual([
+		expect([...snapshot.breadth({ root: body })].map((node) => node.name)).toEqual([
 			'BODY',
 			'DIV',
 			'INPUT',
@@ -119,8 +119,8 @@ describe('BrowserSnapshot', () => {
 			'#document',
 			'BODY',
 		])
-		const depth = [...snapshot.walk()]
-		const breadth = [...snapshot.walk({ order: 'breadth' })]
+		const depth = [...snapshot.depth()]
+		const breadth = [...snapshot.breadth()]
 		expect(breadth).toHaveLength(depth.length)
 		expect(new Set(breadth.map((node) => `${node.document}:${node.index}`))).toEqual(
 			new Set(depth.map((node) => `${node.document}:${node.index}`)),
@@ -212,7 +212,7 @@ describe('BrowserSnapshot', () => {
 		expect(Object.keys(parsed)).toEqual(['documents', 'styles'])
 		expect(parsed).toEqual(data)
 		expect(rehydrated.path(parsedNode)).toBe(snapshot.path(originalNode))
-		expect([...rehydrated.walk()]).toHaveLength([...snapshot.walk()].length)
+		expect([...rehydrated.depth()]).toHaveLength([...snapshot.depth()].length)
 		expect(rehydrated).toBeInstanceOf(BrowserSnapshot)
 	})
 
@@ -260,7 +260,7 @@ describe('BrowserSnapshot', () => {
 			],
 			styles: [],
 		})
-		const walked = [...snapshot.walk()]
+		const walked = [...snapshot.depth()]
 		const identities = walked.map((node) => `${node.document}:${node.index}`)
 
 		expect(identities).toEqual(['0:0', '0:1', '0:2'])

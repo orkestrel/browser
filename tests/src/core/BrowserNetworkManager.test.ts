@@ -1,10 +1,30 @@
 import type { BrowserWebSocketFrame, BrowserWebSocketInterface } from '@src/core'
+import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
-import { BrowserPage, isBrowserError } from '@src/core'
+import { isBrowserError } from '@src/core'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
-import { createConnectedCDPClient, ignoreAsyncCall, replyOk } from '../../setup.js'
+import {
+	BROWSER_BASE64_REFUSALS,
+	createConnectedCDPClient,
+	ignoreAsyncCall,
+	replyOk,
+} from '../../setup.js'
 
 describe('BrowserNetworkManager', () => {
+	it.each(BROWSER_BASE64_REFUSALS)('refuses a malformed response body %j', async (body) => {
+		const { client, transport } = await createConnectedCDPClient()
+		replyOk(transport, 'Network.enable')
+		replyOk(transport, 'Network.getResponseBody', { body, base64Encoded: true })
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		try {
+			await expect(page.network.body('malformed')).rejects.toMatchObject({
+				code: 'PROTOCOL',
+				context: { id: 'malformed' },
+			})
+		} finally {
+			await client.close()
+		}
+	})
 	it('decodes requests, redirects, responses, failures, and completion events', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Network.enable')
@@ -135,6 +155,11 @@ describe('BrowserNetworkManager', () => {
 		expect(await page.network.json('two')).toEqual({ ok: true })
 		body = { body: 'not-json', base64Encoded: false }
 		await expect(page.network.json('three')).rejects.toSatisfy(isBrowserError)
+		body = { body: '', base64Encoded: true }
+		expect(await page.network.body('empty')).toEqual(new Uint8Array())
+		body = { body: 'caf\u00e9 \u{1f600}', base64Encoded: false }
+		expect(await page.network.text('unicode')).toBe('caf\u00e9 \u{1f600}')
+		await client.close()
 	})
 
 	it('matches Fetch routes and fulfills them exactly once', async () => {
@@ -143,7 +168,7 @@ describe('BrowserNetworkManager', () => {
 		replyOk(transport, 'Fetch.enable')
 		replyOk(transport, 'Fetch.fulfillRequest')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		await page.network.route(
+		await page.network.routes.add(
 			{ url: '**/api', method: 'GET' },
 			async (route) =>
 				await route.fulfill({
@@ -187,7 +212,7 @@ describe('BrowserNetworkManager', () => {
 		})
 		replyOk(transport, 'Fetch.failRequest')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		await page.network.route(
+		await page.network.routes.add(
 			{ url: '**/api' },
 			async (route) => await route.fulfill({ body: 'unavailable' }),
 		)
@@ -218,7 +243,7 @@ describe('BrowserNetworkManager', () => {
 		replyOk(transport, 'Fetch.enable')
 		replyOk(transport, 'Fetch.failRequest')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		await page.network.route({}, async () => undefined)
+		await page.network.routes.add({}, async () => undefined)
 
 		transport.event(
 			'Fetch.requestPaused',
@@ -245,7 +270,7 @@ describe('BrowserNetworkManager', () => {
 		replyOk(transport, 'Fetch.disable')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 		const handler = ignoreAsyncCall
-		await page.network.route({ url: '**/match' }, handler)
+		await page.network.routes.add({ url: '**/match' }, handler)
 
 		transport.event(
 			'Fetch.requestPaused',
@@ -258,18 +283,64 @@ describe('BrowserNetworkManager', () => {
 		await waitForCondition('the route continued the request', () =>
 			transport.sent.some((message) => message.method === 'Fetch.continueRequest'),
 		)
-		await page.network.unroute(handler)
+		await page.network.routes.remove(handler)
 
 		expect(transport.sent.some((message) => message.method === 'Fetch.disable')).toBe(true)
 	})
 
+	it('applies only supplied overrides and clears credentials explicitly', async () => {
+		const { client, transport } = await createConnectedCDPClient()
+		for (const method of [
+			'Network.enable',
+			'Network.setExtraHTTPHeaders',
+			'Network.emulateNetworkConditions',
+			'Fetch.enable',
+			'Fetch.disable',
+			'Fetch.continueWithAuth',
+		])
+			replyOk(transport, method)
+		const page = new BrowserPage(client, 'target-1', 'session-1')
+		try {
+			await page.network.apply({
+				headers: { 'x-test': 'one' },
+				offline: true,
+				credentials: { username: 'user', password: 'secret' },
+			})
+			const before = transport.sent.length
+			await page.network.apply({ headers: undefined, offline: undefined, credentials: undefined })
+			expect(transport.sent.length).toBe(before)
+			await page.network.apply({ offline: false })
+			expect(transport.sent.at(-1)?.params?.['offline']).toBe(false)
+			transport.event('Fetch.authRequired', { requestId: 'auth-1' }, 'session-1')
+			await waitForCondition('credentials survive omitted fields', () =>
+				transport.sent.some((message) => message.method === 'Fetch.continueWithAuth'),
+			)
+			expect(transport.sent.at(-1)?.params).toMatchObject({
+				authChallengeResponse: { username: 'user' },
+			})
+			await page.network.clear()
+			expect(
+				transport.sent.filter((message) => message.method === 'Network.setExtraHTTPHeaders').at(-1)
+					?.params,
+			).toEqual({ headers: {} })
+			expect(
+				transport.sent
+					.filter((message) => message.method === 'Network.emulateNetworkConditions')
+					.at(-1)?.params?.['offline'],
+			).toBe(false)
+			expect(transport.sent.at(-1)?.method).toBe('Fetch.disable')
+		} finally {
+			await client.close()
+			await page.destroy()
+		}
+	})
 	it('answers Fetch authentication challenges with configured credentials', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Network.enable')
 		replyOk(transport, 'Fetch.enable')
 		replyOk(transport, 'Fetch.continueWithAuth')
 		const page = new BrowserPage(client, 'target-1', 'session-1')
-		await page.network.credentials({ username: 'user', password: 'secret' })
+		await page.network.apply({ credentials: { username: 'user', password: 'secret' } })
 
 		transport.event('Fetch.authRequired', { requestId: 'auth-1' }, 'session-1')
 		await waitForCondition('the route answered the auth challenge', () =>

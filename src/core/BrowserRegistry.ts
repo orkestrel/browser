@@ -6,7 +6,6 @@ import type {
 	BrowserRegistryEventMap,
 	BrowserRegistryInterface,
 	BrowserRegistryOptions,
-	BrowserRegistryPending,
 	BrowserTool,
 	CDPClientInterface,
 	CDPHandler,
@@ -22,8 +21,9 @@ import {
 	BROWSER_REGISTRY_ABSENT_CODE,
 	BROWSER_REGISTRY_OUTPUT_LIMIT,
 } from './constants.js'
-import { BrowserError, isCDPError } from './errors.js'
+import { BrowserError, isBrowserError } from './errors.js'
 import {
+	validateBrowserPageOpen,
 	renderBrowserToolOutput,
 	deriveBrowserToolSchema,
 	validateBrowserTimeout,
@@ -57,9 +57,36 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	readonly #subscriptions = new Map<string, ReadonlyMap<string, CDPHandler>>()
 	readonly #enabled = new Set<string>()
 	readonly #enabling = new Map<string, Promise<boolean>>()
-	readonly #pending = new Set<BrowserRegistryPending>()
-	readonly #awaiting = new Set<BrowserRegistryPending>()
-	readonly #identifiers = new Map<BrowserRegistryPending, string>()
+	readonly #pending = new Set<{
+		readonly frame: string
+		readonly session: string
+		readonly signal: AbortSignal | undefined
+		readonly controller: AbortController
+		readonly timer: ReturnType<typeof setTimeout>
+		readonly resolve: (result: BrowserInvocationResult) => void
+		readonly reject: (error: unknown) => void
+	}>()
+	readonly #awaiting = new Set<{
+		readonly frame: string
+		readonly session: string
+		readonly signal: AbortSignal | undefined
+		readonly controller: AbortController
+		readonly timer: ReturnType<typeof setTimeout>
+		readonly resolve: (result: BrowserInvocationResult) => void
+		readonly reject: (error: unknown) => void
+	}>()
+	readonly #identifiers = new Map<
+		{
+			readonly frame: string
+			readonly session: string
+			readonly signal: AbortSignal | undefined
+			readonly controller: AbortController
+			readonly timer: ReturnType<typeof setTimeout>
+			readonly resolve: (result: BrowserInvocationResult) => void
+			readonly reject: (error: unknown) => void
+		},
+		string
+	>()
 	readonly #responses = new Map<string, Map<string, BrowserInvocationResult>>()
 	readonly #starting = new BrowserTransition<boolean>()
 	#destroying: Promise<void> | undefined
@@ -146,10 +173,18 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 			!this.#enabled.has(session) ||
 			this.tool(tool.name, tool.frame) === undefined
 		) {
-			throw new BrowserError('Browser tool is not registered in an enabled frame')
+			throw new BrowserError('ARGUMENT', 'Browser tool is not registered in an enabled frame')
 		}
 		const deferred = Promise.withResolvers<BrowserInvocationResult>()
-		const pending: BrowserRegistryPending = {
+		const pending: {
+			readonly frame: string
+			readonly session: string
+			readonly signal: AbortSignal | undefined
+			readonly controller: AbortController
+			readonly timer: ReturnType<typeof setTimeout>
+			readonly resolve: (result: BrowserInvocationResult) => void
+			readonly reject: (error: unknown) => void
+		} = {
 			frame: tool.frame,
 			session,
 			signal: options?.signal,
@@ -173,8 +208,9 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}
 
 	#assert(): void {
-		if (this.#destroying !== undefined) throw new BrowserError('Browser registry is destroyed')
-		this.#page.assert()
+		if (this.#destroying !== undefined)
+			throw new BrowserError('CLOSED', 'Browser registry is destroyed')
+		validateBrowserPageOpen(this.#page, this.#client)
 	}
 
 	async #start(options?: BrowserCallOptions): Promise<boolean> {
@@ -210,7 +246,8 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}
 
 	async #enable(session: string, options?: BrowserCallOptions): Promise<boolean> {
-		if (this.#destroying !== undefined) throw new BrowserError('Browser registry is destroyed')
+		if (this.#destroying !== undefined)
+			throw new BrowserError('CLOSED', 'Browser registry is destroyed')
 		if (this.#enabled.has(session)) return true
 		const active = this.#enabling.get(session)
 		if (active !== undefined) return await active
@@ -240,7 +277,11 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 		} catch (error) {
 			this.#unsubscribe(session)
 			this.#invalidateSession(session)
-			if (isCDPError(error) && error.context?.['code'] === BROWSER_REGISTRY_ABSENT_CODE)
+			if (
+				isBrowserError(error) &&
+				error.code === 'REMOTE' &&
+				error.context?.['code'] === BROWSER_REGISTRY_ABSENT_CODE
+			)
 				return false
 			throw error
 		}
@@ -294,7 +335,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 		this.#owners.delete(frame)
 		for (const pending of this.#pending) {
 			if (pending.frame === frame)
-				this.#reject(pending, new BrowserError('Browser tool frame was invalidated'))
+				this.#reject(pending, new BrowserError('CLOSED', 'Browser tool frame was invalidated'))
 		}
 		if (removed) this.#emitter.emit('change')
 	}
@@ -344,7 +385,15 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}
 
 	async #invoke(
-		pending: BrowserRegistryPending,
+		pending: {
+			readonly frame: string
+			readonly session: string
+			readonly signal: AbortSignal | undefined
+			readonly controller: AbortController
+			readonly timer: ReturnType<typeof setTimeout>
+			readonly resolve: (result: BrowserInvocationResult) => void
+			readonly reject: (error: unknown) => void
+		},
 		tool: BrowserTool,
 		input: Readonly<Record<string, unknown>>,
 		timeout: number,
@@ -358,7 +407,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 				{ session: pending.session, timeout },
 			)
 			if (!isRecord(reply) || !isString(reply['invocationId']))
-				throw new BrowserError('WebMCP invocation reply has no invocationId')
+				throw new BrowserError('PROTOCOL', 'WebMCP invocation reply has no invocationId')
 			const id = reply['invocationId']
 			// A settled entry with a reply means the deadline or abort won the race; cancel remotely.
 			if (pending.signal?.aborted === true || !this.#pending.has(pending)) {
@@ -381,13 +430,32 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 		}
 	}
 
-	#expire(pending: BrowserRegistryPending): void {
+	#expire(pending: {
+		readonly frame: string
+		readonly session: string
+		readonly signal: AbortSignal | undefined
+		readonly controller: AbortController
+		readonly timer: ReturnType<typeof setTimeout>
+		readonly resolve: (result: BrowserInvocationResult) => void
+		readonly reject: (error: unknown) => void
+	}): void {
 		const id = this.#identifiers.get(pending)
 		if (id !== undefined) this.#abortInvocation(pending.session, id)
-		this.#reject(pending, new BrowserError('Browser tool invocation timed out'))
+		this.#reject(
+			pending,
+			new BrowserError('TIMEOUT', 'Browser tool invocation timed out', { operation: 'execute' }),
+		)
 	}
 
-	#abort(pending: BrowserRegistryPending): void {
+	#abort(pending: {
+		readonly frame: string
+		readonly session: string
+		readonly signal: AbortSignal | undefined
+		readonly controller: AbortController
+		readonly timer: ReturnType<typeof setTimeout>
+		readonly resolve: (result: BrowserInvocationResult) => void
+		readonly reject: (error: unknown) => void
+	}): void {
 		const id = this.#identifiers.get(pending)
 		if (id !== undefined) this.#abortInvocation(pending.session, id)
 		this.#reject(pending, pending.signal?.reason)
@@ -399,14 +467,33 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 			.catch(() => undefined)
 	}
 
-	#release(pending: BrowserRegistryPending): void {
+	#release(pending: {
+		readonly frame: string
+		readonly session: string
+		readonly signal: AbortSignal | undefined
+		readonly controller: AbortController
+		readonly timer: ReturnType<typeof setTimeout>
+		readonly resolve: (result: BrowserInvocationResult) => void
+		readonly reject: (error: unknown) => void
+	}): void {
 		clearTimeout(pending.timer)
 		pending.controller.abort()
 		this.#pending.delete(pending)
 		this.#identifiers.delete(pending)
 	}
 
-	#reject(pending: BrowserRegistryPending, error: unknown): void {
+	#reject(
+		pending: {
+			readonly frame: string
+			readonly session: string
+			readonly signal: AbortSignal | undefined
+			readonly controller: AbortController
+			readonly timer: ReturnType<typeof setTimeout>
+			readonly resolve: (result: BrowserInvocationResult) => void
+			readonly reject: (error: unknown) => void
+		},
+		error: unknown,
+	): void {
 		if (!this.#pending.has(pending)) return
 		this.#release(pending)
 		pending.reject(error)
@@ -424,6 +511,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 		const result = await this.execute(tool, parameters, { signal: context.signal })
 		if (result.status !== 'Completed')
 			throw new BrowserError(
+				'PROTOCOL',
 				`Browser tool ${result.status}: ${result.error ?? 'No error description'}`.slice(
 					0,
 					BROWSER_REGISTRY_OUTPUT_LIMIT,
@@ -436,7 +524,7 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 		this.#unwatch()
 		for (const session of [...this.#subscriptions.keys()]) this.#unsubscribe(session)
 		for (const pending of [...this.#pending])
-			this.#reject(pending, new BrowserError('Browser registry is destroyed'))
+			this.#reject(pending, new BrowserError('CLOSED', 'Browser registry is destroyed'))
 		this.#tools.clear()
 		this.#owners.clear()
 		this.#responses.clear()

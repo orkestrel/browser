@@ -14,14 +14,12 @@ import { describe, it, expect, afterEach } from 'vitest'
 import { existsSync } from 'node:fs'
 import {
 	createBrowser,
-	createCDPTransport,
-	BrowserDestroyedError,
-	BrowserNotConnectedError,
+	createWebSocketCDPTransport,
 	BROWSER_PROCESS_EXIT_CAUSE,
 	BROWSER_TRANSPORT_LOSS_CAUSE,
 	BROWSER_TRANSPORT_LOSS_DEFER_MS,
 } from '@src/server'
-import { BrowserConnectionError, CDPClient, isBrowserConnectionError } from '@src/core'
+import { CDPClient, isBrowserError } from '@src/core'
 import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { isRunning } from '@orkestrel/test/server'
 import {
@@ -49,7 +47,9 @@ describe('Browser eager U2', () => {
 		const browser = createBrowser({ cdp: { endpoint: server.endpoint } })
 		try {
 			expect(browser.endpoint).toBeUndefined()
-			await expect(browser.ping()).rejects.toThrow(BrowserNotConnectedError)
+			await expect(browser.ping()).rejects.toThrow(
+				expect.objectContaining({ code: 'DISCONNECTED' }),
+			)
 			await browser.connect()
 			expect(browser.endpoint).toBe(server.endpoint)
 			await expect(browser.ping()).resolves.toBeUndefined()
@@ -59,17 +59,21 @@ describe('Browser eager U2', () => {
 			expect(browser.status).toBe('connected')
 			await browser.disconnect()
 			expect(browser.endpoint).toBeUndefined()
-			await expect(browser.ping()).rejects.toThrow(BrowserNotConnectedError)
+			await expect(browser.ping()).rejects.toThrow(
+				expect.objectContaining({ code: 'DISCONNECTED' }),
+			)
 			await browser.connect()
 			browser.adopt()
 			await browser.disconnect()
 			expect(browser.endpoint).toBe(server.endpoint)
-			await expect(browser.ping()).rejects.toThrow(BrowserNotConnectedError)
+			await expect(browser.ping()).rejects.toThrow(
+				expect.objectContaining({ code: 'DISCONNECTED' }),
+			)
 		} finally {
 			await browser.destroy()
 		}
 		expect(browser.endpoint).toBeUndefined()
-		await expect(browser.ping()).rejects.toThrow(BrowserDestroyedError)
+		await expect(browser.ping()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
 	it('uses the command deadline and honors ping cancellation', async () => {
@@ -79,7 +83,7 @@ describe('Browser eager U2', () => {
 		const browser = createBrowser({ cdp: { endpoint: server.endpoint }, timeout: 1000 })
 		try {
 			await browser.connect()
-			await expect(browser.ping()).rejects.toMatchObject({ code: 'BROWSER_CDP_TIMEOUT_ERROR' })
+			await expect(browser.ping()).rejects.toMatchObject({ code: 'TIMEOUT' })
 			const controller = new AbortController()
 			const pending = browser.ping({ signal: controller.signal })
 			const reason = new Error('ping cancelled')
@@ -156,9 +160,11 @@ describe('Browser idle state', () => {
 		expect(errors.calls[0]?.[1]).toBe('idle')
 	})
 
-	it('create() throws BrowserNotConnectedError when not connected', async () => {
+	it('create() throws BrowserError when not connected', async () => {
 		const browser = createBrowser()
-		await expect(browser.create()).rejects.toThrow(BrowserNotConnectedError)
+		await expect(browser.create()).rejects.toThrow(
+			expect.objectContaining({ code: 'DISCONNECTED' }),
+		)
 	})
 
 	it('disconnect() is no-op when not connected', async () => {
@@ -207,16 +213,16 @@ describe('Browser destroyed state', () => {
 		expect(browser.status).not.toBe('connected')
 	})
 
-	it('connect() after destroy() throws BrowserDestroyedError', async () => {
+	it('connect() after destroy() throws BrowserError', async () => {
 		const browser = createBrowser()
 		await browser.destroy()
-		await expect(browser.connect()).rejects.toThrow(BrowserDestroyedError)
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
-	it('create() after destroy() throws BrowserDestroyedError', async () => {
+	it('create() after destroy() throws BrowserError', async () => {
 		const browser = createBrowser()
 		await browser.destroy()
-		await expect(browser.create()).rejects.toThrow(BrowserDestroyedError)
+		await expect(browser.create()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
 	it('disconnect() is no-op after destroy', async () => {
@@ -249,11 +255,11 @@ describe('Browser destroyed state', () => {
 // === abort handling
 
 describe('Browser abort handling', () => {
-	it('connect() with pre-aborted signal throws BrowserConnectionError', async () => {
+	it('connect() with pre-aborted signal throws BrowserError', async () => {
 		const controller = new AbortController()
 		controller.abort()
 		const browser = createBrowser({ signal: controller.signal })
-		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CONNECTION' }))
 	})
 
 	it('connect() with pre-aborted signal leaves status as idle', async () => {
@@ -268,7 +274,7 @@ describe('Browser abort handling', () => {
 		expect(browser.status).toBe('idle')
 	})
 
-	it('create() throws BrowserNotConnectedError after aborted connection', async () => {
+	it('create() throws BrowserError after aborted connection', async () => {
 		const controller = new AbortController()
 		controller.abort()
 		const browser = createBrowser({ signal: controller.signal })
@@ -277,7 +283,9 @@ describe('Browser abort handling', () => {
 		} catch {
 			// expected
 		}
-		await expect(browser.create()).rejects.toThrow(BrowserNotConnectedError)
+		await expect(browser.create()).rejects.toThrow(
+			expect.objectContaining({ code: 'DISCONNECTED' }),
+		)
 	})
 })
 
@@ -325,7 +333,9 @@ describe('Browser connect() through CDP discovery', () => {
 		expect(browser.status).not.toBe('connected')
 		expect(browser.connection).toBeUndefined()
 		expect(browser.owned).toBeUndefined()
-		await expect(browser.create()).rejects.toThrow(BrowserNotConnectedError)
+		await expect(browser.create()).rejects.toThrow(
+			expect.objectContaining({ code: 'DISCONNECTED' }),
+		)
 
 		await browser.destroy()
 	})
@@ -395,7 +405,7 @@ describe('Browser connect() through CDP discovery', () => {
 
 	it('adopt() rejects when there is no active connection', () => {
 		const browser = createBrowser()
-		expect(() => browser.adopt()).toThrow(BrowserNotConnectedError)
+		expect(() => browser.adopt()).toThrow(expect.objectContaining({ code: 'DISCONNECTED' }))
 	})
 
 	it('destroy() cancels an in-flight connection without waiting for its full timeout', async () => {
@@ -408,7 +418,7 @@ describe('Browser connect() through CDP discovery', () => {
 		await browser.destroy()
 		const error = await connecting
 
-		expect(error).toBeInstanceOf(BrowserDestroyedError)
+		expect(error).toMatchObject({ name: 'BrowserError', code: 'CLOSED' })
 		expect(performance.now() - start).toBeLessThan(1000)
 		expect(browser.status).not.toBe('connected')
 	})
@@ -586,7 +596,7 @@ describe('Browser isolate()', () => {
 			if (request === undefined) throw new Error('Missing creation')
 			const ending = browser.destroy()
 			server.reply(request.id, { browserContextId: 'late-context' })
-			expect(await creating).toBeInstanceOf(BrowserDestroyedError)
+			expect(await creating).toMatchObject({ name: 'BrowserError', code: 'CLOSED' })
 			await ending
 			expect(events.count).toBe(0)
 			expect(browser.contexts()).toEqual([])
@@ -645,7 +655,9 @@ describe('Browser isolate()', () => {
 	it('rejects isolation while disconnected', async () => {
 		const browser = createBrowser()
 
-		await expect(browser.isolate()).rejects.toThrow(BrowserNotConnectedError)
+		await expect(browser.isolate()).rejects.toThrow(
+			expect.objectContaining({ code: 'DISCONNECTED' }),
+		)
 	})
 
 	it('rejects malformed context configuration before creating remote state', async () => {
@@ -660,6 +672,13 @@ describe('Browser isolate()', () => {
 		await expect(browser.isolate({ origins: ['ftp://example.com'] })).rejects.toThrow(
 			'absolute HTTP(S) origin',
 		)
+		const suppliedId = { id: 'existing-context', viewport: { width: 640, height: 480 } }
+		await expect(browser.isolate(suppliedId)).rejects.toThrow(
+			expect.objectContaining({ code: 'ARGUMENT' }),
+		)
+		await expect(browser.isolate({ viewport: { width: 0, height: 480 } })).rejects.toThrow(
+			expect.objectContaining({ code: 'ARGUMENT' }),
+		)
 
 		expect(
 			server.received.some((message) => message.method === 'Target.createBrowserContext'),
@@ -671,12 +690,12 @@ describe('Browser isolate()', () => {
 // === launch path — executable resolution failure (no real browser spawned)
 
 describe('Browser launch path', () => {
-	it('connect() throws BrowserConnectionError when the executable does not exist', async () => {
+	it('connect() throws BrowserError when the executable does not exist', async () => {
 		const browser = createBrowser({
 			cdp: { port: UNUSED_PORT },
 			executable: '/nonexistent/path/to/chrome-does-not-exist',
 		})
-		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CONNECTION' }))
 		expect(browser.status).toBe('error')
 	})
 
@@ -756,15 +775,14 @@ describe('Browser launch path', () => {
 	it('connect() with a requested engine and no matching installed browser rejects with the engine in context', async () => {
 		const browser = createBrowser({
 			cdp: { port: UNUSED_PORT },
-			engine: 'edge',
 			// Forces empty discovery deterministically — on a machine with a real
 			// Edge install, unconstrained discovery would find it and launch it
 			// instead of rejecting.
-			browsers: { env: {}, paths: [], names: [], stores: [] },
+			browsers: { engine: 'edge', env: {}, paths: [], names: [], stores: [] },
 			timeout: 2000,
 		})
 
-		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CONNECTION' }))
 		await expect(browser.connect()).rejects.toMatchObject({ context: { engine: 'edge' } })
 	})
 
@@ -880,7 +898,7 @@ describe('Browser launcher hand-off', () => {
 			timeout: 1500,
 		})
 
-		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CONNECTION' }))
 		expect(browser.status).toBe('error')
 		expect(browser.pid).toBeUndefined()
 	}, 20_000)
@@ -1032,7 +1050,7 @@ describe('Browser launch readiness from standard error', () => {
 		})
 
 		await browser.connect()
-		const transport = createCDPTransport({ url: await fake.endpoint(), timeout: 5000 })
+		const transport = createWebSocketCDPTransport({ url: await fake.endpoint(), timeout: 5000 })
 		const client = new CDPClient({ transport, timeout: 5000 })
 		await client.connect()
 		try {
@@ -1429,9 +1447,9 @@ describe('Browser external-disconnect detection', () => {
 		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
 		const lastError = errors.calls[0]?.[0]
-		expect(lastError).toBeInstanceOf(BrowserConnectionError)
-		if (!isBrowserConnectionError(lastError)) {
-			throw new Error('Expected a BrowserConnectionError')
+		expect(lastError).toMatchObject({ name: 'BrowserError', code: 'CONNECTION' })
+		if (!(isBrowserError(lastError) && lastError.code === 'CONNECTION')) {
+			throw new Error('Expected a BrowserError')
 		}
 		expect(lastError.context?.['cause']).toBe(BROWSER_TRANSPORT_LOSS_CAUSE)
 		expect(() => process.kill(pid, 0)).not.toThrow()
@@ -1476,9 +1494,9 @@ describe('Browser external-disconnect detection', () => {
 		expect(disconnect.count).toBe(1)
 		expect(browser.status).toBe('disconnected')
 		const lastError = errors.calls[0]?.[0]
-		expect(lastError).toBeInstanceOf(BrowserConnectionError)
-		if (!isBrowserConnectionError(lastError)) {
-			throw new Error('Expected a BrowserConnectionError')
+		expect(lastError).toMatchObject({ name: 'BrowserError', code: 'CONNECTION' })
+		if (!(isBrowserError(lastError) && lastError.code === 'CONNECTION')) {
+			throw new Error('Expected a BrowserError')
 		}
 		expect(lastError.context?.['cause']).toBe(BROWSER_PROCESS_EXIT_CAUSE)
 		expect(browser.pid).toBeUndefined()
@@ -1544,7 +1562,7 @@ describe('Browser destroy()/close() matrix', () => {
 		const closeCalls = server.received.filter((m) => m.method === 'Browser.close')
 		expect(closeCalls).toHaveLength(1)
 		expect(browser.status).not.toBe('connected')
-		await expect(browser.connect()).rejects.toThrow(BrowserDestroyedError)
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
 	})
 
 	it('close() on an owned session results in the process exiting', async () => {
@@ -1575,22 +1593,25 @@ describe('Browser destroy()/close() matrix', () => {
 // === constructor engine seeding (design-5)
 
 describe('Browser constructor engine seeding', () => {
-	it('seeds engine from options.engine when provided', () => {
-		const browser = createBrowser({ engine: 'edge' })
+	it('seeds engine from browsers.engine when provided', () => {
+		const browser = createBrowser({ browsers: { engine: 'edge' } })
 		expect(browser.engine).toBe('edge')
 	})
 
-	it('options.engine takes precedence over the executable-derived engine', () => {
-		const browser = createBrowser({ engine: 'edge', executable: '/usr/bin/google-chrome' })
-		expect(browser.engine).toBe('edge')
+	it('an explicit executable takes precedence over browsers.engine', () => {
+		const browser = createBrowser({
+			browsers: { engine: 'edge' },
+			executable: '/usr/bin/google-chrome',
+		})
+		expect(browser.engine).toBe('chrome')
 	})
 
-	it('falls back to parsing the executable when options.engine is absent', () => {
+	it('derives the engine from the explicit executable', () => {
 		const browser = createBrowser({ executable: '/usr/bin/google-chrome' })
 		expect(browser.engine).toBe('chrome')
 	})
 
-	it('defaults to chromium when neither options.engine nor executable is given', () => {
+	it('defaults to chromium when neither browsers.engine nor executable is given', () => {
 		const browser = createBrowser()
 		expect(browser.engine).toBe('chromium')
 	})
@@ -1608,7 +1629,7 @@ describe('Browser cdp.discover option', () => {
 			timeout: 2000,
 		})
 
-		await expect(browser.connect()).rejects.toThrow(BrowserConnectionError)
+		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CONNECTION' }))
 		await expect(
 			createBrowser({ cdp: { port: server.port, discover: false }, timeout: 2000 }).connect(),
 		).rejects.toMatchObject({ context: { port: server.port } })
@@ -1653,7 +1674,7 @@ describe('Browser abort mid-connect', () => {
 		const descendant = process.platform === 'win32' ? undefined : await fake.descendant()
 		controller.abort()
 
-		await expect(connectPromise).rejects.toThrow(BrowserConnectionError)
+		await expect(connectPromise).rejects.toThrow(expect.objectContaining({ code: 'CONNECTION' }))
 
 		expect(browser.pid).toBeUndefined()
 		expect(descendant === undefined || !isRunning(descendant)).toBe(true)
@@ -1678,7 +1699,7 @@ describe('Browser post-spawn connect failure', () => {
 		expect(browser.pid).toBe(pid)
 		const descendant = process.platform === 'win32' ? undefined : await fake.descendant()
 
-		expect(isBrowserConnectionError(await failure)).toBe(true)
+		expect(await failure).toMatchObject({ name: 'BrowserError', code: 'CONNECTION' })
 
 		expect(browser.pid).toBeUndefined()
 		expect(descendant === undefined || !isRunning(descendant)).toBe(true)

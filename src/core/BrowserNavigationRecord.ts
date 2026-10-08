@@ -159,7 +159,7 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 	}
 
 	destroy(): void {
-		this.#end(new BrowserError('Browser navigation record ended'))
+		this.#end(new BrowserError('CLOSED', 'Browser navigation record ended'))
 	}
 
 	#end(reason: unknown): void {
@@ -315,7 +315,8 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 
 	#expireWait(id: symbol, timeout: number): void {
 		this.#releaseWait(id)?.reject(
-			new BrowserError('Browser navigation wait timed out', 'BROWSER_NAVIGATION_TIMEOUT', {
+			new BrowserError('TIMEOUT', 'Browser navigation wait timed out', {
+				operation: 'wait',
 				frame: this.#frame,
 				timeout,
 			}),

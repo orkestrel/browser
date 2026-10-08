@@ -15,7 +15,7 @@ import {
 	readProfiles,
 	waitForProcessExit,
 } from '../../setupServer.js'
-import { findSystemBrowser, parseBrowserProfileRecord, probeProcess } from '@src/server'
+import { findSystemBrowsers, parseBrowserProfileRecord, probeProcess } from '@src/server'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
@@ -43,8 +43,8 @@ describe('bin entry', () => {
 					expect(child.lines).toEqual([])
 					expect(child.stderr).toBe(
 						value === '5'
-							? 'browse: BROWSER_SERVER_OPTIONS: pool.contexts must be an integer from 1 through 4\n'
-							: `browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_CONTEXTS must be an integer, not "${value}"\n`,
+							? 'browse: ARGUMENT: pool.contexts must be an integer from 1 through 4\n'
+							: `browse: SERVER_ENVIRONMENT: BROWSE_CONTEXTS must be an integer, not "${value}"\n`,
 					)
 				} finally {
 					await child.destroy()
@@ -62,7 +62,7 @@ describe('bin entry', () => {
 			`import { writeFileSync } from 'node:fs'\nawait import(${JSON.stringify(pathToFileURL(BUILT_ENTRY).href)})\nprocess.stdin.once('end', () => process.stderr.write('closed-reader probe\\n', error => writeFileSync(${JSON.stringify(marker)}, JSON.stringify({ code: error?.code ?? null }))))\n`,
 		)
 		const child = new BrowseChild(entry, scratch.path, {
-			BROWSE_EXECUTABLE: requireValue(findSystemBrowser(), 'Chromium executable').executable,
+			BROWSE_EXECUTABLE: requireValue(findSystemBrowsers()[0], 'Chromium executable').executable,
 		})
 		const profiles = join(scratch.path, 'tmp/browsers/.profiles')
 		const pids: number[] = []
@@ -160,13 +160,13 @@ describe('bin entry', () => {
 				await client.connect()
 				const tools = await client.tools()
 				expect(tools.map((tool) => tool.name)).toStrictEqual(BROWSE_VOCABULARY)
-				await expect(client.call('look', { search: 'the page' })).rejects.toThrow(
-					/BROWSER_SERVER_UNAVAILABLE:.*ENOENT/u,
+				await expect(client.call('read', { from: 1, search: 'the page' })).rejects.toThrow(
+					/SERVER_UNAVAILABLE:.*ENOENT/u,
 				)
 				expect(readdirSync(join(root, '.profiles'))).toStrictEqual([])
 				// Closing the client signals the child, and a later call is refused without reaching it.
 				await client.disconnect()
-				await expect(client.call('look', { search: 'the page' })).rejects.toThrow(
+				await expect(client.call('read', { from: 1, search: 'the page' })).rejects.toThrow(
 					"MCP client is not connected, so 'tools/call' was not issued",
 				)
 			} finally {
@@ -191,7 +191,7 @@ describe('bin entry', () => {
 					jsonrpc: '2.0',
 					id: 3,
 					method: 'tools/call',
-					params: { name: 'look', arguments: { search: 'the page' } },
+					params: { name: 'read', arguments: { from: 1, search: 'the page' } },
 				},
 				{ jsonrpc: '2.0', id: 4, method: 'ping', params: {} },
 			)
@@ -205,8 +205,8 @@ describe('bin entry', () => {
 				id: 1,
 				error: {
 					code: -32000,
-					data: { code: 'BROWSER_SERVER_UNAVAILABLE' },
-					message: expect.stringMatching(/^BROWSER_SERVER_UNAVAILABLE:.*ENOENT/u),
+					data: { code: 'SERVER_UNAVAILABLE' },
+					message: expect.stringMatching(/^SERVER_UNAVAILABLE:.*ENOENT/u),
 				},
 			})
 			const discovery = answers.find((answer) => isRecord(answer) && answer['id'] === 2)
@@ -226,7 +226,7 @@ describe('bin entry', () => {
 						content: [
 							{
 								type: 'text',
-								text: expect.stringMatching(/^BROWSER_SERVER_UNAVAILABLE:.*ENOENT/u),
+								text: expect.stringMatching(/^SERVER_UNAVAILABLE:.*ENOENT/u),
 							},
 						],
 					},
@@ -238,11 +238,11 @@ describe('bin entry', () => {
 			expect(await child.ending).toStrictEqual({ code: 1, signal: null })
 			const diagnostics = child.stderr.split(/\r\n|\n/u).filter((line) => line !== '')
 			expect(diagnostics).toEqual([
-				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT/u),
-				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT/u),
-				expect.stringMatching(/^browse: BROWSER_SERVER_UNAVAILABLE:.*ENOENT/u),
+				expect.stringMatching(/^browse: SERVER_LAUNCH:.*ENOENT/u),
+				expect.stringMatching(/^browse: SERVER_LAUNCH:.*ENOENT/u),
+				expect.stringMatching(/^browse: SERVER_UNAVAILABLE:.*ENOENT/u),
 			])
-			for (const line of diagnostics) expect(line.match(/BROWSER_SERVER_\w+/gu)).toHaveLength(1)
+			for (const line of diagnostics) expect(line.match(/SERVER_\w+/gu)).toHaveLength(1)
 		} finally {
 			await teardown.destroy()
 		}
@@ -256,7 +256,7 @@ describe('bin entry', () => {
 				expect(await child.ending).toStrictEqual({ code: 1, signal: null })
 				expect(child.lines).toEqual([])
 				expect(child.stderr).toBe(
-					`browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_POOL must be an integer, not "${value}"\n`,
+					`browse: SERVER_ENVIRONMENT: BROWSE_POOL must be an integer, not "${value}"\n`,
 				)
 			} finally {
 				await child.destroy()
@@ -272,7 +272,7 @@ describe('bin entry', () => {
 				expect(await child.ending).toStrictEqual({ code: 1, signal: null })
 				expect(child.lines).toEqual([])
 				expect(child.stderr).toBe(
-					'browse: BROWSER_SERVER_OPTIONS: pool.size must be an integer from 1 through 3\n',
+					'browse: ARGUMENT: pool.size must be an integer from 1 through 3\n',
 				)
 			} finally {
 				await child.destroy()
@@ -290,7 +290,7 @@ describe('bin entry', () => {
 				expect(await child.ending).toEqual({ code: 1, signal: null })
 				expect(child.lines).toEqual([])
 				expect(child.stderr).toBe(
-					`browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_VIEWPORT must be positive integers in WIDTHxHEIGHT form, not "${value}"\n`,
+					`browse: SERVER_ENVIRONMENT: BROWSE_VIEWPORT must be positive integers in WIDTHxHEIGHT form, not "${value}"\n`,
 				)
 				expect(existsSync(join(scratch.path, 'tmp/browsers'))).toBe(false)
 			} finally {
@@ -309,7 +309,7 @@ describe('bin entry', () => {
 		try {
 			expect(await child.ending).toStrictEqual({ code: 1, signal: null })
 			expect(child.stderr).toBe(
-				'browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"\n',
+				'browse: SERVER_ENVIRONMENT: BROWSE_HEADLESS must be true, false, 1, or 0, not "sometimes"\n',
 			)
 			expect(child.lines).toStrictEqual([])
 		} finally {

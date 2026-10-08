@@ -351,12 +351,12 @@ describe('BrowserNavigationRecord', () => {
 			record.destroy()
 		})
 
-		it('rejects at its timeout with BROWSER_NAVIGATION_TIMEOUT', async () => {
+		it('rejects at its timeout with TIMEOUT', async () => {
 			const { record } = openBrowserNavigationRecord('main')
 			const error = await record.wait({ timeout: 20 }).catch((caught: unknown) => caught)
 			expect(isBrowserError(error) && [error.code, error.context]).toEqual([
-				'BROWSER_NAVIGATION_TIMEOUT',
-				{ frame: 'main', timeout: 20 },
+				'TIMEOUT',
+				{ operation: 'wait', frame: 'main', timeout: 20 },
 			])
 			record.destroy()
 		})

@@ -1,32 +1,9 @@
-/**
- * Proof for `tests/setup.ts`.
- *
- * The subject is the exported test infrastructure the workspace's suites drive: the in-memory CDP
- * transport, the scripting helpers layered on it, the protocol fixtures, the encoded constants,
- * the timer lead, and the rewrite that records a generated journey module's actions.
- * Production behavior is not re-proven here — where a case sends a real frame through
- * `createCDPClient`, the client is the driver and the assertion is on what the fixture answered.
- *
- * `tests/setup.ts` is host-independent and declares no DOM-driving export, so this file defers
- * nothing to a browser suite. This package registers no browser project: `vite.config.ts` runs
- * `src:core` and `src:server` in Node with `browser: { enabled: false }`, and the `setup` project
- * that collects this file does the same.
- *
- * Every expected value is derived by a route the module does not share: hand-written protocol
- * literals, a parent-index walk over the raw snapshot columns, `atob` over the base64 constants,
- * hand-written module lines, and real host timers measured on `performance.now()`.
- */
-
 import type { BrowserPageInterface } from '@src/core'
 import type { CDPSentMessage } from './setup.js'
+import { BrowserPage } from '../src/core/BrowserPage.js'
+import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import {
-	BrowserPage,
-	compileGuardedEvaluateExpression,
-	compileSubmitObserverExpression,
-	compileSubmitReadExpression,
-	readBrowserAccessibility,
-} from '@src/core'
+import { readBrowserAccessibility } from '@src/core'
 import {
 	captureError,
 	createRecorder,
@@ -42,29 +19,14 @@ import {
 	extractBrowserPage,
 	BROWSER_ELEMENT_FRAMED_FIXTURE,
 	BROWSER_RECORD_PARENTS,
-	BROWSER_PENDING_REQUEST_CASES,
-	BROWSER_SUBMIT_EARLY_CASES,
-	BROWSER_SUBMIT_NEGATIVE_CASES,
-	BROWSER_SUBMIT_FOCUS_CASES,
-	BROWSER_SUBMIT_FOCUS_STEPS,
-	BROWSER_SUBMIT_MALFORMED_READS,
-	BROWSER_SUBMIT_UNREAD_CASES,
-	BrowserSubmitElement,
-	BrowserSubmitWindow,
-	BrowserSubmitWindows,
 	RecordingCDPClient,
 	RecordingBrowserRunStore,
 	createBrowserJourneyFixture,
 	createBrowserSecretSelectFixture,
-	answerBrowserEvaluation,
 	attachBrowserElementChild,
 	buildBrowserElementTree,
 	emitBrowserNavigation,
-	evaluateBrowserSubmit,
-	matchesBrowserSubmitObserver,
-	matchesBrowserSubmitRead,
 	openBrowserNavigationRecord,
-	readBrowserSubmitToken,
 	scriptBrowserElements,
 	readBrowserCompiledTimers,
 	runBrowserCompiledTimers,
@@ -110,7 +72,7 @@ describe('element protocol and compiler fixtures', () => {
 	it('records run writes while retaining the memory store validation and persistence', async () => {
 		const store = new RecordingBrowserRunStore()
 		const journey = createBrowserJourneyFixture()
-		const slot = await store.open(journey.name)
+		const slot = await store.create(journey.name)
 		await store.set({
 			format: 1,
 			id: slot.id,
@@ -122,7 +84,7 @@ describe('element protocol and compiler fixtures', () => {
 		})
 		expect(store.writes.count).toBe(1)
 		expect(await store.get(journey.name, slot.id)).toEqual(store.writes.calls[0]?.[0])
-		const unopened = await new RecordingBrowserRunStore().open(journey.name)
+		const unopened = await new RecordingBrowserRunStore().create(journey.name)
 		await expect(
 			store.set({
 				format: 1,
@@ -223,7 +185,7 @@ describe('element protocol and compiler fixtures', () => {
 				),
 			)
 
-			expect(refusals[0]).toMatchObject({ code: 'BROWSER_TARGET_HELD' })
+			expect(refusals[0]).toMatchObject({ code: 'TARGET_HELD' })
 			expect(refusals[1]).toBeUndefined()
 		} finally {
 			await held.client.close()
@@ -356,8 +318,8 @@ describe('element protocol and compiler fixtures', () => {
 			'Cart',
 		])
 		const outline = await view.elements.outline()
-		expect(outline.text).toBe(
-			'page "Cart" https://example.test/cart\ne1 button "Save"\ne2 textbox "Email"\ne3 combobox "Size"\n(3 of 3 elements)',
+		expect(outline.lines.map(renderBrowserLine).join('\n')).toBe(
+			'button "Save" [ref=e1]\ntextbox "Email" [ref=e2]\ncombobox "Size" [ref=e3]',
 		)
 		expect((await view.read()).markdown().text).toContain('Two items')
 		const save = requireValue(view.elements.element('e1'))
@@ -366,7 +328,7 @@ describe('element protocol and compiler fixtures', () => {
 		await expect(save.select(['x'])).rejects.toThrow('Element is not a select control')
 		await requireValue(view.elements.element('e3')).select(['Large'])
 		const wait = await view.wait('Paid').catch((caught: unknown) => caught)
-		expect(readProperty(wait, 'code')).toBe('BROWSER_WAIT_TIMEOUT')
+		expect(readProperty(wait, 'code')).toBe('TIMEOUT')
 		expect(view.elements.element('e9')).toBeUndefined()
 		expect(view.calls).toEqual([
 			'outline',
@@ -434,13 +396,19 @@ describe('buildBrowserButtonTree', () => {
 describe('extractBrowserPage', () => {
 	it('reads the body, the range, and the next offset of a continued, a last, and a whole page', () => {
 		expect(
-			extractBrowserPage('alpha\n\n\n[characters 0–6 of 20; call look with offset 6 for more]'),
-		).toEqual({ body: 'alpha\n', start: 0, end: 6, total: 20, next: 6 })
-		expect(extractBrowserPage('gamma\n\n[characters 14–20 of 20]')).toEqual({
+			extractBrowserPage(
+				'page "Test" about:blank (3 lines)\n1: alpha\n[lines 1–1 of 3; 2 below; call read with from 2 for more]',
+			),
+		).toEqual({ body: 'alpha', start: 1, end: 1, total: 3, next: 2 })
+		expect(
+			extractBrowserPage(
+				'page "Test" about:blank (3 lines)\n3: gamma\n[lines 3–3 of 3; 2 above; end of page]',
+			),
+		).toEqual({
 			body: 'gamma',
-			start: 14,
-			end: 20,
-			total: 20,
+			start: 3,
+			end: 3,
+			total: 3,
 			next: undefined,
 		})
 		expect(extractBrowserPage('whole')).toEqual({
@@ -1074,7 +1042,7 @@ describe('createStartedCodegen', () => {
 	it('returns a codegen already started over the scripted binding handshake for its session', async () => {
 		const { codegen, transport } = await createStartedCodegen('session-4')
 
-		expect(codegen.started).toBe(true)
+		expect(codegen.active).toBe(true)
 		expect(transport.sent.map((message) => message.method)).toContain('Runtime.addBinding')
 		expect(transport.sent.map((message) => message.method)).toContain(
 			'Page.addScriptToEvaluateOnNewDocument',
@@ -1082,11 +1050,26 @@ describe('createStartedCodegen', () => {
 		expect(transport.sent.every((message) => message.sessionId === 'session-4')).toBe(true)
 	})
 
+	it('registers the owner callback for a newly attached frame session', async () => {
+		const { codegen, transport, attach, client } = await createStartedCodegen()
+		try {
+			await attach('child-session')
+			expect(
+				transport.sent.some(
+					(message) =>
+						message.method === 'Runtime.addBinding' && message.sessionId === 'child-session',
+				),
+			).toBe(true)
+		} finally {
+			await codegen.destroy()
+			await client.close()
+		}
+	})
 	it('scripts the binding removal so stop() resolves on the started fixture', async () => {
 		const { codegen } = await createStartedCodegen()
 
 		await expect(codegen.stop()).resolves.toEqual([])
-		expect(codegen.started).toBe(false)
+		expect(codegen.active).toBe(false)
 	})
 })
 
@@ -1284,242 +1267,6 @@ describe('listener fixtures', () => {
 		expect(ignoreCall()).toBeUndefined()
 		await expect(ignoreAsyncCall()).resolves.toBeUndefined()
 		expect(throwListenerError).toThrow('listener failed')
-	})
-})
-
-describe('submit observer fixtures', () => {
-	it('answers an attribute from its record and null for one it lacks', () => {
-		const element = new BrowserSubmitElement({ target: '_top' })
-		expect(element.getAttribute('target')).toBe('_top')
-		expect(element.getAttribute('method')).toBeNull()
-	})
-
-	it('registers submit listeners only, honours the once option, dispatches inert events, and answers a base target', () => {
-		const window = new BrowserSubmitWindow('results')
-		const seen = createRecorder<[event: unknown]>()
-		window.addEventListener('click', seen.handler)
-		window.addEventListener('submit', seen.handler)
-		window.addEventListener('submit', ignoreCall, { once: true })
-		expect(window.listeners).toBe(2)
-		window.dispatch({
-			prevented: true,
-			form: { method: 'post' },
-			submitter: { formtarget: '_top' },
-		})
-		expect(window.listeners).toBe(1)
-		const [event] = requireValue(seen.calls[0])
-		expect(readProperty(event, 'defaultPrevented')).toBe(true)
-		expect(readProperty(event, 'submitter')).toBeInstanceOf(BrowserSubmitElement)
-		window.removeEventListener('submit', seen.handler)
-		expect(window.listeners).toBe(0)
-		expect(window.querySelector('base[target]')?.getAttribute('target')).toBe('results')
-		expect(new BrowserSubmitWindow().querySelector('base[target]')).toBeNull()
-	})
-
-	it('sends a key to the capture listeners, the focused element, and the bubbling listeners in that order, and sends none from an iframe or without a focus', () => {
-		const window = new BrowserSubmitWindow()
-		const seen: Array<readonly [phase: string, key: unknown, target: unknown, focus: unknown]> = []
-		window.addEventListener(
-			'keydown',
-			(event: unknown) =>
-				seen.push([
-					'bubble',
-					readProperty(event, 'key'),
-					readProperty(readProperty(event, 'target'), 'localName'),
-					window.activeElement?.localName,
-				]),
-			false,
-		)
-		window.addEventListener(
-			'keydown',
-			(event: unknown) =>
-				seen.push([
-					'capture',
-					readProperty(event, 'key'),
-					readProperty(readProperty(event, 'target'), 'localName'),
-					window.activeElement?.localName,
-				]),
-			{ capture: true },
-		)
-		expect(window.listeners).toBe(2)
-		window.press('Enter')
-		expect(seen).toEqual([])
-		window.focus({
-			name: 'input',
-			form: { method: 'post' },
-			moves: { name: 'textarea', form: { method: 'get' } },
-		})
-		window.press('Enter')
-		expect(seen).toEqual([
-			['capture', 'Enter', 'input', 'input'],
-			['bubble', 'Enter', 'input', 'textarea'],
-		])
-		expect(window.evaluate('document.activeElement.localName')).toBe('textarea')
-		expect(window.activeElement?.form?.getAttribute('method')).toBe('get')
-		window.focus({ name: 'iframe' })
-		window.press('Enter')
-		window.focus()
-		window.press('Enter')
-		expect(seen).toHaveLength(2)
-		expect(window.activeElement).toBeNull()
-	})
-
-	it('keeps one registration per type, listener, and capture flag, and removes only the matching one', () => {
-		const window = new BrowserSubmitWindow()
-		const keys = createRecorder<[event: unknown]>()
-		window.addEventListener('keydown', keys.handler, true)
-		window.addEventListener('keydown', keys.handler, { capture: true })
-		window.addEventListener('keydown', keys.handler)
-		expect(window.listeners).toBe(2)
-		window.removeEventListener('keydown', keys.handler)
-		expect(window.listeners).toBe(1)
-		window.focus({ name: 'input', form: {} })
-		window.press('Enter')
-		expect(keys.count).toBe(1)
-		window.removeEventListener('keydown', keys.handler, true)
-		expect(window.listeners).toBe(0)
-	})
-
-	it('presses a key in every window it holds', () => {
-		const windows = new BrowserSubmitWindows()
-		const main = createRecorder<[event: unknown]>()
-		const child = createRecorder<[event: unknown]>()
-		windows.window('session-main', 91).addEventListener('keydown', main.handler)
-		windows.window('session-child', 92).addEventListener('keydown', child.handler)
-		windows.window('session-main', 91).focus({ name: 'iframe' })
-		windows.window('session-child', 92).focus({ name: 'input', form: {} })
-		windows.press('Enter')
-		expect([main.count, child.count]).toEqual([0, 1])
-	})
-
-	it('holds the pending-request cases, focus steps, focus cases, early-navigation cases, negative-read cases, unread cases, and malformed reads the submit proofs register', () => {
-		expect(BROWSER_SUBMIT_FOCUS_STEPS).toHaveLength(9)
-		for (const [label, main, child, tool, args, line] of BROWSER_SUBMIT_FOCUS_STEPS) {
-			expect(label).not.toBe('')
-			expect([main, child].every((focus) => focus === undefined || focus.name !== '')).toBe(true)
-			expect(['type', 'press', 'click']).toContain(tool)
-			expect(Object.keys(args).length).toBeGreaterThan(0)
-			expect(line).toMatch(/^(?:Typed|Pressed|Clicked) .+\.$/)
-		}
-		expect(BROWSER_SUBMIT_FOCUS_CASES).toHaveLength(8)
-		expect(BROWSER_SUBMIT_FOCUS_CASES.filter(([, , , implicit]) => implicit)).toHaveLength(2)
-		expect(BROWSER_SUBMIT_EARLY_CASES.map(([, , reason, clause]) => [reason, clause])).toEqual([
-			['formSubmissionPost', 'and submitted the form'],
-			['anchorClick', 'and pressed Enter'],
-			['formSubmissionPost', 'and pressed Enter'],
-		])
-		expect(BROWSER_SUBMIT_EARLY_CASES[2]?.[1]).toEqual(['start'])
-		expect(BROWSER_SUBMIT_UNREAD_CASES).toHaveLength(4)
-		expect(BROWSER_SUBMIT_NEGATIVE_CASES.map(([, first]) => first)).toEqual([true, false])
-		expect(BROWSER_PENDING_REQUEST_CASES).toHaveLength(10)
-		expect(
-			BROWSER_PENDING_REQUEST_CASES.filter(([, , , , reason]) => reason !== undefined).map(
-				([name]) => name,
-			),
-		).toEqual([
-			'a start of the requested URL takes the request reason',
-			'a swapped frame keeps its request',
-		])
-		expect(
-			BROWSER_SUBMIT_UNREAD_CASES.filter(
-				([, , , , clause]) => clause === 'and submitted the form',
-			).map(([, stages, reason]) => [stages.includes('request'), reason]),
-		).toEqual([[true, 'formSubmissionGet']])
-		expect(BROWSER_SUBMIT_MALFORMED_READS.map(([name]) => name)).toEqual([
-			'a record without implicit',
-			'a record whose submitted is a string',
-			'a record whose destinations hold a number',
-			'null',
-			'a bare array',
-		])
-	})
-
-	it('evaluates an expression against globals of its own, apart from every other window', () => {
-		const first = new BrowserSubmitWindow()
-		const second = new BrowserSubmitWindow()
-		expect(first.evaluate('(globalThis.marker = 7, globalThis.marker)')).toBe(7)
-		expect(second.evaluate('globalThis.marker')).toBeUndefined()
-		expect(first.evaluate("typeof document.querySelector === 'function'")).toBe(true)
-	})
-
-	it('keeps one window per session and context, sums their listeners, and evaluates a message in the window it names', () => {
-		const windows = new BrowserSubmitWindows()
-		const main = windows.window('session-main', 91)
-		expect(windows.window('session-main', 91)).toBe(main)
-		expect(windows.window('session-child', 91)).not.toBe(main)
-		main.addEventListener('submit', ignoreCall)
-		windows.window('session-child', 92).addEventListener('submit', ignoreCall)
-		expect(windows.listeners).toBe(2)
-		main.evaluate('(globalThis.frame = "main")')
-		expect(
-			windows.evaluate({
-				id: 1,
-				method: 'Runtime.evaluate',
-				params: { expression: 'globalThis.frame', contextId: 91 },
-				sessionId: 'session-main',
-			}),
-		).toBe('main')
-		expect(
-			windows.evaluate({
-				id: 2,
-				method: 'Runtime.evaluate',
-				params: { expression: 'globalThis.frame', contextId: 92 },
-				sessionId: 'session-child',
-			}),
-		).toBeUndefined()
-	})
-
-	it('installs an observer as often as asked, dispatches the submissions, and reads it with the listeners left', () => {
-		const observer =
-			"addEventListener('submit', () => { globalThis.count = (globalThis.count ?? 0) + 1 })"
-		const read = 'globalThis.count ?? 0'
-		expect(evaluateBrowserSubmit(observer, read)).toEqual([0, 1])
-		expect(evaluateBrowserSubmit(observer, read, [{ prevented: false, form: {} }], 2)).toEqual([
-			2, 2,
-		])
-		expect(evaluateBrowserSubmit(observer, read, [], 0)).toEqual([0, 0])
-	})
-
-	it('reads the token a compiled observer or read embeds and tells the two apart, alone or guarded', () => {
-		const observer = compileSubmitObserverExpression(12)
-		const read = compileSubmitReadExpression(12)
-		expect(readBrowserSubmitToken(observer)).toBe(12)
-		expect(readBrowserSubmitToken(compileGuardedEvaluateExpression(read, 100))).toBe(12)
-		expect(readBrowserSubmitToken('document.title')).toBeUndefined()
-		expect([matchesBrowserSubmitObserver(observer), matchesBrowserSubmitRead(observer)]).toEqual([
-			true,
-			false,
-		])
-		expect([matchesBrowserSubmitObserver(read), matchesBrowserSubmitRead(read)]).toEqual([
-			false,
-			true,
-		])
-		expect(matchesBrowserSubmitRead(read.replace('const token = 12', 'const token = 13'))).toBe(
-			true,
-		)
-		expect(matchesBrowserSubmitRead(read.replace('delete globalThis', 'void globalThis'))).toBe(
-			false,
-		)
-	})
-
-	it('answers an evaluation with the value its expression returns in the window it names', async () => {
-		const { client, transport } = await createConnectedCDPClient()
-		try {
-			const windows = new BrowserSubmitWindows()
-			windows.window('session-child', 92).evaluate('(globalThis.answer = 42)')
-			transport.onSend('Runtime.evaluate', (message) =>
-				answerBrowserEvaluation(transport, windows, message),
-			)
-			expect(
-				await client.send(
-					'Runtime.evaluate',
-					{ expression: 'globalThis.answer', contextId: 92 },
-					{ session: 'session-child' },
-				),
-			).toEqual({ result: { value: 42 } })
-		} finally {
-			await client.close()
-		}
 	})
 })
 

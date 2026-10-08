@@ -3,6 +3,7 @@ import type {
 	BrowserRunSlot,
 	BrowserRunStoreInterface,
 	BrowserStoreOptions,
+	BrowserStorePageOptions,
 	BrowserStorePage,
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
@@ -28,7 +29,7 @@ import { FileBrowserStore } from './FileBrowserStore.js'
  * still refuses conflicting mutations and allocations from another process.
  * @example
  * const store = new FileBrowserRunStore({ root: directory })
- * const slot = await store.open('check-ready')
+ * const slot = await store.create('check-ready')
  */
 export class FileBrowserRunStore implements BrowserRunStoreInterface {
 	static readonly #allocations = new Map<string, Promise<void>>()
@@ -40,7 +41,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		this.#files = new FileBrowserStore(options)
 	}
 
-	async snapshot(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string> {
+	async write(bytes: Uint8Array, options?: BrowserStoreOptions): Promise<string> {
 		options?.signal?.throwIfAborted()
 		const owned = new Uint8Array(bytes)
 		const directory = await this.#files.allocate(
@@ -60,7 +61,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		}
 	}
 
-	async open(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
+	async create(name: string, options?: BrowserStoreOptions): Promise<BrowserRunSlot> {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)
 		const path = this.#files.resolvePath(name, BROWSER_JOURNEY_LOCK_DIRECTORY)
@@ -106,15 +107,15 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		try {
 			const value = parseJSON(source)
 			if (!isRecord(value) || !('format' in value))
-				throw new BrowserError('Missing run format', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('STORE_FILE', 'Missing run format')
 			if (
 				value['format'] === BROWSER_JOURNEY_FORMAT_VERSION &&
 				(!isRecord(value['journey']) || !('format' in value['journey']))
 			)
-				throw new BrowserError('Missing run journey format', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('STORE_FILE', 'Missing run journey format')
 			validateBrowserRun(value)
 			if (value.id !== id || value.journey.name !== name)
-				throw new BrowserError('Run identity differs from its directory', 'BROWSER_JOURNEY_FILE')
+				throw new BrowserError('STORE_FILE', 'Run identity differs from its directory')
 			return value
 		} catch (error) {
 			throw this.#files.translateError(path, error)
@@ -141,10 +142,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 		options?.signal?.throwIfAborted()
 		const directory = this.#slots.get(slot)
 		if (directory === undefined || !/^s[1-9]\d*\.png$/.test(name))
-			throw new BrowserError(
-				'Capture requires an opened slot and an sN.png name',
-				'BROWSER_JOURNEY_PATH',
-			)
+			throw new BrowserError('STORE_PATH', 'Capture requires an opened slot and an sN.png name')
 		const owned = new Uint8Array(bytes)
 		await this.#requireDirectory(directory, options)
 		await this.#files.write(this.#files.resolvePath(directory, name), owned, options)
@@ -197,7 +195,7 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 
 	async list(
 		name: string,
-		options?: BrowserStoreOptions & { readonly offset?: number; readonly limit?: number },
+		options?: BrowserStorePageOptions,
 	): Promise<BrowserStorePage<BrowserRun>> {
 		options?.signal?.throwIfAborted()
 		this.#files.validateName(name)
@@ -211,18 +209,15 @@ export class FileBrowserRunStore implements BrowserRunStoreInterface {
 	async #requireDirectory(directory: string, options?: BrowserStoreOptions): Promise<void> {
 		if (!this.#directories.has(directory) || !(await this.#files.check(directory, options)))
 			throw new BrowserError(
+				'STORE_PATH',
 				`Run directory was not opened or is missing: ${directory}`,
-				'BROWSER_JOURNEY_PATH',
 			)
 		try {
 			options?.signal?.throwIfAborted()
 			const status = await lstat(directory)
 			options?.signal?.throwIfAborted()
 			if (!status.isDirectory())
-				throw new BrowserError(
-					`Run directory is not a directory: ${directory}`,
-					'BROWSER_JOURNEY_PATH',
-				)
+				throw new BrowserError('STORE_PATH', `Run directory is not a directory: ${directory}`)
 		} catch (error) {
 			options?.signal?.throwIfAborted()
 			throw this.#files.translateError(directory, error)

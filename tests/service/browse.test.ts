@@ -21,10 +21,16 @@ import {
 	requireValue,
 	waitForCondition,
 	waitForEvent,
+	retryUntil,
 } from '@orkestrel/test'
 import { createScratch, createLoopback, readErrorCode } from '@orkestrel/test/server'
 import { isRecord, isString } from '@orkestrel/contract'
-import { createCDPClient, BROWSER_DEFAULT_TIMEOUT_MS, isBrowserConnectionError } from '@src/core'
+import {
+	createCDPClient,
+	BROWSER_DEFAULT_TIMEOUT_MS,
+	BROWSER_TOOL_LIMIT,
+	isBrowserError,
+} from '@src/core'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
 	createBrowserMCPServer,
@@ -32,7 +38,7 @@ import {
 	probeProcess,
 	parseBrowserProfileRecord,
 	formatBrowserLockEntry,
-	createCDPTransport,
+	createWebSocketCDPTransport,
 	createFileBrowserJourneyStore,
 	createFileBrowserRunStore,
 	BROWSER_KILL_GRACE_MS,
@@ -90,6 +96,115 @@ describe('contexts C2 built browse on one browser', () => {
 		await server?.client.disconnect()
 		await pages?.destroy()
 		scratch?.destroy()
+	})
+
+	it('audit repair 9: an adopted page tool may take the removed look name', async () => {
+		const launcher = new BrowseLauncher()
+		const fixture = createBrowseFixture({
+			browser: { executable: requireSystemBrowser().executable },
+			pool: {
+				size: 1,
+				launch: (options) =>
+					launcher.launch({
+						...options,
+						args: [...(options.args ?? []), '--enable-features=WebMCP'],
+					}),
+			},
+		})
+		try {
+			await fixture.server.start()
+			await fixture.pair.initialize()
+			expect(
+				(await fixture.pair.call(2, 'navigate', { url: pages.url + '/adopted-look' })).error,
+			).toBe(false)
+			const browser = requireValue(launcher.browsers[0])
+			const page = requireValue(
+				browser
+					.contexts()
+					.flatMap((context) => context.pages())
+					.find((candidate) => candidate.url.includes('/adopted-look')),
+			)
+			expect(
+				await page.evaluate(
+					"(() => { const registry = navigator.modelContext ?? document.modelContext; registry.registerTool({ name: 'look', description: 'Reports the page authored answer', inputSchema: { type: 'object', properties: { purpose: { type: 'string' } }, required: ['purpose'] }, execute: () => 'A page authored look answer.' }); return true })()",
+				),
+			).toBe(true)
+			let id = 3
+			await retryUntil(
+				'the page tool is mirrored',
+				() => fixture.pair.request(id++, 'tools/list'),
+				(result) => JSON.stringify(result).includes('Reports the page authored answer'),
+				{ budget: 5000, interval: 50 },
+			)
+			expect(
+				await fixture.pair.call(id++, 'look', { purpose: 'Read the page tool answer' }),
+			).toEqual({ error: false, text: 'A page authored look answer.' })
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+	it('audit repair 5: a crash notice redacts the departed address with the lost toolset secrets', async () => {
+		const secret = 'departure-private-4821'
+		const source = await pages.read(server.client, holder, 'secret-departure')
+		const observer = await inspectHolderContext(scratch.path, source.url)
+		try {
+			const attached: unknown = await observer.client.send('Target.attachToTarget', {
+				targetId: observer.target,
+				flatten: true,
+			})
+			if (!isRecord(attached) || !isString(attached['sessionId']))
+				throw new Error('Missing session')
+			await observer.client.send(
+				'Runtime.evaluate',
+				{ expression: `document.body.innerHTML = '<input aria-label="Private">'` },
+				{ session: attached['sessionId'] },
+			)
+			const read = await callContextTool(server.client, holder, 'read', { from: 1 })
+			const ref = requireOutlineReference(read, 'textbox', 'Private')
+			await callContextTool(server.client, holder, 'type', { ref, text: secret, secret: true })
+			await callContextTool(server.client, holder, 'navigate', {
+				url: new URL(source.url).origin + '/state?secret=' + secret,
+			})
+			process.kill(observer.pid, 'SIGKILL')
+			await waitForProcessExit(observer.pid)
+			const result = await callContextTool(server.client, holder, 'read', { from: 1 })
+			expect(result).toContain('SERVER_CRASH')
+			expect(result).not.toContain(secret)
+			expect(result).toContain('[redacted]')
+		} finally {
+			await observer.client.close()
+		}
+	})
+	it('bounds complete MCP reading windows and refuses the removed names', async () => {
+		const source = await pages.read(server.client, holder, 'reading-bound')
+		const observer = await inspectHolderContext(scratch.path, source.url)
+		try {
+			const attached: unknown = await observer.client.send('Target.attachToTarget', {
+				targetId: observer.target,
+				flatten: true,
+			})
+			if (!isRecord(attached) || !isString(attached['sessionId']))
+				throw new Error('Missing reading session')
+			await observer.client.send(
+				'Runtime.evaluate',
+				{
+					expression: `document.body.innerHTML = ${JSON.stringify(Array.from({ length: 200 }, (_, index) => `<p>Entry ${index}. ${'Store material. '.repeat(10)}</p>`).join(''))}`,
+				},
+				{ session: attached['sessionId'] },
+			)
+			const first = await callContextTool(server.client, holder, 'read', { from: 1 })
+			expect(first.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			const from = Number(requireValue(/call read with from (\d+) for more/.exec(first))[1])
+			const next = await callContextTool(server.client, holder, 'read', { from })
+			expect(next.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
+			expect(next).toContain(`\n${from}: `)
+			for (const name of ['look', 'plain', 'tabs'])
+				await expect(callContextTool(server.client, holder, name, {})).rejects.toThrow(
+					`tool not found: ${name}`,
+				)
+		} finally {
+			await observer.client.close()
+		}
 	})
 
 	it('isolates every web store between simultaneous holders on one browser', async () => {
@@ -184,10 +299,11 @@ describe('contexts C2 built browse on one browser', () => {
 			)
 			await callHolderServer(server.client, 'destroy', { holder })
 			expect(existsSync(old), 'destroy removes the old downloads folder').toBe(false)
-			const sibling = await callContextTool(server.client, undefined, 'look', { search: '' })
-			expect(sibling, 'destroy keeps the sibling context alive').not.toContain(
-				'BROWSER_SERVER_CRASH',
-			)
+			const sibling = await callContextTool(server.client, undefined, 'read', {
+				from: 1,
+				search: '',
+			})
+			expect(sibling, 'destroy keeps the sibling context alive').not.toContain('SERVER_CRASH')
 			expect(
 				probeProcess(observer.pid),
 				`destroy retains the sibling browser; ${server.transport.evidence ?? ''}`,
@@ -240,16 +356,17 @@ describe('contexts C2 built browse on one browser', () => {
 			{ holder, url: named.url },
 			{ holder: undefined, url: shared.url },
 		]) {
-			const answer = await callContextTool(server.client, entry.holder, 'look', { search: '' })
-			expect(answer, 'each affected holder receives a crash notice').toMatch(
-				/^BROWSER_SERVER_CRASH:/,
-			)
+			const answer = await callContextTool(server.client, entry.holder, 'read', {
+				from: 1,
+				search: '',
+			})
+			expect(answer, 'each affected holder receives a crash notice').toMatch(/SERVER_CRASH:/)
 			expect(answer, 'each notice keeps its own last URL').toContain(entry.url)
 			expect(answer, 'recovery has a blank active page').toContain('about:blank')
 			expect(
-				await callContextTool(server.client, entry.holder, 'look', { search: '' }),
+				await callContextTool(server.client, entry.holder, 'read', { from: 1, search: '' }),
 				'notice is delivered once',
-			).not.toContain('BROWSER_SERVER_CRASH')
+			).not.toContain('SERVER_CRASH')
 		}
 	})
 
@@ -268,12 +385,20 @@ describe('contexts C2 built browse on one browser', () => {
 			await victim.client
 				.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
 				.catch(() => undefined)
-			const recovered = await callContextTool(server.client, holder, 'look', { search: '' })
-			expect(recovered).toMatch(/^BROWSER_SERVER_CRASH:/)
+			let recovered: string
+			try {
+				recovered = await callContextTool(server.client, holder, 'read', { from: 1 })
+			} catch (error) {
+				// The crash can arrive during this observation; the next call must recover it.
+				if (!String(error).includes('SERVER_UNRESOLVED: The current page renderer crashed.'))
+					throw error
+				recovered = await callContextTool(server.client, holder, 'read', { from: 1 })
+			}
+			expect(recovered).toContain('SERVER_CRASH:')
 			expect(recovered).toContain(named.url)
 			expect(recovered).toContain('about:blank')
-			const sibling = await callContextTool(server.client, undefined, 'plain', { search: '' })
-			expect(sibling).not.toContain('BROWSER_SERVER_CRASH')
+			const sibling = await callContextTool(server.client, undefined, 'read', { from: 1 })
+			expect(sibling).not.toContain('SERVER_CRASH')
 			expect(sibling).toContain('"local":"source"')
 			expect((await findHolderProfile(scratch.path, shared.url)).pid).toBe(victim.pid)
 			expect(await victim.client.send('Target.getBrowserContexts')).toHaveProperty(
@@ -330,13 +455,13 @@ describe('contexts C2 built browse on two browsers', () => {
 		process.kill(victim.pid, 'SIGKILL')
 		await waitForProcessExit(victim.pid)
 		for (const owner of owners.filter((entry) => entry.pid === victim.pid)) {
-			const answer = await callContextTool(server.client, owner.holder, 'plain', { search: '' })
-			expect(answer).toMatch(/^BROWSER_SERVER_CRASH:/)
+			const answer = await callContextTool(server.client, owner.holder, 'read', { from: 1 })
+			expect(answer).toContain('SERVER_CRASH:')
 			expect(answer).toContain(owner.url)
 		}
 		for (const owner of owners.filter((entry) => entry.pid !== victim.pid)) {
-			const answer = await callContextTool(server.client, owner.holder, 'plain', { search: '' })
-			expect(answer, 'other browser holder has no notice').not.toContain('BROWSER_SERVER_CRASH')
+			const answer = await callContextTool(server.client, owner.holder, 'read', { from: 1 })
+			expect(answer, 'other browser holder has no notice').not.toContain('SERVER_CRASH')
 			expect(answer, 'other browser holder keeps state').toContain('"local":"source"')
 			expect((await findHolderProfile(scratch.path, owner.url)).pid).toBe(owner.pid)
 		}
@@ -434,7 +559,7 @@ describe('holders H3 built browse', () => {
 				name: 'click',
 				arguments: { ref: seed },
 			}),
-		).rejects.toThrow(`Element ${seed} is not in the current view`)
+		).rejects.toThrow(`Element [ref=${seed}] is not in the current view`)
 		const firstAgain = await callHolderServer(server.client, 'execute', {
 			holder: first,
 			name: 'navigate',
@@ -449,15 +574,15 @@ describe('holders H3 built browse', () => {
 		expect(
 			await callHolderServer(server.client, 'execute', {
 				holder: first,
-				name: 'tabs',
-				arguments: { search: '' },
+				name: 'read',
+				arguments: { from: 1 },
 			}),
 		).toContain(`${pages.url}/tab`)
 		expect(
 			await callHolderServer(server.client, 'execute', {
 				holder: second,
-				name: 'tabs',
-				arguments: { search: '' },
+				name: 'read',
+				arguments: { from: 1 },
 			}),
 		).not.toContain(`${pages.url}/tab`)
 	})
@@ -473,28 +598,28 @@ describe('holders H3 built browse', () => {
 		expect(
 			await callHolderServer(server.client, 'execute', {
 				holder: first,
-				name: 'look',
-				arguments: { search: '' },
+				name: 'read',
+				arguments: { from: 1, search: '' },
 			}),
-		).not.toContain('BROWSER_SERVER_CRASH')
+		).not.toContain('SERVER_CRASH')
 		const recovered = await callHolderServer(server.client, 'execute', {
 			holder: second,
-			name: 'look',
-			arguments: { search: '' },
+			name: 'read',
+			arguments: { from: 1, search: '' },
 		})
-		expect(recovered).toContain('BROWSER_SERVER_CRASH')
+		expect(recovered).toContain('SERVER_CRASH')
 		expect(recovered).toContain('about:blank')
 		expect(
 			await callHolderServer(server.client, 'execute', {
 				holder: second,
-				name: 'look',
-				arguments: { search: '' },
+				name: 'read',
+				arguments: { from: 1, search: '' },
 			}),
-		).not.toContain('BROWSER_SERVER_CRASH')
+		).not.toContain('SERVER_CRASH')
 	})
 
 	it('contains downloads and removes them before holder capacity is reused cleanly', async () => {
-		await expect(acquireHolder(server.client, 'overflow')).rejects.toThrow('BROWSER_SERVER_BUSY')
+		await expect(acquireHolder(server.client, 'overflow')).rejects.toThrow('SERVER_BUSY')
 		await callHolderServer(server.client, 'execute', {
 			holder: first,
 			name: 'navigate',
@@ -523,8 +648,8 @@ describe('holders H3 built browse', () => {
 		expect(
 			await callHolderServer(server.client, 'execute', {
 				holder: first,
-				name: 'tabs',
-				arguments: { search: '' },
+				name: 'read',
+				arguments: { from: 1 },
 			}),
 		).not.toContain(`${pages.url}/tab`)
 		const clean = await callHolderServer(server.client, 'execute', {
@@ -701,7 +826,7 @@ describe('holders H3 built cleanup refusal', () => {
 			await locked
 			child.end()
 			expect(await child.ending).toEqual({ code: 1, signal: null })
-			expect(child.stderr).toContain('BROWSER_SERVER_TEARDOWN')
+			expect(child.stderr).toContain('SERVER_TEARDOWN')
 			expect(child.stderr).toContain('The browse server teardown failed')
 			for (const pid of pids) expect(probeProcess(pid)).toBe(false)
 			for (const other of folders) expect(existsSync(other)).toBe(other === folder)
@@ -755,8 +880,8 @@ describe('eager U8 built browse', () => {
 				id: 2,
 				method: 'tools/call',
 				params: {
-					name: 'plain',
-					arguments: { search: '' },
+					name: 'read',
+					arguments: { from: 1, search: '' },
 				},
 			})
 			await waitForCondition('viewport reading', () => child.lines.length === 2)
@@ -774,7 +899,7 @@ describe('eager U8 built browse', () => {
 		}
 	})
 
-	it('refuses malformed BROWSE_VIEWPORT with BROWSER_SERVER_ENVIRONMENT', async () => {
+	it('refuses malformed BROWSE_VIEWPORT with SERVER_ENVIRONMENT', async () => {
 		const scratch = createScratch()
 		const child = new BrowseChild(
 			fileURLToPath(new URL('../../dist/bin/main.js', import.meta.url)),
@@ -784,7 +909,7 @@ describe('eager U8 built browse', () => {
 		try {
 			child.end()
 			expect(await child.ending).toEqual({ code: 1, signal: null })
-			expect(child.stderr).toContain('browse: BROWSER_SERVER_ENVIRONMENT: BROWSE_VIEWPORT')
+			expect(child.stderr).toContain('browse: SERVER_ENVIRONMENT: BROWSE_VIEWPORT')
 			expect(child.lines).toEqual([])
 			expect(existsSync(join(scratch.path, 'tmp/browsers'))).toBe(false)
 		} finally {
@@ -899,10 +1024,11 @@ describe('eager U7 real browse', () => {
 	it('inherits viewport on isolated pages, popups, spares, and refills', async () => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			viewport: { width: 390, height: 844 },
-			pool: { size: 2 },
-			launch: launcher.launch,
+			browser: {
+				executable: requireSystemBrowser().executable,
+				viewport: { width: 390, height: 844 },
+			},
+			pool: { size: 2, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -940,7 +1066,9 @@ describe('eager U7 real browse', () => {
 					process.kill(pid, 'SIGKILL')
 					await waitForProcessExit(pid)
 				}
-				expect((await fixture.pair.call(index + 2, 'look', { search: 'page' })).error).toBe(false)
+				expect(
+					(await fixture.pair.call(index + 2, 'read', { from: 1, search: 'page' })).error,
+				).toBe(false)
 			}
 		} finally {
 			await fixture.teardown.destroy()
@@ -951,9 +1079,8 @@ describe('eager U7 real browse', () => {
 		it(`replaces a killed lease at size ${size} and refuses a stale reference`, async () => {
 			const launcher = new BrowseLauncher()
 			const fixture = createBrowseFixture({
-				executable: requireSystemBrowser().executable,
-				pool: { size },
-				launch: launcher.launch,
+				browser: { executable: requireSystemBrowser().executable },
+				pool: { size, launch: launcher.launch },
 			})
 			const pages = await createFixtureServer()
 			try {
@@ -961,7 +1088,7 @@ describe('eager U7 real browse', () => {
 				const url = pages.url('/form')
 				const navigated = await fixture.pair.call(2, 'navigate', { url })
 				expect(navigated.error).toBe(false)
-				const reading = await fixture.pair.call(3, 'look', { search: 'button' })
+				const reading = await fixture.pair.call(3, 'read', { from: 1, search: 'button' })
 				const reference = requireValue(reading.text.match(/\be[1-9]\d*\b/)?.[0], 'old reference')
 				await waitForCondition('warm floor', () => launcher.connections.length === size, {
 					budget: 15000,
@@ -969,9 +1096,9 @@ describe('eager U7 real browse', () => {
 				const pid = requireValue(launcher.browsers[0]?.pid, 'lease pid')
 				process.kill(pid, 'SIGKILL')
 				await waitForProcessExit(pid)
-				const answer = await fixture.pair.call(4, 'look', { search: 'page' })
+				const answer = await fixture.pair.call(4, 'read', { from: 1, search: 'page' })
 				expect(answer.error).toBe(false)
-				expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+				expect(answer.text).toContain('SERVER_CRASH:')
 				expect(answer.text).toContain(url)
 				await waitForCondition(
 					'exactly one replacement',
@@ -990,7 +1117,7 @@ describe('eager U7 real browse', () => {
 				expect((await fixture.pair.call(5, 'navigate', { url })).error).toBe(false)
 				const stale = await fixture.pair.call(6, 'click', { ref: reference })
 				expect(stale.error).toBe(true)
-				expect(stale.text).not.toContain('BROWSER_SERVER_')
+				expect(stale.text).not.toContain('SERVER_')
 			} finally {
 				await fixture.teardown.destroy()
 				await pages.destroy()
@@ -1001,9 +1128,8 @@ describe('eager U7 real browse', () => {
 	it('keeps the lease when a spare is killed and launches one replacement', async () => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: launcher.launch,
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -1020,9 +1146,9 @@ describe('eager U7 real browse', () => {
 			await waitForCondition('spare replaced', () => launcher.connections.length === 3, {
 				budget: 15000,
 			})
-			const answer = await fixture.pair.call(2, 'look', { search: 'page' })
+			const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'page' })
 			expect(answer.error).toBe(false)
-			expect(answer.text).not.toContain('BROWSER_SERVER_CRASH')
+			expect(answer.text).not.toContain('SERVER_CRASH')
 			expect(launcher.browsers[0]?.pid).toBe(lease)
 			expect(launcher.browsers).toHaveLength(3)
 		} finally {
@@ -1039,9 +1165,8 @@ describe('eager U7 real browse', () => {
 		)
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: launcher.launch,
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -1050,10 +1175,10 @@ describe('eager U7 real browse', () => {
 			process.kill(requireValue(launcher.browsers[0]?.pid, 'lease pid'), 'SIGKILL')
 			const answer = await pending
 			expect(answer.error).toBe(true)
-			expect(answer.text).toMatch(/^BROWSER_SERVER_UNRESOLVED:/)
+			expect(answer.text).toMatch(/^SERVER_UNRESOLVED:/)
 			expect(answer.text).toContain('Browse did not repeat the call')
-			expect((await fixture.pair.call(3, 'look', { search: 'page' })).text).toMatch(
-				/^BROWSER_SERVER_CRASH:/,
+			expect((await fixture.pair.call(3, 'read', { from: 1, search: 'page' })).text).toMatch(
+				/SERVER_CRASH:/,
 			)
 			expect(requests).toBe(1)
 		} finally {
@@ -1062,54 +1187,87 @@ describe('eager U7 real browse', () => {
 		}
 	})
 
-	it('notes a current renderer crash but ignores a background renderer crash', async () => {
-		const launcher = new BrowseLauncher()
-		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: (options) => launcher.launch({ ...options, timeout: 5000 }),
-		})
-		let client: ReturnType<typeof createCDPClient> | undefined
-		try {
-			await fixture.server.start()
-			const browser = requireValue(launcher.browsers[0], 'lease')
-			const context = requireValue(
-				browser.contexts().find((entry) => entry.id !== undefined),
-				'isolated context',
-			)
-			const view = requireValue(context.pages()[0], 'view')
-			const background = await context.create()
-			client = createCDPClient({
-				transport: createCDPTransport({ url: requireValue(browser.endpoint, 'endpoint') }),
+	it.each(['launch', 'reverse'])(
+		'notes a current renderer crash but ignores a background renderer crash with %s inventory',
+		async (order) => {
+			const launcher = new BrowseLauncher()
+			const pages = await createFixtureServer()
+			const url = pages.url('/form')
+			const fixture = createBrowseFixture({
+				browser: { executable: requireSystemBrowser().executable },
+				pool: { size: 2, launch: (options) => launcher.launch({ ...options, timeout: 5000 }) },
 			})
-			await client.connect()
-			for (const page of [background, view]) {
-				const crashed = createRecorder<readonly []>()
-				page.emitter.on('crash', crashed.handler)
-				const attached: unknown = await client.send('Target.attachToTarget', {
-					targetId: page.id,
-					flatten: true,
-				})
-				if (!isRecord(attached) || !isString(attached['sessionId']))
-					throw new Error('Missing crash session')
-				await client
-					.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
-					.catch(() => undefined)
+			let client: ReturnType<typeof createCDPClient> | undefined
+			try {
+				await fixture.server.start()
+				expect((await fixture.pair.call(1, 'navigate', { url })).error).toBe(false)
 				await waitForCondition(
-					'renderer crash event without Inspector.enable',
-					() => crashed.count === 1,
+					'both browser contexts prepared',
+					() =>
+						launcher.browsers.length === 2 &&
+						launcher.browsers.every((entry) =>
+							entry
+								.contexts()
+								.some((context) => context.id !== undefined && context.pages().length > 0),
+						),
+					{ budget: 5000 },
 				)
-				const answer = await fixture.pair.call(page === background ? 2 : 3, 'look', {
-					search: 'page',
+				const browsers = order === 'launch' ? launcher.browsers : [...launcher.browsers].reverse()
+				const browser = requireValue(
+					browsers.find((entry) =>
+						entry.contexts().some((context) => context.pages().some((page) => page.url === url)),
+					),
+					'lease',
+				)
+				const context = requireValue(
+					browser.contexts().find((entry) => entry.id !== undefined),
+					'isolated context',
+				)
+				const view = requireValue(context.pages()[0], 'view')
+				expect(view.url, 'the crash target must belong to the shared MCP lease').toBe(url)
+				const background = await context.create()
+				client = createCDPClient({
+					transport: createWebSocketCDPTransport({
+						url: requireValue(browser.endpoint, 'endpoint'),
+					}),
 				})
-				expect(answer.error).toBe(false)
-				expect(answer.text.startsWith('BROWSER_SERVER_CRASH:')).toBe(page === view)
+				await client.connect()
+				for (const page of [background, view]) {
+					const crashed = createRecorder<readonly []>()
+					page.emitter.on('crash', crashed.handler)
+					const attached: unknown = await client.send('Target.attachToTarget', {
+						targetId: page.id,
+						flatten: true,
+					})
+					if (!isRecord(attached) || !isString(attached['sessionId']))
+						throw new Error('Missing crash session')
+					await client
+						.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
+						.catch(() => undefined)
+					await waitForCondition(
+						'renderer crash event without Inspector.enable',
+						() => crashed.count === 1,
+						{ budget: 5000 },
+					).catch((cause: unknown) => {
+						throw new Error(
+							`Expected one ${page === background ? 'background' : 'current'} renderer crash; received ${crashed.count}; closed=${page.closed}`,
+							{ cause },
+						)
+					})
+					const answer = await fixture.pair.call(page === background ? 2 : 3, 'read', {
+						from: 1,
+						search: 'page',
+					})
+					expect(answer.error).toBe(false)
+					expect(answer.text.includes('SERVER_CRASH:')).toBe(page === view)
+				}
+			} finally {
+				await client?.close()
+				await fixture.teardown.destroy()
+				await pages.destroy()
 			}
-		} finally {
-			await client?.close()
-			await fixture.teardown.destroy()
-		}
-	})
+		},
+	)
 
 	it('reports ENOENT after its executable path disappears at size one', async () => {
 		const scratch = createScratch()
@@ -1119,9 +1277,8 @@ describe('eager U7 real browse', () => {
 		symlinkSync(dirname(executable), link, 'junction')
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: join(link, basename(executable)),
-			pool: { size: 1 },
-			launch: launcher.launch,
+			browser: { executable: join(link, basename(executable)) },
+			pool: { size: 1, launch: launcher.launch },
 		})
 		try {
 			await fixture.server.start()
@@ -1129,20 +1286,18 @@ describe('eager U7 real browse', () => {
 			unlinkSync(link)
 			expect(existsSync(join(link, basename(executable)))).toBe(false)
 			process.kill(pid, 'SIGKILL')
-			const answer = await fixture.pair.call(2, 'look', { search: 'page' })
+			const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'page' })
 			expect(answer.error).toBe(true)
-			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
-			expect(answer.text).toMatch(/\nBROWSER_SERVER_UNAVAILABLE:.*ENOENT/)
+			expect(answer.text).toContain('SERVER_CRASH:')
+			expect(answer.text).toMatch(/\nSERVER_UNAVAILABLE:.*ENOENT/)
 			expect(launcher.browsers).toHaveLength(3)
-			expect(
-				fixture.log.lines.filter((line) => line.startsWith('browse: BROWSER_SERVER_LAUNCH:')),
-			).toEqual([
-				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
-				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
-			])
-			expect(fixture.log.lines.some((line) => line.includes('BROWSER_SERVER_UNAVAILABLE:'))).toBe(
-				false,
+			expect(fixture.log.lines.filter((line) => line.startsWith('browse: SERVER_LAUNCH:'))).toEqual(
+				[
+					expect.stringMatching(/^browse: SERVER_LAUNCH:.*ENOENT.*\n$/),
+					expect.stringMatching(/^browse: SERVER_LAUNCH:.*ENOENT.*\n$/),
+				],
 			)
+			expect(fixture.log.lines.some((line) => line.includes('SERVER_UNAVAILABLE:'))).toBe(false)
 		} finally {
 			await fixture.teardown.destroy()
 			if (existsSync(link)) unlinkSync(link)
@@ -1153,9 +1308,8 @@ describe('eager U7 real browse', () => {
 	it('probes SIGSTOP support and recovers a stopped lease within its ping deadlines', async (context) => {
 		const launcher = new BrowseLauncher()
 		const fixture = createBrowseFixture({
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: (options) => launcher.launch({ ...options, timeout: 3000 }),
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: (options) => launcher.launch({ ...options, timeout: 3000 }) },
 		})
 		try {
 			await fixture.server.start()
@@ -1173,9 +1327,9 @@ describe('eager U7 real browse', () => {
 			const supported = refusal === undefined
 			context.skip(!supported, BROWSE_SIGSTOP_REASON)
 			const began = performance.now()
-			const answer = await fixture.pair.call(2, 'look', { search: 'page' })
+			const answer = await fixture.pair.call(2, 'read', { from: 1, search: 'page' })
 			expect(answer.error).toBe(false)
-			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+			expect(answer.text).toContain('SERVER_CRASH:')
 			await waitForProcessExit(pid)
 			expect(probeProcess(pid)).toBe(false)
 			await waitForCondition(
@@ -1196,26 +1350,28 @@ describe('eager U7 real browse', () => {
 		// Exit must follow the ping within half a deadline, before graceful teardown's command waits.
 		const timeout = 2000
 		const fixture = createBrowseFixture({
-			launch: (options) =>
-				launcher.launch(
-					launcher.browsers.length === 0
-						? {
-								...options,
-								executable: process.execPath,
-								args: [
-									fileURLToPath(new URL('../fixtures/hung/main.ts', import.meta.url)),
-									transcript,
-								],
-								timeout,
-							}
-						: { ...options, executable: requireSystemBrowser().executable },
-				),
+			pool: {
+				launch: (options) =>
+					launcher.launch(
+						launcher.browsers.length === 0
+							? {
+									...options,
+									executable: process.execPath,
+									args: [
+										fileURLToPath(new URL('../fixtures/hung/main.ts', import.meta.url)),
+										transcript,
+									],
+									timeout,
+								}
+							: { ...options, executable: requireSystemBrowser().executable },
+					),
+			},
 		})
 		try {
 			await fixture.server.start()
 			const pid = requireValue(launcher.browsers[0]?.pid, 'stand-in pid')
 			expect(probeProcess(pid)).toBe(true)
-			const pending = fixture.pair.call(2, 'tabs', { search: 'page' })
+			const pending = fixture.pair.call(2, 'read', { from: 1 })
 			const exited = waitForCondition(
 				'withheld per-call ping',
 				() =>
@@ -1230,14 +1386,14 @@ describe('eager U7 real browse', () => {
 			const [answer] = await Promise.all([pending, exited])
 			expect(probeProcess(pid)).toBe(false)
 			expect(answer.error).toBe(false)
-			expect(answer.text).toMatch(/^BROWSER_SERVER_CRASH:/)
+			expect(answer.text).toContain('SERVER_CRASH:')
 			expect(answer.text).toContain('about:blank')
 			const successor = requireValue(launcher.browsers[1]?.pid, 'successor pid')
 			expect(successor).not.toBe(pid)
 			expect(probeProcess(successor)).toBe(true)
-			const next = await fixture.pair.call(3, 'tabs', { search: 'page' })
+			const next = await fixture.pair.call(3, 'read', { from: 1 })
 			expect(next.error).toBe(false)
-			expect(next.text).not.toContain('BROWSER_SERVER_CRASH:')
+			expect(next.text).not.toContain('SERVER_CRASH:')
 			expect(launcher.browsers[1]?.pid).toBe(successor)
 		} finally {
 			await fixture.teardown.destroy()
@@ -1253,9 +1409,9 @@ describe('eager U6 real browse', () => {
 		const child = createEagerBrowseChild(scratch.path, executable)
 		const server = createBrowserMCPServer({
 			root: scratch.path,
-			executable,
 			stdio: new MCPStdioPair(),
 			log: new BrowseLog(),
+			browser: { executable },
 		})
 		let orphan: number | undefined
 		try {
@@ -1318,9 +1474,9 @@ describe('eager U6 real browse', () => {
 		const root = scratch.ensure('server')
 		const server = createBrowserMCPServer({
 			root,
-			executable,
 			stdio: new MCPStdioPair(),
 			log: new BrowseLog(),
+			browser: { executable },
 		})
 		try {
 			await browser.connect()
@@ -1337,7 +1493,8 @@ describe('eager U6 real browse', () => {
 				(listener) => {
 					browser.emitter.on('error', (error) => {
 						if (
-							isBrowserConnectionError(error) &&
+							isBrowserError(error) &&
+							error.code === 'CONNECTION' &&
 							error.context?.['cause'] === BROWSER_PROCESS_EXIT_CAUSE
 						)
 							listener()
@@ -1357,7 +1514,7 @@ describe('eager U6 real browse', () => {
 			scratch.destroy()
 		}
 	})
-	it('starts connected, keeps navigate and look on one pid, and tears down the floor', async () => {
+	it('starts connected, keeps navigate and read on one pid, and tears down the floor', async () => {
 		const scratch = createScratch()
 		const launcher = new BrowseLauncher()
 		const pair = new MCPStdioPair()
@@ -1369,11 +1526,10 @@ describe('eager U6 real browse', () => {
 		}
 		const server = createBrowserMCPServer({
 			root: scratch.path,
-			executable: requireSystemBrowser().executable,
-			pool: { size: 2 },
-			launch: launcher.launch,
 			stdio: pair,
 			log,
+			browser: { executable: requireSystemBrowser().executable },
+			pool: { size: 2, launch: launcher.launch },
 		})
 		const teardown = createTeardown()
 		teardown.add(() => scratch.destroy())
@@ -1389,7 +1545,7 @@ describe('eager U6 real browse', () => {
 			expect(probeProcess(pid)).toBe(true)
 			await pair.initialize()
 			expect((await pair.call(2, 'navigate', { url: fixture.url('/form') })).error).toBe(false)
-			expect((await pair.call(3, 'look', { search: 'button' })).error).toBe(false)
+			expect((await pair.call(3, 'read', { from: 1, search: 'button' })).error).toBe(false)
 			expect(launcher.browsers[0]?.pid).toBe(pid)
 			const spare = requireValue(launcher.browsers[1], 'spare')
 			await waitForCondition(
@@ -1440,21 +1596,21 @@ describe('eager U6 real browse', () => {
 		const log = new BrowseLog()
 		const server = createBrowserMCPServer({
 			root: scratch.path,
-			executable: join(scratch.path, 'missing.exe'),
-			launch: launcher.launch,
 			stdio: pair,
 			log,
+			browser: { executable: join(scratch.path, 'missing.exe') },
+			pool: { launch: launcher.launch },
 		})
 		try {
 			await expect(server.start()).rejects.toThrow('ENOENT')
 			expect(await pair.initialize()).toMatchObject({
 				code: -32000,
-				data: { code: 'BROWSER_SERVER_UNAVAILABLE' },
+				data: { code: 'SERVER_UNAVAILABLE' },
 			})
 			expect(launcher.browsers).toHaveLength(2)
 			expect(log.lines).toEqual([
-				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
-				expect.stringMatching(/^browse: BROWSER_SERVER_LAUNCH:.*ENOENT.*\n$/),
+				expect.stringMatching(/^browse: SERVER_LAUNCH:.*ENOENT.*\n$/),
+				expect.stringMatching(/^browse: SERVER_LAUNCH:.*ENOENT.*\n$/),
 			])
 			expect(readdirSync(join(scratch.path, '.profiles'))).toEqual([])
 		} finally {
@@ -1471,20 +1627,22 @@ describe('eager U6 real browse', () => {
 			const executable = requireSystemBrowser().executable
 			const server = createBrowserMCPServer({
 				root: scratch.path,
-				executable,
 				stdio: new MCPStdioPair(),
 				log: new BrowseLog(),
-				launch: (options) => {
-					const browser = createBrowser(options)
-					browsers.push(browser)
-					browser.emitter.on('connect', () =>
-						mkdirSync(join(requireValue(options.profile, 'profile'), blocked)),
-					)
-					return browser
+				browser: { executable },
+				pool: {
+					launch: (options) => {
+						const browser = createBrowser(options)
+						browsers.push(browser)
+						browser.emitter.on('connect', () =>
+							mkdirSync(join(requireValue(options.profile, 'profile'), blocked)),
+						)
+						return browser
+					},
 				},
 			})
 			try {
-				await expect(server.start()).rejects.toMatchObject({ code: 'BROWSER_SERVER_UNAVAILABLE' })
+				await expect(server.start()).rejects.toMatchObject({ code: 'SERVER_UNAVAILABLE' })
 				expect(browsers).toHaveLength(2)
 				expect(browsers.every((browser) => browser.pid === undefined)).toBe(true)
 				expect(readdirSync(join(scratch.path, '.profiles'))).toEqual([])

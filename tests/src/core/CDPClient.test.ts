@@ -1,14 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest'
-import { createCDPClient } from '@src/core'
+import { createCDPClient, isBrowserError } from '@src/core'
 import type { CDPClientInterface } from '@src/core'
-import {
-	isCDPError,
-	CDPError,
-	isCDPConnectionError,
-	isCDPTimeoutError,
-	CDPConnectionError,
-	CDPTimeoutError,
-} from '@src/core'
+
 import { getEventListeners } from 'node:events'
 import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
 import { createCDPTestTransport, replyOk } from '../../setup.js'
@@ -61,9 +54,9 @@ describe('CDPClient', () => {
 					budget: 1000,
 				})
 				await pending
-				expect(detached.calls[0]?.[0]).toBeInstanceOf(CDPConnectionError)
+				expect(detached.calls[0]?.[0]).toMatchObject({ name: 'BrowserError', code: 'DISCONNECTED' })
 				expect(detached.calls[0]?.[0]).toMatchObject({
-					code: 'BROWSER_CDP_CONNECTION_ERROR',
+					code: 'DISCONNECTED',
 					context: { method: 'WebMCP.disable', session: 'session-1' },
 				})
 				expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
@@ -101,7 +94,7 @@ describe('CDPClient', () => {
 					{ budget: 1000 },
 				)
 				await child
-				expect(detached.calls[0]?.[0]).toBeInstanceOf(CDPConnectionError)
+				expect(detached.calls[0]?.[0]).toMatchObject({ name: 'BrowserError', code: 'DISCONNECTED' })
 				expect(detached.calls[0]?.[0]).toMatchObject({
 					context: { method: 'WebMCP.disable', session: 'child' },
 				})
@@ -155,7 +148,7 @@ describe('CDPClient', () => {
 			await expect(client.send('Bad.method')).rejects.toThrow('boom')
 		})
 
-		it('rejects with a CDPError carrying method/code/message/data on a CDP error response', async () => {
+		it('rejects with a BrowserError carrying method/code/message/data on a CDP error response', async () => {
 			await client.connect()
 			transport.onSend('Bad.method', (message) => {
 				transport.emitter.emit(
@@ -168,11 +161,21 @@ describe('CDPClient', () => {
 			})
 
 			const thrown: unknown = await client.send('Bad.method').catch((caught: unknown) => caught)
-			expect(isCDPError(thrown)).toBe(true)
-			expect(thrown instanceof CDPError ? thrown.context?.['method'] : undefined).toBe('Bad.method')
-			expect(thrown instanceof CDPError ? thrown.context?.['code'] : undefined).toBe(-32000)
-			expect(thrown instanceof CDPError ? thrown.context?.['message'] : undefined).toBe('boom')
-			expect(thrown instanceof CDPError ? thrown.context?.['data'] : undefined).toBe('extra')
+			expect(isBrowserError(thrown) && thrown.code === 'REMOTE').toBe(true)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'REMOTE' ? thrown.context?.['method'] : undefined,
+			).toBe('Bad.method')
+			expect(
+				isBrowserError(thrown) && thrown.code === 'REMOTE' ? thrown.context?.['code'] : undefined,
+			).toBe(-32000)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'REMOTE'
+					? thrown.context?.['message']
+					: undefined,
+			).toBe('boom')
+			expect(
+				isBrowserError(thrown) && thrown.code === 'REMOTE' ? thrown.context?.['data'] : undefined,
+			).toBe('extra')
 		})
 
 		it('rejects immediately without leaking a pending timer when params are not serializable', async () => {
@@ -196,17 +199,19 @@ describe('CDPClient', () => {
 			await expect(client.send('Target.getTargets')).rejects.toThrow('not connected')
 		})
 
-		it('rejects with a coded CDPConnectionError when not connected', async () => {
+		it('rejects with a coded BrowserError when not connected', async () => {
 			const thrown: unknown = await client
 				.send('Target.getTargets')
 				.catch((caught: unknown) => caught)
-			expect(isCDPConnectionError(thrown)).toBe(true)
-			expect(thrown instanceof CDPConnectionError ? thrown.code : undefined).toBe(
-				'BROWSER_CDP_CONNECTION_ERROR',
-			)
-			expect(thrown instanceof CDPConnectionError ? thrown.context?.['method'] : undefined).toBe(
-				'Target.getTargets',
-			)
+			expect(isBrowserError(thrown) && thrown.code === 'DISCONNECTED').toBe(true)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'DISCONNECTED' ? thrown.code : undefined,
+			).toBe('DISCONNECTED')
+			expect(
+				isBrowserError(thrown) && thrown.code === 'DISCONNECTED'
+					? thrown.context?.['method']
+					: undefined,
+			).toBe('Target.getTargets')
 		})
 
 		it('times out a pending request', async () => {
@@ -216,7 +221,7 @@ describe('CDPClient', () => {
 			await expect(timedClient.send('Never.replies')).rejects.toThrow('timed out')
 		})
 
-		it('rejects a timed-out request with a coded CDPTimeoutError carrying method/timeout', async () => {
+		it('rejects a timed-out request with a coded BrowserError carrying method/timeout', async () => {
 			const timedClient = createCDPClient({ transport, timeout: 20 })
 			await timedClient.connect()
 
@@ -224,11 +229,17 @@ describe('CDPClient', () => {
 				.send('Never.replies')
 				.catch((caught: unknown) => caught)
 
-			expect(isCDPTimeoutError(thrown)).toBe(true)
-			expect(thrown instanceof CDPTimeoutError ? thrown.context?.['method'] : undefined).toBe(
-				'Never.replies',
-			)
-			expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
+			expect(isBrowserError(thrown) && thrown.code === 'TIMEOUT').toBe(true)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'TIMEOUT'
+					? thrown.context?.['method']
+					: undefined,
+			).toBe('Never.replies')
+			expect(
+				isBrowserError(thrown) && thrown.code === 'TIMEOUT'
+					? thrown.context?.['timeout']
+					: undefined,
+			).toBe(20)
 		})
 
 		it('uses a per-call timeout that overrides the client-wide default', async () => {
@@ -241,8 +252,12 @@ describe('CDPClient', () => {
 				.catch((caught: unknown) => caught)
 			const elapsed = performance.now() - started
 
-			expect(isCDPTimeoutError(thrown)).toBe(true)
-			expect(thrown instanceof CDPTimeoutError ? thrown.context?.['timeout'] : undefined).toBe(20)
+			expect(isBrowserError(thrown) && thrown.code === 'TIMEOUT').toBe(true)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'TIMEOUT'
+					? thrown.context?.['timeout']
+					: undefined,
+			).toBe(20)
 			// The 10s client-wide default never bounded this call.
 			expect(elapsed).toBeLessThan(1_000)
 		})
@@ -305,7 +320,7 @@ describe('CDPClient', () => {
 				await expect(sent).rejects.toBe(reason)
 				transport.reply(id ?? 0, { late: true })
 				await expect(sent).rejects.toBe(reason)
-				expect(isCDPTimeoutError(await caught)).toBe(false)
+				expect(await caught).not.toMatchObject({ code: 'TIMEOUT' })
 				expect(errors.calls).toEqual([])
 			} finally {
 				hook.disable()
@@ -337,15 +352,17 @@ describe('CDPClient', () => {
 	})
 
 	describe('test transport fail()', () => {
-		it('writes a numeric code into the CDPError context', async () => {
+		it('writes a numeric code into the BrowserError context', async () => {
 			await client.connect()
 			const pending = client.send('Missing.method').catch((thrown: unknown) => thrown)
 			await waitForDelay(0)
 			transport.fail(transport.sent[0]?.id ?? 0, 'not found', -32601)
 
 			const thrown = await pending
-			expect(isCDPError(thrown)).toBe(true)
-			expect(thrown instanceof CDPError ? thrown.context?.['code'] : undefined).toBe(-32601)
+			expect(isBrowserError(thrown) && thrown.code === 'REMOTE').toBe(true)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'REMOTE' ? thrown.context?.['code'] : undefined,
+			).toBe(-32601)
 		})
 	})
 
@@ -501,17 +518,17 @@ describe('CDPClient', () => {
 			expect(client.connected).toBe(false)
 		})
 
-		it('rejects pending requests with a coded CDPConnectionError on close', async () => {
+		it('rejects pending requests with a coded BrowserError on close', async () => {
 			await client.connect()
 			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
 
 			await client.close()
 
 			const thrown = await pending
-			expect(isCDPConnectionError(thrown)).toBe(true)
-			expect(thrown instanceof CDPConnectionError ? thrown.code : undefined).toBe(
-				'BROWSER_CDP_CONNECTION_ERROR',
-			)
+			expect(isBrowserError(thrown) && thrown.code === 'DISCONNECTED').toBe(true)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'DISCONNECTED' ? thrown.code : undefined,
+			).toBe('DISCONNECTED')
 		})
 
 		it('is idempotent when not connected', async () => {
@@ -524,14 +541,14 @@ describe('CDPClient', () => {
 			expect(client.connected).toBe(false)
 		})
 
-		it('rejects pending requests with a coded CDPConnectionError when the transport emits close', async () => {
+		it('rejects pending requests with a coded BrowserError when the transport emits close', async () => {
 			await client.connect()
 			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
 
 			transport.closeRemote()
 
 			const thrown = await pending
-			expect(isCDPConnectionError(thrown)).toBe(true)
+			expect(isBrowserError(thrown) && thrown.code === 'DISCONNECTED').toBe(true)
 		})
 
 		it('rejects pending requests and closes the transport after a transport error', async () => {
@@ -541,7 +558,7 @@ describe('CDPClient', () => {
 			transport.errorRemote(new Error('socket failed'))
 
 			const thrown = await pending
-			expect(isCDPConnectionError(thrown)).toBe(true)
+			expect(isBrowserError(thrown) && thrown.code === 'DISCONNECTED').toBe(true)
 			expect(client.connected).toBe(false)
 
 			await client.close()
@@ -560,10 +577,10 @@ describe('CDPClient', () => {
 			const thrown = await connecting
 			await closing
 
-			expect(isCDPConnectionError(thrown)).toBe(true)
-			expect(thrown instanceof CDPConnectionError ? thrown.message : undefined).toBe(
-				'CDP client was closed while connecting',
-			)
+			expect(isBrowserError(thrown) && thrown.code === 'DISCONNECTED').toBe(true)
+			expect(
+				isBrowserError(thrown) && thrown.code === 'DISCONNECTED' ? thrown.message : undefined,
+			).toBe('CDP client was closed while connecting')
 			expect(client.connected).toBe(false)
 			expect(transport.closed).toBe(true)
 			expect(close.count).toBe(1)
@@ -602,15 +619,24 @@ describe('CDPClient', () => {
 			expect(close.count).toBe(0)
 		})
 
-		it('reports the transport fault on error', async () => {
+		it('reports the transport fault and gives pending requests JSON context', async () => {
 			const errors = createRecorder<[error: unknown]>()
 			client.emitter.on('error', errors.handler)
 			await client.connect()
 			const fault = new Error('socket failed')
+			const pending = client.send('Pending.method').catch((error: unknown) => error)
+			await waitForCondition('the request was sent', () =>
+				transport.sent.some((message) => message.method === 'Pending.method'),
+			)
 
 			transport.errorRemote(fault)
 
 			expect(errors.calls).toEqual([[fault]])
+			expect(await pending).toMatchObject({
+				name: 'BrowserError',
+				code: 'DISCONNECTED',
+				context: { method: 'Pending.method', error: 'Error: socket failed' },
+			})
 		})
 
 		it('wires the listeners supplied at construction', async () => {

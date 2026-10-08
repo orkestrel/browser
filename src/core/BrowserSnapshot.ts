@@ -6,7 +6,7 @@ import type {
 	BrowserSiblingRelation,
 	BrowserSnapshotInput,
 	BrowserSnapshotInterface,
-	BrowserWalkOptions,
+	BrowserTraversalOptions,
 } from './types.js'
 import { isInteger } from '@orkestrel/contract'
 import { BrowserError } from './errors.js'
@@ -34,13 +34,9 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		this.styles = Object.freeze([...input.styles])
 	}
 
-	walk(options?: BrowserWalkOptions): Generator<BrowserNode, void, unknown> {
-		return options?.order === 'breadth' ? this.#breadth(options.root) : this.#depth(options?.root)
-	}
-
 	*descendants(node: BrowserNode): Generator<BrowserNode, void, unknown> {
 		let first = true
-		for (const descendant of this.#depth(node)) {
+		for (const descendant of this.depth({ root: node })) {
 			if (first) {
 				first = false
 				continue
@@ -118,7 +114,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 	}
 
 	find(query: BrowserNodeQuery | BrowserNodePredicate): BrowserNode | undefined {
-		for (const node of this.walk()) {
+		for (const node of this.depth()) {
 			if (this.#match(node, query)) return node
 		}
 		return undefined
@@ -127,8 +123,8 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 	filter(query: BrowserNodeQuery | BrowserNodePredicate, limit?: number): readonly BrowserNode[] {
 		if (limit !== undefined && (!isInteger(limit) || limit < 0)) {
 			throw new BrowserError(
+				'ARGUMENT',
 				'Browser node result limit must be a non-negative integer',
-				undefined,
 				{
 					limit,
 				},
@@ -136,7 +132,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		}
 		if (limit === 0) return []
 		const found: BrowserNode[] = []
-		for (const node of this.walk()) {
+		for (const node of this.depth()) {
 			if (!this.#match(node, query)) continue
 			found.push(node)
 			if (limit !== undefined && found.length >= limit) break
@@ -194,14 +190,15 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		const owners = this.#owners
 		if (owners !== undefined) return owners.get(document)
 		const index = new Map<number, BrowserNode>()
-		for (const node of this.walk()) {
+		for (const node of this.depth()) {
 			if (node.content !== undefined && !index.has(node.content)) index.set(node.content, node)
 		}
 		this.#owners = index
 		return index.get(document)
 	}
 
-	*#depth(root?: BrowserNode): Generator<BrowserNode, void, unknown> {
+	*depth(options?: BrowserTraversalOptions): Generator<BrowserNode, void, unknown> {
+		const root = options?.root
 		const visited = new Set<string>()
 		for (const seed of root === undefined ? this.#roots() : [root]) {
 			const stack: BrowserNode[] = [seed]
@@ -222,7 +219,8 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		}
 	}
 
-	*#breadth(root?: BrowserNode): Generator<BrowserNode, void, unknown> {
+	*breadth(options?: BrowserTraversalOptions): Generator<BrowserNode, void, unknown> {
+		const root = options?.root
 		const visited = new Set<string>()
 		for (const seed of root === undefined ? this.#roots() : [root]) {
 			const queue: BrowserNode[] = [seed]

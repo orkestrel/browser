@@ -1,7 +1,6 @@
 import type {
 	BrowserBindingHandler,
 	BrowserFrameInterface,
-	BrowserScriptEntry,
 	BrowserScriptManagerInterface,
 } from './types.js'
 import {
@@ -16,19 +15,18 @@ import { BrowserError } from './errors.js'
 /**
  * Installs new-document scripts and promise-based host functions for one page.
  *
- * @example
- * ```ts
- * import { BrowserScriptManager } from '@orkestrel/browser'
- *
- * const scripts = new BrowserScriptManager(page)
- * const id = await scripts.add('window.__ready = true')
- * await scripts.remove(id)
- * ```
+ * @remarks The owner exposes this entity through `page.scripts`.
  */
 export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	readonly #frame: BrowserFrameInterface
 	readonly #bindings: Map<string, BrowserBindingHandler> = new Map()
-	readonly #scripts: Map<string, BrowserScriptEntry> = new Map()
+	readonly #scripts: Map<
+		string,
+		{
+			readonly source: string
+			readonly binding: string | undefined
+		}
+	> = new Map()
 	#subscribed = false
 	#destroyed = false
 	readonly #bindingHandler = this.#handleBinding.bind(this)
@@ -65,15 +63,15 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 		this.#assert()
 		if (!/^[$A-Z_a-z][$\w]*$/.test(name)) {
 			throw new BrowserError(
+				'ARGUMENT',
 				'Browser binding name must be a valid JavaScript identifier',
-				undefined,
 				{
 					name,
 				},
 			)
 		}
 		if (this.#bindings.has(name)) {
-			throw new BrowserError('Browser binding already exists', undefined, { name })
+			throw new BrowserError('ARGUMENT', 'Browser binding already exists', { name })
 		}
 		const subscribed = this.#subscribed
 		if (!subscribed) {
@@ -87,7 +85,7 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 			const id = await this.add(compileBrowserBindingSource(name))
 			const entry = this.#scripts.get(id)
 			if (entry === undefined) {
-				throw new BrowserError('Browser binding script registration was lost', undefined, {
+				throw new BrowserError('PROTOCOL', 'Browser binding script registration was lost', {
 					name,
 				})
 			}
@@ -163,6 +161,6 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 	}
 
 	#assert(): void {
-		if (this.#destroyed) throw new BrowserError('Browser script manager is destroyed')
+		if (this.#destroyed) throw new BrowserError('CLOSED', 'Browser script manager is destroyed')
 	}
 }

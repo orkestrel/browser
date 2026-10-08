@@ -15,14 +15,7 @@ import { BrowserTracing } from './BrowserTracing.js'
 /**
  * Groups the tracing, coverage, performance, and profiler classes beneath one page.
  *
- * @example
- * ```ts
- * import { BrowserDiagnostics } from '@orkestrel/browser'
- *
- * const diagnostics = new BrowserDiagnostics(page)
- * const metrics = await diagnostics.performance.metrics()
- * await diagnostics.destroy()
- * ```
+ * @remarks The owner exposes this entity through `page.diagnostics`.
  */
 export class BrowserDiagnostics implements BrowserDiagnosticsInterface {
 	readonly #tracing: BrowserTracing

@@ -15,14 +15,7 @@ import {
 /**
  * Sends trusted mouse input through Chromium's CDP Input domain.
  *
- * @example
- * ```ts
- * import { BrowserMouse } from '@orkestrel/browser'
- *
- * const mouse = new BrowserMouse(page)
- * await mouse.click({ x: 50, y: 20 }, { button: 'left', count: 2 })
- * await mouse.drag({ x: 10, y: 10 }, { x: 90, y: 90 }, { steps: 20 })
- * ```
+ * @remarks The owner exposes this entity through `page.mouse`.
  */
 export class BrowserMouse implements BrowserMouseInterface {
 	readonly #frame: BrowserFrameInterface
