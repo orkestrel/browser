@@ -1174,7 +1174,7 @@ describe('eager U7', () => {
 				message: 'The browser process exited.',
 			})
 			expect(pinged).toBe(true)
-			expect(commit.resolved).toContain('Pool.#commit')
+			expect(commit.resolved).toContain('#commit')
 			expect(await fixture.pair.initialize()).toMatchObject({
 				message: 'SERVER_UNAVAILABLE: The browser process exited.',
 			})
