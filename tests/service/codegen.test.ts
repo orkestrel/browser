@@ -80,6 +80,13 @@ describe('claim 12: page recorder against the fixture event log', () => {
 		await page.keyboard.press('Enter')
 		await page.evaluate("document.querySelector('#search').focus()")
 		await page.keyboard.press('Enter')
+		await waitForCondition('the search submission commits in the sink frame', async () =>
+			(await page.frames()).some(
+				(frame) =>
+					frame.name === 'sink' &&
+					frame.url === 'http://127.0.0.1:' + server.port + '/sink?search=kettle',
+			),
+		)
 		await page.evaluate("document.querySelector('#speed').focus()")
 		await page.keyboard.press('ArrowDown')
 		await page.keyboard.down('Control')
