@@ -118,7 +118,7 @@
 		"@microsoft/api-extractor": "^7.59.4",
 		"@orkestrel/guide": "^0.0.24",
 		"@orkestrel/probe": "^0.0.24",
-		"@orkestrel/scaffold": "^0.0.104",
+		"@orkestrel/scaffold": "^0.0.107",
 		"@orkestrel/test": "^0.0.28",
 		"@types/node": "^24.19.2",
 		"@vitest/browser-playwright": "^4.1.12",
