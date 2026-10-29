@@ -97,7 +97,7 @@
 		"test:distribution": "vitest run --config vite.config.ts --no-cache --reporter=dot --project distribution",
 		"test:service": "vitest run --config vite.config.ts --no-cache --reporter=dot --project service",
 		"test:probe": "vitest run --config vite.config.ts --no-cache --reporter=verbose --project probe",
-		"test:bench": "vitest bench --config vite.config.ts --no-cache --project probe",
+		"test:bench": "vitest bench --config vite.config.ts --no-cache --project \"probe (bench)\" --mode benchmark",
 		"test:setup": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup",
 		"test:setup:browser": "vitest run --config vite.config.ts --no-cache --reporter=dot --project setup:browser"
 	},
