@@ -1,6 +1,6 @@
 {
 	"name": "@orkestrel/browser",
-	"version": "0.0.29",
+	"version": "0.0.30",
 	"description": "Chrome DevTools Protocol browser automation with an environment-agnostic core. Part of the @orkestrel line.",
 	"keywords": [
 		"automation",
@@ -109,6 +109,7 @@
 		"@orkestrel/markdown": "^0.0.18",
 		"@orkestrel/mcp": "^0.0.40",
 		"@orkestrel/pool": "^0.0.18",
+		"@orkestrel/process": "^0.0.16",
 		"@orkestrel/router": "^0.0.18",
 		"@orkestrel/server": "^0.0.24",
 		"@orkestrel/tool": "^0.0.20",
