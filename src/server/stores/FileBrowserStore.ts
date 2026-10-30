@@ -1,5 +1,6 @@
 import type { BrowserStoreOptions, BrowserStorePage, BrowserStoreFault } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
+import type { FileHandle } from 'node:fs/promises'
 import { realpathSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
@@ -74,26 +75,31 @@ export class FileBrowserStore {
 	 */
 	async check(path: string, options?: BrowserStoreOptions): Promise<boolean> {
 		this.resolvePath(path)
-		let current = this.#root
 		const parts = relative(this.#root, path).split(sep).filter(Boolean)
-		for (let index = 0; index <= parts.length; index += 1) {
-			options?.signal?.throwIfAborted()
-			try {
-				const status = await lstat(current)
+		const checked = await [undefined, ...parts].reduce(
+			async (previous, part, index) => {
+				const ancestor = await previous
+				if (!ancestor.exists) return ancestor
+				const current = part === undefined ? ancestor.path : this.resolvePath(ancestor.path, part)
 				options?.signal?.throwIfAborted()
-				if (status.isSymbolicLink())
-					throw new BrowserError('STORE_PATH', `Refused symbolic link: ${current}`)
-				if (index < parts.length && !status.isDirectory())
-					throw new BrowserError('STORE_PATH', `Not a directory: ${current}`)
-			} catch (error) {
-				options?.signal?.throwIfAborted()
-				if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return false
-				throw this.translateError(current, error)
-			}
-			const part = parts[index]
-			if (part !== undefined) current = this.resolvePath(current, part)
-		}
-		return true
+				try {
+					const status = await lstat(current)
+					options?.signal?.throwIfAborted()
+					if (status.isSymbolicLink())
+						throw new BrowserError('STORE_PATH', `Refused symbolic link: ${current}`)
+					if (index < parts.length && !status.isDirectory())
+						throw new BrowserError('STORE_PATH', `Not a directory: ${current}`)
+				} catch (error) {
+					options?.signal?.throwIfAborted()
+					if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+						return { path: current, exists: false }
+					throw this.translateError(current, error)
+				}
+				return { path: current, exists: true }
+			},
+			Promise.resolve({ path: this.#root, exists: true }),
+		)
+		return checked.exists
 	}
 
 	/** Creates checked directories one component at a time. @param path - Directory @param options - Cancellation options */
@@ -133,44 +139,66 @@ export class FileBrowserStore {
 		options?: BrowserStoreOptions,
 	): Promise<void> {
 		const temporary = this.resolvePath(dirname(path), `.${randomUUID()}.tmp`)
-		let owned = false
+		const file = await this.#openTemporary(path, temporary, options)
+		try {
+			await this.#commitTemporary(file, path, temporary, value, options)
+		} catch (error) {
+			try {
+				options?.signal?.throwIfAborted()
+				throw this.translateError(path, error)
+			} finally {
+				await this.remove(temporary)
+			}
+		}
+	}
+
+	async #openTemporary(
+		path: string,
+		temporary: string,
+		options?: BrowserStoreOptions,
+	): Promise<FileHandle> {
 		try {
 			await this.check(path, options)
 			await this.check(temporary, options)
 			options?.signal?.throwIfAborted()
-			const file = await open(temporary, 'wx')
-			owned = true
-			try {
-				options?.signal?.throwIfAborted()
-				await file.writeFile(value, { signal: options?.signal })
-			} finally {
-				await file.close()
-			}
-			await this.check(path, options)
-			await this.check(temporary, options)
-			options?.signal?.throwIfAborted()
-			try {
-				await rename(temporary, path)
-			} catch (error) {
-				// A file cannot replace a directory: hosts report EISDIR or EPERM.
-				const target = await lstat(path).catch(() => undefined)
-				if (
-					error instanceof Error &&
-					'code' in error &&
-					(error.code === 'EISDIR' || error.code === 'EPERM') &&
-					target?.isDirectory()
-				)
-					throw new BrowserError('STORE_FILE', `Cannot replace directory: ${path}`, {
-						path,
-					})
-				throw error
-			}
-			owned = false
+			return await open(temporary, 'wx')
 		} catch (error) {
 			options?.signal?.throwIfAborted()
 			throw this.translateError(path, error)
+		}
+	}
+
+	async #commitTemporary(
+		file: FileHandle,
+		path: string,
+		temporary: string,
+		value: string | Uint8Array,
+		options?: BrowserStoreOptions,
+	): Promise<void> {
+		try {
+			options?.signal?.throwIfAborted()
+			await file.writeFile(value, { signal: options?.signal })
 		} finally {
-			if (owned) await this.remove(temporary)
+			await file.close()
+		}
+		await this.check(path, options)
+		await this.check(temporary, options)
+		options?.signal?.throwIfAborted()
+		try {
+			await rename(temporary, path)
+		} catch (error) {
+			// A file cannot replace a directory: hosts report EISDIR or EPERM.
+			const target = await lstat(path).catch(() => undefined)
+			if (
+				error instanceof Error &&
+				'code' in error &&
+				(error.code === 'EISDIR' || error.code === 'EPERM') &&
+				target?.isDirectory()
+			)
+				throw new BrowserError('STORE_FILE', `Cannot replace directory: ${path}`, {
+					path,
+				})
+			throw error
 		}
 	}
 
@@ -218,45 +246,45 @@ export class FileBrowserStore {
 		await this.createDirectory(dirname(path), options)
 		const name = formatBrowserLockEntry(process.pid, randomUUID())
 		const entry = this.resolvePath(path, name)
-		for (let attempt = 0; attempt < BROWSER_JOURNEY_LOCK_ATTEMPTS; attempt += 1) {
-			await this.check(path, options)
+		for (const lock of Array.from({ length: BROWSER_JOURNEY_LOCK_ATTEMPTS }, () => path)) {
+			await this.check(lock, options)
 			options?.signal?.throwIfAborted()
 			try {
-				await mkdir(path)
+				await mkdir(lock)
 			} catch (error) {
 				if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST'))
-					throw this.translateError(path, error)
-				const entries = await this.#readLock(path, options)
+					throw this.translateError(lock, error)
+				const entries = await this.#readLock(lock, options)
 				if (entries === undefined) continue
 				if (entries.length > 1) break
 				const holder = entries[0]
 				if (holder !== undefined) {
 					const pid = parseBrowserLockEntry(holder)
 					if (pid === undefined || probeProcess(pid)) break
-					if (!(await this.#unlinkLock(this.resolvePath(path, holder)))) continue
+					if (!(await this.#unlinkLock(this.resolvePath(lock, holder)))) continue
 				}
-				await this.#removeLock(path)
+				await this.#removeLock(lock)
 				continue
 			}
-			let owned = false
+			const cleanup: Array<() => Promise<boolean>> = []
 			try {
 				await this.check(entry, options)
 				try {
 					const file = await open(entry, 'wx')
-					owned = true
+					cleanup.push(this.#unlinkLock.bind(this, entry))
 					await file.close()
 				} catch (error) {
 					if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue
 					throw this.translateError(entry, error)
 				}
 				// An empty directory can be replaced between mkdir and entry creation.
-				const entries = await this.#readLock(path, options)
+				const entries = await this.#readLock(lock, options)
 				if (entries?.length !== 1 || entries[0] !== name) break
 				options?.signal?.throwIfAborted()
 				return await action()
 			} finally {
-				if (owned) await this.#unlinkLock(entry)
-				await this.#removeLock(path)
+				for (const release of cleanup) await release()
+				await this.#removeLock(lock)
 			}
 		}
 		throw new BrowserError('STORE_LOCKED', `Journey is locked: ${path}`)
@@ -281,23 +309,19 @@ export class FileBrowserStore {
 		const entries: T[] = []
 		const faults: BrowserStoreFault[] = []
 		if (!(await this.check(path, options))) return { entries, faults, truncated: false }
-		let names: string[]
-		try {
-			options?.signal?.throwIfAborted()
-			names = (await readdir(path)).sort()
-		} catch (error) {
-			options?.signal?.throwIfAborted()
-			throw this.translateError(path, error)
-		}
-		let count = 0
+		const names = await this.#readNames(path, options)
 		for (const name of names) {
 			options?.signal?.throwIfAborted()
 			try {
 				const entry = await reader(name)
 				if (entry === undefined) continue
-				if (count++ < offset) continue
-				if (entries.length === limit) return { entries, faults, truncated: true }
 				entries.push(entry)
+				if (entries.length > offset + limit)
+					return {
+						entries: entries.filter((_entry, index) => index >= offset && index < offset + limit),
+						faults,
+						truncated: true,
+					}
 			} catch (error) {
 				options?.signal?.throwIfAborted()
 				const reason = error instanceof BrowserError ? error.context?.['reason'] : undefined
@@ -316,7 +340,17 @@ export class FileBrowserStore {
 				})
 			}
 		}
-		return { entries, faults, truncated: false }
+		return { entries: entries.filter((_entry, index) => index >= offset), faults, truncated: false }
+	}
+
+	async #readNames(path: string, options?: BrowserStoreOptions): Promise<readonly string[]> {
+		try {
+			options?.signal?.throwIfAborted()
+			return (await readdir(path)).sort()
+		} catch (error) {
+			options?.signal?.throwIfAborted()
+			throw this.translateError(path, error)
+		}
 	}
 
 	/**

@@ -20,7 +20,15 @@ import type {
 } from '@src/core'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import { addAbortListener, once } from 'node:events'
-import { isArray, isError, isInteger, isRecord, isString, isJSONValue } from '@orkestrel/contract'
+import {
+	attempt,
+	isArray,
+	isError,
+	isInteger,
+	isRecord,
+	isString,
+	isJSONValue,
+} from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
 	BrowserContext,
@@ -36,7 +44,6 @@ import {
 	BROWSER_CDP_VERSION_PATH,
 	BROWSER_DEFAULT_CDP_PORT,
 	BROWSER_DEFAULT_HOST,
-	BROWSER_DRAIN_INTERVAL_MS,
 	BROWSER_KILL_GRACE_MS,
 	BROWSER_PORT_PROBE_TIMEOUT_MS,
 	BROWSER_PROCESS_EXIT_CAUSE,
@@ -52,6 +59,7 @@ import {
 	readBrowserEndpoint,
 	removeBrowserProfile,
 } from './helpers.js'
+import { BrowserProcessDrain } from './BrowserProcessDrain.js'
 import { createWebSocketCDPTransport, createFileBrowserWriter } from './factories.js'
 
 // === Browser
@@ -210,12 +218,12 @@ export class Browser implements BrowserInterface {
 	}
 
 	async isolate(options?: BrowserIsolateOptions): Promise<BrowserContextInterface> {
-		const attempt = this.#isolate(options)
-		this.#isolating.add(attempt)
+		const pending = this.#isolate(options)
+		this.#isolating.add(pending)
 		try {
-			return await attempt
+			return await pending
 		} finally {
-			this.#isolating.delete(attempt)
+			this.#isolating.delete(pending)
 		}
 	}
 
@@ -227,18 +235,20 @@ export class Browser implements BrowserInterface {
 			throw new BrowserError('DISCONNECTED', 'Browser is not connected')
 		}
 
-		let context = this.#contexts[0]
-		if (context === undefined) {
-			context = new BrowserContext(client, {
-				...(this.#options.viewport === undefined ? {} : { viewport: this.#options.viewport }),
-				writer: createFileBrowserWriter(),
-			})
-			this.#registerContext(context)
-		}
+		const context = this.#contexts[0] ?? this.#defaultContext(client)
 
 		const page = await context.create(options)
 		this.#emitter.emit('page', page)
 		return page
+	}
+
+	#defaultContext(client: CDPClient): BrowserContext {
+		const context = new BrowserContext(client, {
+			...(this.#options.viewport === undefined ? {} : { viewport: this.#options.viewport }),
+			writer: createFileBrowserWriter(),
+		})
+		this.#registerContext(context)
+		return context
 	}
 
 	destroy(): Promise<void> {
@@ -644,19 +654,16 @@ export class Browser implements BrowserInterface {
 		}
 
 		const requestedEngine = this.#options.browsers?.engine
-		let executable = this.#options.executable
-		let resolvedEngine: BrowserEngine | undefined
-
-		if (executable !== undefined) {
-			resolvedEngine = parseBrowserEngine(executable) ?? 'chromium'
-		} else {
-			const found = findSystemBrowsers({
-				...this.#options.browsers,
-				...(requestedEngine !== undefined ? { engine: requestedEngine } : {}),
-			})[0]
-			executable = found?.executable
-			resolvedEngine = found?.engine
-		}
+		const supplied = this.#options.executable
+		const selected =
+			supplied === undefined
+				? findSystemBrowsers({
+						...this.#options.browsers,
+						...(requestedEngine !== undefined ? { engine: requestedEngine } : {}),
+					})[0]
+				: { executable: supplied, engine: parseBrowserEngine(supplied) ?? 'chromium' }
+		const executable = selected?.executable
+		const resolvedEngine = selected?.engine
 
 		if (executable === undefined) {
 			throw new BrowserError(
@@ -670,27 +677,29 @@ export class Browser implements BrowserInterface {
 		await this.#releaseProfile()
 		const profile = await createBrowserProfile(this.#options.profile)
 		this.#profile = profile
-		let process: ChildProcess
-		try {
-			process = launchBrowserProcess(
+		const launched = attempt(() =>
+			launchBrowserProcess(
 				executable,
 				this.#options.cdp?.port,
 				this.#options.headless ?? true,
 				profile.path,
 				this.#options.args,
-			)
-		} catch (error) {
+			),
+		)
+		if (!launched.success) {
 			await this.#releaseProfile()
-			throw error
+			throw launched.error
 		}
+		const process = launched.value
 		this.#process = process
 
-		let client: CDPClient | undefined
+		const cleanup: Array<() => Promise<void>> = []
 
 		try {
 			const endpoint = await this.#waitForLaunch(process, executable, this.#options.args)
 			const transport = createWebSocketCDPTransport({ url: endpoint, timeout: this.#timeout() })
-			client = new CDPClient({ transport, timeout: this.#timeout() })
+			const client = new CDPClient({ transport, timeout: this.#timeout() })
+			cleanup.push(this.#closeClient.bind(this, client))
 			await this.#raceAbort(client.connect())
 			await this.#takeEndpointOwner(process, client)
 
@@ -709,7 +718,7 @@ export class Browser implements BrowserInterface {
 		} catch (error) {
 			this.#unbindTransport()
 			this.#unbindProcess()
-			await this.#closeClient(client)
+			for (const release of cleanup) await release()
 			await this.#terminate(process)
 			await this.#releaseProfile()
 			this.#process = undefined
@@ -737,21 +746,17 @@ export class Browser implements BrowserInterface {
 	async #takeEndpointOwner(process: ChildProcess, client: CDPClient): Promise<void> {
 		if (process.exitCode === null && process.signalCode === null) return
 
-		let result: unknown
-		try {
-			result = await client.send('SystemInfo.getProcessInfo')
-		} catch {
-			result = undefined
-		}
-
-		let pid: number | undefined
-		if (isRecord(result) && isArray(result['processInfo'])) {
-			for (const entry of result['processInfo']) {
-				if (!isRecord(entry) || entry['type'] !== 'browser' || !isInteger(entry['id'])) continue
-				pid = entry['id']
-				break
-			}
-		}
+		const result = await client.send('SystemInfo.getProcessInfo').catch(() => undefined)
+		const pid =
+			isRecord(result) && isArray(result['processInfo'])
+				? Iterator.from(result['processInfo'])
+						.map((entry) =>
+							isRecord(entry) && entry['type'] === 'browser' && isInteger(entry['id'])
+								? entry['id']
+								: undefined,
+						)
+						.find((id) => id !== undefined)
+				: undefined
 
 		if (pid === undefined) {
 			await this.#closeRemote(client)
@@ -858,12 +863,7 @@ export class Browser implements BrowserInterface {
 		const client = this.#client
 		if (client === undefined) return
 
-		let result: unknown
-		try {
-			result = await client.send('Target.getTargets')
-		} catch {
-			return
-		}
+		const result = await client.send('Target.getTargets').catch(() => undefined)
 		if (!isRecord(result) || !isArray(result['targetInfos'])) return
 
 		const pages: CDPTarget[] = []
@@ -895,71 +895,74 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #destroyResources(): Promise<void> {
-		let terminated = false
 		try {
-			await this.#settle()
-			this.#unbindTransport()
-			this.#unbindProcess()
-
-			const client = this.#client
-			if (this.#owned === true) {
-				await this.#closeContexts()
-				if (this.#process === undefined) await this.#closeRemote(client)
-			} else {
-				await this.#destroyContexts()
-			}
-			this.#contexts = []
-
-			await this.#terminate(this.#process)
-			this.#process = undefined
-			this.#servingPid = undefined
-			terminated = true
-		} finally {
-			const contexts = this.#contexts
-			this.#contexts = []
-			const client = this.#client
-			this.#client = undefined
-			try {
-				await this.#cleanupLocal(contexts, client)
-				if (terminated) await this.#releaseProfile()
-			} finally {
-				this.#finish()
-			}
+			await this.#destroySession()
+		} catch (error) {
+			await this.#finishResources(false)
+			throw error
 		}
+		await this.#finishResources(true)
+	}
+
+	async #destroySession(): Promise<void> {
+		await this.#settle()
+		this.#unbindTransport()
+		this.#unbindProcess()
+
+		const client = this.#client
+		if (this.#owned === true) {
+			await this.#closeContexts()
+			if (this.#process === undefined) await this.#closeRemote(client)
+		} else {
+			await this.#destroyContexts()
+		}
+		this.#contexts = []
+
+		await this.#terminate(this.#process)
+		this.#process = undefined
+		this.#servingPid = undefined
 	}
 
 	async #closeResources(): Promise<void> {
-		let terminated = false
 		try {
-			await this.#settle()
-			this.#unbindTransport()
-			this.#unbindProcess()
+			await this.#closeSession()
+		} catch (error) {
+			await this.#finishResources(false)
+			throw error
+		}
+		await this.#finishResources(true)
+	}
 
-			const client = this.#client
-			await this.#closeContexts()
-			this.#contexts = []
-			await this.#closeRemote(client)
+	async #closeSession(): Promise<void> {
+		await this.#settle()
+		this.#unbindTransport()
+		this.#unbindProcess()
 
-			const process = this.#process
-			if (process !== undefined) {
-				const exited = await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS)
-				if (!exited) await this.#terminate(process)
-				await this.#closeProcessPipe(process)
-			}
-			this.#process = undefined
-			this.#servingPid = undefined
-			terminated = true
+		const client = this.#client
+		await this.#closeContexts()
+		this.#contexts = []
+		await this.#closeRemote(client)
+
+		const process = this.#process
+		if (process !== undefined) {
+			const exited = await this.#waitForTerminationWithin(process, BROWSER_KILL_GRACE_MS)
+			if (!exited) await this.#terminate(process)
+			await this.#closeProcessPipe(process)
+		}
+		this.#process = undefined
+		this.#servingPid = undefined
+	}
+
+	async #finishResources(release: boolean): Promise<void> {
+		const contexts = this.#contexts
+		this.#contexts = []
+		const client = this.#client
+		this.#client = undefined
+		try {
+			await this.#cleanupLocal(contexts, client)
+			if (release) await this.#releaseProfile()
 		} finally {
-			const contexts = this.#contexts
-			this.#contexts = []
-			const client = this.#client
-			this.#client = undefined
-			try {
-				await this.#cleanupLocal(contexts, client)
-				if (terminated) await this.#releaseProfile()
-			} finally {
-				this.#finish()
-			}
+			this.#finish()
 		}
 	}
 
@@ -978,24 +981,7 @@ export class Browser implements BrowserInterface {
 	}
 
 	async #closeRemote(client: CDPClient | undefined): Promise<void> {
-		let remote = client
-		let temporary = false
-
-		if (remote === undefined && this.#owned === true && this.#endpoint !== undefined) {
-			const transport = createWebSocketCDPTransport({
-				url: this.#endpoint,
-				timeout: this.#timeout(),
-			})
-			remote = new CDPClient({ transport, timeout: this.#timeout() })
-			try {
-				await remote.connect()
-				temporary = true
-			} catch {
-				await this.#closeClient(remote)
-				return
-			}
-		}
-
+		const remote = client ?? (await this.#openRemote())
 		if (remote !== undefined) {
 			try {
 				await remote.send('Browser.close')
@@ -1003,8 +989,23 @@ export class Browser implements BrowserInterface {
 				// The remote may already be gone or close before acknowledging.
 			}
 		}
+		if (client === undefined && remote !== undefined) await this.#closeClient(remote)
+	}
 
-		if (temporary) await this.#closeClient(remote)
+	async #openRemote(): Promise<CDPClient | undefined> {
+		if (this.#owned !== true || this.#endpoint === undefined) return undefined
+		const transport = createWebSocketCDPTransport({
+			url: this.#endpoint,
+			timeout: this.#timeout(),
+		})
+		const remote = new CDPClient({ transport, timeout: this.#timeout() })
+		try {
+			await remote.connect()
+			return remote
+		} catch {
+			await this.#closeClient(remote)
+			return undefined
+		}
 	}
 
 	async #closeContexts(): Promise<void> {
@@ -1060,14 +1061,12 @@ export class Browser implements BrowserInterface {
 		contexts: readonly BrowserContext[],
 		client: CDPClient | undefined,
 	): Promise<void> {
-		let terminated = false
 		try {
 			await this.#terminate(process)
-			terminated = true
 		} finally {
 			await this.#cleanupLocal(contexts, client)
 		}
-		if (terminated) await this.#releaseProfile()
+		await this.#releaseProfile()
 	}
 
 	async #cleanupLocal(
@@ -1142,41 +1141,14 @@ export class Browser implements BrowserInterface {
 		}
 	}
 
-	/**
-	 * Waits within a bound for the rest of a terminated process group, or the process a
-	 * launcher handed the endpoint to, to disappear.
-	 *
-	 * @remarks
-	 * This is the one interval loop in the server. Node raises an exit event for the direct
-	 * child only, so no event source reports the remainder of a POSIX process group or a
-	 * handed-off process, and the drain probes on `BROWSER_DRAIN_INTERVAL_MS` until the
-	 * remainder is gone or `timeout` elapses.
-	 */
-	async #waitForRemainderWithin(
-		process: ChildProcess,
-		timeout: number,
-	): Promise<boolean | undefined> {
-		const deadline = performance.now() + timeout
-		let confirmed = false
-		while (true) {
-			const alive = this.#inspectRemainder(process)
-			if (alive === false) return true
-			if (alive === true) confirmed = true
-			const remaining = deadline - performance.now()
-			if (remaining <= 0) return confirmed ? false : undefined
-			await new Promise<void>((resolve) =>
-				setTimeout(resolve, Math.min(BROWSER_DRAIN_INTERVAL_MS, remaining)),
-			)
-		}
-	}
-
 	async #waitForTerminationWithin(
 		process: ChildProcess,
 		timeout: number,
 		final = false,
 	): Promise<boolean> {
 		const exited = this.#waitForProcessWithin(process, timeout)
-		const drained = this.#waitForRemainderWithin(process, timeout)
+		const drained = new BrowserProcessDrain(this.#inspectRemainder.bind(this, process), timeout)
+			.result
 		const results = await Promise.all([exited, drained])
 		return results[0] && (results[1] === true || (final && results[1] === undefined))
 	}

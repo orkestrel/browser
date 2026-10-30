@@ -1,4 +1,6 @@
 import type {
+	BrowserAction,
+	BrowserSnapshotTables,
 	BrowserPageInterface,
 	BrowserJourneyBinding,
 	BrowserJourneyTarget,
@@ -6,6 +8,12 @@ import type {
 	BrowserJourneyValidationContext,
 } from './types.js'
 import {
+	holds,
+	INTRINSICS,
+	isObject,
+	isArray,
+	isNumber,
+	literalOf,
 	attempt,
 	isRecord,
 	isString,
@@ -14,7 +22,67 @@ import {
 	isTrue,
 	objectOf,
 } from '@orkestrel/contract'
-import { BROWSER_JOURNEY_PARAMETER_PATTERN } from './constants.js'
+import {
+	BROWSER_ACTION_OUTCOMES,
+	BROWSER_ACTION_STAGES,
+	BROWSER_JOURNEY_PARAMETER_PATTERN,
+	BROWSER_NAVIGATION_REASONS,
+} from './constants.js'
+import type { JSONRecord } from '@orkestrel/contract'
+import { BrowserErrorContext } from './BrowserErrorContext.js'
+
+/** Checks the outer tables of a CDP snapshot without decoding their entries. */
+export function isBrowserSnapshotTables(value: unknown): value is BrowserSnapshotTables {
+	return isRecord(value) && isArray(value['strings']) && isArray(value['documents'])
+}
+
+/** Checks error metadata, including non-finite numbers that describe refused input values. */
+export function isBrowserErrorContext(value: unknown): value is JSONRecord {
+	return holds(() => new BrowserErrorContext().matches(value))
+}
+
+/** Checks whether a step error carries the declared action members. */
+export function isBrowserAction(value: unknown): value is BrowserAction {
+	return holds(() => {
+		if (!isObject(value) && !isFunction(value)) return false
+		const start: unknown = INTRINSICS.reflect.read(value, 'start')
+		const target: unknown = INTRINSICS.reflect.read(value, 'target')
+		const tab: unknown = INTRINSICS.reflect.read(value, 'tab')
+		const secret: unknown = INTRINSICS.reflect.read(value, 'secret')
+		const stage: unknown = INTRINSICS.reflect.read(value, 'stage')
+		const reason: unknown = INTRINSICS.reflect.read(value, 'reason')
+		if (target !== undefined) {
+			if (!isObject(target) && !isFunction(target)) return false
+			const frame: unknown = INTRINSICS.reflect.read(target, 'frame')
+			if (
+				!isString(INTRINSICS.reflect.read(target, 'role')) ||
+				!isString(INTRINSICS.reflect.read(target, 'name')) ||
+				!isString(INTRINSICS.reflect.read(target, 'reference')) ||
+				(frame !== undefined && !isString(frame))
+			)
+				return false
+		}
+		if (tab !== undefined) {
+			if (!isObject(tab) && !isFunction(tab)) return false
+			if (
+				!isString(INTRINSICS.reflect.read(tab, 'url')) ||
+				!isString(INTRINSICS.reflect.read(tab, 'title'))
+			)
+				return false
+		}
+		return (
+			isString(INTRINSICS.reflect.read(value, 'action')) &&
+			(start === undefined || isString(start)) &&
+			isBrowserErrorContext(INTRINSICS.reflect.read(value, 'arguments')) &&
+			(secret === undefined || isBoolean(secret)) &&
+			literalOf(BROWSER_ACTION_OUTCOMES)(INTRINSICS.reflect.read(value, 'outcome')) &&
+			(stage === undefined || literalOf(BROWSER_ACTION_STAGES)(stage)) &&
+			(reason === undefined || literalOf(BROWSER_NAVIGATION_REASONS)(reason)) &&
+			isString(INTRINSICS.reflect.read(value, 'receipt')) &&
+			isNumber(INTRINSICS.reflect.read(value, 'elapsed'))
+		)
+	})
+}
 
 /**
  * Checks whether a value exposes the page capabilities used by a browser toolset.

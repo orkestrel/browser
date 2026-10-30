@@ -12,8 +12,7 @@ import { isFiniteNumber } from '@orkestrel/contract'
 export class BrowserClock implements BrowserClockInterface {
 	readonly #frame: BrowserFrameInterface
 	#active = false
-	#advancing = false
-	#budgetResolve: (() => void) | undefined
+	readonly #budgets = new Set<PromiseWithResolvers<void>>()
 	readonly #budgetHandler = this.#handleBudget.bind(this)
 
 	constructor(frame: BrowserFrameInterface) {
@@ -66,13 +65,11 @@ export class BrowserClock implements BrowserClockInterface {
 			return
 		}
 		const deferred = Promise.withResolvers<void>()
-		this.#advancing = true
-		this.#budgetResolve = deferred.resolve
+		this.#budgets.add(deferred)
 		try {
 			await this.#frame.subscribe('Emulation.virtualTimeBudgetExpired', this.#budgetHandler)
 		} catch (error) {
-			this.#budgetResolve = undefined
-			this.#advancing = false
+			this.#budgets.delete(deferred)
 			throw error
 		}
 		const timer = setTimeout(() => {
@@ -83,27 +80,15 @@ export class BrowserClock implements BrowserClockInterface {
 				}),
 			)
 		}, BROWSER_DEFAULT_TIMEOUT_MS)
-		let failure: unknown
-		try {
-			await this.#frame.send('Emulation.setVirtualTimePolicy', {
-				policy: 'advance',
-				budget: ms,
-				maxVirtualTimeTaskStarvationCount: 10_000,
-			})
-			await deferred.promise
-		} catch (error) {
-			failure = error
-		} finally {
-			clearTimeout(timer)
-			this.#budgetResolve = undefined
-			const settled = await settleBrowserTeardown(
-				() => this.#frame.unsubscribe('Emulation.virtualTimeBudgetExpired', this.#budgetHandler),
-				() => this.#frame.send('Emulation.setVirtualTimePolicy', { policy: 'pause' }),
-			)
-			failure ??= settled
-			this.#advancing = false
-		}
-		if (failure !== undefined) throw failure
+		const failure = await this.#advanceBudget(ms, deferred.promise)
+		clearTimeout(timer)
+		const settled = await settleBrowserTeardown(
+			() => this.#frame.unsubscribe('Emulation.virtualTimeBudgetExpired', this.#budgetHandler),
+			() => this.#frame.send('Emulation.setVirtualTimePolicy', { policy: 'pause' }),
+		)
+		this.#budgets.delete(deferred)
+		const reason = failure ?? settled
+		if (reason !== undefined) throw reason
 	}
 
 	async stop(): Promise<void> {
@@ -116,16 +101,30 @@ export class BrowserClock implements BrowserClockInterface {
 		this.#active = false
 	}
 
+	async #advanceBudget(ms: number, promise: Promise<void>): Promise<unknown> {
+		try {
+			await this.#frame.send('Emulation.setVirtualTimePolicy', {
+				policy: 'advance',
+				budget: ms,
+				maxVirtualTimeTaskStarvationCount: 10_000,
+			})
+			await promise
+			return undefined
+		} catch (error) {
+			return error
+		}
+	}
+
 	#assert(): void {
 		if (!this.#active) throw new BrowserError('ARGUMENT', 'Browser clock is not active')
 	}
 
 	#idle(): void {
-		if (this.#advancing)
+		if (this.#budgets.size !== 0)
 			throw new BrowserError('ARGUMENT', 'Browser clock advance is already active')
 	}
 
 	#handleBudget(): void {
-		this.#budgetResolve?.()
+		for (const budget of this.#budgets) budget.resolve()
 	}
 }

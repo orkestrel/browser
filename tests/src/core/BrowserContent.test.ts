@@ -1,21 +1,22 @@
-import type { BrowserReadResult, BrowserReadingInterface } from '@src/core'
+import type { BrowserReadResult, BrowserContentInterface } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { BrowserError, BrowserReading, createBrowserReading } from '@src/core'
+import { BrowserError, BrowserContent, createBrowserContent } from '@src/core'
+import { BrowserFixtureValue } from '../../setup.js'
 
 const url = 'https://example.com/notes/'
 const html =
 	'<html><head><title>Field notes</title></head><body><nav><a href="/home">Section navigation</a></nav><main><h1>Field notes</h1><p>The paragraph the reader wants, with a <a href="/next">relative link</a>.</p></main><footer>Footer links</footer></body></html>'
 
-// === BrowserReading
+// === BrowserContent
 
 describe('BrowserReading', () => {
 	it('preserves lowered carrier order while caller HTML retains the safety floor', () => {
-		const lowered = createBrowserReading({
+		const lowered = createBrowserContent({
 			url,
 			title: '',
 			html: '<div><p>Form prose</p><span><br>Field value<br></span><span><br>Chosen label<br></span><div><br>First line<br>Second line<br></div></div>',
 		})
-		const supplied = createBrowserReading({
+		const supplied = createBrowserContent({
 			url,
 			title: '',
 			html: '<p>Outside control</p><form>Form prose</form><select><option>Chosen label</option></select>',
@@ -31,9 +32,9 @@ describe('BrowserReading', () => {
 		}
 	})
 	it('carries the captured url and title and parses the html one time into its handle', () => {
-		const reading = createBrowserReading({ url, title: 'Field notes', html })
+		const reading = createBrowserContent({ url, title: 'Field notes', html })
 
-		expect(reading).toBeInstanceOf(BrowserReading)
+		expect(reading).toBeInstanceOf(BrowserContent)
 		expect(reading.url).toBe(url)
 		expect(reading.title).toBe('Field notes')
 		expect(reading.html.document.category).toBe('document')
@@ -41,7 +42,7 @@ describe('BrowserReading', () => {
 	})
 
 	it('renders distilled Markdown that keeps the main paragraph and drops nav and footer', () => {
-		const reading = createBrowserReading({ url, title: 'Field notes', html })
+		const reading = createBrowserContent({ url, title: 'Field notes', html })
 
 		expect(reading.markdown({ distill: true })).toEqual({
 			text: '# Field notes\n\nThe paragraph the reader wants, with a [relative link](https://example.com/next).',
@@ -51,7 +52,7 @@ describe('BrowserReading', () => {
 	})
 
 	it('renders the whole document as Markdown by default', () => {
-		const reading = createBrowserReading({ url, title: 'Field notes', html })
+		const reading = createBrowserContent({ url, title: 'Field notes', html })
 		const whole = reading.markdown().text
 
 		expect(whole).toContain('The paragraph the reader wants')
@@ -60,7 +61,7 @@ describe('BrowserReading', () => {
 	})
 
 	it('renders distilled plain text and the whole document as plain text with distill false', () => {
-		const reading = createBrowserReading({ url, title: 'Field notes', html })
+		const reading = createBrowserContent({ url, title: 'Field notes', html })
 
 		expect(reading.text({ distill: true }).text).toBe(
 			'Field notes\nThe paragraph the reader wants, with a relative link.',
@@ -75,18 +76,19 @@ describe('BrowserReading', () => {
 			{ length: 132 },
 			(_, index) => `<p>Paragraph ${index} ${'reads on '.repeat((index % 9) + 3)}</p>`,
 		).join('')
-		const reading = createBrowserReading({
+		const reading = createBrowserContent({
 			url,
 			title: 'Long notes',
 			html: `<main>${paragraphs}</main>`,
 		})
 		const whole = reading.markdown().text
 		const slices: BrowserReadResult[] = []
-		let offset = 0
-		while (offset < whole.length) {
+		while (true) {
+			const previous = slices.at(-1)
+			const offset = previous === undefined ? 0 : previous.offset + previous.text.length
+			if (offset >= whole.length) break
 			const slice = reading.markdown({ offset, limit: 4_000 })
 			slices.push(slice)
-			offset = slice.offset + slice.text.length
 		}
 
 		expect(whole.length).toBeGreaterThanOrEqual(10_000)
@@ -100,7 +102,7 @@ describe('BrowserReading', () => {
 	})
 
 	it('hard-cuts a projection with no line break at the limit', () => {
-		const reading = createBrowserReading({
+		const reading = createBrowserContent({
 			url,
 			title: 'One line',
 			html: `<main><p>${'x'.repeat(10_000)}</p></main>`,
@@ -115,7 +117,7 @@ describe('BrowserReading', () => {
 	})
 
 	it('resolves relative links against the captured url in both projections', () => {
-		const reading = createBrowserReading({ url: 'https://example.org/deep/page', title: '', html })
+		const reading = createBrowserContent({ url: 'https://example.org/deep/page', title: '', html })
 
 		for (const distill of [true, false]) {
 			expect(reading.markdown({ distill }).text).toContain('(https://example.org/next)')
@@ -123,28 +125,28 @@ describe('BrowserReading', () => {
 	})
 
 	it('refuses an invalid slice bound with a browser error', () => {
-		const reading = createBrowserReading({ url, title: 'Field notes', html })
+		const reading = createBrowserContent({ url, title: 'Field notes', html })
 
 		expect(() => reading.markdown({ offset: -1 })).toThrow(BrowserError)
 		expect(() => reading.text({ limit: 0 })).toThrow(BrowserError)
 	})
 
 	it('reports stale once the navigation epoch advances past the one recorded at construction', () => {
-		const epochs = [3]
-		const reading: BrowserReadingInterface = createBrowserReading({
+		const epoch = new BrowserFixtureValue(3)
+		const reading: BrowserContentInterface = createBrowserContent({
 			url,
 			title: 'Field notes',
 			html,
-			navigation: () => epochs[0] ?? 0,
+			navigation: () => epoch.value,
 		})
 
 		expect(reading.stale).toBe(false)
-		epochs[0] = 4
+		epoch.value = 4
 		expect(reading.stale).toBe(true)
 	})
 
 	it('reports stale at construction when the epoch recorded at capture already differs', () => {
-		const reading = createBrowserReading({
+		const reading = createBrowserContent({
 			url,
 			title: 'Field notes',
 			html,
@@ -156,7 +158,7 @@ describe('BrowserReading', () => {
 	})
 
 	it('never reports stale without a navigation source', () => {
-		const reading = createBrowserReading({ url, title: 'Field notes', html, epoch: 7 })
+		const reading = createBrowserContent({ url, title: 'Field notes', html, epoch: 7 })
 
 		expect(reading.stale).toBe(false)
 	})

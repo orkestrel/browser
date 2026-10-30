@@ -26,7 +26,7 @@ Source: [core](../src/core), [server](../src/server), [browser](../src/browser),
 
 `BrowserPage`, `BrowserFrame`, `BrowserPageElement`, `BrowserElementManager`, `BrowserDOMElement`, `BrowserDOMElementManager`, and `BrowserJourneyToolset` are internal classes: their owners construct them and return their public interfaces. `BrowserDialog`, `BrowserDownload`, `BrowserWebSocket`, `BrowserCodegen`, `BrowserRouteManager`, `BrowserFileChooser`, `BrowserHandle`, `BrowserHold`, `BrowserNavigationRecord`, `BrowserRegistry`, `BrowserRoute`, `BrowserWorker`, and `FileBrowserStore` are internal for the same reason. Construct a context with `createBrowserContext`, obtain pages from its owner, and construct a toolset with `createBrowserToolset` over either a page or a DOM view. A caller owns that view; destroying the toolset releases its registrations and observers.
 
-The owners also construct `BrowserClock`, `BrowserCookieManager`, `BrowserEmulationManager`, `BrowserHARManager`, `BrowserNetworkManager`, `BrowserKeyboard`, `BrowserMouse`, `BrowserTouch`, `BrowserNavigationManager`, `BrowserPermissionManager`, `BrowserScriptManager`, `BrowserStorageManager`, `BrowserTracing`, `BrowserCoverage`, `BrowserPerformance`, `BrowserProfiler`, `BrowserDiagnostics`, and `BrowserAccessibility`. These classes are internal; the page or context exposes their public interfaces.
+The owners also construct `BrowserClock`, `BrowserCookieManager`, `BrowserEmulationManager`, `BrowserHARManager`, `BrowserNetworkManager`, `BrowserKeyboard`, `BrowserMouse`, `BrowserTouch`, `BrowserNavigationManager`, `BrowserPermissionManager`, `BrowserScriptManager`, `BrowserStorageManager`, `BrowserTrace`, `BrowserCoverage`, `BrowserPerformance`, `BrowserProfiler`, `BrowserDiagnostics`, and `BrowserAccessibility`. These classes are internal; the page or context exposes their public interfaces. `BrowserTraceCapture`, `BrowserPopupArrivals`, and `BrowserJourneyRecord` are internal operation owners constructed by the trace and toolsets. `BrowserErrorContext` is internal to error metadata validation.
 
 ### Connect to a browser and drive a page
 
@@ -188,8 +188,8 @@ The core supplies the entities a browser session and an agent use. Its host-spec
 | `BrowserTiming`                     | interface | Holds network timing values in milliseconds relative to request time.                                                                                                               |
 | `BrowserTimingRange`                | interface | Describes the start/end pair for one network timing phase.                                                                                                                          |
 | `BrowserTouchInterface`             | interface | Provides touch input operations bound to one frame target session.                                                                                                                  |
-| `BrowserTracingInterface`           | interface | Drives the trace capture lifecycle.                                                                                                                                                 |
-| `BrowserTracingResult`              | interface | Describes the result of a trace capture.                                                                                                                                            |
+| `BrowserTraceInterface`             | interface | Drives the trace capture lifecycle.                                                                                                                                                 |
+| `BrowserTraceResult`                | interface | Describes the result of a trace capture.                                                                                                                                            |
 | `BrowserTransitionInterface`        | interface | Represents one asynchronous transition shared by every caller that arrives while it runs.                                                                                           |
 | `BrowserUserAgent`                  | interface | Describes user-agent metadata accepted by Chromium emulation.                                                                                                                       |
 | `BrowserViewInterface`              | interface | Provides the document operations shared by remote and DOM-native views.                                                                                                             |
@@ -217,7 +217,7 @@ The core supplies the entities a browser session and an agent use. Its host-spec
 | `BrowserScreenshotOptions`          | interface | Describes the options for taking a page screenshot.                                                                                                                                 |
 | `BrowserSettlementOptions`          | interface | Configures a record's settlement.                                                                                                                                                   |
 | `BrowserStorageOptions`             | interface | Describes the options for collecting storage state from selected origins.                                                                                                           |
-| `BrowserTracingOptions`             | interface | Describes the options for a Chromium trace capture.                                                                                                                                 |
+| `BrowserTraceOptions`               | interface | Describes the options for a Chromium trace capture.                                                                                                                                 |
 | `BrowserTraversalOptions`           | interface | Describes the options for traversing a browser snapshot.                                                                                                                            |
 | `BrowserWaitOptions`                | interface | Configures a text or element wait, including whether absence satisfies it.                                                                                                          |
 | `validateBrowserContextOptions`     | function  | Validates isolated-context options before creating remote state.                                                                                                                    |
@@ -473,9 +473,9 @@ validateBrowserViewport({ width: 1280, height: 720 })
 
 | API                                   | Kind      | Summary                                                                                                                                                                                                                           |
 | ------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `BrowserReading`                      | class     | Represents one captured document, parsed one time and projected to Markdown or plain text in bounded slices.                                                                                                                      |
+| `BrowserContent`                      | class     | Represents one captured document, parsed one time and projected to Markdown or plain text in bounded slices.                                                                                                                      |
 | `BrowserSnapshot`                     | class     | Represents a navigable, serializable browser DOM snapshot.                                                                                                                                                                        |
-| `createBrowserReading`                | function  | Creates a `BrowserReadingInterface` over a captured document, parsing its HTML one time.                                                                                                                                          |
+| `createBrowserContent`                | function  | Creates a `BrowserContentInterface` over a captured document, parsing its HTML one time.                                                                                                                                          |
 | `createBrowserSnapshot`               | function  | Creates a navigable `BrowserSnapshotInterface` over decoded `BrowserSnapshotInput` data.                                                                                                                                          |
 | `BrowserAccessibilityInterface`       | interface | Inspects the accessibility tree.                                                                                                                                                                                                  |
 | `BrowserAccessibilitySnapshot`        | interface | Describes a serializable accessibility-tree snapshot.                                                                                                                                                                             |
@@ -495,8 +495,8 @@ validateBrowserViewport({ width: 1280, height: 720 })
 | `BrowserOutlineNode`                  | interface | Associates an outline row with its frame, session, and optional actionable reference.                                                                                                                                             |
 | `BrowserPageElementInterface`         | interface | Provides trusted page input and capture for a referenced element.                                                                                                                                                                 |
 | `BrowserPoint`                        | interface | Describes a point in viewport CSS pixels.                                                                                                                                                                                         |
-| `BrowserReadingInput`                 | interface | Describes the captured document a reading is built from.                                                                                                                                                                          |
-| `BrowserReadingInterface`             | interface | Represents one captured document, parsed one time and projected to Markdown or plain text in bounded slices.                                                                                                                      |
+| `BrowserContentInput`                 | interface | Describes the captured document a reading is built from.                                                                                                                                                                          |
+| `BrowserContentInterface`             | interface | Represents one captured document, parsed one time and projected to Markdown or plain text in bounded slices.                                                                                                                      |
 | `BrowserReadResult`                   | interface | Describes one slice of a reading's projection.                                                                                                                                                                                    |
 | `BrowserSearch`                       | interface | Carries the opening line and optional search text of an addressed window.                                                                                                                                                         |
 | `BrowserSnapshotInput`                | interface | Describes the serializable input for a navigable browser snapshot — the form a `BrowserSnapshot` is built from and serializes back to.                                                                                            |
@@ -896,7 +896,7 @@ const waitQuery = compileQueryWaitExpression(5_000, 'wait-2')
 | `BROWSER_CODEGEN_BINDING_NAME`         | const     | Names the CDP runtime binding the codegen recorder script calls into, `'__orkestrelBrowserCodegen'`.                                                                                      |
 | `BROWSER_CODEGEN_SOURCE`               | const     | Holds the self-contained document listener installed before a frame resumes. Password input carries a marker; only Enter carries a key. Node indices are local to a document.             |
 | `BROWSER_JOURNEY_ACTIONS`              | const     | Names the native actions a journey step can hold: `click`, `type`, `press`, `navigate`, `wait`, `dialog`, and `switch`.                                                                   |
-| `BROWSER_JOURNEY_EMPTY_LISTING`        | const     | Holds the result the `journeys` tool returns when no journey is saved.                                                                                                                    |
+| `BROWSER_JOURNEY_EMPTY_LIST`           | const     | Holds the result the `journeys` tool returns when no journey is saved.                                                                                                                    |
 | `BROWSER_JOURNEY_FORMAT_VERSION`       | const     | Holds the journey and run file format this package writes and reads, `1`.                                                                                                                 |
 | `BROWSER_JOURNEY_IDLE_REFUSAL`         | const     | Holds the refusal `save` returns when no journey is recording.                                                                                                                            |
 | `BROWSER_JOURNEY_SAVE_SAVED_REFUSAL`   | const     | Holds the refusal `save` returns after a successful save when no journey is recording.                                                                                                    |
@@ -1021,18 +1021,84 @@ compileBrowserJourneyValue(
 compileBrowserJourney(journey, { language: 'typescript' }) // { source, gaps: [] }
 ```
 
+#### Execution and projection state
+
+These entities own state for one traversal, edit, or replay. Construct a fresh entity for each operation. The existing capture, rendering, and replay entry points construct them for callers.
+
+| API                               | Kind      | Summary                                                                                 |
+| --------------------------------- | --------- | --------------------------------------------------------------------------------------- |
+| `BrowserLineWrap`                 | class     | Wraps one semantic line while retaining its continuation and reference boundaries.      |
+| `BrowserOutlineRows`              | class     | Projects outline nodes into wrapped lines while retaining listing totals and focus.     |
+| `BrowserOutlineAncestors`         | class     | Traverses outline parents lazily through the supplied index.                            |
+| `BrowserOrdinals`                 | class     | Yields positive ordinals for fallback secret parameter names.                           |
+| `BrowserJourneyEditor`            | class     | Applies one journey edit batch and retains the edit responsible for a refusal.          |
+| `renderBrowserSearchQuote`        | function  | Chooses a bounded reference-bearing quote for a search outside the requested range.     |
+| `boundBrowserTail`                | function  | Fits a character-range footer by narrowing a UTF-16 slice boundary.                     |
+| `findBrowserWrapSpace`            | function  | Finds a soft wrap before a reference token without splitting its preceding name.        |
+| `skipBrowserWhitespace`           | function  | Finds the next non-whitespace offset after a soft line break.                           |
+| `BrowserNavigationStep`           | type      | Carries one recorded navigation event and its frame identity.                           |
+| `BrowserNavigationSelection`      | interface | Carries the settlement selected after a navigation event.                               |
+| `BrowserJourneyEditorInterface`   | interface | Exposes the result of one atomic journey edit batch.                                    |
+| `BrowserToolObservation`          | interface | Identifies one form-submission observation and the frames it watches.                   |
+| `BrowserToolSettlement`           | interface | Carries the initial command outcome and the receipt deadline.                           |
+| `BrowserWindowRow`                | interface | Retains an accepted projection row and its footer eligibility.                          |
+| `BrowserTextRange`                | type      | Names the UTF-16 boundaries of a reference span.                                        |
+| `BrowserTeardown`                 | class     | Runs teardown steps in order while retaining the first failure, including undefined.    |
+| `BrowserTeardownInterface`        | interface | Exposes completion after every teardown step has run.                                   |
+| `BrowserSnapshotTables`           | interface | Names the undecoded tables supplied by a CDP snapshot response.                         |
+| `isBrowserSnapshotTables`         | function  | Checks the outer tables of a CDP snapshot without decoding their entries.               |
+| `BrowserOutlineRowsInput`         | interface | Supplies the nodes, location, limits, and secrets for an outline projection.            |
+| `BrowserToolHandler`              | type      | Executes a tool action and returns its body and footer.                                 |
+| `BrowserJourneyPagesInterface`    | type      | Iterates pages of journey revisions from a store.                                       |
+| `BrowserReplayExecution`          | class     | Owns the hold, captures, and completion of one prepared replay call.                    |
+| `BrowserJourneyPages`             | class     | Iterates a store listing while retaining its offset between page requests.              |
+| `BrowserNavigationScan`           | class     | Yields the settlement selected after each navigation step.                              |
+| `BrowserReplayExecutionInterface` | interface | Exposes the result of one prepared replay execution.                                    |
+| `BROWSER_ERROR_CODES`             | const     | Holds the declared codes accepted by the browser error guard.                           |
+| `BROWSER_ERROR_BRAND`             | const     | Identifies browser errors across installed copies and module formats.                   |
+| `BROWSER_STEP_ERROR_BRAND`        | const     | Identifies journey step errors across installed copies and module formats.              |
+| `isBrowserErrorContext`           | function  | Checks error metadata, including non-finite numbers that describe refused input values. |
+| `isBrowserAction`                 | function  | Checks whether a step error carries the declared action members.                        |
+
+The quote helper uses a passage and search result prepared by the projection pipeline.
+
+```ts
+import type { BrowserPassage, BrowserSearch } from '@orkestrel/browser'
+import {
+	renderBrowserSearchQuote,
+	boundBrowserTail,
+	findBrowserWrapSpace,
+	skipBrowserWhitespace,
+	isBrowserErrorContext,
+	isBrowserSnapshotTables,
+	isBrowserAction,
+} from '@orkestrel/browser'
+
+declare const passage: BrowserPassage
+declare const found: BrowserSearch
+renderBrowserSearchQuote(passage, found, [], 400, passage.lines.length)
+boundBrowserTail('A long document. '.repeat(20), 80, 'read', 80)
+findBrowserWrapSpace('alpha beta', 0, 5, []) // 5
+skipBrowserWhitespace('alpha   beta', 5) // 8
+isBrowserErrorContext({ limit: 0 }) // true
+isBrowserAction(undefined) // false
+isBrowserSnapshotTables({ strings: [], documents: [] }) // true
+```
+
 #### Errors
 
-| API                      | Kind     | Summary                                                                        |
-| ------------------------ | -------- | ------------------------------------------------------------------------------ |
-| `BrowserError`           | class    | Reports a browser failure with a typed code and optional JSON context.         |
-| `BrowserStepError`       | class    | Reports an incomplete journey step with its action and the code `STEP`.        |
-| `BrowserErrorCode`       | type     | Identifies a browser refusal, lifecycle failure, or protocol failure.          |
-| `describeBrowserRefusal` | function | Describes an element refusal, adding a fresh-reference instruction for `GONE`. |
-| `isBrowserError`         | function | Checks whether a value is a browser error.                                     |
-| `isBrowserStepError`     | function | Checks whether a value is a journey step error.                                |
+| API                      | Kind     | Summary                                                                                       |
+| ------------------------ | -------- | --------------------------------------------------------------------------------------------- |
+| `BrowserError`           | class    | Reports a browser failure with a typed code and optional JSON context.                        |
+| `BrowserStepError`       | class    | Reports an incomplete journey step with its action and the code `STEP`.                       |
+| `BrowserErrorCode`       | type     | Identifies a browser refusal, lifecycle failure, or protocol failure.                         |
+| `describeBrowserRefusal` | function | Describes an element refusal, adding a fresh-reference instruction for `GONE`.                |
+| `isBrowserError`         | function | Checks whether an error carries the browser brand and declared members across package copies. |
+| `isBrowserStepError`     | function | Checks whether a branded browser error carries the step brand and declared action members.    |
 
 A caught `BrowserStepError` is also a `BrowserError`; check the step guard first when the action matters. Branch on `code`, and use `context.reason` for an `ELEMENT` refusal. `describeBrowserRefusal` builds its receipt. Abort signals reject with their original `signal.reason`, so a caught value need not be a browser error.
+
+The error guards require a global `Error` with a non-base prototype, its own self-valued package brand, a declared code, and its declared members. They accept subclasses and errors from another installed copy without requiring an exact `name`. They refuse look-alikes, transparent proxies, and plain branded objects.
 
 The bare code union follows. `TOOLSET_SETTLED` and `TOOLSET_RECEIPT` are **internal** control signals; callers receive their resulting receipt. `TOOLSET_PAGE` refuses a page-only operation on another view. A replay records `JOURNEY_DIALOG` as a step refusal when no interrupted action precedes a dialog step.
 
@@ -1356,6 +1422,18 @@ await browser.destroy()
 | `BROWSER_WINDOWS_ROOT_FALLBACKS`  | const     | Lists the fallback Windows install roots used when `PROGRAMFILES`, `PROGRAMFILES(X86)`, or `LOCALAPPDATA` is absent.                                                                                                          |
 | `BROWSER_WINDOWS_SUFFIXES`        | const     | Lists the Windows install-root-relative suffixes for Chrome/Edge/Chromium, joined against each candidate root (`PROGRAMFILES`, `PROGRAMFILES(X86)`, `LOCALAPPDATA`).                                                          |
 
+##### Launch and holder state
+
+| API                            | Kind      | Summary                                                                                  |
+| ------------------------------ | --------- | ---------------------------------------------------------------------------------------- |
+| `BrowserProcessDrainInterface` | interface | Exposes whether a process remainder disappeared before its deadline.                     |
+| `BrowserServerSlot`            | interface | Pairs a pooled browser with its profile directory.                                       |
+| `BrowserServerGeneration`      | interface | Owns a holder's context, toolset, and download directory.                                |
+| `BrowserServerHolder`          | interface | Identifies an admitted holder and its cancellation lifetime.                             |
+| `BrowserServerLease`           | interface | Pairs a pool token with the generation it owns.                                          |
+| `BrowserEndpoint`              | class     | Reads the announced CDP endpoint while continuing to drain the browser's standard error. |
+| `BrowserProcessDrain`          | class     | Waits for a process remainder whose host exposes no exit event.                          |
+
 ##### Discover and launch
 
 | API | Kind | Summary |
@@ -1524,6 +1602,33 @@ The browser face supplies an untrusted DOM view. Drive a same-origin child docum
 | `BROWSER_INTERACTIVE_CONTENT` | const     | Selects the HTML interactive content a click inside a `label` can land on without activating the label, as the HTML interactive-content category lists it: `a` with `href`, `audio` and `video` with `controls`, `button`, `details`, `embed`, `iframe`, `img` with `usemap` or `controls`, `input` other than `hidden`, `label`, `select`, and `textarea`. |
 | `BROWSER_SELECTED_ROLES`      | const     | Names the roles whose selection state the DOM outline reads.                                                                                                                                                                                                                                                                                                |
 | `BROWSER_TYPED_INPUTS`        | const     | Names the `input` type states whose value an untrusted `fill` sets as typed text.                                                                                                                                                                                                                                                                           |
+
+##### Capture state
+
+| API                          | Kind      | Summary                                                                            |
+| ---------------------------- | --------- | ---------------------------------------------------------------------------------- |
+| `BrowserAncestors`           | class     | Traverses ancestors lazily while retaining the previously yielded node.            |
+| `BrowserCaptureSiblings`     | class     | Traverses paired live and inert siblings while preserving pointers across pruning. |
+| `BrowserDOMOutline`          | class     | Captures one flat-tree subtree while retaining its text and visibility state.      |
+| `readBrowserCaptureValue`    | function  | Derives rendered form values and SVG fragments for an inert capture.               |
+| `readBrowserCaptureOmission` | function  | Checks shadow-slot ancestors for capture omission without skipping style reads.    |
+| `BrowserDOMOutlineInput`     | interface | Supplies the document subtree, row sinks, and traversal operations for an outline. |
+| `BrowserDOMOutlineInterface` | interface | Captures the rows of one document subtree.                                         |
+| `BrowserAncestorReader`      | type      | Reads the next ancestor, ending at the platform's null boundary.                   |
+| `BrowserCaptureSibling`      | interface | Pairs the current live and inert nodes during sibling traversal.                   |
+| `BrowserCaptureCursor`       | interface | Retains the sibling pointers read before a capture prunes its copy.                |
+| `BrowserCaptureValue`        | interface | Carries rendered lines, fragments, or a container retained by a capture.           |
+| `BrowserDOMSubmission`       | class     | Observes whether one form submission dispatches its submit event.                  |
+
+```ts
+import { readBrowserCaptureValue, readBrowserCaptureOmission } from '@orkestrel/browser/browser'
+
+const live = document.documentElement
+const inert = document.implementation.createHTMLDocument('')
+const twin = inert.importNode(live, true)
+readBrowserCaptureValue(live, twin, window, inert, false, live.localName)
+readBrowserCaptureOmission(live, live.firstChild ?? live, window, live.isConnected, false)
+```
 
 ##### DOM helpers
 
@@ -1735,7 +1840,7 @@ page.emitter.on('download', async (download) => {
 | `click`  | Clicks the element, refusing with a coded `BrowserError` when it is gone, hidden, covered, or disabled.                                                                                                                                                                         |
 | `fill`   | Replaces the value of a text control with `value`, dispatching the input events that typing fires.                                                                                                                                                                              |
 | `focus`  | Moves focus to the element.                                                                                                                                                                                                                                                     |
-| `read`   | Captures the element's rendered markup with its document's URL and title as a reading whose `stale` flag tracks later navigations of that document; `BrowserReadingInput` defines the rendered markup.                                                                          |
+| `read`   | Captures the element's rendered markup with its document's URL and title as a reading whose `stale` flag tracks later navigations of that document; `BrowserContentInput` defines the rendered markup.                                                                          |
 | `select` | Selects the options of a `select` element whose value or label matches `values`, dispatching `input` and `change`.                                                                                                                                                              |
 | `submit` | Submits the form the element belongs to. The CDP placement focuses the element and presses Enter through a trusted key pair, sending the release even after an abort; the DOM placement calls the form's `requestSubmit()` and reports the outcome through a `submit` listener. |
 
@@ -1817,7 +1922,7 @@ page.emitter.on('chooser', async (chooser) => {
 | ------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `evaluate`    | Evaluates an expression in the frame execution world under the result-size guard.                                                                                                                                                                                                               |
 | `handle`      | Evaluates an expression by reference and returns a disposable remote object handle.                                                                                                                                                                                                             |
-| `read`        | Captures the document URL, title, and rendered HTML in one size-guarded evaluation in the frame's isolated world and returns them as a reading whose `stale` flag tracks later navigations. The owning page supplies the navigation counter. `BrowserReadingInput` defines the rendered markup. |
+| `read`        | Captures the document URL, title, and rendered HTML in one size-guarded evaluation in the frame's isolated world and returns them as a reading whose `stale` flag tracks later navigations. The owning page supplies the navigation counter. `BrowserContentInput` defines the rendered markup. |
 | `send`        | Issues a raw CDP method in the frame's current target session, with a trailing `BrowserCallOptions` carrying a per-call `timeout` overriding the client-wide default and a `signal` that aborts the call.                                                                                       |
 | `subscribe`   | Subscribes to a CDP event in the frame's current target session.                                                                                                                                                                                                                                |
 | `title`       | Resolves the frame document title.                                                                                                                                                                                                                                                              |
@@ -1829,7 +1934,7 @@ The following example uses an instance supplied by its owner.
 const child = await page.frame('checkout')
 const title = await child?.title()
 const result = await child?.evaluate('document.readyState', { timeout: 2_000 })
-const reading = await child?.read() // BrowserReadingInterface
+const reading = await child?.read() // BrowserContentInterface
 const handle = await child?.handle('document.body')
 await handle?.destroy()
 const onLoad = () => log('loaded')
@@ -2067,7 +2172,7 @@ await page.network.destroy()
 | `hover`      | Moves the pointer onto the element with a trusted mouse event.                                                                                                                                                                                                                  |
 | `press`      | Focuses the element and presses `key` through a trusted key pair, sending the release even after an abort.                                                                                                                                                                      |
 | `quad`       | Resolves the element's content quad in page coordinates, composed through every frame between the element and the page.                                                                                                                                                         |
-| `read`       | Captures the element's rendered markup with its document's URL and title as a reading whose `stale` flag tracks later navigations of that document; `BrowserReadingInput` defines the rendered markup.                                                                          |
+| `read`       | Captures the element's rendered markup with its document's URL and title as a reading whose `stale` flag tracks later navigations of that document; `BrowserContentInput` defines the rendered markup.                                                                          |
 | `screenshot` | Captures the page clipped to the element's box.                                                                                                                                                                                                                                 |
 | `select`     | Selects the options of a `select` element whose value or label matches `values`, dispatching `input` and `change`.                                                                                                                                                              |
 | `submit`     | Submits the form the element belongs to. The CDP placement focuses the element and presses Enter through a trusted key pair, sending the release even after an abort; the DOM placement calls the form's `requestSubmit()` and reports the outcome through a `submit` listener. |
@@ -2112,7 +2217,7 @@ A context creates and publishes its pages. The page supplies stable managers and
 | `handle`      | Evaluates an expression by reference and returns a disposable remote object handle.                                                                                                                                                                                                             |
 | `navigate`    | Goes to a URL, waits for the requested load condition, and returns the final URL with its response correlation.                                                                                                                                                                                 |
 | `pdf`         | Prints the page to PDF bytes, optionally persisted through the injected writer.                                                                                                                                                                                                                 |
-| `read`        | Captures the document URL, title, and rendered HTML in one size-guarded evaluation in the frame's isolated world and returns them as a reading whose `stale` flag tracks later navigations. The owning page supplies the navigation counter. `BrowserReadingInput` defines the rendered markup. |
+| `read`        | Captures the document URL, title, and rendered HTML in one size-guarded evaluation in the frame's isolated world and returns them as a reading whose `stale` flag tracks later navigations. The owning page supplies the navigation counter. `BrowserContentInput` defines the rendered markup. |
 | `reload`      | Reloads the page and returns the final URL with its response correlation.                                                                                                                                                                                                                       |
 | `screenshot`  | Captures PNG or JPEG bytes, optionally full-page and persisted through an injected writer.                                                                                                                                                                                                      |
 | `send`        | Issues a raw CDP method in the frame's current target session, with a trailing `BrowserCallOptions` carrying a per-call `timeout` overriding the client-wide default and a `signal` that aborts the call.                                                                                       |
@@ -2212,7 +2317,7 @@ const profile = await page.diagnostics.profiler.stop() // { start, end, nodes, s
 await page.diagnostics.profiler.destroy()
 ```
 
-#### `BrowserReadingInterface`
+#### `BrowserContentInterface`
 
 | Method     | Summary                                                                                                                                                                              |
 | ---------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
@@ -2231,9 +2336,9 @@ const main = reading.text({ distill: true }) // main content without navigation 
 ```
 
 ```ts
-import { createBrowserReading, collectBrowserWords } from '@orkestrel/browser'
+import { createBrowserContent, collectBrowserWords } from '@orkestrel/browser'
 
-const reading = createBrowserReading({
+const reading = createBrowserContent({
 	url: 'https://example.test/',
 	title: '',
 	html: '<nav>Menu</nav><main><p>Blue kettle</p></main>',
@@ -2542,7 +2647,7 @@ The following example uses an instance supplied by its owner.
 await page.touch.tap({ x: 120, y: 240 })
 ```
 
-#### `BrowserTracingInterface`
+#### `BrowserTraceInterface`
 
 | Method    | Summary                                                                                           |
 | --------- | ------------------------------------------------------------------------------------------------- |
@@ -2550,12 +2655,14 @@ await page.touch.tap({ x: 120, y: 240 })
 | `start`   | Begins tracing with the given categories. Throws a `BrowserError` when a trace is already active. |
 | `stop`    | Ends tracing, drains the IO stream, and writes it through the page writer when a path was set.    |
 
+A pending `start` reserves the trace: another `start` rejects as already active, while `stop` rejects as not active until initialization finishes. A `start` during a draining `stop` waits for the previous capture's stream cleanup before it starts collecting events.
+
 The following example uses an instance supplied by its owner.
 
 ```ts
-await page.diagnostics.tracing.start({ screenshots: true })
-const trace = await page.diagnostics.tracing.stop() // { bytes, path }
-await page.diagnostics.tracing.destroy()
+await page.diagnostics.trace.start({ screenshots: true, samples: true })
+const trace = await page.diagnostics.trace.stop() // { bytes, path }
+await page.diagnostics.trace.destroy()
 ```
 
 #### `BrowserTransitionInterface`
@@ -2578,7 +2685,7 @@ const joined = starting.pending // the in-flight promise, or undefined
 
 | Method       | Summary                                                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `read`       | Captures the document URL, title, and rendered markup as a reading whose `stale` flag tracks later navigations; `BrowserReadingInput` defines the rendered markup.                               |
+| `read`       | Captures the document URL, title, and rendered markup as a reading whose `stale` flag tracks later navigations; `BrowserContentInput` defines the rendered markup.                               |
 | `screenshot` | Captures PNG or JPEG bytes of the view.                                                                                                                                                          |
 | `title`      | Resolves the document title.                                                                                                                                                                     |
 | `wait`       | Resolves when the main document body’s `innerText` contains `text`, or lacks it with `absent`; rejects with a `BrowserError` coded `TIMEOUT` at the deadline, and with `signal.reason` on abort. |
@@ -2739,7 +2846,7 @@ This interface inherits the element operations without adding a method. DOM acti
 | `click`  | Clicks the element, refusing with a coded `BrowserError` when it is gone, hidden, covered, or disabled.                                                                                                                                                                         |
 | `fill`   | Replaces the value of a text control with `value`, dispatching the input events that typing fires.                                                                                                                                                                              |
 | `focus`  | Moves focus to the element.                                                                                                                                                                                                                                                     |
-| `read`   | Captures the element's rendered markup with its document's URL and title as a reading whose `stale` flag tracks later navigations of that document; `BrowserReadingInput` defines the rendered markup.                                                                          |
+| `read`   | Captures the element's rendered markup with its document's URL and title as a reading whose `stale` flag tracks later navigations of that document; `BrowserContentInput` defines the rendered markup.                                                                          |
 | `select` | Selects the options of a `select` element whose value or label matches `values`, dispatching `input` and `change`.                                                                                                                                                              |
 | `submit` | Submits the form the element belongs to. The CDP placement focuses the element and presses Enter through a trusted key pair, sending the release even after an abort; the DOM placement calls the form's `requestSubmit()` and reports the outcome through a `submit` listener. |
 
@@ -2750,7 +2857,7 @@ The owner supplies a same-origin document from a surviving realm. `trusted` is `
 | Method       | Summary                                                                                                                                                                                          |
 | ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `destroy`    | Releases the navigation listeners and every element reference.                                                                                                                                   |
-| `read`       | Captures the document URL, title, and rendered markup as a reading whose `stale` flag tracks later navigations; `BrowserReadingInput` defines the rendered markup.                               |
+| `read`       | Captures the document URL, title, and rendered markup as a reading whose `stale` flag tracks later navigations; `BrowserContentInput` defines the rendered markup.                               |
 | `screenshot` | Captures PNG or JPEG bytes of the view.                                                                                                                                                          |
 | `title`      | Resolves the document title.                                                                                                                                                                     |
 | `wait`       | Resolves when the main document body’s `innerText` contains `text`, or lacks it with `absent`; rejects with a `BrowserError` coded `TIMEOUT` at the deadline, and with `signal.reason` on abort. |
@@ -2765,6 +2872,19 @@ log(await view.title())
 await view.wait('Saved', { timeout: 2_000 }) // wakes on mutations, load, transitionend, and animationend
 const reading = await view.read()
 view.destroy()
+```
+
+#### `BrowserDOMOutlineInterface`
+
+| Method    | Summary                                                            |
+| --------- | ------------------------------------------------------------------ |
+| `capture` | Appends the captured rows through the supplied outline operations. |
+
+```ts
+import type { BrowserDOMOutlineInterface } from '@orkestrel/browser/browser'
+
+declare const outline: BrowserDOMOutlineInterface
+outline.capture()
 ```
 
 #### `BrowserDOMWaitInterface`
@@ -2857,7 +2977,7 @@ In the following table, `URL` is an address, `REF` an element reference, `ROLE` 
 
 | Situation                                                                                                                  | Text                                                                                                                                                                                                                                                                                                                                                                                                                                                                                        |
 | -------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A heading row, an element row, and a text row                                                                              | `# NAME`, `ROLE "NAME" [ref=REF]` with `value="…"`, `pressed=true\|false\|mixed`, `expanded=true\|false`, `selected=true\|false`, `[checked]`, `[disabled]`, or `[tool=NAME]` after it, in that order, and the text itself                                                                                                                                                                                                                                                                  |
+| A heading row, an element row, and a text row                                                                              | `# NAME`, `ROLE "NAME" [ref=REF]` with `value="…"`, `pressed=true\                                                                                                                                                                                                                                                                                                                                                                                                                          | false\ | mixed`, `expanded=true\ | false`, `selected=true\ | false`, `[checked]`, `[disabled]`, or `[tool=NAME]` after it, in that order, and the text itself |
 | A page header                                                                                                              | `page "TITLE" URL (TOTAL lines)`                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
 | A page continuation                                                                                                        | `[lines START–END of TOTAL; BELOW below; call read with from NEXT for more]`                                                                                                                                                                                                                                                                                                                                                                                                                |
 | A whole page                                                                                                               | `[lines 1–7 of 7; the whole page]`                                                                                                                                                                                                                                                                                                                                                                                                                                                          |
@@ -3049,7 +3169,7 @@ The following table names each adapter, the contract on each side, and the proof
 
 ## Declared conformance gaps
 
-`npm run test:conformance` runs [`tests/conformance.test.ts`](../tests/conformance.test.ts) in Node with the browser disabled, and `npm test` includes it. It starts no browser: it reads three vendored mirrors through [`tests/setupConformance.ts`](../tests/setupConformance.ts), whose reader checks each file's raw-byte SHA-256 against a pinned constant at module load, so a changed byte throws before a row runs. Each row compares one coordinate of an authority with what this package ships and is ruled implement, retain, or exclude; every exclusion names its closer.
+`npm run test:conformance` runs [`tests/conformance.test.ts`](../tests/conformance.test.ts) in Node with the browser disabled, and `npm test` includes it. It starts no browser: it reads three vendored mirrors through [`tests/setupServer.ts`](../tests/setupServer.ts), whose reader checks each file's raw-byte SHA-256 against a pinned constant at module load, so a changed byte throws before a row runs. Each row compares one coordinate of an authority with what this package ships and is ruled implement, retain, or exclude; every exclusion names its closer.
 
 The following table records each mirror's upstream, revision, and pin.
 
@@ -3061,7 +3181,7 @@ The following table records each mirror's upstream, revision, and pin.
 
 The whole protocol file the domain was cut from is pinned without being vendored, at `672d8481c92832907211e85488e216cd5b1a922fde273faff72f7f6cf765899e`. The web-platform-tests `webmcp/` tree at revision `e6ba3d7abea7` is recorded as a listing, [`wpt-webmcp-e6ba3d7abea7.txt`](../tests/mirrors/wpt-webmcp-e6ba3d7abea7.txt). Refresh the mirrors on each version bump of this package and whenever `@orkestrel/mcp`'s bridge advances its reading date: fetch the three files at their upstream heads, record each commit, cut the domain again by byte range, pin the digests again, and rule every row that reddens as implement, retain, or exclude.
 
-**The web-platform-tests cases do not run.** The listing at `e6ba3d7abea7` holds 88 entries, 55 under `webmcp/imperative/` and 28 under `webmcp/declarative/`. Those cases drive a browser's `document.modelContext`, and none of them runs against this package's double, [`tests/fixtures/modelContext.ts`](../tests/fixtures/modelContext.ts). **What it costs:** the double is checked member by member against webref's IDL, and its behavior is checked only by this package's own composition cases. **Closer:** a testharness runner under the Playwright provider that runs those cases against the double.
+**The web-platform-tests cases do not run.** The listing at `e6ba3d7abea7` holds 88 entries, 55 under `webmcp/imperative/` and 28 under `webmcp/declarative/`. Those cases drive a browser's `document.modelContext`, and none of them runs against this package's double, [`tests/setup.ts`](../tests/setup.ts). **What it costs:** the double is checked member by member against webref's IDL, and its behavior is checked only by this package's own composition cases. **Closer:** a testharness runner under the Playwright provider that runs those cases against the double.
 
 **The domain's `Tool.stackTrace` is not read.** Every other property of the mirror's `Tool`, `Annotation`, and `RemovedTool` types is one name a parser reads. **What it costs:** an agent never sees where in the page a tool was registered. **Closer:** a developer diagnostics consumer; `stackTrace` is a developer datum, excluded from the agent surface.
 
@@ -3091,7 +3211,7 @@ These invariants hold across the four faces (`src/core`, `src/browser`, `src/ser
 4. **Captured bytes never touch a filesystem in core.** A page accepts an optional `BrowserWriterInterface`, injected through `BrowserContext`, and calls `write(path, bytes)` only when a screenshot, PDF, trace, or HAR request carries a `path`; the server supplies `createFileBrowserWriter` through `Browser`. A replay takes each capture's bytes from the view without a `path` and hands them to its run store's `capture`, which writes them only into the run directory its `create` created and creates no directory; the memory run store keeps no bytes. [`tests/src/server/writers/FileBrowserWriter.test.ts`](../tests/src/server/writers/FileBrowserWriter.test.ts) pins the writer, the capture cases of [`tests/src/core/BrowserReplay.test.ts`](../tests/src/core/BrowserReplay.test.ts) pin that no path reaches the page, and [`tests/src/server/stores/FileBrowserRunStore.test.ts`](../tests/src/server/stores/FileBrowserRunStore.test.ts) pins the capture's confinement.
 5. **Browser options name their owner.** `browsers.engine` selects discovery; there is no top-level engine option. `BrowserMCPServerOptions.browser` carries `headless`, `executable`, and `viewport`; `pool` carries `size`, `contexts`, and `launch`; `journeys` carries `readonly`. The binary maps its environment into those groups. [Browser](../tests/src/server/Browser.test.ts), [MCP server](../tests/src/server/BrowserMCPServer.test.ts), and [binary](../tests/src/bin/main.test.ts) prove the mappings.
 6. **Lifecycle events are observable, never polled.** `BrowserInterface.emitter` fires `idle`, `discover`, `connect`, `disconnect`, `launch`, `page`, `context`, `error`, and `destroy`; `CDPClientInterface.emitter` fires `connect`, `close`, `drop`, and `error`; a recorder, `page.recorder` included, fires `start`, `step`, `stop`, and `clear`, and a replay fires `step`. A page fires `navigate` with `[url, same]` for both a cross-document and a same-document navigation, `session` when an out-of-process frame's session attaches, `popup` for each page it opens, and `dialog`, `close`, and the network and worker events; a context fires `page` for each page it publishes, popups included. A page a context constructs holds its target on the client's connection, and the first such page on a connection enables `Target.setDiscoverTargets` for it; a second live page for a held target is refused with `TARGET_HELD`, and a `create()` that meets a page another path published for its target joins that page, or rejects with `CLOSED` when that page closed. A discovered popup is published one time, after its opener, through the opener's `popup`, the context's `page`, and `pages()`. Limit: when the page holding a popup's target fails its setup, discovery publishes nothing, and a later `sync()` adds the target without a `popup` from its opener. Limit: when `Target.setDiscoverTargets` fails, or the connection ends and another opens, the next page a context constructs on that connection sends it again, and nothing sends it before then; `sync()` is the recovery for a popup that discovery missed meanwhile. The registry fires `change`, `invoke`, and `respond`, and the toolset `adopt`, `skip`, `select`, `action`, `hold`, and `release`. A journey store never polls: a held `journey.lock` refuses at once with `STORE_LOCKED`, and the tool tells the model to call again. Every wait parks on a protocol event, a DOM observer, or an abort signal, and a `setTimeout` survives only as a deadline; the one liveness probe with no event source is the bounded drain of a terminated process group, at `BROWSER_DRAIN_INTERVAL_MS` in `src/server`. An external disconnect emits a coded `error` before `disconnect`; transport loss with the process alive is resumable, and a process exit is terminal. [`tests/src/core/BrowserPage.test.ts`](../tests/src/core/BrowserPage.test.ts), [`tests/src/core/recorders/BrowserCodegen.test.ts`](../tests/src/core/recorders/BrowserCodegen.test.ts), [`tests/src/core/recorders/BrowserRecorder.test.ts`](../tests/src/core/recorders/BrowserRecorder.test.ts), and [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts) pin the page, recorder, and toolset events, [`tests/src/server/stores/FileBrowserJourneyStore.test.ts`](../tests/src/server/stores/FileBrowserJourneyStore.test.ts) pins the lock refused at once, and [`tests/src/core/BrowserContext.test.ts`](../tests/src/core/BrowserContext.test.ts) pins target ownership, the joined creation, and popup publication.
-7. **Two error classes cover the runtime.** `BrowserError` carries a bare `BrowserErrorCode` and optional JSON context; `BrowserStepError` adds its typed action and the code `STEP`. Guards narrow both. `ARGUMENT`, `CLOSED`, `PROTOCOL`, and `NAVIGATION` distinguish invalid input, closed state, malformed protocol data, and navigation failure. Remote CDP failures use `REMOTE`, disconnected requests use `DISCONNECTED`, and deadlines use `TIMEOUT`. The navigation-load, clock, tracing, and registry deadlines name their operation in context. Shared storage failures use `STORE_*` codes for both journey and run stores. [Errors](../tests/src/core/errors.test.ts), [CDP client](../tests/src/core/CDPClient.test.ts), [page navigation](../tests/src/core/BrowserPage.test.ts), [clock](../tests/src/core/BrowserClock.test.ts), [tracing](../tests/src/core/BrowserTracing.test.ts), and [registry](../tests/src/core/BrowserRegistry.test.ts) prove these contracts.
+7. **Two error classes cover the runtime.** `BrowserError` carries a bare `BrowserErrorCode` and optional JSON context; `BrowserStepError` adds its typed action and the code `STEP`. Guards narrow both. `ARGUMENT`, `CLOSED`, `PROTOCOL`, and `NAVIGATION` distinguish invalid input, closed state, malformed protocol data, and navigation failure. Remote CDP failures use `REMOTE`, disconnected requests use `DISCONNECTED`, and deadlines use `TIMEOUT`. The navigation-load, clock, tracing, and registry deadlines name their operation in context. Shared storage failures use `STORE_*` codes for both journey and run stores. [Errors](../tests/src/core/errors.test.ts), [CDP client](../tests/src/core/CDPClient.test.ts), [page navigation](../tests/src/core/BrowserPage.test.ts), [clock](../tests/src/core/BrowserClock.test.ts), [tracing](../tests/src/core/BrowserTrace.test.ts), and [registry](../tests/src/core/BrowserRegistry.test.ts) prove these contracts.
 8. **Oversized results fail clean.** `evaluate()` and `read()` wrap their in-page result with `compileGuardedEvaluateExpression(expression, BROWSER_RESULT_LIMIT)`, which throws the `BROWSER_RESULT_LIMIT_SENTINEL_PREFIX` sentinel before an oversized result could overflow the transport frame; the frame recognizes it through `BROWSER_RESULT_LIMIT_PATTERN` and rejects with `BrowserError` with code `RESULT_LIMIT`, and the connection and the browser process are unaffected. [`tests/service/browser.test.ts`](../tests/service/browser.test.ts) pins both against a real browser.
 9. **The page recorder records semantic steps, and a journey compiles to a module that runs as a replay does.** `page.recorder` records each gesture by role and exact accessible name, collapses consecutive edits on one field while the edit is open, and never across a submission, a focus departure, a navigation, or `stop`. `compileBrowserJourney` emits one `follow` call per step on a toolset the module constructs, as `'javascript'` or `'typescript'`, and throws at a gap step. [`tests/src/core/recorders/BrowserCodegen.test.ts`](../tests/src/core/recorders/BrowserCodegen.test.ts) pins the recorder, [`tests/service/codegen.test.ts`](../tests/service/codegen.test.ts) pins its gestures on Chromium against the fixture's own event log, [`tests/src/core/compilers.test.ts`](../tests/src/core/compilers.test.ts) pins the module byte for byte, and the `compiled module equality` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) runs each generated module and its replay to one page outcome with the same receipts.
 10. **Doc ↔ source method bijection.** Each `## Methods` table lists exactly the call-signature members of its interface, inherited members included, and each implementing class named for its interface exposes no public method its table omits: the internal page recorder and `BrowserRecorder`, `BrowserReplay`, `BrowserHold`, `BrowserJourneyToolset`, `BrowserMCPServer`, the two memory stores, and the two file stores pair with their interfaces as every earlier class does. The remaining exports are functions, constants, and data contracts. [`tests/guides.test.ts`](../tests/guides.test.ts) pins it.
@@ -3100,7 +3220,7 @@ These invariants hold across the four faces (`src/core`, `src/browser`, `src/ser
 13. **A launch owns the process that serves its endpoint, through the inherited pipe.** Chrome and Chromium serve the endpoint from the process they spawn. A launcher such as Microsoft Edge on Windows instead re-executes the browser with the same `--remote-debugging-port` and exits 0 before the endpoint answers, and the process it spawned inherits its standard error, so `connect()` treats that clean exit as a hand-off: it keeps reading the same pipe on the same `timeout` budget until the `DevTools listening on` line arrives, then reads the `browser` entry of CDP `SystemInfo.getProcessInfo` and owns the process named there. A nonzero exit or a signal rejects at once with a `BrowserError` naming the exit; a pipe that closes without the line rejects with the readiness failure; an endpoint that names no browser process rejects after a best-effort `Browser.close`. The Windows Edge launch reading is recorded in limit 26. The launcher hand-off cases in [`tests/src/server/Browser.test.ts`](../tests/src/server/Browser.test.ts) pin the rest.
 14. **A snapshot is serializable data plus navigation.** `BrowserSnapshot` holds exactly `documents` and `styles`, so `JSON.stringify(snapshot)` yields `{ documents, styles }` and `createBrowserSnapshot(parsed)` navigates it again; every method takes and returns bare `BrowserNode` values, and containment is derived from `ancestors`. [`tests/src/core/BrowserSnapshot.test.ts`](../tests/src/core/BrowserSnapshot.test.ts) pins it.
 15. **A reference names one element for as long as that element exists.** A reference is `e` followed by a positive integer. On CDP every page's element manager mints from one counter its browser context owns and binds the reference to `SESSION:BACKEND`, because backend node ids are per renderer; in the DOM placement the view owns the counter and binds a `WeakRef`. The allocator never reuses a number within the context. Across consecutive documents in one tab, a link keeps its reference when its role (`link`), accessible name, and resolved `href` match exactly one link in each document. Duplicate identities in either document, changed names or destinations, and every non-link receive fresh references. Buttons never carry. A child frame's navigation or detachment drops that frame's bindings. The toolset retains each shown reference's last role and name for missing-reference refusals until teardown. A never-shown reference keeps the unknown-reference refusal. A successful action still resets the accepted set; carried references are accepted again because its result lists them. `parseBrowserReference` accepts `e12`, `E12`, `[e12]`, `ref=e12`, and `[ref=e12]`. A journey's `reference` is evidence a developer reads, never a lookup: replay resolves each target by role and exact name. [`tests/src/core/elements/BrowserElementManager.test.ts`](../tests/src/core/elements/BrowserElementManager.test.ts), [`tests/src/core/parsers.test.ts`](../tests/src/core/parsers.test.ts), and [`tests/src/browser/elements/BrowserDOMElementManager.test.ts`](../tests/src/browser/elements/BrowserDOMElementManager.test.ts) pin it, and the `journey semantic replay` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) pins that a changed page resolves by name and that neither a stored reference nor a matching CSS selector resolves a target.
-16. **A reading is captured one time and sliced from one projection.** `frame.read()` issues one size-guarded evaluation in the isolated world; `markdown` and `text` each project the capture one time per mode and cut every slice from it, ending a bounded slice after the last line break in its window when one lies past `offset`. Truncation is derived as `offset + text.length < total`, and `stale` is derived from the navigation epoch, never stored. [`tests/src/core/BrowserReading.test.ts`](../tests/src/core/BrowserReading.test.ts) and [`tests/src/core/BrowserPage.test.ts`](../tests/src/core/BrowserPage.test.ts) pin it.
+16. **A reading is captured one time and sliced from one projection.** `frame.read()` issues one size-guarded evaluation in the isolated world; `markdown` and `text` each project the capture one time per mode and cut every slice from it, ending a bounded slice after the last line break in its window when one lies past `offset`. Truncation is derived as `offset + text.length < total`, and `stale` is derived from the navigation epoch, never stored. [`tests/src/core/BrowserContent.test.ts`](../tests/src/core/BrowserContent.test.ts) and [`tests/src/core/BrowserPage.test.ts`](../tests/src/core/BrowserPage.test.ts) pin it.
 17. **The registry mirrors the domain and settles every invocation.** `start()` subscribes before it enables, because enabling reports every registered tool; a `-32601` answer unsubscribes and resolves `false`, and any other failure rethrows. `execute` never passes the signal to `invokeTool`, so the invocation id always arrives; an abort or a deadline sends `WebMCP.cancelInvocation` with that id and rejects without waiting for `Canceled`; a navigation or detachment of the tool's frame and `destroy` reject; every terminal status resolves a `BrowserInvocationResult`. A `toolResponded` with an unknown id is held only while an `invokeTool` reply is pending. [`tests/src/core/BrowserRegistry.test.ts`](../tests/src/core/BrowserRegistry.test.ts) pins it.
 18. **Actions run one at a time.** The toolset runs actions in first-in, first-out order, and an action holds the queue until its receipt is produced; an action whose signal aborts while queued sends nothing. After a `mousePressed` or `keyDown` is sent, the matching release is sent without the signal, so an abort never leaves a button or key down, and the next action waits for a pending release. Every complete browser or journey tool result and error message fits the smaller of `limit` and `BROWSER_TOOL_LIMIT`, including its footer. A `click`, `type`, or `press` on a page opens `page.navigation.record(frame)` before its first input and settles its receipt through that record, so the receipt's view follows the navigation the record selects, and the toolset holds no frame, session, or loader state of its own. While a replay holds the toolset, an action admitted after the hold that does not carry the hold's token is refused with `TOOLSET_BUSY` rather than queued, and the actions admitted before the hold complete first. The queue, bounds, destroy, hold, and navigation settlement cases in [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts), the selection cases in [`tests/src/core/BrowserNavigationRecord.test.ts`](../tests/src/core/BrowserNavigationRecord.test.ts), and the `claim 6` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) pin it.
 19. **A dialog interrupts every tool and stages `dialog`.** Every pending step of every tool is raced against the page's `dialog` event, so a tool returns a receipt naming the dialog while the blocked command waits; the `dialog` tool is advertised while the dialog is open and bypasses the queue, and every other tool refuses with a message naming the open dialog and ending `call dialog.` A replay admits a `dialog` step only after an `interrupted` action, the continuation the toolset stages, and under a hold a `dialog` from another caller is refused with `TOOLSET_BUSY`. The dialog cases in [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts) and [`tests/src/core/BrowserReplay.test.ts`](../tests/src/core/BrowserReplay.test.ts), the `confirm()` and `beforeunload` dialog cases in [`tests/service/toolset.test.ts`](../tests/service/toolset.test.ts), and the `claim 6` block of [`tests/service/journey.test.ts`](../tests/service/journey.test.ts) pin it.
@@ -3637,7 +3757,7 @@ if (driven !== null && bridge !== undefined) {
 
 The suites run as Vitest projects, each with a fixed scope:
 
-- `src:core` runs [`tests/src/core`](../tests/src/core) in Node against real entities over an in-memory CDP transport whose replies each test scripts; `src:server` runs [`tests/src/server`](../tests/src/server) in Node against spawned stand-in processes and in-process CDP servers; `src:browser` runs [`tests/src/browser`](../tests/src/browser) in Playwright's Chromium, with a browser launched by this package's own `createBrowser` for the socket transport. `npm run test:src` runs all three. `src:bin` runs [`tests/src/bin`](../tests/src/bin) in Node against the built `dist/bin/main.js`, through `npm run test:src:bin` after `npm run build`.
+- `src:core` runs [`tests/src/core`](../tests/src/core) in Node against real entities over an in-memory CDP transport whose replies each test scripts; `src:server` runs [`tests/src/server`](../tests/src/server) in Node against spawned stand-in processes and in-process CDP servers; `src:browser` runs [`tests/src/browser`](../tests/src/browser) in Playwright's Chromium, with a browser launched by this package's own `createBrowser` for the socket transport. `npm run test:src` runs all three. `src:bin` runs [`tests/src/bin`](../tests/src/bin) in Node against the built `dist/bin/main.js`, through `npm run test:src:bin` after `npm run build`. Before any case spawns, `requireBrowserBuild` refuses an absent entry or an entry older than any file under `src/`, with a message naming `npm run build`.
 - `guides` runs [`tests/guides.test.ts`](../tests/guides.test.ts) in Node through `npm run test:guides`; `conformance` runs [`tests/conformance.test.ts`](../tests/conformance.test.ts) in Node against the pinned mirrors; `policy`, `config`, `setup`, and `setup:browser` prove the workspace rules, the configuration, and the shared test infrastructure. `npm test` runs every project named so far.
 - `service` runs [`tests/service`](../tests/service) against a real Chromium-family browser on the host and is outside `npm test`; `distribution` packs and installs the package and runs from `prepublishOnly`.
 
@@ -3648,11 +3768,10 @@ The following list names each test file and what it proves.
 - [`tests/policy.test.ts`](../tests/policy.test.ts): the workspace rules, including the banned-term sweep over authored Markdown.
 - [`tests/config.test.ts`](../tests/config.test.ts): the aliases, the registered projects and their scopes, the target wrappers, and the scripts that gate each proof.
 - [`tests/distribution.test.ts`](../tests/distribution.test.ts): the packed archive a consumer installs, its three faces, and their declarations under every module resolution; the `generated journey module` case, which type-checks the modules `compileBrowserJourney` emits against the installed declarations and imports them under Node; and the `packed browse binary` case, which spawns the installed binary through `@orkestrel/mcp`'s stdio client, lists the vocabulary with Chromium absent, then records, saves, lists, edits, and replays a journey.
-- [`tests/setup.test.ts`](../tests/setup.test.ts): the scripted CDP fixtures, the element and registry replies, the popup discovery fixtures, the journey module instrument, and the compiled-timer instrument the core suites use; the store suites both twins of each journey store run live in `tests/src/core/stores/suite.ts`.
+- [`tests/setup.test.ts`](../tests/setup.test.ts): the scripted CDP fixtures, the element and registry replies, the popup discovery fixtures, the journey module instrument, and the compiled-timer instrument the core suites use. The shared journey and run case tables live in `tests/setup.ts`; the mirrored store tests register the cases and assert their observations.
 - [`tests/setupBrowser.test.ts`](../tests/setupBrowser.test.ts): the same-origin probe documents the in-page suites drive.
-- [`tests/setupConformance.test.ts`](../tests/setupConformance.test.ts): the mirror reader's digest refusal on a changed byte and the row readers the conformance project uses.
 - [`tests/setupGlobal.test.ts`](../tests/setupGlobal.test.ts): the global setup that serves fixtures and launches the browser the in-page suites reach.
-- [`tests/setupServer.test.ts`](../tests/setupServer.test.ts): the ports, processes, scratch directories, CDP test server, fixture pages, the journey module stage, and the browse launch double and stdio pair the server and service suites share; the filesystem suite the file stores run, two processes over one directory included, lives in `tests/src/server/stores/suite.ts`.
+- [`tests/setupServer.test.ts`](../tests/setupServer.test.ts): the mirror reader's digest refusal and conformance row readers, the ports, processes, scratch directories, CDP test server, fixture pages, the journey module stage, the built-entry freshness refusal, and the browse launch double and stdio pair the server and service suites share. The filesystem case table lives in `tests/setupServer.ts`; the mirrored file-store test registers its cases and asserts their observations, including competing processes over one directory.
 - [`tests/setupService.test.ts`](../tests/setupService.test.ts): the service project's browser flags, engine selection, and registry reading.
 - [`tests/service/browser.test.ts`](../tests/service/browser.test.ts): a real browser's launch, navigation, elements, frames, routes, snapshots, PDF, result limits, reattachment, transport loss, and shutdown; the out-of-process frame click, occlusion, hit-test, stale-reference, reading, and wait proofs; and the `WebMCP` domain reading and its live case.
 
@@ -3667,7 +3786,7 @@ The following list names each test file and what it proves.
 - [`tests/src/core/BrowserPage.test.ts`](../tests/src/core/BrowserPage.test.ts): navigation, both navigation events, the navigation steps and their ownership rule, out-of-process frame sessions attached paused and resumed after their enablement, DOM readiness, the page input stream, text waits, popups, and the popup records.
 - [`tests/src/core/BrowserFrame.test.ts`](../tests/src/core/BrowserFrame.test.ts): evaluation, readings, handles, sends with timeouts and signals, and the result-size guard of one frame.
 - [`tests/src/core/BrowserTransition.test.ts`](../tests/src/core/BrowserTransition.test.ts): the shared in-flight transition every joining caller awaits.
-- [`tests/src/core/BrowserReading.test.ts`](../tests/src/core/BrowserReading.test.ts): distilled and whole Markdown and text, line-break slicing with a constant total, and derived staleness.
+- [`tests/src/core/BrowserContent.test.ts`](../tests/src/core/BrowserContent.test.ts): distilled and whole Markdown and text, line-break slicing with a constant total, and derived staleness.
 - [`tests/src/core/BrowserRegistry.test.ts`](../tests/src/core/BrowserRegistry.test.ts): detection, the mirror, invocation settlement, cancellation, adoption, and destroy over the `WebMCP` domain.
 - [`tests/src/core/BrowserToolset.test.ts`](../tests/src/core/BrowserToolset.test.ts): the vocabulary, reserved names, dialogs, the action queue, the submit observers and the navigation settlement of each action, views and tabs, page-tool adoption, bounds, destroy, the trust marker, `execute` and its actions, the hold, the secret receipt, the popup a click settles on, the `tabs()` listing, `follow` and its target and tab resolution, and the construction under `journeys`.
 - [`tests/src/core/elements/BrowserPageElement.test.ts`](../tests/src/core/elements/BrowserPageElement.test.ts): the ordered trusted click, its refusals, key and pointer releases after an abort, and the remaining element actions.
@@ -3688,7 +3807,7 @@ The following list names each test file and what it proves.
 - [`tests/src/core/BrowserClock.test.ts`](../tests/src/core/BrowserClock.test.ts): the virtual clock.
 - [`tests/src/core/BrowserCoverage.test.ts`](../tests/src/core/BrowserCoverage.test.ts): JavaScript and CSS coverage.
 - [`tests/src/core/BrowserProfiler.test.ts`](../tests/src/core/BrowserProfiler.test.ts): the sampled CPU profile.
-- [`tests/src/core/BrowserTracing.test.ts`](../tests/src/core/BrowserTracing.test.ts): a trace streamed back through the IO domain.
+- [`tests/src/core/BrowserTrace.test.ts`](../tests/src/core/BrowserTrace.test.ts): a trace streamed back through the IO domain.
 - [`tests/src/core/BrowserPerformance.test.ts`](../tests/src/core/BrowserPerformance.test.ts): Performance-domain metrics.
 - [`tests/src/core/BrowserDiagnostics.test.ts`](../tests/src/core/BrowserDiagnostics.test.ts): the diagnostics teardown, which discards a failure from an already-stopped capability.
 - [`tests/src/core/BrowserCookieManager.test.ts`](../tests/src/core/BrowserCookieManager.test.ts): context-scoped cookies.

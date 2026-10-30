@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import {
 	collectBrowserRoots,
@@ -21,7 +22,7 @@ import {
 	BROWSER_EXPANDED_ROLES,
 	skipBrowserSubtree,
 } from '@src/browser'
-import { BROWSER_RESULT_LIMIT, createBrowserReading, isBrowserError } from '@src/core'
+import { BROWSER_RESULT_LIMIT, createBrowserContent, isBrowserError } from '@src/core'
 import {
 	RENDERED_PAGE,
 	RENDERED_TEXT,
@@ -439,12 +440,12 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		).toBe(false)
 		const branches = Array.from(document.querySelectorAll('switch > *'))
 		expect(branches.map((branch) => branch.getClientRects().length)).toEqual([0, 1])
-		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+		expect(createBrowserContent(read(document.documentElement)).text().text.trim()).toBe(
 			fixture.text,
 		)
 		expect(read(requireValue(document.querySelector('foreignObject div'))).html).toBe('')
 		expect(
-			createBrowserReading(read(requireValue(document.querySelector('text'))))
+			createBrowserContent(read(requireValue(document.querySelector('text'))))
 				.text()
 				.text.trim(),
 		).toBe(fixture.text)
@@ -454,7 +455,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			'<div style="visibility:hidden">hidden <span style="visibility:visible">First</span>hidden <span style="display:none">Omitted</span>hidden <span style="visibility:visible">Last</span>tail</div>',
 		)
 		expect(
-			createBrowserReading(read(document.documentElement)).text().text.replace(/\s+/g, ' ').trim(),
+			createBrowserContent(read(document.documentElement)).text().text.replace(/\s+/g, ' ').trim(),
 		).toBe('FirstLast')
 	})
 	it('visits children of a namespaced select that cannot be lowered', () => {
@@ -469,7 +470,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 	it.each(CAPTURE_ANCESTORS)('omits a direct read under $name', ({ html, edit }) => {
 		const document = createProbeDocument(html)
 		requireValue(document.defaultView).eval(edit)
-		expect(createBrowserReading(read(document.documentElement)).text().text).not.toContain(
+		expect(createBrowserContent(read(document.documentElement)).text().text).not.toContain(
 			'Omitted text',
 		)
 		expect(read(requireValue(document.querySelector('#target'))).html).toBe('')
@@ -495,14 +496,14 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		)
 		const capture = read(document.documentElement)
 		expect(capture.html).not.toMatch(/private-frame|hidden-payload|input/)
-		expect(createBrowserReading(capture).text().text.trim()).toBe('Frame prose')
+		expect(createBrowserContent(capture).text().text.trim()).toBe('Frame prose')
 		for (const input of document.querySelectorAll('input')) expect(read(input).html).toBe('')
 	})
 	it('clips listbox rows outside the horizontal client area', () => {
 		const document = createProbeDocument(
 			'<select multiple size="3" style="width:120px"><option style="transform:translateX(200px)">Right outside</option><option style="transform:translateX(-200px)">Left outside</option><option>Shown row</option></select>',
 		)
-		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+		expect(createBrowserContent(read(document.documentElement)).text().text.trim()).toBe(
 			'Shown row',
 		)
 	})
@@ -510,7 +511,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		const document = createProbeDocument(
 			'<svg style="visibility:hidden"><title>Hidden graphic name</title><text y="20" style="visibility:visible">Visible drawing</text></svg>',
 		)
-		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+		expect(createBrowserContent(read(document.documentElement)).text().text.trim()).toBe(
 			'Visible drawing',
 		)
 	})
@@ -518,7 +519,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		const document = createProbeDocument(
 			'<svg aria-hidden="true"><text y="20">Printed <tspan style="display:none">Hidden drawing</tspan><tspan style="visibility:hidden">Invisible drawing</tspan><tspan>drawing</tspan></text></svg>',
 		)
-		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+		expect(createBrowserContent(read(document.documentElement)).text().text.trim()).toBe(
 			'Printed drawing',
 		)
 	})
@@ -527,7 +528,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			'<select size="4"><optgroup label="Shown group"><option style="display:none">Hidden first</option><option>Shown row</option></optgroup></select>',
 		)
 		expect(
-			createBrowserReading(read(document.documentElement)).text().text.replace(/\s+/g, ' ').trim(),
+			createBrowserContent(read(document.documentElement)).text().text.replace(/\s+/g, ' ').trim(),
 		).toBe('Shown group Shown row')
 	})
 	it('omits unavailable native multiple-file summaries', () => {
@@ -537,7 +538,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		transfer.items.add(new view.File(['one'], 'first-unprinted.txt'))
 		transfer.items.add(new view.File(['two'], 'second-unprinted.txt'))
 		requireValue(document.querySelector('input')).files = transfer.files
-		expect(createBrowserReading(read(document.documentElement)).text().text).toBe('')
+		expect(createBrowserContent(read(document.documentElement)).text().text).toBe('')
 	})
 	it('drops active floor subtrees even when styled or disconnected', () => {
 		const document = createProbeDocument('<p>Outside control</p>')
@@ -567,21 +568,21 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			'<select size="3"><option>First row</option><option>Second row</option><option>Third row</option><option>Fourth row</option></select><select id="collapsed"><option selected>Chosen</option><option>Not shown</option></select>',
 		)
 		const select = requireValue(document.querySelector('select'))
-		expect(createBrowserReading(read(select)).text().text.replace(/\s+/g, ' ').trim()).toBe(
+		expect(createBrowserContent(read(select)).text().text.replace(/\s+/g, ' ').trim()).toBe(
 			'First row Second row Third row',
 		)
 		select.scrollTop = select.scrollHeight
-		expect(createBrowserReading(read(select)).text().text.replace(/\s+/g, ' ').trim()).toBe(
+		expect(createBrowserContent(read(select)).text().text.replace(/\s+/g, ' ').trim()).toBe(
 			'Second row Third row Fourth row',
 		)
-		expect(createBrowserReading(read(requireValue(select.options[0]))).text().text).toBe('')
+		expect(createBrowserContent(read(requireValue(select.options[0]))).text().text).toBe('')
 		expect(
-			createBrowserReading(read(requireValue(select.options[3])))
+			createBrowserContent(read(requireValue(select.options[3])))
 				.text()
 				.text.trim(),
 		).toBe('Fourth row')
 		expect(
-			createBrowserReading(
+			createBrowserContent(
 				read(requireValue(document.querySelector('#collapsed option:last-child'))),
 			).text().text,
 		).toBe('')
@@ -590,7 +591,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		const document = createProbeDocument(
 			'<select multiple size="5"><optgroup label="Hidden group" style="display:none"><option>Hidden child</option></optgroup><option style="display:none">Hidden row</option><option style="visibility:hidden">Invisible row</option><option>Shown row</option></select>',
 		)
-		expect(createBrowserReading(read(document.documentElement)).text().text.trim()).toBe(
+		expect(createBrowserContent(read(document.documentElement)).text().text.trim()).toBe(
 			'Shown row',
 		)
 	})
@@ -607,10 +608,10 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			expect(capture.html).toContain('Data only')
 			expect(capture.html).not.toMatch(/private-default|hidden-payload|template-secret|input/)
 			for (const distill of [true, false]) {
-				expect(createBrowserReading(capture).text({ distill }).text).not.toMatch(
+				expect(createBrowserContent(capture).text({ distill }).text).not.toMatch(
 					/private-default|hidden-payload/,
 				)
-				expect(createBrowserReading(capture).markdown({ distill }).text).not.toMatch(
+				expect(createBrowserContent(capture).markdown({ distill }).text).not.toMatch(
 					/private-default|hidden-payload/,
 				)
 			}
@@ -627,7 +628,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			'<base href="https://example.test/base/"><nav><form>Navigation prose</form></nav><header>Header prose</header><aside>Aside prose</aside><menu>Menu prose</menu><p>Outside main</p><main><a href="next">Resolved link</a><p aria-hidden="true">Painted prose</p></main><footer>Footer prose</footer>',
 		)
 		const capture = read(document.documentElement)
-		const reading = createBrowserReading(capture)
+		const reading = createBrowserContent(capture)
 		expect(capture.html).toMatch(/<nav>/)
 		expect(capture.html).toContain('href="https://example.test/base/next"')
 		expect(reading.markdown({ distill: false }).text).toContain(
@@ -656,7 +657,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			['select', 'Chosen text'],
 			['svg', 'Graphic text'],
 		]) {
-			const result = createBrowserReading(
+			const result = createBrowserContent(
 				read(requireValue(document.querySelector(requireValue(selector)))),
 			)
 			expect(result.text().text.trim()).toBe(expected)
@@ -665,14 +666,14 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		input.value = '<script>Printed & safe</script>'
 		const capture = read(input)
 		expect(capture.html).toContain('&lt;script&gt;Printed &amp; safe&lt;/script&gt;')
-		expect(createBrowserReading(capture).text().text.trim()).toBe(input.value)
+		expect(createBrowserContent(capture).text().text.trim()).toBe(input.value)
 	})
 	it('keeps modal background and SVG printed text independently of accessibility', () => {
 		const document = createProbeDocument(
 			'<p>Painted background</p><dialog>Modal prose</dialog><svg aria-hidden="true"><text y="20">Printed drawing</text><title>Decorative title</title></svg>',
 		)
 		requireValue(document.querySelector('dialog')).showModal()
-		const reading = createBrowserReading(read(document.documentElement))
+		const reading = createBrowserContent(read(document.documentElement))
 		expect(reading.text().text.replace(/\s+/g, ' ').trim()).toBe(
 			'Painted background Modal prose Printed drawing',
 		)
@@ -692,7 +693,7 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 			const capture = read(document.documentElement)
 			for (const input of document.querySelectorAll('input[type="password"],input[type="hidden"]'))
 				expect(read(input).html).toBe('')
-			const reading = createBrowserReading(capture)
+			const reading = createBrowserContent(capture)
 			for (const distill of [true, false]) {
 				expect(reading.markdown({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(text)
 				expect(reading.text({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(text)
@@ -706,14 +707,14 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		const document = createProbeDocument(RENDERED_PAGE)
 		requireValue(document.defaultView).eval(RENDERED_SHADOW_EXPRESSION)
 		const capture = read(document.documentElement)
-		const reading = createBrowserReading(capture)
+		const reading = createBrowserContent(capture)
 		for (const distill of [true, false])
 			expect(reading.text({ distill }).text.replace(/\s+/g, ' ').trim()).toBe(RENDERED_TEXT)
 	})
 	it('rendered capture removes invisible alt text and drops active head elements', () => {
 		const document = createProbeDocument(RENDERED_PAGE)
 		const capture = read(document.documentElement)
-		const markdown = createBrowserReading(capture).markdown().text
+		const markdown = createBrowserContent(capture).markdown().text
 		expect(markdown).toContain('Shown image alt')
 		expect(markdown).not.toContain('Hidden image alt')
 		expect(capture.html).not.toContain('<head')
@@ -732,18 +733,18 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 	it('rendered capture copies without constructors or live mutations', () => {
 		const document = createProbeDocument('<main><p>Text</p></main>')
 		const view = requireValue(document.defaultView)
-		let count = 0
+		const count = new BrowserFixtureValue(0)
 		view.customElements.define(
 			'reading-card',
 			class extends view.HTMLElement {
 				constructor() {
 					super()
-					count += 1
+					count.value += 1
 				}
 			},
 		)
 		document.body.append(document.createElement('reading-card'))
-		count = 0
+		count.value = 0
 		const observer = new view.MutationObserver(() => undefined)
 		observer.observe(document, {
 			subtree: true,
@@ -753,12 +754,12 @@ describe.each(['DOM', 'compiled'])('rendered capture %s', (placement) => {
 		})
 		const raw = document.documentElement.outerHTML
 		expect(read(document.documentElement).html).toContain('reading-card')
-		expect(count).toBe(0)
+		expect(count.value).toBe(0)
 		expect(document.documentElement.outerHTML).toBe(raw)
 		expect(observer.takeRecords()).toHaveLength(0)
 		observer.disconnect()
 		document.documentElement.cloneNode(true)
-		expect(count).toBe(1)
+		expect(count.value).toBe(1)
 	})
 	it('rendered capture measures pruned markup against the result limit', () => {
 		const document = createProbeDocument(

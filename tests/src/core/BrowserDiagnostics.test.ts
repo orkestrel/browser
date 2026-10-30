@@ -1,7 +1,12 @@
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
 import { describe, expect, it } from 'vitest'
 import { isBrowserError } from '@src/core'
-import { createConnectedCDPClient, createRecordingWriter, replyOk } from '../../setup.js'
+import {
+	BrowserFixtureValue,
+	createConnectedCDPClient,
+	createRecordingWriter,
+	replyOk,
+} from '../../setup.js'
 
 describe('BrowserDiagnostics', () => {
 	it('streams a trace to bytes and persists the completed result', async () => {
@@ -12,12 +17,12 @@ describe('BrowserDiagnostics', () => {
 			transport.reply(message.id, {})
 			transport.event('Tracing.tracingComplete', { stream: 'stream-1' }, 'session-1')
 		})
-		let read = 0
+		const read = new BrowserFixtureValue(0)
 		transport.onSend('IO.read', (message) => {
-			read += 1
+			read.value += 1
 			transport.reply(
 				message.id,
-				read === 1
+				read.value === 1
 					? { data: 'hello ', eof: false }
 					: { data: 'd29ybGQ=', base64Encoded: true, eof: true },
 			)
@@ -25,12 +30,12 @@ describe('BrowserDiagnostics', () => {
 		replyOk(transport, 'IO.close')
 		const page = new BrowserPage(client, 'target-1', 'session-1', writer)
 
-		await page.diagnostics.tracing.start({
+		await page.diagnostics.trace.start({
 			path: 'trace.json',
 			screenshots: true,
-			sampling: true,
+			samples: true,
 		})
-		const result = await page.diagnostics.tracing.stop()
+		const result = await page.diagnostics.trace.stop()
 
 		expect(new TextDecoder().decode(result.bytes)).toBe('hello world')
 		expect(writer.calls[0]?.path).toBe('trace.json')
@@ -51,7 +56,7 @@ describe('BrowserDiagnostics', () => {
 		const { client } = await createConnectedCDPClient()
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
-		await expect(page.diagnostics.tracing.stop()).rejects.toSatisfy(isBrowserError)
+		await expect(page.diagnostics.trace.stop()).rejects.toSatisfy(isBrowserError)
 	})
 
 	it('clears tracing state when ending the trace fails', async () => {
@@ -60,11 +65,11 @@ describe('BrowserDiagnostics', () => {
 		transport.onSend('Tracing.end', (message) => transport.fail(message.id, 'trace end failed'))
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
-		await page.diagnostics.tracing.start()
-		await expect(page.diagnostics.tracing.stop()).rejects.toThrow('trace end failed')
+		await page.diagnostics.trace.start()
+		await expect(page.diagnostics.trace.stop()).rejects.toThrow('trace end failed')
 
-		expect(page.diagnostics.tracing.active).toBe(false)
-		await expect(page.diagnostics.tracing.start()).resolves.toBeUndefined()
+		expect(page.diagnostics.trace.active).toBe(false)
+		await expect(page.diagnostics.trace.start()).resolves.toBeUndefined()
 	})
 
 	it('captures precise JavaScript and CSS coverage with validated ranges', async () => {

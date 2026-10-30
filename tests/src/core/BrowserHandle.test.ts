@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest'
+import { BrowserFixtureValue } from '../../setup.js'
 import { isBrowserError } from '@src/core'
 import { BrowserHandle } from '../../../src/core/BrowserHandle.js'
 import { createConnectedCDPClient, replyOk } from '../../setup.js'
@@ -21,16 +22,16 @@ describe('BrowserHandle', () => {
 
 	it('creates a child handle only when Chromium returns an object id', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		let object = true
+		const object = new BrowserFixtureValue(true)
 		transport.onSend('Runtime.callFunctionOn', (message) => {
 			transport.reply(message.id, {
-				result: object ? { objectId: 'object-2' } : { value: 1 },
+				result: object.value ? { objectId: 'object-2' } : { value: 1 },
 			})
 		})
 		const handle = new BrowserHandle(client, 'session-1', 'object-1')
 
 		expect((await handle.property('child'))?.id).toBe('object-2')
-		object = false
+		object.value = false
 		expect(await handle.property('primitive')).toBeUndefined()
 	})
 

@@ -1,7 +1,7 @@
 import type { BrowserInvocation, BrowserInvocationResult } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
-import { createAttachedPage, replyOk } from '../../setup.js'
+import { BrowserFixtureValue, createAttachedPage, replyOk } from '../../setup.js'
 
 describe('BrowserRegistry', () => {
 	it('emits observed invocations and preserves tools on same-document navigation', async () => {
@@ -183,9 +183,9 @@ describe('BrowserRegistry', () => {
 		const { page, client, transport } = await createAttachedPage()
 		try {
 			const registry = requireValue(page.registry)
-			let code = -32601
+			const code = new BrowserFixtureValue(-32601)
 			transport.onSend('WebMCP.enable', (message) =>
-				transport.fail(message.id, 'unavailable', code),
+				transport.fail(message.id, 'unavailable', code.value),
 			)
 			const changes = createRecorder<readonly []>()
 			const invocations = createRecorder<readonly [BrowserInvocation]>()
@@ -215,7 +215,7 @@ describe('BrowserRegistry', () => {
 			expect(changes.count).toBe(0)
 			expect(invocations.count).toBe(0)
 			expect(responses.count).toBe(0)
-			code = -32000
+			code.value = -32000
 			await expect(registry.start()).rejects.toThrow('unavailable')
 		} finally {
 			await client.close()
@@ -291,7 +291,7 @@ describe('BrowserRegistry', () => {
 				'session-1',
 			)
 			const tool = requireValue(registry.tool('search'))
-			let status = 'Completed'
+			const status = new BrowserFixtureValue('Completed')
 			transport.onSend('WebMCP.invokeTool', (message) => {
 				transport.reply(message.id, { invocationId: 'invocation' })
 				transport.event(
@@ -301,14 +301,20 @@ describe('BrowserRegistry', () => {
 				)
 				transport.event(
 					'WebMCP.toolResponded',
-					{ invocationId: 'invocation', status, output: { found: true }, errorText: 'failure' },
+					{
+						invocationId: 'invocation',
+						status: status.value,
+						output: { found: true },
+						errorText: 'failure',
+					},
 					message.sessionId,
 				)
 			})
-			for (status of ['Completed', 'Error', 'Canceled']) {
+			for (const value of ['Completed', 'Error', 'Canceled']) {
+				status.value = value
 				expect(await registry.execute(tool, {})).toEqual({
 					id: 'invocation',
-					status,
+					status: status.value,
 					output: { found: true },
 					error: 'failure',
 				})
@@ -365,12 +371,12 @@ describe('BrowserRegistry', () => {
 		try {
 			const registry = requireValue(page.registry)
 			replyOk(transport, 'WebMCP.enable')
-			let id = 'long'
-			let sent = Promise.withResolvers<void>()
+			const id = new BrowserFixtureValue('long')
+			const sent = new BrowserFixtureValue(Promise.withResolvers<void>())
 			replyOk(transport, 'Runtime.evaluate', { result: { type: 'undefined' } })
 			transport.onSend('WebMCP.invokeTool', (message) => {
-				transport.reply(message.id, { invocationId: id })
-				sent.resolve()
+				transport.reply(message.id, { invocationId: id.value })
+				sent.value.resolve()
 			})
 			await registry.start()
 			transport.event(
@@ -382,10 +388,10 @@ describe('BrowserRegistry', () => {
 			const responses = createRecorder<readonly [BrowserInvocationResult]>()
 			registry.emitter.on('respond', responses.handler)
 			const pending = registry.execute(tool, {})
-			await sent.promise
+			await sent.value.promise
 			// A later protocol reply lets the invocation reply settle before response events arrive.
 			await client.send('Runtime.evaluate', { expression: 'void 0' }, { session: 'session-1' })
-			for (let index = 0; index < 1000; index++) {
+			for (const index of Array.prototype.keys.call({ length: 1000 })) {
 				transport.event(
 					'WebMCP.toolResponded',
 					{ invocationId: `foreign-${index}`, status: 'Completed', output: 'stale' },
@@ -400,15 +406,15 @@ describe('BrowserRegistry', () => {
 			)
 			expect((await pending).output).toBe('long result')
 			// Reusing every foreign id makes any retained response observable as a stale settlement.
-			for (let index = 0; index < 1000; index++) {
-				id = `foreign-${index}`
-				sent = Promise.withResolvers<void>()
+			for (const index of Array.prototype.keys.call({ length: 1000 })) {
+				id.value = `foreign-${index}`
+				sent.value = Promise.withResolvers<void>()
 				const next = registry.execute(tool, {})
-				await sent.promise
+				await sent.value.promise
 				await client.send('Runtime.evaluate', { expression: 'void 0' }, { session: 'session-1' })
 				transport.event(
 					'WebMCP.toolResponded',
-					{ invocationId: id, status: 'Completed', output: 'fresh' },
+					{ invocationId: id.value, status: 'Completed', output: 'fresh' },
 					'session-1',
 				)
 				expect((await next).output).toBe('fresh')
@@ -512,12 +518,17 @@ describe('BrowserRegistry', () => {
 			const adopted = await registry.adopt()
 			expect(adopted.map((tool) => tool.name)).toEqual(['empty', 'optional'])
 			expect(adopted[0]?.annotations).toEqual({ pure: true, consequential: true, untrusted: true })
-			let status = 'Completed'
+			const status = new BrowserFixtureValue('Completed')
 			transport.onSend('WebMCP.invokeTool', (message) => {
 				transport.reply(message.id, { invocationId: 'adopted' })
 				transport.event(
 					'WebMCP.toolResponded',
-					{ invocationId: 'adopted', status, output: 'result', errorText: 'x'.repeat(1024 * 1024) },
+					{
+						invocationId: 'adopted',
+						status: status.value,
+						output: 'result',
+						errorText: 'x'.repeat(1024 * 1024),
+					},
 					message.sessionId,
 				)
 			})
@@ -535,7 +546,7 @@ describe('BrowserRegistry', () => {
 					.filter((message) => message.method === 'WebMCP.invokeTool')
 					.map((message) => message.params?.['input']),
 			).toEqual([{ query: 'book' }, { query: 'book' }])
-			status = 'Error'
+			status.value = 'Error'
 			await expect(
 				requireValue(adopted[0]).execute(
 					{ purpose: 'Read' },
@@ -677,16 +688,16 @@ describe('BrowserRegistry', () => {
 			}
 			await waitForDelay()
 			const offset = transport.sent.length
-			let held: number | undefined
+			const held = new BrowserFixtureValue<number | undefined>(undefined)
 			transport.onSend('WebMCP.enable', (message) => {
-				if (message.sessionId === 'child-a-session') held = message.id
+				if (message.sessionId === 'child-a-session') held.value = message.id
 				else transport.reply(message.id, {})
 			})
 			const registry = requireValue(page.registry)
 			const starting = registry.start().catch((error: unknown) => error)
-			await waitForCondition('first child enable pending', () => held !== undefined)
+			await waitForCondition('first child enable pending', () => held.value !== undefined)
 			const destroyed = registry.destroy()
-			transport.reply(requireValue(held), {})
+			transport.reply(requireValue(held.value), {})
 			expect(await starting).toMatchObject({ message: expect.stringContaining('destroyed') })
 			await destroyed
 			expect(
@@ -793,13 +804,13 @@ describe('BrowserRegistry', () => {
 			)
 			expect((await first).output).toBe('one result')
 			replyOk(transport, 'WebMCP.invokeTool', { invocationId: 'F' })
-			let settled = false
+			const settled = new BrowserFixtureValue(false)
 			const second = registry.execute(tool, {}).then((result) => {
-				settled = true
+				settled.value = true
 				return result
 			})
 			await waitForDelay()
-			expect(settled).toBe(false)
+			expect(settled.value).toBe(false)
 			transport.event(
 				'WebMCP.toolResponded',
 				{ invocationId: 'F', status: 'Completed', output: 'fresh' },

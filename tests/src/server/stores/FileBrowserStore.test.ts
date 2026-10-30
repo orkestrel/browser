@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from '../../../setup.js'
 import type { AsyncHook } from 'node:async_hooks'
 import { describe, it, expect } from 'vitest'
 import {
@@ -20,29 +21,29 @@ describe('FileBrowserStore', () => {
 		const scratch = createScratch()
 		try {
 			const lock = join(scratch.path, 'journey.lock')
-			let committed = false
-			let competing: Promise<unknown> | undefined
-			let races = 0
+			const committed = new BrowserFixtureValue(false)
+			const competing = new BrowserFixtureValue<Promise<unknown> | undefined>(undefined)
+			const races = new BrowserFixtureValue(0)
 			const failures: unknown[] = []
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
-				if (path !== lock || !committed) return
-				races += 1
-				competing = rmdir(lock).catch((error: unknown) => error)
+				if (path !== lock || !committed.value) return
+				races.value += 1
+				competing.value = rmdir(lock).catch((error: unknown) => error)
 			})
 			// At measured p >= 307/512, 8 independent races give (1 - p)^8 < 0.001.
 			const attempts = 8
-			for (let index = 0; index < attempts; index += 1) {
-				committed = false
+			for (const index of Array.prototype.keys.call({ length: attempts })) {
+				committed.value = false
 				const result = await files
 					.lock(lock, async () => {
-						committed = true
+						committed.value = true
 						return index
 					})
 					.catch((error: unknown) => error)
-				await competing
+				await competing.value
 				if (result !== index) failures.push(result)
 			}
-			expect(races).toBe(attempts)
+			expect(races.value).toBe(attempts)
 			expect(failures).toEqual([])
 			expect(await readdir(scratch.path)).toEqual([])
 		} finally {
@@ -67,34 +68,34 @@ describe('FileBrowserStore', () => {
 	})
 	it('preserves the committed result when another writer reacquires after release rmdir gets ENOENT', async () => {
 		const scratch = createScratch()
-		let hook: AsyncHook | undefined
+		const hook = new BrowserFixtureValue<AsyncHook | undefined>(undefined)
 		try {
 			const lock = join(scratch.path, 'journey.lock')
 			const foreign = formatBrowserLockEntry(process.pid, '22222222-2222-4222-8222-222222222222')
-			let committed = false
-			let reclaimed = false
+			const committed = new BrowserFixtureValue(false)
+			const reclaimed = new BrowserFixtureValue(false)
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
-				if (path !== lock || !committed) return
+				if (path !== lock || !committed.value) return
 				expect(await readdir(lock)).toEqual([])
 				await rmdir(lock)
-				hook = observeBrowserFilesystem(() => {
+				hook.value = observeBrowserFilesystem(() => {
 					mkdirSync(lock)
 					writeFileSync(join(lock, foreign), '')
-					reclaimed = true
+					reclaimed.value = true
 				})
 			})
 			await expect(
 				files.lock(lock, async () => {
 					await files.write(files.resolvePath('journey.json'), 'committed')
-					committed = true
+					committed.value = true
 					return 'saved revision'
 				}),
 			).resolves.toBe('saved revision')
-			expect(reclaimed).toBe(true)
+			expect(reclaimed.value).toBe(true)
 			expect(await readFile(files.resolvePath('journey.json'), 'utf8')).toBe('committed')
 			expect(await readdir(lock)).toEqual([foreign])
 		} finally {
-			hook?.disable()
+			hook.value?.disable()
 			scratch.destroy()
 		}
 	})
@@ -103,10 +104,10 @@ describe('FileBrowserStore', () => {
 		try {
 			const lock = join(scratch.path, 'journey.lock')
 			const foreign = formatBrowserLockEntry(process.pid, '22222222-2222-4222-8222-222222222222')
-			let competing = true
+			const competing = new BrowserFixtureValue(true)
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
-				if (dirname(path) !== lock || !competing) return
-				competing = false
+				if (dirname(path) !== lock || !competing.value) return
+				competing.value = false
 				await writeFile(join(lock, foreign), '')
 			})
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
@@ -124,9 +125,9 @@ describe('FileBrowserStore', () => {
 		const scratch = createScratch()
 		try {
 			const lock = join(scratch.path, 'journey.lock')
-			let releasing = false
+			const releasing = new BrowserFixtureValue(false)
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
-				if (path !== lock || !releasing) return
+				if (path !== lock || !releasing.value) return
 				// Replace the emptied directory after its real check so rmdir reaches ENOTDIR or ENOENT.
 				expect(await readdir(lock), 'release has unlinked its entry').toEqual([])
 				await rmdir(lock)
@@ -134,7 +135,7 @@ describe('FileBrowserStore', () => {
 			})
 			await expect(
 				files.lock(lock, async () => {
-					releasing = true
+					releasing.value = true
 				}),
 				'rmdir failure names the denied directory',
 			).rejects.toMatchObject({
@@ -155,10 +156,10 @@ describe('FileBrowserStore', () => {
 				process.pid,
 				'22222222-2222-4222-8222-222222222222',
 			)
-			let replaced = false
+			const replaced = new BrowserFixtureValue(false)
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
-				if (dirname(path) !== lock || replaced) return
-				replaced = true
+				if (dirname(path) !== lock || replaced.value) return
+				replaced.value = true
 				await rmdir(lock)
 				await mkdir(lock)
 				await writeFile(join(lock, replacement), '')
@@ -166,7 +167,7 @@ describe('FileBrowserStore', () => {
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
 				code: 'STORE_LOCKED',
 			})
-			expect(replaced).toBe(true)
+			expect(replaced.value).toBe(true)
 			expect(await readdir(lock)).toEqual([replacement])
 		} finally {
 			scratch.destroy()
@@ -176,17 +177,17 @@ describe('FileBrowserStore', () => {
 		const scratch = createScratch()
 		try {
 			const lock = join(scratch.path, 'journey.lock')
-			let attempts = 0
+			const attempts = new BrowserFixtureValue(0)
 			const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
 				if (dirname(path) !== lock) return
-				attempts += 1
+				attempts.value += 1
 				await rmdir(lock)
 			})
 			await expect(files.lock(lock, async () => 'entered')).rejects.toMatchObject({
 				code: 'STORE_LOCKED',
 			})
-			expect(attempts).toBe(BROWSER_JOURNEY_LOCK_ATTEMPTS)
-			expect(attempts).toBe(8)
+			expect(attempts.value).toBe(BROWSER_JOURNEY_LOCK_ATTEMPTS)
+			expect(attempts.value).toBe(8)
 			expect(await readdir(scratch.path)).toEqual([])
 		} finally {
 			scratch.destroy()
@@ -236,24 +237,24 @@ describe('FileBrowserStore', () => {
 		try {
 			const files = new FileBrowserStore({ root: scratch.path })
 			const lock = files.resolvePath('journey.lock')
-			let blocked: string | undefined
+			const blocked = new BrowserFixtureValue<string | undefined>(undefined)
 			const failure = await files
 				.lock(lock, async () => {
 					const [name] = await readdir(lock)
 					if (name === undefined) throw new Error('Missing holder')
-					blocked = join(lock, name)
-					await unlink(blocked)
-					await mkdir(blocked)
+					blocked.value = join(lock, name)
+					await unlink(blocked.value)
+					await mkdir(blocked.value)
 				})
 				.catch((error: unknown) => error)
 			expect(failure).toMatchObject({
 				code: 'STORE_ACCESS',
-				message: `Cannot remove lock entry: ${blocked}`,
-				context: { path: blocked },
+				message: `Cannot remove lock entry: ${blocked.value}`,
+				context: { path: blocked.value },
 			})
-			expect(blocked).toBeDefined()
-			if (blocked === undefined) throw new Error('Missing blocked entry')
-			expect(await readdir(lock)).toEqual([blocked.slice(lock.length + 1)])
+			expect(blocked.value).toBeDefined()
+			if (blocked.value === undefined) throw new Error('Missing blocked entry')
+			expect(await readdir(lock)).toEqual([blocked.value.slice(lock.length + 1)])
 		} finally {
 			scratch.destroy()
 		}
@@ -358,17 +359,18 @@ describe('FileBrowserStore', () => {
 				BROWSER_RUN_FIXTURE.id.replace(/-[a-f0-9]{4}$/, '-abcd'),
 				BROWSER_RUN_FIXTURE.id.replace(/-[a-f0-9]{4}$/, '-dcba'),
 			]
-			let index = 0
-			let firstIndex = 0
+			const index = new BrowserFixtureValue(0)
+			const firstIndex = new BrowserFixtureValue(0)
 			const allocations = await Promise.all([
 				first.allocate(parent, () =>
-					firstIndex++ === 0
+					firstIndex.value++ === 0
 						? BROWSER_RUN_FIXTURE.id
 						: BROWSER_RUN_FIXTURE.id.replace(/-[a-f0-9]{4}$/, '-eeee'),
 				),
 				second.allocate(
 					parent,
-					() => candidates[index++] ?? BROWSER_RUN_FIXTURE.id.replace(/-[a-f0-9]{4}$/, '-dcba'),
+					() =>
+						candidates[index.value++] ?? BROWSER_RUN_FIXTURE.id.replace(/-[a-f0-9]{4}$/, '-dcba'),
 				),
 			])
 			expect(new Set(allocations.map((entry) => entry.id)).size).toBe(2)

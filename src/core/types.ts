@@ -461,6 +461,31 @@ export type BrowserNavigationReason =
 	| 'reload'
 	| 'scriptInitiated'
 
+/** Carries one recorded navigation event and its frame identity. */
+export type BrowserNavigationStep =
+	| {
+			readonly event: 'request'
+			readonly frame: string
+			readonly url: string
+			readonly loader: string | undefined
+			readonly reason: BrowserNavigationReason | undefined
+	  }
+	| {
+			readonly event: 'commit'
+			readonly frame: string
+			readonly url: string
+			readonly loader: string | undefined
+			readonly same: boolean
+	  }
+	| { readonly event: 'load'; readonly frame: string; readonly loader: string | undefined }
+	| { readonly event: 'detach'; readonly frame: string; readonly swapped: boolean }
+
+/** Carries the settlement selected after a navigation event. */
+export interface BrowserNavigationSelection {
+	readonly done: boolean
+	readonly result: BrowserSettlementResult | undefined
+}
+
 /**
  * Describes the navigation a record settled.
  *
@@ -665,15 +690,15 @@ export interface BrowserAccessibilityInterface {
 // === Browser diagnostics
 
 /** Describes the options for a Chromium trace capture. */
-export interface BrowserTracingOptions {
+export interface BrowserTraceOptions {
 	readonly path?: string
 	readonly categories?: readonly string[]
 	readonly screenshots?: boolean
-	readonly sampling?: boolean
+	readonly samples?: boolean
 }
 
 /** Describes the result of a trace capture. */
-export interface BrowserTracingResult {
+export interface BrowserTraceResult {
 	readonly bytes: Uint8Array
 	readonly path: string | undefined
 }
@@ -685,18 +710,18 @@ export interface BrowserStreamChunk {
 }
 
 /** Drives the trace capture lifecycle. */
-export interface BrowserTracingInterface {
+export interface BrowserTraceInterface {
 	readonly active: boolean
 	/**
 	 * Begins tracing with the given categories. Throws a `BrowserError` when a trace is
 	 * already active.
 	 */
-	start(options?: BrowserTracingOptions): Promise<void>
+	start(options?: BrowserTraceOptions): Promise<void>
 	/**
 	 * Ends tracing, drains the IO stream, and writes it through the page writer when a path
 	 * was set.
 	 */
-	stop(): Promise<BrowserTracingResult>
+	stop(): Promise<BrowserTraceResult>
 	/**
 	 * Stops an active trace, discarding any failure, and does nothing when no trace is
 	 * running.
@@ -824,7 +849,7 @@ export interface BrowserProfilerInterface {
 
 /** Groups the diagnostics by capability. */
 export interface BrowserDiagnosticsInterface {
-	readonly tracing: BrowserTracingInterface
+	readonly trace: BrowserTraceInterface
 	readonly coverage: BrowserCoverageInterface
 	readonly performance: BrowserPerformanceInterface
 	readonly profiler: BrowserProfilerInterface
@@ -1785,6 +1810,11 @@ export interface BrowserJourney {
 	readonly steps: readonly BrowserJourneyStep[]
 }
 
+/** Exposes the result of one atomic journey edit batch. */
+export interface BrowserJourneyEditorInterface {
+	readonly journey: BrowserJourney
+}
+
 /**
  * Carries a journey with the revision the store assigned; `revision` is absent for a journey the
  * store never held.
@@ -1984,6 +2014,48 @@ export interface BrowserToolsetResult {
 	readonly fault?: unknown
 }
 
+/** Identifies one form-submission observation and the frames it watches. */
+export interface BrowserToolObservation {
+	readonly token: number
+	readonly frames: Set<BrowserFrameInterface>
+}
+
+/** Carries the initial command outcome and the receipt deadline. */
+export interface BrowserToolSettlement {
+	readonly first: boolean
+	readonly deadline: number
+}
+
+/** Retains an accepted projection row and its footer eligibility. */
+export interface BrowserWindowRow {
+	readonly index: number
+	readonly row: string
+	readonly heading: readonly string[]
+	readonly eligible: boolean
+}
+
+/** Names the UTF-16 boundaries of a reference span. */
+export type BrowserTextRange = readonly [start: number, end: number]
+
+/** Exposes completion after every teardown step has run. */
+export interface BrowserTeardownInterface {
+	readonly result: Promise<unknown>
+}
+
+/** Supplies the nodes, location, limits, and secrets for an outline projection. */
+export interface BrowserOutlineRowsInput {
+	readonly nodes: readonly BrowserOutlineNode[]
+	readonly url: string
+	readonly limit: number
+	readonly secrets: readonly string[]
+}
+
+/** Executes a tool action and returns its body and footer. */
+export type BrowserToolHandler = (
+	args: Readonly<Record<string, unknown>>,
+	context: ToolContext,
+) => Promise<readonly [body: string, footer: string]>
+
 /**
  * Owns the toolset while a replay runs; `destroy` releases it.
  *
@@ -2103,6 +2175,11 @@ export interface BrowserReplayInterface {
 	execute(options?: BrowserCallOptions): Promise<BrowserRun>
 }
 
+/** Exposes the result of one prepared replay execution. */
+export interface BrowserReplayExecutionInterface {
+	readonly result: Promise<BrowserRun>
+}
+
 /** Configures one page of a store listing, with cancellation. */
 export interface BrowserStorePageOptions extends BrowserStoreOptions {
 	readonly offset?: number
@@ -2137,6 +2214,11 @@ export interface BrowserJourneyValidationContext {
 	readonly step: string
 	readonly field: string
 }
+
+/** Iterates pages of journey revisions from a store. */
+export type BrowserJourneyPagesInterface = AsyncIterableIterator<
+	BrowserStorePage<BrowserJourneyRevision>
+>
 
 /**
  * Carries one page of a listing with the entries it could not read.
@@ -2394,7 +2476,7 @@ export type BrowserEpochFunction = () => number
  * formatting, textarea clipping, and significant spaces are outside the capture's fidelity.
  * Caller-supplied HTML is parsed as given; projection options and their safety floors apply.
  */
-export interface BrowserReadingInput {
+export interface BrowserContentInput {
 	readonly url: string
 	readonly title: string
 	readonly html: string
@@ -2418,7 +2500,7 @@ export interface BrowserReadingInput {
  * `html.distill({ base: url })` with `distill: true`. A reading computes each projection one time and cuts every slice from
  * it, so successive slices of one reading and mode share one `total`.
  */
-export interface BrowserReadingInterface {
+export interface BrowserContentInterface {
 	readonly url: string
 	readonly title: string
 	readonly html: HTMLInterface
@@ -2654,10 +2736,10 @@ export interface BrowserElementInterface {
 	focus(options?: BrowserCallOptions): Promise<void>
 	/**
 	 * Captures the element's rendered markup with its document's URL and title as a reading whose
-	 * `stale` flag tracks later navigations of that document; {@link BrowserReadingInput} defines
+	 * `stale` flag tracks later navigations of that document; {@link BrowserContentInput} defines
 	 * the rendered markup.
 	 */
-	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
+	read(options?: BrowserCallOptions): Promise<BrowserContentInterface>
 	/**
 	 * Submits the form the element belongs to. The CDP placement focuses the element and presses
 	 * Enter through a trusted key pair, sending the release even after an abort; the DOM
@@ -2747,9 +2829,9 @@ export interface BrowserViewInterface<E extends BrowserElementInterface = Browse
 	title(options?: BrowserCallOptions): Promise<string>
 	/**
 	 * Captures the document URL, title, and rendered markup as a reading whose `stale` flag tracks
-	 * later navigations; {@link BrowserReadingInput} defines the rendered markup.
+	 * later navigations; {@link BrowserContentInput} defines the rendered markup.
 	 */
-	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
+	read(options?: BrowserCallOptions): Promise<BrowserContentInterface>
 	/**
 	 * Resolves when the main document body’s `innerText` contains `text`, or lacks it with `absent`; rejects with a `BrowserError` coded
 	 * `TIMEOUT` at the deadline, and with `signal.reason` on abort.
@@ -3149,10 +3231,10 @@ export interface BrowserFrameInterface {
 	/**
 	 * Captures the document URL, title, and rendered HTML in one size-guarded evaluation in the frame's
 	 * isolated world and returns them as a reading whose `stale` flag tracks later navigations.
-	 * The owning page supplies the navigation counter. {@link BrowserReadingInput} defines
+	 * The owning page supplies the navigation counter. {@link BrowserContentInput} defines
 	 * the rendered markup.
 	 */
-	read(options?: BrowserCallOptions): Promise<BrowserReadingInterface>
+	read(options?: BrowserCallOptions): Promise<BrowserContentInterface>
 	/** Evaluates an expression in the frame execution world under the result-size guard. */
 	evaluate(expression: string, options?: BrowserCallOptions): Promise<unknown>
 	/**
@@ -3231,6 +3313,12 @@ export interface BrowserDocument {
 	readonly scroll: readonly [x: number | undefined, y: number | undefined]
 	readonly width: number | undefined
 	readonly height: number | undefined
+}
+
+/** Names the undecoded tables supplied by a CDP snapshot response. */
+export interface BrowserSnapshotTables {
+	readonly strings: readonly unknown[]
+	readonly documents: readonly unknown[]
 }
 
 /**

@@ -24,6 +24,7 @@ import {
 	createCDPClient,
 } from '@src/core'
 import {
+	BrowserFixtureValue,
 	createBrowserViewDouble,
 	createBrowserJourneyFixture,
 	createBrowserElementFixture,
@@ -125,20 +126,20 @@ describe('createBrowserContext', () => {
 		replyOk(transport, 'Emulation.setDeviceMetricsOverride')
 		replyOk(transport, 'Target.detachFromTarget')
 		const writer = createRecordingWriter()
-		let announced = ''
+		const announced = new BrowserFixtureValue('')
 		const context = createBrowserContext(client, {
 			id: 'factory-context',
 			viewport: { width: 640, height: 480 },
 			writer,
 			on: {
 				page: (page) => {
-					announced = page.target
+					announced.value = page.target
 				},
 			},
 		})
 		try {
 			const page = await context.create()
-			expect(announced).toBe('factory-page')
+			expect(announced.value).toBe('factory-page')
 			expect(context.id).toBe('factory-context')
 			expect(
 				transport.sent.find((entry) => entry.method === 'Target.createTarget')?.params,

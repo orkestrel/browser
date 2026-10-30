@@ -1,5 +1,6 @@
 import type { ToolDefinition } from '@orkestrel/tool'
 import type {
+	BrowserErrorCode,
 	BrowserElementRefusal,
 	BrowserJourney,
 	BrowserMouseButton,
@@ -10,6 +11,79 @@ import type {
 } from './types.js'
 
 // === Browser
+
+/** Holds the declared codes accepted by the browser error guard. */
+export const BROWSER_ERROR_CODES: readonly BrowserErrorCode[] = Object.freeze([
+	'ARGUMENT',
+	'CAPTURE_UNAVAILABLE',
+	'CAPTURE_UNTRUSTED',
+	'CLOSED',
+	'CONNECTION',
+	'DISCONNECTED',
+	'DOCUMENT',
+	'DOCUMENT_DESTROYED',
+	'DOCUMENT_OWN',
+	'DOCUMENT_SUBMIT',
+	'ELEMENT',
+	'ELEMENT_QUERY',
+	'HAR',
+	'STORE_ACCESS',
+	'JOURNEY_AMBIGUOUS',
+	'JOURNEY_DIALOG',
+	'JOURNEY_EDIT',
+	'JOURNEY_EMPTY',
+	'STORE_FILE',
+	'STORE_FORMAT',
+	'JOURNEY_GAP',
+	'JOURNEY_INPUT',
+	'JOURNEY_INVALID',
+	'STORE_LOCKED',
+	'JOURNEY_MISSING',
+	'STORE_PATH',
+	'JOURNEY_PLACEMENT',
+	'JOURNEY_READONLY',
+	'JOURNEY_RECORDING',
+	'JOURNEY_SAVED',
+	'JOURNEY_STALE',
+	'JOURNEY_TARGET',
+	'JSON',
+	'NAVIGATION',
+	'PROTOCOL',
+	'REMOTE',
+	'RESULT_LIMIT',
+	'SERVER_BUSY',
+	'SERVER_CRASH',
+	'SERVER_ENVIRONMENT',
+	'SERVER_EXHAUSTED',
+	'SERVER_HOLDER',
+	'SERVER_LAUNCH',
+	'SERVER_SWEEP',
+	'SERVER_TEARDOWN',
+	'SERVER_UNAVAILABLE',
+	'SERVER_UNRESOLVED',
+	'STEP',
+	'TARGET_HELD',
+	'TIMEOUT',
+	'TOOLSET_BUSY',
+	'TOOLSET_CAPTURE',
+	'TOOLSET_CONTEXT',
+	'TOOLSET_DIALOG',
+	'TOOLSET_LIMIT',
+	'TOOLSET_OBSERVE',
+	'TOOLSET_PAGE',
+	'TOOLSET_RECEIPT',
+	'TOOLSET_RESERVED',
+	'TOOLSET_ROLE',
+	'TOOLSET_SCHEME',
+	'TOOLSET_SETTLED',
+	'TOOLSET_TAB',
+])
+
+/** Identifies browser errors across installed copies and module formats. */
+export const BROWSER_ERROR_BRAND = Symbol.for('@orkestrel/browser.BrowserError')
+
+/** Identifies journey step errors across installed copies and module formats. */
+export const BROWSER_STEP_ERROR_BRAND = Symbol.for('@orkestrel/browser.BrowserStepError')
 
 /**
  * Sets the default timeout for browser connection, requests, and navigation, `30_000`
@@ -201,9 +275,9 @@ export const BROWSER_CODEGEN_SOURCE = `(() => {
 			if (event.type === 'keydown' && event.key !== 'Enter') return
 			const element = event.composedPath()[0]
 			if (!(element instanceof Element)) return
-			let index = state.indices.get(element)
-			if (index === undefined) {
-				index = state.nodes.push(element) - 1
+			const known = state.indices.get(element)
+			const index = known === undefined ? state.nodes.push(element) - 1 : known
+			if (known === undefined) {
 				state.indices.set(element, index)
 			}
 			const control = element.tagName === 'SELECT' ? (element.multiple ? 'multiple' : 'select')
@@ -815,7 +889,7 @@ export const BROWSER_ACTION_STAGES: readonly BrowserNavigationStage[] = Object.f
 ])
 
 /** Holds the result the `journeys` tool returns when no journey is saved. */
-export const BROWSER_JOURNEY_EMPTY_LISTING = 'No journeys are saved; call record to start one.'
+export const BROWSER_JOURNEY_EMPTY_LIST = 'No journeys are saved; call record to start one.'
 
 /**
  * Names the journey tools a toolset constructed with `journeys` registers and reserves: `record`,

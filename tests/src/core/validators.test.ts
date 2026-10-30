@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { attempt } from '@orkestrel/contract'
 import {
 	isBrowserPage,
+	isBrowserErrorContext,
 	isBrowserSecretBinding,
 	isBrowserJourneyBinding,
 	isBrowserJourneyTab,
@@ -23,6 +24,32 @@ import {
 	BROWSER_JOURNEY_TEMPLATE_CASES,
 	BROWSER_RUN_FIXTURE,
 } from '../../setup.js'
+
+describe('isBrowserErrorContext', () => {
+	it('checks nested metadata by index, retains numbers, and refuses cycles and unreadable members', () => {
+		const values = [Number.NaN, Number.POSITIVE_INFINITY]
+		Object.defineProperty(values, Symbol.iterator, {
+			value: () => {
+				throw new Error('the iterator must not run')
+			},
+		})
+		const shared = { values }
+		expect(isBrowserErrorContext({ first: shared, second: shared })).toBe(true)
+		expect(isBrowserErrorContext({ values: Array(1) })).toBe(false)
+		expect(isBrowserErrorContext({ value: undefined })).toBe(false)
+		expect(isBrowserErrorContext({ value: new Date() })).toBe(false)
+		const cycle: Record<string, unknown> = {}
+		cycle['self'] = cycle
+		expect(isBrowserErrorContext(cycle)).toBe(false)
+		expect(
+			isBrowserErrorContext({
+				get value() {
+					throw new Error('unreadable')
+				},
+			}),
+		).toBe(false)
+	})
+})
 
 describe('isBrowserPage', () => {
 	it.each([

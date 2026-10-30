@@ -325,13 +325,11 @@ export class BrowserRegistry implements BrowserRegistryInterface {
 	}
 
 	#invalidate(frame: string): void {
-		let removed = false
-		for (const [key, tool] of this.#tools) {
-			if (tool.frame === frame) {
-				this.#tools.delete(key)
-				removed = true
-			}
-		}
+		const removed = this.#tools.entries().reduce((previous, [key, tool]) => {
+			if (tool.frame !== frame) return previous
+			this.#tools.delete(key)
+			return true
+		}, false)
 		this.#owners.delete(frame)
 		for (const pending of this.#pending) {
 			if (pending.frame === frame)

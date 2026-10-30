@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { BrowserPage } from '../../../src/core/BrowserPage.js'
-import { createConnectedCDPClient, replyOk, ignoreAsyncCall } from '../../setup.js'
+import {
+	BrowserFixtureValue,
+	createConnectedCDPClient,
+	replyOk,
+	ignoreAsyncCall,
+} from '../../setup.js'
 
 describe('BrowserRouteManager', () => {
 	it('shares the owner manager and clears every route before disabling interception', async () => {
@@ -28,9 +33,9 @@ describe('BrowserRouteManager', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Network.enable')
 		replyOk(transport, 'Fetch.disable')
-		let refusing = true
+		const refusing = new BrowserFixtureValue(true)
 		transport.onSend('Fetch.enable', (message) => {
-			if (refusing) transport.fail(message.id, 'Fetch refused')
+			if (refusing.value) transport.fail(message.id, 'Fetch refused')
 			else transport.reply(message.id, {})
 		})
 		const page = new BrowserPage(client, 'target', 'session')
@@ -38,7 +43,7 @@ describe('BrowserRouteManager', () => {
 			await expect(
 				page.network.routes.add({ url: '**/failed' }, async (route) => await route.abort()),
 			).rejects.toThrow('Fetch refused')
-			refusing = false
+			refusing.value = false
 			await page.network.routes.add({ url: '**/ok' }, ignoreAsyncCall)
 			await page.network.routes.remove(ignoreAsyncCall)
 			expect(transport.sent.at(-1)?.method).toBe('Fetch.disable')

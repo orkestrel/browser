@@ -1,3 +1,14 @@
+import type {
+	WebMCPAnnotations,
+	WebMCPExecuteHandler,
+	WebMCPExecuteOptions,
+	WebMCPRegisteredTool,
+	WebMCPRegisterOptions,
+	WebMCPRegistryInterface,
+	WebMCPTool,
+	WebMCPToolEvent,
+	WebMCPToolsOptions,
+} from '@orkestrel/mcp/browser'
 import { BrowserCodegen } from '../src/core/recorders/BrowserCodegen.js'
 import type {
 	BrowserAction,
@@ -5,8 +16,10 @@ import type {
 	BrowserJourneyEdit,
 	BrowserJourney,
 	BrowserJourneyStoreInterface,
+	BrowserJourneyRevision,
 	BrowserJourneyStep,
 	BrowserRun,
+	BrowserRunStoreInterface,
 	BrowserStoreOptions,
 	BrowserStoreFault,
 	BrowserCallOptions,
@@ -19,11 +32,12 @@ import type {
 	BrowserOutline,
 	BrowserOutlineNode,
 	BrowserOutlineOptions,
-	BrowserReadingInterface,
+	BrowserContentInterface,
 	BrowserReferenceFunction,
 	BrowserViewInterface,
 	BrowserToolsetInterface,
 	BrowserToolSourceEventMap,
+	BrowserToolSourceInterface,
 	CDPClientInterface,
 	CDPTarget,
 	CDPTransportEventMap,
@@ -46,14 +60,70 @@ import {
 	compileSubmitObserverExpression,
 	compileReadFunction,
 	compileSubmitReadExpression,
-	createBrowserReading,
+	createBrowserContent,
 	createCDPClient,
 } from '@src/core'
 import { BrowserNavigationRecord } from '../src/core/BrowserNavigationRecord.js'
-import { isNumber, isRecord, isString } from '@orkestrel/contract'
+import { attempt, isNumber, isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { createRecorder, waitForEvent } from '@orkestrel/test'
+import { createRecorder, requireValue, waitForEvent, waitForAbort } from '@orkestrel/test'
+
+/** Owns a fixture value that changes across callbacks of one test. */
+export class BrowserFixtureValue<T> {
+	#value: T
+
+	constructor(value: T) {
+		this.#value = value
+	}
+
+	get value(): T {
+		return this.#value
+	}
+
+	get required(): NonNullable<T> {
+		return requireValue(this.#value ?? undefined)
+	}
+
+	set value(value: T) {
+		this.#value = value
+	}
+}
+
+/** Replies to a wait interrupted by navigation, then supplies its retry result. */
+export function replyBrowserNavigationRetry(
+	current: BrowserFixtureValue<BrowserElementFixture | undefined>,
+	attempts: BrowserFixtureValue<number>,
+	method: string,
+	message: CDPSentMessage,
+): void {
+	const fixture = current.required
+	attempts.value += 1
+	if (attempts.value === 1) {
+		fixture.transport.event(
+			'Page.frameNavigated',
+			{
+				frame: { id: 'main', url: fixture.page.url, loaderId: 'next' },
+			},
+			'session-main',
+		)
+		fixture.transport.event(
+			'Page.lifecycleEvent',
+			{
+				frameId: 'main',
+				loaderId: 'next',
+				name: 'DOMContentLoaded',
+			},
+			'session-main',
+		)
+		if (method === 'document') fixture.transport.reply(message.id, {})
+		else fixture.transport.fail(message.id, 'Could not find node with given id')
+	} else if (method === 'accessibility') fixture.transport.reply(message.id, { nodes: [] })
+	else if (method === 'describe')
+		fixture.transport.reply(message.id, { node: { backendNodeId: 7 } })
+	else if (method === 'document') fixture.transport.reply(message.id, { root: { nodeId: 2 } })
+	else fixture.transport.reply(message.id, { nodeIds: [50] })
+}
 
 /** Holds details whose body becomes readable when opened. */
 export const WAIT_DETAILS_HTML = '<details><summary>Summary</summary><p>Wait subject</p></details>'
@@ -397,6 +467,33 @@ export const BROWSER_STORE_FAULT_FIXTURE: BrowserStoreFault = Object.freeze({
 	name: 'broken-journey',
 	reason: 'The read/write mode is unsupported',
 })
+
+/**
+ * Writes a competing revision after a store read when the fixture enables concurrency.
+ * @param store - The real store serving reads and ordinary writes
+ * @param writer - The real store publishing the competing revision
+ * @param concurrent - Whether a read publishes a competing revision
+ * @returns A store boundary exercising the revision race
+ */
+export function createBrowserConcurrentJourneyStore(
+	store: BrowserJourneyStoreInterface,
+	writer: BrowserJourneyStoreInterface,
+	concurrent: BrowserFixtureValue<boolean>,
+): BrowserJourneyStoreInterface {
+	return {
+		get: async (name, options) => {
+			const read = await store.get(name, options)
+			if (read !== undefined && concurrent.value)
+				await writer.set(read.journey, {
+					...(read.revision === undefined ? {} : { revision: read.revision }),
+				})
+			return read
+		},
+		set: store.set.bind(store),
+		delete: store.delete.bind(store),
+		list: store.list.bind(store),
+	}
+}
 
 /**
  * Refuses scripted writes at the store boundary before delegating subsequent writes to the store.
@@ -1353,8 +1450,8 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 	const sessions = new Set<string>()
 	// The `Target.attachToTarget` requests of the current connection that no reply has answered.
 	const attaching = new Set<number>()
-	let started = false
-	let closed = false
+	const started = new BrowserFixtureValue(false)
+	const closed = new BrowserFixtureValue(false)
 
 	return {
 		emitter,
@@ -1365,14 +1462,14 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 			return sessions
 		},
 		get started(): boolean {
-			return started
+			return started.value
 		},
 		get closed(): boolean {
-			return closed
+			return closed.value
 		},
 		async start(): Promise<void> {
-			started = true
-			closed = false
+			started.value = true
+			closed.value = false
 		},
 		async send(data: string): Promise<void> {
 			const parsed: unknown = JSON.parse(data)
@@ -1386,14 +1483,14 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 			const message: CDPSentMessage = { id, method, params, sessionId }
 
 			sent.push(message)
-			if (method === 'Target.attachToTarget' && started) attaching.add(id)
+			if (method === 'Target.attachToTarget' && started.value) attaching.add(id)
 
 			for (const handler of handlers.get(method) ?? []) handler(message)
 		},
 		async close(): Promise<void> {
-			const open = started
-			closed = true
-			started = false
+			const open = started.value
+			closed.value = true
+			started.value = false
 			attaching.clear()
 			sessions.clear()
 			// The real transport reports every socket close, including the one it
@@ -1401,11 +1498,9 @@ export function createCDPTestTransport(): CDPTestTransportInterface {
 			if (open) emitter.emit('close')
 		},
 		onSend(method: string, handler: CDPSentHandler): void {
-			let list = handlers.get(method)
-			if (list === undefined) {
-				list = []
-				handlers.set(method, list)
-			}
+			const registered = handlers.get(method)
+			const list = registered ?? []
+			if (registered === undefined) handlers.set(method, list)
 			list.push(handler)
 		},
 		reply(id: number, result: unknown): void {
@@ -1527,14 +1622,11 @@ export class RecordingCDPClient implements CDPClientInterface {
 	 * @returns The count of live handler registrations that match
 	 */
 	registrations(method?: string, session?: string): number {
-		let count = 0
-		for (const held of this.#registrations.values())
-			if (
-				(method === undefined || held.method === method) &&
-				(session === undefined || held.session === session)
-			)
-				count += held.handlers.size
-		return count
+		return this.#registrations.values().reduce((count, held) => {
+			if (method !== undefined && held.method !== method) return count
+			if (session !== undefined && held.session !== session) return count
+			return count + held.handlers.size
+		}, 0)
 	}
 }
 
@@ -1654,8 +1746,8 @@ export function emitBrowserWindowOpen(
  * ```
  */
 export function createReferenceSequence(): BrowserReferenceFunction {
-	let sequence = 0
-	return () => `e${++sequence}`
+	const sequence = new BrowserFixtureValue(0)
+	return () => `e${++sequence.value}`
 }
 
 /**
@@ -2815,10 +2907,10 @@ export class BrowserElementDouble implements BrowserElementInterface {
 		this.#calls.push(`submit ${this.#reference}`)
 	}
 
-	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+	async read(options?: BrowserCallOptions): Promise<BrowserContentInterface> {
 		options?.signal?.throwIfAborted()
 		this.#calls.push(`read ${this.#reference}`)
-		return createBrowserReading({
+		return createBrowserContent({
 			url: 'https://example.test/form',
 			title: 'Form',
 			html: `<p>${this.#name}</p>`,
@@ -2922,10 +3014,10 @@ export class BrowserViewDouble implements BrowserViewInterface {
 		return this.#title
 	}
 
-	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+	async read(options?: BrowserCallOptions): Promise<BrowserContentInterface> {
 		options?.signal?.throwIfAborted()
 		this.#calls.push('read')
-		return createBrowserReading({ url: this.#url, title: this.#title, html: this.#html })
+		return createBrowserContent({ url: this.#url, title: this.#title, html: this.#html })
 	}
 
 	async wait(text: string, options?: BrowserWaitOptions): Promise<void> {
@@ -4126,12 +4218,7 @@ export function captureCodegenSource(
 	)
 	for (const event of events) {
 		const element = {
-			tagName: 'INPUT',
-			type: 'password',
-			value: 'teal-Heron-42',
-			form: {},
-			ownerDocument: document,
-			getRootNode: () => document,
+			...createCodegenSourceElement(document),
 			...(isRecord(event['element']) ? event['element'] : {}),
 		}
 		const name = event['type']
@@ -4139,6 +4226,18 @@ export function captureCodegenSource(
 			listeners.get(name)?.({ isTrusted: true, ...event, composedPath: () => [element] })
 	}
 	return payloads
+}
+
+/** Builds the inert password element the compiled listener's fixture supplies. */
+export function createCodegenSourceElement(document: unknown) {
+	return {
+		tagName: 'INPUT',
+		type: 'password',
+		value: 'teal-Heron-42',
+		form: {},
+		ownerDocument: document,
+		getRootNode: () => document,
+	}
 }
 
 /** Holds the independent fixture event log, using only fixture-declared semantic names. */
@@ -4176,17 +4275,29 @@ export const BROWSER_CODEGEN_FIXTURE = `<!doctype html><meta charset="utf-8"><ti
 export function projectCodegenOracle(
 	log: ReadonlyArray<Readonly<Record<string, unknown>>>,
 ): readonly BrowserJourneyStepInput[] {
-	const steps: BrowserJourneyStepInput[] = []
-	let edit: { readonly id: unknown; readonly position: number } | undefined
-	let entered = false
-	for (const event of log) {
+	const oracle = new BrowserCodegenOracle()
+	for (const event of log) oracle.accept(event)
+	return oracle.steps
+}
+
+/** Projects fixture gestures while retaining the edit that a later gesture can finish. */
+export class BrowserCodegenOracle {
+	readonly #steps: BrowserJourneyStepInput[] = []
+	#edit: { readonly id: unknown; readonly position: number } | undefined
+	#entered = false
+
+	get steps(): readonly BrowserJourneyStepInput[] {
+		return this.#steps
+	}
+
+	accept(event: Readonly<Record<string, unknown>>): void {
 		const action = event['event']
 		const control = event['control']
 		const target = { role: String(event['role']), name: String(event['name']) }
 		if (action === 'focusout' || action === 'submit' || action === 'navigation') {
-			edit = undefined
-			entered = false
-			continue
+			this.#edit = undefined
+			this.#entered = false
+			return
 		}
 		if (action === 'input' && (control === 'text' || control === 'password')) {
 			const step = {
@@ -4196,55 +4307,63 @@ export function projectCodegenOracle(
 					text: event['secret'] === true ? { parameter: 'password' } : String(event['text']),
 				},
 			}
-			if (edit !== undefined && edit.id === event['id']) steps[edit.position] = step
-			else {
-				steps.push(step)
-				edit = { id: event['id'], position: steps.length - 1 }
+			if (this.#edit !== undefined && this.#edit.id === event['id']) {
+				this.#steps[this.#edit.position] = step
+			} else {
+				this.#steps.push(step)
+				this.#edit = { id: event['id'], position: this.#steps.length - 1 }
 			}
-			continue
+			return
 		}
 		if (action === 'keydown') {
+			const edit = this.#edit
 			const previous =
-				edit !== undefined && edit.id === event['id'] ? steps[edit.position] : undefined
-			if (previous?.action === 'type' && event['form'] === true && edit !== undefined)
-				steps[edit.position] = { ...previous, arguments: { ...previous.arguments, submit: true } }
-			else steps.push({ action: 'press', arguments: { key: 'Enter' } })
-			edit = undefined
-			entered = event['form'] === true
-			continue
+				edit !== undefined && edit.id === event['id'] ? this.#steps[edit.position] : undefined
+			if (previous?.action === 'type' && event['form'] === true && this.#edit !== undefined) {
+				this.#steps[this.#edit.position] = {
+					...previous,
+					arguments: { ...previous.arguments, submit: true },
+				}
+			} else this.#steps.push({ action: 'press', arguments: { key: 'Enter' } })
+			this.#edit = undefined
+			this.#entered = event['form'] === true
+			return
 		}
 		if (action === 'click') {
 			if (
 				['select', 'multiple', 'option'].includes(String(control)) ||
-				(event['detail'] === 0 && entered)
+				(event['detail'] === 0 && this.#entered)
 			)
-				continue
-			edit = undefined
-			entered = false
+				return
+			this.#edit = undefined
+			this.#entered = false
 			if (event['main'] === false)
-				steps.push({ action: 'unresolved', arguments: {}, gap: 'the element is in a child frame' })
+				this.#steps.push({
+					action: 'unresolved',
+					arguments: {},
+					gap: 'the element is in a child frame',
+				})
 			else {
-				steps.push({ action: 'click', arguments: {}, target })
+				this.#steps.push({ action: 'click', arguments: {}, target })
 				if (control === 'text' || control === 'password')
-					edit = { id: event['id'], position: steps.length - 1 }
+					this.#edit = { id: event['id'], position: this.#steps.length - 1 }
 			}
 		}
 		if (action === 'change' && (control === 'select' || control === 'multiple')) {
-			edit = undefined
+			this.#edit = undefined
 			if (control === 'multiple' || event['valid'] !== true)
-				steps.push({
+				this.#steps.push({
 					action: 'unresolved',
 					arguments: {},
 					gap: control === 'multiple' ? 'a multiple selection' : 'the option does not round-trip',
 				})
-			else steps.push({ action: 'type', arguments: { text: String(event['text']) }, target })
+			else this.#steps.push({ action: 'type', arguments: { text: String(event['text']) }, target })
 		}
 		if (action === 'dialog') {
-			edit = undefined
-			steps.push({ action: 'unresolved', arguments: {}, gap: 'a native dialog answer' })
+			this.#edit = undefined
+			this.#steps.push({ action: 'unresolved', arguments: {}, gap: 'a native dialog answer' })
 		}
 	}
-	return steps
 }
 
 // === Compiled journey modules
@@ -4854,3 +4973,1433 @@ export const BROWSER_READING_HTML =
 /** Supplies heading, table-reference, image-escaping and hidden-content edge cases. */
 export const BROWSER_READING_STRUCTURE_HTML =
 	'<h2>Menu <a href="/tea">Tea</a> <a href="https://else.example/">Elsewhere</a></h2><div role="heading" aria-level="9">End</div><table><tr><td>Before <a href="/buy">Buy</a> after</td><td>9</td></tr></table><img alt="A &quot;quote&quot;"><img alt=""><p hidden>Hidden words</p>'
+
+export function createBrowserFixtureSource(
+	adopt: BrowserToolSourceInterface['adopt'],
+	tools?: BrowserToolSourceInterface['tools'],
+	emitter: EmitterInterface<BrowserToolSourceEventMap> = new Emitter<BrowserToolSourceEventMap>(),
+): BrowserToolSourceInterface {
+	return { emitter, adopt, ...(tools === undefined ? {} : { tools }) }
+}
+
+export function countBrowserFrontCalls(transport: CDPTestTransportInterface): number {
+	return transport.sent.filter((message) => message.method === 'Page.bringToFront').length
+}
+
+export type BrowserJourneyReadMode = 'block' | 'file' | 'format'
+
+export function createBrowserFaultJourneyStore(
+	memory: BrowserJourneyStoreInterface,
+): BrowserJourneyStoreInterface {
+	return {
+		get: memory.get.bind(memory),
+		set: memory.set.bind(memory),
+		delete: memory.delete.bind(memory),
+		list: async () => ({
+			entries: [],
+			truncated: false,
+			faults: [BROWSER_STORE_FAULT_FIXTURE, BROWSER_STORE_FAULT_FIXTURE],
+		}),
+	}
+}
+
+export function createBrowserObservedJourneyStore(
+	memory: BrowserJourneyStoreInterface,
+	calls: RecorderInterface<readonly [string]>,
+): BrowserJourneyStoreInterface {
+	return {
+		get: (name, options) => {
+			calls.handler('get')
+			return memory.get(name, options)
+		},
+		set: (journey, options) => {
+			calls.handler('set')
+			return memory.set(journey, options)
+		},
+		delete: memory.delete.bind(memory),
+		list: (options) => {
+			calls.handler('list')
+			return memory.list(options)
+		},
+	}
+}
+
+export function createBrowserStaleJourneyStore(
+	memory: BrowserJourneyStoreInterface,
+	scripted: Array<'stale' | 'locked'>,
+): BrowserJourneyStoreInterface {
+	return {
+		get: async (name, options) => {
+			const read = await memory.get(name, options)
+			// Another writer saves the journey between this read and the edit's write.
+			if (read !== undefined && scripted[0] === 'stale') await memory.set(read.journey)
+			return read
+		},
+		set: async (journey, options) => {
+			if (scripted.shift() === 'locked')
+				throw new BrowserError('STORE_LOCKED', 'Journey check-ready is locked.')
+			return memory.set(journey, options)
+		},
+		delete: memory.delete.bind(memory),
+		list: memory.list.bind(memory),
+	}
+}
+
+export function createBrowserInertJourneyStore(
+	memory: BrowserJourneyStoreInterface,
+	journey: BrowserJourney,
+): BrowserJourneyStoreInterface {
+	return {
+		get: async () => ({ journey }),
+		set: memory.set.bind(memory),
+		list: memory.list.bind(memory),
+		delete: memory.delete.bind(memory),
+	}
+}
+
+export function createBrowserHeldJourneyStore(
+	memory: BrowserJourneyStoreInterface,
+	mode: BrowserFixtureValue<BrowserJourneyReadMode | undefined>,
+	pending: PromiseWithResolvers<void>,
+): BrowserJourneyStoreInterface {
+	return {
+		get: async (name, options): Promise<BrowserJourneyRevision | undefined> => {
+			const read = await memory.get(name, options)
+			if (mode.value === 'block') await pending.promise
+			if (mode.value === 'file')
+				throw new BrowserError(
+					'STORE_FILE',
+					'The journey file tmp/browsers/check-ready/journey.json is malformed.',
+				)
+			if (mode.value === 'format' && read !== undefined)
+				return { ...read, journey: { ...read.journey, format: 1, next: 0 } }
+			return read
+		},
+		set: memory.set.bind(memory),
+		delete: memory.delete.bind(memory),
+		list: memory.list.bind(memory),
+	}
+}
+
+export function createBrowserAbortedJourneyStore(
+	memory: BrowserJourneyStoreInterface,
+	reached: RecorderInterface<readonly [string]>,
+): BrowserJourneyStoreInterface {
+	return {
+		get: async (_name, options) => {
+			reached.handler('get')
+			await waitForAbort(requireValue(options?.signal))
+			throw requireValue(options?.signal).reason
+		},
+		set: async (_journey, options) => {
+			reached.handler('set')
+			await waitForAbort(requireValue(options?.signal))
+			throw requireValue(options?.signal).reason
+		},
+		delete: memory.delete.bind(memory),
+		list: async (options) => {
+			reached.handler('list')
+			await waitForAbort(requireValue(options?.signal))
+			throw requireValue(options?.signal).reason
+		},
+	}
+}
+
+export function createBrowserAbortedJourneyWriteStore(
+	memory: BrowserJourneyStoreInterface,
+	writes: RecorderInterface<readonly [boolean]>,
+): BrowserJourneyStoreInterface {
+	return {
+		get: memory.get.bind(memory),
+		set: async (_journey, options) => {
+			writes.handler(options?.signal?.aborted ?? true)
+			await waitForAbort(requireValue(options?.signal))
+			throw requireValue(options?.signal).reason
+		},
+		delete: memory.delete.bind(memory),
+		list: memory.list.bind(memory),
+	}
+}
+
+// === WebMCP fixture source
+
+// The WebMCP registry double: an in-memory implementation of the `ModelContext` WebIDL in the
+// WebMCP specification source `index.bs` at revision 19fc56516057, member for member and nothing
+// beyond it.
+//
+// It is a protocol-faithful boundary stub of a FOREIGN surface, which is the one substitution
+// the test contract permits: the Chromium the browser project drives exposes no
+// `document.modelContext`, so the platform object a registry client talks to does not exist to
+// drive. It never stands in for any part of this package or of `@orkestrel/mcp`: the bridge a
+// proof drives is the real one `createModelContext` returns, and what this file supplies is only
+// the thing the browser does not.
+//
+// `ModelContextRegistry` therefore declares exactly the IDL's own operations and its three
+// event-handler attributes, and inherits `EventTarget` for the `toolchange`, `toolactivated`, and
+// `toolcancel` events. The recorders a proof reads registrations and live subscriptions through
+// are NOT registry members: they sit on the fixture handle beside the registry, over the same
+// state, so the object installed on the document stays the shape a user agent would install.
+
+/** Matches a tool name the `registerTool` steps accept: 1 to 128 ASCII alphanumerics, `_`, `-`, `.`. */
+export const MODEL_CONTEXT_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,128}$/
+
+/** Holds one tool definition the registry keeps under its name, as the `registerTool` steps build it. */
+export interface ModelContextDefinition {
+	/** The tool dictionary the caller handed `registerTool`. */
+	readonly tool: WebMCPTool
+	/** The registration options the caller handed `registerTool`, `undefined` when omitted. */
+	readonly options: WebMCPRegisterOptions | undefined
+	/** The serialized input schema, the empty string when the tool declares none. */
+	readonly schema: string
+	/** The annotations with the dictionary defaults applied, `undefined` when the tool declares none. */
+	readonly annotations: Required<WebMCPAnnotations> | undefined
+	/** The origins `exposedTo` named, serialized. */
+	readonly exposed: readonly string[]
+}
+
+/** Names the shape a WebMCP `EventHandler` attribute holds: a handler function, or nothing. */
+export type ModelContextEventHandler = ((event: Event) => unknown) | null
+
+/** Holds the live state the fixture handle reads a registry back through. */
+export interface ModelContextState {
+	/** Every live definition, keyed by the tool name the registry keys registration on. */
+	readonly tools: Map<string, ModelContextDefinition>
+	/** Every registry listener subscribed and not yet removed, in subscription order. */
+	readonly listeners: EventListenerOrEventListenerObject[]
+}
+
+/** Pairs the installed registry double with the recorders over its live state. */
+export interface ModelContextFixtureInterface {
+	/** The IDL-faithful registry installed as the document's `modelContext`. */
+	readonly registry: ModelContextRegistry
+	/** The origin the registry reports for its tools: the document's own. */
+	readonly origin: string
+	/** Every definition the registry holds, in registration order. */
+	registrations(): readonly ModelContextDefinition[]
+	/** Every registry listener subscribed and not yet removed, in subscription order. */
+	listeners(): readonly EventListenerOrEventListenerObject[]
+}
+
+/** Transliterates the `ToolActivatedEventInit` and `ToolCancelEventInit` dictionaries. */
+export interface ModelContextToolEventInit extends EventInit {
+	readonly toolName?: string
+}
+
+/** Carries the name of the tool whose execution begins, as the IDL's activation event does. */
+export class ToolActivatedEvent extends Event implements WebMCPToolEvent {
+	readonly toolName: string
+
+	constructor(type: string, options: ModelContextToolEventInit = {}) {
+		super(type, options)
+		this.toolName = options.toolName ?? ''
+	}
+}
+
+/** Carries the name of the tool whose execution is cancelled, as the IDL's cancel event does. */
+export class ToolCancelEvent extends Event implements WebMCPToolEvent {
+	readonly toolName: string
+
+	constructor(type: string, options: ModelContextToolEventInit = {}) {
+		super(type, options)
+		this.toolName = options.toolName ?? ''
+	}
+}
+
+/**
+ * Reports whether a URL's origin is potentially trustworthy, the test `exposedTo` and
+ * `fromOrigins` entries must pass.
+ *
+ * @param value - The origin string a caller supplied
+ * @returns The serialized origin, or `undefined` when the string does not parse or its origin is
+ * not potentially trustworthy
+ */
+export function parseModelContextOrigin(value: string): string | undefined {
+	const parsed = attempt(() => new URL(value))
+	if (!parsed.success) return undefined
+	const url = parsed.value
+	const loopback =
+		url.hostname === 'localhost' ||
+		url.hostname.endsWith('.localhost') ||
+		url.hostname === '[::1]' ||
+		/^127(?:\.\d{1,3}){3}$/.test(url.hostname)
+	const trustworthy =
+		url.protocol === 'https:' || url.protocol === 'wss:' || url.protocol === 'file:' || loopback
+	return trustworthy && url.origin !== 'null' ? url.origin : undefined
+}
+
+/** Implements the WebMCP `ModelContext` interface over an injected state record. */
+export class ModelContextRegistry extends EventTarget implements WebMCPRegistryInterface {
+	readonly #state: ModelContextState
+	readonly #window: Window
+	readonly #origin: string
+	#changed: ModelContextEventHandler = null
+	#activated: ModelContextEventHandler = null
+	#cancelled: ModelContextEventHandler = null
+
+	constructor(state: ModelContextState, host: Window, origin: string) {
+		super()
+		this.#state = state
+		this.#window = host
+		this.#origin = origin
+	}
+
+	/** Holds the `ontoolchange` event-handler attribute. */
+	get ontoolchange(): ModelContextEventHandler {
+		return this.#changed
+	}
+
+	set ontoolchange(handler: ModelContextEventHandler) {
+		this.#replace('toolchange', this.#changed, handler)
+		this.#changed = handler
+	}
+
+	/** Holds the `ontoolactivated` event-handler attribute. */
+	get ontoolactivated(): ModelContextEventHandler {
+		return this.#activated
+	}
+
+	set ontoolactivated(handler: ModelContextEventHandler) {
+		this.#replace('toolactivated', this.#activated, handler)
+		this.#activated = handler
+	}
+
+	/** Holds the `ontoolcancel` event-handler attribute. */
+	get ontoolcancel(): ModelContextEventHandler {
+		return this.#cancelled
+	}
+
+	set ontoolcancel(handler: ModelContextEventHandler) {
+		this.#replace('toolcancel', this.#cancelled, handler)
+		this.#cancelled = handler
+	}
+
+	// The subscription pair records into the injected state before delegating, because an
+	// `EventTarget` publishes no way to read back what was subscribed.
+	override addEventListener(
+		type: string,
+		listener: EventListenerOrEventListenerObject | null,
+		options?: AddEventListenerOptions | boolean,
+	): void {
+		if (listener !== null) this.#state.listeners.push(listener)
+		super.addEventListener(type, listener, options)
+	}
+
+	override removeEventListener(
+		type: string,
+		listener: EventListenerOrEventListenerObject | null,
+		options?: EventListenerOptions | boolean,
+	): void {
+		const index = listener === null ? -1 : this.#state.listeners.indexOf(listener)
+		if (index !== -1) this.#state.listeners.splice(index, 1)
+		super.removeEventListener(type, listener, options)
+	}
+
+	async registerTool(tool: WebMCPTool, options?: WebMCPRegisterOptions): Promise<void> {
+		if (this.#state.tools.has(tool.name)) {
+			throw new DOMException(`A tool named '${tool.name}' is registered`, 'InvalidStateError')
+		}
+		if (!MODEL_CONTEXT_NAME_PATTERN.test(tool.name)) {
+			throw new DOMException(`The tool name '${tool.name}' is invalid`, 'InvalidStateError')
+		}
+		if (tool.description === '') {
+			throw new DOMException('A tool description must not be empty', 'InvalidStateError')
+		}
+		const schema: unknown = tool.inputSchema === undefined ? '' : JSON.stringify(tool.inputSchema)
+		if (!isString(schema)) throw new TypeError('The input schema does not serialize')
+		const signal = options?.signal
+		if (signal?.aborted === true) throw signal.reason
+		const exposed = (options?.exposedTo ?? []).map((origin) => parseModelContextOrigin(origin))
+		if (exposed.includes(undefined)) {
+			throw new DOMException('An exposedTo origin is not potentially trustworthy', 'SecurityError')
+		}
+		const annotations = tool.annotations
+		this.#state.tools.set(tool.name, {
+			tool,
+			options,
+			schema,
+			annotations:
+				annotations === undefined
+					? undefined
+					: {
+							readOnlyHint: annotations.readOnlyHint ?? false,
+							untrustedContentHint: annotations.untrustedContentHint ?? false,
+							consequentialHint: annotations.consequentialHint ?? false,
+							debugging: annotations.debugging ?? false,
+						},
+			exposed: exposed.flatMap((origin) => (origin === undefined ? [] : [origin])),
+		})
+		// The draft's abort steps unregister the tool and reject the pending registration with the
+		// signal's reason; a rejection after the registration settled changes nothing.
+		const registration = Promise.withResolvers<void>()
+		signal?.addEventListener('abort', this.#abort.bind(this, tool.name, signal, registration), {
+			once: true,
+		})
+		// The draft queues the `toolchange` notification as a task, then queues another task that
+		// resolves the registration, so a listener runs after this call returns and before the
+		// returned promise settles.
+		setTimeout(this.#notify.bind(this), 0)
+		setTimeout(registration.resolve, 0)
+		await registration.promise
+	}
+
+	async getTools(options?: WebMCPToolsOptions): Promise<readonly WebMCPRegisteredTool[]> {
+		const origins = (options?.fromOrigins ?? []).map((origin) => parseModelContextOrigin(origin))
+		if (origins.includes(undefined)) {
+			throw new DOMException('A fromOrigins origin is not potentially trustworthy', 'SecurityError')
+		}
+		return [...this.#state.tools.values()]
+			.map((definition) => this.#describe(definition))
+			.sort((left, right) => (left.name < right.name ? -1 : left.name > right.name ? 1 : 0))
+	}
+
+	async executeTool(
+		tool: WebMCPRegisteredTool,
+		input?: Readonly<Record<string, unknown>>,
+		options?: WebMCPExecuteOptions,
+	): Promise<string> {
+		const expected = attempt(() => new URL(tool.origin).origin)
+		if (!expected.success || expected.value === 'null') {
+			throw new DOMException('The tool origin is not a tuple origin', 'NotSupportedError')
+		}
+		const serialized = JSON.stringify(input ?? {})
+		const caller = options?.signal
+		if (caller?.aborted === true) throw caller.reason
+		const definition = this.#state.tools.get(tool.name)
+		if (definition === undefined || expected.value !== this.#origin) {
+			throw new DOMException(`No registered tool named '${tool.name}'`, 'UnknownError')
+		}
+		const parsed: unknown = JSON.parse(serialized)
+		if (!isRecord(parsed)) throw new DOMException('The input is not an object', 'UnknownError')
+		this.dispatchEvent(new ToolActivatedEvent('toolactivated', { toolName: tool.name }))
+		const controller = new AbortController()
+		const settled = Promise.withResolvers<string>()
+		const release = new AbortController()
+		caller?.addEventListener(
+			'abort',
+			() => {
+				settled.reject(caller.reason)
+				controller.abort(caller.reason)
+				this.dispatchEvent(new ToolCancelEvent('toolcancel', { toolName: tool.name }))
+			},
+			{ signal: release.signal },
+		)
+		this.#run(definition.tool.execute, parsed, controller.signal).then(
+			settled.resolve,
+			settled.reject,
+		)
+		try {
+			return await settled.promise
+		} finally {
+			release.abort()
+		}
+	}
+
+	// Runs the imperative execute steps: the callback's value serialized, any failure an `UnknownError`.
+	async #run(
+		execute: WebMCPExecuteHandler,
+		input: Readonly<Record<string, unknown>>,
+		signal: AbortSignal,
+	): Promise<string> {
+		const outcome = await Promise.resolve()
+			.then(() => execute(input, { signal }))
+			.then(
+				(value) => ({ value }),
+				() => undefined,
+			)
+		// Serializing the callback's value is part of completion: a value that does not serialize,
+		// such as a `BigInt`, completes the execution unsuccessfully.
+		const serialized = attempt((): unknown =>
+			outcome === undefined ? undefined : JSON.stringify(outcome.value),
+		)
+		if (!serialized.success || !isString(serialized.value)) {
+			throw new DOMException('The tool did not complete', 'UnknownError')
+		}
+		return serialized.value
+	}
+
+	#replace(
+		type: string,
+		previous: ModelContextEventHandler,
+		handler: ModelContextEventHandler,
+	): void {
+		if (previous !== null) this.removeEventListener(type, previous)
+		if (handler !== null) this.addEventListener(type, handler)
+	}
+
+	// Projects one definition onto the `RegisteredTool` dictionary `getTools` reports.
+	#describe(definition: ModelContextDefinition): WebMCPRegisteredTool {
+		const parsed: unknown = definition.schema === '' ? undefined : JSON.parse(definition.schema)
+		return {
+			name: definition.tool.name,
+			title: definition.tool.title ?? '',
+			description: definition.tool.description,
+			window: this.#window,
+			origin: this.#origin,
+			...(isRecord(parsed) ? { inputSchema: parsed } : {}),
+			...(definition.annotations === undefined ? {} : { annotations: definition.annotations }),
+		}
+	}
+
+	#abort(name: string, signal: AbortSignal, registration: PromiseWithResolvers<void>): void {
+		this.#unregister(name)
+		registration.reject(signal.reason)
+	}
+
+	#unregister(name: string): void {
+		if (!this.#state.tools.delete(name)) return
+		setTimeout(this.#notify.bind(this), 0)
+	}
+
+	#notify(): void {
+		this.dispatchEvent(new Event('toolchange'))
+	}
+}
+
+/**
+ * Installs an IDL-faithful WebMCP registry on a document and returns it with its recorders.
+ *
+ * @remarks
+ * The registry reports the document's window and origin for every tool, as `getTools` does for
+ * tools registered in the caller's own document. Pass a document the proof owns, so no scenario
+ * mutates the page the suite runs in.
+ *
+ * @param host - The document to install `modelContext` on; it needs a window
+ * @returns The installed registry, its origin, and the recorders over its live state
+ * @throws Thrown when the document has no window.
+ */
+export function installModelContext(host: Document): ModelContextFixtureInterface {
+	const view = host.defaultView
+	if (view === null) throw new Error('The registry double needs a document with a window')
+	const state: ModelContextState = { tools: new Map(), listeners: [] }
+	const origin = view.origin
+	const registry = new ModelContextRegistry(state, view, origin)
+	Object.defineProperty(host, 'modelContext', { value: registry, configurable: true })
+	return {
+		registry,
+		origin,
+		registrations(): readonly ModelContextDefinition[] {
+			return [...state.tools.values()]
+		},
+		listeners(): readonly EventListenerOrEventListenerObject[] {
+			return [...state.listeners]
+		},
+	}
+}
+
+// === WebMCP fixture end
+
+/** Carries a store observation and its declared comparison data to a mirrored proof. */
+export type BrowserStoreObservation =
+	| {
+			readonly comparison: 'identity'
+			readonly actual: unknown
+			readonly expected: unknown
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'different'
+			readonly actual: unknown
+			readonly expected: unknown
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'equal'
+			readonly actual: unknown
+			readonly expected: unknown
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'contains'
+			readonly actual: unknown
+			readonly expected: unknown
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'undefined' | 'defined'
+			readonly actual: unknown
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'length'
+			readonly actual: unknown
+			readonly expected: number
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'maximum'
+			readonly actual: unknown
+			readonly expected: number
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'match'
+			readonly actual: unknown
+			readonly expected: string | RegExp
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'object'
+			readonly actual: unknown
+			readonly expected: Readonly<Record<string, unknown>>
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'rejected'
+			readonly actual: ReadonlyArray<PromiseSettledResult<unknown>>
+			readonly expected: Readonly<Record<string, unknown>>
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'thrown'
+			readonly actual: ReadonlyArray<PromiseSettledResult<unknown>>
+			readonly expected: string
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'path'
+			readonly actual: ReadonlyArray<PromiseSettledResult<unknown>>
+			readonly expected: { readonly code: string; readonly path: string }
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'access'
+			readonly actual: unknown
+			readonly expected: {
+				readonly uid: number | undefined
+				readonly gid: number | undefined
+				readonly paths: readonly string[]
+			}
+			readonly message?: string
+	  }
+	| {
+			readonly comparison: 'skip'
+			readonly actual: boolean
+			readonly expected: string
+	  }
+
+/** Drives one isolated store case and yields observations before the next operation. */
+export interface BrowserStoreCase<TStore> {
+	readonly title: string
+	readonly run: (
+		factory: () => TStore | Promise<TStore>,
+	) => AsyncGenerator<BrowserStoreObservation, void>
+}
+
+/** Drives one filesystem case while its resources remain owned until observation ends. */
+export interface BrowserFilesystemCase {
+	readonly title: string
+	readonly timeout?: number
+	readonly run: () => AsyncGenerator<BrowserStoreObservation, void>
+}
+
+/** Supplies the observations for the shared store contract. */
+export const BROWSER_JOURNEY_STORE_CASES: ReadonlyArray<
+	BrowserStoreCase<BrowserJourneyStoreInterface>
+> = Object.freeze([
+	{
+		title: 'refuses incompatible conditions and invalid revisions before any write',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			for (const options of [
+				{ revision: 1, exclusive: true },
+				{ revision: 0 },
+				{ revision: -1 },
+				{ revision: 1.5 },
+				{ revision: Number.NaN },
+				{ revision: Number.POSITIVE_INFINITY },
+				{ revision: Number.MAX_SAFE_INTEGER + 1 },
+			]) {
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(journey, options)]),
+					expected: { code: 'ARGUMENT' },
+				}
+				yield {
+					comparison: 'undefined',
+					actual: await store.get(journey.name),
+				}
+			}
+			const saved = await store.set(journey)
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([
+					store.set({ ...journey, description: 'Rejected' }, { revision: 1, exclusive: true }),
+				]),
+				expected: { code: 'ARGUMENT' },
+			}
+			yield {
+				comparison: 'equal',
+				actual: await store.get(journey.name),
+				expected: saved,
+			}
+			yield {
+				comparison: 'identity',
+				actual: (await store.set(journey, { exclusive: false })).revision,
+				expected: 2,
+			}
+		},
+	},
+	{
+		title: 'treats exclusive false as omission with a revision',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			yield {
+				comparison: 'identity',
+				actual: (await store.set(journey, { revision: 1, exclusive: false })).revision,
+				expected: 2,
+			}
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.set(journey, { revision: 1, exclusive: false })]),
+				expected: {
+					code: 'JOURNEY_STALE',
+				},
+			}
+		},
+	},
+	{
+		title: 'accepts exactly one competing exclusive creator and one revision writer',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			for (const options of [{ exclusive: true }, { revision: 1 }]) {
+				const outcomes = await Promise.allSettled([
+					store.set({ ...journey, description: 'First' }, options),
+					store.set({ ...journey, description: 'Second' }, options),
+				])
+				yield {
+					comparison: 'length',
+					actual: outcomes.filter((result) => result.status === 'fulfilled'),
+					expected: 1,
+				}
+				const saved = outcomes.find((result) => result.status === 'fulfilled')
+				if (saved?.status !== 'fulfilled') throw new Error('No accepted write')
+				yield {
+					comparison: 'equal',
+					actual: await store.get(journey.name),
+					expected: saved.value,
+				}
+				const refused = outcomes.filter((result) => result.status === 'rejected')
+				for (const result of refused)
+					yield {
+						comparison: 'contains',
+						actual: ['JOURNEY_STALE', 'STORE_LOCKED'],
+						expected: result.reason.code,
+					}
+			}
+			yield {
+				comparison: 'identity',
+				actual: (await store.get(journey.name))?.revision,
+				expected: 2,
+			}
+		},
+	},
+	{
+		title: 'owns the write conditions while an asynchronous backend acquires its lock',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			const options = { exclusive: true }
+			const saving = store.set({ ...journey, description: 'Rejected' }, options)
+			options.exclusive = false
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([saving]),
+				expected: { code: 'JOURNEY_STALE' },
+			}
+			yield {
+				comparison: 'identity',
+				actual: (await store.get(journey.name))?.revision,
+				expected: 1,
+			}
+		},
+	},
+	{
+		title: 'gets missing entries and deletes missing names',
+		async *run(factory) {
+			const store = await factory()
+			yield {
+				comparison: 'undefined',
+				actual: await store.get('missing'),
+			}
+			await store.delete('missing')
+			yield {
+				comparison: 'equal',
+				actual: await store.list(),
+				expected: { entries: [], truncated: false, faults: [] },
+			}
+		},
+	},
+	{
+		title: 'refuses zero journey limits',
+		async *run(factory) {
+			const store = await factory()
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.list({ limit: 0 })]),
+				expected: {
+					code: 'ARGUMENT',
+				},
+			}
+			await store.set(createBrowserJourneyFixture())
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.list({ limit: 0 })]),
+				expected: {
+					code: 'ARGUMENT',
+				},
+			}
+		},
+	},
+	{
+		title: 'refuses invalid journey names in point operations',
+		async *run(factory) {
+			const store = await factory()
+			for (const invalid of BROWSER_STORE_INVALID_NAMES) {
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.get(invalid)]),
+					expected: { code: 'STORE_PATH' },
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.delete(invalid)]),
+					expected: { code: 'STORE_PATH' },
+				}
+				const journey = createBrowserJourneyFixture([], { name: invalid })
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(journey)]),
+					expected: { code: 'STORE_PATH' },
+				}
+				Reflect.set(journey, 'format', 9)
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(journey)]),
+					expected: { code: 'STORE_PATH' },
+				}
+			}
+		},
+	},
+	{
+		title: 'owns input, returned values, and listings',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			const saved = await store.set(journey)
+			Reflect.set(journey, 'description', 'caller edit')
+			Reflect.set(saved.journey, 'description', 'result edit')
+			const fetched = await store.get(journey.name)
+			yield {
+				comparison: 'identity',
+				actual: fetched?.journey.description,
+				expected: 'Check readiness',
+			}
+			if (fetched !== undefined) Reflect.set(fetched.journey, 'description', 'get edit')
+			const listed = await store.list()
+			for (const entry of listed.entries) Reflect.set(entry.journey, 'description', 'list edit')
+			yield {
+				comparison: 'identity',
+				actual: (await store.get(journey.name))?.journey.description,
+				expected: 'Check readiness',
+			}
+		},
+	},
+	{
+		title: 'refuses stale expected revisions and retains the accepted value',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			yield {
+				comparison: 'identity',
+				actual: (await store.set(journey)).revision,
+				expected: 1,
+			}
+			const accepted = await store.set({ ...journey, description: 'Accepted' }, { revision: 1 })
+			yield {
+				comparison: 'identity',
+				actual: accepted.revision,
+				expected: 2,
+			}
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([
+					store.set({ ...journey, description: 'Stale' }, { revision: 1 }),
+				]),
+				expected: {
+					code: 'JOURNEY_STALE',
+					message: 'Journey check-ready changed since you read it',
+				},
+			}
+			yield {
+				comparison: 'identity',
+				actual: (await store.get(journey.name))?.journey.description,
+				expected: 'Accepted',
+			}
+		},
+	},
+	{
+		title: 'creates only an absent journey with exclusive creation, including after deletion',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			const saved = await store.set(journey, { exclusive: true })
+			yield {
+				comparison: 'identity',
+				actual: saved.revision,
+				expected: 1,
+			}
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([
+					store.set({ ...journey, description: 'Replacement' }, { exclusive: true }),
+				]),
+				expected: {
+					code: 'JOURNEY_STALE',
+					message: `Journey ${journey.name} changed since you read it`,
+				},
+			}
+			yield {
+				comparison: 'equal',
+				actual: await store.get(journey.name),
+				expected: saved,
+			}
+			await store.delete(journey.name)
+			yield {
+				comparison: 'identity',
+				actual: (await store.set(journey, { exclusive: true })).revision,
+				expected: 2,
+			}
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.set(journey, { revision: 1 })]),
+				expected: {
+					code: 'JOURNEY_STALE',
+					message: `Journey ${journey.name} changed since you read it`,
+				},
+			}
+		},
+	},
+	{
+		title: 'counts revisions across delete and recreate and refuses a stale writer',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			await store.delete(journey.name)
+			yield {
+				comparison: 'undefined',
+				actual: await store.get(journey.name),
+			}
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.set(journey, { revision: 1 })]),
+				expected: {
+					code: 'JOURNEY_STALE',
+				},
+			}
+			yield {
+				comparison: 'identity',
+				actual: (await store.set(journey)).revision,
+				expected: 2,
+			}
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.set(journey, { revision: 1 })]),
+				expected: {
+					code: 'JOURNEY_STALE',
+				},
+			}
+		},
+	},
+	{
+		title: 'refuses negative journey paging',
+		async *run(factory) {
+			const store = await factory()
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.list({ offset: -1 })]),
+				expected: {
+					code: 'ARGUMENT',
+					message: 'Paging requires a nonnegative integer offset and a positive integer limit',
+				},
+			}
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.list({ limit: -1 })]),
+				expected: {
+					code: 'ARGUMENT',
+					message: 'Paging requires a nonnegative integer offset and a positive integer limit',
+				},
+			}
+		},
+	},
+	{
+		title: 'sorts by name and pages with truthful truncation and empty faults',
+		async *run(factory) {
+			const store = await factory()
+			for (const journeyName of ['zebra', 'alpine', 'harbor'])
+				await store.set(createBrowserJourneyFixture(undefined, { name: journeyName }))
+			yield {
+				comparison: 'equal',
+				actual: (await store.list()).entries.map((entry) => entry.journey.name),
+				expected: ['alpine', 'harbor', 'zebra'],
+			}
+			const page = await store.list({ offset: 1, limit: 1 })
+			yield {
+				comparison: 'equal',
+				actual: page.entries.map((entry) => entry.journey.name),
+				expected: ['harbor'],
+			}
+			yield {
+				comparison: 'identity',
+				actual: page.truncated,
+				expected: true,
+			}
+			yield {
+				comparison: 'equal',
+				actual: page.faults,
+				expected: [],
+			}
+			yield {
+				comparison: 'identity',
+				actual: (await store.list({ offset: 2, limit: 1 })).truncated,
+				expected: false,
+			}
+			yield {
+				comparison: 'equal',
+				actual: await store.list({ offset: 9, limit: 1 }),
+				expected: {
+					entries: [],
+					truncated: false,
+					faults: [],
+				},
+			}
+		},
+	},
+	{
+		title: 'refuses an unknown format before replacing a saved journey',
+		async *run(factory) {
+			const store = await factory()
+			const journey = createBrowserJourneyFixture()
+			await store.set(journey)
+			Reflect.set(journey, 'format', 9)
+			yield {
+				comparison: 'rejected',
+				actual: await Promise.allSettled([store.set(journey)]),
+				expected: { code: 'STORE_FORMAT' },
+			}
+			yield {
+				comparison: 'identity',
+				actual: (await store.get(journey.name))?.revision,
+				expected: 1,
+			}
+		},
+	},
+	{
+		title: 'honours an aborted signal on every primitive',
+		async *run(factory) {
+			const store = await factory()
+			const options = { signal: AbortSignal.abort(new Error('store aborted')) }
+			yield {
+				comparison: 'thrown',
+				actual: await Promise.allSettled([store.get('missing', options)]),
+				expected: 'store aborted',
+			}
+			yield {
+				comparison: 'thrown',
+				actual: await Promise.allSettled([
+					store.set(createBrowserJourneyFixture(), { ...options }),
+				]),
+				expected: 'store aborted',
+			}
+			yield {
+				comparison: 'thrown',
+				actual: await Promise.allSettled([store.delete('missing', options)]),
+				expected: 'store aborted',
+			}
+			yield {
+				comparison: 'thrown',
+				actual: await Promise.allSettled([store.list(options)]),
+				expected: 'store aborted',
+			}
+		},
+	},
+])
+
+/** Supplies the observations for the shared store contract. */
+export const BROWSER_RUN_STORE_CASES: ReadonlyArray<BrowserStoreCase<BrowserRunStoreInterface>> =
+	Object.freeze([
+		{
+			title: 'refuses zero run limits',
+			async *run(factory) {
+				const store = await factory()
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.list('add-kettle', { limit: 0 })]),
+					expected: {
+						code: 'ARGUMENT',
+					},
+				}
+			},
+		},
+		{
+			title: 'clears saved runs and unsaved slots without touching another journey',
+			async *run(factory) {
+				const store = await factory()
+				const journey = BROWSER_RUN_FIXTURE.journey.name
+				const first = await store.create(journey)
+				await store.set({ ...BROWSER_RUN_FIXTURE, id: first.id })
+				const unsaved = await store.create(journey)
+				const sibling = await store.create('other-journey')
+				yield {
+					comparison: 'identity',
+					actual: await store.clear(journey),
+					expected: 2,
+				}
+				yield {
+					comparison: 'equal',
+					actual: await store.list(journey),
+					expected: { entries: [], truncated: false, faults: [] },
+				}
+				for (const slot of [first, unsaved]) {
+					yield {
+						comparison: 'rejected',
+						actual: await Promise.allSettled([store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })]),
+						expected: {
+							code: 'STORE_PATH',
+						},
+					}
+					yield {
+						comparison: 'rejected',
+						actual: await Promise.allSettled([store.capture(slot, 's1.png', new Uint8Array([1]))]),
+						expected: {
+							code: 'STORE_PATH',
+						},
+					}
+				}
+				await store.capture(sibling, 's1.png', new Uint8Array([2]))
+				yield {
+					comparison: 'identity',
+					actual: await store.clear(journey),
+					expected: 0,
+				}
+				yield {
+					comparison: 'identity',
+					actual: await store.clear('missing'),
+					expected: 0,
+				}
+				const recreated = await store.create(journey)
+				await store.set({ ...BROWSER_RUN_FIXTURE, id: recreated.id })
+				yield {
+					comparison: 'equal',
+					actual: (await store.list(journey)).entries.map((run) => run.id),
+					expected: [recreated.id],
+				}
+			},
+		},
+		{
+			title: 'refuses invalid journey names in run operations',
+			async *run(factory) {
+				const store = await factory()
+				for (const invalid of BROWSER_STORE_INVALID_NAMES) {
+					yield {
+						comparison: 'rejected',
+						actual: await Promise.allSettled([store.create(invalid)]),
+						expected: { code: 'STORE_PATH' },
+					}
+					yield {
+						comparison: 'rejected',
+						actual: await Promise.allSettled([store.clear(invalid)]),
+						expected: { code: 'STORE_PATH' },
+					}
+					yield {
+						comparison: 'rejected',
+						actual: await Promise.allSettled([store.get(invalid, BROWSER_RUN_FIXTURE.id)]),
+						expected: {
+							code: 'STORE_PATH',
+						},
+					}
+					yield {
+						comparison: 'rejected',
+						actual: await Promise.allSettled([store.delete(invalid, BROWSER_RUN_FIXTURE.id)]),
+						expected: {
+							code: 'STORE_PATH',
+						},
+					}
+					yield {
+						comparison: 'rejected',
+						actual: await Promise.allSettled([store.list(invalid)]),
+						expected: { code: 'STORE_PATH' },
+					}
+				}
+			},
+		},
+		{
+			title: 'refuses writing a run this store never opened',
+			async *run(factory) {
+				const store = await factory()
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(BROWSER_RUN_FIXTURE)]),
+					expected: {
+						code: 'STORE_PATH',
+					},
+				}
+				yield {
+					comparison: 'undefined',
+					actual: await store.get(BROWSER_RUN_FIXTURE.journey.name, BROWSER_RUN_FIXTURE.id),
+				}
+				const other = await factory()
+				const slot = await other.create(BROWSER_RUN_FIXTURE.journey.name)
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })]),
+					expected: {
+						code: 'STORE_PATH',
+					},
+				}
+			},
+		},
+		{
+			title: 'refuses negative run paging',
+			async *run(factory) {
+				const store = await factory()
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.list('add-kettle', { offset: -1 })]),
+					expected: {
+						code: 'ARGUMENT',
+						message: 'Paging requires a nonnegative integer offset and a positive integer limit',
+					},
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.list('add-kettle', { limit: -1 })]),
+					expected: {
+						code: 'ARGUMENT',
+						message: 'Paging requires a nonnegative integer offset and a positive integer limit',
+					},
+				}
+			},
+		},
+		{
+			title: 'refuses capture on a slot the store did not open',
+			async *run(factory) {
+				const store = await factory()
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([
+						store.capture({ id: BROWSER_RUN_FIXTURE.id }, 's1.png', new Uint8Array([137, 80])),
+					]),
+					expected: { code: 'STORE_PATH' },
+				}
+			},
+		},
+		{
+			title: 'refuses capture on a slot opened by another store',
+			async *run(factory) {
+				const store = await factory()
+				const other = await factory()
+				const slot = await other.create('add-kettle')
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([
+						store.capture(slot, 's1.png', new Uint8Array([137, 80])),
+					]),
+					expected: {
+						code: 'STORE_PATH',
+					},
+				}
+			},
+		},
+		{
+			title: 'honours an aborted signal when capturing an opened slot',
+			async *run(factory) {
+				const store = await factory()
+				const slot = await store.create('add-kettle')
+				yield {
+					comparison: 'thrown',
+					actual: await Promise.allSettled([
+						store.capture(slot, 's1.png', new Uint8Array([137, 80]), {
+							signal: AbortSignal.abort(new Error('capture aborted')),
+						}),
+					]),
+					expected: 'capture aborted',
+				}
+			},
+		},
+		{
+			title: 'opens unique ids and gets and deletes missing runs',
+			async *run(factory) {
+				const store = await factory()
+				const first = await store.create('add-kettle')
+				const second = await store.create('add-kettle')
+				yield {
+					comparison: 'match',
+					actual: first.id,
+					expected: /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}\.\d{3}Z-[0-9a-f]{4}$/,
+				}
+				yield {
+					comparison: 'different',
+					actual: first.id,
+					expected: second.id,
+				}
+				yield {
+					comparison: 'undefined',
+					actual: await store.get('add-kettle', first.id),
+				}
+				await store.delete('add-kettle', first.id)
+				yield {
+					comparison: 'equal',
+					actual: await store.list('add-kettle'),
+					expected: { entries: [], truncated: false, faults: [] },
+				}
+			},
+		},
+		{
+			title: 'owns snapshots and keys runs by journey name and id',
+			async *run(factory) {
+				const store = await factory()
+				const run = structuredClone(BROWSER_RUN_FIXTURE)
+				const slot = await store.create(run.journey.name)
+				const saved = { ...run, id: slot.id }
+				await store.set(saved)
+				Reflect.set(saved, 'elapsed', 99)
+				const fetched = await store.get(run.journey.name, slot.id)
+				yield {
+					comparison: 'identity',
+					actual: fetched?.elapsed,
+					expected: 25,
+				}
+				if (fetched !== undefined) Reflect.set(fetched, 'elapsed', 100)
+				for (const entry of (await store.list(run.journey.name)).entries)
+					Reflect.set(entry, 'elapsed', 101)
+				yield {
+					comparison: 'identity',
+					actual: (await store.get(run.journey.name, slot.id))?.elapsed,
+					expected: 25,
+				}
+				yield {
+					comparison: 'undefined',
+					actual: await store.get('other-journey', slot.id),
+				}
+				await store.delete(run.journey.name, slot.id)
+				yield {
+					comparison: 'undefined',
+					actual: await store.get(run.journey.name, slot.id),
+				}
+			},
+		},
+		{
+			title: 'pages runs by id and isolates journey listings',
+			async *run(factory) {
+				const store = await factory()
+				const ids: string[] = []
+				while (ids.length < 3) {
+					const slot = await store.create(BROWSER_RUN_FIXTURE.journey.name)
+					ids.push(slot.id)
+					await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+				}
+				ids.sort()
+				const page = await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 1, limit: 1 })
+				yield {
+					comparison: 'equal',
+					actual: page.entries.map((run) => run.id),
+					expected: ids.slice(1, 2),
+				}
+				yield {
+					comparison: 'identity',
+					actual: page.truncated,
+					expected: true,
+				}
+				yield {
+					comparison: 'equal',
+					actual: page.faults,
+					expected: [],
+				}
+				const tail = await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 2, limit: 1 })
+				yield {
+					comparison: 'identity',
+					actual: tail.truncated,
+					expected: false,
+				}
+				const absent = await store.list(BROWSER_RUN_FIXTURE.journey.name, { offset: 20, limit: 1 })
+				yield {
+					comparison: 'equal',
+					actual: absent.entries,
+					expected: [],
+				}
+				yield {
+					comparison: 'equal',
+					actual: (await store.list('other-journey')).entries,
+					expected: [],
+				}
+			},
+		},
+		{
+			title: 'refuses an unknown format before overwriting a run',
+			async *run(factory) {
+				const store = await factory()
+				const slot = await store.create(BROWSER_RUN_FIXTURE.journey.name)
+				const run = { ...structuredClone(BROWSER_RUN_FIXTURE), id: slot.id }
+				await store.set(run)
+				Reflect.set(run, 'format', 9)
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(run)]),
+					expected: { code: 'STORE_FORMAT' },
+				}
+				yield {
+					comparison: 'identity',
+					actual: (await store.get(run.journey.name, run.id))?.format,
+					expected: 1,
+				}
+			},
+		},
+		{
+			title: 'honours an aborted signal on every primitive',
+			async *run(factory) {
+				const store = await factory()
+				const options = { signal: AbortSignal.abort(new Error('store aborted')) }
+				yield {
+					comparison: 'thrown',
+					actual: await Promise.allSettled([store.create('add-kettle', options)]),
+					expected: 'store aborted',
+				}
+				yield {
+					comparison: 'thrown',
+					actual: await Promise.allSettled([store.clear('add-kettle', options)]),
+					expected: 'store aborted',
+				}
+				yield {
+					comparison: 'thrown',
+					actual: await Promise.allSettled([
+						store.get('add-kettle', BROWSER_RUN_FIXTURE.id, options),
+					]),
+					expected: 'store aborted',
+				}
+				yield {
+					comparison: 'thrown',
+					actual: await Promise.allSettled([store.set(BROWSER_RUN_FIXTURE, options)]),
+					expected: 'store aborted',
+				}
+				yield {
+					comparison: 'thrown',
+					actual: await Promise.allSettled([
+						store.delete('add-kettle', BROWSER_RUN_FIXTURE.id, options),
+					]),
+					expected: 'store aborted',
+				}
+				yield {
+					comparison: 'thrown',
+					actual: await Promise.allSettled([store.list('add-kettle', options)]),
+					expected: 'store aborted',
+				}
+			},
+		},
+	])

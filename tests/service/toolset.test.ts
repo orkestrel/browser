@@ -8,7 +8,11 @@ import type {
 } from '@src/core'
 import type { ToolManagerInterface } from '@orkestrel/tool'
 import type { FixtureServerInterface } from '../setupServer.js'
-import { BROWSER_READING_HTML, BROWSER_READING_STRUCTURE_HTML } from '../setup.js'
+import {
+	BrowserFixtureValue,
+	BROWSER_READING_HTML,
+	BROWSER_READING_STRUCTURE_HTML,
+} from '../setup.js'
 import { renderBrowserLine } from '@src/core'
 import {
 	SERVICE_READING_SUBMISSIONS,
@@ -64,38 +68,36 @@ import {
 	requireBrowserJourneyElement,
 } from '../setup.js'
 
-const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
-
 describe('BrowserToolset over a real page through createToolManager().execute', () => {
 	const teardown = createTeardown()
 	const opened: BrowserPageInterface[] = []
 	const contexts: BrowserContextInterface[] = []
 	const toolsets: BrowserToolsetInterface[] = []
-	let fixtures: FixtureServerInterface
-	let browser: BrowserInterface
-	let port: number
+	const fixtures = new BrowserFixtureValue<FixtureServerInterface | undefined>(undefined)
+	const browser = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+	const port = new BrowserFixtureValue<number | undefined>(undefined)
 
 	// Each resource registers its release as soon as it exists, so a later acquisition that
 	// rejects still releases the earlier ones.
 	beforeAll(async () => {
 		const server = await createFixtureServer()
 		teardown.add(() => server.destroy())
-		fixtures = server
+		fixtures.value = server
 
 		const profile = createTempDirectory('orkestrel-browser-profile-')
 		teardown.add(() => profile.destroy())
-		port = await reservePort()
+		port.value = await reservePort()
 		const launched = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: profile.path,
 			args: [...SERVICE_BROWSER_ARGS, '--site-per-process'],
-			cdp: { port },
+			cdp: { port: port.required },
 			timeout: 20_000,
 		})
 		teardown.add(() => launched.destroy())
 		await launched.connect()
-		browser = launched
+		browser.value = launched
 	})
 
 	afterEach(async () => {
@@ -112,7 +114,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		it('matches the direct editable-combobox receipt and its filled value', async () => {
 			const receipts: string[] = []
 			for (const direct of [true, false]) {
-				const page = await browser.create({ url: fixtures.url('/form') })
+				const page = await browser.required.create({ url: fixtures.required.url('/form') })
 				opened.push(page)
 				await page.evaluate(
 					`document.querySelector('main').innerHTML = ${JSON.stringify(BROWSER_JOURNEY_COMBOBOX_HTML)}`,
@@ -151,7 +153,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 
 		it('performs a semantic click in a same-origin child frame through the DOM placement', async () => {
 			requireDocumentBundle()
-			const page = await browser.create({ url: fixtures.url('/document') })
+			const page = await browser.required.create({ url: fixtures.required.url('/document') })
 			opened.push(page)
 			await requireDocumentToolset(page)
 			await page.evaluate(
@@ -176,7 +178,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				const observed: BrowserAction[] = []
 				const receipts: string[] = []
 				for (const direct of [true, false]) {
-					const page = await browser.create({ url: fixtures.url(scenario.route) })
+					const page = await browser.required.create({ url: fixtures.required.url(scenario.route) })
 					opened.push(page)
 					const toolset = createBrowserToolset(page)
 					toolsets.push(toolset)
@@ -184,7 +186,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					await page.elements.outline()
 					const args =
 						scenario.action === 'navigate'
-							? { url: fixtures.url(scenario.arguments.url) }
+							? { url: fixtures.required.url(scenario.arguments.url) }
 							: scenario.arguments
 					const target =
 						'target' in scenario
@@ -216,7 +218,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		it('matches the interrupted click and its dialog continuation without waiting for the blocked input', async () => {
 			const observed: BrowserAction[][] = []
 			for (const direct of [true, false]) {
-				const page = await browser.create({ url: fixtures.url('/confirm') })
+				const page = await browser.required.create({ url: fixtures.required.url('/confirm') })
 				opened.push(page)
 				const toolset = createBrowserToolset(page)
 				toolsets.push(toolset)
@@ -253,10 +255,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		it('resolves a switch by URL and title and matches the direct tab receipt', async () => {
 			const actions: BrowserAction[] = []
 			for (const direct of [true, false]) {
-				const context = await browser.isolate()
+				const context = await browser.required.isolate()
 				contexts.push(context)
-				const first = await context.create({ url: fixtures.url('/popup') })
-				await context.create({ url: fixtures.url('/popup/child') })
+				const first = await context.create({ url: fixtures.required.url('/popup') })
+				await context.create({ url: fixtures.required.url('/popup/child') })
 				const toolset = createBrowserToolset(first, { context })
 				toolsets.push(toolset)
 				await toolset.start()
@@ -267,22 +269,25 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					await toolset.follow('s1', {
 						action: 'switch',
 						arguments: {},
-						tab: { title: 'Details', url: fixtures.url('/popup/child') },
+						tab: { title: 'Details', url: fixtures.required.url('/popup/child') },
 					})
 			}
 			expect(actions[1]?.receipt).toBe(actions[0]?.receipt)
 			expect(actions[1]?.arguments).toEqual({ tab: 't2' })
-			expect(actions[1]?.tab).toEqual({ title: 'Details', url: fixtures.url('/popup/child') })
+			expect(actions[1]?.tab).toEqual({
+				title: 'Details',
+				url: fixtures.required.url('/popup/child'),
+			})
 		})
 
 		it('matches the direct receipt of a click on a link that opens a popup, each settling on the popup with the move in its result', async () => {
-			const child = fixtures.url('/popup/child')
+			const child = fixtures.required.url('/popup/child')
 			const results: string[] = []
 			const actions: BrowserAction[] = []
 			for (const direct of [true, false]) {
-				const context = await browser.isolate()
+				const context = await browser.required.isolate()
 				contexts.push(context)
-				const page = await context.create({ url: fixtures.url('/popup') })
+				const page = await context.create({ url: fixtures.required.url('/popup') })
 				await page.evaluate(
 					`document.querySelector('main').innerHTML = ${JSON.stringify(BROWSER_JOURNEY_POPUP_LINK_HTML)}`,
 				)
@@ -318,16 +323,16 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('audit repair 14: captures all 5000 paragraph nodes repeatedly', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = '<p>Ordinary capture material</p>'.repeat(5000)`)
-		for (let sample = 0; sample < 3; sample += 1) {
-			const outline = await page.elements.outline({ timeout: 30000 })
+		for (const current of [page, page, page]) {
+			const outline = await current.elements.outline({ timeout: 30000 })
 			expect(outline.lines).toHaveLength(5000)
 		}
 	})
 	it('audit repair 1: the receipt and error redaction layer protects unnumbered text', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		const secret = 'private-receipt-4821'
 		await page.evaluate(
@@ -361,7 +366,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(refused.success ? '' : refused.error).not.toContain(secret)
 	})
 	it('audit repair 1: a numeric secret preserves addressed rows and continuation', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`document.body.innerHTML = '<input aria-label="Code">' + '<p>Ordinary prose</p>'.repeat(110)`,
@@ -393,7 +398,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	it.each([' Tide4821', 'Tide4821 ', 'Tide  4821', 'Tide\n4821'])(
 		'audit repair 1: whitespace secret %j never reaches a receipt or window',
 		async (secret) => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			await page.evaluate(`document.body.innerHTML = '<textarea aria-label="Code"></textarea>'`)
 			const toolset = createBrowserToolset(page)
@@ -415,14 +420,14 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		},
 	)
 	it('audit repair 3: refused captures preserve the last delivered projection and pending move note', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = '<p>Original</p>'.repeat(110)`)
-		let note = ''
+		const note = new BrowserFixtureValue('')
 		const toolset = createBrowserToolset(page, {
 			notes: () => {
-				const result = note
-				note = ''
+				const result = note.value
+				note.value = ''
 				return result
 			},
 		})
@@ -430,7 +435,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		await toolset.start()
 		await toolset.read()
 		await page.evaluate(`document.body.innerHTML = '<p>Replacement</p>'.repeat(40)`)
-		note = 'The view moved to a new tab.'
+		note.value = 'The view moved to a new tab.'
 		await expect(toolset.read({ from: 101 })).rejects.toThrow('past the end')
 		const result = await toolset.read({ from: 20 })
 		expect(result).toContain('The page changed since the last view')
@@ -438,7 +443,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(await toolset.read({ from: 20 })).not.toContain('The view moved to a new tab.')
 	})
 	it('audit repair 6: wait opens at text spanning wrapped lines and quoted names', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`document.body.innerHTML = '<p>Earlier</p>'.repeat(30) + '<p>' + 'filler '.repeat(113) + 'Order A12 placed</p><button>Say &quot;yes&quot;</button>'`,
@@ -462,7 +467,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(quoted).not.toContain('\n1: ')
 	})
 	it('reading campaign: projects controls, redacts typed secrets in the receipt and the following window', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(BROWSER_READING_HTML)}`)
 		const toolset = createBrowserToolset(page)
@@ -493,7 +498,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('reading campaign: keeps distinct heading links, table references, escaped images and clamped levels', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`document.body.innerHTML = ${JSON.stringify(BROWSER_READING_STRUCTURE_HTML)}`,
@@ -515,9 +520,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		'line redesign: equals the measured bytes of $record',
 		async ({ html, expected, record }) => {
 			const route = record.includes('paging') ? '/policy' : '/'
-			const context = await browser.isolate()
+			const context = await browser.required.isolate()
 			contexts.push(context)
-			const page = await context.create({ url: fixtures.url('/form') })
+			const page = await context.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			await page.evaluate(
 				`(() => { history.replaceState(null, '', ${JSON.stringify(route)}); document.open(); document.write(${JSON.stringify(html)}); document.close() })()`,
@@ -552,9 +557,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const record = requireValue(
 			SERVICE_LINE_VIEW_RECORDS.find((row) => row.record.includes('paging')),
 		)
-		const context = await browser.isolate()
+		const context = await browser.required.isolate()
 		contexts.push(context)
-		const page = await context.create({ url: fixtures.url('/form') })
+		const page = await context.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`(history.replaceState(null, '', '/policy'), document.open(), document.write(${JSON.stringify(record.html)}), document.close())`,
@@ -599,9 +604,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const record = requireValue(
 			SERVICE_LINE_VIEW_RECORDS.find((row) => row.record.includes('cart')),
 		)
-		const context = await browser.isolate()
+		const context = await browser.required.isolate()
 		contexts.push(context)
-		const page = await context.create({ url: fixtures.url('/form') })
+		const page = await context.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`(history.replaceState(null, '', '/'), document.open(), document.write(${JSON.stringify(record.html)}), document.close())`,
@@ -624,7 +629,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 	})
 	it('reading campaign: returns complete bounded numbered windows, continuation, search, and a changed continuation', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`(() => { document.title = 'Reading fixture'; document.body.innerHTML = ${JSON.stringify(BROWSER_READING_HTML + Array.from({ length: 140 }, (_, index) => `<p>Paragraph ${index + 1}. ${'Ordinary store description. '.repeat(8)}${index === 110 ? 'Delivery schedules tomorrow.' : ''}</p>`).join(''))} })()`,
@@ -654,7 +659,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('reading campaign: budgets receipts exactly and opens wait at the matching line', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`document.body.innerHTML = ${JSON.stringify('<button>Observe</button>' + Array.from({ length: 150 }, (_, index) => `<p>Row ${index + 1}. ${'Ordinary prose. '.repeat(8)}${index === 120 ? 'Unique confirmation' : ''}</p>`).join(''))}`,
@@ -715,9 +720,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	)(
 		'reading campaign: $action settles a real frame form targeting $target exactly once',
 		async ({ action, target }) => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
-			const form = `<form action="${fixtures.url('/shop/cart')}" target="${target}"><label>Name<input name="name"></label><button>Submit</button></form><script>document.querySelector('form').onsubmit = () => sessionStorage.setItem('submissions', String(Number(sessionStorage.getItem('submissions') ?? 0) + 1))</script>`
+			const form = `<form action="${fixtures.required.url('/shop/cart')}" target="${target}"><label>Name<input name="name"></label><button>Submit</button></form><script>document.querySelector('form').onsubmit = () => sessionStorage.setItem('submissions', String(Number(sessionStorage.getItem('submissions') ?? 0) + 1))</script>`
 			await page.evaluate(
 				`(() => { document.body.innerHTML = '<h1>Outer page</h1>'; const frame=document.createElement('iframe'); frame.srcdoc=${JSON.stringify(form)}; document.body.append(frame) })()`,
 			)
@@ -750,7 +755,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	it.each(['type', 'press'])(
 		'reading campaign: %s reports an Enter without a form and releases its observer',
 		async (action) => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			await page.evaluate('document.body.innerHTML = "<label>Loose<input></label>"')
 			const toolset = createBrowserToolset(page)
@@ -778,7 +783,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	)
 
 	it('reading campaign: keeps ordinary ollama store paragraphs whole and reconstructs every continued line', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
 			`(() => { document.body.replaceChildren(); for(const text of ${JSON.stringify(SERVICE_STORE_PARAGRAPHS)}) { const p=document.createElement('p'); p.textContent=text; document.body.append(p) } })()`,
@@ -788,26 +793,32 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const toolset = createBrowserToolset(page)
 		toolsets.push(toolset)
 		await toolset.start()
-		const reconstructed: string[] = []
-		let from = 1
+		const windows: Array<{
+			readonly rows: readonly string[]
+			readonly next: number | undefined
+		}> = []
 		for (;;) {
+			const from = windows.at(-1)?.next ?? 1
 			const result = await toolset.read({ from })
 			expect(result.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			const rows = result.split('\n').filter((line) => /^\d+: /.test(line))
 			expect(rows[0]).toMatch(new RegExp('^' + from + ': '))
-			reconstructed.push(...rows.map((line) => line.replace(/^\d+: /, '')))
 			const next = /call read with from (\d+) for more/.exec(result)?.[1]
+			windows.push({
+				rows: rows.map((line) => line.replace(/^\d+: /, '')),
+				next: next === undefined ? undefined : Number(next),
+			})
 			if (next === undefined) break
 			expect(Number(next)).toBe(from + rows.length)
-			from = Number(next)
 		}
+		const reconstructed = windows.flatMap((window) => window.rows)
 		expect(reconstructed).toEqual(SERVICE_STORE_PARAGRAPHS)
 	})
 
 	it.each(SERVICE_READING_SUBMISSIONS)(
 		'reading campaign: settles $name handled submission and releases the observer',
 		async ({ code, changed }) => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			await page.evaluate(
 				`(() => { document.body.innerHTML = '<form><label>Name<input></label><button>Submit</button></form><output></output><aside hidden></aside>'; document.querySelector('form').onsubmit = event => { event.preventDefault(); ${code} } })()`,
@@ -841,7 +852,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	it.each(['click', 'type', 'press'])(
 		'reading campaign: %s observes the handled submission before synchronous handlers',
 		async (action) => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			await page.evaluate(
 				`(() => { document.body.innerHTML = '<form><label>Name<input></label><button>Submit</button></form><output></output>'; document.querySelector('form').onsubmit = event => { event.preventDefault(); document.querySelector('output').textContent = 'One confirmation' }; document.querySelector('input').focus() })()`,
@@ -873,9 +884,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	it.each(['navigation', 'dialog', 'abort', 'detach'])(
 		'reading campaign: releases submission observation on %s',
 		async (outcome) => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
-			const destination = fixtures.url('/shop/cart')
+			const destination = fixtures.required.url('/shop/cart')
 			const code =
 				outcome === 'navigation'
 					? `setTimeout(() => location.href = ${JSON.stringify(destination)}, 200)`
@@ -928,7 +939,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			expect((result.success ? requireToolText(result) : result.error).length).toBeLessThanOrEqual(
 				BROWSER_TOOL_LIMIT,
 			)
-			expect(page.url).toBe(outcome === 'navigation' ? destination : fixtures.url('/form'))
+			expect(page.url).toBe(outcome === 'navigation' ? destination : fixtures.required.url('/form'))
 			if (outcome === 'dialog')
 				requireToolText(
 					await toolset.tools.execute({
@@ -949,7 +960,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	)
 
 	it('carries pressed and expanded CDP states into read with a plain-button control', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(SERVICE_TOGGLE_HTML)}`)
 		const toolset = createBrowserToolset(page)
@@ -976,7 +987,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('runs one task end to end: read, click the text field by reference, type with submit, and read the result page, each receipt whole and under BROWSER_TOOL_LIMIT', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
@@ -990,7 +1001,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			reading,
 		).map((row) => row.reference)
 		const form = [
-			`page "Delivery form" ${fixtures.url('/form')} (12 lines)`,
+			`page "Delivery form" ${fixtures.required.url('/form')} (12 lines)`,
 			'1: # Delivery form',
 			'2: Name',
 			`3: textbox "Name" [ref=${name}] value="Ada"`,
@@ -1028,7 +1039,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				arguments: { ref: name, text: 'Grace Hopper', submit: true },
 			}),
 		)
-		const placed = fixtures.url(
+		const placed = fixtures.required.url(
 			'/form/placed?name=Grace+Hopper&notes=Leave+at+the+door&speed=Standard',
 		)
 		const result = [
@@ -1068,7 +1079,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 
 	describe('read past the cut view', () => {
 		it('lists the Tracking number textbox first on a page whose text before it runs past the limit, and its reference types into the field (control: a reading that shares no word starts with the page line)', async () => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			await page.evaluate(
 				`(() => { document.querySelector('main').insertAdjacentHTML('afterbegin', ${JSON.stringify(SERVICE_TRACKING_HTML)}); return true })()`,
@@ -1116,7 +1127,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 
 		it('pages the outline of that page through to its count line', async () => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			await page.evaluate(
 				`(() => { document.querySelector('main').insertAdjacentHTML('afterbegin', ${JSON.stringify(SERVICE_TRACKING_HTML)}); return true })()`,
@@ -1125,9 +1136,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const toolset = createBrowserToolset(page, { tools })
 			toolsets.push(toolset)
 			await toolset.start()
-			const bodies: string[] = []
-			let from: number | undefined = 1
-			while (from !== undefined) {
+			const pages: Array<ReturnType<typeof extractBrowserPage>> = []
+			for (;;) {
+				const from = pages.at(-1)?.next ?? 1
 				const paged = extractBrowserPage(
 					requireToolText(
 						await tools.execute({ id: 'reading', name: 'read', arguments: { from } }),
@@ -1135,9 +1146,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				)
 				expect(paged.start).toBe(from)
 				expect(paged.body.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
-				bodies.push(paged.body)
-				from = paged.next
+				pages.push(paged)
+				if (paged.next === undefined) break
 			}
+			const bodies = pages.map((entry) => entry.body)
 			expect(bodies.length).toBeGreaterThan(1)
 			expect(bodies.join('\n')).toBe(
 				(await page.elements.outline({ limit: Number.MAX_SAFE_INTEGER })).lines
@@ -1147,7 +1159,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 
 		it('names the focused element in the receipt of each Tab press', async () => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			const tools = createToolManager()
 			const toolset = createBrowserToolset(page, { tools })
@@ -1174,7 +1186,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('returns the cart view in the receipt of a click whose POST form the server answers with 303, and the same page with the handled status for a form whose submit handler prevents the submission', async () => {
-		const page = await browser.create({ url: fixtures.url('/shop') })
+		const page = await browser.required.create({ url: fixtures.required.url('/shop') })
 		opened.push(page)
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
@@ -1193,7 +1205,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			`Clicked button "Save for later" [ref=${hold}]; the page handled the submission and has not changed yet; do not submit again; call read or wait for the text you expect.\n\n${reading}`,
 		)
 		expect(await page.evaluate('document.body.dataset.held')).toBe('yes')
-		expect(page.url).toBe(fixtures.url('/shop'))
+		expect(page.url).toBe(fixtures.required.url('/shop'))
 
 		const added = requireToolText(
 			await tools.execute({ id: 'add', name: 'click', arguments: { ref: add } }),
@@ -1202,7 +1214,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			[
 				`Clicked button "Add to cart" [ref=${add}].`,
 				'',
-				`page "Cart" ${fixtures.url('/shop/cart')} (2 lines)`,
+				`page "Cart" ${fixtures.required.url('/shop/cart')} (2 lines)`,
 				'1: # Cart',
 				'2: Your cart holds the Cedar Tea Tray.',
 				'[lines 1–2 of 2; the whole page]',
@@ -1211,7 +1223,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('names the page handling of a type with submit whose submission the page script prevents and posts, returning its confirmation, which a following wait also finds (control: a form that navigates keeps the destination view)', async () => {
-		const page = await browser.create({ url: fixtures.url('/checkout') })
+		const page = await browser.required.create({ url: fixtures.required.url('/checkout') })
 		opened.push(page)
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
@@ -1234,10 +1246,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(typed.split('\n', 1)[0]).toBe(
 			`Typed "Ada Lovelace" into textbox "Name" [ref=${name}] and submitted the form; the page handled the submission and changed.`,
 		)
-		expect(typed).toContain(`\n\npage "Checkout" ${fixtures.url('/checkout')} (`)
+		expect(typed).toContain(`\n\npage "Checkout" ${fixtures.required.url('/checkout')} (`)
 		expect(typed).toContain(`textbox "Name" [ref=${name}] value="Ada Lovelace"`)
 		expect(typed).toContain(FIXTURE_CHECKOUT_CODE)
-		expect(page.url).toBe(fixtures.url('/checkout'))
+		expect(page.url).toBe(fixtures.required.url('/checkout'))
 
 		expect(
 			requireToolText(
@@ -1252,7 +1264,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				arguments: { ref: recipient, text: 'Grace Hopper', submit: true },
 			}),
 		)
-		const placed = fixtures.url('/form/placed?speed=Standard&name=Grace+Hopper')
+		const placed = fixtures.required.url('/form/placed?speed=Standard&name=Grace+Hopper')
 		const view = [
 			`page "Order placed" ${placed} (2 lines)`,
 			'1: # Order placed',
@@ -1269,7 +1281,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('outlines editable regions by role and types only into a referenced text role, filling a role="textbox" region through the trusted path', async () => {
-		const page = await browser.create({ url: fixtures.url('/document') })
+		const page = await browser.required.create({ url: fixtures.required.url('/document') })
 		opened.push(page)
 		await page.evaluate(
 			`(() => { document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_EDITABLE_HTML)}); return true })()`,
@@ -1325,7 +1337,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('stages dialog when a click fires confirm(); the receipt names the dialog, and dialog accept settles the blocked click with no second receipt (control: a click without a dialog returns the plain receipt)', async () => {
-		const page = await browser.create({ url: fixtures.url('/confirm') })
+		const page = await browser.required.create({ url: fixtures.required.url('/confirm') })
 		opened.push(page)
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
@@ -1337,7 +1349,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		const remove = requireOutlineReference(reading, 'button', 'Delete')
 		const keep = requireOutlineReference(reading, 'button', 'Keep')
 		const drafts = [
-			`page "Drafts" ${fixtures.url('/confirm')} (3 lines)`,
+			`page "Drafts" ${fixtures.required.url('/confirm')} (3 lines)`,
 			'1: # Drafts',
 			`2: button "Delete" [ref=${remove}]`,
 			`3: button "Keep" [ref=${keep}]`,
@@ -1382,11 +1394,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('names the beforeunload dialog in a link click receipt, and the accepted dialog commits the navigation (control: the link on a page without the handler navigates in one receipt)', async () => {
-		const page = await browser.create()
+		const page = await browser.required.create()
 		opened.push(page)
 		// The document reaches network idle before the click, so the next idle belongs to the
 		// document the accepted dialog commits.
-		await page.navigate(fixtures.url('/beforeunload'), { condition: 'idle' })
+		await page.navigate(fixtures.required.url('/beforeunload'), { condition: 'idle' })
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
 		toolsets.push(toolset)
@@ -1403,7 +1415,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(clicked).toBe(
 			`Clicked link "Next" [ref=${next}]. A beforeunload dialog is open: ""; call dialog.`,
 		)
-		expect(page.url).toBe(fixtures.url('/beforeunload'))
+		expect(page.url).toBe(fixtures.required.url('/beforeunload'))
 
 		// The idle wait carries a handler from the moment it starts, and `finally` ends and drains
 		// it, so a failed dialog step leaves no rejection behind and keeps its own failure.
@@ -1422,9 +1434,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			ending.abort()
 			await drained
 		}
-		expect(page.url).toBe(fixtures.url('/beforeunload/next'))
+		expect(page.url).toBe(fixtures.required.url('/beforeunload/next'))
 		const destination = [
-			`page "Next note" ${fixtures.url('/beforeunload/next')} (1 lines)`,
+			`page "Next note" ${fixtures.required.url('/beforeunload/next')} (1 lines)`,
 			'1: # Next note',
 			'[lines 1–1 of 1; the whole page]',
 		].join('\n')
@@ -1432,7 +1444,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			requireToolText(await tools.execute({ id: 'after', name: 'read', arguments: { from: 1 } })),
 		).toBe(destination)
 
-		const plain = await browser.create({ url: fixtures.url('/beforeunload/plain') })
+		const plain = await browser.required.create({
+			url: fixtures.required.url('/beforeunload/plain'),
+		})
 		opened.push(plain)
 		const controls = createToolManager()
 		const control = createBrowserToolset(plain, { tools: controls })
@@ -1453,50 +1467,53 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			matchesToolReceipt(receipt, {
 				action: `Clicked link "Next" [ref=${link}]`,
 				view: destination,
-				url: fixtures.url('/beforeunload/next'),
+				url: fixtures.required.url('/beforeunload/next'),
 			}),
 		)
 		expect(controls.tool('dialog')).toBeUndefined()
 		await waitForCondition(
 			'the control link committed and rendered the next note',
 			async () =>
-				plain.url === fixtures.url('/beforeunload/next') && (await control.read()) === destination,
+				plain.url === fixtures.required.url('/beforeunload/next') &&
+				(await control.read()) === destination,
 			{ budget: 10_000, interval: 20 },
 		)
 	})
 
 	describe('a popup that window.open creates from a trusted click', () => {
 		const suite = createTeardown()
-		let toolset: BrowserToolsetInterface
-		let child: string
+		const toolset = new BrowserFixtureValue<BrowserToolsetInterface | undefined>(undefined)
+		const child = new BrowserFixtureValue<string | undefined>(undefined)
 
 		// Establishes every step before the cursor assertion: the context, the navigation, the
 		// toolset, the reference, the activation click, whose receipt names the move, and a second
 		// protocol connection's `Target.getTargets` listing the child page with the opener's
 		// `openerId`.
 		beforeAll(async () => {
-			const context = await browser.isolate()
+			const context = await browser.required.isolate()
 			suite.add(() => context.close())
-			const page = await context.create({ url: fixtures.url('/popup') })
+			const page = await context.create({ url: fixtures.required.url('/popup') })
 			const tools = createToolManager()
 			const started = createBrowserToolset(page, { tools, context })
 			suite.add(() => started.destroy())
 			await started.start()
-			toolset = started
+			toolset.value = started
 			const catalog = requireToolText(
 				await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 			)
 			const open = requireOutlineReference(catalog, 'button', 'Open details')
-			child = fixtures.url('/popup/child')
+			child.value = fixtures.required.url('/popup/child')
 			const clicked = requireToolText(
 				await tools.execute({ id: 'click', name: 'click', arguments: { ref: open } }),
 			)
-			if (!clicked.includes(`The view moved to a new tab: ${child}.`))
+			if (!clicked.includes(`The view moved to a new tab: ${child.required}.`))
 				throw new Error(
 					`Precondition failed: the Open details click returned ${JSON.stringify(clicked)}`,
 				)
 
-			const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
+			const version: unknown = await (
+				await fetch(`http://127.0.0.1:${port.required}/json/version`)
+			).json()
 			const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 			if (!isString(endpoint))
 				throw new Error('Precondition failed: Chromium reported no debugger URL.')
@@ -1513,7 +1530,8 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					isRecord(targets) &&
 					isArray(targets['targetInfos']) &&
 					targets['targetInfos'].some(
-						(info) => isRecord(info) && info['url'] === child && info['openerId'] === page.target,
+						(info) =>
+							isRecord(info) && info['url'] === child.required && info['openerId'] === page.target,
 					),
 				{ budget: 5_000, interval: 50 },
 			)
@@ -1525,18 +1543,22 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 
 		it('moves the cursor to the popup the click opened', async () => {
 			await expect(
-				waitForCondition('the view moved to the popup', () => toolset.view.url === child, {
-					budget: 5_000,
-					interval: 20,
-				}),
+				waitForCondition(
+					'the view moved to the popup',
+					() => toolset.required.view.url === child.required,
+					{
+						budget: 5_000,
+						interval: 20,
+					},
+				),
 			).resolves.toBeUndefined()
 		})
 	})
 
 	it('keeps the view on the page when a click opens no popup: tabs lists one current tab (control for the popup case)', async () => {
-		const context = await browser.isolate()
+		const context = await browser.required.isolate()
 		contexts.push(context)
-		const page = await context.create({ url: fixtures.url('/popup') })
+		const page = await context.create({ url: fixtures.required.url('/popup') })
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools, context })
 		toolsets.push(toolset)
@@ -1562,57 +1584,64 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	describe('two tabs of one context', () => {
-		let context: BrowserContextInterface
-		let catalogPage: BrowserPageInterface
-		let detailsPage: BrowserPageInterface
-		let tools: ToolManagerInterface
-		let toolset: BrowserToolsetInterface
-		let catalog: string
+		const context = new BrowserFixtureValue<BrowserContextInterface | undefined>(undefined)
+		const catalogPage = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
+		const detailsPage = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
+		const tools = new BrowserFixtureValue<ToolManagerInterface | undefined>(undefined)
+		const toolset = new BrowserFixtureValue<BrowserToolsetInterface | undefined>(undefined)
+		const catalog = new BrowserFixtureValue<string | undefined>(undefined)
 
 		afterEach(async () => {
-			await toolset.destroy().catch(() => undefined)
-			await context.close().catch(() => undefined)
+			await toolset.required.destroy().catch(() => undefined)
+			await context.required.close().catch(() => undefined)
 		})
 
 		// Each case opens both tabs and starts a context-scoped toolset on the first tab.
 		beforeEach(async () => {
-			context = await browser.isolate()
-			catalogPage = await context.create({ url: fixtures.url('/popup') })
-			detailsPage = await context.create({ url: fixtures.url('/popup/child') })
-			tools = createToolManager()
-			toolset = createBrowserToolset(catalogPage, { tools, context })
-			await toolset.start()
-			catalog = requireToolText(
-				await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
+			context.value = await browser.required.isolate()
+			catalogPage.value = await context.required.create({ url: fixtures.required.url('/popup') })
+			detailsPage.value = await context.required.create({
+				url: fixtures.required.url('/popup/child'),
+			})
+			tools.value = createToolManager()
+			toolset.value = createBrowserToolset(catalogPage.required, {
+				tools: tools.required,
+				context: context.required,
+			})
+			await toolset.required.start()
+			catalog.value = requireToolText(
+				await tools.required.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
 			)
 		})
 
 		it('moves the cursor between the tabs with switch, and the page tools follow it', async () => {
 			const selected = createRecorder<[unknown]>()
-			toolset.emitter.on('select', selected.handler)
+			toolset.required.emitter.on('select', selected.handler)
 			expect(
-				requireToolText(await tools.execute({ id: 'tabs', name: 'read', arguments: { from: 1 } })),
+				requireToolText(
+					await tools.required.execute({ id: 'tabs', name: 'read', arguments: { from: 1 } }),
+				),
 			).toContain('tabs: t1 "Catalog" (current), t2 "Details"')
-			expect(await toolset.tabs()).toStrictEqual([
-				{ id: 't1', title: 'Catalog', url: fixtures.url('/popup'), current: true },
-				{ id: 't2', title: 'Details', url: fixtures.url('/popup/child'), current: false },
+			expect(await toolset.required.tabs()).toStrictEqual([
+				{ id: 't1', title: 'Catalog', url: fixtures.required.url('/popup'), current: true },
+				{ id: 't2', title: 'Details', url: fixtures.required.url('/popup/child'), current: false },
 			])
 
 			const moved = requireToolText(
-				await tools.execute({ id: 'switch', name: 'switch', arguments: { tab: 't2' } }),
+				await tools.required.execute({ id: 'switch', name: 'switch', arguments: { tab: 't2' } }),
 			)
-			expect(toolset.view).toBe(detailsPage)
-			const details = await toolset.read()
+			expect(toolset.required.view).toBe(detailsPage.required)
+			const details = await toolset.required.read()
 			expect(moved).toSatisfy((receipt: string) =>
 				matchesToolReceipt(receipt, {
-					action: `Switched to t2 ${fixtures.url('/popup/child')}`,
+					action: `Switched to t2 ${fixtures.required.url('/popup/child')}`,
 					view: details,
 				}),
 			)
 			const like = requireOutlineReference(details, 'button', 'Like')
 			expect(
 				requireToolText(
-					await tools.execute({ id: 'like', name: 'click', arguments: { ref: like } }),
+					await tools.required.execute({ id: 'like', name: 'click', arguments: { ref: like } }),
 				),
 			).toSatisfy((receipt: string) =>
 				matchesToolReceipt(receipt, {
@@ -1620,40 +1649,40 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 					view: details,
 				}),
 			)
-			expect(await detailsPage.evaluate('document.body.dataset.liked')).toBe('yes')
+			expect(await detailsPage.required.evaluate('document.body.dataset.liked')).toBe('yes')
 
 			const back = requireToolText(
-				await tools.execute({ id: 'back', name: 'switch', arguments: { tab: 't1' } }),
+				await tools.required.execute({ id: 'back', name: 'switch', arguments: { tab: 't1' } }),
 			)
 			expect(back).toSatisfy((receipt: string) =>
 				matchesToolReceipt(receipt, {
-					action: `Switched to t1 ${fixtures.url('/popup')}`,
-					view: catalog,
+					action: `Switched to t1 ${fixtures.required.url('/popup')}`,
+					view: catalog.required,
 				}),
 			)
-			expect(toolset.view).toBe(catalogPage)
-			expect(selected.calls).toStrictEqual([[detailsPage], [catalogPage]])
+			expect(toolset.required.view).toBe(catalogPage.required)
+			expect(selected.calls).toStrictEqual([[detailsPage.required], [catalogPage.required]])
 		})
 
 		it('returns the cursor to the first tab when the tab it moved to closes, and the next result names the return', async () => {
-			await tools.execute({ id: 'switch', name: 'switch', arguments: { tab: 't2' } })
-			expect(toolset.view).toBe(detailsPage)
-			const closed = detailsPage.url
+			await tools.required.execute({ id: 'switch', name: 'switch', arguments: { tab: 't2' } })
+			expect(toolset.required.view).toBe(detailsPage.required)
+			const closed = detailsPage.required.url
 
-			await detailsPage.close()
+			await detailsPage.required.close()
 			await waitForCondition(
 				'the view returned to the first tab',
-				() => toolset.view === catalogPage,
+				() => toolset.required.view === catalogPage.required,
 				{
 					budget: 5_000,
 					interval: 20,
 				},
 			)
-			expect(
-				requireToolText(
-					await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
-				),
-			).toContain(`The tab ${closed} closed; the view returned to ${fixtures.url('/popup')}.`)
+			const returned = requireToolText(
+				await tools.required.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
+			)
+			const note = `The tab ${closed} closed; the view returned to ${fixtures.required.url('/popup')}.`
+			expect(returned).toContain(note)
 		})
 	})
 
@@ -1662,11 +1691,11 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	// for the frame's request on its own session and its commit and stop on the page session, so it
 	// carries the frame's destination view.
 	it('returns the destination view in the receipt of a type with submit that navigates an out-of-process frame to another process', async () => {
-		const page = await browser.create()
+		const page = await browser.required.create()
 		opened.push(page)
 		const attached = createRecorder<[Readonly<Record<string, unknown>>]>()
 		await page.subscribe('Target.attachedToTarget', attached.handler)
-		await page.navigate(fixtures.url('/frame/voucher'))
+		await page.navigate(fixtures.required.url('/frame/voucher'))
 		await waitForCondition(
 			'precondition: the localhost voucher field attached as its own iframe target',
 			() =>
@@ -1689,7 +1718,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			{ budget: 10_000, interval: 20 },
 		)
 		expect((await page.frames()).map((frame) => frame.url)).toContain(
-			fixtures.url('/frame/field', 'localhost'),
+			fixtures.required.url('/frame/field', 'localhost'),
 		)
 		const reading = requireToolText(
 			await tools.execute({ id: 'reading', name: 'read', arguments: { from: 1 } }),
@@ -1705,7 +1734,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		const applied = [
-			`page "Voucher" ${fixtures.url('/frame/voucher')} (4 lines)`,
+			`page "Voucher" ${fixtures.required.url('/frame/voucher')} (4 lines)`,
 			'1: # Voucher',
 			`2: Iframe "Voucher form" [ref=${frame}]`,
 			'3: # Voucher applied',
@@ -1717,7 +1746,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		)
 		// The frame's keydown listener put the Enter into the submitted query, so the committed
 		// URL is evidence that the key-down reached the frame.
-		const done = fixtures.url('/frame/done?code=SPRING&key=Enter')
+		const done = fixtures.required.url('/frame/done?code=SPRING&key=Enter')
 		await waitForCondition(
 			'the framed form committed its cross-process navigation',
 			async () => (await page.frames()).some((candidate) => candidate.url === done),
@@ -1734,7 +1763,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	})
 
 	it('returns the destination view in the receipt of a type with submit that navigates an in-process frame out to another process', async () => {
-		const page = await browser.create({ url: fixtures.url('/frame/local') })
+		const page = await browser.required.create({ url: fixtures.required.url('/frame/local') })
 		opened.push(page)
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
@@ -1763,7 +1792,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			}),
 		)
 		const applied = [
-			`page "Local voucher" ${fixtures.url('/frame/local')} (4 lines)`,
+			`page "Local voucher" ${fixtures.required.url('/frame/local')} (4 lines)`,
 			'1: # Local voucher',
 			`2: Iframe "Voucher form" [ref=${frame}]`,
 			'3: # Voucher applied',
@@ -1774,12 +1803,12 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			`Typed "SPRING" into textbox "Code" [ref=${code}] and submitted the form.\n\n${applied}`,
 		)
 		expect((await page.frames()).map((candidate) => candidate.url)).toContain(
-			fixtures.url('/frame/done?code=SPRING&key=Enter', 'localhost'),
+			fixtures.required.url('/frame/done?code=SPRING&key=Enter', 'localhost'),
 		)
 	})
 
 	it('returns the parent frame destination in the receipt of a type with submit whose nested out-of-process form targets _parent', async () => {
-		const page = await browser.create({ url: fixtures.url('/frame/nested') })
+		const page = await browser.required.create({ url: fixtures.required.url('/frame/nested') })
 		opened.push(page)
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
@@ -1795,10 +1824,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			{ budget: 10_000, interval: 20 },
 		)
 		const inner = (await page.frames()).find(
-			(candidate) => candidate.url === fixtures.url('/frame/inner'),
+			(candidate) => candidate.url === fixtures.required.url('/frame/inner'),
 		)
 		const middle = (await page.frames()).find(
-			(candidate) => candidate.url === fixtures.url('/frame/middle', 'localhost'),
+			(candidate) => candidate.url === fixtures.required.url('/frame/middle', 'localhost'),
 		)
 		expect(inner?.parent).toBe(requireValue(middle).id)
 		const reading = requireToolText(
@@ -1820,12 +1849,12 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		expect(view).toContain('# Voucher applied')
 		expect(view).not.toContain('textbox "Coupon"')
 		expect((await page.frames()).map((candidate) => candidate.url)).toContain(
-			fixtures.url('/frame/done?code=SPRING'),
+			fixtures.required.url('/frame/done?code=SPRING'),
 		)
 	})
 
 	it('returns the same page at its fragment in the receipt of a click whose form submission stays within the document', async () => {
-		const page = await browser.create({ url: fixtures.url('/search?q=tray') })
+		const page = await browser.required.create({ url: fixtures.required.url('/search?q=tray') })
 		opened.push(page)
 		const tools = createToolManager()
 		const toolset = createBrowserToolset(page, { tools })
@@ -1844,7 +1873,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			[
 				`Clicked button "Find" [ref=${find}].`,
 				'',
-				`page "Search" ${fixtures.url('/search?q=tray#found')} (2 lines)`,
+				`page "Search" ${fixtures.required.url('/search?q=tray#found')} (2 lines)`,
 				'1: # Search',
 				`2: button "Find" [ref=${find}]`,
 				'[lines 1–2 of 2; the whole page]',
@@ -1860,7 +1889,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 	// the behaviour under any load.
 	describe('performance within the receipt deadline', () => {
 		it('returns the loaded result page of a type with submit within the deadline', async () => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			opened.push(page)
 			const tools = createToolManager()
 			const toolset = createBrowserToolset(page, { tools })
@@ -1883,7 +1912,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				}),
 			)
 			const elapsed = performance.now() - started
-			const placed = fixtures.url(
+			const placed = fixtures.required.url(
 				'/form/placed?name=Grace+Hopper&notes=Leave+at+the+door&speed=Standard',
 			)
 			const view = [
@@ -1899,7 +1928,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 
 		it('returns the dialog-naming click receipt and the accepted dialog receipt each within the deadline', async () => {
-			const page = await browser.create({ url: fixtures.url('/confirm') })
+			const page = await browser.required.create({ url: fixtures.required.url('/confirm') })
 			opened.push(page)
 			const tools = createToolManager()
 			const toolset = createBrowserToolset(page, { tools })
@@ -1929,7 +1958,9 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 
 		it('returns the loaded destination of a link click on a page without a beforeunload handler within the deadline', async () => {
-			const page = await browser.create({ url: fixtures.url('/beforeunload/plain') })
+			const page = await browser.required.create({
+				url: fixtures.required.url('/beforeunload/plain'),
+			})
 			opened.push(page)
 			const tools = createToolManager()
 			const toolset = createBrowserToolset(page, { tools })
@@ -1952,7 +1983,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 				[
 					`Clicked link "Next" [ref=${link}].`,
 					'',
-					`page "Next note" ${fixtures.url('/beforeunload/next')} (1 lines)`,
+					`page "Next note" ${fixtures.required.url('/beforeunload/next')} (1 lines)`,
 					'1: # Next note',
 					'[lines 1–1 of 1; the whole page]',
 				].join('\n'),
@@ -1961,10 +1992,10 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 		})
 
 		it('returns the tab a switch moved to with its captured view within the deadline', async () => {
-			const context = await browser.isolate()
+			const context = await browser.required.isolate()
 			contexts.push(context)
-			const first = await context.create({ url: fixtures.url('/popup') })
-			const second = await context.create({ url: fixtures.url('/popup/child') })
+			const first = await context.create({ url: fixtures.required.url('/popup') })
+			const second = await context.create({ url: fixtures.required.url('/popup/child') })
 			const tools = createToolManager()
 			const toolset = createBrowserToolset(first, { tools, context })
 			toolsets.push(toolset)
@@ -1977,7 +2008,7 @@ describe('BrowserToolset over a real page through createToolManager().execute', 
 			const elapsed = performance.now() - started
 			expect(toolset.view).toBe(second)
 			const details = await toolset.read()
-			expect(moved).toBe(`Switched to t2 ${fixtures.url('/popup/child')}.\n\n${details}`)
+			expect(moved).toBe(`Switched to t2 ${fixtures.required.url('/popup/child')}.\n\n${details}`)
 			expect(elapsed).toBeLessThan(BROWSER_TOOL_TIMEOUT_MS)
 		})
 	})

@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from '../../setup.js'
 import { describe, expect, it } from 'vitest'
 import { compileQueryWaitExpression, isBrowserError } from '@src/core'
 import { BrowserDOMWait, collectBrowserRoots } from '@src/browser'
@@ -14,12 +15,12 @@ describe('BrowserDOMWait', () => {
 		const document = createProbeDocument('<div></div>')
 		const shadow = requireValue(document.querySelector('div')).attachShadow({ mode: 'open' })
 		const checks = createRecorder<[]>()
-		let ready = false
+		const ready = new BrowserFixtureValue(false)
 		const waiting = new BrowserDOMWait({
 			roots: () => [document, shadow],
 			check: () => {
 				checks.handler()
-				return ready ? 'done' : undefined
+				return ready.value ? 'done' : undefined
 			},
 			timeout: 1_000,
 			start: performance.now(),
@@ -28,13 +29,13 @@ describe('BrowserDOMWait', () => {
 			.execute()
 			.catch((error: unknown) => error)
 		const initial = checks.count
-		for (let count = 0; count < 100; count += 1) {
-			document.dispatchEvent(new Event('transitionend'))
+		for (const event of Array.from({ length: 100 }, () => 'transitionend')) {
+			document.dispatchEvent(new Event(event))
 			shadow.dispatchEvent(new Event('animationend', { composed: false }))
 		}
 		await waitForDelay()
 		expect(checks.count - initial).toBe(1)
-		ready = true
+		ready.value = true
 		shadow.dispatchEvent(new Event('animationend', { composed: false }))
 		expect(await waiting).toBe('done')
 		expect(checks.count - initial).toBe(2)
@@ -42,20 +43,21 @@ describe('BrowserDOMWait', () => {
 	it('coalesces compiled finish bursts and wakes on the final event', async () => {
 		const document = createProbeDocument('<div></div>')
 		const checks = createRecorder<[]>()
-		let ready = false
+		const ready = new BrowserFixtureValue(false)
 		const waiting: unknown = new Function(
 			'document',
 			'predicate',
 			`return ${compileQueryWaitExpression(1_000, 'burst', 'predicate()')}`,
 		)(document, () => {
 			checks.handler()
-			return ready
+			return ready.value
 		})
 		const initial = checks.count
-		for (let count = 0; count < 100; count += 1) document.dispatchEvent(new Event('transitionend'))
+		for (const event of Array.from({ length: 100 }, () => 'transitionend'))
+			document.dispatchEvent(new Event(event))
 		await waitForDelay()
 		expect(checks.count - initial).toBe(1)
-		ready = true
+		ready.value = true
 		document.dispatchEvent(new Event('animationend'))
 		expect(await waiting).toBe(true)
 		expect(checks.count - initial).toBe(2)
@@ -70,10 +72,10 @@ describe('BrowserDOMWait', () => {
 				),
 			)
 			const controller = new AbortController()
-			let ready = false
+			const ready = new BrowserFixtureValue(false)
 			const waiting = new BrowserDOMWait({
 				roots: () => [document, shadow],
-				check: () => (ready ? 'done' : undefined),
+				check: () => (ready.value ? 'done' : undefined),
 				timeout: ending === 'deadline' ? 25 : 1_000,
 				start: performance.now(),
 				signal: controller.signal,
@@ -86,7 +88,7 @@ describe('BrowserDOMWait', () => {
 			for (const listener of listeners)
 				expect(requireValue(listener.calls[0]?.[0]).aborted).toBe(false)
 			if (ending === 'settle') {
-				ready = true
+				ready.value = true
 				shadow.dispatchEvent(new Event('transitionend', { composed: false }))
 			} else if (ending === 'abort') controller.abort(new Error('stopped'))
 			const result = await waiting
@@ -100,19 +102,19 @@ describe('BrowserDOMWait', () => {
 			const document = createProbeDocument('<div></div>')
 			const shadow = requireValue(document.querySelector('div')).attachShadow({ mode: 'open' })
 			for (const root of [document, shadow]) {
-				let ready = false
+				const ready = new BrowserFixtureValue(false)
 				const checks = createRecorder<[]>()
 				const pending = new BrowserDOMWait({
 					roots: () => [document, shadow],
 					check: () => {
 						checks.handler()
-						return ready ? 'done' : undefined
+						return ready.value ? 'done' : undefined
 					},
 					timeout: 1_000,
 					start: performance.now(),
 					subject: 'Event wait',
 				}).execute()
-				ready = true
+				ready.value = true
 				root.dispatchEvent(new Event(name, { composed: false }))
 				expect(await pending).toBe('done')
 				const settled = checks.count
@@ -127,13 +129,13 @@ describe('BrowserDOMWait', () => {
 			const listeners = ['load', 'transitionend', 'animationend'].map((event) =>
 				recordProbeSubscriptions(shadow, event),
 			)
-			let ready = false
+			const ready = new BrowserFixtureValue(false)
 			const checks = createRecorder<[]>()
 			const wait = new BrowserDOMWait({
 				roots: () => (host.isConnected ? [document, shadow] : [document]),
 				check: () => {
 					checks.handler()
-					return ready ? true : undefined
+					return ready.value ? true : undefined
 				},
 				timeout: 1_000,
 				start: performance.now(),
@@ -150,7 +152,7 @@ describe('BrowserDOMWait', () => {
 			const departed = checks.count
 			shadow.dispatchEvent(new Event(name))
 			expect(checks.count).toBe(departed)
-			ready = true
+			ready.value = true
 			document.dispatchEvent(new Event(name))
 			await pending
 		})
@@ -376,10 +378,10 @@ describe('BrowserDOMWait', () => {
 		const probe = createProbeDocument('<main></main>')
 		const checks = createRecorder<[]>()
 		// The reading starts at the host clock, so a wait that ignores `now` sees budget left.
-		let reading = performance.now()
+		const reading = new BrowserFixtureValue(performance.now())
 		const wait = new BrowserDOMWait({
 			roots: () => {
-				reading += 100
+				reading.value += 100
 				return [probe]
 			},
 			check: () => {
@@ -387,8 +389,8 @@ describe('BrowserDOMWait', () => {
 				return checks.count > 1 ? 'late' : undefined
 			},
 			timeout: 50,
-			start: reading,
-			now: () => reading,
+			start: reading.value,
+			now: () => reading.value,
 			subject: 'Consumed wait',
 		})
 		const expired = await wait.execute().catch((error: unknown) => error)

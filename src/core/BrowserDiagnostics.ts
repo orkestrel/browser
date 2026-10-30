@@ -4,13 +4,13 @@ import type {
 	BrowserFrameInterface,
 	BrowserPerformanceInterface,
 	BrowserProfilerInterface,
-	BrowserTracingInterface,
+	BrowserTraceInterface,
 	BrowserWriterInterface,
 } from './types.js'
 import { BrowserCoverage } from './BrowserCoverage.js'
 import { BrowserPerformance } from './BrowserPerformance.js'
 import { BrowserProfiler } from './BrowserProfiler.js'
-import { BrowserTracing } from './BrowserTracing.js'
+import { BrowserTrace } from './BrowserTrace.js'
 
 /**
  * Groups the tracing, coverage, performance, and profiler classes beneath one page.
@@ -18,20 +18,20 @@ import { BrowserTracing } from './BrowserTracing.js'
  * @remarks The owner exposes this entity through `page.diagnostics`.
  */
 export class BrowserDiagnostics implements BrowserDiagnosticsInterface {
-	readonly #tracing: BrowserTracing
+	readonly #trace: BrowserTrace
 	readonly #coverage: BrowserCoverage
 	readonly #performance: BrowserPerformance
 	readonly #profiler: BrowserProfiler
 
 	constructor(frame: BrowserFrameInterface, writer?: BrowserWriterInterface) {
-		this.#tracing = new BrowserTracing(frame, writer)
+		this.#trace = new BrowserTrace(frame, writer)
 		this.#coverage = new BrowserCoverage(frame)
 		this.#performance = new BrowserPerformance(frame)
 		this.#profiler = new BrowserProfiler(frame)
 	}
 
-	get tracing(): BrowserTracingInterface {
-		return this.#tracing
+	get trace(): BrowserTraceInterface {
+		return this.#trace
 	}
 
 	get coverage(): BrowserCoverageInterface {
@@ -47,7 +47,7 @@ export class BrowserDiagnostics implements BrowserDiagnosticsInterface {
 	}
 
 	async destroy(): Promise<void> {
-		await this.#tracing.destroy()
+		await this.#trace.destroy()
 		await this.#coverage.destroy()
 		await this.#profiler.destroy()
 	}

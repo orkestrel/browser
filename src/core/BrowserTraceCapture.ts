@@ -1,8 +1,7 @@
 import type {
 	BrowserFrameInterface,
-	BrowserTracingInterface,
-	BrowserTracingOptions,
-	BrowserTracingResult,
+	BrowserTraceOptions,
+	BrowserTraceResult,
 	BrowserWriterInterface,
 } from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
@@ -10,84 +9,92 @@ import { concatBytes, readBrowserStreamChunk } from './helpers.js'
 import { BrowserError } from './errors.js'
 import { isString } from '@orkestrel/contract'
 
-/**
- * Captures Chromium traces streamed through the IO domain.
- *
- * @remarks The owner exposes this entity through `page.diagnostics.tracing`.
- */
-export class BrowserTracing implements BrowserTracingInterface {
+/** Owns initialization, stream completion, and cleanup for one trace. */
+export class BrowserTraceCapture {
 	readonly #frame: BrowserFrameInterface
 	readonly #writer: BrowserWriterInterface | undefined
-	#active = false
-	#options: BrowserTracingOptions | undefined
-	#completion: PromiseWithResolvers<string> | undefined
+	readonly #options: BrowserTraceOptions | undefined
+	readonly #categories: readonly string[]
+	readonly #completion = Promise.withResolvers<string>()
+	readonly #ended = Promise.withResolvers<void>()
+	#started = false
+	#closed = false
 	readonly #completeHandler = this.#handleComplete.bind(this)
 
-	constructor(frame: BrowserFrameInterface, writer?: BrowserWriterInterface) {
+	constructor(
+		frame: BrowserFrameInterface,
+		options: BrowserTraceOptions | undefined,
+		writer: BrowserWriterInterface | undefined,
+	) {
 		this.#frame = frame
 		this.#writer = writer
-	}
-
-	get active(): boolean {
-		return this.#active
-	}
-
-	async start(options?: BrowserTracingOptions): Promise<void> {
-		if (this.#active) throw new BrowserError('ARGUMENT', 'Browser tracing is already active')
 		const categories = [...(options?.categories ?? ['devtools.timeline', 'v8.execute'])]
 		if (options?.screenshots === true) {
 			categories.push('disabled-by-default-devtools.screenshot')
 		}
-		if (options?.sampling === true) {
+		if (options?.samples === true) {
 			categories.push('disabled-by-default-v8.cpu_profiler')
 		}
 		this.#options = options
-		this.#completion = Promise.withResolvers<string>()
+		this.#categories = categories
+	}
+
+	get active(): boolean {
+		return this.#started && !this.#closed
+	}
+
+	get closed(): boolean {
+		return this.#closed
+	}
+
+	get ended(): Promise<void> {
+		return this.#ended.promise
+	}
+
+	async start(): Promise<void> {
 		try {
 			await this.#frame.subscribe('Tracing.tracingComplete', this.#completeHandler)
 			await this.#frame.send('Tracing.start', {
 				transferMode: 'ReturnAsStream',
 				traceConfig: {
-					includedCategories: categories,
+					includedCategories: this.#categories,
 				},
 			})
-			this.#active = true
+			this.#started = true
 		} catch (error) {
+			this.#closed = true
 			await this.#frame
 				.unsubscribe('Tracing.tracingComplete', this.#completeHandler)
 				.catch(() => undefined)
-			this.#options = undefined
-			this.#completion = undefined
+			this.#ended.resolve()
 			throw error
 		}
 	}
 
-	async stop(): Promise<BrowserTracingResult> {
-		if (!this.#active || this.#completion === undefined) {
-			throw new BrowserError('ARGUMENT', 'Browser tracing is not active')
-		}
+	async stop(): Promise<BrowserTraceResult> {
+		this.#closed = true
 		const completion = this.#completion
 		const options = this.#options
-		this.#active = false
-		let stream: string | undefined
 		const chunks: Uint8Array[] = []
 		try {
 			await this.#frame.send('Tracing.end')
-			stream = await this.#wait(completion.promise)
-			while (true) {
-				const chunk = readBrowserStreamChunk(await this.#frame.send('IO.read', { handle: stream }))
-				chunks.push(chunk.bytes)
-				if (chunk.eof) break
-			}
-		} finally {
-			if (stream !== undefined) {
+			const stream = await this.#wait(completion.promise)
+			try {
+				while (true) {
+					const chunk = readBrowserStreamChunk(
+						await this.#frame.send('IO.read', { handle: stream }),
+					)
+					chunks.push(chunk.bytes)
+					if (chunk.eof) break
+				}
+			} finally {
 				await this.#frame.send('IO.close', { handle: stream }).catch(() => undefined)
 			}
+		} finally {
 			await this.#frame
 				.unsubscribe('Tracing.tracingComplete', this.#completeHandler)
 				.catch(() => undefined)
-			this.#options = undefined
-			this.#completion = undefined
+			this.#ended.resolve()
 		}
 		const bytes = concatBytes(chunks)
 		if (options?.path !== undefined) {
@@ -97,11 +104,6 @@ export class BrowserTracing implements BrowserTracingInterface {
 			await this.#writer.write(options.path, bytes)
 		}
 		return { bytes, path: options?.path }
-	}
-
-	async destroy(): Promise<void> {
-		if (!this.#active) return
-		await this.stop().catch(() => undefined)
 	}
 
 	async #wait(promise: Promise<string>): Promise<string> {

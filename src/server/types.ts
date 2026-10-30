@@ -1,6 +1,7 @@
 import type { EmitterErrorHandler, EmitterHooks, EmitterInterface } from '@orkestrel/emitter'
 import type { StdioServerOptions } from '@orkestrel/mcp/server'
 import type { ToolDefinition } from '@orkestrel/tool'
+import type { PoolToken } from '@orkestrel/pool'
 import type {
 	BrowserCallOptions,
 	BrowserContextInterface,
@@ -8,10 +9,42 @@ import type {
 	BrowserPageInterface,
 	BrowserPageOptions,
 	BrowserViewport,
+	BrowserToolsetInterface,
 	CDPTransportEventMap,
 } from '@src/core'
 
 // === Browser shared
+
+/** Exposes whether a process remainder disappeared before its deadline. */
+export interface BrowserProcessDrainInterface {
+	readonly result: Promise<boolean | undefined>
+}
+
+/** Pairs a pooled browser with its profile directory. */
+export interface BrowserServerSlot {
+	readonly browser: BrowserInterface
+	readonly profile: string
+}
+
+/** Owns a holder's context, toolset, and download directory. */
+export interface BrowserServerGeneration {
+	readonly context: BrowserContextInterface
+	readonly toolset: BrowserToolsetInterface
+	readonly directory: string
+}
+
+/** Identifies an admitted holder and its cancellation lifetime. */
+export interface BrowserServerHolder {
+	readonly id: string
+	readonly purpose: string
+	readonly abort: AbortController
+}
+
+/** Pairs a pool token with the generation it owns. */
+export interface BrowserServerLease {
+	readonly token: PoolToken<BrowserServerSlot>
+	readonly generation: BrowserServerGeneration
+}
 
 /** Names a supported browser engine (raw CDP targets Chromium-family browsers only). */
 export type BrowserEngine = 'chromium' | 'chrome' | 'edge'

@@ -3,6 +3,40 @@ import { BrowserError, BrowserStepError, isBrowserError, isBrowserStepError } fr
 import { describe, expect, it } from 'vitest'
 
 describe('browser error guards', () => {
+	it('recognizes numeric error context even when the refused input is not finite', () => {
+		for (const value of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY, -0]) {
+			const error = new BrowserError('ARGUMENT', 'Invalid input', {
+				value,
+				point: { x: value, y: 0 },
+				values: [value],
+			})
+			expect(isBrowserError(error)).toBe(true)
+			expect(error.context?.['value']).toBe(value)
+		}
+	})
+
+	it('reads declared callable action members without touching restricted function accessors', () => {
+		const action: BrowserAction = {
+			action: 'wait',
+			arguments: {},
+			outcome: 'done',
+			receipt: 'Ready',
+			elapsed: 0,
+		}
+		const callable = Object.defineProperties(
+			() => undefined,
+			Object.getOwnPropertyDescriptors(action),
+		)
+		Object.defineProperty(callable, 'caller', {
+			get: () => {
+				throw new Error('unrelated restricted accessor')
+			},
+		})
+		const error = new BrowserStepError('s1', action)
+		Object.defineProperty(error, 'action', { value: callable })
+		expect(isBrowserStepError(error)).toBe(true)
+	})
+
 	it('narrows a coded browser failure and retains its JSON context', () => {
 		const context = { method: 'Page.navigate', detail: { retry: false }, values: [1, null] }
 		const error = new BrowserError('REMOTE', 'Remote failure', context)

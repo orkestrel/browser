@@ -14,16 +14,91 @@ import { createBrowserToolset, createMemoryBrowserJourneyStore } from '@src/core
 import { createBrowser, FileBrowserRunStore } from '@src/server'
 import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../../../setupService.js'
 import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
-import { describeBrowserRunStore } from '../../core/stores/suite.js'
+import { BROWSER_RUN_STORE_CASES } from '../../../setup.js'
 
 const scratches: ScratchInterface[] = []
 afterEach(() => {
 	for (const scratch of scratches.splice(0)) scratch.destroy()
 })
-describeBrowserRunStore('FileBrowserRunStore', () => {
-	const scratch = createScratch()
-	scratches.push(scratch)
-	return new FileBrowserRunStore({ root: scratch.path })
+describe('FileBrowserRunStore', () => {
+	for (const entry of BROWSER_RUN_STORE_CASES) {
+		it(`${entry.title}`, async (context) => {
+			for await (const received of entry.run(() => {
+				const scratch = createScratch()
+				scratches.push(scratch)
+				return new FileBrowserRunStore({ root: scratch.path })
+			})) {
+				for (const observation of [received].filter((value) => value.comparison === 'identity')) {
+					expect(observation.actual).toBe(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'different')) {
+					expect(observation.actual).not.toBe(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'equal')) {
+					expect(observation.actual).toEqual(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'object')) {
+					expect(observation.actual).toMatchObject(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'contains')) {
+					expect(observation.actual).toContain(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'length')) {
+					expect(observation.actual).toHaveLength(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'maximum')) {
+					expect(observation.actual).toBeLessThanOrEqual(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'undefined')) {
+					expect(observation.actual).toBeUndefined()
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'defined')) {
+					expect(observation.actual).toBeDefined()
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'match')) {
+					expect(observation.actual).toMatch(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'rejected')) {
+					expect(observation.actual).toHaveLength(1)
+					const [result] = observation.actual
+					expect(result?.status).toBe('rejected')
+					if (result?.status !== 'rejected') throw new Error('The store call did not reject')
+					expect(result.reason).toMatchObject(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'thrown')) {
+					expect(observation.actual).toHaveLength(1)
+					const [result] = observation.actual
+					expect(result?.status).toBe('rejected')
+					if (result?.status !== 'rejected') throw new Error('The store call did not reject')
+					expect(() => {
+						throw result.reason
+					}).toThrow(observation.expected)
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'path')) {
+					expect(observation.actual).toHaveLength(1)
+					const [result] = observation.actual
+					expect(result?.status).toBe('rejected')
+					if (result?.status !== 'rejected') throw new Error('The store call did not reject')
+					expect(result.reason).toMatchObject({
+						code: observation.expected.code,
+						message: expect.stringContaining(observation.expected.path),
+					})
+				}
+				for (const observation of [received].filter((value) => value.comparison === 'access')) {
+					expect(observation.actual).toEqual({
+						uid: observation.expected.uid,
+						gid: observation.expected.gid,
+						outcomes: observation.expected.paths.map((path) => ({
+							status: 'rejected',
+							code: 'STORE_ACCESS',
+							message: expect.stringContaining(path),
+						})),
+					})
+				}
+				if (received.comparison === 'skip') context.skip(received.actual, received.expected)
+			}
+		})
+	}
 })
 
 describe('FileBrowserRunStore standalone captures', () => {
@@ -387,7 +462,7 @@ describe('FileBrowserRunStore persisted files', () => {
 		scratches.push(scratch)
 		const store = new FileBrowserRunStore({ root: scratch.path, limit: 1 })
 		const slots = []
-		for (let index = 0; index < 3; index += 1) {
+		while (slots.length < 3) {
 			const slot = await store.create(BROWSER_RUN_FIXTURE.journey.name)
 			slots.push(slot)
 			await store.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })

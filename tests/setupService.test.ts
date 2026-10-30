@@ -451,13 +451,7 @@ describe('matchesToolReceipt', () => {
 describe('requireDocumentToolset', () => {
 	it('resolves after the page reports its toolset ready', async () => {
 		const read: string[] = []
-		const page = {
-			evaluate: (expression: string): Promise<unknown> => {
-				read.push(expression)
-				if (expression === 'document.body.dataset.failed') return Promise.resolve(undefined)
-				return Promise.resolve(read.length < 3 ? undefined : 'yes')
-			},
-		}
+		const page = createDocumentReadinessProbe(read)
 
 		await expect(requireDocumentToolset(page, 1_000)).resolves.toBeUndefined()
 		expect(read).toStrictEqual([
@@ -469,10 +463,8 @@ describe('requireDocumentToolset', () => {
 	})
 
 	it('throws the error the page recorded, and names the import when the page reports nothing', async () => {
-		const failed = {
-			evaluate: (): Promise<unknown> => Promise.resolve('TypeError: Failed to fetch'),
-		}
-		const silent = { evaluate: (): Promise<unknown> => Promise.resolve(undefined) }
+		const failed = createDocumentFailureProbe('TypeError: Failed to fetch')
+		const silent = createDocumentFailureProbe(undefined)
 
 		await expect(requireDocumentToolset(failed, 1_000)).rejects.toThrow(
 			'Precondition failed: the document toolset did not start: TypeError: Failed to fetch',
@@ -616,3 +608,4 @@ describe('tests/service readiness', () => {
 		}
 	})
 })
+import { createDocumentReadinessProbe, createDocumentFailureProbe } from './setupService.js'

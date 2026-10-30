@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from './setup.js'
 import type { BrowserPageInterface } from '@src/core'
 import type { CDPSentMessage } from './setup.js'
 import { BrowserPage } from '../src/core/BrowserPage.js'
@@ -633,16 +634,16 @@ describe('createDiscoveringPage', () => {
 			(message) => message.method === 'Target.attachToTarget',
 		)
 		try {
-			let answered = false
+			const answered = new BrowserFixtureValue(false)
 			void client.send('Target.attachToTarget', { targetId: 'popup-1', flatten: true }).then(
-				() => (answered = true),
+				() => (answered.value = true),
 				() => undefined,
 			)
 			const enabled = client.send('Page.enable', undefined, { session: 'session-1' })
 
 			await expect(enabled).resolves.toStrictEqual({})
 			expect(transport.sent.map((message) => message.method)).toContain('Target.attachToTarget')
-			expect(answered).toBe(false)
+			expect(answered.value).toBe(false)
 		} finally {
 			await client.close()
 		}
@@ -1153,12 +1154,13 @@ describe('createDOMSnapshotResult', () => {
 		const parentIndex = readProperty<readonly number[]>(nodes, 'parentIndex')
 		const nodeName = readProperty<readonly number[]>(nodes, 'nodeName')
 
-		const walked: string[] = []
-		let cursor = 3
-		while (cursor >= 0) {
-			walked.push(requireValue(strings[requireValue(nodeName[cursor])]))
-			cursor = requireValue(parentIndex[cursor])
+		const ancestors = [3]
+		while (true) {
+			const parent = requireValue(parentIndex[requireValue(ancestors.at(-1))])
+			if (parent < 0) break
+			ancestors.push(parent)
 		}
+		const walked = ancestors.map((cursor) => requireValue(strings[requireValue(nodeName[cursor])]))
 
 		expect(walked).toStrictEqual(['DIV', 'BODY', 'HTML', '#document'])
 	})
@@ -1230,7 +1232,7 @@ describe('TIMER_LEAD', () => {
 		const control = performance.now()
 		await waitForDelay(25)
 		expect(performance.now() - control).toBeGreaterThanOrEqual(25 - TIMER_LEAD)
-		for (let attempt = 0; attempt < 5; attempt += 1) {
+		while (spans.length < 5) {
 			const aligning = performance.now()
 			alignLoopClock(0.9)
 			expect(performance.now() - aligning).toBeGreaterThanOrEqual(0.9)

@@ -1,5 +1,7 @@
-import type { BrowserReadingInput } from '@src/core'
-import type { BrowserNameContext } from './types.js'
+import type { BrowserContentInput } from '@src/core'
+import type { BrowserNameContext, BrowserCaptureValue } from './types.js'
+import { BrowserAncestors } from './BrowserAncestors.js'
+import { BrowserCaptureSiblings } from './BrowserCaptureSiblings.js'
 import { attempt, isObject, isString } from '@orkestrel/contract'
 import { BROWSER_RESULT_LIMIT, normalizeBrowserName, BrowserError } from '@src/core'
 import {
@@ -35,8 +37,8 @@ export function isBrowserDocument(value: unknown): value is Document {
  * @remarks
  * The measure is the length of `JSON.stringify({ url, title, html })`, the form the CDP capture
  * guard compares with `BROWSER_RESULT_LIMIT`, so a character JSON escapes counts as its escape
- * sequence. A reading a caller builds with `createBrowserReading` passes through no limit.
- * {@link BrowserReadingInput} defines the inert capture, lowering, redaction, and limits.
+ * sequence. A reading a caller builds with `createBrowserContent` passes through no limit.
+ * {@link BrowserContentInput} defines the inert capture, lowering, redaction, and limits.
  *
  * @param node - The root whose rendered markup is captured; its owner document supplies `URL`
  * and `title`
@@ -44,13 +46,15 @@ export function isBrowserDocument(value: unknown): value is Document {
  * @throws Thrown as a `BrowserError` when the serialized capture is longer than
  * `BROWSER_RESULT_LIMIT` characters, with `length` and `limit` in its context.
  */
-export function readBrowserCapture(node: Element): BrowserReadingInput {
+export function readBrowserCapture(node: Element): BrowserContentInput {
 	const document = node.ownerDocument
 	const capture = { url: document.URL, title: document.title, html: '' }
 	const view = document.defaultView
 	const rendered = view !== null && node.isConnected
 	const inert = document.implementation.createHTMLDocument('')
-	let root: Element | undefined = inert.importNode(node, true)
+	const root = inert.importNode(node, true)
+	const output = inert.createDocumentFragment()
+	output.append(root)
 	const pending: Array<{
 		live: Element
 		twin: Element
@@ -58,12 +62,10 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 		visited: boolean
 	}> = [{ live: node, twin: root, visited: false }]
 	if (rendered) {
-		let child = node
-		for (
-			let parent: Element | null = node;
-			parent?.ownerDocument === document;
-			parent = readBrowserParent(parent)
-		) {
+		const ancestors = new BrowserAncestors(node, readBrowserParent)
+		for (const parent of ancestors) {
+			if (parent.ownerDocument !== document) break
+			const child = ancestors.previous ?? node
 			const style = view.getComputedStyle(parent)
 			const outside =
 				parent !== node &&
@@ -107,11 +109,10 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 				child.parentElement?.shadowRoot !== undefined &&
 				child.assignedSlot === null
 			if (style.display === 'none' || outside || unassigned) {
-				root = undefined
+				root.remove()
 				pending.length = 0
 				break
 			}
-			child = parent
 		}
 	}
 	while (pending.length > 0) {
@@ -140,14 +141,12 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 			(tag === 'input' && ['password', 'hidden'].includes(input))
 		) {
 			twin.remove()
-			if (twin === root) root = undefined
 			continue
 		}
 		const style = entry.style ?? (rendered ? view.getComputedStyle(live) : undefined)
 		const invisible = style?.visibility === 'hidden' || style?.visibility === 'collapse'
 		if (style?.display === 'none' || (invisible && !live.hasChildNodes())) {
 			twin.remove()
-			if (twin === root) root = undefined
 			continue
 		}
 		if (!visited) {
@@ -188,44 +187,20 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 						live.firstElementChild)
 					: undefined
 			// Save sibling pointers before pruning invalidates the copied child collections.
-			let element = live.lastElementChild
-			let counterpart = twin.lastElementChild
-			let child = live.lastChild
-			let mirror = twin.lastChild
-			while (child !== null && mirror !== null) {
-				const previous = child.previousSibling
-				const previousMirror = mirror.previousSibling
-				const previousElement: Element | null = element?.previousElementSibling ?? null
-				const previousCounterpart: Element | null = counterpart?.previousElementSibling ?? null
-				let omitted =
+			for (const { child, mirror, element, counterpart } of new BrowserCaptureSiblings(
+				live,
+				twin,
+			)) {
+				const excluded =
 					rendered &&
 					((summary !== undefined && child !== summary) || (conditional && child !== branch))
-				if (rendered && live.shadowRoot !== null) {
-					const slot =
-						child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
-					if (slot === null) omitted = true
-					else {
-						for (
-							let parent: Element | null = slot;
-							parent !== null && parent !== live;
-							parent = readBrowserParent(parent)
-						) {
-							if (view.getComputedStyle(parent).display === 'none') omitted = true
-						}
-					}
-				}
+				const omitted = readBrowserCaptureOmission(live, child, view, rendered, excluded)
 				if (omitted || (child.nodeType === 3 && invisible)) mirror.parentNode?.removeChild(mirror)
 				else if (child.nodeType === 1) {
 					// Element sibling pointers retain their type across windowless document realms.
 					if (element !== null && counterpart !== null)
 						pending.push({ live: element, twin: counterpart, visited: false })
 				}
-				if (child.nodeType === 1) {
-					element = previousElement
-					counterpart = previousCounterpart
-				}
-				child = previous
-				mirror = previousMirror
 			}
 			continue
 		}
@@ -239,125 +214,10 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 			twin.prepend(inert.createElement('br'))
 			twin.append(inert.createElement('br'))
 		}
-		let fragments: Node[] | undefined
-		let lines: string[] | undefined
-		let container = false
-		if (live instanceof view.HTMLInputElement) {
-			lines = []
-			if (['text', 'email', 'search', 'tel', 'url', 'number'].includes(live.type)) {
-				if (live.type !== 'number' || !live.validity.badInput) {
-					const placeholder = view.getComputedStyle(live, '::placeholder')
-					lines = [
-						live.value ||
-							(live.matches(':placeholder-shown') &&
-							placeholder.visibility === 'visible' &&
-							placeholder.opacity !== '0' &&
-							placeholder.color !== 'rgba(0, 0, 0, 0)'
-								? live.placeholder
-								: ''),
-					]
-				}
-			} else if (['submit', 'reset', 'button'].includes(live.type)) lines = [live.value]
-			else if (live.type === 'file' && live.files?.length === 1)
-				lines = Array.from(live.files ?? [], (file) => file.name)
-			else if (live.type === 'image' && live.getAttribute('aria-hidden') !== 'true')
-				lines = [live.getAttribute('aria-label')?.trim() || live.alt]
-		} else if (live instanceof view.HTMLTextAreaElement) {
-			const placeholder = view.getComputedStyle(live, '::placeholder')
-			const value =
-				live.value ||
-				(live.matches(':placeholder-shown') &&
-				placeholder.visibility === 'visible' &&
-				placeholder.opacity !== '0' &&
-				placeholder.color !== 'rgba(0, 0, 0, 0)'
-					? live.placeholder
-					: '')
-			lines = value.split(/\r?\n/)
-		} else if (
-			live instanceof view.HTMLSelectElement ||
-			live instanceof view.HTMLOptionElement ||
-			live instanceof view.HTMLOptGroupElement
-		) {
-			lines = []
-			const select = live instanceof view.HTMLSelectElement ? live : live.closest('select')
-			if (select !== null) {
-				if (!select.multiple && select.size <= 1) {
-					const option = select.selectedOptions[0]
-					if (option !== undefined && (live === select || live === option || live.contains(option)))
-						lines.push(option.label)
-				} else {
-					const box = select.getBoundingClientRect()
-					const top = box.top + select.clientTop
-					const bottom = top + select.clientHeight
-					const rows =
-						live === select
-							? select.querySelectorAll('option,optgroup')
-							: [live, ...live.querySelectorAll('option')]
-					for (const row of rows) {
-						const rowStyle = view.getComputedStyle(row)
-						const groupStyle =
-							row.parentElement instanceof view.HTMLOptGroupElement
-								? view.getComputedStyle(row.parentElement)
-								: undefined
-						if (
-							rowStyle.display === 'none' ||
-							rowStyle.visibility !== 'visible' ||
-							groupStyle?.display === 'none'
-						)
-							continue
-						const rect = row.getBoundingClientRect()
-						// The group box includes its options; its caption ends where the first row starts.
-						const end =
-							row instanceof view.HTMLOptGroupElement
-								? (Array.from(row.querySelectorAll('option'))
-										.find((option) => option.getClientRects().length > 0)
-										?.getBoundingClientRect().top ?? rect.bottom)
-								: rect.bottom
-						if (
-							end > top &&
-							rect.top < bottom &&
-							rect.right > box.left + select.clientLeft &&
-							rect.left < box.left + select.clientLeft + select.clientWidth &&
-							(row instanceof view.HTMLOptionElement || row instanceof view.HTMLOptGroupElement)
-						)
-							lines.push(row.label)
-					}
-				}
-			}
-		} else if (tag === 'svg') {
-			if (twin.parentElement?.closest('svg, foreignObject')?.localName === 'svg') continue
-			lines = []
-			fragments = []
-			for (const content of twin.querySelectorAll('text, foreignObject')) {
-				if (content.parentElement?.closest('svg, foreignObject')?.localName === 'foreignObject')
-					continue
-				if (
-					content.localName === 'text' &&
-					content.parentElement?.closest('text')?.closest('svg') === content.closest('svg')
-				)
-					continue
-				if (content.localName === 'foreignObject') fragments.push(...content.childNodes)
-				else if (content.textContent) fragments.push(inert.createTextNode(content.textContent))
-			}
-			if (fragments.length === 0) fragments = undefined
-			if (!invisible && fragments === undefined && live.getAttribute('aria-hidden') !== 'true')
-				lines.push(
-					live.getAttribute('aria-label')?.trim() ||
-						live.querySelector(':scope > title')?.textContent ||
-						'',
-				)
-		} else if (['form', 'dialog', 'button'].includes(tag)) {
-			container = true
-			if (live instanceof view.HTMLButtonElement && !invisible && live.innerText.trim() === '') {
-				const name = live.getAttribute('aria-label')?.trim()
-				if (name) {
-					lines = [name]
-					container = false
-				}
-			}
-		}
-		if (lines === undefined && !container) continue
-		if (invisible && !container && tag !== 'svg') lines = []
+		const value = readBrowserCaptureValue(live, twin, view, inert, invisible, tag)
+		if (value === undefined) continue
+		const { fragments, container } = value
+		const lines = invisible && !container && tag !== 'svg' ? [] : value.lines
 		const block = !style?.display.startsWith('inline') && style?.display !== 'contents'
 		const carrier = inert.createElement(block ? 'div' : 'span')
 		if (container) carrier.append(...twin.childNodes)
@@ -375,13 +235,13 @@ export function readBrowserCapture(node: Element): BrowserReadingInput {
 			carrier.append(inert.createElement('br'))
 		}
 		twin.replaceWith(carrier)
-		if (twin === root) root = carrier
 	}
 	// Guard a copy that has fallen out of step with the live tree.
-	for (const input of root?.querySelectorAll('input[type="password" i],input[type="hidden" i]') ??
-		[])
+	for (const input of output.firstElementChild?.querySelectorAll(
+		'input[type="password" i],input[type="hidden" i]',
+	) ?? [])
 		input.remove()
-	capture.html = root?.outerHTML ?? ''
+	capture.html = output.firstElementChild?.outerHTML ?? ''
 	const length = JSON.stringify(capture).length
 	if (length > BROWSER_RESULT_LIMIT) {
 		throw new BrowserError('RESULT_LIMIT', 'Document capture exceeds BROWSER_RESULT_LIMIT', {
@@ -593,15 +453,20 @@ export function readBrowserContent(
 			: view !== null && root instanceof view.HTMLSlotElement
 				? root.assignedNodes({ flatten: true })
 				: Array.from(root.childNodes)
-	let text = ''
-	let previous = false
-	for (const child of children) {
-		const piece = computeBrowserAlternative(child, context)
-		const block = view !== null && child instanceof view.Element && matchesBrowserBlock(child)
-		if (piece !== '') text += text !== '' && (block || previous) ? ` ${piece}` : piece
-		previous = block
-	}
-	return text
+	return children.reduce(
+		(state, child) => {
+			const piece = computeBrowserAlternative(child, context)
+			const block = view !== null && child instanceof view.Element && matchesBrowserBlock(child)
+			return {
+				text:
+					piece === ''
+						? state.text
+						: state.text + (state.text !== '' && (block || state.previous) ? ` ${piece}` : piece),
+				previous: block,
+			}
+		},
+		{ text: '', previous: false },
+	).text
 }
 
 /**
@@ -748,11 +613,7 @@ export function matchesBrowserInvisible(element: Element): boolean {
  * ```
  */
 export function matchesBrowserOmitted(element: Element): boolean {
-	for (
-		let current: Element | null = element;
-		current !== null;
-		current = readBrowserParent(current)
-	) {
+	for (const current of new BrowserAncestors(element, readBrowserParent)) {
 		if (matchesBrowserHidden(current)) return true
 	}
 	return false
@@ -816,7 +677,9 @@ export function matchesBrowserBlock(element: Element): boolean {
 export function collectBrowserRoots(root: Document | ShadowRoot | Element): readonly Node[] {
 	const roots: Node[] = [root.getRootNode()]
 	const queue: Array<Document | ShadowRoot | Element> = [root]
-	for (let current = queue.shift(); current !== undefined; current = queue.shift()) {
+	while (queue.length > 0) {
+		const current = queue.shift()
+		if (current === undefined) continue
 		const view = (isBrowserDocument(current) ? current : current.ownerDocument)?.defaultView ?? null
 		const own = view !== null && current instanceof view.Element ? [current] : []
 		for (const element of [...own, ...current.querySelectorAll('*')]) {
@@ -869,25 +732,26 @@ export function matchesBrowserPopup(element: Element): boolean {
 		(tag === 'button' && type === 'submit') ||
 		(tag === 'input' && (type === 'submit' || type === 'image'))
 	const form = tag === 'form' ? element : Reflect.get(element, 'form')
-	let target: string | undefined
-	if ((tag === 'a' || tag === 'area') && element.hasAttribute('href'))
-		target = element.getAttribute('target') ?? base
-	else if (view !== null && form instanceof view.HTMLFormElement && (tag === 'form' || submitter))
-		target =
-			(submitter ? element.getAttribute('formtarget') : null) ?? form.getAttribute('target') ?? base
+	const target =
+		(tag === 'a' || tag === 'area') && element.hasAttribute('href')
+			? (element.getAttribute('target') ?? base)
+			: view !== null && form instanceof view.HTMLFormElement && (tag === 'form' || submitter)
+				? ((submitter ? element.getAttribute('formtarget') : null) ??
+					form.getAttribute('target') ??
+					base)
+				: undefined
 	if (target === undefined) return false
 	const keyword = target.trim().toLowerCase()
 	if (BROWSER_CONTEXT_TARGETS.has(keyword)) return false
 	if (keyword === '_blank') return true
 	const selector = `iframe[name="${CSS.escape(target)}"], frame[name="${CSS.escape(target)}"]`
-	let current: Window | null = view
-	while (current !== null) {
-		const frame: Window = current
+	for (const frame of new BrowserAncestors<Window>(view, (entry) =>
+		entry.parent === entry ? null : entry.parent,
+	)) {
 		const found = attempt(
 			() => frame.name === target || frame.document.querySelector(selector) !== null,
 		)
 		if (found.success && found.value) return false
-		current = frame.parent === frame ? null : frame.parent
 	}
 	return true
 }
@@ -914,11 +778,8 @@ export function matchesBrowserPopup(element: Element): boolean {
  * ```
  */
 export function matchesBrowserActivation(target: Element, label: Element): boolean {
-	for (
-		let current: Element | null = target;
-		current !== null && current !== label;
-		current = current.parentElement
-	) {
+	for (const current of new BrowserAncestors(target, (entry) => entry.parentElement)) {
+		if (current === label) break
 		if (current.matches(BROWSER_INTERACTIVE_CONTENT)) return false
 	}
 	return true
@@ -938,12 +799,11 @@ export function matchesBrowserActivation(target: Element, label: Element): boole
  * ```
  */
 export function skipBrowserSubtree(walker: TreeWalker): Node | null {
-	let node = walker.nextSibling()
-	while (node === null) {
+	while (true) {
+		const node = walker.nextSibling()
+		if (node !== null) return node
 		if (walker.parentNode() === null) return null
-		node = walker.nextSibling()
 	}
-	return node
 }
 
 /**
@@ -964,10 +824,9 @@ export function skipBrowserSubtree(walker: TreeWalker): Node | null {
  * ```
  */
 export function readBrowserBlock(element: Element | null, root: Node): Node {
-	let current = element
-	while (current !== null && current !== root) {
+	for (const current of new BrowserAncestors(element, (entry) => entry.parentElement)) {
+		if (current === root) break
 		if (matchesBrowserBlock(current)) return current
-		current = current.parentElement
 	}
 	return root
 }
@@ -1072,4 +931,153 @@ export function readBrowserStates(
 			states['selected'] = element.selected
 	}
 	return states
+}
+
+/** Derives rendered form values and SVG fragments for an inert capture. */
+export function readBrowserCaptureValue(
+	live: Element,
+	twin: Element,
+	view: Window & typeof globalThis,
+	inert: Document,
+	invisible: boolean,
+	tag: string,
+): BrowserCaptureValue | undefined {
+	if (live instanceof view.HTMLInputElement) {
+		if (['text', 'email', 'search', 'tel', 'url', 'number'].includes(live.type)) {
+			if (live.type !== 'number' || !live.validity.badInput) {
+				const placeholder = view.getComputedStyle(live, '::placeholder')
+				return {
+					lines: [
+						live.value ||
+							(live.matches(':placeholder-shown') &&
+							placeholder.visibility === 'visible' &&
+							placeholder.opacity !== '0' &&
+							placeholder.color !== 'rgba(0, 0, 0, 0)'
+								? live.placeholder
+								: ''),
+					],
+				}
+			}
+		} else if (['submit', 'reset', 'button'].includes(live.type)) return { lines: [live.value] }
+		else if (live.type === 'file' && live.files?.length === 1)
+			return { lines: Array.from(live.files ?? [], (file) => file.name) }
+		else if (live.type === 'image' && live.getAttribute('aria-hidden') !== 'true')
+			return { lines: [live.getAttribute('aria-label')?.trim() || live.alt] }
+		return { lines: [] }
+	} else if (live instanceof view.HTMLTextAreaElement) {
+		const placeholder = view.getComputedStyle(live, '::placeholder')
+		const value =
+			live.value ||
+			(live.matches(':placeholder-shown') &&
+			placeholder.visibility === 'visible' &&
+			placeholder.opacity !== '0' &&
+			placeholder.color !== 'rgba(0, 0, 0, 0)'
+				? live.placeholder
+				: '')
+		return { lines: value.split(/\r?\n/) }
+	} else if (
+		live instanceof view.HTMLSelectElement ||
+		live instanceof view.HTMLOptionElement ||
+		live instanceof view.HTMLOptGroupElement
+	) {
+		const lines: string[] = []
+		const select = live instanceof view.HTMLSelectElement ? live : live.closest('select')
+		if (select !== null) {
+			if (!select.multiple && select.size <= 1) {
+				const option = select.selectedOptions[0]
+				if (option !== undefined && (live === select || live === option || live.contains(option)))
+					lines.push(option.label)
+			} else {
+				const box = select.getBoundingClientRect()
+				const top = box.top + select.clientTop
+				const bottom = top + select.clientHeight
+				const rows =
+					live === select
+						? select.querySelectorAll('option,optgroup')
+						: [live, ...live.querySelectorAll('option')]
+				for (const row of rows) {
+					const rowStyle = view.getComputedStyle(row)
+					const groupStyle =
+						row.parentElement instanceof view.HTMLOptGroupElement
+							? view.getComputedStyle(row.parentElement)
+							: undefined
+					if (
+						rowStyle.display === 'none' ||
+						rowStyle.visibility !== 'visible' ||
+						groupStyle?.display === 'none'
+					)
+						continue
+					const rect = row.getBoundingClientRect()
+					// The group box includes its options; its caption ends where the first row starts.
+					const end =
+						row instanceof view.HTMLOptGroupElement
+							? (Array.from(row.querySelectorAll('option'))
+									.find((option) => option.getClientRects().length > 0)
+									?.getBoundingClientRect().top ?? rect.bottom)
+							: rect.bottom
+					if (
+						end > top &&
+						rect.top < bottom &&
+						rect.right > box.left + select.clientLeft &&
+						rect.left < box.left + select.clientLeft + select.clientWidth &&
+						(row instanceof view.HTMLOptionElement || row instanceof view.HTMLOptGroupElement)
+					)
+						lines.push(row.label)
+				}
+			}
+		}
+		return { lines }
+	} else if (tag === 'svg') {
+		if (twin.parentElement?.closest('svg, foreignObject')?.localName === 'svg') return undefined
+		const lines: string[] = []
+		const fragments: Node[] = []
+		for (const content of twin.querySelectorAll('text, foreignObject')) {
+			if (content.parentElement?.closest('svg, foreignObject')?.localName === 'foreignObject')
+				continue
+			if (
+				content.localName === 'text' &&
+				content.parentElement?.closest('text')?.closest('svg') === content.closest('svg')
+			)
+				continue
+			if (content.localName === 'foreignObject') fragments.push(...content.childNodes)
+			else if (content.textContent) fragments.push(inert.createTextNode(content.textContent))
+		}
+		if (!invisible && fragments.length === 0 && live.getAttribute('aria-hidden') !== 'true')
+			lines.push(
+				live.getAttribute('aria-label')?.trim() ||
+					live.querySelector(':scope > title')?.textContent ||
+					'',
+			)
+		return { lines, ...(fragments.length === 0 ? {} : { fragments }) }
+	} else if (['form', 'dialog', 'button'].includes(tag)) {
+		if (live instanceof view.HTMLButtonElement && !invisible && live.innerText.trim() === '') {
+			const name = live.getAttribute('aria-label')?.trim()
+			if (name) {
+				return { lines: [name] }
+			}
+		}
+		return { container: true }
+	}
+	return undefined
+}
+
+/** Checks shadow-slot ancestors for capture omission without skipping style reads. */
+export function readBrowserCaptureOmission(
+	live: Element,
+	child: Node,
+	view: (Window & typeof globalThis) | null,
+	rendered: boolean,
+	excluded: boolean,
+): boolean {
+	if (!rendered || live.shadowRoot === null || view === null) return excluded
+	const slot =
+		child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
+	if (slot === null) return true
+	return new BrowserAncestors<Element>(slot, (entry) =>
+		entry === live ? null : readBrowserParent(entry),
+	).reduce(
+		(omitted, parent) =>
+			parent === live ? omitted : view.getComputedStyle(parent).display === 'none' || omitted,
+		excluded,
+	)
 }

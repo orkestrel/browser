@@ -86,8 +86,8 @@ describe('createBrowserToolset over a document', () => {
 		const subscriptions = recordProbeSubscriptions(window, 'pagehide')
 		const view = createBrowserDOMView({ document: probe.document })
 		try {
-			for (let round = 0; round < 3; round += 1) {
-				const toolset = createBrowserToolset(view)
+			for (const current of [view, view, view]) {
+				const toolset = createBrowserToolset(current)
 				await toolset.start()
 				const closing = toolset.destroy()
 				expect(toolset.destroy()).toBe(closing)

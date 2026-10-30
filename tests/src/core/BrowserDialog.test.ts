@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { BrowserFixtureValue } from '../../setup.js'
 import { BrowserDialog } from '../../../src/core/BrowserDialog.js'
 import { createAttachedPage, readCDPParams, replyOk } from '../../setup.js'
 
@@ -66,16 +67,16 @@ describe('BrowserDialog', () => {
 
 	it('stays unhandled when its decision frame fails, so it can be decided again', async () => {
 		const { page, transport } = await createAttachedPage()
-		let attempts = 0
+		const attempts = new BrowserFixtureValue(0)
 		transport.onSend('Page.handleJavaScriptDialog', (message) => {
-			attempts += 1
-			if (attempts === 1) transport.fail(message.id, 'dialog gone')
+			attempts.value += 1
+			if (attempts.value === 1) transport.fail(message.id, 'dialog gone')
 			else transport.reply(message.id, {})
 		})
 		const dialog = new BrowserDialog(page, 'alert', 'Saved', '')
 
 		await expect(dialog.accept()).rejects.toThrow('dialog gone')
 		await expect(dialog.dismiss()).resolves.toBeUndefined()
-		expect(attempts).toBe(2)
+		expect(attempts.value).toBe(2)
 	})
 })

@@ -1,6 +1,6 @@
-import { BrowserTracing } from '../../../src/core/BrowserTracing.js'
+import { BrowserTrace } from '../../../src/core/BrowserTrace.js'
 /**
- * src/core/BrowserTracing.ts tests.
+ * src/core/BrowserTrace.ts tests.
  *
  * Tracing arms a `Tracing.tracingComplete` subscription, ends the trace, then drains the
  * IO stream Chromium hands back. Each case drives a real tracer over the in-memory CDP
@@ -9,15 +9,114 @@ import { BrowserTracing } from '../../../src/core/BrowserTracing.js'
  */
 
 import { describe, expect, it } from 'vitest'
+import { BrowserFixtureValue } from '../../setup.js'
 import { isBrowserError } from '@src/core'
 import { createAttachedPage, createRecordingWriter, readCDPParams, replyOk } from '../../setup.js'
 
 describe('BrowserTracing', () => {
+	it('refuses a second start while the first start is pending', async () => {
+		const { page, client, transport } = await createAttachedPage()
+		const sent = Promise.withResolvers<number>()
+		transport.onSend('Tracing.start', (message) => sent.resolve(message.id))
+		const tracing = new BrowserTrace(page)
+		try {
+			const starting = tracing.start()
+			const id = await sent.promise
+			await expect(tracing.start()).rejects.toThrow('Browser tracing is already active')
+			expect(readCDPParams(transport, 'Tracing.start')).toHaveLength(1)
+			transport.reply(id, {})
+			await starting
+			expect(tracing.active).toBe(true)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('refuses a stop while the first start is pending', async () => {
+		const { page, client, transport } = await createAttachedPage()
+		const sent = Promise.withResolvers<number>()
+		transport.onSend('Tracing.start', (message) => sent.resolve(message.id))
+		const tracing = new BrowserTrace(page)
+		try {
+			const starting = tracing.start()
+			const id = await sent.promise
+			await expect(tracing.stop()).rejects.toThrow('Browser tracing is not active')
+			expect(readCDPParams(transport, 'Tracing.end')).toEqual([])
+			transport.reply(id, {})
+			await starting
+			expect(tracing.active).toBe(true)
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('waits for a draining stop before starting and keeps each capture stream separate', async () => {
+		const { page, client, transport } = await createAttachedPage()
+		replyOk(transport, 'Tracing.start')
+		replyOk(transport, 'IO.close')
+		const draining = Promise.withResolvers<number>()
+		const streams = new BrowserFixtureValue(0)
+		const order: string[] = []
+		transport.onSend('Tracing.end', (message) => {
+			streams.value += 1
+			transport.reply(message.id, {})
+			transport.event('Tracing.tracingComplete', { stream: `stream-${streams.value}` }, 'session-1')
+		})
+		transport.onSend('IO.read', (message) => {
+			if (message.params?.['handle'] === 'stream-1') draining.resolve(message.id)
+			else transport.reply(message.id, { data: 'second', eof: true })
+		})
+		const tracing = new BrowserTrace(page)
+		try {
+			await tracing.start()
+			const stopping = tracing.stop().then((trace) => {
+				order.push('stopped')
+				return trace
+			})
+			const id = await draining.promise
+			const starting = tracing.start().then(() => order.push('started'))
+			expect(readCDPParams(transport, 'Tracing.start')).toHaveLength(1)
+			expect(tracing.active).toBe(false)
+			transport.reply(id, { data: 'first', eof: true })
+			const first = await stopping
+			await starting
+			const second = await tracing.stop()
+			expect(order).toEqual(['stopped', 'started'])
+			expect(new TextDecoder().decode(first.bytes)).toBe('first')
+			expect(new TextDecoder().decode(second.bytes)).toBe('second')
+			expect(readCDPParams(transport, 'IO.close')).toEqual([
+				{ handle: 'stream-1' },
+				{ handle: 'stream-2' },
+			])
+		} finally {
+			await client.close()
+		}
+	})
+
+	it('admits a start after a failed start and becomes active', async () => {
+		const { page, client, transport } = await createAttachedPage()
+		const starts = new BrowserFixtureValue(0)
+		transport.onSend('Tracing.start', (message) => {
+			starts.value += 1
+			if (starts.value === 1) transport.fail(message.id, 'start failed')
+			else transport.reply(message.id, {})
+		})
+		const tracing = new BrowserTrace(page)
+		try {
+			await expect(tracing.start()).rejects.toThrow('start failed')
+			expect(tracing.active).toBe(false)
+			await expect(tracing.start()).resolves.toBeUndefined()
+			expect(tracing.active).toBe(true)
+		} finally {
+			await client.close()
+		}
+	})
+
 	it('reports a missing trace completion as TIMEOUT', async () => {
 		const { page, client, transport } = await createAttachedPage()
 		replyOk(transport, 'Tracing.start')
 		replyOk(transport, 'Tracing.end')
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 		try {
 			await tracing.start()
 			await expect(tracing.stop()).rejects.toMatchObject({
@@ -38,7 +137,7 @@ describe('BrowserTracing', () => {
 			transport.event('Tracing.tracingComplete', { stream: 'invalid-stream' }, 'session-1')
 		})
 		const writer = createRecordingWriter()
-		const tracing = new BrowserTracing(page, writer)
+		const tracing = new BrowserTrace(page, writer)
 		try {
 			await tracing.start({ path: 'trace.json' })
 			await expect(tracing.stop()).rejects.toMatchObject({ code: 'PROTOCOL' })
@@ -52,7 +151,7 @@ describe('BrowserTracing', () => {
 	it('starts with the default categories and reports active between start and stop', async () => {
 		const { page, transport } = await createAttachedPage()
 		replyOk(transport, 'Tracing.start')
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
 		expect(tracing.active).toBe(false)
 		await tracing.start()
@@ -69,9 +168,9 @@ describe('BrowserTracing', () => {
 	it('appends the screenshot and sampling categories when either is requested', async () => {
 		const { page, transport } = await createAttachedPage()
 		replyOk(transport, 'Tracing.start')
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
-		await tracing.start({ categories: ['custom'], screenshots: true, sampling: true })
+		await tracing.start({ categories: ['custom'], screenshots: true, samples: true })
 
 		expect(readCDPParams(transport, 'Tracing.start')[0]?.['traceConfig']).toStrictEqual({
 			includedCategories: [
@@ -87,18 +186,18 @@ describe('BrowserTracing', () => {
 		replyOk(transport, 'Tracing.start')
 		replyOk(transport, 'Tracing.end')
 		replyOk(transport, 'IO.close')
-		let reads = 0
+		const reads = new BrowserFixtureValue(0)
 		transport.onSend('IO.read', (message) => {
-			reads += 1
+			reads.value += 1
 			transport.reply(
 				message.id,
-				reads === 1 ? { data: 'ab', eof: false } : { data: 'c', eof: true },
+				reads.value === 1 ? { data: 'ab', eof: false } : { data: 'c', eof: true },
 			)
 		})
 		transport.onSend('Tracing.end', () => {
 			transport.event('Tracing.tracingComplete', { stream: 'stream-1' }, 'session-1')
 		})
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
 		await tracing.start()
 		const trace = await tracing.stop()
@@ -119,7 +218,7 @@ describe('BrowserTracing', () => {
 			transport.event('Tracing.tracingComplete', { stream: 'stream-1' }, 'session-1')
 		})
 		const writer = createRecordingWriter()
-		const tracing = new BrowserTracing(page, writer)
+		const tracing = new BrowserTrace(page, writer)
 
 		await tracing.start({ path: 'traces/run.json' })
 		const trace = await tracing.stop()
@@ -138,7 +237,7 @@ describe('BrowserTracing', () => {
 		transport.onSend('Tracing.end', () => {
 			transport.event('Tracing.tracingComplete', { stream: 'stream-1' }, 'session-1')
 		})
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
 		await tracing.start({ path: 'traces/run.json' })
 
@@ -148,7 +247,7 @@ describe('BrowserTracing', () => {
 	it('refuses a second start and a stop with nothing running', async () => {
 		const { page, transport } = await createAttachedPage()
 		replyOk(transport, 'Tracing.start')
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
 		await expect(tracing.stop()).rejects.toThrow('Browser tracing is not active')
 		await tracing.start()
@@ -158,7 +257,7 @@ describe('BrowserTracing', () => {
 	it('stays inactive and unsubscribes when the start frame fails', async () => {
 		const { page, transport } = await createAttachedPage()
 		transport.onSend('Tracing.start', (message) => transport.fail(message.id, 'start failed'))
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
 		await expect(tracing.start()).rejects.toThrow('start failed')
 
@@ -173,7 +272,7 @@ describe('BrowserTracing', () => {
 		transport.onSend('Tracing.end', () => {
 			transport.event('Tracing.tracingComplete', {}, 'session-1')
 		})
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
 		await tracing.start()
 
@@ -190,7 +289,7 @@ describe('BrowserTracing', () => {
 		transport.onSend('Tracing.end', () => {
 			transport.event('Tracing.tracingComplete', { stream: 'stream-1' }, 'session-1')
 		})
-		const tracing = new BrowserTracing(page)
+		const tracing = new BrowserTrace(page)
 
 		await tracing.destroy()
 		expect(transport.sent).toStrictEqual([])

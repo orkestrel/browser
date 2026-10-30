@@ -91,7 +91,8 @@ export class BrowserMouse implements BrowserMouseInterface {
 		await this.move(start)
 		await this.down(options?.button ?? 'left', 1)
 		try {
-			for (let step = 1; step <= steps; step += 1) {
+			for (const index of Array.prototype.keys.call({ length: steps })) {
+				const step = index + 1
 				await this.move({
 					x: start.x + ((end.x - start.x) * step) / steps,
 					y: start.y + ((end.y - start.y) * step) / steps,

@@ -11,6 +11,7 @@ import type { TestContext } from 'vitest'
 import type { MCPClientInterface } from '@orkestrel/mcp'
 import { spawnSync } from 'node:child_process'
 import {
+	cpSync,
 	existsSync,
 	mkdirSync,
 	mkdtempSync,
@@ -31,6 +32,7 @@ import { build } from 'vite'
 import { createMCPClient } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { createTeardown, requireValue } from '@orkestrel/test'
+import { attempt } from '@orkestrel/contract'
 import { resolveBrowser, resolvePinnedBrowser } from '../configs/browsers.js'
 import { afterAll, describe, expect, it } from 'vitest'
 import { BROWSER_TOOL_TIMEOUT_MS, compileBrowserJourney } from '@src/core'
@@ -61,7 +63,10 @@ const NPM = process.platform === 'win32' ? 'npm.cmd' : 'npm'
 // compiler majors this toolchain supports, and its in-process API is not. It is
 // resolved from the workspace under proof, so a consumer of the packed artifact is
 // checked by the same compiler that workspace's own `check` script runs.
-const TSC = createRequire(join(ROOT, 'package.json')).resolve('typescript/bin/tsc')
+const TSC = join(
+	dirname(createRequire(join(ROOT, 'package.json')).resolve('typescript/package.json')),
+	'bin/tsc',
+)
 // Windows needs a shell to launch a `.cmd`: Node refuses one directly since the
 // batch-argument hardening, and `spawnSync` returns `EINVAL` with a null status
 // rather than an exit code a caller can read. Every following argument is a literal or
@@ -232,10 +237,8 @@ function isList(value: unknown): value is readonly unknown[] {
 function isPackageTarget(target: string): boolean {
 	if (!target.startsWith('./')) return false
 	for (const segment of target.slice(2).split(/[\\/]/u)) {
-		let decoded = segment
-		try {
-			decoded = decodeURIComponent(segment)
-		} catch {}
+		const result = attempt(() => decodeURIComponent(segment))
+		const decoded = result.success ? result.value : segment
 		const normalized = decoded.toLowerCase()
 		if (normalized === '.' || normalized === '..' || normalized === 'node_modules') return false
 	}
@@ -323,11 +326,16 @@ function matchesFile(path: string): boolean {
 // the containing condition or fallback list unresolved, so the walk continues.
 function targetToDeclaration(target: string, installed: string): string | undefined {
 	if (!isPackageTarget(target)) return undefined
-	let declaration = target
-	if (target.endsWith('.cjs')) declaration = `${target.slice(0, -4)}.d.cts`
-	else if (target.endsWith('.mjs')) declaration = `${target.slice(0, -4)}.d.mts`
-	else if (target.endsWith('.js')) declaration = `${target.slice(0, -3)}.d.ts`
-	else if (!isDeclaration(target)) return undefined
+	const declaration = target.endsWith('.cjs')
+		? `${target.slice(0, -4)}.d.cts`
+		: target.endsWith('.mjs')
+			? `${target.slice(0, -4)}.d.mts`
+			: target.endsWith('.js')
+				? `${target.slice(0, -3)}.d.ts`
+				: isDeclaration(target)
+					? target
+					: undefined
+	if (declaration === undefined) return undefined
 	return matchesFile(join(installed, declaration)) ? declaration : undefined
 }
 
@@ -359,9 +367,10 @@ function resolveDeclaration(
 // physical nested manifest starts a scope even when it omits `type` or cannot be
 // parsed. A directory at that spelling is not a manifest, so the walk continues.
 function readPackageType(installed: string, target: string): unknown {
-	let directory = dirname(join(installed, target))
-	while (true) {
-		const path = join(directory, 'package.json')
+	const directory = dirname(join(installed, target))
+	for (const [depth] of directory.split(/[\\/]/u).entries()) {
+		const current = resolve(directory, ...Array.from({ length: depth }, () => '..'))
+		const path = join(current, 'package.json')
 		if (matchesFile(path)) {
 			try {
 				const manifest = readJson(path)
@@ -370,11 +379,9 @@ function readPackageType(installed: string, target: string): unknown {
 				return undefined
 			}
 		}
-		if (directory === installed) return undefined
-		const parent = dirname(directory)
-		if (parent === directory) return undefined
-		directory = parent
+		if (current === installed || dirname(current) === current) return undefined
 	}
+	return undefined
 }
 
 function resolvesBrowser(entry: unknown): boolean {
@@ -1494,6 +1501,76 @@ describe('packed browse binary', () => {
 // file that reaches core by a relative path inlines that module instead, and the bundle then holds
 // a second copy of each binding it imports, so an `instanceof` check across the two copies fails.
 describe('packed server bundle', () => {
+	it('recognizes branded errors across module formats and installed copies [requires the registry]', (context) => {
+		const stage = requireStage(context)
+		const copy = `${stage.installed}-error-copy`
+		cpSync(stage.installed, copy, { recursive: true })
+		const result = runNode(
+			[
+				'--input-type=module',
+				'--eval',
+				`import assert from 'node:assert/strict'
+import { createRequire } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { join } from 'node:path'
+const require = createRequire(import.meta.url)
+const copies = []
+for (const root of ${JSON.stringify([stage.installed, copy])}) {
+	copies.push(await import(pathToFileURL(join(root, 'dist/src/core/index.js')).href))
+	copies.push(require(join(root, 'dist/src/core/index.cjs')))
+}
+assert.equal(new Set(copies.map((copy) => copy.BrowserError)).size, copies.length)
+assert.equal(new Set(copies.map((copy) => copy.BrowserStepError)).size, copies.length)
+for (const source of copies) {
+	class Child extends source.BrowserError {
+		constructor() { super('REMOTE', 'child'); this.name = 'Child' }
+	}
+	class Step extends source.BrowserStepError {
+		constructor(action) { super('s1', action); this.name = 'Step' }
+	}
+	const action = { action: 'wait', arguments: {}, outcome: 'timeout', receipt: 'timeout', elapsed: 1 }
+	const error = new source.BrowserError('REMOTE', 'failure', { retry: false })
+	const step = new source.BrowserStepError('s1', action)
+	for (const [name, value] of [['BrowserError', error], ['BrowserStepError', step]]) {
+		const brand = Symbol.for('@orkestrel/browser.' + name)
+		const descriptor = Object.getOwnPropertyDescriptor(value, brand)
+		assert.equal(descriptor.value, value)
+		assert.equal(descriptor.enumerable, false)
+		assert.equal(descriptor.writable, false)
+		const plain = {}
+		Object.defineProperty(plain, brand, { value: plain })
+		for (const target of copies) {
+			const guard = target['is' + name]
+			assert.equal(guard(value), true)
+			assert.equal(guard(name === 'BrowserError' ? new Child() : new Step(action)), true)
+			assert.equal(guard(Object.assign(new Error('failure'), { code: value.code, action })), false)
+			assert.equal(guard(new Proxy(value, {})), false)
+			assert.equal(guard(plain), false)
+		}
+	}
+	for (const target of copies) {
+		for (const context of [new (class Context { retry = false })(), Object.assign(() => {}, { retry: false }), { point: { x: NaN, y: Infinity }, values: [-Infinity] }]) {
+			assert.equal(target.isBrowserError(new source.BrowserError('REMOTE', 'failure', context)), true)
+		}
+		for (const value of [new (class Action { constructor() { Object.assign(this, action) } })(), Object.defineProperties(() => {}, Object.getOwnPropertyDescriptors(action))]) {
+			assert.equal(target.isBrowserStepError(new source.BrowserStepError('s1', value)), true)
+		}
+		for (const [field, value] of Object.entries({ action: 1, arguments: null, outcome: 'unknown', receipt: 1, elapsed: '1', start: false, target: {}, tab: {}, secret: 1, stage: 'unknown', reason: 'unknown' })) {
+			assert.equal(target.isBrowserStepError(new source.BrowserStepError('s1', { ...action, [field]: value })), false)
+		}
+		assert.equal(target.isBrowserError(new source.BrowserError('unknown', 'failure')), false)
+		assert.equal(target.isBrowserError(new source.BrowserError('REMOTE', 'failure', null)), false)
+	}
+}
+`,
+			],
+			stage.consumer,
+		)
+		expect(result.error).toBeUndefined()
+		expect(readOutput(result)).toBe('')
+		expect(result.status).toBe(0)
+	})
+
 	it('imports BrowserError from the core bundle and declares no core binding of its own [requires the registry]', (context) => {
 		const stage = requireStage(context)
 		const bundle = readFileSync(join(stage.installed, 'dist/src/server/index.js'), 'utf8')

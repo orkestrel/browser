@@ -5,6 +5,7 @@
 import { describe, expect, it } from 'vitest'
 import { waitForDelay } from '@orkestrel/test'
 import { BrowserTransition } from '@src/core'
+import { BrowserFixtureValue } from '../../setup.js'
 
 describe('BrowserTransition', () => {
 	it('runs the work once and joins every caller that arrives while it is in transition', async () => {
@@ -77,20 +78,20 @@ describe('BrowserTransition', () => {
 
 	it('returns the in-transition result to a caller that joins rather than re-running the work', async () => {
 		const transition = new BrowserTransition<number>()
-		let calls = 0
+		const calls = new BrowserFixtureValue(0)
 
 		const first = transition.execute(async () => {
-			calls += 1
+			calls.value += 1
 			await waitForDelay(10)
 			return 42
 		})
 		const joined = transition.execute(async () => {
-			calls += 1
+			calls.value += 1
 			return 7
 		})
 
 		await expect(first).resolves.toBe(42)
 		await expect(joined).resolves.toBe(42)
-		expect(calls).toBe(1)
+		expect(calls.value).toBe(1)
 	})
 })

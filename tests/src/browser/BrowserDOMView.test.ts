@@ -1,6 +1,7 @@
+import { BrowserFixtureValue } from '../../setup.js'
 import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
-import { BROWSER_RESULT_LIMIT, createBrowserReading, isBrowserError } from '@src/core'
+import { BROWSER_RESULT_LIMIT, createBrowserContent, isBrowserError } from '@src/core'
 import { createBrowserDOMView } from '@src/browser'
 import { readProperty, requireValue, waitForEvent } from '@orkestrel/test'
 import {
@@ -64,12 +65,12 @@ describe('BrowserDOMView', () => {
 			for (const hide of [true, false]) {
 				document.body.innerHTML = '<p>Saved</p>'
 				const paragraph = requireValue(document.querySelector('p'))
-				let settled = false
+				const settled = new BrowserFixtureValue(false)
 				const pending = view.wait('Saved', { absent: true, timeout: 1_000 }).then(() => {
-					settled = true
+					settled.value = true
 				})
 				await new Promise(requestAnimationFrame)
-				expect(settled).toBe(false)
+				expect(settled.value).toBe(false)
 				if (hide) paragraph.hidden = true
 				else paragraph.remove()
 				await pending
@@ -178,7 +179,7 @@ describe('BrowserDOMView', () => {
 			expect(
 				readProperty<number>(readProperty<object>(refusal, 'context'), 'length'),
 			).toBeGreaterThan(BROWSER_RESULT_LIMIT)
-			expect(createBrowserReading({ url: view.url, title: 'Probe', html }).title).toBe('Probe')
+			expect(createBrowserContent({ url: view.url, title: 'Probe', html }).title).toBe('Probe')
 			filler.remove()
 			expect((await view.read()).text().text).toContain('A paragraph the reader wants.')
 		})

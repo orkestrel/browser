@@ -164,16 +164,12 @@ export class CDPClient implements CDPClientInterface {
 	}
 
 	subscribe(method: string, handler: CDPHandler, session?: string): void {
-		let methods = this.#subscriptions.get(session)
-		if (methods === undefined) {
-			methods = new Map()
-			this.#subscriptions.set(session, methods)
-		}
-		let handlers = methods.get(method)
-		if (handlers === undefined) {
-			handlers = new Set()
-			methods.set(method, handlers)
-		}
+		const subscribed = this.#subscriptions.get(session)
+		const methods = subscribed ?? new Map<string, Set<CDPHandler>>()
+		if (subscribed === undefined) this.#subscriptions.set(session, methods)
+		const registered = methods.get(method)
+		const handlers = registered ?? new Set<CDPHandler>()
+		if (registered === undefined) methods.set(method, handlers)
 		handlers.add(handler)
 	}
 

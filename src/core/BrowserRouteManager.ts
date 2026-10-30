@@ -35,7 +35,9 @@ export class BrowserRouteManager implements BrowserRouteManagerInterface {
 	}
 
 	async remove(handler: BrowserRouteHandler): Promise<void> {
-		for (let index = this.#definitions.length - 1; index >= 0; index -= 1) {
+		const count = this.#definitions.length
+		for (const offset of Array.prototype.keys.call({ length: count })) {
+			const index = count - 1 - offset
 			if (this.#definitions[index]?.handler === handler) this.#definitions.splice(index, 1)
 		}
 		await this.#configure()

@@ -52,13 +52,17 @@ import {
 	SERVICE_BROWSER_ARGS,
 	SERVICE_REGISTRY_ARGS,
 } from '../setupService.js'
-import { WAIT_DETAILS_HTML, WAIT_EXIT_HTML, WAIT_TEXT_CASES } from '../setup.js'
+import {
+	BrowserFixtureValue,
+	WAIT_DETAILS_HTML,
+	WAIT_EXIT_HTML,
+	WAIT_TEXT_CASES,
+} from '../setup.js'
 
-const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
 const REAL_BROWSER_ARGS = [...SERVICE_BROWSER_ARGS]
 
 describe('Browser real launch', () => {
-	let browser: BrowserInterface | undefined
+	const browser = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
 	it('executes the README usage fence and observes its saved text', async () => {
 		const markdown = readFileSync('README.md', 'utf8')
 		const fence = requireValue(/```ts\r?\n([\s\S]*?)\r?\n```/u.exec(markdown)?.[1])
@@ -75,15 +79,20 @@ describe('Browser real launch', () => {
 		)
 		const result: unknown = await run(
 			createBrowser,
-			{ headless: true, port: 0, executable: REAL_BROWSER_EXECUTABLE, args: REAL_BROWSER_ARGS },
+			{
+				headless: true,
+				port: 0,
+				executable: requireSystemBrowser().executable,
+				args: REAL_BROWSER_ARGS,
+			},
 			join(createTempDirectory().path, 'example.png'),
 		)
 		expect(result).toMatchObject({ text: expect.stringContaining('Saved') })
 	})
 
 	afterEach(async () => {
-		await browser?.destroy()
-		browser = undefined
+		await browser.value?.destroy()
+		browser.value = undefined
 		await destroyFakeBrowsers()
 		await destroyTempDirectories()
 	})
@@ -98,20 +107,20 @@ describe('Browser real launch', () => {
 		await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve))
 		const port = readServerPort(fixture)
 		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			browser.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port, discover: false },
 				timeout: 2000,
 			})
-			await expect(browser.connect()).rejects.toMatchObject({
+			await expect(browser.required.connect()).rejects.toMatchObject({
 				message: `Port ${port} on 127.0.0.1 is already occupied by another CDP endpoint`,
 				context: { port, host: '127.0.0.1' },
 			})
 			expect(requests).toContain('/json/version')
-			expect(browser.status).toBe('error')
-			expect(browser.pid).toBeUndefined()
+			expect(browser.required.status).toBe('error')
+			expect(browser.required.pid).toBeUndefined()
 		} finally {
 			await new Promise<void>((resolve, reject) =>
 				fixture.close((error) => (error === undefined ? resolve() : reject(error))),
@@ -128,8 +137,8 @@ describe('Browser real launch', () => {
 		const url = `http://127.0.0.1:${readServerPort(httpServer)}/`
 
 		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			browser.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
@@ -137,12 +146,12 @@ describe('Browser real launch', () => {
 				timeout: 20_000,
 			})
 
-			await browser.connect()
-			expect(browser.status).toBe('connected')
-			expect(browser.endpoint).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//)
-			await expect(browser.ping()).resolves.toBeUndefined()
+			await browser.required.connect()
+			expect(browser.required.status).toBe('connected')
+			expect(browser.required.endpoint).toMatch(/^ws:\/\/127\.0\.0\.1:\d+\/devtools\/browser\//)
+			await expect(browser.required.ping()).resolves.toBeUndefined()
 
-			const page = await browser.create({ url })
+			const page = await browser.required.create({ url })
 			const title = await page.title()
 			const reading = await page.read()
 
@@ -157,15 +166,15 @@ describe('Browser real launch', () => {
 		const fixture = createServer(handleServiceWorkerFixture)
 		await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve))
 		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			browser.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: 0, discover: false },
 			})
-			await browser.connect()
+			await browser.required.connect()
 			const url = `http://127.0.0.1:${readServerPort(fixture)}/`
-			const page = await browser.create({ url })
+			const page = await browser.required.create({ url })
 			const published = waitForEvent<readonly [BrowserWorkerInterface]>(
 				(deliver) => {
 					page.emitter.on('worker', deliver)
@@ -197,7 +206,7 @@ describe('Browser real launch', () => {
 				worker.url,
 			)
 		} finally {
-			await browser?.destroy()
+			await browser.value?.destroy()
 			await new Promise<void>((resolve) => fixture.close(() => resolve()))
 		}
 	})
@@ -206,15 +215,15 @@ describe('Browser real launch', () => {
 		const fixture = createServer(handleServiceWorkerFixture)
 		await new Promise<void>((resolve) => fixture.listen(0, '127.0.0.1', resolve))
 		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			browser.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: 0, discover: false },
 			})
-			await browser.connect()
+			await browser.required.connect()
 			const url = `http://127.0.0.1:${readServerPort(fixture)}/`
-			const page = await browser.create({ url })
+			const page = await browser.required.create({ url })
 			await expect(
 				page.evaluate(
 					`Promise.all([
@@ -242,7 +251,7 @@ describe('Browser real launch', () => {
 				),
 			).resolves.toEqual(['dedicated:ping', 'shared:ping'])
 		} finally {
-			await browser?.destroy()
+			await browser.value?.destroy()
 			await new Promise<void>((resolve) => fixture.close(() => resolve()))
 		}
 	})
@@ -263,16 +272,16 @@ describe('Browser real launch', () => {
 		const url = `http://127.0.0.1:${readServerPort(httpServer)}/`
 
 		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			browser.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
 				cdp: { port: await reservePort() },
 				timeout: 20_000,
 			})
-			await browser.connect()
-			const page = await browser.create({ url })
+			await browser.required.connect()
+			const page = await browser.required.create({ url })
 
 			const saves = await page.elements.find({ role: 'button', name: 'Save' })
 			expect(saves).toHaveLength(1)
@@ -310,8 +319,8 @@ describe('Browser real launch', () => {
 	})
 
 	it('screenshot returns real PNG bytes from a real browser page', async () => {
-		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+		browser.value = createBrowser({
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
@@ -319,8 +328,8 @@ describe('Browser real launch', () => {
 			timeout: 20_000,
 		})
 
-		await browser.connect()
-		const page = await browser.create()
+		await browser.required.connect()
+		const page = await browser.required.create()
 
 		const result = await page.screenshot()
 		expect(result.bytes.length).toBeGreaterThan(100)
@@ -338,8 +347,8 @@ describe('Browser real launch', () => {
 
 	it('launches and destroys a real browser process, fully exiting it', async () => {
 		const port = await reservePort()
-		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+		browser.value = createBrowser({
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
@@ -347,15 +356,15 @@ describe('Browser real launch', () => {
 			timeout: 20_000,
 		})
 
-		await browser.connect()
-		expect(browser.status).toBe('connected')
+		await browser.required.connect()
+		expect(browser.required.status).toBe('connected')
 
-		await browser.destroy()
-		expect(browser.status).not.toBe('connected')
+		await browser.required.destroy()
+		expect(browser.required.status).not.toBe('connected')
 
 		// A destroyed launch releases its CDP port — a fresh launch can reuse it.
 		const relaunch = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
@@ -370,24 +379,24 @@ describe('Browser real launch', () => {
 	it('connect() with a profile launches with a persistent user-data dir', async () => {
 		const profile = createTempDirectory('orkestrel-browser-profile-').path
 
-		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+		browser.value = createBrowser({
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile,
 			args: REAL_BROWSER_ARGS,
 			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
-		await browser.connect()
-		expect(browser.status).toBe('connected')
-		await browser.destroy()
-		browser = undefined
+		await browser.required.connect()
+		expect(browser.required.status).toBe('connected')
+		await browser.required.destroy()
+		browser.value = undefined
 
 		// Relaunching against the same profile dir succeeds — proves the
 		// directory was honored as the browser's user-data-dir rather than
 		// a throwaway default.
 		const relaunch = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile,
 			args: REAL_BROWSER_ARGS,
@@ -403,8 +412,8 @@ describe('Browser real launch', () => {
 		// This container has no display server, so a successful connect +
 		// render within the timeout is itself proof the explicit `headless:
 		// true` option launched a working (non-UI-dependent) browser process.
-		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+		browser.value = createBrowser({
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
@@ -412,10 +421,10 @@ describe('Browser real launch', () => {
 			timeout: 20_000,
 		})
 
-		await browser.connect()
-		expect(browser.status).toBe('connected')
+		await browser.required.connect()
+		expect(browser.required.status).toBe('connected')
 
-		const page = await browser.create()
+		const page = await browser.required.create()
 		const reading = await page.read()
 		expect(reading.url).toBe('about:blank')
 	})
@@ -423,8 +432,8 @@ describe('Browser real launch', () => {
 	// === hardening (real Chromium) — proves the audit's confirmed defects are fixed
 
 	it('an oversized evaluate() result rejects with a coded error and the session survives', async () => {
-		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+		browser.value = createBrowser({
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
@@ -432,16 +441,16 @@ describe('Browser real launch', () => {
 			timeout: 20_000,
 		})
 
-		await browser.connect()
-		const page = await browser.create()
-		const pid = browser.pid
+		await browser.required.connect()
+		const page = await browser.required.create()
+		const pid = browser.required.pid
 
 		await expect(
 			page.evaluate(`'x'.repeat(${BROWSER_RESULT_LIMIT + 100_000})`),
 		).rejects.toMatchObject({ name: 'BrowserError', code: 'RESULT_LIMIT' })
 
 		// The browser must survive the oversized result — no crashed session.
-		expect(browser.status).toBe('connected')
+		expect(browser.required.status).toBe('connected')
 		expect(await page.evaluate('1 + 1')).toBe(2)
 		expect(pid).toBeDefined()
 		const livePid = requireValue(pid)
@@ -463,8 +472,8 @@ describe('Browser real launch', () => {
 		const url = `http://127.0.0.1:${readServerPort(httpServer)}/`
 
 		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			browser.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
@@ -472,14 +481,14 @@ describe('Browser real launch', () => {
 				timeout: 20_000,
 			})
 
-			await browser.connect()
-			const page = await browser.create({ url })
+			await browser.required.connect()
+			const page = await browser.required.create({ url })
 
 			await expect(page.read()).rejects.toMatchObject({
 				name: 'BrowserError',
 				code: 'RESULT_LIMIT',
 			})
-			expect(browser.status).toBe('connected')
+			expect(browser.required.status).toBe('connected')
 			expect(await page.evaluate('1 + 1')).toBe(2)
 
 			await page.navigate(`${url}small`)
@@ -497,12 +506,12 @@ describe('Browser real launch', () => {
 		await new Promise<void>((resolve) => httpServer.listen(0, '127.0.0.1', resolve))
 		const url = `http://127.0.0.1:${readServerPort(httpServer)}/`
 		const port = await reservePort()
-		let launched: BrowserInterface | undefined
-		let reattached: BrowserInterface | undefined
+		const launched = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+		const reattached = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
 
 		try {
-			launched = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			launched.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
@@ -510,27 +519,27 @@ describe('Browser real launch', () => {
 				timeout: 20_000,
 			})
 
-			await launched.connect()
-			await launched.create({ url })
-			await launched.disconnect()
+			await launched.required.connect()
+			await launched.required.create({ url })
+			await launched.required.disconnect()
 
-			reattached = createBrowser({ cdp: { port }, timeout: 20_000 })
-			await reattached.connect()
+			reattached.value = createBrowser({ cdp: { port }, timeout: 20_000 })
+			await reattached.required.connect()
 
 			// A headless launch already carries its own initial about:blank tab
 			// alongside the page this test created — find the one matching the
 			// served url rather than assuming a single page.
-			const pages = reattached.context()?.pages() ?? []
+			const pages = reattached.required.context()?.pages() ?? []
 			const target = pages.find((page) => page.url === url)
 			expect(target).toBeDefined()
 		} finally {
-			if (reattached !== undefined) {
-				await reattached.destroy()
+			if (reattached.value !== undefined) {
+				await reattached.required.destroy()
 			}
 			// The launching instance retains process ownership across its
 			// persistent disconnect, so it also owns orderly termination and
 			// waits until Chromium has released the profile directory.
-			await launched?.destroy()
+			await launched.value?.destroy()
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
 		}
 	})
@@ -545,7 +554,7 @@ describe('Browser real launch', () => {
 		// Chromium (which is listening as 127.0.0.1:cdpPort), Chromium must be
 		// told to allow it explicitly.
 		const owner = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: [...REAL_BROWSER_ARGS, '--remote-allow-origins=*'],
@@ -553,7 +562,7 @@ describe('Browser real launch', () => {
 			timeout: 20_000,
 		})
 
-		let proxied: BrowserInterface | undefined
+		const proxied = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
 		const proxy = createTCPProxy(proxyPort)
 
 		try {
@@ -579,7 +588,7 @@ describe('Browser real launch', () => {
 
 			const errors = createRecorder<[]>()
 			const disconnect = createRecorder<[]>()
-			proxied = createBrowser({
+			proxied.value = createBrowser({
 				cdp: { endpoint: proxiedEndpoint },
 				timeout: 5000,
 				on: {
@@ -588,10 +597,10 @@ describe('Browser real launch', () => {
 				},
 			})
 
-			await proxied.connect()
-			expect(proxied.status).toBe('connected')
-			expect(proxied.connection).toBe('cdp')
-			const page = await proxied.create()
+			await proxied.required.connect()
+			expect(proxied.required.status).toBe('connected')
+			expect(proxied.required.connection).toBe('cdp')
+			const page = await proxied.required.create()
 			expect(await page.evaluate('1 + 1')).toBe(2)
 
 			// Sever the transport: destroy every piped socket and close the
@@ -604,7 +613,7 @@ describe('Browser real launch', () => {
 
 			expect(errors.count).toBe(1)
 			expect(disconnect.count).toBe(1)
-			expect(proxied.status).not.toBe('connected')
+			expect(proxied.required.status).not.toBe('connected')
 
 			// Chromium (owned by `owner`) survives the transport loss.
 			const livePid = requireValue(ownerPid)
@@ -615,20 +624,20 @@ describe('Browser real launch', () => {
 			// resolves again — connect() on the same instance resumes.
 			await proxy.start(chromiumWSURL.hostname, Number(chromiumWSURL.port))
 
-			await proxied.connect()
-			expect(proxied.status).toBe('connected')
-			const resumedPage = await proxied.create()
+			await proxied.required.connect()
+			expect(proxied.required.status).toBe('connected')
+			const resumedPage = await proxied.required.create()
 			expect(await resumedPage.evaluate('2 + 2')).toBe(4)
 		} finally {
-			await proxied?.destroy()
+			await proxied.value?.destroy()
 			await proxy.stop()
 			await owner.destroy()
 		}
 	})
 
 	it('close() gracefully shuts down an owned real browser process', async () => {
-		browser = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+		browser.value = createBrowser({
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: createTempDirectory('orkestrel-browser-profile-').path,
 			args: REAL_BROWSER_ARGS,
@@ -636,12 +645,12 @@ describe('Browser real launch', () => {
 			timeout: 20_000,
 		})
 
-		await browser.connect()
-		const pid = browser.pid
+		await browser.required.connect()
+		const pid = browser.required.pid
 		expect(pid).toBeDefined()
 
-		await browser.close()
-		expect(browser.status).not.toBe('connected')
+		await browser.required.close()
+		expect(browser.required.status).not.toBe('connected')
 
 		const livePid = requireValue(pid)
 		expect(() => process.kill(livePid, 0)).toThrow('ESRCH')
@@ -649,12 +658,12 @@ describe('Browser real launch', () => {
 
 	it('close() on a cdp-attached instance shuts down the shared real browser and the owner observes disconnect', async () => {
 		const port = await reservePort()
-		let owner: BrowserInterface | undefined
-		let second: BrowserInterface | undefined
+		const owner = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+		const second = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
 
 		try {
-			owner = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			owner.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
@@ -662,17 +671,17 @@ describe('Browser real launch', () => {
 				timeout: 20_000,
 			})
 			const disconnect = createRecorder<[]>()
-			owner.emitter.on('disconnect', disconnect.handler)
+			owner.required.emitter.on('disconnect', disconnect.handler)
 
-			await owner.connect()
-			const pid = owner.pid
+			await owner.required.connect()
+			const pid = owner.required.pid
 			expect(pid).toBeDefined()
 
-			second = createBrowser({ cdp: { port }, timeout: 20_000 })
-			await second.connect()
-			expect(second.connection).toBe('cdp')
+			second.value = createBrowser({ cdp: { port }, timeout: 20_000 })
+			await second.required.connect()
+			expect(second.required.connection).toBe('cdp')
 
-			await second.close()
+			await second.required.close()
 
 			// Attached close() does not await the remote process. Observe the owner's
 			// actual lifecycle and the OS process rather than sleeping for a fixed delay.
@@ -680,15 +689,15 @@ describe('Browser real launch', () => {
 				budget: 20_000,
 				interval: 50,
 			})
-			expect(owner.status).not.toBe('connected')
+			expect(owner.required.status).not.toBe('connected')
 			const livePid = requireValue(pid)
 			await waitForProcessExit(livePid)
 			expect(disconnect.count).toBe(1)
 			expect(isRunning(livePid)).toBe(false)
 		} finally {
 			// Safety net — no-op once close() has already torn everything down.
-			await owner?.destroy()
-			await second?.destroy()
+			await owner.value?.destroy()
+			await second.value?.destroy()
 		}
 	})
 
@@ -701,8 +710,8 @@ describe('Browser real launch', () => {
 		const url = `http://127.0.0.1:${readServerPort(httpServer)}/`
 
 		try {
-			browser = createBrowser({
-				executable: REAL_BROWSER_EXECUTABLE,
+			browser.value = createBrowser({
+				executable: requireSystemBrowser().executable,
 				headless: true,
 				profile: createTempDirectory('orkestrel-browser-profile-').path,
 				args: REAL_BROWSER_ARGS,
@@ -710,8 +719,8 @@ describe('Browser real launch', () => {
 				timeout: 20_000,
 			})
 
-			await browser.connect()
-			const page = await browser.create()
+			await browser.required.connect()
+			const page = await browser.required.create()
 
 			const started = performance.now()
 			await expect(page.navigate(url, { timeout: 1500 })).rejects.toThrow('CDP request timed out')
@@ -720,7 +729,7 @@ describe('Browser real launch', () => {
 
 			// The client-side timeout must not leave the session wedged — a
 			// subsequent call on the same page must still complete.
-			expect(browser.status).toBe('connected')
+			expect(browser.required.status).toBe('connected')
 			expect(await page.evaluate('1 + 1')).toBe(2)
 		} finally {
 			await new Promise<void>((resolve) => httpServer.close(() => resolve()))
@@ -731,37 +740,37 @@ describe('Browser real launch', () => {
 describe('Browser proofs against the fixture pages', () => {
 	const teardown = createTeardown()
 	const opened: BrowserPageInterface[] = []
-	let fixtures: FixtureServerInterface
-	let browser: BrowserInterface
-	let registry: BrowserInterface
-	let port: number
+	const fixtures = new BrowserFixtureValue<FixtureServerInterface | undefined>(undefined)
+	const browser = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+	const registry = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+	const port = new BrowserFixtureValue<number | undefined>(undefined)
 
 	// Each resource registers its release as soon as it exists, so a later acquisition that
 	// rejects still releases the earlier ones, and no release reads an unassigned binding.
 	beforeAll(async () => {
 		const server = await createFixtureServer()
 		teardown.add(() => server.destroy())
-		fixtures = server
+		fixtures.value = server
 
 		const profile = createTempDirectory('orkestrel-browser-profile-')
 		teardown.add(() => profile.destroy())
-		port = await reservePort()
+		port.value = await reservePort()
 		const launched = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: profile.path,
 			args: [...REAL_BROWSER_ARGS, '--site-per-process'],
-			cdp: { port },
+			cdp: { port: port.required },
 			timeout: 20_000,
 		})
 		teardown.add(() => launched.destroy())
 		await launched.connect()
-		browser = launched
+		browser.value = launched
 
 		const flaggedProfile = createTempDirectory('orkestrel-browser-profile-')
 		teardown.add(() => flaggedProfile.destroy())
 		const flagged = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: flaggedProfile.path,
 			args: [...REAL_BROWSER_ARGS, ...SERVICE_REGISTRY_ARGS],
@@ -770,7 +779,7 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 		teardown.add(() => flagged.destroy())
 		await flagged.connect()
-		registry = flagged
+		registry.value = flagged
 	})
 
 	afterEach(async () => {
@@ -782,9 +791,9 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('fills and selects in a hidden page without waiting for unrequested animation frames', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
-		const front = await browser.create({ url: fixtures.url('/form') })
+		const front = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(front)
 		await front.send('Page.bringToFront')
 		expect(await page.evaluate('document.visibilityState')).toBe('hidden')
@@ -802,9 +811,9 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('activates a hidden page before waiting for stable pointer input', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
-		const front = await browser.create({ url: fixtures.url('/form') })
+		const front = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(front)
 		await front.send('Page.bringToFront')
 		expect(await page.evaluate('document.visibilityState')).toBe('hidden')
@@ -818,23 +827,23 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	describe('an out-of-process frame', () => {
-		let page: BrowserPageInterface
-		let child: CDPClientInterface
-		let session: string
-		let local: BrowserPoint
-		let content: BrowserPoint
+		const page = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
+		const child = new BrowserFixtureValue<CDPClientInterface | undefined>(undefined)
+		const session = new BrowserFixtureValue<string | undefined>(undefined)
+		const local = new BrowserFixtureValue<BrowserPoint | undefined>(undefined)
+		const content = new BrowserFixtureValue<BrowserPoint | undefined>(undefined)
 
 		// Establishes, outside every expected-failure body, that `--site-per-process` put the
 		// `localhost` document in its own target with its own session, and reads the framed
 		// button's centre through a second protocol connection that does not depend on the page's
 		// frame tracking.
 		beforeAll(async () => {
-			const outer = await browser.create()
+			const outer = await browser.required.create()
 			teardown.add(() => outer.close())
-			page = outer
+			page.value = outer
 			const attached = createRecorder<[Readonly<Record<string, unknown>>]>()
-			await page.subscribe('Target.attachedToTarget', attached.handler)
-			await page.navigate(fixtures.url('/frame/outer'))
+			await page.required.subscribe('Target.attachedToTarget', attached.handler)
+			await page.required.navigate(fixtures.required.url('/frame/outer'))
 			await waitForCondition(
 				'precondition: the localhost frame attached as its own iframe target',
 				() =>
@@ -850,12 +859,14 @@ describe('Browser proofs against the fixture pages', () => {
 				),
 			)[0]
 			const target = isRecord(event['targetInfo']) ? event['targetInfo']['targetId'] : undefined
-			if (!isString(event['sessionId']) || !isString(target) || target === page.target)
+			if (!isString(event['sessionId']) || !isString(target) || target === page.required.target)
 				throw new Error(
 					'Precondition failed: the framed document has no session of its own; launch Chromium with --site-per-process.',
 				)
 
-			const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
+			const version: unknown = await (
+				await fetch(`http://127.0.0.1:${port.required}/json/version`)
+			).json()
 			const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 			if (!isString(endpoint))
 				throw new Error('Precondition failed: Chromium reported no debugger URL.')
@@ -865,7 +876,7 @@ describe('Browser proofs against the fixture pages', () => {
 			})
 			teardown.add(() => client.close())
 			await client.connect()
-			child = client
+			child.value = client
 			const attachment = await client.send('Target.attachToTarget', {
 				targetId: target,
 				flatten: true,
@@ -875,7 +886,7 @@ describe('Browser proofs against the fixture pages', () => {
 				throw new Error(
 					'Precondition failed: the second connection opened no session of its own on the frame.',
 				)
-			session = raw
+			session.value = raw
 			await waitForCondition(
 				'precondition: the framed Pay button rendered',
 				async () =>
@@ -883,7 +894,7 @@ describe('Browser proofs against the fixture pages', () => {
 						await client.send(
 							'Runtime.evaluate',
 							{ expression: "document.getElementById('pay') !== null", returnByValue: true },
-							{ session },
+							{ session: session.required },
 						),
 					) === true,
 				{ budget: 10_000, interval: 20 },
@@ -892,12 +903,12 @@ describe('Browser proofs against the fixture pages', () => {
 				await client.send(
 					'Runtime.evaluate',
 					{ expression: 'location.origin', returnByValue: true },
-					{ session },
+					{ session: session.required },
 				),
 			)
-			if (origin !== `http://localhost:${fixtures.port}`)
+			if (origin !== `http://localhost:${fixtures.required.port}`)
 				throw new Error(`Precondition failed: the framed document's origin is ${String(origin)}.`)
-			local = {
+			local.value = {
 				x: Number(
 					readEvaluationResult(
 						await client.send(
@@ -907,7 +918,7 @@ describe('Browser proofs against the fixture pages', () => {
 									"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.x + box.width / 2 })()",
 								returnByValue: true,
 							},
-							{ session },
+							{ session: session.required },
 						),
 					),
 				),
@@ -920,19 +931,19 @@ describe('Browser proofs against the fixture pages', () => {
 									"(() => { const box = document.getElementById('pay').getBoundingClientRect(); return box.y + box.height / 2 })()",
 								returnByValue: true,
 							},
-							{ session },
+							{ session: session.required },
 						),
 					),
 				),
 			}
-			content = {
+			content.value = {
 				x: Number(
-					await page.evaluate(
+					await page.required.evaluate(
 						"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().x + frame.clientLeft })()",
 					),
 				),
 				y: Number(
-					await page.evaluate(
+					await page.required.evaluate(
 						"(() => { const frame = document.querySelector('iframe'); return frame.getBoundingClientRect().y + frame.clientTop })()",
 					),
 				),
@@ -940,56 +951,56 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 
 		it('clicks an out-of-process frame button through page.elements into the frame document, hit-testing it on the frame session and offsetting it by the content box, and leaves the outer decoy unclicked', async () => {
-			const [pay] = await page.elements.find({ role: 'button', name: 'Pay' })
+			const [pay] = await page.required.elements.find({ role: 'button', name: 'Pay' })
 			const button = requireValue(pay)
 			expect((await button.quad()).center).toStrictEqual({
-				x: content.x + local.x,
-				y: content.y + local.y,
+				x: content.required.x + local.required.x,
+				y: content.required.y + local.required.y,
 			})
 			await button.click()
 			expect(
 				readEvaluationResult(
-					await child.send(
+					await child.required.send(
 						'Runtime.evaluate',
 						{ expression: 'document.body.dataset.received', returnByValue: true },
-						{ session },
+						{ session: session.required },
 					),
 				),
 			).toBe('pay:true')
-			expect(await page.evaluate('document.body.dataset.decoy')).toBeUndefined()
+			expect(await page.required.evaluate('document.body.dataset.decoy')).toBeUndefined()
 		})
 
 		it('lands the raw frame-local point on the outer decoy, not in the frame (control for the frame click)', async () => {
 			const received = readEvaluationResult(
-				await child.send(
+				await child.required.send(
 					'Runtime.evaluate',
 					{ expression: 'document.body.dataset.received', returnByValue: true },
-					{ session },
+					{ session: session.required },
 				),
 			)
-			await page.mouse.click(local)
-			expect(await page.evaluate('document.body.dataset.decoy')).toBe('decoy:true')
+			await page.required.mouse.click(local.required)
+			expect(await page.required.evaluate('document.body.dataset.decoy')).toBe('decoy:true')
 			expect(
 				readEvaluationResult(
-					await child.send(
+					await child.required.send(
 						'Runtime.evaluate',
 						{ expression: 'document.body.dataset.received', returnByValue: true },
-						{ session },
+						{ session: session.required },
 					),
 				),
 			).toBe(received)
 		})
 
 		it('lists the out-of-process frame at its document URL', async () => {
-			expect((await page.frames()).map((frame) => frame.url)).toStrictEqual([
-				fixtures.url('/frame/outer'),
-				fixtures.url('/frame/inner', 'localhost'),
+			expect((await page.required.frames()).map((frame) => frame.url)).toStrictEqual([
+				fixtures.required.url('/frame/outer'),
+				fixtures.required.url('/frame/inner', 'localhost'),
 			])
 		})
 	})
 
 	it('refuses a click on an overlay-covered button with OCCLUDED naming the covering element (control: the uncovered button clicks)', async () => {
-		const page = await browser.create({ url: fixtures.url('/overlay') })
+		const page = await browser.required.create({ url: fixtures.required.url('/overlay') })
 		opened.push(page)
 		const [save] = await page.elements.find({ role: 'button', name: 'Save' })
 		const covered = requireValue(save)
@@ -1007,7 +1018,7 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('clicks a text input, a textarea, and a select, whose hit test resolves to the control rather than its user-agent shadow node (control: a plain button clicks)', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		const [name] = await page.elements.find({ role: 'textbox', name: 'Name' })
 		const [notes] = await page.elements.find({ role: 'textbox', name: 'Notes' })
@@ -1028,7 +1039,7 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('clicks a button below the fold after the page scrolls to it, hit-testing in document coordinates', async () => {
-		const page = await browser.create({ url: fixtures.url('/article') })
+		const page = await browser.required.create({ url: fixtures.required.url('/article') })
 		opened.push(page)
 		const viewport = Number(await page.evaluate('innerHeight'))
 		const offset = Number(await page.evaluate("document.getElementById('subscribe').offsetTop"))
@@ -1045,7 +1056,7 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('reads the article distilled against whole and reassembles it from offset and limit slices (control: a limit past the total returns one slice)', async () => {
-		const page = await browser.create({ url: fixtures.url('/article') })
+		const page = await browser.required.create({ url: fixtures.required.url('/article') })
 		opened.push(page)
 		const reading = await page.read()
 		const distilled = reading.text({ distill: true })
@@ -1060,12 +1071,12 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(distilled.total).toBeLessThan(whole.total)
 
 		const slices: BrowserReadResult[] = []
-		for (
-			let offset = 0;
-			offset < distilled.total && slices.length < 100;
-			offset += slices.at(-1)?.text.length ?? distilled.total
-		)
+		while (slices.length < 100) {
+			const previous = slices.at(-1)
+			const offset = previous === undefined ? 0 : previous.offset + previous.text.length
+			if (offset >= distilled.total) break
 			slices.push(reading.text({ distill: true, offset, limit: 500 }))
+		}
 		expect(slices.length).toBeGreaterThan(1)
 		expect(slices.filter((slice) => slice.text.length > 500)).toStrictEqual([])
 		expect(slices.filter((slice) => slice.total !== distilled.total)).toStrictEqual([])
@@ -1085,7 +1096,7 @@ describe('Browser proofs against the fixture pages', () => {
 	// insertion, and this process reads the same sum at resolution; 2 ms covers the rounding each
 	// process applies to its origin.
 	it('resolves wait for text inserted 200 ms after a click within 300 ms of the insertion (control: absent text stays pending before its deadline, then rejects TIMEOUT)', async () => {
-		const page = await browser.create({ url: fixtures.url('/late') })
+		const page = await browser.required.create({ url: fixtures.required.url('/late') })
 		opened.push(page)
 		const [reveal] = await page.elements.find({ role: 'button', name: 'Reveal' })
 		const button = requireValue(reveal)
@@ -1119,7 +1130,7 @@ describe('Browser proofs against the fixture pages', () => {
 
 	for (const scenario of WAIT_TEXT_CASES) {
 		it(`reads ${scenario.name} in an absent text wait`, async () => {
-			const page = await browser.create({ url: fixtures.url('/late') })
+			const page = await browser.required.create({ url: fixtures.required.url('/late') })
 			opened.push(page)
 			await page.evaluate(`document.body.innerHTML = ${JSON.stringify(scenario.html)}`)
 			await page.wait('')
@@ -1134,7 +1145,7 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	}
 	it('opening details makes an absent text wait time out', async () => {
-		const page = await browser.create({ url: fixtures.url('/late') })
+		const page = await browser.required.create({ url: fixtures.required.url('/late') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_DETAILS_HTML)}`)
 		await page.evaluate("document.querySelector('details').open = true")
@@ -1143,7 +1154,7 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 	})
 	it('closing a page rejects a pending text wait well before its deadline', async () => {
-		const page = await browser.create({ url: fixtures.url('/late') })
+		const page = await browser.required.create({ url: fixtures.required.url('/late') })
 		opened.push(page)
 		await page.wait('Order')
 		const settled = createRecorder<[]>()
@@ -1162,7 +1173,7 @@ describe('Browser proofs against the fixture pages', () => {
 		expect(performance.now() - start).toBeLessThan(1_000)
 	})
 	it('navigation settles a pending absent element wait', async () => {
-		const page = await browser.create({ url: fixtures.url('/late') })
+		const page = await browser.required.create({ url: fixtures.required.url('/late') })
 		opened.push(page)
 		await page.evaluate("document.body.innerHTML = '<p id=subject>Wait subject</p>'")
 		await page.elements.wait({ css: '#subject' })
@@ -1173,11 +1184,11 @@ describe('Browser proofs against the fixture pages', () => {
 			'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
 		)
 		expect(settled.count).toBe(0)
-		await page.navigate(fixtures.url('/form'))
+		await page.navigate(fixtures.required.url('/form'))
 		await expect(waiting).resolves.toEqual([])
 	})
 	it('navigation settles a pending absent text wait', async () => {
-		const page = await browser.create({ url: fixtures.url('/late') })
+		const page = await browser.required.create({ url: fixtures.required.url('/late') })
 		opened.push(page)
 		await page.evaluate("document.body.innerHTML = '<p>Wait subject</p>'")
 		await page.wait('Wait subject')
@@ -1188,11 +1199,11 @@ describe('Browser proofs against the fixture pages', () => {
 			'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
 		)
 		expect(settled.count).toBe(0)
-		await page.navigate(fixtures.url('/form'))
+		await page.navigate(fixtures.required.url('/form'))
 		await expect(waiting).resolves.toBeUndefined()
 	})
 	it('waits for a delayed visibility exit and an immediate removal', async () => {
-		const page = await browser.create({ url: fixtures.url('/late') })
+		const page = await browser.required.create({ url: fixtures.required.url('/late') })
 		opened.push(page)
 		await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
 		await page.wait('Saved to drafts')
@@ -1214,7 +1225,7 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('waits for removal and hiding, accepts initial absence, and times out when text stays', async () => {
-		const page = await browser.create({ url: fixtures.url('/late') })
+		const page = await browser.required.create({ url: fixtures.required.url('/late') })
 		opened.push(page)
 		for (const hide of [true, false]) {
 			await page.evaluate("document.body.innerHTML = '<p>Saved</p>'")
@@ -1239,7 +1250,7 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('navigate clears references: a stale element refuses GONE naming read, and the next outline numbers past the previous maximum (control: the reference acts before the navigation)', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		const previous = extractOutlineReferences(
 			(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
@@ -1249,7 +1260,7 @@ describe('Browser proofs against the fixture pages', () => {
 		await stale.focus()
 		expect(await page.evaluate('document.activeElement.id')).toBe('name')
 
-		await page.navigate(fixtures.url('/overlay'))
+		await page.navigate(fixtures.required.url('/overlay'))
 
 		expect(page.elements.element(stale.reference)).toBeUndefined()
 		await expect(stale.click()).rejects.toMatchObject({
@@ -1266,10 +1277,10 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('binds no later element to an earlier reference after churn and garbage collection (control: a removed and collected element no longer resolves)', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		await page.evaluate(
-			"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 50; index += 1) { const button = document.createElement('button'); button.textContent = 'Old ' + index; pool.append(button) } return pool.children.length })()",
+			"(() => { const pool = document.getElementById('pool'); for (const index of Array.from({length: 50}).keys()) { const button = document.createElement('button'); button.textContent = 'Old ' + index; pool.append(button) } return pool.children.length })()",
 		)
 		const earlier = extractOutlineReferences(
 			(await page.elements.outline()).lines
@@ -1283,11 +1294,11 @@ describe('Browser proofs against the fixture pages', () => {
 		const removed = requireValue(first)
 
 		await page.evaluate(
-			"(() => { const pool = document.getElementById('pool'); pool.replaceChildren(); for (let index = 0; index < 10000; index += 1) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
+			"(() => { const pool = document.getElementById('pool'); pool.replaceChildren(); for (const index of Array.from({length: 10000}).keys()) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
 		)
 		await page.send('HeapProfiler.collectGarbage')
 		await page.evaluate(
-			"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 50; index += 1) { const button = document.createElement('button'); button.textContent = 'Later ' + index; pool.append(button) } return pool.children.length })()",
+			"(() => { const pool = document.getElementById('pool'); for (const index of Array.from({length: 50}).keys()) { const button = document.createElement('button'); button.textContent = 'Later ' + index; pool.append(button) } return pool.children.length })()",
 		)
 		const later = extractOutlineReferences(
 			(await page.elements.outline()).lines
@@ -1305,15 +1316,15 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	describe('a removed and collected element', () => {
-		let removed: BrowserPageElementInterface
+		const removed = new BrowserFixtureValue<BrowserPageElementInterface | undefined>(undefined)
 
 		// Establishes outside the expected-failure body that the collector reclaimed the node: a
 		// detached but live node answers a different protocol error, which the classifier handles.
 		beforeAll(async () => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			teardown.add(() => page.close())
 			const [save] = await page.elements.find({ role: 'button', name: 'Save draft' })
-			removed = requireValue(save)
+			removed.value = requireValue(save)
 			const backend = requireValue(
 				(await page.accessibility.snapshot()).nodes.find(
 					(node) => node.role === 'button' && node.name === 'Save draft',
@@ -1326,7 +1337,7 @@ describe('Browser proofs against the fixture pages', () => {
 				'precondition: the collector reclaimed the removed Save draft node',
 				async () => {
 					await page.evaluate(
-						"(() => { const pool = document.getElementById('pool'); for (let index = 0; index < 10000; index += 1) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
+						"(() => { const pool = document.getElementById('pool'); for (const index of Array.from({length: 10000}).keys()) { const button = document.createElement('button'); pool.append(button); button.remove() } return pool.children.length })()",
 					)
 					await page.send('HeapProfiler.collectGarbage')
 					return await page.send('DOM.scrollIntoViewIfNeeded', { backendNodeId: backend }).then(
@@ -1340,16 +1351,16 @@ describe('Browser proofs against the fixture pages', () => {
 		})
 
 		it('refuses a click on a removed and collected element GONE naming read', async () => {
-			await expect(removed.click()).rejects.toMatchObject({
+			await expect(removed.required.click()).rejects.toMatchObject({
 				code: 'ELEMENT',
-				context: { reference: removed.reference, reason: 'GONE' },
-				message: `Element ${removed.role}${removed.name === '' ? '' : ` ${JSON.stringify(removed.name)}`} [ref=${removed.reference}] is gone because the page changed; call read for fresh refs.`,
+				context: { reference: removed.required.reference, reason: 'GONE' },
+				message: `Element ${removed.required.role}${removed.required.name === '' ? '' : ` ${JSON.stringify(removed.required.name)}`} [ref=${removed.required.reference}] is gone because the page changed; call read for fresh refs.`,
 			})
 		})
 	})
 
 	it('marks a reading stale after a same-document route and keeps references (control: a DOM mutation leaves it fresh)', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		const reading = await page.read()
 		const [name] = await page.elements.find({ role: 'textbox', name: 'Name' })
@@ -1370,20 +1381,20 @@ describe('Browser proofs against the fixture pages', () => {
 				interval: 20,
 			},
 		)
-		expect(page.url).toBe(fixtures.url('/form/review'))
+		expect(page.url).toBe(fixtures.required.url('/form/review'))
 		await requireValue(name).focus()
 		expect(await page.evaluate('document.activeElement.id')).toBe('name')
 		expect((await page.read()).stale).toBe(false)
 	})
 
 	it('leaves the outline usable after a back-forward cache restore', async () => {
-		const page = await browser.create({ url: fixtures.url('/form') })
+		const page = await browser.required.create({ url: fixtures.required.url('/form') })
 		opened.push(page)
 		const navigations = createRecorder<[Readonly<Record<string, unknown>>]>()
 		const misses = createRecorder<[Readonly<Record<string, unknown>>]>()
 		await page.subscribe('Page.frameNavigated', navigations.handler)
 		await page.subscribe('Page.backForwardCacheNotUsed', misses.handler)
-		await page.navigate(fixtures.url('/article', 'localhost'))
+		await page.navigate(fixtures.required.url('/article', 'localhost'))
 		navigations.clear()
 		await page.back({ condition: 'commit' })
 		requireCacheRestore(
@@ -1391,7 +1402,7 @@ describe('Browser proofs against the fixture pages', () => {
 			misses.calls.map(([params]) => params),
 		)
 
-		expect(page.url).toBe(fixtures.url('/form'))
+		expect(page.url).toBe(fixtures.required.url('/form'))
 		expect(await page.evaluate('document.body.dataset.restored')).toBe('yes')
 		const outline = await page.elements.outline()
 		expect(outline.lines.map(renderBrowserLine).join('\n')).toContain('textbox "Name"')
@@ -1401,18 +1412,20 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	describe('a back() served from the back-forward cache', () => {
-		let outcome: Readonly<Record<string, unknown>>
+		const outcome = new BrowserFixtureValue<Readonly<Record<string, unknown>> | undefined>(
+			undefined,
+		)
 
 		// Starts `back()` under its default condition and establishes, outside the expected-failure
 		// body, that the host restored the entry from the cache rather than evicting it.
 		beforeAll(async () => {
-			const page = await browser.create({ url: fixtures.url('/form') })
+			const page = await browser.required.create({ url: fixtures.required.url('/form') })
 			teardown.add(() => page.close())
 			const navigations = createRecorder<[Readonly<Record<string, unknown>>]>()
 			const misses = createRecorder<[Readonly<Record<string, unknown>>]>()
 			await page.subscribe('Page.frameNavigated', navigations.handler)
 			await page.subscribe('Page.backForwardCacheNotUsed', misses.handler)
-			await page.navigate(fixtures.url('/article', 'localhost'))
+			await page.navigate(fixtures.required.url('/article', 'localhost'))
 			navigations.clear()
 			const going = page.back({ timeout: 5_000 }).then(
 				(result) => ({ status: 'resolved', url: result.url }),
@@ -1430,16 +1443,19 @@ describe('Browser proofs against the fixture pages', () => {
 				navigations.calls.map(([params]) => params),
 				misses.calls.map(([params]) => params),
 			)
-			outcome = await going
+			outcome.value = await going
 		})
 
 		it('resolves back() under its default load condition when the back-forward cache restores the entry', () => {
-			expect(outcome).toStrictEqual({ status: 'resolved', url: fixtures.url('/form') })
+			expect(outcome.required).toStrictEqual({
+				status: 'resolved',
+				url: fixtures.required.url('/form'),
+			})
 		})
 	})
 
 	it('resolves registry.start() to the direct WebMCP.enable capability with a missing-method control', async () => {
-		const page = await browser.create({ url: fixtures.url('/registry') })
+		const page = await browser.required.create({ url: fixtures.required.url('/registry') })
 		opened.push(page)
 		const domains = requireValue(parseProtocolDomains(await page.send('Schema.getDomains')))
 
@@ -1459,7 +1475,7 @@ describe('Browser proofs against the fixture pages', () => {
 	})
 
 	it('mirrors a page-registered tool through the live WebMCP domain on a browser launched with the WebMCP feature switch', async (context) => {
-		const page = await registry.create({ url: fixtures.url('/registry') })
+		const page = await registry.required.create({ url: fixtures.required.url('/registry') })
 		opened.push(page)
 		const refusal: unknown = await page.send('WebMCP.enable').then(
 			() => undefined,

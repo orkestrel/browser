@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from './setup.js'
 import { renderBrowserLine } from '@src/core'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -26,7 +27,7 @@ import {
 	readDomainRecord,
 	readDomainRecords,
 	readConformanceDrift,
-} from './setupConformance.js'
+} from './setupServer.js'
 
 describe('pinned WebMCP conformance', () => {
 	it('redesign fix: service tests keep author evidence capture outside the committed suite', () => {
@@ -178,7 +179,7 @@ describe('pinned WebMCP conformance', () => {
 	)
 
 	it('marks a registered backend form as e5 and removes the mark after tool removal', async () => {
-		let disabled = false
+		const disabled = new BrowserFixtureValue(false)
 		const fixture = await createBrowserElementFixture({
 			registry: (message) => fixture.transport.reply(message.id, {}),
 			accessibility: (message) =>
@@ -188,7 +189,7 @@ describe('pinned WebMCP conformance', () => {
 						backendDOMNodeId: index === 4 ? 50 : index + 1,
 						role: { value: index === 4 ? 'form' : 'button' },
 						name: { value: index === 4 ? 'Search cars' : `Button ${index}` },
-						properties: [{ name: 'disabled', value: { value: index === 4 && disabled } }],
+						properties: [{ name: 'disabled', value: { value: index === 4 && disabled.value } }],
 					})),
 				}),
 		})
@@ -200,7 +201,7 @@ describe('pinned WebMCP conformance', () => {
 				'form "Search cars" [ref=e5] [tool=search-cars]',
 			)
 			expect(outline.lines.map(renderBrowserLine).join('\n')).not.toContain('autosubmit')
-			disabled = true
+			disabled.value = true
 			expect(
 				(await fixture.page.elements.outline()).lines.map(renderBrowserLine).join('\n').split('\n'),
 			).toContain('form "Search cars" [ref=e5] [disabled] [tool=search-cars]')

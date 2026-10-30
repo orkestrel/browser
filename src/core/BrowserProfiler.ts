@@ -47,17 +47,20 @@ export class BrowserProfiler implements BrowserProfilerInterface {
 	async stop(): Promise<BrowserProfile> {
 		if (!this.#active) throw new BrowserError('ARGUMENT', 'Browser CPU profiling is not active')
 		this.#active = false
-		let result: unknown
-		try {
-			result = await this.#frame.send('Profiler.stop')
-		} finally {
-			await this.#frame.send('Profiler.disable').catch(() => undefined)
-		}
+		const result = await this.#finish()
 		return readBrowserProfile(result)
 	}
 
 	async destroy(): Promise<void> {
 		if (!this.#active) return
 		await this.stop().catch(() => undefined)
+	}
+
+	async #finish(): Promise<unknown> {
+		try {
+			return await this.#frame.send('Profiler.stop')
+		} finally {
+			await this.#frame.send('Profiler.disable').catch(() => undefined)
+		}
 	}
 }

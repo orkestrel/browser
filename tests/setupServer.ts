@@ -9,6 +9,7 @@ import type { ScratchInterface } from '@orkestrel/test/server'
 import type { RetryOptions, TeardownInterface } from '@orkestrel/test'
 import type { MCPTransportInterface } from '@orkestrel/mcp'
 import type {
+	BrowserToolsetReason,
 	BrowserCallOptions,
 	BrowserContextInterface,
 	BrowserIsolateOptions,
@@ -27,21 +28,23 @@ import type {
 	BrowserStatus,
 } from '@src/server'
 import type { BrowserElementFixture, CDPSentMessage, CDPTestTransportInterface } from './setup.js'
+import type { BrowserFilesystemCase } from './setup.js'
 import { spawn as spawnProcess, spawnSync } from 'node:child_process'
 import { createHook } from 'node:async_hooks'
 import { addAbortListener } from 'node:events'
 import { createServer } from 'node:http'
 import { createInterface } from 'node:readline'
 import { PassThrough, Writable } from 'node:stream'
-import { createBrowserMCPServer, formatBrowserLockEntry } from '@src/server'
+import { createBrowserMCPServer, formatBrowserLockEntry, parseBrowserLockEntry } from '@src/server'
 import { createConnection, createServer as createNetServer } from 'node:net'
-import { constants, existsSync, readdirSync, readFileSync } from 'node:fs'
+import { constants, existsSync, globSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { open, mkdir, writeFile, unlink, rmdir } from 'node:fs/promises'
-import { randomUUID } from 'node:crypto'
-import { dirname, join, resolve as resolvePath } from 'node:path'
+import { createHash, randomUUID } from 'node:crypto'
+import { basename, dirname, join, resolve as resolvePath } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { createRequire } from 'node:module'
 import {
+	attempt,
 	isArray,
 	isError,
 	isFunction,
@@ -60,8 +63,15 @@ import {
 	WEBSOCKET_OPCODE_TEXT,
 	WEBSOCKET_READY_OPEN,
 } from '@orkestrel/websocket'
-import { createLoopback, createScratch, isRunning, readErrorCode } from '@orkestrel/test/server'
 import {
+	createLoopback,
+	createScratch,
+	isRunning,
+	readErrorCode,
+	supportsMode,
+} from '@orkestrel/test/server'
+import {
+	createRecorder,
 	createTeardown,
 	requireValue,
 	retryUntil,
@@ -69,9 +79,45 @@ import {
 	waitForEvent,
 } from '@orkestrel/test'
 import { Emitter } from '@orkestrel/emitter'
-import { BrowserContext, BrowserError } from '@src/core'
-import { createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
+import {
+	BrowserContext,
+	BrowserError,
+	createBrowserToolset,
+	parseBrowserTool,
+	parseBrowserRemoval,
+	parseBrowserInvocation,
+	parseBrowserInvocationResult,
+} from '@src/core'
+import { isDeepStrictEqual } from 'node:util'
+import { ModelContextRegistry } from './setup.js'
+import {
+	BROWSER_RUN_FIXTURE,
+	createBrowserJourneyFixture,
+	createBrowserViewDouble,
+} from './setup.js'
+import { BrowserFixtureValue, createBrowserElementFixture, ignoreCall, replyOk } from './setup.js'
 import { FileBrowserStore } from '../src/server/stores/FileBrowserStore.js'
+
+/** Refuses a missing or stale built browser entry before a proof starts its processes. */
+export function requireBrowserBuild(root: string, entry: string): void {
+	const newest = readdirSync(resolvePath(root, 'src'), { recursive: true, withFileTypes: true })
+		.filter((file) => file.isFile())
+		.map((file) => statSync(resolvePath(file.parentPath, file.name)).mtimeMs)
+		.reduce<number | undefined>(
+			(previous, modified) => (previous === undefined ? modified : Math.max(previous, modified)),
+			undefined,
+		)
+	const built = attempt(() => statSync(entry))
+	if (
+		!built.success ||
+		!built.value.isFile() ||
+		(newest !== undefined && built.value.mtimeMs < newest)
+	) {
+		throw new Error(
+			`The built entry ${entry} is missing or older than src/. Run npm run build before this proof.`,
+		)
+	}
+}
 
 /**
  * Holds a real file-lock entry outside the store's process-local queue.
@@ -129,9 +175,12 @@ export function readLoopClock(): number {
  */
 export function alignLoopClock(offset = 0): void {
 	const tick = readLoopClock()
-	let crossed: number | undefined
-	while (crossed === undefined || performance.now() - crossed < offset) {
-		if (crossed === undefined && readLoopClock() !== tick) crossed = performance.now()
+	while (readLoopClock() === tick) {
+		// Hold this macrotask until libuv's clock crosses the tick.
+	}
+	const crossed = performance.now()
+	while (performance.now() - crossed < offset) {
+		// Hold this macrotask for the requested part of the millisecond.
 	}
 }
 
@@ -643,16 +692,16 @@ export class CDPTestServer implements CDPTestServerInterface {
  * @throws Thrown when the chunk ends inside a frame, naming the offset of that frame.
  */
 export function readWebSocketFrames(chunk: Buffer): readonly string[] {
-	const payloads: string[] = []
-	let offset = 0
-	while (offset < chunk.length) {
+	const frames: Array<{ readonly end: number; readonly text: string }> = []
+	while (true) {
+		const offset = frames.at(-1)?.end ?? 0
+		if (offset >= chunk.length) break
 		const frame = parseWebSocketFrame(chunk.subarray(offset))
 		if (frame === undefined)
 			throw new Error(`The write ends inside the frame at byte ${offset} of ${chunk.length}`)
-		payloads.push(frame.payload.toString('utf8'))
-		offset += frame.consumed
+		frames.push({ text: frame.payload.toString('utf8'), end: offset + frame.consumed })
 	}
-	return payloads
+	return frames.map((frame) => frame.text)
 }
 
 // === Fake browser process (real spawned executable, no mocks)
@@ -675,13 +724,7 @@ const registeredFakeBrowsers: RegisteredFakeBrowser[] = []
 export async function destroyFakeBrowsers(): Promise<void> {
 	for (const fixture of registeredFakeBrowsers.splice(0)) {
 		for (const pidName of fixture.pidNames) {
-			let pid: number | undefined
-			try {
-				const contents = fixture.scratch.read(pidName)?.trim()
-				if (contents !== undefined && contents.length > 0) pid = Number(contents)
-			} catch {
-				// pid file never written — nothing to kill
-			}
+			const pid = readOptionalBrowserPid(fixture.scratch, pidName)
 			if (pid === undefined) continue
 			try {
 				process.kill(pid, 'SIGKILL')
@@ -691,6 +734,19 @@ export async function destroyFakeBrowsers(): Promise<void> {
 			await waitForProcessExit(pid).catch(() => undefined)
 		}
 		fixture.scratch.destroy()
+	}
+}
+
+/** Reads a fixture process identifier, returning absence when its file is unreadable or empty. */
+export function readOptionalBrowserPid(
+	scratch: ScratchInterface,
+	name: string,
+): number | undefined {
+	try {
+		const contents = scratch.read(name)?.trim()
+		return contents === undefined || contents.length === 0 ? undefined : Number(contents)
+	} catch {
+		return undefined
 	}
 }
 
@@ -883,7 +939,7 @@ export function createFakeBrowserProcess(
 				`const { createNodeWebSocket } = require(${JSON.stringify(websocketEntry)})`,
 				"const portArg = process.argv.find((a) => a.startsWith('--remote-debugging-port='))",
 				"const port = Number(portArg.split('=')[1])",
-				'let activeWS',
+				'const connection = new (class { value })()',
 				'const server = http.createServer((req, res) => {',
 				`\trequire('fs').appendFileSync(${JSON.stringify(requestsFile)}, req.url + '\\n')`,
 				"\tif (req.url.startsWith('/json/version')) {",
@@ -897,7 +953,7 @@ export function createFakeBrowserProcess(
 				'\t\treturn',
 				'\t}',
 				"\tif (req.url.startsWith('/__drop')) {",
-				'\t\tif (activeWS) activeWS.destroy()',
+				'\t\tif (connection.value) connection.value.destroy()',
 				'\t\tres.writeHead(204)',
 				'\t\tres.end()',
 				'\t\treturn',
@@ -908,7 +964,7 @@ export function createFakeBrowserProcess(
 				"server.on('upgrade', (req, socket, head) => {",
 				"\tconst key = req.headers['sec-websocket-key']",
 				'\tconst ws = createNodeWebSocket({ socket, key, head })',
-				'\tactiveWS = ws',
+				'\tconnection.value = ws',
 				"\tws.emitter.on('message', (text) => {",
 				'\t\ttry {',
 				'\t\t\tconst msg = JSON.parse(text)',
@@ -925,7 +981,7 @@ export function createFakeBrowserProcess(
 				'\t\t} catch {}',
 				'\t})',
 				"\tws.emitter.on('close', () => {",
-				'\t\tif (activeWS === ws) activeWS = undefined',
+				'\t\tif (connection.value === ws) connection.value = undefined',
 				'\t})',
 				'})',
 				"server.on('error', (e) => { console.error('fake-browser listen error: ' + e.message); process.exit(12) })",
@@ -1440,18 +1496,24 @@ export function requireDocumentBundle(root: string = FIXTURE_WORKSPACE): void {
  * @remarks
  * The served paths are each {@link FIXTURE_DOCUMENT_IMPORTS} entry, the two
  * {@link FIXTURE_DOCUMENT_BUNDLE} files, the `@orkestrel/mcp` core entry the browser entry
- * imports relatively, and {@link FIXTURE_REGISTRY_MODULE}, which is `tests/fixtures/modelContext.ts`
- * with its types removed by Vite's `transformWithOxc`.
+ * imports relatively, and {@link FIXTURE_REGISTRY_MODULE}, which serves the delimited WebMCP fixture section
+ * of `tests/setup.ts` with its types removed by Vite's `transformWithOxc`.
  */
 export async function loadFixtureModule(
 	path: string,
 	root: string = FIXTURE_WORKSPACE,
 ): Promise<string | undefined> {
 	if (path === FIXTURE_REGISTRY_MODULE) {
-		const source = join(root, 'tests/fixtures/modelContext.ts')
+		const source = join(root, 'tests/setup.ts')
 		if (!existsSync(source)) return undefined
+		const text = readFileSync(source, 'utf8')
+		const section = text
+			.split('// === WebMCP fixture source')[1]
+			?.split('// === WebMCP fixture end')[0]
+		if (section === undefined) throw new Error('The WebMCP fixture source section is absent')
 		const { transformWithOxc } = await import('vite')
-		return (await transformWithOxc(readFileSync(source, 'utf8'), source)).code
+		const imports = "import { attempt, isRecord, isString } from '@orkestrel/contract'\n"
+		return (await transformWithOxc(imports + section, source)).code
 	}
 	if (
 		!Object.values(FIXTURE_DOCUMENT_IMPORTS).includes(path) &&
@@ -1789,11 +1851,9 @@ export class BrowserLaunchDouble implements BrowserInterface {
 		// The fixture scripts its transport before it returns it, so each answer reads the transport
 		// off the fixture this connect stores.
 		const fixture = await createBrowserElementFixture({
-			...(evaluation === undefined
-				? {}
-				: { evaluation: (message) => this.#answer(evaluation, message) }),
-			...(released === undefined ? {} : { released: (message) => this.#answer(released, message) }),
-			...(registry === undefined ? {} : { registry: (message) => this.#answer(registry, message) }),
+			...(evaluation === undefined ? {} : { evaluation: this.#answer.bind(this, evaluation) }),
+			...(released === undefined ? {} : { released: this.#answer.bind(this, released) }),
+			...(registry === undefined ? {} : { registry: this.#answer.bind(this, registry) }),
 		})
 		const { transport } = fixture
 		transport.onSend('Browser.getVersion', (message) => {
@@ -2737,7 +2797,10 @@ export class BrowserJourneyStage implements BrowserJourneyStageInterface {
 			'tsconfig.json',
 			`${JSON.stringify(project, undefined, '\t')}\n`,
 		)
-		const compiler = createRequire(import.meta.url).resolve('typescript/bin/tsc')
+		const compiler = join(
+			dirname(createRequire(import.meta.url).resolve('typescript/package.json')),
+			'bin/tsc',
+		)
 		const result = spawnSync(process.execPath, [compiler, '--pretty', 'false', '-p', config], {
 			cwd: this.path,
 			encoding: 'utf8',
@@ -2773,7 +2836,8 @@ export class BrowserJourneyStage implements BrowserJourneyStageInterface {
 	}
 }
 
-function isBrowserContextValue(value: unknown): value is BrowserContextInterface {
+/** Checks whether a fixture connection exposes the context operations its consumer uses. */
+export function isBrowserContextValue(value: unknown): value is BrowserContextInterface {
 	return (
 		isObject(value) &&
 		isFunction(Reflect.get(value, 'create')) &&
@@ -2872,16 +2936,1611 @@ export class BrowserLockObserver extends FileBrowserStore {
  * @returns The enabled hook, which the caller disables during cleanup
  */
 export function observeBrowserFilesystem(action: () => void): AsyncHook {
-	let pending: number | undefined
-	let delivered = false
+	const pending = new BrowserFixtureValue<number | undefined>(undefined)
+	const delivered = new BrowserFixtureValue(false)
 	return createHook({
 		init(id, category) {
-			if (category === 'FSREQPROMISE' && pending === undefined) pending = id
+			if (category === 'FSREQPROMISE' && pending.value === undefined) pending.value = id
 		},
 		before(id) {
-			if (id !== pending || delivered) return
-			delivered = true
+			if (id !== pending.value || delivered.value) return
+			delivered.value = true
 			action()
 		},
 	}).enable()
 }
+
+/** Records a ruled comparison between a package reading and its pinned authority. */
+export interface ConformanceRow {
+	readonly symbol: string
+	readonly expected: unknown
+	readonly model: unknown
+	readonly ruling: 'implement' | 'retain' | 'exclude'
+	readonly closer?: string
+}
+
+/** Defers a ruled model reading until its independent wire input reaches the real operation. */
+export interface ConformanceOperationRow extends ConformanceRow {
+	readonly input: Readonly<Record<string, unknown>>
+	readonly model: (input: Readonly<Record<string, unknown>>) => Promise<unknown>
+}
+
+/** Enumerates source declarations and export clauses reachable through local star exports.
+ * @param paths - Entry modules, including barrels or scratch controls
+ * @returns Exported names by entry path
+ * @throws Thrown when a module cannot be read or a star export is not relative.
+ */
+export function readConformanceExports(
+	paths: readonly string[],
+): ReadonlyMap<string, readonly string[]> {
+	const exports = new Map<string, readonly string[]>()
+	for (const path of paths) {
+		const pending = [resolvePath(path)]
+		const visited = new Set<string>()
+		const names = new Set<string>()
+		while (pending.length > 0) {
+			const module = requireValue(pending.pop())
+			if (visited.has(module)) continue
+			visited.add(module)
+			if (!existsSync(module)) throw new Error(`Missing export module: ${module}`)
+			// Preserve quoted text while removing block and line comments, including between keywords.
+			const source = readFileSync(module, 'utf8').replace(
+				/"(?:\\[\s\S]|[^"\\])*"|'(?:\\[\s\S]|[^'\\])*'|`(?:\\[\s\S]|[^`\\])*`|\/\*[\s\S]*?\*\/|\/\/[^\r\n]*/g,
+				(token) => (token.startsWith('/') ? ' ' : token),
+			)
+			for (const match of source.matchAll(
+				/\bexport\s+(?:declare\s+)?(?:abstract\s+)?(?:async\s+)?(?:class|function|const|let|var|interface|type|enum|namespace)\s+([$\w]+)/g,
+			))
+				names.add(requireValue(match[1]))
+			for (const match of source.matchAll(/\bexport\s+(?:type\s+)?\{([^}]+)\}/g)) {
+				for (const entry of requireValue(match[1]).split(',')) {
+					const name = /^(?:type\s+)?([$\w]+)(?:\s+as\s+([$\w]+))?$/.exec(entry.trim())
+					if (name !== null) names.add(requireValue(name[2] ?? name[1]))
+				}
+			}
+			if (/\bexport\s+default\b/.test(source)) names.add('default')
+			for (const match of source.matchAll(/\bexport\s+\*\s+from\s+['"]([^'"]+)['"]/g)) {
+				const target = requireValue(match[1])
+				if (!target.startsWith('.')) throw new Error(`Nonrelative star export: ${target}`)
+				pending.push(resolvePath(dirname(module), target.replace(/\.js$/, '.ts')))
+			}
+		}
+		exports.set(path, [...names].sort())
+	}
+	return exports
+}
+
+/** Supplies a star-export chain ending in indirect and comment-separated forbidden exports. */
+export const WEBMCP_EXPORT_CONTROL = Object.freeze({
+	'index.ts': "export * from './bridge.js'\n",
+	'bridge.ts': "export * from './definitions.js'\n",
+	'definitions.ts':
+		'export class BrowserRegistry {}\nexport { BrowserRegistry as BrowserModelContext }\nexport /* note */ class ModelContextThing {}\n',
+})
+
+/** Locates the Orchestrator's revision-specific WPT tree listing. */
+export const WEBMCP_WPT_LISTING_PATH = fileURLToPath(
+	new URL('./mirrors/wpt-webmcp-e6ba3d7abea7.txt', import.meta.url),
+)
+/** Holds the supplied git tree listing, whose presence the setup proof requires. */
+export const WEBMCP_WPT_LISTING = readFileSync(WEBMCP_WPT_LISTING_PATH, 'utf8')
+/** Records each listed WPT path, excluding the provenance header. */
+export const WEBMCP_WPT_ENTRIES: readonly string[] = Object.freeze(
+	[...WEBMCP_WPT_LISTING.matchAll(/\t(webmcp\/[^\r\n]+)$/gm)].flatMap((match) =>
+		match[1] === undefined ? [] : [match[1]],
+	),
+)
+
+/** Reads the real registry's adoption and its retained protocol annotation.
+ * @param input - Mirror-shaped tool delivered over the protocol boundary
+ * @returns Adopted annotations and the retained autosubmit value
+ */
+export async function readAdoptionModel(
+	input: Readonly<Record<string, unknown>>,
+): Promise<unknown> {
+	const fixture = await createBrowserElementFixture({
+		registry: (message) => fixture.transport.reply(message.id, {}),
+	})
+	try {
+		await fixture.page.registry.start()
+		fixture.transport.event('WebMCP.toolsAdded', { tools: [input] }, 'session-main')
+		const adopted = requireValue((await fixture.page.registry.adopt())[0])
+		const autosubmit = fixture.page.registry.tools()[0]?.annotation.autosubmit
+		return { annotations: adopted.annotations, ...(autosubmit === undefined ? {} : { autosubmit }) }
+	} finally {
+		await fixture.client.close()
+	}
+}
+
+/** Reads the real toolset's exclusion and whether the excluded tool was installed.
+ * @param input - Mirror-shaped tool delivered over the protocol boundary
+ * @returns The emitted name and reason with the tool's membership
+ */
+export async function readSkipModel(input: Readonly<Record<string, unknown>>): Promise<unknown> {
+	const fixture = await createBrowserElementFixture({
+		registry: (message) => fixture.transport.reply(message.id, {}),
+	})
+	const toolset = createBrowserToolset(fixture.page)
+	try {
+		replyOk(fixture.transport, 'WebMCP.disable')
+		const skips = createRecorder<readonly [string, BrowserToolsetReason]>()
+		toolset.emitter.on('skip', skips.handler)
+		await toolset.start()
+		fixture.transport.event('WebMCP.toolsAdded', { tools: [input] }, 'session-main')
+		await waitForCondition('skip reported', () => skips.count > 0)
+		const [name, reason] = requireValue(skips.calls[0])
+		return { name, reason, present: toolset.tools.tool(name) !== undefined }
+	} finally {
+		await toolset.destroy()
+		await fixture.client.close()
+	}
+}
+
+/** Pins the specification source bytes. */
+export const WEBMCP_INDEX_DIGEST =
+	'e6c9b9790fd5cabc11662bbfeb296a6919388d8fd3f23bf7c85258059948b1b9'
+/** Pins the webref IDL bytes. */
+export const WEBMCP_WEBREF_DIGEST =
+	'eddabc7932e9fdfe5e7c48efffb6fe4606657c5f45c9799038d361775802f332'
+/** Pins the raw protocol domain cut. */
+export const WEBMCP_DOMAIN_DIGEST =
+	'13fb565428f1fc1e09bca51b1234536c5c8da77adf0bd952700e6cdbbc4f1bf6'
+/** Pins the whole protocol file from which the domain was cut, without vendoring it. */
+export const WEBMCP_PROTOCOL_DIGEST =
+	'672d8481c92832907211e85488e216cd5b1a922fde273faff72f7f6cf765899e'
+/** Records the domain byte range, with an exclusive end. */
+export const WEBMCP_DOMAIN_RANGE = Object.freeze({ start: 1404474, end: 1415819 })
+/** Locates the revision-named source mirror. */
+export const WEBMCP_INDEX_PATH = fileURLToPath(
+	new URL('./mirrors/webmcp-index-19fc56516057.bs', import.meta.url),
+)
+/** Locates the revision-named IDL mirror. */
+export const WEBMCP_WEBREF_PATH = fileURLToPath(
+	new URL('./mirrors/webmcp-webref-e6ba3d7abea7.idl', import.meta.url),
+)
+/** Locates the revision-named domain mirror. */
+export const WEBMCP_DOMAIN_PATH = fileURLToPath(
+	new URL('./mirrors/webmcp-domain-dc2ddf369035.json', import.meta.url),
+)
+
+/** Formats a drift with the authority's expected value.
+ * @param symbol - Compared symbol
+ * @param authority - Pinned authority
+ * @param value - Authority value
+ * @returns The failure description
+ */
+export function formatConformanceDrift(symbol: string, authority: string, value: unknown): string {
+	return `${symbol} drifted; ${authority}=${JSON.stringify(value)}`
+}
+
+/** Reports unequal readings, comparing composite values without depending on property order.
+ * @param symbol - Compared symbol
+ * @param local - Local reading
+ * @param authority - Pinned authority
+ * @param value - Authority reading
+ * @returns A drift description, or undefined on equality
+ */
+export function readConformanceDrift(
+	symbol: string,
+	local: unknown,
+	authority: string,
+	value: unknown,
+): string | undefined {
+	return isDeepStrictEqual(local, value)
+		? undefined
+		: formatConformanceDrift(symbol, authority, value)
+}
+
+/** Reads raw bytes only after their digest matches the pin.
+ * @param path - Mirror path
+ * @param digest - Expected SHA-256 digest
+ * @returns The verified bytes
+ * @throws Thrown when the digest differs or the file cannot be read.
+ */
+export function readMirror(path: string, digest: string): Uint8Array {
+	const bytes = readFileSync(path)
+	if (createHash('sha256').update(bytes).digest('hex') !== digest)
+		throw new Error(formatConformanceDrift(`${basename(path)} bytes`, 'SHA-256', digest))
+	return bytes
+}
+
+/** Holds the verified specification source. */
+export const WEBMCP_INDEX = readMirror(WEBMCP_INDEX_PATH, WEBMCP_INDEX_DIGEST)
+/** Holds the verified webref IDL. */
+export const WEBMCP_WEBREF = readMirror(WEBMCP_WEBREF_PATH, WEBMCP_WEBREF_DIGEST)
+/** Holds the verified raw domain cut. */
+export const WEBMCP_DOMAIN = readMirror(WEBMCP_DOMAIN_PATH, WEBMCP_DOMAIN_DIGEST)
+
+/** Decodes verified mirror bytes without rewriting them.
+ * @param bytes - Verified bytes
+ * @returns UTF-8 text
+ */
+export function readMirrorText(bytes: Uint8Array): string {
+	return new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+}
+
+/** Reads an IDL declaration block from a pinned text mirror.
+ * @param text - Mirror text
+ * @param name - Interface or dictionary name
+ * @returns The declaration body
+ * @throws Thrown when the declaration is absent.
+ */
+export function readIDLBlock(text: string, name: string): string {
+	const body = new RegExp(
+		`(?:interface|dictionary) ${name}(?: : \\w+)? \\{([\\s\\S]*?)\\n\\};`,
+	).exec(text)?.[1]
+	if (body === undefined) throw new Error(`Missing IDL block: ${name}`)
+	return body
+}
+
+/** Reads named records from one protocol collection.
+ * @param root - Protocol object
+ * @param key - Collection key
+ * @returns Records in mirror order
+ * @throws Thrown when the collection is malformed.
+ */
+export function readDomainRecords(
+	root: unknown,
+	key: string,
+): ReadonlyArray<Readonly<Record<string, unknown>>> {
+	const values = isRecord(root) ? root[key] : undefined
+	if (!Array.isArray(values) || !values.every(isRecord))
+		throw new Error(`Missing protocol collection: ${key}`)
+	return values
+}
+
+/** Finds a protocol record by its external name or id.
+ * @param records - Protocol records
+ * @param name - External name
+ * @returns The record
+ * @throws Thrown when absent.
+ */
+export function readDomainRecord(
+	records: ReadonlyArray<Readonly<Record<string, unknown>>>,
+	name: string,
+): Readonly<Record<string, unknown>> {
+	const record = records.find((entry) => entry['name'] === name || entry['id'] === name)
+	if (record === undefined) throw new Error(`Missing protocol record: ${name}`)
+	return record
+}
+
+/** Records property reads made by the real parser against a valid protocol value.
+ * @param parser - Production parser
+ * @param value - Valid protocol fixture
+ * @returns Sorted external property names read by the parser
+ */
+export function readParserFields(
+	parser: (value: unknown) => unknown,
+	value: Readonly<Record<string, unknown>>,
+): readonly string[] {
+	const names = new Set<string>()
+	parser(
+		new Proxy(value, {
+			get(target, key) {
+				if (typeof key === 'string') names.add(key)
+				return Reflect.get(target, key)
+			},
+		}),
+	)
+	return [...names].sort()
+}
+
+/** Holds a mirror-shaped tool with every optional coordinate populated. */
+export const WEBMCP_TOOL = Object.freeze({
+	name: 'search-cars',
+	description: 'Search cars',
+	frameId: 'main',
+	backendNodeId: 50,
+	inputSchema: { type: 'object', properties: { search: { type: 'string' } }, required: ['search'] },
+	annotations: {
+		readOnly: true,
+		untrustedContent: false,
+		consequential: true,
+		debugging: false,
+		autosubmit: true,
+	},
+	stackTrace: { callFrames: [] },
+})
+/** Holds the parsed domain authority. */
+export const WEBMCP_PROTOCOL: unknown = JSON.parse(readMirrorText(WEBMCP_DOMAIN))
+/** Holds the external tool fields the parser reads. */
+export const WEBMCP_TOOL_FIELDS = readParserFields(parseBrowserTool, WEBMCP_TOOL)
+/** Holds the external annotation fields the parser reads. */
+export const WEBMCP_ANNOTATION_FIELDS = readParserFields(
+	(annotations) => parseBrowserTool({ ...WEBMCP_TOOL, annotations }),
+	WEBMCP_TOOL.annotations,
+)
+/** Holds the external removal fields the parser reads. */
+export const WEBMCP_REMOVAL_FIELDS = readParserFields(parseBrowserRemoval, {
+	name: 'search-cars',
+	frameId: 'main',
+})
+/** Holds the external invocation fields the parser reads. */
+export const WEBMCP_INVOCATION_FIELDS = readParserFields(parseBrowserInvocation, {
+	invocationId: 'call',
+	toolName: 'search-cars',
+	frameId: 'main',
+	input: '{}',
+})
+/** Holds the external result fields the parser reads, including its exception fallback. */
+export const WEBMCP_RESULT_FIELDS = readParserFields(parseBrowserInvocationResult, {
+	invocationId: 'call',
+	status: 'Completed',
+	output: 'cars',
+	errorText: undefined,
+	exception: { description: 'failure' },
+})
+
+/** Builds field rows from every property in a protocol type, retaining explicit exclusions.
+ * @param name - Protocol type
+ * @param fields - Fields the production parser read
+ * @returns Ruled property comparisons
+ */
+export function buildDomainRows(
+	name: string,
+	fields: readonly string[],
+): readonly ConformanceRow[] {
+	return readDomainRecords(
+		readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'types'), name),
+		'properties',
+	).map((property): ConformanceRow => {
+		const key = property['name']
+		if (!isString(key)) throw new Error('Protocol property has no name')
+		return key === 'stackTrace'
+			? {
+					symbol: `${name}.${key}`,
+					expected: false,
+					model: fields.includes(key),
+					ruling: 'exclude',
+					closer:
+						'A developer diagnostics consumer; stackTrace is a developer datum excluded from the agent surface.',
+				}
+			: {
+					symbol: `${name}.${key}`,
+					expected: true,
+					model: fields.includes(key),
+					ruling: 'implement',
+				}
+	})
+}
+
+/** Rules every domain property against production parser reads. */
+export const WEBMCP_DOMAIN_ROWS: readonly ConformanceRow[] = Object.freeze([
+	...buildDomainRows('Tool', WEBMCP_TOOL_FIELDS),
+	...buildDomainRows('Annotation', WEBMCP_ANNOTATION_FIELDS),
+	...buildDomainRows('RemovedTool', WEBMCP_REMOVAL_FIELDS),
+	...['enable', 'disable', 'invokeTool', 'cancelInvocation'].map((name): ConformanceRow => ({
+		symbol: `command.${name}`,
+		expected: name,
+		model: readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'commands'), name)['name'],
+		ruling: 'implement',
+	})),
+	...['toolsAdded', 'toolsRemoved', 'toolInvoked', 'toolResponded'].map((name): ConformanceRow => ({
+		symbol: `event.${name}`,
+		expected: name,
+		model: readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'events'), name)['name'],
+		ruling: 'implement',
+	})),
+	{
+		symbol: 'InvocationStatus',
+		expected: ['Completed', 'Canceled', 'Error'],
+		model: readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'types'), 'InvocationStatus')[
+			'enum'
+		],
+		ruling: 'implement',
+	},
+	{
+		symbol: 'invokeTool.invocationId ordering',
+		expected: true,
+		model: String(
+			readDomainRecord(
+				readDomainRecords(
+					readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'commands'), 'invokeTool'),
+					'returns',
+				),
+				'invocationId',
+			)['description'],
+		).includes('Response is sent before tool events.'),
+		ruling: 'implement',
+	},
+	{
+		symbol: 'toolResponded.output trust',
+		expected: true,
+		model: /untrusted/i.test(
+			String(
+				readDomainRecord(
+					readDomainRecords(
+						readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'events'), 'toolResponded'),
+						'parameters',
+					),
+					'output',
+				)['description'],
+			),
+		),
+		ruling: 'implement',
+	},
+])
+
+/** Holds source text decoded from verified bytes. */
+export const WEBMCP_SOURCE = readMirrorText(WEBMCP_INDEX)
+/** Holds IDL text decoded from verified bytes. */
+export const WEBMCP_IDL = readMirrorText(WEBMCP_WEBREF)
+/** Rules the specification's interface and annotation members. */
+export const WEBMCP_SOURCE_ROWS: readonly ConformanceRow[] = Object.freeze([
+	...[
+		'registerTool',
+		'getTools',
+		'executeTool',
+		'ontoolchange',
+		'ontoolactivated',
+		'ontoolcancel',
+	].map((name): ConformanceRow => ({
+		symbol: `index.ModelContext.${name}`,
+		expected: true,
+		model: readIDLBlock(WEBMCP_SOURCE, 'ModelContext').includes(name),
+		ruling: 'implement',
+	})),
+	...['readOnlyHint', 'untrustedContentHint', 'consequentialHint', 'debugging'].map(
+		(name): ConformanceRow => ({
+			symbol: `index.ToolAnnotations.${name}`,
+			expected: true,
+			model: readIDLBlock(WEBMCP_SOURCE, 'ToolAnnotations').includes(`boolean ${name} = false;`),
+			ruling: 'implement',
+		}),
+	),
+	{
+		symbol: 'index.executeTool return',
+		expected: true,
+		model: readIDLBlock(WEBMCP_SOURCE, 'ModelContext').includes('Promise<DOMString> executeTool('),
+		ruling: 'implement',
+	},
+	{
+		symbol: 'index.name validation',
+		expected: true,
+		model:
+			/between 1 and 128, inclusive,[\s\S]*?ASCII alphanumeric[\s\S]*?code points[\s\S]*?U\+005F LOW LINE \(_\),\s*U\+002D HYPHEN-MINUS \(-\), and U\+002E FULL STOP \(\.\)/.test(
+				WEBMCP_SOURCE,
+			),
+		ruling: 'implement',
+	},
+	{
+		symbol: 'index.test suite',
+		expected: true,
+		model: /^Test Suite: https:\/\/wpt.fyi\/results\/webmcp$/m.test(WEBMCP_SOURCE),
+		ruling: 'implement',
+	},
+	{
+		symbol: 'BrowserToolAnnotation.autosubmit retained beyond source ToolAnnotations',
+		expected: true,
+		model:
+			parseBrowserTool(WEBMCP_TOOL)?.annotation.autosubmit === true &&
+			!readIDLBlock(WEBMCP_SOURCE, 'ToolAnnotations').includes('autosubmit'),
+		ruling: 'retain',
+		closer:
+			'Retains the protocol annotation while the specification has no autosubmit hint; it emits no outline mark.',
+	},
+])
+/** Rules webref's older interface against the package double. */
+export const WEBMCP_WEBREF_ROWS: readonly ConformanceRow[] = Object.freeze([
+	{
+		symbol: 'webref.handlers',
+		expected: ['ontoolchange'],
+		model: [
+			...readIDLBlock(WEBMCP_IDL, 'ModelContext').matchAll(/attribute EventHandler (\w+);/g),
+		].map((match) => match[1]),
+		ruling: 'implement',
+	},
+	{
+		symbol: 'webref.hints',
+		expected: ['readOnlyHint', 'untrustedContentHint', 'consequentialHint'],
+		model: [...readIDLBlock(WEBMCP_IDL, 'ToolAnnotations').matchAll(/boolean (\w+)/g)].map(
+			(match) => match[1],
+		),
+		ruling: 'implement',
+	},
+	...[
+		...readIDLBlock(WEBMCP_IDL, 'ModelContext').matchAll(
+			/\b(\w+)\(|attribute EventHandler (\w+);/g,
+		),
+	].map((match): ConformanceRow => ({
+		symbol: `double.${match[1] ?? match[2]}`,
+		expected: true,
+		model: (match[1] ?? match[2] ?? '') in ModelContextRegistry.prototype,
+		ruling: 'implement',
+	})),
+	...['ontoolactivated', 'ontoolcancel'].map((name): ConformanceRow => ({
+		symbol: `double.${name} ahead of webref`,
+		expected: true,
+		model:
+			name in ModelContextRegistry.prototype &&
+			!readIDLBlock(WEBMCP_IDL, 'ModelContext').includes(name),
+		ruling: 'retain',
+		closer: 'Retains the specification source member while webref catches up.',
+	})),
+])
+/** Records bounded gaps and the authority readings that support them. */
+export const WEBMCP_GAPS: readonly ConformanceRow[] = Object.freeze([
+	{
+		symbol:
+			'WPT cases remain outside the double: tests/mirrors/wpt-webmcp-e6ba3d7abea7.txt at e6ba3d7abea7 lists 88 entries, including 55 under webmcp/imperative/ and 28 under webmcp/declarative/',
+		expected: false,
+		model: globSync('tests/**/webmcp/{imperative,declarative}/**/*.{js,html}').length > 0,
+		ruling: 'exclude',
+		closer:
+			'A testharness runner under the Playwright provider must run these cases against the double.',
+	},
+	{
+		symbol:
+			'WPT directory provenance from tests/mirrors/wpt-webmcp-e6ba3d7abea7.txt at e6ba3d7abea7',
+		expected: { revision: true, entries: 88, imperative: 55, declarative: 28 },
+		model: {
+			revision: WEBMCP_WPT_LISTING.startsWith(
+				'# wpt webmcp/ tree at e6ba3d7abea784a1f03347bccaad76e7a6347eae ',
+			),
+			entries: WEBMCP_WPT_ENTRIES.length,
+			imperative: WEBMCP_WPT_ENTRIES.filter((path) => path.startsWith('webmcp/imperative/')).length,
+			declarative: WEBMCP_WPT_ENTRIES.filter((path) => path.startsWith('webmcp/declarative/'))
+				.length,
+		},
+		ruling: 'implement',
+	},
+	{
+		symbol:
+			'name charset and bound: provider ASCII alphanumerics _ - / 64; specification adds . / 128',
+		expected: true,
+		model:
+			WEBMCP_SOURCE.includes('between 1 and 128, inclusive') &&
+			WEBMCP_SOURCE.includes('U+002E FULL STOP (.)'),
+		ruling: 'retain',
+		closer:
+			'Retains the provider charset and 64 bound documented beside BROWSER_TOOL_NAME_PATTERN in src/core/constants.ts. The guide section Declared conformance gaps governs digest-pinned conformance and its refresh steps only.',
+	},
+	{
+		symbol: 'declarative toolname, tooldescription, toolautosubmit ahead of source',
+		expected: true,
+		model:
+			/<h3 id="declarative-api">[\s\S]*?This section is entirely a TODO/.test(WEBMCP_SOURCE) &&
+			!/toolname|tooldescription|toolautosubmit/.test(WEBMCP_SOURCE),
+		ruling: 'retain',
+		closer: 'The specification declarative section; the mark follows the Chrome explainer.',
+	},
+	{
+		symbol: 'webref lag: ontoolchange alone and three hints',
+		expected: false,
+		model:
+			/ontoolactivated|ontoolcancel/.test(readIDLBlock(WEBMCP_IDL, 'ModelContext')) ||
+			/debugging/.test(readIDLBlock(WEBMCP_IDL, 'ToolAnnotations')),
+		ruling: 'exclude',
+		closer: 'A webref extraction carrying the source handlers and debugging annotation.',
+	},
+])
+
+/** Rules every terminal status the registry must settle. */
+export const WEBMCP_STATUS_ROWS: readonly ConformanceRow[] = Object.freeze(
+	['Completed', 'Canceled', 'Error'].map((symbol): ConformanceRow => ({
+		symbol,
+		expected: true,
+		model:
+			Array.isArray(
+				readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'types'), 'InvocationStatus')['enum'],
+			) &&
+			String(
+				readDomainRecord(readDomainRecords(WEBMCP_PROTOCOL, 'types'), 'InvocationStatus')['enum'],
+			)
+				.split(',')
+				.includes(symbol),
+		ruling: 'implement',
+	})),
+)
+/** Rules annotations projected by the real registry adoption. */
+export const WEBMCP_MAPPING_ROWS: readonly ConformanceOperationRow[] = Object.freeze([
+	{
+		symbol: 'readOnly false, consequential true, untrustedContent false',
+		input: {
+			...WEBMCP_TOOL,
+			annotations: { readOnly: false, consequential: true, untrustedContent: false },
+		},
+		expected: { annotations: { pure: false, consequential: true, untrusted: true } },
+		model: readAdoptionModel,
+		ruling: 'retain',
+		closer:
+			'Retains the package trust boundary: every page tool is untrusted, regardless of its hint.',
+	},
+	{
+		symbol: 'readOnly true, consequential false, untrustedContent true',
+		input: {
+			...WEBMCP_TOOL,
+			annotations: { readOnly: true, consequential: false, untrustedContent: true },
+		},
+		expected: { annotations: { pure: true, consequential: false, untrusted: true } },
+		model: readAdoptionModel,
+		ruling: 'retain',
+		closer:
+			'Retains the package trust boundary: every page tool is untrusted, regardless of its hint.',
+	},
+	{
+		symbol: 'omitted annotations',
+		input: { name: 'search-cars', description: 'Search cars', frameId: 'main' },
+		expected: { annotations: { untrusted: true } },
+		model: readAdoptionModel,
+		ruling: 'retain',
+		closer:
+			'Retains untrusted when the page supplies no annotations; absent behavioral hints stay absent.',
+	},
+	{
+		symbol: 'omitted behavioral hints with untrustedContent true',
+		input: { ...WEBMCP_TOOL, annotations: { untrustedContent: true } },
+		expected: { annotations: { untrusted: true } },
+		model: readAdoptionModel,
+		ruling: 'retain',
+		closer: 'Retains untrusted without inventing pure or consequential hints.',
+	},
+	{
+		symbol: 'omitted behavioral hints with untrustedContent false',
+		input: { ...WEBMCP_TOOL, annotations: { untrustedContent: false } },
+		expected: { annotations: { untrusted: true } },
+		model: readAdoptionModel,
+		ruling: 'retain',
+		closer: 'Retains untrusted without inventing pure or consequential hints.',
+	},
+	{
+		symbol: 'autosubmit retained on the protocol tool without an adopted hint',
+		input: { ...WEBMCP_TOOL, annotations: { autosubmit: true } },
+		expected: { annotations: { untrusted: true }, autosubmit: true },
+		model: readAdoptionModel,
+		ruling: 'retain',
+		closer:
+			'Retains the protocol annotation on BrowserToolAnnotation without a tool hint or outline mark.',
+	},
+])
+/** Rules tools excluded at the provider and debugging boundaries. */
+export const WEBMCP_SKIP_ROWS: readonly ConformanceOperationRow[] = Object.freeze([
+	{
+		symbol: 'a.b',
+		input: { ...WEBMCP_TOOL, name: 'a.b', annotations: {} },
+		expected: { name: 'a.b', reason: 'pattern', present: false },
+		model: readSkipModel,
+		ruling: 'exclude',
+		closer:
+			'Retains the provider charset documented beside BROWSER_TOOL_NAME_PATTERN in src/core/constants.ts.',
+	},
+	{
+		symbol: 'a'.repeat(65),
+		input: { ...WEBMCP_TOOL, name: 'a'.repeat(65), annotations: {} },
+		expected: { name: 'a'.repeat(65), reason: 'pattern', present: false },
+		model: readSkipModel,
+		ruling: 'exclude',
+		closer:
+			'Retains the provider 64-character bound documented beside BROWSER_TOOL_NAME_PATTERN in src/core/constants.ts.',
+	},
+	{
+		symbol: 'debug',
+		input: { ...WEBMCP_TOOL, name: 'debug', annotations: { debugging: true } },
+		expected: { name: 'debug', reason: 'debugging', present: false },
+		model: readSkipModel,
+		ruling: 'exclude',
+		closer: 'Explicit developer-tool opt-in, outside the agent toolset.',
+	},
+])
+
+/** Supplies the observations for the shared store contract. */
+export const BROWSER_FILESYSTEM_STORE_CASES = Object.freeze<readonly BrowserFilesystemCase[]>([
+	{
+		title: 'retries a lock directory that vanishes after EEXIST and before readdir',
+		async *run() {
+			const { readdir } = await import('node:fs/promises')
+			const scratch = createScratch()
+			try {
+				const lock = join(scratch.path, 'journey.lock')
+				await mkdir(lock)
+				const checks = new BrowserFixtureValue(0)
+				const vanished = new BrowserFixtureValue(false)
+				const files = new BrowserLockObserver({ root: scratch.path }, async (path) => {
+					if (path !== lock) return
+					checks.value += 1
+					// The second check follows mkdir's EEXIST, immediately before reading the directory.
+					if (checks.value !== 2) return
+					await rmdir(lock)
+					vanished.value = true
+				})
+				yield {
+					comparison: 'identity',
+					actual: await files.lock(lock, async () => 'entered'),
+					expected: 'entered',
+					message: 'vanished directory retries acquisition',
+				}
+				yield {
+					comparison: 'identity',
+					actual: vanished.value,
+					expected: true,
+				}
+				yield {
+					comparison: 'equal',
+					actual: await readdir(scratch.path),
+					expected: [],
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'refuses save when a second store saved the name between record and save',
+		async *run() {
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const { BrowserToolset } = await import('@src/core')
+			const { BrowserJourneyToolset } = await import('../src/core/BrowserJourneyToolset.js')
+			const scratch = createScratch()
+			const first = new FileBrowserJourneyStore({ root: scratch.path })
+			const second = new FileBrowserJourneyStore({ root: scratch.path })
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const journeys = new BrowserJourneyToolset(toolset, { store: first })
+			try {
+				await toolset.start()
+				yield {
+					comparison: 'object',
+					actual: await toolset.tools.execute({
+						id: '1',
+						name: 'record',
+						arguments: { journey: 'check-ready' },
+					}),
+					expected: { success: true },
+				}
+				const saved = await second.set(createBrowserJourneyFixture())
+				await toolset.tools.execute({ id: 'wait', name: 'wait', arguments: { text: 'Ready' } })
+				yield {
+					comparison: 'object',
+					actual: await toolset.tools.execute({
+						id: '2',
+						name: 'save',
+						arguments: { description: 'Replacement' },
+					}),
+					expected: {
+						success: false,
+						error: 'A journey named "check-ready" is saved; call journeys, or record another name.',
+					},
+				}
+				yield {
+					comparison: 'equal',
+					actual: await first.get('check-ready'),
+					expected: saved,
+				}
+			} finally {
+				await journeys.destroy()
+				await toolset.destroy()
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'skips non-journey names without faults or hiding journeys beyond the cap',
+		async *run() {
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const store = new FileBrowserJourneyStore({ root: scratch.path, limit: 1 })
+				await mkdir(join(scratch.path, '.profiles'))
+				await mkdir(join(scratch.path, 'Not-a-journey'))
+				for (const name of ['alpine', 'harbor'])
+					await store.set(createBrowserJourneyFixture(undefined, { name }))
+				const first = await store.list()
+				const next = await store.list({ offset: first.entries.length })
+				yield {
+					comparison: 'equal',
+					actual: first.faults,
+					expected: [],
+				}
+				yield {
+					comparison: 'equal',
+					actual: next.faults,
+					expected: [],
+				}
+				yield {
+					comparison: 'identity',
+					actual: first.truncated,
+					expected: true,
+				}
+				yield {
+					comparison: 'identity',
+					actual: next.truncated,
+					expected: false,
+				}
+				yield {
+					comparison: 'equal',
+					actual: [...first.entries, ...next.entries].map((entry) => entry.journey.name),
+					expected: ['alpine', 'harbor'],
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'recovers a dead holder lock after refusing the live child',
+		timeout: 15000,
+		async *run() {
+			const { readdir } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			scratch.write(
+				'holder.ts',
+				`
+import { registerHooks } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
+import { once } from 'node:events'
+${SOURCE_HOOK}
+const { FileBrowserStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserStore.ts')).href)
+const files = new FileBrowserStore({ root: process.argv[2] })
+await files.lock(resolve(process.argv[2], 'check-ready', 'journey.lock'), async () => {
+	process.send?.('held')
+	await once(process, 'message')
+})
+		`,
+			)
+			const child = spawnProcess(
+				process.execPath,
+				[join(scratch.path, 'holder.ts'), scratch.path],
+				{ stdio: ['ignore', 'pipe', 'pipe', 'ipc'] },
+			)
+			try {
+				const ready = await waitForEvent<[unknown]>(
+					(listener) => {
+						child.once('message', listener)
+						return () => {
+							child.off('message', listener)
+						}
+					},
+					'child holds journey lock',
+					{ budget: 10000 },
+				)
+				yield {
+					comparison: 'identity',
+					actual: ready[0],
+					expected: 'held',
+				}
+				const store = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				const lock = join(scratch.path, journey.name, 'journey.lock')
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(journey)]),
+					expected: {
+						code: 'STORE_LOCKED',
+						message: `Journey is locked: ${lock}`,
+					},
+				}
+				yield {
+					comparison: 'equal',
+					actual: (await readdir(lock)).map(parseBrowserLockEntry),
+					expected: [child.pid],
+				}
+				const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
+					(listener) => {
+						child.once('exit', listener)
+						return () => {
+							child.off('exit', listener)
+						}
+					},
+					'lock holder dies',
+					{ budget: 10000 },
+				)
+				child.kill('SIGKILL')
+				await exit
+				yield {
+					comparison: 'identity',
+					actual: (await store.set(journey)).revision,
+					expected: 1,
+				}
+				yield {
+					comparison: 'object',
+					actual: await store.get(journey.name),
+					expected: { journey, revision: 1 },
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([readdir(lock)]),
+					expected: { code: 'ENOENT' },
+				}
+			} finally {
+				if (child.exitCode === null && child.signalCode === null) {
+					const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
+						(listener) => {
+							child.once('exit', listener)
+							return () => {
+								child.off('exit', listener)
+							}
+						},
+						'terminated lock holder',
+						{ budget: 10000 },
+					)
+					child.kill('SIGKILL')
+					await exit
+				}
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'admits exactly one of two processes that observed the same dead holder',
+		timeout: 15000,
+		async *run() {
+			const { readdir } = await import('node:fs/promises')
+			const scratch = createScratch()
+			const children: ChildProcess[] = []
+			try {
+				const lock = join(scratch.path, 'journey.lock')
+				const dead = formatBrowserLockEntry(
+					readExitedProcessId(),
+					'11111111-1111-4111-8111-111111111111',
+				)
+				await mkdir(lock)
+				await writeFile(join(lock, dead), '')
+				const script = scratch.write('recover.ts', BROWSER_LOCK_RECOVERER)
+				while (children.length < 2)
+					children.push(
+						spawnProcess(process.execPath, [script, scratch.path, dead], {
+							stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+						}),
+					)
+				yield {
+					comparison: 'equal',
+					actual: await Promise.all(children.map((child) => waitForBrowserChild(child))),
+					expected: ['observed', 'observed'],
+				}
+				const [first, second] = children
+				if (first === undefined || second === undefined) throw new Error('Missing recoverers')
+				const entered = waitForBrowserChild(first)
+				first.send('reclaim')
+				yield {
+					comparison: 'identity',
+					actual: await entered,
+					expected: 'entered',
+				}
+				const held = await readdir(lock)
+				yield {
+					comparison: 'equal',
+					actual: held.map(parseBrowserLockEntry),
+					expected: [first.pid],
+				}
+				const refused = waitForBrowserChild(second)
+				second.send('reclaim')
+				yield {
+					comparison: 'identity',
+					actual: await refused,
+					expected: 'STORE_LOCKED',
+					message: 'the second recoverer cannot enter while the first holds',
+				}
+				yield {
+					comparison: 'equal',
+					actual: await readdir(lock),
+					expected: held,
+					message: 'reclaim preserves the live winner',
+				}
+				const released = waitForBrowserChild(first)
+				first.send('release')
+				yield {
+					comparison: 'identity',
+					actual: await released,
+					expected: 'released',
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([readdir(lock)]),
+					expected: { code: 'ENOENT' },
+				}
+			} finally {
+				await Promise.all(children.map((child) => stopBrowserChild(child)))
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'prevents competing processes from both saving the same expected revision',
+		timeout: 15000,
+		async *run() {
+			const { spawn } = await import('node:child_process')
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			const children: ChildProcess[] = []
+			try {
+				const store = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				await store.set(journey)
+				scratch.write(
+					'race.ts',
+					`
+import { registerHooks } from 'node:module'
+import { pathToFileURL } from 'node:url'
+import { resolve } from 'node:path'
+${SOURCE_HOOK}
+const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
+const store = new FileBrowserJourneyStore({ root: process.argv[2] })
+process.once('message', async (journey) => {
+	try {
+		const saved = await store.set(journey, { revision: 1 })
+		process.send?.({ outcome: 'saved', revision: saved.revision })
+	} catch (error) {
+		process.send?.({ outcome: 'refused', code: error.code })
+	} finally { process.disconnect?.() }
+})
+process.send?.({ outcome: 'ready' })
+		`,
+				)
+				while (children.length < 2)
+					children.push(
+						spawn(process.execPath, [join(scratch.path, 'race.ts'), scratch.path], {
+							stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+						}),
+					)
+				const exits = children.map((child) =>
+					waitForEvent<[number | null, NodeJS.Signals | null]>(
+						(listener) => {
+							child.once('exit', listener)
+							return () => {
+								child.off('exit', listener)
+							}
+						},
+						'file store child exits',
+						{ budget: 10000 },
+					),
+				)
+				const ready = await Promise.all(
+					children.map((child) =>
+						waitForEvent<[unknown]>(
+							(listener) => {
+								child.once('message', listener)
+								return () => {
+									child.off('message', listener)
+								}
+							},
+							'file store child ready',
+							{ budget: 10000 },
+						),
+					),
+				)
+				yield {
+					comparison: 'equal',
+					actual: ready.map((event) => event[0]),
+					expected: [{ outcome: 'ready' }, { outcome: 'ready' }],
+				}
+				const answers = children.map((child) =>
+					waitForEvent<[unknown]>(
+						(listener) => {
+							child.once('message', listener)
+							return () => {
+								child.off('message', listener)
+							}
+						},
+						'file store child result',
+						{ budget: 10000 },
+					),
+				)
+				for (const child of children) child.send(journey)
+				const results = (await Promise.all(answers)).map((event) => event[0])
+				const saved = results.filter((value) => isRecord(value) && value['outcome'] === 'saved')
+				yield {
+					comparison: 'maximum',
+					actual: saved.length,
+					expected: 1,
+				}
+				yield {
+					comparison: 'equal',
+					actual: saved,
+					expected: saved.map(() => ({ outcome: 'saved', revision: 2 })),
+				}
+				yield {
+					comparison: 'length',
+					actual: results.filter(
+						(value) =>
+							isRecord(value) &&
+							value['outcome'] === 'refused' &&
+							['STORE_LOCKED', 'JOURNEY_STALE'].includes(String(value['code'])),
+					),
+					expected: 2 - saved.length,
+				}
+				yield {
+					comparison: 'equal',
+					actual: await Promise.all(exits),
+					expected: [
+						[0, null],
+						[0, null],
+					],
+				}
+				yield {
+					comparison: 'identity',
+					actual: (await store.get(journey.name))?.revision,
+					expected: 1 + saved.length,
+				}
+				// Publication can overlap and make both holders refuse. A later uncontended
+				// write must still advance exactly once, then reject the stale expectation.
+				yield {
+					comparison: 'identity',
+					actual: (await store.set(journey, { revision: 1 + saved.length })).revision,
+					expected: 2 + saved.length,
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(journey, { revision: 1 + saved.length })]),
+					expected: {
+						code: 'JOURNEY_STALE',
+					},
+				}
+			} finally {
+				for (const child of children) {
+					if (child.exitCode === null && child.signalCode === null) {
+						const exit = waitForEvent<[number | null, NodeJS.Signals | null]>(
+							(listener) => {
+								child.once('exit', listener)
+								return () => {
+									child.off('exit', listener)
+								}
+							},
+							'terminated file store child',
+							{ budget: 10000 },
+						)
+						child.kill()
+						await exit
+					}
+				}
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'reopens journeys and runs from the same path',
+		async *run() {
+			const { FileBrowserJourneyStore, FileBrowserRunStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const options = { root: scratch.path }
+				const journeys = new FileBrowserJourneyStore(options)
+				const runs = new FileBrowserRunStore(options)
+				const journey = createBrowserJourneyFixture()
+				const saved = await journeys.set(journey)
+				const slot = await runs.create(BROWSER_RUN_FIXTURE.journey.name)
+				const run = { ...BROWSER_RUN_FIXTURE, id: slot.id }
+				await runs.set(run)
+				yield {
+					comparison: 'equal',
+					actual: await new FileBrowserJourneyStore(options).get(journey.name),
+					expected: saved,
+				}
+				yield {
+					comparison: 'equal',
+					actual: await new FileBrowserRunStore(options).get(run.journey.name, run.id),
+					expected: run,
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'refuses corrupt files rather than returning absence',
+		async *run() {
+			const { FileBrowserJourneyStore, FileBrowserRunStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const journeys = new FileBrowserJourneyStore({ root: scratch.path })
+				const runs = new FileBrowserRunStore({ root: scratch.path })
+				const saved = await journeys.set(createBrowserJourneyFixture())
+				const slot = await runs.create(BROWSER_RUN_FIXTURE.journey.name)
+				const run = { ...BROWSER_RUN_FIXTURE, id: slot.id }
+				await runs.set(run)
+				const journeyPath = join(scratch.path, saved.journey.name, 'journey.json')
+				const runPath = join(scratch.path, run.journey.name, 'runs', run.id, 'run.json')
+				for (const corrupt of [
+					'',
+					'{',
+					'{bad json}',
+					'{}',
+					JSON.stringify({ revision: 1, journey: {} }),
+					JSON.stringify({ format: 1, journey: {} }),
+				]) {
+					await writeFile(journeyPath, corrupt)
+					await writeFile(runPath, corrupt)
+					yield {
+						comparison: 'path',
+						actual: await Promise.allSettled([journeys.get(saved.journey.name)]),
+						expected: { code: 'STORE_FILE', path: journeyPath },
+					}
+					yield {
+						comparison: 'path',
+						actual: await Promise.allSettled([runs.get(run.journey.name, run.id)]),
+						expected: { code: 'STORE_FILE', path: runPath },
+					}
+				}
+				await writeFile(
+					journeyPath,
+					JSON.stringify({ ...saved, journey: { ...saved.journey, format: 9 } }),
+				)
+				await writeFile(runPath, JSON.stringify({ ...run, format: 9 }))
+				yield {
+					comparison: 'path',
+					actual: await Promise.allSettled([journeys.get(saved.journey.name)]),
+					expected: { code: 'STORE_FORMAT', path: journeyPath },
+				}
+				yield {
+					comparison: 'path',
+					actual: await Promise.allSettled([runs.get(run.journey.name, run.id)]),
+					expected: { code: 'STORE_FORMAT', path: runPath },
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'reports chmod 000 permission errors from a non-root child with the denied path',
+		async *run() {
+			yield {
+				comparison: 'skip',
+				actual: !supportsMode(),
+				expected: 'supportsMode reports that chmod permission bits do not round-trip on this host',
+			}
+			const { chmod, stat } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore, FileBrowserRunStore } = await import('@src/server')
+			const root = process.getuid?.() === 0
+			const account = root
+				? readFileSync('/etc/passwd', 'utf8')
+						.split(/\r\n|\n/)
+						.find((line) => line.startsWith('nobody:'))
+						?.split(':')
+				: undefined
+			if (root && account === undefined) {
+				yield {
+					comparison: 'skip',
+					actual: true,
+					expected: 'The nobody account is absent; root bypasses chmod 000 mode bits',
+				}
+				return
+			}
+			const uid = account === undefined ? undefined : Number(account[2])
+			const gid = account === undefined ? undefined : Number(account[3])
+			if (
+				root &&
+				(uid === undefined || uid <= 0 || !Number.isSafeInteger(uid) || !Number.isSafeInteger(gid))
+			)
+				throw new Error('The nobody account must have a non-root uid and an integer gid')
+			const scratch = createScratch()
+			try {
+				const journeys = new FileBrowserJourneyStore({ root: scratch.path })
+				const runs = new FileBrowserRunStore({ root: scratch.path })
+				const saved = await journeys.set(createBrowserJourneyFixture())
+				const slot = await runs.create(BROWSER_RUN_FIXTURE.journey.name)
+				await runs.set({ ...BROWSER_RUN_FIXTURE, id: slot.id })
+				const paths = [
+					join(scratch.path, saved.journey.name, 'journey.json'),
+					join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs', slot.id, 'run.json'),
+				]
+				// The child must reach the files so denial measures file reads, not directory traversal.
+				await chmod(scratch.path, 0o755)
+				await chmod(join(scratch.path, saved.journey.name), 0o755)
+				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name), 0o755)
+				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs'), 0o755)
+				await chmod(join(scratch.path, BROWSER_RUN_FIXTURE.journey.name, 'runs', slot.id), 0o755)
+				const control = scratch.write('read-control', 'readable')
+				await chmod(control, 0o644)
+				const script = scratch.write(
+					'access.ts',
+					`
+import { strict as assert } from 'node:assert'
+import { readFile, stat } from 'node:fs/promises'
+import { registerHooks } from 'node:module'
+import { resolve, join } from 'node:path'
+import { pathToFileURL } from 'node:url'
+${SOURCE_HOOK}
+assert.notEqual(process.getuid?.(), 0)
+const { FileBrowserJourneyStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserJourneyStore.ts')).href)
+const { FileBrowserRunStore } = await import(pathToFileURL(resolve('src/server/stores/FileBrowserRunStore.ts')).href)
+const [root, journey, run, id] = process.argv.slice(2)
+assert.equal(await readFile(join(root, 'read-control'), 'utf8'), 'readable')
+const journeys = new FileBrowserJourneyStore({ root })
+const runs = new FileBrowserRunStore({ root })
+for (const path of [join(root, journey, 'journey.json'), join(root, run, 'runs', id, 'run.json')]) {
+	assert.equal((await stat(path)).mode & 0o777, 0)
+	await assert.rejects(readFile(path), { code: 'EACCES' })
+}
+const outcomes = await Promise.allSettled([journeys.get(journey), runs.get(run, id)])
+console.log(JSON.stringify({
+	uid: process.getuid?.(), gid: process.getgid?.(),
+	outcomes: outcomes.map((outcome) => outcome.status === 'rejected'
+		? { status: outcome.status, code: outcome.reason.code, message: outcome.reason.message }
+		: { status: outcome.status })
+}))
+		`,
+				)
+				await chmod(script, 0o644)
+				for (const path of paths) {
+					yield {
+						comparison: 'defined',
+						actual: parseJSON(readFileSync(path, 'utf8')),
+					}
+					await chmod(path, 0)
+					yield {
+						comparison: 'identity',
+						actual: (await stat(path)).mode & 0o777,
+						expected: 0,
+					}
+				}
+				try {
+					const child = spawnSync(
+						process.execPath,
+						[script, scratch.path, saved.journey.name, BROWSER_RUN_FIXTURE.journey.name, slot.id],
+						{ uid, gid, encoding: 'utf8', timeout: 10000 },
+					)
+					yield {
+						comparison: 'undefined',
+						actual: child.error,
+					}
+					yield {
+						comparison: 'equal',
+						actual: { status: child.status, stderr: child.stderr },
+						expected: { status: 0, stderr: '' },
+					}
+					yield {
+						comparison: 'access',
+						actual: parseJSON(child.stdout),
+						expected: { uid: uid ?? process.getuid?.(), gid: gid ?? process.getgid?.(), paths },
+					}
+				} finally {
+					for (const path of paths) await chmod(path, 0o600)
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'allows one exclusive creator across independent file store instances',
+		async *run() {
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const first = new FileBrowserJourneyStore({ root: scratch.path })
+				const second = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				const results = await Promise.allSettled([
+					first.set(journey, { exclusive: true }),
+					second.set({ ...journey, description: 'Second' }, { exclusive: true }),
+				])
+				yield {
+					comparison: 'length',
+					actual: results.filter((result) => result.status === 'fulfilled'),
+					expected: 1,
+				}
+				yield {
+					comparison: 'length',
+					actual: results.filter((result) => result.status === 'rejected'),
+					expected: 1,
+				}
+				yield {
+					comparison: 'identity',
+					actual: (await first.get(journey.name))?.revision,
+					expected: 1,
+				}
+				yield {
+					comparison: 'equal',
+					actual: await first.get(journey.name),
+					expected: await second.get(journey.name),
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'refuses a lost update across instances and preserves revisions after deletion',
+		async *run() {
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const first = new FileBrowserJourneyStore({ root: scratch.path })
+				const second = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				await first.set(journey)
+				const outcomes = await Promise.allSettled([
+					first.set({ ...journey, description: 'First' }, { revision: 1 }),
+					second.set({ ...journey, description: 'Second' }, { revision: 1 }),
+				])
+				yield {
+					comparison: 'length',
+					actual: outcomes.filter((outcome) => outcome.status === 'fulfilled'),
+					expected: 1,
+				}
+				yield {
+					comparison: 'length',
+					actual: outcomes.filter((outcome) => outcome.status === 'rejected'),
+					expected: 1,
+				}
+				yield {
+					comparison: 'identity',
+					actual: (await first.get(journey.name))?.revision,
+					expected: 2,
+				}
+				await second.delete(journey.name)
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([first.set(journey, { revision: 2 })]),
+					expected: {
+						code: 'JOURNEY_STALE',
+					},
+				}
+				yield {
+					comparison: 'identity',
+					actual: (await second.set(journey)).revision,
+					expected: 3,
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([first.set(journey, { revision: 2 })]),
+					expected: {
+						code: 'JOURNEY_STALE',
+					},
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'refuses a held lock before reading the expected revision',
+		async *run() {
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const store = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				await store.set(journey)
+				const lock = join(scratch.path, journey.name, 'journey.lock')
+				await mkdir(lock)
+				const entry = join(
+					lock,
+					formatBrowserLockEntry(process.pid, '11111111-1111-4111-8111-111111111111'),
+				)
+				await writeFile(entry, '')
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.set(journey, { exclusive: true })]),
+					expected: {
+						code: 'STORE_LOCKED',
+					},
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([store.delete(journey.name)]),
+					expected: {
+						code: 'STORE_LOCKED',
+					},
+				}
+				await unlink(entry)
+				await rmdir(lock)
+				yield {
+					comparison: 'identity',
+					actual: (await store.set(journey, { revision: 1 })).revision,
+					expected: 2,
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'keeps the previous revision and removes temporary files after a failed write',
+		async *run() {
+			const { readdir } = await import('node:fs/promises')
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const store = new FileBrowserJourneyStore({ root: scratch.path })
+				const journey = createBrowserJourneyFixture()
+				const saved = await store.set(journey)
+				const revision = join(scratch.path, journey.name, 'revision')
+				// A real directory at the counter path refuses the replacement before any data is lost.
+				await unlink(revision)
+				await mkdir(revision)
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([
+						store.set({ ...journey, description: 'Uncommitted' }, { revision: 1 }),
+					]),
+					expected: { code: 'STORE_FILE' },
+				}
+				yield {
+					comparison: 'equal',
+					actual: await store.get(journey.name),
+					expected: saved,
+				}
+				yield {
+					comparison: 'equal',
+					actual: (await readdir(join(scratch.path, journey.name))).sort(),
+					expected: ['journey.json', 'revision'],
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'pages sorted readable journeys with a cap, truncation, and faults',
+		async *run() {
+			const { FileBrowserJourneyStore } = await import('@src/server')
+			const scratch = createScratch()
+			try {
+				const store = new FileBrowserJourneyStore({ root: scratch.path, limit: 1 })
+				for (const name of ['zebra', 'broken', 'alpine', 'harbor'])
+					await store.set(createBrowserJourneyFixture(undefined, { name }))
+				await writeFile(join(scratch.path, 'broken', 'journey.json'), '{')
+				const first = await store.list({ limit: 999 })
+				yield {
+					comparison: 'equal',
+					actual: first.entries.map((entry) => entry.journey.name),
+					expected: ['alpine'],
+				}
+				yield {
+					comparison: 'identity',
+					actual: first.truncated,
+					expected: true,
+				}
+				yield {
+					comparison: 'equal',
+					actual: first.faults,
+					expected: [{ name: 'broken', reason: 'Malformed journey revision' }],
+				}
+				const next = await store.list({ offset: 1 })
+				yield {
+					comparison: 'equal',
+					actual: next.entries.map((entry) => entry.journey.name),
+					expected: ['harbor'],
+				}
+				yield {
+					comparison: 'identity',
+					actual: next.truncated,
+					expected: true,
+				}
+				yield {
+					comparison: 'identity',
+					actual: (await store.list({ offset: 2 })).truncated,
+					expected: false,
+				}
+			} finally {
+				scratch.destroy()
+			}
+		},
+	},
+	{
+		title: 'refuses reserved and escaping names before filesystem access',
+		async *run() {
+			const { FileBrowserJourneyStore, FileBrowserRunStore } = await import('@src/server')
+			const scratch = createScratch()
+			const journeys = new FileBrowserJourneyStore({ root: scratch.path })
+			const runs = new FileBrowserRunStore({ root: scratch.path })
+			scratch.destroy()
+			for (const name of ['con', 'aux', 'com1', 'lpt9', '../escape', 'two/parts', 'UPPER']) {
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([journeys.get(name)]),
+					expected: { code: 'STORE_PATH' },
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([
+						journeys.set(createBrowserJourneyFixture([], { name })),
+					]),
+					expected: { code: 'STORE_PATH' },
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([journeys.delete(name)]),
+					expected: { code: 'STORE_PATH' },
+				}
+				yield {
+					comparison: 'rejected',
+					actual: await Promise.allSettled([runs.create(name)]),
+					expected: { code: 'STORE_PATH' },
+				}
+			}
+		},
+	},
+])

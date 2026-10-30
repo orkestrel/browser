@@ -1,9 +1,10 @@
+import { BrowserFixtureValue } from '../../setup.js'
 /**
  * src/server/factories.ts tests.
  *
  * `createFileBrowserWriter` writes real bytes to a real temp directory (no
  * fake filesystem). `createWebSocketCDPTransport` and `createBrowser` are checked for
- * shape and real connectivity against the in-process CDP test server.
+ * shape and real connectivity against the in-process CDP test server.required.
  */
 
 import type { ScratchInterface } from '@orkestrel/test/server'
@@ -22,21 +23,21 @@ import {
 import { BROWSER_RUN_FIXTURE, createBrowserJourneyFixture } from '../../setup.js'
 import { createCDPTestServer } from '../../setupServer.js'
 
-let server: CDPTestServerInterface | undefined
-let scratch: ScratchInterface | undefined
+const server = new BrowserFixtureValue<CDPTestServerInterface | undefined>(undefined)
+const scratch = new BrowserFixtureValue<ScratchInterface | undefined>(undefined)
 
 afterEach(async () => {
-	await server?.close()
-	server = undefined
-	scratch?.destroy()
-	scratch = undefined
+	await server.value?.close()
+	server.value = undefined
+	scratch.value?.destroy()
+	scratch.value = undefined
 })
 
 describe('createFileBrowserWriter', () => {
 	it('writes real bytes to a real file, creating parent dirs', async () => {
-		scratch = createScratch({ prefix: 'scsr-screenshot-' })
+		scratch.value = createScratch({ prefix: 'scsr-screenshot-' })
 		const writer = createFileBrowserWriter()
-		const path = join(scratch.path, 'nested', 'shot.png')
+		const path = join(scratch.required.path, 'nested', 'shot.png')
 		const bytes = new Uint8Array([137, 80, 78, 71])
 
 		await writer.write(path, bytes)
@@ -46,9 +47,9 @@ describe('createFileBrowserWriter', () => {
 	})
 
 	it('overwrites an existing file at the same path', async () => {
-		scratch = createScratch({ prefix: 'scsr-screenshot-' })
+		scratch.value = createScratch({ prefix: 'scsr-screenshot-' })
 		const writer = createFileBrowserWriter()
-		const path = join(scratch.path, 'shot.png')
+		const path = join(scratch.required.path, 'shot.png')
 
 		await writer.write(path, new Uint8Array([1, 2, 3]))
 		await writer.write(path, new Uint8Array([4, 5]))
@@ -68,8 +69,8 @@ describe('createWebSocketCDPTransport', () => {
 	})
 
 	it('connects to a real in-process CDP WebSocket endpoint', async () => {
-		server = await createCDPTestServer()
-		const transport = createWebSocketCDPTransport({ url: server.endpoint })
+		server.value = await createCDPTestServer()
+		const transport = createWebSocketCDPTransport({ url: server.required.endpoint })
 		await transport.start()
 		await expect(transport.send('{}')).resolves.toBeUndefined()
 		await transport.close()
@@ -94,21 +95,24 @@ describe('createBrowser', () => {
 
 describe('file store factories', () => {
 	it('creates a journey store that persists a revision', async () => {
-		scratch = createScratch()
-		const store = createFileBrowserJourneyStore({ root: scratch.path })
+		scratch.value = createScratch()
+		const store = createFileBrowserJourneyStore({ root: scratch.required.path })
 		const saved = await store.set(createBrowserJourneyFixture())
 		expect(
-			await createFileBrowserJourneyStore({ root: scratch.path }).get(saved.journey.name),
+			await createFileBrowserJourneyStore({ root: scratch.required.path }).get(saved.journey.name),
 		).toEqual(saved)
 	})
 	it('creates a run store that allocates and persists a run', async () => {
-		scratch = createScratch()
-		const store = createFileBrowserRunStore({ root: scratch.path })
+		scratch.value = createScratch()
+		const store = createFileBrowserRunStore({ root: scratch.required.path })
 		const slot = await store.create(BROWSER_RUN_FIXTURE.journey.name)
 		const run = { ...BROWSER_RUN_FIXTURE, id: slot.id }
 		await store.set(run)
 		expect(
-			await createFileBrowserRunStore({ root: scratch.path }).get(run.journey.name, run.id),
+			await createFileBrowserRunStore({ root: scratch.required.path }).get(
+				run.journey.name,
+				run.id,
+			),
 		).toEqual(run)
 	})
 })

@@ -362,13 +362,16 @@ export class BrowserCodegen implements BrowserRecorderInterface {
 			(gesture.control === 'text' || gesture.control === 'password')
 		) {
 			if (this.#pending?.key !== key) this.#flush()
-			let text = gesture.secret ? this.#pending?.step.arguments['text'] : gesture.value
-			if (gesture.secret && !isRecord(text)) {
-				const taken = collectBrowserJourneyTextBindings(this.#steps)
-				text = {
-					parameter: deriveBrowserJourneySecret(isString(target.name) ? target.name : '', taken),
-				}
-			}
+			const value = gesture.secret ? this.#pending?.step.arguments['text'] : gesture.value
+			const text =
+				gesture.secret && !isRecord(value)
+					? {
+							parameter: deriveBrowserJourneySecret(
+								isString(target.name) ? target.name : '',
+								collectBrowserJourneyTextBindings(this.#steps),
+							),
+						}
+					: value
 			this.#pending = { key, step: { action: 'type', arguments: { text: text ?? '' }, target } }
 			return
 		}

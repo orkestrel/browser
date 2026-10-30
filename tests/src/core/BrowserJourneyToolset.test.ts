@@ -1,9 +1,5 @@
-import type {
-	BrowserJourney,
-	BrowserJourneyRevision,
-	BrowserJourneyStoreInterface,
-} from '@src/core'
-import type { CDPSentMessage } from '../../setup.js'
+import type { BrowserJourney } from '@src/core'
+import type { BrowserJourneyReadMode, CDPSentMessage } from '../../setup.js'
 import { BrowserJourneyToolset } from '../../../src/core/BrowserJourneyToolset.js'
 import { describe, expect, it } from 'vitest'
 import { createContract, schemaToShape } from '@orkestrel/contract'
@@ -13,11 +9,10 @@ import {
 	createRecorder,
 	readProperty,
 	requireValue,
-	waitForAbort,
 	waitForCondition,
 } from '@orkestrel/test'
 import {
-	BROWSER_JOURNEY_EMPTY_LISTING,
+	BROWSER_JOURNEY_EMPTY_LIST,
 	BROWSER_JOURNEY_TOOL_NAMES,
 	BROWSER_TOOL_COPY,
 	BrowserError,
@@ -28,9 +23,16 @@ import {
 	createMemoryBrowserJourneyStore,
 } from '@src/core'
 import {
+	BrowserFixtureValue,
+	createBrowserFaultJourneyStore,
+	createBrowserObservedJourneyStore,
+	createBrowserStaleJourneyStore,
+	createBrowserInertJourneyStore,
+	createBrowserHeldJourneyStore,
+	createBrowserAbortedJourneyStore,
+	createBrowserAbortedJourneyWriteStore,
 	BROWSER_JOURNEY_FIXTURE,
 	BROWSER_JOURNEY_EDIT_SHAPES,
-	BROWSER_STORE_FAULT_FIXTURE,
 	BROWSER_PREPARATION_CASES,
 	BROWSER_JOURNEY_LISTING,
 	BROWSER_RUN_FIXTURE,
@@ -48,14 +50,14 @@ import {
 
 describe('BrowserJourneyToolset', () => {
 	it('stable links: edits with a carried link and refuses a gone reference by its last name', async () => {
-		let navigated = false
+		const navigated = new BrowserFixtureValue(false)
 		const fixture = await createBrowserElementFixture({
 			local: true,
 			accessibility: (message) =>
 				fixture.transport.reply(
 					message.id,
 					buildBrowserReferenceTree(
-						navigated
+						navigated.value
 							? BROWSER_STABLE_REFERENCE_ELEMENTS.slice(0, 3)
 							: BROWSER_STABLE_REFERENCE_ELEMENTS,
 					),
@@ -71,7 +73,7 @@ describe('BrowserJourneyToolset', () => {
 		try {
 			await toolset.start()
 			expect(await toolset.read()).toContain('searchbox "Search products" [ref=e4]')
-			navigated = true
+			navigated.value = true
 			emitBrowserNavigation(
 				fixture.transport,
 				'session-main',
@@ -368,7 +370,7 @@ describe('BrowserJourneyToolset', () => {
 			const miss = await tool.execute({ from: 2, search: 'Missing' }, context)
 			expect(miss).toContain('No line from 2 on matches "Missing".')
 			expect(miss).toContain('end of listing]')
-			for (let index = 0; index < 60; index += 1)
+			for (const index of Array.from({ length: 60 }).keys())
 				await store.set({
 					...createBrowserJourneyFixture([{ action: 'wait', arguments: { text: 'Ready' } }]),
 					name: 'cedar-' + index,
@@ -910,16 +912,7 @@ describe('BrowserJourneyToolset', () => {
 	})
 	it('h2c renders structured faults without scraping the reason and deduplicates names', async () => {
 		const memory = createMemoryBrowserJourneyStore()
-		const store: BrowserJourneyStoreInterface = {
-			get: memory.get.bind(memory),
-			set: memory.set.bind(memory),
-			delete: memory.delete.bind(memory),
-			list: async () => ({
-				entries: [],
-				truncated: false,
-				faults: [BROWSER_STORE_FAULT_FIXTURE, BROWSER_STORE_FAULT_FIXTURE],
-			}),
-		}
+		const store = createBrowserFaultJourneyStore(memory)
 		const toolset = new BrowserToolset(createBrowserViewDouble())
 		const journeys = new BrowserJourneyToolset(toolset, { store })
 		try {
@@ -1442,7 +1435,7 @@ describe('BrowserJourneyToolset', () => {
 				expect(journeys.recording).toBe('check-form')
 				expect(
 					await toolset.tools.execute({ id: '4', name: 'journeys', arguments: { from: 1 } }),
-				).toMatchObject({ value: BROWSER_JOURNEY_EMPTY_LISTING })
+				).toMatchObject({ value: BROWSER_JOURNEY_EMPTY_LIST })
 				const locked = await toolset.tools.execute({
 					id: '6',
 					name: 'save',
@@ -1474,21 +1467,7 @@ describe('BrowserJourneyToolset', () => {
 			const memory = createMemoryBrowserJourneyStore()
 			await memory.set(createBrowserJourneyFixture())
 			const calls = createRecorder<readonly [string]>()
-			const store: BrowserJourneyStoreInterface = {
-				get: (name, options) => {
-					calls.handler('get')
-					return memory.get(name, options)
-				},
-				set: (journey, options) => {
-					calls.handler('set')
-					return memory.set(journey, options)
-				},
-				delete: memory.delete.bind(memory),
-				list: (options) => {
-					calls.handler('list')
-					return memory.list(options)
-				},
-			}
+			const store = createBrowserObservedJourneyStore(memory, calls)
 			const runs = new MemoryBrowserRunStore()
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store, runs, readonly: true })
@@ -1699,21 +1678,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 			const memory = createMemoryBrowserJourneyStore()
 			await memory.set(createBrowserJourneyFixture())
 			const scripted: Array<'stale' | 'locked'> = []
-			const store: BrowserJourneyStoreInterface = {
-				get: async (name, options) => {
-					const read = await memory.get(name, options)
-					// Another writer saves the journey between this read and the edit's write.
-					if (read !== undefined && scripted[0] === 'stale') await memory.set(read.journey)
-					return read
-				},
-				set: async (journey, options) => {
-					if (scripted.shift() === 'locked')
-						throw new BrowserError('STORE_LOCKED', 'Journey check-ready is locked.')
-					return memory.set(journey, options)
-				},
-				delete: memory.delete.bind(memory),
-				list: memory.list.bind(memory),
-			}
+			const store = createBrowserStaleJourneyStore(memory, scripted)
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			await toolset.start()
@@ -1824,12 +1789,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				const memory = createMemoryBrowserJourneyStore()
 				const journey = structuredClone(candidate.journey)
 				if (candidate.corrupt !== undefined) Reflect.set(journey, ...candidate.corrupt)
-				const store: BrowserJourneyStoreInterface = {
-					get: async () => ({ journey }),
-					set: memory.set.bind(memory),
-					list: memory.list.bind(memory),
-					delete: memory.delete.bind(memory),
-				}
+				const store = createBrowserInertJourneyStore(memory, journey)
 				const view = createBrowserViewDouble()
 				const toolset = new BrowserToolset(view)
 				const journeys = new BrowserJourneyToolset(toolset, { store })
@@ -1939,28 +1899,62 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 			}
 		})
 
+		it('refuses a second replay issued in the same tick and releases its replay name', async () => {
+			const memory = createMemoryBrowserJourneyStore()
+			await memory.set(createBrowserJourneyFixture())
+			const pending = Promise.withResolvers<void>()
+			const mode = new BrowserFixtureValue<BrowserJourneyReadMode | undefined>('block')
+			const store = createBrowserHeldJourneyStore(memory, mode, pending)
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const journeys = new BrowserJourneyToolset(toolset, { store })
+			await toolset.start()
+			const replay = { id: 'r', name: 'replay', arguments: { journey: 'check-ready' } }
+			try {
+				const first = toolset.tools.execute(replay)
+				const second = toolset.tools.execute(replay)
+				expect(readProperty(await second, 'error')).toBe(
+					'The toolset is replaying check-ready until it finishes; call read.',
+				)
+				pending.resolve()
+				expect(await first).toMatchObject({ success: true })
+				expect(journeys.replaying).toBeUndefined()
+			} finally {
+				pending.resolve()
+				await journeys.destroy()
+				await toolset.destroy()
+			}
+		})
+
+		it('releases a failed store read and admits the next replay', async () => {
+			const memory = createMemoryBrowserJourneyStore()
+			await memory.set(createBrowserJourneyFixture())
+			const pending = Promise.withResolvers<void>()
+			const mode = new BrowserFixtureValue<BrowserJourneyReadMode | undefined>('file')
+			const store = createBrowserHeldJourneyStore(memory, mode, pending)
+			const toolset = new BrowserToolset(createBrowserViewDouble())
+			const journeys = new BrowserJourneyToolset(toolset, { store })
+			await toolset.start()
+			const replay = { id: 'r', name: 'replay', arguments: { journey: 'check-ready' } }
+			try {
+				expect(readProperty(await toolset.tools.execute(replay), 'error')).toBe(
+					'Journey check-ready cannot be read: The journey file tmp/browsers/check-ready/journey.json is malformed; call journeys.',
+				)
+				expect(journeys.replaying).toBeUndefined()
+				mode.value = undefined
+				expect(await toolset.tools.execute(replay)).toMatchObject({ success: true })
+				expect(journeys.replaying).toBeUndefined()
+			} finally {
+				await journeys.destroy()
+				await toolset.destroy()
+			}
+		})
+
 		it('refuses while recording, while another replay holds, and when the journey cannot be read', async () => {
 			const memory = createMemoryBrowserJourneyStore()
 			await memory.set(createBrowserJourneyFixture())
 			const pending = Promise.withResolvers<void>()
-			let mode: 'block' | 'file' | 'format' | undefined
-			const store: BrowserJourneyStoreInterface = {
-				get: async (name, options): Promise<BrowserJourneyRevision | undefined> => {
-					const read = await memory.get(name, options)
-					if (mode === 'block') await pending.promise
-					if (mode === 'file')
-						throw new BrowserError(
-							'STORE_FILE',
-							'The journey file tmp/browsers/check-ready/journey.json is malformed.',
-						)
-					if (mode === 'format' && read !== undefined)
-						return { ...read, journey: { ...read.journey, format: 1, next: 0 } }
-					return read
-				},
-				set: memory.set.bind(memory),
-				delete: memory.delete.bind(memory),
-				list: memory.list.bind(memory),
-			}
+			const mode = new BrowserFixtureValue<BrowserJourneyReadMode | undefined>(undefined)
+			const store = createBrowserHeldJourneyStore(memory, mode, pending)
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			await toolset.start()
@@ -1977,7 +1971,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 					'The toolset is replaying add-kettle until it finishes; call read.',
 				)
 				hold.destroy()
-				mode = 'block'
+				mode.value = 'block'
 				const first = toolset.tools.execute(replay)
 				await waitForCondition(
 					'the first replay claims the toolset',
@@ -1988,11 +1982,11 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 				)
 				pending.resolve()
 				expect(await first).toMatchObject({ success: true })
-				mode = 'file'
+				mode.value = 'file'
 				expect(readProperty(await toolset.tools.execute(replay), 'error')).toBe(
 					'Journey check-ready cannot be read: The journey file tmp/browsers/check-ready/journey.json is malformed; call journeys.',
 				)
-				mode = 'format'
+				mode.value = 'format'
 				expect(readProperty(await toolset.tools.execute(replay), 'error')).toBe(
 					'Journey check-ready cannot be read: has an invalid next counter; call journeys.',
 				)
@@ -2062,24 +2056,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 			const memory = createMemoryBrowserJourneyStore()
 			await memory.set(createBrowserJourneyFixture())
 			const reached = createRecorder<readonly [string]>()
-			const store: BrowserJourneyStoreInterface = {
-				get: async (_name, options) => {
-					reached.handler('get')
-					await waitForAbort(requireValue(options?.signal))
-					throw requireValue(options?.signal).reason
-				},
-				set: async (_journey, options) => {
-					reached.handler('set')
-					await waitForAbort(requireValue(options?.signal))
-					throw requireValue(options?.signal).reason
-				},
-				delete: memory.delete.bind(memory),
-				list: async (options) => {
-					reached.handler('list')
-					await waitForAbort(requireValue(options?.signal))
-					throw requireValue(options?.signal).reason
-				},
-			}
+			const store = createBrowserAbortedJourneyStore(memory, reached)
 			const toolset = new BrowserToolset(createBrowserViewDouble())
 			const journeys = new BrowserJourneyToolset(toolset, { store })
 			await toolset.start()
@@ -2111,16 +2088,7 @@ ${BROWSER_JOURNEY_LISTING.split('\n')
 		it('reaches a save write and a replayed step', async () => {
 			const memory = createMemoryBrowserJourneyStore()
 			const writes = createRecorder<readonly [boolean]>()
-			const store: BrowserJourneyStoreInterface = {
-				get: memory.get.bind(memory),
-				set: async (_journey, options) => {
-					writes.handler(options?.signal?.aborted ?? true)
-					await waitForAbort(requireValue(options?.signal))
-					throw requireValue(options?.signal).reason
-				},
-				delete: memory.delete.bind(memory),
-				list: memory.list.bind(memory),
-			}
+			const store = createBrowserAbortedJourneyWriteStore(memory, writes)
 			const withheld: CDPSentMessage[] = []
 			const fixture = await createBrowserElementFixture({
 				insert: (message) => withheld.push(message),

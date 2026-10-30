@@ -1,8 +1,28 @@
-import type { BrowserDOMElementInterface, BrowserDOMViewInterface } from '@src/browser'
+import type {
+	BrowserDOMElementInterface,
+	BrowserDOMViewInterface,
+	BrowserDOMViewOptions,
+	BrowserDOMView,
+	BrowserDOMWaitInterface,
+	BrowserMutationWait,
+	BrowserNameContext,
+	SocketCDPTransportOptions,
+} from '@src/browser'
 import type { ModelContextInterface } from '@orkestrel/mcp/browser'
-import type { ModelContextFixtureInterface } from './fixtures/modelContext.js'
+import type { ModelContextFixtureInterface } from './setup.js'
 import type { RecorderInterface } from '@orkestrel/test'
-import type { BrowserReadingInput } from '@src/core'
+import type {
+	BrowserContentInput,
+	BrowserElementInterface,
+	BrowserElementManagerInterface,
+	BrowserToolSourceInterface,
+	BrowserToolsetInterface,
+	createBrowserToolset,
+	BrowserViewInterface,
+} from '@src/core'
+import type { EmitterInterface } from '@orkestrel/emitter'
+import type { BrowserDOMElement } from '../src/browser/elements/BrowserDOMElement.js'
+import type { BrowserDOMElementManager } from '../src/browser/elements/BrowserDOMElementManager.js'
 import {
 	compileReadFunction,
 	compileGuardedEvaluateExpression,
@@ -12,7 +32,53 @@ import { isFunction, isRecord, isString } from '@orkestrel/contract'
 import { afterEach, inject } from 'vitest'
 import { createModelContext } from '@orkestrel/mcp/browser'
 import { createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
-import { installModelContext } from './fixtures/modelContext.js'
+import { installModelContext } from './setup.js'
+
+/** Records the type of an event delivered to a fixture handler attribute. */
+export function recordProbeEvent(recorder: RecorderInterface<[string]>, event: Event): void {
+	recorder.handler(event.type)
+}
+
+/** Compiles only while the mcp model context satisfies the tool source contract. */
+export function adoptModelContext(context: ModelContextInterface): BrowserToolSourceInterface {
+	return context
+}
+
+/** Resolves to `true` only while the contract refuses a shape without `adopt`. */
+export type RefusesEmitterOnly = {
+	readonly emitter: EmitterInterface<{ readonly change: readonly [] }>
+} extends BrowserToolSourceInterface
+	? false
+	: true
+
+// === Browser face assignability (unit U10b, R5)
+
+/** Resolves to `true` only while the left type is assignable to the right one. */
+export type Assignable<TLeft, TRight> = [TLeft] extends [TRight] ? true : false
+
+/** Holds one `true` per browser face class that satisfies the core contract it implements. */
+export type BrowserFaceContracts = [
+	Assignable<BrowserDOMView, BrowserViewInterface>,
+	Assignable<BrowserDOMView, BrowserDOMViewInterface>,
+	Assignable<BrowserDOMElement, BrowserElementInterface>,
+	Assignable<BrowserDOMElement, BrowserDOMElementInterface>,
+	Assignable<BrowserDOMElementManager, BrowserElementManagerInterface>,
+	Assignable<BrowserDOMElementManager, BrowserElementManagerInterface<BrowserDOMElementInterface>>,
+	Assignable<ReturnType<typeof createBrowserToolset>, BrowserToolsetInterface>,
+]
+
+/** Holds one `true` per public browser face type the `@src/browser` barrel re-exports. */
+export type BrowserFaceExports = [
+	Assignable<BrowserDOMViewOptions, { readonly document: Document }>,
+	Assignable<BrowserNameContext, { readonly hidden?: boolean }>,
+	Assignable<BrowserMutationWait<string>, { readonly subject: string }>,
+	Assignable<BrowserDOMWaitInterface<string>, { readonly roots: readonly Node[] }>,
+	Assignable<SocketCDPTransportOptions, { readonly url: string }>,
+]
+
+/** Resolves to `true` only while a view without `trusted` is refused by the core view contract. */
+export type RefusesUntrustedlessView =
+	Assignable<Omit<BrowserDOMView, 'trusted'>, BrowserViewInterface> extends true ? false : true
 
 const frames = new Set<HTMLIFrameElement>()
 
@@ -33,7 +99,7 @@ export function evaluateProbeDocument(document: Document, expression: string): u
  * @param root - The capture root
  * @returns The validated capture
  */
-export function readCompiledCapture(root: Element): BrowserReadingInput {
+export function readCompiledCapture(root: Element): BrowserContentInput {
 	const result: unknown = new Function(
 		'document',
 		'root',

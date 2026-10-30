@@ -26,7 +26,7 @@ import type {
 	BrowserPageOptions,
 	BrowserPopupManagerInterface,
 	BrowserPopupRecordInterface,
-	BrowserReadingInterface,
+	BrowserContentInterface,
 	BrowserRect,
 	BrowserRegistryInterface,
 	BrowserResponse,
@@ -436,40 +436,40 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 
 	// The page's reading waits for the current document's DOMContentLoaded, as the outline does,
 	// so a read issued while a navigation loads captures the loaded document.
-	override async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+	override async read(options?: BrowserCallOptions): Promise<BrowserContentInterface> {
 		await this.#ready(options)
 		return await super.read(options)
 	}
 
 	async wait(text: string, options?: BrowserWaitOptions): Promise<void> {
 		this.#assert()
-		options = {
+		const call = {
 			...options,
 			signal:
 				options?.signal === undefined
 					? this.#waitRelease.signal
 					: AbortSignal.any([options.signal, this.#waitRelease.signal]),
 		}
-		const timeout = options?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
+		const timeout = call?.timeout ?? BROWSER_DEFAULT_TIMEOUT_MS
 		validateBrowserTimeout(timeout)
 		const end = performance.now() + timeout
 		while (true) {
-			options?.signal?.throwIfAborted()
+			call?.signal?.throwIfAborted()
 			const remaining = Math.max(0, end - performance.now())
-			await this.#ready({ ...options, timeout: remaining })
-			const context = await this.#world(this.id, this.#sessionId, options)
+			await this.#ready({ ...call, timeout: remaining })
+			const context = await this.#world(this.id, this.#sessionId, call)
 			const key = `__browserTextWait${++this.#waitSequence}`
 			this.#textWaits.set(key, context)
 			try {
 				const result = await this.send(
 					'Runtime.evaluate',
 					{
-						expression: compileTextWaitExpression(text, remaining, key, options?.absent === true),
+						expression: compileTextWaitExpression(text, remaining, key, call?.absent === true),
 						contextId: context,
 						returnByValue: true,
 						awaitPromise: true,
 					},
-					{ ...options, timeout: remaining + 1000 },
+					{ ...call, timeout: remaining + 1000 },
 				)
 				if (readEvaluationResult(result) !== true)
 					throw new BrowserError('TIMEOUT', 'Browser text wait timed out', {
@@ -479,9 +479,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 					})
 				return
 			} catch (error) {
-				if (options?.signal?.aborted === true) {
+				if (call?.signal?.aborted === true) {
 					if (!this.#closed) await this.#releaseTextWait(key, context)
-					throw options.signal.reason
+					throw call.signal.reason
 				}
 				if (!isError(error) || !BROWSER_CONTEXT_LOSS_PATTERN.test(error.message)) throw error
 				if (performance.now() >= end)
@@ -490,7 +490,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 						text,
 						timeout,
 					})
-				await this.#recoverReadiness({ ...options, timeout: Math.max(0, end - performance.now()) })
+				await this.#recoverReadiness({ ...call, timeout: Math.max(0, end - performance.now()) })
 			} finally {
 				this.#textWaits.delete(key)
 			}
@@ -640,8 +640,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			}
 		}
 
-		let token: string | undefined
-		let transparent = false
+		const cleanup: Array<() => Promise<unknown>> = []
 		try {
 			const masks: BrowserRect[] = []
 			for (const element of options?.mask ?? []) {
@@ -657,13 +656,13 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				const value = await this.evaluate(preparation)
 				if (!isString(value))
 					throw new BrowserError('PROTOCOL', 'Browser screenshot preparation failed')
-				token = value
+				cleanup.push(() => this.evaluate(compileScreenshotCleanupExpression(value)))
 			}
 			if (options?.transparent === true) {
 				await this.send('Emulation.setDefaultBackgroundColorOverride', {
 					color: { r: 0, g: 0, b: 0, a: 0 },
 				})
-				transparent = true
+				cleanup.push(() => this.send('Emulation.setDefaultBackgroundColorOverride'))
 			}
 			const result = await this.send('Page.captureScreenshot', params)
 			if (!isRecord(result) || !isString(result['data'])) {
@@ -676,12 +675,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			if (options?.path !== undefined) await this.#save(options.path, bytes)
 			return { bytes, path: options?.path }
 		} finally {
-			if (transparent) {
-				await this.send('Emulation.setDefaultBackgroundColorOverride').catch(() => undefined)
-			}
-			if (token !== undefined) {
-				await this.evaluate(compileScreenshotCleanupExpression(token)).catch(() => undefined)
-			}
+			for (const release of cleanup.reverse()) await release().catch(() => undefined)
 		}
 	}
 
@@ -776,7 +770,6 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		const condition = options?.condition ?? 'load'
 		const wait = this.#waitForLoadEvent(condition, timeout, signal)
 		void wait.catch(() => undefined)
-		let loader: string | undefined
 
 		// A load or a completion read that settles in the same tick as an abort leaves the signal as
 		// the only witness, so cancellation is checked after the wait and after the completion read.
@@ -785,10 +778,9 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 			if (isRecord(result) && isString(result['errorText'])) {
 				throw new BrowserError('NAVIGATION', `Navigation failed: ${result['errorText']}`)
 			}
-			if (isRecord(result) && isString(result['loaderId'])) {
-				loader = result['loaderId']
-				this.#loader = loader
-			}
+			const loader =
+				isRecord(result) && isString(result['loaderId']) ? result['loaderId'] : undefined
+			if (loader !== undefined) this.#loader = loader
 			await wait
 			signal?.throwIfAborted()
 			const completed = await this.#completeNavigation(watch, loader, call)
@@ -1457,8 +1449,42 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 		url: string | undefined,
 		owner: string | undefined,
 	): Promise<void> {
-		let popup: BrowserPage | undefined
 		const setup = Promise.withResolvers<void>()
+		try {
+			const popup = await this.#openPopup(session, id, url, owner, setup.promise)
+			if (popup === undefined) return
+			try {
+				popup.#owner = owner
+				await popup.send('Target.setAutoAttach', {
+					autoAttach: true,
+					waitForDebuggerOnStart: true,
+					flatten: true,
+				})
+				await popup.send('Page.setInterceptFileChooserDialog', { enabled: true })
+				await popup.network.start()
+				if (this.#closed) throw new BrowserError('CLOSED', 'Browser page is closed')
+				this.#resumeTarget(session)
+				setup.resolve()
+				this.#publish(popup)
+			} catch (error) {
+				// A popup can close before its session initialization completes.
+				this.#concludePopup(id)
+				setup.reject(error)
+				await this.#releaseTarget(session)
+				await popup.destroy()
+			}
+		} finally {
+			this.#claimed.delete(id)
+		}
+	}
+
+	async #openPopup(
+		session: string,
+		id: string,
+		url: string | undefined,
+		owner: string | undefined,
+		publication: Promise<void>,
+	): Promise<BrowserPage | undefined> {
 		try {
 			await this.#client.send('Page.enable', undefined, { session })
 			await this.#client.send('Runtime.enable', undefined, { session })
@@ -1481,7 +1507,7 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				else this.#concludePopup(id)
 				return
 			}
-			popup = new BrowserPage(
+			return new BrowserPage(
 				this.#client,
 				id,
 				session,
@@ -1492,30 +1518,12 @@ export class BrowserPage extends BrowserFrame implements BrowserPageInterface {
 				this,
 				undefined,
 				this.#reference,
-				setup.promise,
+				publication,
 			)
-			popup.#owner = owner
-			await popup.send('Target.setAutoAttach', {
-				autoAttach: true,
-				waitForDebuggerOnStart: true,
-				flatten: true,
-			})
-			await popup.send('Page.setInterceptFileChooserDialog', { enabled: true })
-			await popup.network.start()
-			if (this.#closed) throw new BrowserError('CLOSED', 'Browser page is closed')
-			this.#resumeTarget(session)
-			setup.resolve()
-			this.#publish(popup)
-		} catch (error) {
-			// A popup can close before its session initialization completes.
+		} catch {
 			this.#concludePopup(id)
-			if (popup !== undefined) {
-				setup.reject(error)
-				await this.#releaseTarget(session)
-				await popup.destroy()
-			} else await this.#detachChild(session, owner)
-		} finally {
-			this.#claimed.delete(id)
+			await this.#detachChild(session, owner)
+			return undefined
 		}
 	}
 

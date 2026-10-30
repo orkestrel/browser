@@ -10,6 +10,7 @@ import {
 } from '@src/core'
 import { createRecorder } from '@orkestrel/test'
 import {
+	BrowserFixtureValue,
 	createCDPTestTransport,
 	createConnectedCDPClient,
 	readCDPExpression,
@@ -47,11 +48,11 @@ describe('BrowserFrame', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
 		scriptEvaluate(transport, (expression) => expression.includes('2 + 2'), 4)
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -91,15 +92,13 @@ describe('BrowserFrame', () => {
 	it('resolves a current session lazily before every operation', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		const calls = createRecorder<[frame: string]>()
-		let count = 0
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
 		scriptEvaluate(transport, () => true, 'ok')
 		const frame = new BrowserFrame(
 			client,
 			async (id) => {
 				calls.handler(id)
-				count += 1
-				return count === 1 ? 'session-one' : 'session-two'
+				return calls.count === 1 ? 'session-one' : 'session-two'
 			},
 			'frame-child',
 			'https://example.com/frame',
@@ -119,11 +118,11 @@ describe('BrowserFrame', () => {
 	it('throws a coded browser error when the isolated world is malformed', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', {})
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -134,11 +133,11 @@ describe('BrowserFrame', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
 		scriptEvaluate(transport, (expression) => expression === 'document.title', 'Frame title')
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -153,11 +152,11 @@ describe('BrowserFrame', () => {
 			title: 'Frame title',
 			html: '<main><p>Frame body</p></main>',
 		})
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -185,11 +184,11 @@ describe('BrowserFrame', () => {
 			title: 'Paragraphs',
 			html: `<main>${'<p>One paragraph of the frame document.</p>'.repeat(40)}</main>`,
 		})
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -218,11 +217,11 @@ describe('BrowserFrame', () => {
 				},
 			})
 		})
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -260,11 +259,11 @@ describe('BrowserFrame', () => {
 			url: 'https://example.com/frame',
 			title: 'No html',
 		})
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -273,11 +272,11 @@ describe('BrowserFrame', () => {
 
 	it('rejects a read with an aborted signal with its reason before any protocol work', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 		const reason = new Error('tool cancelled')
@@ -295,7 +294,7 @@ describe('BrowserFrame', () => {
 			title: 'Frame title',
 			html: '<p>Frame body</p>',
 		})
-		const epochs = [0]
+		const epoch = new BrowserFixtureValue(0)
 		const sessions = createRecorder<[session: string]>()
 		const frame = new BrowserFrame(
 			client,
@@ -305,7 +304,7 @@ describe('BrowserFrame', () => {
 			undefined,
 			undefined,
 			true,
-			() => epochs[0] ?? 0,
+			() => epoch.value,
 			async (session) => {
 				sessions.handler(session)
 				return 77
@@ -313,7 +312,7 @@ describe('BrowserFrame', () => {
 		)
 
 		const reading = await frame.read()
-		epochs[0] = 1
+		epoch.value = 1
 
 		expect(sessions.calls).toEqual([['session-child']])
 		expect(transport.sent.map((message) => message.method)).toEqual(['Runtime.evaluate'])
@@ -329,16 +328,16 @@ describe('BrowserFrame', () => {
 			title: 'Frame title',
 			html: '<p>Frame body</p>',
 		})
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
 		const reading = await frame.read()
-		url = 'https://example.com/frame/next'
+		url.value = 'https://example.com/frame/next'
 
 		expect(reading.stale).toBe(false)
 	})
@@ -346,11 +345,11 @@ describe('BrowserFrame', () => {
 	it('sends arbitrary CDP methods through the resolved frame session', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'DOM.getDocument', { root: { nodeId: 1 } })
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -368,11 +367,11 @@ describe('BrowserFrame', () => {
 		// per-call argument can settle this never-answered request.
 		const client = createCDPClient({ transport, timeout: 600_000 })
 		await client.connect()
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -384,11 +383,11 @@ describe('BrowserFrame', () => {
 
 	it('rejects operations after the CDP client disconnects', async () => {
 		const { client } = await createConnectedCDPClient()
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 		await client.close()
@@ -398,11 +397,11 @@ describe('BrowserFrame', () => {
 
 	it('asserts a disconnected frame is unusable before any protocol work', async () => {
 		const { client } = await createConnectedCDPClient()
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
@@ -413,26 +412,26 @@ describe('BrowserFrame', () => {
 
 	it('records an externally observed url as the frame url', async () => {
 		const { client } = await createConnectedCDPClient()
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 
-		url = 'https://example.com/frame/next'
+		url.value = 'https://example.com/frame/next'
 
 		expect(frame.url).toBe('https://example.com/frame/next')
 	})
 	it('forwards a signal from send, evaluate, and handle to the client', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 		const reason = new Error('tool cancelled')
@@ -451,11 +450,11 @@ describe('BrowserFrame', () => {
 	it('keeps the evaluate timeout behavior', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Page.createIsolatedWorld', { executionContextId: 42 })
-		let url = 'https://example.com/frame'
+		const url = new BrowserFixtureValue('https://example.com/frame')
 		const frame = new BrowserFrame(client, 'session-child', 'frame-child', {
-			get: () => url,
+			get: () => url.value,
 			set: (value) => {
-				url = value
+				url.value = value
 			},
 		})
 

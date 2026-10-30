@@ -9,8 +9,8 @@ import type {
 	BrowserViewInterface,
 	BrowserContextInterface,
 	BrowserContextOptions,
-	BrowserReadingInput,
-	BrowserReadingInterface,
+	BrowserContentInput,
+	BrowserContentInterface,
 	BrowserSnapshotInput,
 	BrowserSnapshotInterface,
 	BrowserToolsetInterface,
@@ -22,7 +22,7 @@ import { BrowserRecorder } from './recorders/BrowserRecorder.js'
 import { BrowserReplay } from './BrowserReplay.js'
 import { MemoryBrowserJourneyStore } from './stores/MemoryBrowserJourneyStore.js'
 import { MemoryBrowserRunStore } from './stores/MemoryBrowserRunStore.js'
-import { BrowserReading } from './BrowserReading.js'
+import { BrowserContent } from './BrowserContent.js'
 import { BrowserSnapshot } from './BrowserSnapshot.js'
 import { BrowserToolset } from './BrowserToolset.js'
 import { BrowserContext } from './BrowserContext.js'
@@ -88,20 +88,20 @@ export function createBrowserSnapshot(input: BrowserSnapshotInput): BrowserSnaps
 }
 
 /**
- * Creates a `BrowserReadingInterface` over a captured document, parsing its HTML one time.
+ * Creates a `BrowserContentInterface` over a captured document, parsing its HTML one time.
  *
  * @remarks
  * A reading built with a `navigation` source reports `stale` when that source's epoch differs
  * from the `epoch` recorded at capture; a reading built without one never does.
  *
  * @param input - The document URL, title, and HTML, and the optional navigation epoch
- * @returns A {@link BrowserReadingInterface}
+ * @returns A {@link BrowserContentInterface}
  *
  * @example
  * ```ts
- * import { createBrowserReading } from '@orkestrel/browser'
+ * import { createBrowserContent } from '@orkestrel/browser'
  *
- * const reading = createBrowserReading({
+ * const reading = createBrowserContent({
  * 	url: 'https://example.com/',
  * 	title: 'Example',
  * 	html: '<nav>Menu</nav><main><p>Body</p></main>',
@@ -109,8 +109,8 @@ export function createBrowserSnapshot(input: BrowserSnapshotInput): BrowserSnaps
  * reading.text({ distill: false }) // { text: 'Menu\nBody', offset: 0, total: 9 }
  * ```
  */
-export function createBrowserReading(input: BrowserReadingInput): BrowserReadingInterface {
-	return new BrowserReading(input)
+export function createBrowserContent(input: BrowserContentInput): BrowserContentInterface {
+	return new BrowserContent(input)
 }
 
 /**

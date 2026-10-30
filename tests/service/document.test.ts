@@ -1,9 +1,9 @@
 import type { BrowserInterface } from '@src/server'
 import type { BrowserPageInterface, BrowserToolsetInterface } from '@src/core'
 import type { FixtureServerInterface } from '../setupServer.js'
-import { extractBrowserPage } from '../setup.js'
+import { BrowserFixtureValue, extractBrowserPage } from '../setup.js'
 import { scanBrowserLines } from '@src/core'
-import { writeFileSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { renderBrowserLine } from '@src/core'
 import { describe, it, expect, afterAll, afterEach, beforeAll, beforeEach } from 'vitest'
 import { createBrowser } from '@src/server'
@@ -28,6 +28,7 @@ import {
 	requireSystemBrowser,
 	requireToolText,
 	SERVICE_BROWSER_ARGS,
+	SERVICE_DOCUMENT_READ,
 	SERVICE_EDITABLE_HTML,
 	SERVICE_TOGGLE_HTML,
 } from '../setupService.js'
@@ -40,37 +41,32 @@ import {
 	WAIT_EXIT_HTML,
 } from '../setup.js'
 
-const REAL_BROWSER_EXECUTABLE = requireSystemBrowser().executable
-
-const DOCUMENT_READ =
-	"documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: 'the gift options' } })"
-
 describe('createBrowserToolset composed with a DOM view from dist against CDP on the same page', () => {
 	const teardown = createTeardown()
-	let fixtures: FixtureServerInterface
-	let browser: BrowserInterface
-	let port: number
+	const fixtures = new BrowserFixtureValue<FixtureServerInterface | undefined>(undefined)
+	const browser = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+	const port = new BrowserFixtureValue<number | undefined>(undefined)
 
 	beforeAll(async () => {
 		requireDocumentBundle()
 		const server = await createFixtureServer()
 		teardown.add(() => server.destroy())
-		fixtures = server
+		fixtures.value = server
 
 		const profile = createTempDirectory('orkestrel-browser-profile-')
 		teardown.add(() => profile.destroy())
-		port = await reservePort()
+		port.value = await reservePort()
 		const launched = createBrowser({
-			executable: REAL_BROWSER_EXECUTABLE,
+			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: profile.path,
 			args: [...SERVICE_BROWSER_ARGS],
-			cdp: { port },
+			cdp: { port: port.required },
 			timeout: 20_000,
 		})
 		teardown.add(() => launched.destroy())
 		await launched.connect()
-		browser = launched
+		browser.value = launched
 	})
 
 	afterAll(async () => {
@@ -79,30 +75,31 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 
 	describe('on a fresh document page', () => {
 		const toolsets: BrowserToolsetInterface[] = []
-		let page: BrowserPageInterface
+		const page = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
 
 		beforeEach(async () => {
-			page = await browser.create({ url: fixtures.url('/document') })
-			await requireDocumentToolset(page)
+			page.value = await browser.required.create({ url: fixtures.required.url('/document') })
+			await requireDocumentToolset(page.required)
 		})
 
 		afterEach(async () => {
 			for (const toolset of toolsets.splice(0)) await toolset.destroy().catch(() => undefined)
-			await page.close().catch(() => undefined)
+			await page.required.close().catch(() => undefined)
 		})
 
 		it('audit repair 7: both placements join inline text without crossing blocks or losing labels', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`document.body.innerHTML = '<h2>A heading</h2><a href="/p3"><span>Cedar</span> Tea Tray</a><ul><li><b>Free</b> shipping</li></ul><p>First <b>ordinary</b> block</p><p>Second block</p><table><tr><td>Tea</td><td>41</td></tr></table><img alt="Tea tin"><label>Buyer<input value="Ada"></label><button>Save</button>'`,
 			)
-			const cdp = (await page.elements.outline()).lines
+			const cdp = (await page.required.elements.outline()).lines
 				.map(renderBrowserLine)
 				.map((line) => line.replace(/e\d+/g, 'eREF'))
+			mkdirSync('tmp/codex', { recursive: true })
 			writeFileSync(
 				'tmp/codex/reading-joining-source.json',
-				JSON.stringify(await page.accessibility.snapshot(), null, 2),
+				JSON.stringify(await page.required.accessibility.snapshot(), null, 2),
 			)
-			const dom = await page.evaluate(
+			const dom = await page.required.evaluate(
 				`(async () => (await documentToolset.view.elements.outline()).lines.map(line => line.spans.map(span => span.text).join('')).map(line => line.replace(/e\\d+/g, 'eREF')))()`,
 			)
 			expect(cdp).toEqual([
@@ -120,42 +117,45 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			expect(dom).toEqual(cdp)
 		})
 		it('audit repair 13: DOM continuation reconstructs every projected line', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`document.body.innerHTML = '<p>Ordinary paragraph with enough material to fill several windows.</p>'.repeat(250)`,
 			)
-			const result = await page.evaluate(`(async () => {
+			const result = await page.required.evaluate(`(async () => {
 				const expected = (await documentToolset.view.elements.outline()).lines.map(line => line.spans.map(span => span.text).join(''))
-				const actual = []; let from = 1; let windows = 0
+				const windows = []
 				for (;;) {
-					const text = await documentToolset.read({ from }); windows++
+					const from = windows.at(-1)?.next ?? 1
+					const text = await documentToolset.read({ from })
 					if(text.length > 4000) throw new Error('Oversized DOM window')
-					actual.push(...text.split('\\n').filter(line => /^\\d+: /.test(line)).map(line => line.replace(/^\\d+: /, '')))
+					const lines = text.split('\\n').filter(line => /^\\d+: /.test(line)).map(line => line.replace(/^\\d+: /, ''))
 					const next = /call read with from (\\d+) for more/.exec(text)
+					windows.push({ lines, next: next === null ? undefined : Number(next[1]) })
 					if(next === null) break
 					if(Number(next[1]) <= from) throw new Error('Non-advancing footer')
-					from = Number(next[1])
 				}
-				return { equal: JSON.stringify(actual) === JSON.stringify(expected), count: actual.length, windows }
+				const actual = windows.flatMap(window => window.lines)
+				return { equal: JSON.stringify(actual) === JSON.stringify(expected), count: actual.length, windows: windows.length }
 			})()`)
 			expect(result).toMatchObject({ equal: true, count: 250, windows: expect.any(Number) })
 		})
 
 		for (const placement of ['CDP', 'DOM']) {
 			it(`records the hidden-tab transition limit and settles a removal in the ${placement} placement`, async () => {
-				await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
-				await page.evaluate(`import('/dist/src/browser/index.js').then(({createBrowserDOMView}) => {
+				const view = page.required
+				await view.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
+				await view.evaluate(`import('/dist/src/browser/index.js').then(({createBrowserDOMView}) => {
 					globalThis.hiddenView = createBrowserDOMView({document, own: true})
 				})`)
-				await page.wait('Saved to drafts')
-				await page.evaluate(
+				await view.wait('Saved to drafts')
+				await view.evaluate(
 					'new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)))',
 				)
-				const front = await browser.create({ url: fixtures.url('/form') })
+				const front = await browser.required.create({ url: fixtures.required.url('/form') })
 				try {
 					await front.send('Page.bringToFront')
 					expect(await front.evaluate('document.visibilityState')).toBe('visible')
-					expect(await page.evaluate('document.visibilityState')).toBe('hidden')
-					await page.evaluate(`(() => {
+					expect(await view.evaluate('document.visibilityState')).toBe('hidden')
+					await view.evaluate(`(() => {
 						globalThis.hiddenEnd = null
 						document.getElementById('toast').addEventListener('transitionend', () => { globalThis.hiddenEnd = performance.now() }, {once: true})
 						return true
@@ -163,56 +163,56 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 					const start = performance.now()
 					const waiting = (
 						placement === 'CDP'
-							? page.wait('Saved to drafts', { absent: true, timeout: 5_000 })
-							: page.evaluate(
+							? view.wait('Saved to drafts', { absent: true, timeout: 5_000 })
+							: view.evaluate(
 									"hiddenView.wait('Saved to drafts', {absent: true, timeout: 5000}).then(() => 'done')",
 								)
 					).then(
 						() => 'done',
 						(error: unknown) => error,
 					)
-					await page.evaluate("document.getElementById('toast').classList.remove('shown')")
+					await view.evaluate("document.getElementById('toast').classList.remove('shown')")
 					const outcome = await waiting
 					const elapsed = performance.now() - start
 					const reading =
-						await page.evaluate(`({visibility: document.visibilityState, text: document.body.innerText,
+						await view.evaluate(`({visibility: document.visibilityState, text: document.body.innerText,
 						ended: hiddenEnd, style: getComputedStyle(document.getElementById('toast')).visibility})`)
 					console.log('hidden transition', { placement, elapsed, outcome, reading })
 					expect(outcome).toBeInstanceOf(Error)
 					expect(elapsed).toBeGreaterThanOrEqual(5_000)
 					expect(reading).toEqual({ visibility: 'hidden', text: '', ended: null, style: 'hidden' })
-					await page.evaluate("document.getElementById('toast').classList.add('shown')")
-					await page.wait('Saved to drafts')
+					await view.evaluate("document.getElementById('toast').classList.add('shown')")
+					await view.wait('Saved to drafts')
 					const removed = (
 						placement === 'CDP'
-							? page.wait('Saved to drafts', { absent: true, timeout: 5_000 })
-							: page.evaluate(
+							? view.wait('Saved to drafts', { absent: true, timeout: 5_000 })
+							: view.evaluate(
 									"hiddenView.wait('Saved to drafts', {absent: true, timeout: 5000}).then(() => 'done')",
 								)
 					).then(
 						() => 'done',
 						(error: unknown) => error,
 					)
-					await page.evaluate('new Promise(resolve => setTimeout(resolve, 0))')
+					await view.evaluate('new Promise(resolve => setTimeout(resolve, 0))')
 					const removal = performance.now()
-					await page.evaluate("document.getElementById('toast').remove()")
+					await view.evaluate("document.getElementById('toast').remove()")
 					const result = await removed
 					console.log('hidden removal', { placement, elapsed: performance.now() - removal, result })
 					expect(result).toBe('done')
 					expect(performance.now() - removal).toBeLessThan(3_000)
-					await page.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
-					await page.wait('Saved to drafts')
+					await view.evaluate(`document.body.innerHTML = ${JSON.stringify(WAIT_EXIT_HTML)}`)
+					await view.wait('Saved to drafts')
 					const finished = (
 						placement === 'CDP'
-							? page.wait('Saved to drafts', { absent: true, timeout: 5_000 })
-							: page.evaluate(
+							? view.wait('Saved to drafts', { absent: true, timeout: 5_000 })
+							: view.evaluate(
 									"hiddenView.wait('Saved to drafts', {absent: true, timeout: 5000}).then(() => 'done')",
 								)
 					).then(
 						() => 'done',
 						(error: unknown) => error,
 					)
-					await page.evaluate(`(() => {
+					await view.evaluate(`(() => {
 						document.getElementById('toast').classList.remove('shown')
 						setTimeout(() => document.getElementById('toast').dispatchEvent(new Event('transitionend', {bubbles: true})), 350)
 						return true
@@ -227,7 +227,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 					expect(completion).toBe('done')
 					expect(performance.now() - delivered).toBeLessThan(3_000)
 				} finally {
-					await page.evaluate('hiddenView.destroy()')
+					await view.evaluate('hiddenView.destroy()')
 					await front.close()
 				}
 			})
@@ -235,11 +235,11 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 		it.each(CAPTURE_CASES)(
 			'captures $name through public CDP and DOM reads',
 			async ({ html, edit, text }) => {
-				await page.evaluate(
+				await page.required.evaluate(
 					`(()=>{document.body.innerHTML=${JSON.stringify(html)};${edit};return true})()`,
 				)
-				const cdp = await page.read()
-				const dom = await page.evaluate(
+				const cdp = await page.required.read()
+				const dom = await page.required.evaluate(
 					`(async () => { const {createBrowserDOMView}=await import('/dist/src/browser/index.js');const view=createBrowserDOMView({document,own:true});try { const reading=await view.read();return [reading.markdown().text,reading.markdown({distill:false}).text,reading.text().text,reading.text({distill:false}).text].map(text=>text.replace(/\\s+/g,' ').trim()) } finally {view.destroy()} })()`,
 				)
 				expect(dom).toEqual([text, text, text, text])
@@ -254,34 +254,36 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 		)
 
 		it('captures direct roots, hidden ancestors, shadow hosts, and child frames', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`(()=>{document.body.innerHTML=${JSON.stringify(RENDERED_PAGE)};${RENDERED_SHADOW_EXPRESSION};return true})()`,
 			)
 			for (const [css, expected] of [
 				['#region', 'Region shown'],
 				['#hidden-child', ''],
 			]) {
-				const element = requireValue((await page.elements.find({ css: requireValue(css) }))[0])
+				const element = requireValue(
+					(await page.required.elements.find({ css: requireValue(css) }))[0],
+				)
 				expect((await element.read()).text().text.trim()).toBe(expected)
 			}
 			expect(
-				await page.evaluate(
+				await page.required.evaluate(
 					`(${compileReadFunction()})(document.querySelector('#hidden-host').shadowRoot.querySelector('p')).html`,
 				),
 			).toBe('')
-			await page.evaluate(
+			await page.required.evaluate(
 				`(()=>{document.body.innerHTML='<p>Outside text</p><button>Inside text</button>';return true})()`,
 			)
 			expect(
-				(await requireValue((await page.elements.find({ css: 'button' }))[0]).read())
+				(await requireValue((await page.required.elements.find({ css: 'button' }))[0]).read())
 					.text()
 					.text.trim(),
 			).toBe('Inside text')
-			await page.evaluate(
+			await page.required.evaluate(
 				`new Promise(resolve=>{const frame=document.createElement('iframe');frame.onload=()=>resolve(true);frame.srcdoc='<form>Frame prose<input value="Frame value"><input type="password" value="private-frame"><input type="hidden" value="hidden-payload"></form>';document.body.append(frame)})`,
 			)
 			const frame = requireValue(
-				(await page.frames()).find((candidate) => candidate.parent !== undefined),
+				(await page.required.frames()).find((candidate) => candidate.parent !== undefined),
 			)
 			expect((await frame.read()).text().text.replace(/\s+/g, ' ').trim()).toBe(
 				'Frame prose Frame value',
@@ -292,15 +294,17 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 		})
 
 		it('keeps read tool parity as a stylesheet-hidden panel becomes shown', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`(()=>{document.body.innerHTML='<style>.toast:not(.show){display:none}</style><p>Public prose</p><div class="toast">Toast body dismissed</div>';return true})()`,
 			)
 			const tools = createToolManager()
-			const toolset = createBrowserToolset(page, { tools })
+			const toolset = createBrowserToolset(page.required, { tools })
 			toolsets.push(toolset)
 			await toolset.start()
 			for (const shown of [false, true]) {
-				await page.evaluate(`document.querySelector('.toast').classList.toggle('show',${shown})`)
+				await page.required.evaluate(
+					`document.querySelector('.toast').classList.toggle('show',${shown})`,
+				)
 				const cdp = requireToolText(
 					await tools.execute({
 						id: 'read',
@@ -309,7 +313,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 					}),
 				)
 				const dom = requireToolText(
-					await page.evaluate(
+					await page.required.evaluate(
 						`documentToolset.tools.execute({id:'read',name:'read',arguments:{from:1,search:'the page'}})`,
 					),
 				)
@@ -319,15 +323,15 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 		})
 
 		it('omits a number during an invalid edit without substituting its placeholder', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`document.body.innerHTML='<input type="number" placeholder="Guessed number">'`,
 			)
-			const connection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+			const connection = await chromium.connectOverCDP(`http://127.0.0.1:${port.required}`)
 			const target = requireValue(
 				connection
 					.contexts()[0]
 					?.pages()
-					.find((candidate) => candidate.url() === page.url),
+					.find((candidate) => candidate.url() === page.required.url),
 			)
 			await target.locator('input').pressSequentially('1e')
 			expect(
@@ -335,21 +339,21 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 					.locator('input')
 					.evaluate((element) => element instanceof HTMLInputElement && element.validity.badInput),
 			).toBe(true)
-			expect((await page.read()).text().text).toBe('')
+			expect((await page.required.read()).text().text).toBe('')
 			expect(
-				await page.evaluate(
-					`(async()=>{const {readBrowserCapture}=await import('/dist/src/browser/index.js');const {createBrowserReading}=await import('/dist/src/core/index.js');return createBrowserReading(readBrowserCapture(document.documentElement)).text().text})()`,
+				await page.required.evaluate(
+					`(async()=>{const {readBrowserCapture}=await import('/dist/src/browser/index.js');const {createBrowserContent}=await import('/dist/src/core/index.js');return createBrowserContent(readBrowserCapture(document.documentElement)).text().text})()`,
 				),
 			).toBe('')
 		})
 
 		it('imports inertly without requests, constructors, or live writes in both worlds', async () => {
-			const connection = await chromium.connectOverCDP(`http://127.0.0.1:${port}`)
+			const connection = await chromium.connectOverCDP(`http://127.0.0.1:${port.required}`)
 			const target = requireValue(
 				connection
 					.contexts()[0]
 					?.pages()
-					.find((candidate) => candidate.url() === page.url),
+					.find((candidate) => candidate.url() === page.required.url),
 			)
 			const cdp = await target.context().newCDPSession(target)
 			try {
@@ -435,8 +439,8 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 		})
 
 		it('lists the same interactive (role, name) set in the DOM reading as the CDP outline of the same page', async () => {
-			const dom = requireToolText(await page.evaluate(DOCUMENT_READ))
-			const cdp = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
+			const dom = requireToolText(await page.required.evaluate(SERVICE_DOCUMENT_READ))
+			const cdp = (await page.required.elements.outline()).lines.map(renderBrowserLine).join('\n')
 
 			expect(collectOutlinePairs(cdp)).toStrictEqual([
 				'button "Apply"',
@@ -449,7 +453,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 
 		it('lists the same match rows in the DOM reading as the CDP outline search of the same page', async () => {
 			const search = 'Gift wrap checkbox'
-			const cdp = await page.elements.outline()
+			const cdp = await page.required.elements.outline()
 			expect(
 				collectOutlinePairs(
 					scanBrowserLines(cdp.lines, search)
@@ -460,7 +464,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 				),
 			).toStrictEqual(['checkbox "Gift wrap"'])
 			const dom = requireToolText(
-				await page.evaluate(
+				await page.required.evaluate(
 					`documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: ${JSON.stringify(search)} } })`,
 				),
 			)
@@ -471,24 +475,24 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 
 		it('ends a DOM click receipt with (untrusted event) and records isTrusted false, while a CDP click receipt on the same page carries no marker and records isTrusted true', async () => {
 			const reading = requireToolText(
-				await page.evaluate(
+				await page.required.evaluate(
 					"documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: 'gift wrap' } })",
 				),
 			)
 			const wrap = requireOutlineReference(reading, 'checkbox', 'Gift wrap')
 			const clicked = requireToolText(
-				await page.evaluate(
+				await page.required.evaluate(
 					`documentToolset.tools.execute({ id: 'click', name: 'click', arguments: { ref: ${JSON.stringify(wrap)} } })`,
 				),
 			)
 			expect(clicked.split('\n', 1)[0]).toBe(
 				`Clicked checkbox "Gift wrap" [ref=${wrap}]. (untrusted event)`,
 			)
-			expect(await page.evaluate('document.body.dataset.trusted')).toBe('false')
-			expect(await page.evaluate("document.getElementById('wrap').checked")).toBe(true)
+			expect(await page.required.evaluate('document.body.dataset.trusted')).toBe('false')
+			expect(await page.required.evaluate("document.getElementById('wrap').checked")).toBe(true)
 
 			const tools = createToolManager()
-			const toolset = createBrowserToolset(page, { tools })
+			const toolset = createBrowserToolset(page.required, { tools })
 			toolsets.push(toolset)
 			await toolset.start()
 			const reference = requireOutlineReference(
@@ -507,15 +511,15 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			)
 			expect(trusted.split('\n', 1)[0]).toBe(`Clicked checkbox "Gift wrap" [ref=${reference}].`)
 			expect(trusted).not.toContain('(untrusted event)')
-			expect(await page.evaluate('document.body.dataset.trusted')).toBe('false true')
-			expect(await page.evaluate("document.getElementById('wrap').checked")).toBe(false)
+			expect(await page.required.evaluate('document.body.dataset.trusted')).toBe('false true')
+			expect(await page.required.evaluate("document.getElementById('wrap').checked")).toBe(false)
 		})
 
 		it('outlines editable regions by role and types into none of them, refusing the role="textbox" region UNTRUSTED and the rest by role', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`(() => { document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_EDITABLE_HTML)}); return true })()`,
 			)
-			const reading = requireToolText(await page.evaluate(DOCUMENT_READ))
+			const reading = requireToolText(await page.required.evaluate(SERVICE_DOCUMENT_READ))
 			const message = requireOutlineReference(reading, 'textbox', 'Message')
 			const notes = requireOutlineReference(reading, 'textbox', 'Notes')
 			const bold = requireOutlineReference(reading, 'button', 'Bold')
@@ -531,7 +535,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			)
 			expect(extractOutlineRows(reading).map((row) => row.name)).not.toContain('Plain notes')
 
-			const refused = await page.evaluate(
+			const refused = await page.required.evaluate(
 				`documentToolset.tools.execute([${[notes, bold, coupon]
 					.map(
 						(reference) =>
@@ -553,14 +557,16 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 					error: `Element button "Coupon" [ref=${coupon}] takes no text; to type, use textbox "Message" [ref=${message}] or textbox "Notes" [ref=${notes}].`,
 				},
 			])
-			expect(await page.evaluate("document.querySelector('[role=textbox]').textContent")).toBe('')
+			const expression = "document.querySelector('[role=textbox]').textContent"
+			const content = await page.required.evaluate(expression)
+			expect(content).toBe('')
 		})
 
 		it('replays a one-step click journey naming a same-origin child-frame button to complete, setting the frame marker and not the page marker', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`new Promise((resolve) => { const frame = document.createElement('iframe'); frame.onload = resolve; frame.srcdoc = ${JSON.stringify(BROWSER_JOURNEY_FRAME_HTML)}; document.body.append(frame) })`,
 			)
-			const run = await page.evaluate(
+			const run = await page.required.evaluate(
 				`import('/dist/src/core/index.js').then(async ({ createBrowserReplay }) => {
 					const run = await createBrowserReplay(documentToolset, { journey: ${JSON.stringify(BROWSER_JOURNEY_FRAME_JOURNEY)} }).execute()
 					return { outcome: run.outcome, steps: run.steps.map((step) => [step.id, step.outcome, step.result]) }
@@ -580,11 +586,11 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 				],
 			})
 			expect(
-				await page.evaluate(
+				await page.required.evaluate(
 					'document.querySelector("iframe").contentDocument.body.dataset.clicked',
 				),
 			).toBe('yes')
-			expect(await page.evaluate('document.body.dataset.clicked ?? "none"')).toBe('none')
+			expect(await page.required.evaluate('document.body.dataset.clicked ?? "none"')).toBe('none')
 		})
 
 		it('refuses a workspace without the built bundle before any page loads, naming npm run build', () => {
@@ -598,17 +604,17 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 	})
 
 	describe('with toggle states appended to the document page', () => {
-		let page: BrowserPageInterface
-		let cdp: string
-		let dom: string
+		const page = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
+		const cdp = new BrowserFixtureValue<string | undefined>(undefined)
+		const dom = new BrowserFixtureValue<string | undefined>(undefined)
 		beforeAll(async () => {
-			page = await browser.create({ url: fixtures.url('/document') })
-			await requireDocumentToolset(page)
-			await page.evaluate(
+			page.value = await browser.required.create({ url: fixtures.required.url('/document') })
+			await requireDocumentToolset(page.required)
+			await page.required.evaluate(
 				`document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(SERVICE_TOGGLE_HTML)})`,
 			)
-			cdp = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
-			const entries = collectOutlineEntries(cdp)
+			cdp.value = (await page.required.elements.outline()).lines.map(renderBrowserLine).join('\n')
+			const entries = collectOutlineEntries(cdp.required)
 			for (const entry of [
 				'button "Toggle on" pressed=true',
 				'button "Toggle off" pressed=false',
@@ -643,18 +649,18 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			]) {
 				if (!entries.includes(entry)) throw new Error(`CDP state precondition missing: ${entry}`)
 			}
-			dom = requireToolText(await page.evaluate(DOCUMENT_READ))
+			dom.value = requireToolText(await page.required.evaluate(SERVICE_DOCUMENT_READ))
 		})
 		afterAll(async () => {
-			await page.close().catch(() => undefined)
+			await page.required.close().catch(() => undefined)
 		})
 		it('keeps complete DOM rows equal to the CDP rows, including false and native overrides', () => {
-			expect(collectOutlineEntries(dom)).toEqual(collectOutlineEntries(cdp))
+			expect(collectOutlineEntries(dom.required)).toEqual(collectOutlineEntries(cdp.required))
 		})
 	})
 
 	it('declares the lone tab selection difference between CDP and DOM', async () => {
-		const page = await browser.create({ url: fixtures.url('/document') })
+		const page = await browser.required.create({ url: fixtures.required.url('/document') })
 		try {
 			await requireDocumentToolset(page)
 			await page.evaluate(
@@ -665,7 +671,9 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 					(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
 				),
 			).toContain('tab "Lone tab" selected=false')
-			const entries = collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_READ)))
+			const entries = collectOutlineEntries(
+				requireToolText(await page.evaluate(SERVICE_DOCUMENT_READ)),
+			)
 			expect(entries).toContain('tab "Lone tab"')
 			expect(entries).not.toContain('tab "Lone tab" selected=false')
 		} finally {
@@ -674,7 +682,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 	})
 
 	it('declares the native summary row difference between CDP and DOM', async () => {
-		const page = await browser.create({ url: fixtures.url('/document') })
+		const page = await browser.required.create({ url: fixtures.required.url('/document') })
 		try {
 			await requireDocumentToolset(page)
 			await page.evaluate(
@@ -685,7 +693,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 					(await page.elements.outline()).lines.map(renderBrowserLine).join('\n'),
 				),
 			).toContain('DisclosureTriangle "Delivery details" expanded=false')
-			const dom = requireToolText(await page.evaluate(DOCUMENT_READ))
+			const dom = requireToolText(await page.evaluate(SERVICE_DOCUMENT_READ))
 			expect(dom).toContain('Delivery details')
 			expect(extractOutlineRows(dom).filter((row) => row.name === 'Delivery details')).toEqual([])
 		} finally {
@@ -694,7 +702,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 	})
 
 	it('declares the lone treeitem role and state difference between CDP and DOM', async () => {
-		const page = await browser.create({ url: fixtures.url('/document') })
+		const page = await browser.required.create({ url: fixtures.required.url('/document') })
 		try {
 			await requireDocumentToolset(page)
 			await page.evaluate(
@@ -711,30 +719,30 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 			const cdp = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			expect(cdp).toContain('Lone treeitem')
 			expect(extractOutlineRows(cdp).filter((row) => row.name === 'Lone treeitem')).toEqual([])
-			expect(collectOutlineEntries(requireToolText(await page.evaluate(DOCUMENT_READ)))).toContain(
-				'treeitem "Lone treeitem" expanded=true selected=false',
-			)
+			expect(
+				collectOutlineEntries(requireToolText(await page.evaluate(SERVICE_DOCUMENT_READ))),
+			).toContain('treeitem "Lone treeitem" expanded=true selected=false')
 		} finally {
 			await page.close()
 		}
 	})
 
 	describe('with a select appended to the document page', () => {
-		let page: BrowserPageInterface
-		let dom: string
-		let cdp: string
+		const page = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
+		const dom = new BrowserFixtureValue<string | undefined>(undefined)
+		const cdp = new BrowserFixtureValue<string | undefined>(undefined)
 
 		// Establishes, outside the inverted comparison, the started page, the appended select, both
 		// outlines, and the complete CDP membership with its two option rows; a failure of any of
 		// them fails the block.
 		beforeAll(async () => {
-			page = await browser.create({ url: fixtures.url('/document') })
-			await requireDocumentToolset(page)
-			await page.evaluate(
+			page.value = await browser.required.create({ url: fixtures.required.url('/document') })
+			await requireDocumentToolset(page.required)
+			await page.required.evaluate(
 				"(() => { const label = document.createElement('label'); label.append('Box ', document.createElement('select')); label.lastChild.append(new Option('Small'), new Option('Large')); document.querySelector('main').append(label); return true })()",
 			)
-			dom = requireToolText(await page.evaluate(DOCUMENT_READ))
-			cdp = (await page.elements.outline()).lines.map(renderBrowserLine).join('\n')
+			dom.value = requireToolText(await page.required.evaluate(SERVICE_DOCUMENT_READ))
+			cdp.value = (await page.required.elements.outline()).lines.map(renderBrowserLine).join('\n')
 			const membership = [
 				'button "Apply"',
 				'checkbox "Gift wrap"',
@@ -744,7 +752,7 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 				'option "Small"',
 				'textbox "Message"',
 			]
-			const listed = collectOutlinePairs(cdp)
+			const listed = collectOutlinePairs(cdp.required)
 			if (JSON.stringify(listed) !== JSON.stringify(membership))
 				throw new Error(
 					`Precondition failed: the CDP outline lists ${JSON.stringify(listed)}, not ${JSON.stringify(membership)}`,
@@ -752,13 +760,13 @@ describe('createBrowserToolset composed with a DOM view from dist against CDP on
 		})
 
 		afterAll(async () => {
-			await page.close().catch(() => undefined)
+			await page.required.close().catch(() => undefined)
 		})
 
 		// `BrowserDOMElementManager` skips a `select` element's subtree after its combobox row, so the
 		// DOM reading carries no `option` row, while the CDP outline lists one per option under it.
 		it('lists the option rows of the select in the DOM reading as the CDP outline does', () => {
-			expect(collectOutlinePairs(dom)).toStrictEqual(collectOutlinePairs(cdp))
+			expect(collectOutlinePairs(dom.required)).toStrictEqual(collectOutlinePairs(cdp.required))
 		})
 	})
 })

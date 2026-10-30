@@ -1,8 +1,10 @@
+import { BrowserFixtureValue } from './setup.js'
+import { recordProbeEvent } from './setupBrowser.js'
 import { describe, expect, it, inject } from 'vitest'
 import { createBrowserDOMView } from '@src/browser'
 import { createRecorder, requireValue, waitForEvent } from '@orkestrel/test'
 import { createTool, createToolManager } from '@orkestrel/tool'
-import { installModelContext } from './fixtures/modelContext.js'
+import { installModelContext } from './setup.js'
 import {
 	createProbeBridge,
 	createProbeDocument,
@@ -36,18 +38,18 @@ describe('readCompiledCapture', () => {
 })
 
 describe('createProbeDocument', () => {
-	let probe: Document | undefined
+	const probe = new BrowserFixtureValue<Document | undefined>(undefined)
 
 	it('builds a same-origin document holding the markup', () => {
-		probe = createProbeDocument('<p id="mark">probe</p>')
+		probe.value = createProbeDocument('<p id="mark">probe</p>')
 		const frame = document.querySelector('iframe')
-		expect(frame?.contentDocument).toBe(probe)
-		expect(probe.getElementById('mark')?.textContent).toBe('probe')
-		expect(probe.location.origin).toBe(window.location.origin)
+		expect(frame?.contentDocument).toBe(probe.value)
+		expect(probe.required.getElementById('mark')?.textContent).toBe('probe')
+		expect(probe.required.location.origin).toBe(window.location.origin)
 	})
 
 	it('removes the iframe after the test', () => {
-		expect(probe).toBeDefined()
+		expect(probe.value).toBeDefined()
 		expect(document.querySelector('iframe')).toBeNull()
 	})
 })
@@ -251,7 +253,7 @@ describe('installModelContext', () => {
 	it('refuses a duplicate, an invalid name, an empty description, and an untrustworthy origin', async () => {
 		const probe = await loadProbeDocument('<p>host</p>')
 		const { registry } = installModelContext(probe)
-		const execute = async (): Promise<string> => 'done'
+		const execute = Promise.resolve.bind(Promise, 'done')
 		await registry.registerTool({ name: 'cars.search', description: 'Searches', execute })
 		const refusals = await Promise.all(
 			[
@@ -287,7 +289,7 @@ describe('installModelContext', () => {
 	it('reports registered tools sorted by name with the dictionary defaults', async () => {
 		const probe = await loadProbeDocument('<p>host</p>')
 		const fixture = installModelContext(probe)
-		const execute = async (): Promise<string> => 'done'
+		const execute = Promise.resolve.bind(Promise, 'done')
 		await fixture.registry.registerTool({
 			name: 'zoom',
 			description: 'Zooms',
@@ -381,7 +383,7 @@ describe('installModelContext', () => {
 		const probe = await loadProbeDocument('<p>host</p>')
 		const fixture = installModelContext(probe)
 		const changes = createRecorder<[string]>()
-		fixture.registry.ontoolchange = (event) => changes.handler(event.type)
+		fixture.registry.ontoolchange = recordProbeEvent.bind(undefined, changes)
 		const controller = new AbortController()
 		await fixture.registry.registerTool(
 			{ name: 'temporary', description: 'Temporary', execute: async () => 'done' },

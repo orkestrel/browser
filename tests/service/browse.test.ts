@@ -24,7 +24,7 @@ import {
 	retryUntil,
 } from '@orkestrel/test'
 import { createScratch, createLoopback, readErrorCode } from '@orkestrel/test/server'
-import { isRecord, isString } from '@orkestrel/contract'
+import { attempt, isRecord, isString } from '@orkestrel/contract'
 import {
 	createCDPClient,
 	BROWSER_DEFAULT_TIMEOUT_MS,
@@ -65,7 +65,7 @@ import {
 	downloadContextFile,
 	readContextFolders,
 } from '../setupService.js'
-import { createBrowserJourneyFixture } from '../setup.js'
+import { BrowserFixtureValue, createBrowserJourneyFixture } from '../setup.js'
 import {
 	BrowseLog,
 	MCPStdioPair,
@@ -81,21 +81,23 @@ import {
 } from '../setupServer.js'
 
 describe('contexts C2 built browse on one browser', () => {
-	let scratch: ReturnType<typeof createScratch>
-	let server: Awaited<ReturnType<typeof openHolderServer>>
-	let pages: ContextFixture
-	let holder: string
+	const scratch = new BrowserFixtureValue<ReturnType<typeof createScratch> | undefined>(undefined)
+	const server = new BrowserFixtureValue<Awaited<ReturnType<typeof openHolderServer>> | undefined>(
+		undefined,
+	)
+	const pages = new BrowserFixtureValue<ContextFixture | undefined>(undefined)
+	const holder = new BrowserFixtureValue<string | undefined>(undefined)
 	beforeAll(async () => {
-		scratch = createScratch()
-		pages = new ContextFixture()
-		await pages.start()
-		server = await openHolderServer(scratch.path, 1)
-		holder = await acquireHolder(server.client, 'C2 source context')
+		scratch.value = createScratch()
+		pages.value = new ContextFixture()
+		await pages.required.start()
+		server.value = await openHolderServer(scratch.required.path, 1)
+		holder.value = await acquireHolder(server.required.client, 'C2 source context')
 	})
 	afterAll(async () => {
-		await server?.client.disconnect()
-		await pages?.destroy()
-		scratch?.destroy()
+		await server.value?.client.disconnect()
+		await pages.value?.destroy()
+		scratch.value?.destroy()
 	})
 
 	it('audit repair 9: an adopted page tool may take the removed look name', async () => {
@@ -114,9 +116,10 @@ describe('contexts C2 built browse on one browser', () => {
 		try {
 			await fixture.server.start()
 			await fixture.pair.initialize()
-			expect(
-				(await fixture.pair.call(2, 'navigate', { url: pages.url + '/adopted-look' })).error,
-			).toBe(false)
+			const navigation = await fixture.pair.call(2, 'navigate', {
+				url: pages.required.url + '/adopted-look',
+			})
+			expect(navigation.error).toBe(false)
 			const browser = requireValue(launcher.browsers[0])
 			const page = requireValue(
 				browser
@@ -129,15 +132,15 @@ describe('contexts C2 built browse on one browser', () => {
 					"(() => { const registry = navigator.modelContext ?? document.modelContext; registry.registerTool({ name: 'look', description: 'Reports the page authored answer', inputSchema: { type: 'object', properties: { purpose: { type: 'string' } }, required: ['purpose'] }, execute: () => 'A page authored look answer.' }); return true })()",
 				),
 			).toBe(true)
-			let id = 3
+			const id = new BrowserFixtureValue(3)
 			await retryUntil(
 				'the page tool is mirrored',
-				() => fixture.pair.request(id++, 'tools/list'),
+				() => fixture.pair.request(id.value++, 'tools/list'),
 				(result) => JSON.stringify(result).includes('Reports the page authored answer'),
 				{ budget: 5000, interval: 50 },
 			)
 			expect(
-				await fixture.pair.call(id++, 'look', { purpose: 'Read the page tool answer' }),
+				await fixture.pair.call(id.value++, 'look', { purpose: 'Read the page tool answer' }),
 			).toEqual({ error: false, text: 'A page authored look answer.' })
 		} finally {
 			await fixture.teardown.destroy()
@@ -145,8 +148,12 @@ describe('contexts C2 built browse on one browser', () => {
 	})
 	it('audit repair 5: a crash notice redacts the departed address with the lost toolset secrets', async () => {
 		const secret = 'departure-private-4821'
-		const source = await pages.read(server.client, holder, 'secret-departure')
-		const observer = await inspectHolderContext(scratch.path, source.url)
+		const source = await pages.required.read(
+			server.required.client,
+			holder.required,
+			'secret-departure',
+		)
+		const observer = await inspectHolderContext(scratch.required.path, source.url)
 		try {
 			const attached: unknown = await observer.client.send('Target.attachToTarget', {
 				targetId: observer.target,
@@ -159,15 +166,23 @@ describe('contexts C2 built browse on one browser', () => {
 				{ expression: `document.body.innerHTML = '<input aria-label="Private">'` },
 				{ session: attached['sessionId'] },
 			)
-			const read = await callContextTool(server.client, holder, 'read', { from: 1 })
+			const read = await callContextTool(server.required.client, holder.required, 'read', {
+				from: 1,
+			})
 			const ref = requireOutlineReference(read, 'textbox', 'Private')
-			await callContextTool(server.client, holder, 'type', { ref, text: secret, secret: true })
-			await callContextTool(server.client, holder, 'navigate', {
+			await callContextTool(server.required.client, holder.required, 'type', {
+				ref,
+				text: secret,
+				secret: true,
+			})
+			await callContextTool(server.required.client, holder.required, 'navigate', {
 				url: new URL(source.url).origin + '/state?secret=' + secret,
 			})
 			process.kill(observer.pid, 'SIGKILL')
 			await waitForProcessExit(observer.pid)
-			const result = await callContextTool(server.client, holder, 'read', { from: 1 })
+			const result = await callContextTool(server.required.client, holder.required, 'read', {
+				from: 1,
+			})
 			expect(result).toContain('SERVER_CRASH')
 			expect(result).not.toContain(secret)
 			expect(result).toContain('[redacted]')
@@ -176,8 +191,12 @@ describe('contexts C2 built browse on one browser', () => {
 		}
 	})
 	it('bounds complete MCP reading windows and refuses the removed names', async () => {
-		const source = await pages.read(server.client, holder, 'reading-bound')
-		const observer = await inspectHolderContext(scratch.path, source.url)
+		const source = await pages.required.read(
+			server.required.client,
+			holder.required,
+			'reading-bound',
+		)
+		const observer = await inspectHolderContext(scratch.required.path, source.url)
 		try {
 			const attached: unknown = await observer.client.send('Target.attachToTarget', {
 				targetId: observer.target,
@@ -192,42 +211,56 @@ describe('contexts C2 built browse on one browser', () => {
 				},
 				{ session: attached['sessionId'] },
 			)
-			const first = await callContextTool(server.client, holder, 'read', { from: 1 })
+			const first = await callContextTool(server.required.client, holder.required, 'read', {
+				from: 1,
+			})
 			expect(first.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			const from = Number(requireValue(/call read with from (\d+) for more/.exec(first))[1])
-			const next = await callContextTool(server.client, holder, 'read', { from })
+			const next = await callContextTool(server.required.client, holder.required, 'read', { from })
 			expect(next.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 			expect(next).toContain(`\n${from}: `)
 			for (const name of ['look', 'plain', 'tabs'])
-				await expect(callContextTool(server.client, holder, name, {})).rejects.toThrow(
-					`tool not found: ${name}`,
-				)
+				await expect(
+					callContextTool(server.required.client, holder.required, name, {}),
+				).rejects.toThrow(`tool not found: ${name}`)
 		} finally {
 			await observer.client.close()
 		}
 	})
 
 	it('isolates every web store between simultaneous holders on one browser', async () => {
-		expect(await server.client.call('tools', { holder })).toMatchObject({
+		expect(await server.required.client.call('tools', { holder: holder.required })).toMatchObject({
 			resultType: 'complete',
 			value: {
-				holder,
+				holder: holder.required,
 				tools: expect.arrayContaining([expect.objectContaining({ name: 'navigate' })]),
 			},
 		})
-		const source = await pages.read(server.client, holder, 'seed&cache=simultaneous')
-		const observer = await inspectHolderContext(scratch.path, source.url)
+		const source = await pages.required.read(
+			server.required.client,
+			holder.required,
+			'seed&cache=simultaneous',
+		)
+		const observer = await inspectHolderContext(scratch.required.path, source.url)
 		try {
 			await observer.client.send('Browser.setPermission', {
 				permission: { name: 'geolocation' },
 				setting: 'granted',
-				origin: pages.url,
+				origin: pages.required.url,
 				browserContextId: observer.context,
 			})
-			const control = await pages.read(server.client, holder, 'cache=simultaneous')
-			expect(pages.count('/cached/simultaneous'), 'source HTTP cache readback').toBe(1)
-			const sibling = await pages.read(server.client, undefined, 'cache=simultaneous')
-			const other = await inspectHolderContext(scratch.path, sibling.url)
+			const control = await pages.required.read(
+				server.required.client,
+				holder.required,
+				'cache=simultaneous',
+			)
+			expect(pages.required.count('/cached/simultaneous'), 'source HTTP cache readback').toBe(1)
+			const sibling = await pages.required.read(
+				server.required.client,
+				undefined,
+				'cache=simultaneous',
+			)
+			const other = await inspectHolderContext(scratch.required.path, sibling.url)
 			try {
 				expect(other.pid, 'both holders share the real browser process').toBe(observer.pid)
 			} finally {
@@ -240,19 +273,23 @@ describe('contexts C2 built browse on one browser', () => {
 				expect(sibling.state[store.name], `${store.name}: sibling isolation`).toEqual(store.empty)
 			}
 			expect(other.context).not.toBe(observer.context)
-			expect(pages.count('/cached/simultaneous'), 'sibling HTTP cache is separate').toBe(2)
+			expect(pages.required.count('/cached/simultaneous'), 'sibling HTTP cache is separate').toBe(2)
 			const sourceFile = await downloadContextFile(
-				server.client,
-				holder,
+				server.required.client,
+				holder.required,
 				observer.profile,
 				'source',
 				observer.target,
 			)
-			const download = await pages.read(server.client, undefined, 'marker=sibling')
-			const target = await inspectHolderContext(scratch.path, download.url)
+			const download = await pages.required.read(
+				server.required.client,
+				undefined,
+				'marker=sibling',
+			)
+			const target = await inspectHolderContext(scratch.required.path, download.url)
 			await target.client.close()
 			const siblingFile = await downloadContextFile(
-				server.client,
+				server.required.client,
 				undefined,
 				observer.profile,
 				'sibling',
@@ -270,93 +307,105 @@ describe('contexts C2 built browse on one browser', () => {
 	})
 
 	it('replaces a destroyed holder with empty web stores and an empty downloads folder', async () => {
-		await callHolderServer(server.client, 'destroy', { holder })
-		holder = await acquireHolder(server.client, 'C2 replacement source')
-		const source = await pages.read(server.client, holder, 'seed&cache=replacement')
-		const observer = await inspectHolderContext(scratch.path, source.url)
+		await callHolderServer(server.required.client, 'destroy', { holder: holder.required })
+		holder.value = await acquireHolder(server.required.client, 'C2 replacement source')
+		const source = await pages.required.read(
+			server.required.client,
+			holder.required,
+			'seed&cache=replacement',
+		)
+		const observer = await inspectHolderContext(scratch.required.path, source.url)
 		try {
 			await observer.client.send('Browser.setPermission', {
 				permission: { name: 'geolocation' },
 				setting: 'granted',
-				origin: pages.url,
+				origin: pages.required.url,
 				browserContextId: observer.context,
 			})
-			const control = await pages.read(server.client, holder, 'cache=replacement')
+			const control = await pages.required.read(
+				server.required.client,
+				holder.required,
+				'cache=replacement',
+			)
 			for (const store of CONTEXT_STORES)
 				expect(
 					control.state[store.name],
 					`${store.name}: destroyed holder write/read control`,
 				).toEqual(store.source)
-			expect(pages.count('/cached/replacement'), 'old HTTP cache control').toBe(1)
+			expect(pages.required.count('/cached/replacement'), 'old HTTP cache control').toBe(1)
 			const old = dirname(
 				await downloadContextFile(
-					server.client,
-					holder,
+					server.required.client,
+					holder.required,
 					observer.profile,
 					'source',
 					observer.target,
 				),
 			)
-			await callHolderServer(server.client, 'destroy', { holder })
+			await callHolderServer(server.required.client, 'destroy', { holder: holder.required })
 			expect(existsSync(old), 'destroy removes the old downloads folder').toBe(false)
-			const sibling = await callContextTool(server.client, undefined, 'read', {
+			const sibling = await callContextTool(server.required.client, undefined, 'read', {
 				from: 1,
 				search: '',
 			})
 			expect(sibling, 'destroy keeps the sibling context alive').not.toContain('SERVER_CRASH')
 			expect(
 				probeProcess(observer.pid),
-				`destroy retains the sibling browser; ${server.transport.evidence ?? ''}`,
+				`destroy retains the sibling browser; ${server.required.transport.evidence ?? ''}`,
 			).toBe(true)
 			const retained = readContextFolders(observer.profile)
-			holder = await acquireHolder(server.client, 'C2 replacement')
+			holder.value = await acquireHolder(server.required.client, 'C2 replacement')
 			const folders = readContextFolders(observer.profile).filter(
 				(folder) => !retained.includes(folder),
 			)
 			expect(folders, 'one fresh download folder').toHaveLength(1)
 			expect(readdirSync(requireValue(folders[0])), 'replacement downloads start empty').toEqual([])
-			const replacement = await pages.read(server.client, holder, 'cache=replacement')
+			const replacement = await pages.required.read(
+				server.required.client,
+				holder.required,
+				'cache=replacement',
+			)
 			for (const store of CONTEXT_STORES)
 				expect(replacement.state[store.name], `${store.name}: replacement isolation`).toEqual(
 					store.empty,
 				)
-			expect(pages.count('/cached/replacement'), 'replacement HTTP cache is empty').toBe(2)
+			expect(pages.required.count('/cached/replacement'), 'replacement HTTP cache is empty').toBe(2)
 		} finally {
 			await observer.client.close()
 		}
 	})
 
 	it('removes the destroyed context from Target.getBrowserContexts', async () => {
-		const source = await pages.read(server.client, holder)
-		const observer = await inspectHolderContext(scratch.path, source.url)
+		const source = await pages.required.read(server.required.client, holder.required)
+		const observer = await inspectHolderContext(scratch.required.path, source.url)
 		try {
 			expect(await observer.client.send('Target.getBrowserContexts')).toHaveProperty(
 				'browserContextIds',
 				expect.arrayContaining([observer.context]),
 			)
-			await callHolderServer(server.client, 'destroy', { holder })
+			await callHolderServer(server.required.client, 'destroy', { holder: holder.required })
 			expect(await observer.client.send('Target.getBrowserContexts')).toHaveProperty(
 				'browserContextIds',
 				expect.not.arrayContaining([observer.context]),
 			)
-			holder = await acquireHolder(server.client, 'C2 after disposal')
+			holder.value = await acquireHolder(server.required.client, 'C2 after disposal')
 		} finally {
 			await observer.client.close()
 		}
 	})
 
 	it('ends every holder on a killed browser with its own URL notice and a fresh blank context', async () => {
-		const named = await pages.read(server.client, holder)
-		const shared = await pages.read(server.client)
-		const victim = await findHolderProfile(scratch.path, named.url)
-		expect((await findHolderProfile(scratch.path, shared.url)).pid).toBe(victim.pid)
+		const named = await pages.required.read(server.required.client, holder.required)
+		const shared = await pages.required.read(server.required.client)
+		const victim = await findHolderProfile(scratch.required.path, named.url)
+		expect((await findHolderProfile(scratch.required.path, shared.url)).pid).toBe(victim.pid)
 		process.kill(victim.pid, 'SIGKILL')
 		await waitForProcessExit(victim.pid)
 		for (const entry of [
-			{ holder, url: named.url },
+			{ holder: holder.required, url: named.url },
 			{ holder: undefined, url: shared.url },
 		]) {
-			const answer = await callContextTool(server.client, entry.holder, 'read', {
+			const answer = await callContextTool(server.required.client, entry.holder, 'read', {
 				from: 1,
 				search: '',
 			})
@@ -364,18 +413,21 @@ describe('contexts C2 built browse on one browser', () => {
 			expect(answer, 'each notice keeps its own last URL').toContain(entry.url)
 			expect(answer, 'recovery has a blank active page').toContain('about:blank')
 			expect(
-				await callContextTool(server.client, entry.holder, 'read', { from: 1, search: '' }),
+				await callContextTool(server.required.client, entry.holder, 'read', {
+					from: 1,
+					search: '',
+				}),
 				'notice is delivered once',
 			).not.toContain('SERVER_CRASH')
 		}
 	})
 
 	it('contains an active renderer crash to its holder context', async () => {
-		const named = await pages.read(server.client, holder)
-		const shared = await pages.read(server.client, undefined, 'seed')
-		const victim = await inspectHolderContext(scratch.path, named.url)
+		const named = await pages.required.read(server.required.client, holder.required)
+		const shared = await pages.required.read(server.required.client, undefined, 'seed')
+		const victim = await inspectHolderContext(scratch.required.path, named.url)
 		try {
-			expect((await findHolderProfile(scratch.path, shared.url)).pid).toBe(victim.pid)
+			expect((await findHolderProfile(scratch.required.path, shared.url)).pid).toBe(victim.pid)
 			const attached: unknown = await victim.client.send('Target.attachToTarget', {
 				targetId: victim.target,
 				flatten: true,
@@ -385,22 +437,20 @@ describe('contexts C2 built browse on one browser', () => {
 			await victim.client
 				.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
 				.catch(() => undefined)
-			let recovered: string
-			try {
-				recovered = await callContextTool(server.client, holder, 'read', { from: 1 })
-			} catch (error) {
-				// The crash can arrive during this observation; the next call must recover it.
+			const recovered = await callContextTool(server.required.client, holder.required, 'read', {
+				from: 1,
+			}).catch((error: unknown) => {
 				if (!String(error).includes('SERVER_UNRESOLVED: The current page renderer crashed.'))
 					throw error
-				recovered = await callContextTool(server.client, holder, 'read', { from: 1 })
-			}
+				return callContextTool(server.required.client, holder.required, 'read', { from: 1 })
+			})
 			expect(recovered).toContain('SERVER_CRASH:')
 			expect(recovered).toContain(named.url)
 			expect(recovered).toContain('about:blank')
-			const sibling = await callContextTool(server.client, undefined, 'read', { from: 1 })
+			const sibling = await callContextTool(server.required.client, undefined, 'read', { from: 1 })
 			expect(sibling).not.toContain('SERVER_CRASH')
 			expect(sibling).toContain('"local":"source"')
-			expect((await findHolderProfile(scratch.path, shared.url)).pid).toBe(victim.pid)
+			expect((await findHolderProfile(scratch.required.path, shared.url)).pid).toBe(victim.pid)
 			expect(await victim.client.send('Target.getBrowserContexts')).toHaveProperty(
 				'browserContextIds',
 				expect.not.arrayContaining([victim.context]),
@@ -413,8 +463,8 @@ describe('contexts C2 built browse on one browser', () => {
 	it('keeps all busy headless holders visible with advancing timers and animation frames', async () => {
 		const group = randomUUID()
 		const readings = await Promise.all([
-			pages.read(server.client, holder, `busy=${group}`),
-			pages.read(server.client, undefined, `busy=${group}`),
+			pages.required.read(server.required.client, holder.required, `busy=${group}`),
+			pages.required.read(server.required.client, undefined, `busy=${group}`),
 		])
 		for (const reading of readings) {
 			expect(reading.state['visibility'], `${reading.url}: active page visibility`).toBe('visible')
@@ -425,28 +475,34 @@ describe('contexts C2 built browse on one browser', () => {
 })
 
 describe('contexts C2 built browse on two browsers', () => {
-	let scratch: ReturnType<typeof createScratch>
-	let server: Awaited<ReturnType<typeof openHolderServer>>
-	let pages: ContextFixture
+	const scratch = new BrowserFixtureValue<ReturnType<typeof createScratch> | undefined>(undefined)
+	const server = new BrowserFixtureValue<Awaited<ReturnType<typeof openHolderServer>> | undefined>(
+		undefined,
+	)
+	const pages = new BrowserFixtureValue<ContextFixture | undefined>(undefined)
 	beforeAll(async () => {
-		scratch = createScratch()
-		pages = new ContextFixture()
-		await pages.start()
-		server = await openHolderServer(scratch.path, 2)
+		scratch.value = createScratch()
+		pages.value = new ContextFixture()
+		await pages.required.start()
+		server.value = await openHolderServer(scratch.required.path, 2)
 	})
 	afterAll(async () => {
-		await server?.client.disconnect()
-		await pages?.destroy()
-		scratch?.destroy()
+		await server.value?.client.disconnect()
+		await pages.value?.destroy()
+		scratch.value?.destroy()
 	})
 	it('keeps every holder on the other browser free of a crash notice', async () => {
 		const holders: Array<string | undefined> = [undefined]
-		for (let index = 0; index < 3; index++)
-			holders.push(await acquireHolder(server.client, `C2 browser boundary ${index}`))
+		for (const index of Array.from({ length: 3 }).keys())
+			holders.push(await acquireHolder(server.required.client, `C2 browser boundary ${index}`))
 		const owners = await Promise.all(
 			holders.map(async (holder) => {
-				const page = await pages.read(server.client, holder, 'seed')
-				return { holder, url: page.url, ...(await findHolderProfile(scratch.path, page.url)) }
+				const page = await pages.required.read(server.required.client, holder, 'seed')
+				return {
+					holder,
+					url: page.url,
+					...(await findHolderProfile(scratch.required.path, page.url)),
+				}
 			}),
 		)
 		const victim = requireValue(owners[0])
@@ -455,34 +511,42 @@ describe('contexts C2 built browse on two browsers', () => {
 		process.kill(victim.pid, 'SIGKILL')
 		await waitForProcessExit(victim.pid)
 		for (const owner of owners.filter((entry) => entry.pid === victim.pid)) {
-			const answer = await callContextTool(server.client, owner.holder, 'read', { from: 1 })
+			const answer = await callContextTool(server.required.client, owner.holder, 'read', {
+				from: 1,
+			})
 			expect(answer).toContain('SERVER_CRASH:')
 			expect(answer).toContain(owner.url)
 		}
 		for (const owner of owners.filter((entry) => entry.pid !== victim.pid)) {
-			const answer = await callContextTool(server.client, owner.holder, 'read', { from: 1 })
+			const answer = await callContextTool(server.required.client, owner.holder, 'read', {
+				from: 1,
+			})
 			expect(answer, 'other browser holder has no notice').not.toContain('SERVER_CRASH')
 			expect(answer, 'other browser holder keeps state').toContain('"local":"source"')
-			expect((await findHolderProfile(scratch.path, owner.url)).pid).toBe(owner.pid)
+			expect((await findHolderProfile(scratch.required.path, owner.url)).pid).toBe(owner.pid)
 		}
 	})
 })
 
 describe('holders H3 built browse', () => {
-	let scratch: ReturnType<typeof createScratch>
-	let server: Awaited<ReturnType<typeof openHolderServer>>
-	let pages: Awaited<ReturnType<typeof createLoopback>>
-	let first: string
-	let second: string
-	let gate: PromiseWithResolvers<void> | undefined
-	let entered: PromiseWithResolvers<void> | undefined
+	const scratch = new BrowserFixtureValue<ReturnType<typeof createScratch> | undefined>(undefined)
+	const server = new BrowserFixtureValue<Awaited<ReturnType<typeof openHolderServer>> | undefined>(
+		undefined,
+	)
+	const pages = new BrowserFixtureValue<Awaited<ReturnType<typeof createLoopback>> | undefined>(
+		undefined,
+	)
+	const first = new BrowserFixtureValue<string | undefined>(undefined)
+	const second = new BrowserFixtureValue<string | undefined>(undefined)
+	const gate = new BrowserFixtureValue<PromiseWithResolvers<void> | undefined>(undefined)
+	const entered = new BrowserFixtureValue<PromiseWithResolvers<void> | undefined>(undefined)
 	beforeAll(async () => {
-		scratch = createScratch()
-		pages = await createLoopback(
+		scratch.value = createScratch()
+		pages.value = await createLoopback(
 			createServer(async (request, response) => {
 				if (request.url === '/held') {
-					entered?.resolve()
-					await gate?.promise
+					entered.value?.resolve()
+					await gate.value?.promise
 				}
 				if (request.url === '/download') {
 					response.setHeader('Content-Disposition', 'attachment; filename="holders-h3-fixture.txt"')
@@ -493,125 +557,125 @@ describe('holders H3 built browse', () => {
 				}
 			}),
 		)
-		server = await openHolderServer(scratch.path, 3, 1)
-		first = await acquireHolder(server.client, 'first holder')
-		second = await acquireHolder(server.client, 'second holder')
+		server.value = await openHolderServer(scratch.required.path, 3, 1)
+		first.value = await acquireHolder(server.required.client, 'first holder')
+		second.value = await acquireHolder(server.required.client, 'second holder')
 	})
 	afterAll(async () => {
-		gate?.resolve()
-		await server?.client.disconnect()
-		await pages?.destroy()
-		scratch.destroy()
+		gate.value?.resolve()
+		await server.value?.client.disconnect()
+		await pages.value?.destroy()
+		scratch.required.destroy()
 	})
 
 	it(
 		'completes another holder action while one fixture request remains held',
 		{ timeout: 5000 },
 		async () => {
-			gate = Promise.withResolvers<void>()
-			entered = Promise.withResolvers<void>()
-			let finished = false
-			const held = callHolderServer(server.client, 'execute', {
-				holder: first,
+			gate.value = Promise.withResolvers<void>()
+			entered.value = Promise.withResolvers<void>()
+			const finished = new BrowserFixtureValue(false)
+			const held = callHolderServer(server.required.client, 'execute', {
+				holder: first.required,
 				name: 'navigate',
-				arguments: { url: `${pages.url}/held` },
+				arguments: { url: `${pages.required.url}/held` },
 			}).finally(() => {
-				finished = true
+				finished.value = true
 			})
 			try {
-				await entered.promise
+				await entered.required.promise
 				expect(
-					await callHolderServer(server.client, 'execute', {
-						holder: second,
+					await callHolderServer(server.required.client, 'execute', {
+						holder: second.required,
 						name: 'navigate',
-						arguments: { url: `${pages.url}/second` },
+						arguments: { url: `${pages.required.url}/second` },
 					}),
 				).toContain('Holder fixture')
-				expect(finished).toBe(false)
+				expect(finished.value).toBe(false)
 			} finally {
-				gate.resolve()
+				gate.required.resolve()
 				await held
 			}
 		},
 	)
 
 	it('isolates cookies, localStorage, tabs, and references between holders', async () => {
-		const firstView = await callHolderServer(server.client, 'execute', {
-			holder: first,
+		const firstView = await callHolderServer(server.required.client, 'execute', {
+			holder: first.required,
 			name: 'navigate',
-			arguments: { url: `${pages.url}/first` },
+			arguments: { url: `${pages.required.url}/first` },
 		})
 		const seed = requireOutlineReference(firstView, 'button', 'Seed state')
-		await callHolderServer(server.client, 'execute', {
-			holder: first,
+		await callHolderServer(server.required.client, 'execute', {
+			holder: first.required,
 			name: 'click',
 			arguments: { ref: seed },
 		})
-		const secondView = await callHolderServer(server.client, 'execute', {
-			holder: second,
+		const secondView = await callHolderServer(server.required.client, 'execute', {
+			holder: second.required,
 			name: 'navigate',
-			arguments: { url: `${pages.url}/second` },
+			arguments: { url: `${pages.required.url}/second` },
 		})
 		expect(secondView).toContain('Cookie: empty; Storage: empty')
 		await expect(
-			callHolderServer(server.client, 'execute', {
-				holder: second,
+			callHolderServer(server.required.client, 'execute', {
+				holder: second.required,
 				name: 'click',
 				arguments: { ref: seed },
 			}),
 		).rejects.toThrow(`Element [ref=${seed}] is not in the current view`)
-		const firstAgain = await callHolderServer(server.client, 'execute', {
-			holder: first,
+		const firstAgain = await callHolderServer(server.required.client, 'execute', {
+			holder: first.required,
 			name: 'navigate',
-			arguments: { url: `${pages.url}/first` },
+			arguments: { url: `${pages.required.url}/first` },
 		})
 		expect(firstAgain).toContain('Cookie: holder=first; Storage: first')
-		await callHolderServer(server.client, 'execute', {
-			holder: first,
+		await callHolderServer(server.required.client, 'execute', {
+			holder: first.required,
 			name: 'click',
 			arguments: { ref: requireOutlineReference(firstAgain, 'link', 'Open holder tab') },
 		})
 		expect(
-			await callHolderServer(server.client, 'execute', {
-				holder: first,
+			await callHolderServer(server.required.client, 'execute', {
+				holder: first.required,
 				name: 'read',
 				arguments: { from: 1 },
 			}),
-		).toContain(`${pages.url}/tab`)
+		).toContain(`${pages.required.url}/tab`)
 		expect(
-			await callHolderServer(server.client, 'execute', {
-				holder: second,
+			await callHolderServer(server.required.client, 'execute', {
+				holder: second.required,
 				name: 'read',
 				arguments: { from: 1 },
 			}),
-		).not.toContain(`${pages.url}/tab`)
+		).not.toContain(`${pages.required.url}/tab`)
 	})
 
 	it('recovers a killed holder with every browser leased and keeps its loss notice local', async () => {
-		await callHolderServer(server.client, 'execute', {
-			holder: second,
+		await callHolderServer(server.required.client, 'execute', {
+			holder: second.required,
 			name: 'navigate',
-			arguments: { url: `${pages.url}/victim` },
+			arguments: { url: `${pages.required.url}/victim` },
 		})
-		const victim = await findHolderProfile(scratch.path, `${pages.url}/victim`)
+		const victim = await findHolderProfile(scratch.required.path, `${pages.required.url}/victim`)
 		process.kill(victim.pid, 'SIGKILL')
 		expect(
-			await callHolderServer(server.client, 'execute', {
-				holder: first,
+			await callHolderServer(server.required.client, 'execute', {
+				holder: first.required,
 				name: 'read',
 				arguments: { from: 1, search: '' },
 			}),
 		).not.toContain('SERVER_CRASH')
-		const recovered = await callHolderServer(server.client, 'execute', {
-			holder: second,
+		const recovered = await callHolderServer(server.required.client, 'execute', {
+			holder: second.required,
 			name: 'read',
 			arguments: { from: 1, search: '' },
 		})
 		expect(recovered).toContain('SERVER_CRASH')
 		expect(recovered).toContain('about:blank')
 		expect(
-			await callHolderServer(server.client, 'execute', {
-				holder: second,
+			await callHolderServer(server.required.client, 'execute', {
+				holder: second.required,
 				name: 'read',
 				arguments: { from: 1, search: '' },
 			}),
@@ -619,89 +683,96 @@ describe('holders H3 built browse', () => {
 	})
 
 	it('contains downloads and removes them before holder capacity is reused cleanly', async () => {
-		await expect(acquireHolder(server.client, 'overflow')).rejects.toThrow('SERVER_BUSY')
-		await callHolderServer(server.client, 'execute', {
-			holder: first,
+		await expect(acquireHolder(server.required.client, 'overflow')).rejects.toThrow('SERVER_BUSY')
+		await callHolderServer(server.required.client, 'execute', {
+			holder: first.required,
 			name: 'navigate',
-			arguments: { url: `${pages.url}/download-owner` },
+			arguments: { url: `${pages.required.url}/download-owner` },
 		})
-		const owner = await inspectHolderContext(scratch.path, `${pages.url}/download-owner`)
-		let download: string
-		try {
-			download = await downloadContextFile(
-				server.client,
-				first,
-				owner.profile,
-				'Owned holder download',
-				owner.target,
-				'Download holder file',
-				'holders-h3-fixture.txt',
-			)
-		} finally {
-			await owner.client.close()
-		}
-		await callHolderServer(server.client, 'destroy', { holder: first })
+		const owner = await inspectHolderContext(
+			scratch.required.path,
+			`${pages.required.url}/download-owner`,
+		)
+		const download = await downloadContextFile(
+			server.required.client,
+			first.required,
+			owner.profile,
+			'Owned holder download',
+			owner.target,
+			'Download holder file',
+			'holders-h3-fixture.txt',
+		).finally(() => owner.client.close())
+		await callHolderServer(server.required.client, 'destroy', { holder: first.required })
 		expect(existsSync(dirname(download))).toBe(false)
 		expect(probeProcess(owner.pid)).toBe(true)
 		expect(existsSync(owner.profile)).toBe(true)
-		first = await acquireHolder(server.client, 'clean replacement')
+		first.value = await acquireHolder(server.required.client, 'clean replacement')
 		expect(
-			await callHolderServer(server.client, 'execute', {
-				holder: first,
+			await callHolderServer(server.required.client, 'execute', {
+				holder: first.required,
 				name: 'read',
 				arguments: { from: 1 },
 			}),
-		).not.toContain(`${pages.url}/tab`)
-		const clean = await callHolderServer(server.client, 'execute', {
-			holder: first,
+		).not.toContain(`${pages.required.url}/tab`)
+		const clean = await callHolderServer(server.required.client, 'execute', {
+			holder: first.required,
 			name: 'navigate',
-			arguments: { url: `${pages.url}/clean` },
+			arguments: { url: `${pages.required.url}/clean` },
 		})
 		expect(clean).toContain('Cookie: empty; Storage: empty')
-		const replacement = await findHolderProfile(scratch.path, `${pages.url}/clean`)
+		const replacement = await findHolderProfile(
+			scratch.required.path,
+			`${pages.required.url}/clean`,
+		)
 		expect(replacement.pid).toBe(owner.pid)
 		expect(replacement.profile).toBe(owner.profile)
 	})
 
 	it('persists a holder replay beside shared-browser navigation', { timeout: 5000 }, async () => {
-		gate = Promise.withResolvers<void>()
-		entered = Promise.withResolvers<void>()
-		await createFileBrowserJourneyStore({ root: scratch.path }).set(
+		gate.value = Promise.withResolvers<void>()
+		entered.value = Promise.withResolvers<void>()
+		await createFileBrowserJourneyStore({ root: scratch.required.path }).set(
 			createBrowserJourneyFixture([
-				{ action: 'navigate', arguments: { url: `${pages.url}/held` } },
+				{ action: 'navigate', arguments: { url: `${pages.required.url}/held` } },
 			]),
 		)
-		const replay = callHolderServer(server.client, 'execute', {
-			holder: first,
+		const replay = callHolderServer(server.required.client, 'execute', {
+			holder: first.required,
 			name: 'replay',
 			arguments: { journey: 'check-ready' },
 		})
 		try {
-			await entered.promise
+			await entered.required.promise
 			expect(
-				await callHolderServer(server.client, 'navigate', { url: `${pages.url}/shared` }),
+				await callHolderServer(server.required.client, 'navigate', {
+					url: `${pages.required.url}/shared`,
+				}),
 			).toContain('Holder fixture')
 		} finally {
-			gate.resolve()
+			gate.required.resolve()
 			await replay
 		}
 		expect(await replay).toContain('Replayed check-ready: 1 of 1 steps.')
-		expect(readdirSync(join(scratch.path, 'check-ready', 'runs'))).toHaveLength(1)
+		expect(readdirSync(join(scratch.required.path, 'check-ready', 'runs'))).toHaveLength(1)
 	})
 
 	it('completes simultaneous replays of one recorded journey on two holders repeatedly', async () => {
-		await recordHolderJourney(server.client, 'replay-race', `${pages.url}/replay-race`)
-		for (let repetition = 0; repetition < 4; repetition += 1) {
+		await recordHolderJourney(
+			server.required.client,
+			'replay-race',
+			`${pages.required.url}/replay-race`,
+		)
+		for (const repetition of Array.from({ length: 4 }).keys()) {
 			const peer =
 				repetition % 2 === 0
-					? callHolderServer(server.client, 'replay', { journey: 'replay-race' })
-					: callHolderServer(server.client, 'execute', {
-							holder: second,
+					? callHolderServer(server.required.client, 'replay', { journey: 'replay-race' })
+					: callHolderServer(server.required.client, 'execute', {
+							holder: second.required,
 							name: 'replay',
 							arguments: { journey: 'replay-race' },
 						})
-			const named = callHolderServer(server.client, 'execute', {
-				holder: first,
+			const named = callHolderServer(server.required.client, 'execute', {
+				holder: first.required,
 				name: 'replay',
 				arguments: { journey: 'replay-race' },
 			})
@@ -710,11 +781,13 @@ describe('holders H3 built browse', () => {
 				expect(result, `repetition ${repetition + 1}`).toContain(
 					'Replayed replay-race: 1 of 1 steps.',
 				)
-				expect(result).toContain(`${pages.url}/replay-race`)
+				expect(result).toContain(`${pages.required.url}/replay-race`)
 			}
 		}
-		expect(readdirSync(join(scratch.path, 'replay-race', 'runs'))).toHaveLength(8)
-		const runs = await createFileBrowserRunStore({ root: scratch.path }).list('replay-race')
+		expect(readdirSync(join(scratch.required.path, 'replay-race', 'runs'))).toHaveLength(8)
+		const runs = await createFileBrowserRunStore({ root: scratch.required.path }).list(
+			'replay-race',
+		)
 		expect(runs.entries).toHaveLength(8)
 		expect(runs.faults).toEqual([])
 		for (const run of runs.entries) {
@@ -725,35 +798,39 @@ describe('holders H3 built browse', () => {
 	})
 
 	it('replays another journey after the holder finishes recording', async () => {
-		await recordHolderJourney(server.client, 'replay-other', `${pages.url}/replay-other`)
 		await recordHolderJourney(
-			server.client,
-			'recorded-holder',
-			`${pages.url}/recorded-holder`,
-			second,
+			server.required.client,
+			'replay-other',
+			`${pages.required.url}/replay-other`,
 		)
-		const result = await callHolderServer(server.client, 'execute', {
-			holder: second,
+		await recordHolderJourney(
+			server.required.client,
+			'recorded-holder',
+			`${pages.required.url}/recorded-holder`,
+			second.required,
+		)
+		const result = await callHolderServer(server.required.client, 'execute', {
+			holder: second.required,
 			name: 'replay',
 			arguments: { journey: 'replay-other' },
 		})
 		expect(result).toContain('Replayed replay-other: 1 of 1 steps.')
-		expect(result).toContain(`${pages.url}/replay-other`)
-		expect(result).not.toContain(`${pages.url}/recorded-holder`)
+		expect(result).toContain(`${pages.required.url}/replay-other`)
+		expect(result).not.toContain(`${pages.required.url}/recorded-holder`)
 	})
 
 	it('tears down every live lease process and profile', async () => {
-		const records = readdirSync(join(scratch.path, '.profiles')).map((name) => ({
-			profile: join(scratch.path, '.profiles', name),
+		const records = readdirSync(join(scratch.required.path, '.profiles')).map((name) => ({
+			profile: join(scratch.required.path, '.profiles', name),
 			record: requireValue(
 				parseBrowserProfileRecord(
-					readFileSync(join(scratch.path, '.profiles', name, 'browse.json'), 'utf8'),
+					readFileSync(join(scratch.required.path, '.profiles', name, 'browse.json'), 'utf8'),
 				),
 			),
 		}))
 		expect(records).toHaveLength(3)
-		await server.client.disconnect()
-		expect(server.transport.evidence ?? '').toBe('')
+		await server.required.client.disconnect()
+		expect(server.required.transport.evidence ?? '').toBe('')
 		for (const { profile, record } of records) {
 			expect(probeProcess(record.pid)).toBe(false)
 			expect(existsSync(profile)).toBe(false)
@@ -784,12 +861,8 @@ describe('holders H3 built cleanup refusal', () => {
 		try {
 			if (locker.stdout === null) throw new Error('Missing lock process output')
 			await once(locker.stdout, 'data')
-			let refusal: unknown
-			try {
-				rmdirSync(lock)
-			} catch (error) {
-				refusal = error
-			}
+			const probe = attempt(() => rmdirSync(lock))
+			const refusal = probe.success ? undefined : probe.error
 			expect(readErrorCode(refusal)).toBe(refusal === undefined ? undefined : 'EBUSY')
 			const supported = refusal !== undefined
 			context.skip(!supported, BROWSE_DIRECTORY_REASON)
@@ -1157,10 +1230,10 @@ describe('eager U7 real browse', () => {
 	})
 
 	it('reports an unknown navigation outcome after exactly one held route request', async () => {
-		let requests = 0
+		const requests = new BrowserFixtureValue(0)
 		const route = await createLoopback(
 			createServer(() => {
-				requests += 1
+				requests.value += 1
 			}),
 		)
 		const launcher = new BrowseLauncher()
@@ -1171,7 +1244,7 @@ describe('eager U7 real browse', () => {
 		try {
 			await fixture.server.start()
 			const pending = fixture.pair.call(2, 'navigate', { url: `${route.url}/held` })
-			await waitForCondition('held route request', () => requests === 1, { budget: 5000 })
+			await waitForCondition('held route request', () => requests.value === 1, { budget: 5000 })
 			process.kill(requireValue(launcher.browsers[0]?.pid, 'lease pid'), 'SIGKILL')
 			const answer = await pending
 			expect(answer.error).toBe(true)
@@ -1180,7 +1253,7 @@ describe('eager U7 real browse', () => {
 			expect((await fixture.pair.call(3, 'read', { from: 1, search: 'page' })).text).toMatch(
 				/SERVER_CRASH:/,
 			)
-			expect(requests).toBe(1)
+			expect(requests.value).toBe(1)
 		} finally {
 			await fixture.teardown.destroy()
 			await route.destroy()
@@ -1197,7 +1270,9 @@ describe('eager U7 real browse', () => {
 				browser: { executable: requireSystemBrowser().executable },
 				pool: { size: 2, launch: (options) => launcher.launch({ ...options, timeout: 5000 }) },
 			})
-			let client: ReturnType<typeof createCDPClient> | undefined
+			const client = new BrowserFixtureValue<ReturnType<typeof createCDPClient> | undefined>(
+				undefined,
+			)
 			try {
 				await fixture.server.start()
 				expect((await fixture.pair.call(1, 'navigate', { url })).error).toBe(false)
@@ -1226,22 +1301,22 @@ describe('eager U7 real browse', () => {
 				const view = requireValue(context.pages()[0], 'view')
 				expect(view.url, 'the crash target must belong to the shared MCP lease').toBe(url)
 				const background = await context.create()
-				client = createCDPClient({
+				client.value = createCDPClient({
 					transport: createWebSocketCDPTransport({
 						url: requireValue(browser.endpoint, 'endpoint'),
 					}),
 				})
-				await client.connect()
+				await client.required.connect()
 				for (const page of [background, view]) {
 					const crashed = createRecorder<readonly []>()
 					page.emitter.on('crash', crashed.handler)
-					const attached: unknown = await client.send('Target.attachToTarget', {
+					const attached: unknown = await client.required.send('Target.attachToTarget', {
 						targetId: page.id,
 						flatten: true,
 					})
 					if (!isRecord(attached) || !isString(attached['sessionId']))
 						throw new Error('Missing crash session')
-					await client
+					await client.required
 						.send('Page.crash', undefined, { session: attached['sessionId'], timeout: 1000 })
 						.catch(() => undefined)
 					await waitForCondition(
@@ -1262,7 +1337,7 @@ describe('eager U7 real browse', () => {
 					expect(answer.text.includes('SERVER_CRASH:')).toBe(page === view)
 				}
 			} finally {
-				await client?.close()
+				await client.value?.close()
 				await fixture.teardown.destroy()
 				await pages.destroy()
 			}
@@ -1317,12 +1392,8 @@ describe('eager U7 real browse', () => {
 				budget: 15000,
 			})
 			const pid = requireValue(launcher.browsers[0]?.pid, 'lease pid')
-			let refusal: unknown
-			try {
-				process.kill(pid, 'SIGSTOP')
-			} catch (error) {
-				refusal = error
-			}
+			const probe = attempt(() => process.kill(pid, 'SIGSTOP'))
+			const refusal = probe.success ? undefined : probe.error
 			expect(readErrorCode(refusal)).toBe(refusal === undefined ? undefined : 'ERR_UNKNOWN_SIGNAL')
 			const supported = refusal === undefined
 			context.skip(!supported, BROWSE_SIGSTOP_REASON)
@@ -1413,7 +1484,7 @@ describe('eager U6 real browse', () => {
 			log: new BrowseLog(),
 			browser: { executable },
 		})
-		let orphan: number | undefined
+		const orphan = new BrowserFixtureValue<number | undefined>(undefined)
 		try {
 			await Promise.race([
 				waitForCondition('child ready', () => child.lines.includes('ready'), { budget: 20000 }),
@@ -1430,7 +1501,7 @@ describe('eager U6 real browse', () => {
 				parseBrowserProfileRecord(readFileSync(join(profile, 'browse.json'), 'utf8')),
 				'record',
 			)
-			orphan = record.pid
+			orphan.value = record.pid
 			expect(
 				probeProcess(record.pid),
 				`browser ${record.pid} before killing server ${child.pid}; executable ${executable}`,
@@ -1452,9 +1523,9 @@ describe('eager U6 real browse', () => {
 		} finally {
 			await server.destroy()
 			await child.destroy()
-			if (orphan !== undefined && probeProcess(orphan)) {
-				process.kill(orphan, 'SIGKILL')
-				await waitForProcessExit(orphan)
+			if (orphan.value !== undefined && probeProcess(orphan.required)) {
+				process.kill(orphan.required, 'SIGKILL')
+				await waitForProcessExit(orphan.required)
 			}
 			scratch.destroy()
 		}

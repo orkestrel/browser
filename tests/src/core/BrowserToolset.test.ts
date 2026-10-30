@@ -11,7 +11,6 @@
 import type {
 	BrowserAction,
 	BrowserToolSourceEventMap,
-	BrowserToolSourceInterface,
 	BrowserToolsetReason,
 	BrowserViewInterface,
 } from '@src/core'
@@ -43,12 +42,16 @@ import {
 	isBrowserStepError,
 } from '@src/core'
 import {
+	BrowserFixtureValue,
+	createBrowserFixtureSource,
+	countBrowserFrontCalls,
 	BROWSER_SELECT_SECRET,
 	BROWSER_JOURNEY_SECRET,
 	createBrowserSecretSelectFixture,
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_CHILD_FIXTURE,
 	emitBrowserNavigation,
+	emitBrowserWindowOpen,
 	createBrowserElementFixture,
 	createBrowserJourneyFixture,
 	createBrowserViewDouble,
@@ -62,6 +65,114 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it('selects an announced popup only after the held click replies and emits select once', async () => {
+		const withheld: CDPSentMessage[] = []
+		const fixture = await createBrowserElementFixture({
+			held: true,
+			released: (message) => withheld.push(message),
+			roots: new Map([
+				['popup-1-session', { id: 'popup-1', url: 'https://example.test/popup-1' }],
+				['popup-2-session', { id: 'popup-2', url: 'https://example.test/popup-2' }],
+			]),
+		})
+		for (const method of [
+			'Page.setInterceptFileChooserDialog',
+			'Network.enable',
+			'Network.disable',
+			'Target.detachFromTarget',
+		])
+			replyOk(fixture.transport, method)
+		const toolset = createBrowserToolset(fixture.page)
+		const selections = createRecorder<readonly [BrowserViewInterface]>()
+		const popups = createRecorder<readonly [BrowserViewInterface]>()
+		toolset.emitter.on('select', selections.handler)
+		fixture.page.emitter.on('popup', popups.handler)
+		try {
+			await toolset.start()
+			const clicking = toolset.follow('s1', {
+				action: 'click',
+				arguments: {},
+				target: { role: 'button', name: 'Place order' },
+			})
+			await waitForCondition('the click is held', () => withheld.length === 1)
+			for (const id of ['popup-1']) {
+				emitBrowserWindowOpen(fixture.transport, 'session-main', `https://example.test/${id}`)
+				fixture.transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: `${id}-session`,
+						targetInfo: { targetId: id, type: 'page', url: `https://example.test/${id}` },
+					},
+					'session-main',
+				)
+			}
+			await waitForCondition('the popups are announced', () => popups.count === 1)
+			expect(toolset.view).toBe(fixture.page)
+			expect(selections.calls).toEqual([])
+			fixture.transport.reply(requireValue(withheld[0]).id, {})
+			expect((await clicking).outcome).toBe('done')
+			expect(toolset.view.url).toBe('https://example.test/popup-1')
+			expect(selections.calls).toEqual([[requireValue(popups.calls[0])[0]]])
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
+	it('drops a queued popup when the action has already moved to another popup', async () => {
+		const withheld: CDPSentMessage[] = []
+		const fixture = await createBrowserElementFixture({
+			held: true,
+			released: (message) => withheld.push(message),
+			roots: new Map([
+				['popup-1-session', { id: 'popup-1', url: 'https://example.test/popup-1' }],
+				['popup-2-session', { id: 'popup-2', url: 'https://example.test/popup-2' }],
+			]),
+		})
+		for (const method of [
+			'Page.setInterceptFileChooserDialog',
+			'Network.enable',
+			'Network.disable',
+			'Target.detachFromTarget',
+		])
+			replyOk(fixture.transport, method)
+		const toolset = createBrowserToolset(fixture.page)
+		const selections = createRecorder<readonly [BrowserViewInterface]>()
+		const popups = createRecorder<readonly [BrowserViewInterface]>()
+		toolset.emitter.on('select', selections.handler)
+		fixture.page.emitter.on('popup', popups.handler)
+		try {
+			await toolset.start()
+			const clicking = toolset.follow('s1', {
+				action: 'click',
+				arguments: {},
+				target: { role: 'button', name: 'Place order' },
+			})
+			await waitForCondition('the click is held', () => withheld.length === 1)
+			for (const id of ['popup-1', 'popup-2']) {
+				emitBrowserWindowOpen(fixture.transport, 'session-main', `https://example.test/${id}`)
+				fixture.transport.event(
+					'Target.attachedToTarget',
+					{
+						sessionId: `${id}-session`,
+						targetInfo: { targetId: id, type: 'page', url: `https://example.test/${id}` },
+					},
+					'session-main',
+				)
+			}
+			await waitForCondition('the popups are announced', () => popups.count === 2)
+			expect(toolset.view).toBe(fixture.page)
+			expect(selections.calls).toEqual([])
+			fixture.transport.reply(requireValue(withheld[0]).id, {})
+			expect((await clicking).outcome).toBe('done')
+			expect(toolset.view.url).toBe('https://example.test/popup-1')
+			expect(selections.calls).toEqual([[requireValue(popups.calls[0])[0]]])
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
+
 	it('small copy: advertises click, type, and the words to enter exactly', () => {
 		expect
 			.soft(BROWSER_TOOL_COPY.click.description)
@@ -79,7 +190,7 @@ describe('BrowserToolset', () => {
 		).toBe('The text to type or the option to choose.')
 	})
 	it('small copy: type refusal names one field, two fields in view order, or click with no fields', async () => {
-		let count = 2
+		const count = new BrowserFixtureValue(2)
 		const fixture = await createBrowserElementFixture({
 			local: true,
 			accessibility: (message) =>
@@ -91,7 +202,7 @@ describe('BrowserToolset', () => {
 							{ role: 'button', name: 'Add to cart' },
 							{ role: 'textbox', name: 'Full name' },
 							{ role: 'searchbox', name: 'Address' },
-						].slice(0, count),
+						].slice(0, count.value),
 					),
 				),
 		})
@@ -106,7 +217,7 @@ describe('BrowserToolset', () => {
 				message: 'Element button "Add to cart" [ref=e2] takes no text; call click for a button.',
 				context: { reference: 'e2', role: 'button' },
 			})
-			count = 3
+			count.value = 3
 			await toolset.read()
 			const sent = fixture.transport.sent.length
 			await expect.soft(type.execute({ ref: 'e1', text: 'Sam' }, context)).rejects.toMatchObject({
@@ -116,7 +227,7 @@ describe('BrowserToolset', () => {
 				context: { reference: 'e1', role: 'link' },
 			})
 			expect(fixture.transport.sent.slice(sent)).toEqual([])
-			count = 4
+			count.value = 4
 			await toolset.read()
 			await expect.soft(type.execute({ ref: 'e2', text: 'Sam' }, context)).rejects.toMatchObject({
 				code: 'TOOLSET_ROLE',
@@ -124,7 +235,7 @@ describe('BrowserToolset', () => {
 					'Element button "Add to cart" [ref=e2] takes no text; to type, use textbox "Full name" [ref=e3] or searchbox "Address" [ref=e4].',
 				context: { reference: 'e2', role: 'button' },
 			})
-			count = 2
+			count.value = 2
 			await toolset.read()
 			await expect(type.execute({ ref: 'e2', text: 'Sam' }, context)).rejects.toMatchObject({
 				code: 'TOOLSET_ROLE',
@@ -136,14 +247,14 @@ describe('BrowserToolset', () => {
 		}
 	})
 	it('stable links: carries listed links and names a gone reference while preserving unknown refusals', async () => {
-		let navigated = false
+		const navigated = new BrowserFixtureValue(false)
 		const fixture = await createBrowserElementFixture({
 			local: true,
 			accessibility: (message) =>
 				fixture.transport.reply(
 					message.id,
 					buildBrowserReferenceTree(
-						navigated
+						navigated.value
 							? BROWSER_STABLE_REFERENCE_ELEMENTS.slice(0, 3)
 							: BROWSER_STABLE_REFERENCE_ELEMENTS,
 					),
@@ -153,7 +264,7 @@ describe('BrowserToolset', () => {
 		try {
 			await toolset.start()
 			expect(await toolset.read()).toContain('searchbox "Search products" [ref=e4]')
-			navigated = true
+			navigated.value = true
 			emitBrowserNavigation(
 				fixture.transport,
 				'session-main',
@@ -297,16 +408,16 @@ describe('BrowserToolset', () => {
 		const toolset = createBrowserToolset(fixture.page)
 		try {
 			await toolset.start()
-			let settled = false
+			const settled = new BrowserFixtureValue(false)
 			const waited = toolset.tools
 				.execute({ id: 'gone', name: 'wait', arguments: { text: 'Order placed', absent: true } })
 				.then((result) => {
-					settled = true
+					settled.value = true
 					return result
 				})
 			await waitForCondition(
 				'the absent wait is pending or refused',
-				() => waits.length === 1 || settled,
+				() => waits.length === 1 || settled.value,
 			)
 			expect(waits).toHaveLength(1)
 			fixture.transport.event(
@@ -326,12 +437,9 @@ describe('BrowserToolset', () => {
 	})
 	it('strips synthetic purpose before calling a parameterless page tool', async () => {
 		const inputs = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
-		const source: BrowserToolSourceInterface = {
-			emitter: new Emitter<BrowserToolSourceEventMap>(),
-			adopt: async () => [
-				createTool({ name: 'checkout', execute: (args) => inputs.handler(args) }),
-			],
-		}
+		const source = createBrowserFixtureSource(async () => [
+			createTool({ name: 'checkout', execute: (args) => inputs.handler(args) }),
+		])
 		const toolset = new BrowserToolset(createBrowserViewDouble(), { source })
 		try {
 			await toolset.start()
@@ -365,10 +473,9 @@ describe('BrowserToolset', () => {
 		}
 	})
 	it('skips a page tool named unresolved as reserved', async () => {
-		const source: BrowserToolSourceInterface = {
-			emitter: new Emitter<BrowserToolSourceEventMap>(),
-			adopt: async () => [createTool({ name: 'unresolved', execute: ignoreCall })],
-		}
+		const source = createBrowserFixtureSource(async () => [
+			createTool({ name: 'unresolved', execute: ignoreCall }),
+		])
 		const toolset = new BrowserToolset(createBrowserViewDouble(), { source })
 		const skips = createRecorder<readonly [string, BrowserToolsetReason]>()
 		toolset.emitter.on('skip', skips.handler)
@@ -1750,14 +1857,14 @@ describe('BrowserToolset', () => {
 		it('catches a view capture that a navigation interrupts and that reports the change instead of reading the page again', async () => {
 			const outcomes: Array<readonly [string, number]> = []
 			for (const persistent of [false, true]) {
-				let capturing = false
-				let changes = 0
+				const capturing = new BrowserFixtureValue(false)
+				const changes = new BrowserFixtureValue(0)
 				const fixture = await createBrowserElementFixture({
 					accessibility: (message) => {
 						const child = message.params?.['frameId'] === 'child'
-						if (!child && capturing && (persistent || changes === 0)) {
-							changes += 1
-							const loaderId = `loader-next-${changes}`
+						if (!child && capturing.value && (persistent || changes.value === 0)) {
+							changes.value += 1
+							const loaderId = `loader-next-${changes.value}`
 							fixture.transport.event(
 								'Page.frameNavigated',
 								{ frame: { id: 'main', url: 'https://example.test/next', loaderId } },
@@ -1784,11 +1891,11 @@ describe('BrowserToolset', () => {
 						{ from: 1, search: 'home' },
 						{ signal },
 					)
-					capturing = true
+					capturing.value = true
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 					)
-					outcomes.push([result, changes])
+					outcomes.push([result, changes.value])
 				} finally {
 					await client.close()
 				}
@@ -1807,16 +1914,16 @@ describe('BrowserToolset', () => {
 		it('catches a view capture whose title read a navigation rejects that reports the failure instead of reading the page again, or one that retries a rejection no navigation caused', async () => {
 			const outcomes: Array<readonly [string, number]> = []
 			for (const navigating of [true, false]) {
-				let capturing = false
-				let titles = 0
+				const capturing = new BrowserFixtureValue(false)
+				const titles = new BrowserFixtureValue(0)
 				const fixture = await createBrowserElementFixture({
 					title: (message) => {
-						if (!capturing) {
+						if (!capturing.value) {
 							fixture.transport.reply(message.id, { result: { value: 'Cart' } })
 							return
 						}
-						titles += 1
-						if (titles > 1) {
+						titles.value += 1
+						if (titles.value > 1) {
 							fixture.transport.reply(message.id, { result: { value: 'Next' } })
 							return
 						}
@@ -1846,11 +1953,11 @@ describe('BrowserToolset', () => {
 						{ from: 1, search: 'home' },
 						{ signal },
 					)
-					capturing = true
+					capturing.value = true
 					const result = String(
 						await requireValue(toolset.tools.tool('click')).execute({ ref: 'e1' }, { signal }),
 					)
-					outcomes.push([result, titles])
+					outcomes.push([result, titles.value])
 				} finally {
 					await client.close()
 				}
@@ -1900,7 +2007,7 @@ describe('BrowserToolset', () => {
 						await toolset.tools.execute({ id: url, name: 'navigate', arguments: { url } }),
 					).toMatchObject({ success: false, error })
 				expect(transport.sent.some((message) => message.method === 'Page.navigate')).toBe(false)
-				let settled = false
+				const settled = new BrowserFixtureValue(false)
 				const navigating = toolset.tools
 					.execute({
 						id: 'next',
@@ -1908,13 +2015,13 @@ describe('BrowserToolset', () => {
 						arguments: { url: 'https://example.test/next' },
 					})
 					.finally(() => {
-						settled = true
+						settled.value = true
 					})
 				await waitForCondition('the navigation replied', () =>
 					transport.sent.some((message) => message.method === 'Page.navigate'),
 				)
 				await waitForDelay(50)
-				expect(settled).toBe(false)
+				expect(settled.value).toBe(false)
 				transport.event('Page.loadEventFired', { timestamp: 1 }, 'session-main')
 				const navigated = await navigating
 				expect(
@@ -2244,10 +2351,7 @@ describe('BrowserToolset', () => {
 			try {
 				const click = createTool({ name: 'click', description: 'Page click', execute: ignoreCall })
 				const extra = createTool({ name: 'extra', description: 'Page extra', execute: ignoreCall })
-				const source: BrowserToolSourceInterface = {
-					emitter: new Emitter<BrowserToolSourceEventMap>(),
-					adopt: () => Promise.resolve([click, extra]),
-				}
+				const source = createBrowserFixtureSource(() => Promise.resolve([click, extra]))
 				const toolset = createBrowserToolset(page, { source })
 				const skips = createRecorder<readonly [string, BrowserToolsetReason]>()
 				toolset.emitter.on('skip', skips.handler)
@@ -2276,16 +2380,16 @@ describe('BrowserToolset', () => {
 				const adoptions = Array.from({ length: 8 }, () =>
 					Promise.withResolvers<readonly ToolInterface[]>(),
 				)
-				let calls = 0
+				const calls = new BrowserFixtureValue(0)
 				const emitter = new Emitter<BrowserToolSourceEventMap>()
-				const source: BrowserToolSourceInterface = {
-					emitter,
-					tools: () => [],
-					adopt: () => {
-						calls += 1
-						return requireValue(adoptions[calls - 1]).promise
+				const source = createBrowserFixtureSource(
+					() => {
+						calls.value += 1
+						return requireValue(adoptions[calls.value - 1]).promise
 					},
-				}
+					() => [],
+					emitter,
+				)
 				requireValue(adoptions[0]).resolve([])
 				const toolset = createBrowserToolset(page, { source })
 				await toolset.start()
@@ -2313,7 +2417,7 @@ describe('BrowserToolset', () => {
 					'session-main',
 				)
 				await moved
-				await waitForCondition('the move adopts again', () => calls === 5)
+				await waitForCondition('the move adopts again', () => calls.value === 5)
 				requireValue(adoptions[3]).resolve([createTool({ name: 'moved', execute: ignoreCall })])
 				await waitForDelay(10)
 				expect(toolset.tools.tool('moved')).toBeUndefined()
@@ -2329,7 +2433,7 @@ describe('BrowserToolset', () => {
 					'session-main',
 				)
 				expect((await back)[0]).toBe(page)
-				await waitForCondition('the return adopts again', () => calls === 7)
+				await waitForCondition('the return adopts again', () => calls.value === 7)
 				requireValue(adoptions[5]).resolve([createTool({ name: 'round', execute: ignoreCall })])
 				await waitForDelay(10)
 				expect(toolset.tools.tool('round')).toBeUndefined()
@@ -2603,14 +2707,12 @@ describe('BrowserToolset', () => {
 				tools.emitter.on('add', (tool) => {
 					if (tool.name === 'extra') tools.add(consumer)
 				})
-				const source: BrowserToolSourceInterface = {
-					emitter: new Emitter<BrowserToolSourceEventMap>(),
-					adopt: () =>
-						Promise.resolve([
-							createTool({ name: 'extra', execute: ignoreCall }),
-							createTool({ name: 'search', execute: ignoreCall }),
-						]),
-				}
+				const source = createBrowserFixtureSource(() =>
+					Promise.resolve([
+						createTool({ name: 'extra', execute: ignoreCall }),
+						createTool({ name: 'search', execute: ignoreCall }),
+					]),
+				)
 				const toolset = createBrowserToolset(page, { tools, source })
 				const skips = createRecorder<readonly [string, BrowserToolsetReason]>()
 				toolset.emitter.on('skip', skips.handler)
@@ -2628,18 +2730,16 @@ describe('BrowserToolset', () => {
 			const { client, page } = await createBrowserElementFixture()
 			try {
 				const inputs = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
-				const source: BrowserToolSourceInterface = {
-					emitter: new Emitter<BrowserToolSourceEventMap>(),
-					adopt: () =>
-						Promise.resolve([
-							createTool({ name: 'extra', execute: inputs.handler }),
-							createTool({
-								name: 'maybe',
-								parameters: { type: 'object', properties: { purpose: { type: 'string' } } },
-								execute: ignoreCall,
-							}),
-						]),
-				}
+				const source = createBrowserFixtureSource(() =>
+					Promise.resolve([
+						createTool({ name: 'extra', execute: inputs.handler }),
+						createTool({
+							name: 'maybe',
+							parameters: { type: 'object', properties: { purpose: { type: 'string' } } },
+							execute: ignoreCall,
+						}),
+					]),
+				)
 				const toolset = createBrowserToolset(page, { source })
 				const skips = createRecorder<readonly [string, BrowserToolsetReason]>()
 				toolset.emitter.on('skip', skips.handler)
@@ -2943,11 +3043,11 @@ describe('BrowserToolset', () => {
 			'catches a capture that keeps its protocol call or timer after an abort in the capture reserve',
 			{ timeout: 15_000 },
 			async () => {
-				let holding = false
+				const holding = new BrowserFixtureValue(false)
 				const trees: CDPSentMessage[] = []
 				const fixture = await createBrowserElementFixture({
 					accessibility: (message) => {
-						if (holding) trees.push(message)
+						if (holding.value) trees.push(message)
 						else
 							fixture.transport.reply(
 								message.id,
@@ -2988,7 +3088,7 @@ describe('BrowserToolset', () => {
 						{ from: 1, search: 'home' },
 						{ signal: new AbortController().signal },
 					)
-					holding = true
+					holding.value = true
 					// Setup helpers leave one-second budget timers behind; the baseline waits them out.
 					await waitForDelay(1_100)
 					const timers = process
@@ -3125,16 +3225,16 @@ describe('BrowserToolset', () => {
 				const adoptions = Array.from({ length: 4 }, () =>
 					Promise.withResolvers<readonly ToolInterface[]>(),
 				)
-				let calls = 0
+				const calls = new BrowserFixtureValue(0)
 				const emitter = new Emitter<BrowserToolSourceEventMap>()
-				const source: BrowserToolSourceInterface = {
-					emitter,
-					tools: () => [],
-					adopt: () => {
-						calls += 1
-						return requireValue(adoptions[calls - 1]).promise
+				const source = createBrowserFixtureSource(
+					() => {
+						calls.value += 1
+						return requireValue(adoptions[calls.value - 1]).promise
 					},
-				}
+					() => [],
+					emitter,
+				)
 				requireValue(adoptions[0]).resolve([])
 				const toolset = createBrowserToolset(page, { source })
 				await toolset.start()
@@ -3509,10 +3609,10 @@ describe('BrowserToolset', () => {
 			})
 			const { client, transport } = fixture
 			try {
-				let created = 0
+				const created = new BrowserFixtureValue(0)
 				transport.onSend('Target.createTarget', (message) => {
-					created += 1
-					transport.reply(message.id, { targetId: `tab-${created}` })
+					created.value += 1
+					transport.reply(message.id, { targetId: `tab-${created.value}` })
 				})
 				transport.onSend('Target.attachToTarget', (message) =>
 					transport.reply(message.id, {
@@ -3542,8 +3642,6 @@ describe('BrowserToolset', () => {
 					{ id: 't4', title: 'Returns', url: 'about:blank', current: false },
 				])
 				expect(await toolset.read()).toContain('tabs: t1')
-				const fronted = (): number =>
-					transport.sent.filter((message) => message.method === 'Page.bringToFront').length
 				await expect(
 					toolset.follow('s3', {
 						action: 'switch',
@@ -3564,7 +3662,7 @@ describe('BrowserToolset', () => {
 						code: 'JOURNEY_TARGET',
 						message: `s4: The tab ${JSON.stringify(tab.title)} at ${tab.url} is not open; call read.`,
 					})
-				expect(fronted()).toBe(0)
+				expect(countBrowserFrontCalls(transport)).toBe(0)
 				const switched = await toolset.follow('s5', {
 					action: 'switch',
 					arguments: {},
@@ -3577,7 +3675,7 @@ describe('BrowserToolset', () => {
 					outcome: 'done',
 				})
 				expect(toolset.view).toBe(second)
-				expect(fronted()).toBe(1)
+				expect(countBrowserFrontCalls(transport)).toBe(1)
 				expect(
 					await toolset.follow('s6', {
 						action: 'switch',
@@ -3607,7 +3705,7 @@ describe('BrowserToolset', () => {
 						tab: { title: 'Orders', url: 'about:blank' },
 					}),
 				).rejects.toMatchObject({ code: 'TOOLSET_DIALOG' })
-				expect(fronted()).toBe(2)
+				expect(countBrowserFrontCalls(transport)).toBe(2)
 				await toolset.destroy()
 				await expect(toolset.tabs()).rejects.toMatchObject({ code: 'CLOSED' })
 				const viewless = createBrowserToolset(first)
@@ -3631,10 +3729,7 @@ describe('BrowserToolset', () => {
 		it('constructs the journey tools with journeys, reserves their names from page tools, and destroys them first', async () => {
 			const record = createTool({ name: 'record', description: 'Page record', execute: ignoreCall })
 			const extra = createTool({ name: 'extra', description: 'Page extra', execute: ignoreCall })
-			const source: BrowserToolSourceInterface = {
-				emitter: new Emitter<BrowserToolSourceEventMap>(),
-				adopt: () => Promise.resolve([record, extra]),
-			}
+			const source = createBrowserFixtureSource(() => Promise.resolve([record, extra]))
 			const plain = new BrowserToolset(createBrowserViewDouble(), { source })
 			await plain.start()
 			expect(plain.tools.tool('record')?.description).toBe('Page record')

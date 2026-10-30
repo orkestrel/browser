@@ -10,6 +10,7 @@ import {
 	settleBrowserTeardown,
 } from './helpers.js'
 import { BrowserError } from './errors.js'
+import type { Result } from '@orkestrel/contract'
 
 /**
  * Collects JavaScript precise coverage and CSS rule usage for one page target.
@@ -36,40 +37,28 @@ export class BrowserCoverage implements BrowserCoverageInterface {
 		if (!javascript && !css) {
 			throw new BrowserError('ARGUMENT', 'Browser coverage requires JavaScript, CSS, or both')
 		}
-		let profiler = false
-		let precise = false
-		let dom = false
-		let styles = false
-		let rules = false
+		const cleanup: Array<() => Promise<unknown>> = []
 		try {
 			if (javascript) {
 				await this.#frame.send('Profiler.enable')
-				profiler = true
+				cleanup.push(() => this.#frame.send('Profiler.disable'))
 				await this.#frame.send('Profiler.startPreciseCoverage', {
 					callCount: true,
 					detailed: options?.detailed ?? true,
 					allowTriggeredUpdates: false,
 				})
-				precise = true
+				cleanup.push(() => this.#frame.send('Profiler.stopPreciseCoverage'))
 			}
 			if (css) {
 				await this.#frame.send('DOM.enable')
-				dom = true
+				cleanup.push(() => this.#frame.send('DOM.disable'))
 				await this.#frame.send('CSS.enable')
-				styles = true
+				cleanup.push(() => this.#frame.send('CSS.disable'))
 				await this.#frame.send('CSS.startRuleUsageTracking')
-				rules = true
+				cleanup.push(() => this.#frame.send('CSS.stopRuleUsageTracking'))
 			}
 		} catch (error) {
-			if (rules) {
-				await this.#frame.send('CSS.stopRuleUsageTracking').catch(() => undefined)
-			}
-			if (styles) await this.#frame.send('CSS.disable').catch(() => undefined)
-			if (dom) await this.#frame.send('DOM.disable').catch(() => undefined)
-			if (precise) {
-				await this.#frame.send('Profiler.stopPreciseCoverage').catch(() => undefined)
-			}
-			if (profiler) await this.#frame.send('Profiler.disable').catch(() => undefined)
+			for (const release of cleanup.toReversed()) await release().catch(() => undefined)
 			throw error
 		}
 		this.#options = options
@@ -81,19 +70,25 @@ export class BrowserCoverage implements BrowserCoverageInterface {
 		this.#active = false
 		const javascript = this.#options?.javascript ?? true
 		const css = this.#options?.css ?? true
-		let scripts: BrowserCoverageResult['scripts'] = []
-		let styles: BrowserCoverageResult['styles'] = []
-		const failure = await settleBrowserTeardown(
-			async () => {
-				if (javascript) scripts = await this.#stopJavaScript()
-			},
-			async () => {
-				if (css) styles = await this.#stopCSS()
-			},
-		)
+		const scripts: Result<BrowserCoverageResult['scripts']> = javascript
+			? await this.#stopJavaScript().then(
+					(value) => ({ success: true, value }),
+					(error: unknown) => ({ success: false, error }),
+				)
+			: { success: true, value: [] }
+		const styles: Result<BrowserCoverageResult['styles']> = css
+			? await this.#stopCSS().then(
+					(value) => ({ success: true, value }),
+					(error: unknown) => ({ success: false, error }),
+				)
+			: { success: true, value: [] }
 		this.#options = undefined
+		const failure = !scripts.success ? scripts.error : !styles.success ? styles.error : undefined
 		if (failure !== undefined) throw failure
-		return { scripts, styles }
+		return {
+			scripts: scripts.success ? scripts.value : [],
+			styles: styles.success ? styles.value : [],
+		}
 	}
 
 	async destroy(): Promise<void> {
@@ -102,28 +97,32 @@ export class BrowserCoverage implements BrowserCoverageInterface {
 	}
 
 	async #stopJavaScript(): Promise<BrowserCoverageResult['scripts']> {
-		let result: unknown
+		const result = await this.#readCoverage('Profiler.takePreciseCoverage')
 		const failure = await settleBrowserTeardown(
-			async () => {
-				result = await this.#frame.send('Profiler.takePreciseCoverage')
-			},
 			() => this.#frame.send('Profiler.stopPreciseCoverage'),
 			() => this.#frame.send('Profiler.disable'),
 		)
-		if (failure !== undefined) throw failure
-		return readBrowserScriptCoverage(result)
+		const error = result.success ? failure : result.error
+		if (error !== undefined) throw error
+		return readBrowserScriptCoverage(result.success ? result.value : undefined)
 	}
 
 	async #stopCSS(): Promise<BrowserCoverageResult['styles']> {
-		let result: unknown
+		const result = await this.#readCoverage('CSS.stopRuleUsageTracking')
 		const failure = await settleBrowserTeardown(
-			async () => {
-				result = await this.#frame.send('CSS.stopRuleUsageTracking')
-			},
 			() => this.#frame.send('CSS.disable'),
 			() => this.#frame.send('DOM.disable'),
 		)
-		if (failure !== undefined) throw failure
-		return readBrowserStyleCoverage(result)
+		const error = result.success ? failure : result.error
+		if (error !== undefined) throw error
+		return readBrowserStyleCoverage(result.success ? result.value : undefined)
+	}
+
+	async #readCoverage(method: string): Promise<Result<unknown>> {
+		try {
+			return { success: true, value: await this.#frame.send(method) }
+		} catch (error) {
+			return { success: false, error }
+		}
 	}
 }

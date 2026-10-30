@@ -25,6 +25,7 @@ import {
 } from '@src/core'
 import {
 	BROWSER_SELECT_SECRET,
+	BrowserFixtureValue,
 	RecordingBrowserRunStore,
 	createBrowserSecretSelectFixture,
 	createBrowserElementFixture,
@@ -623,13 +624,13 @@ describe('BrowserReplay', () => {
 		const memory = new MemoryBrowserRunStore()
 		const captures = createRecorder<readonly [string]>()
 		const screenshots = createRecorder<readonly [boolean]>()
-		let dialog = false
+		const dialog = new BrowserFixtureValue(false)
 		fixture.transport.onSend('Page.handleJavaScriptDialog', (message) => {
-			dialog = false
+			dialog.value = false
 			fixture.transport.reply(message.id, {})
 		})
 		fixture.transport.onSend('Page.captureScreenshot', () => {
-			screenshots.handler(dialog)
+			screenshots.handler(dialog.value)
 		})
 		await toolset.start()
 		try {
@@ -650,7 +651,7 @@ describe('BrowserReplay', () => {
 						}),
 						capture: async (_slot, name) => {
 							captures.handler(name)
-							if (dialog) throw new Error('Dialog blocks capture')
+							if (dialog.value) throw new Error('Dialog blocks capture')
 							return name
 						},
 						get: memory.get.bind(memory),
@@ -668,7 +669,7 @@ describe('BrowserReplay', () => {
 				},
 			).execute()
 			await waitForCondition('click awaits release before dialog', () => withheld.length === 1)
-			dialog = true
+			dialog.value = true
 			fixture.transport.event(
 				'Page.javascriptDialogOpening',
 				{ type: 'confirm', message: 'Continue?' },
@@ -917,7 +918,7 @@ describe('BrowserReplay', () => {
 		await toolset.start()
 		const runs = new MemoryBrowserRunStore()
 		const pending = Promise.withResolvers<void>()
-		let signal: AbortSignal | undefined
+		const signal = new BrowserFixtureValue<AbortSignal | undefined>(undefined)
 		try {
 			const run = await new BrowserReplay(
 				toolset,
@@ -931,7 +932,7 @@ describe('BrowserReplay', () => {
 						delete: runs.delete.bind(runs),
 						clear: runs.clear.bind(runs),
 						set: (_value, options) => {
-							signal = options?.signal
+							signal.value = options?.signal
 							return pending.promise
 						},
 					},
@@ -939,7 +940,7 @@ describe('BrowserReplay', () => {
 			).execute()
 			expect(run.outcome).toBe('complete')
 			expect(run.fault).toBe('Writing the run timed out')
-			expect(signal?.aborted).toBe(true)
+			expect(signal.value?.aborted).toBe(true)
 		} finally {
 			pending.resolve()
 			await toolset.destroy()

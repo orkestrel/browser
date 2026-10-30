@@ -4,6 +4,7 @@ import { describe, it, expect } from 'vitest'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
 import { compileBrowserJourney, createCDPClient } from '@src/core'
 import {
+	BrowserFixtureValue,
 	captureCodegenSource,
 	createCDPTestTransport,
 	createCodegenBindingPayload,
@@ -560,8 +561,8 @@ describe('BrowserCodegen', () => {
 	it('installs existing frame sessions on start and reinstalls the live set after stop', async () => {
 		const { transport, client, codegen: fixture } = await createStartedCodegen()
 		await fixture.destroy()
-		let frames = ['existing-frame']
-		const codegen = new BrowserCodegen(client, 'session-1', undefined, () => frames)
+		const frames = new BrowserFixtureValue(['existing-frame'])
+		const codegen = new BrowserCodegen(client, 'session-1', undefined, () => frames.value)
 		await codegen.start()
 		expect(
 			transport.sent.filter(
@@ -571,7 +572,7 @@ describe('BrowserCodegen', () => {
 			),
 		).toHaveLength(1)
 		await codegen.stop()
-		frames = ['replacement-frame']
+		frames.value = ['replacement-frame']
 		await codegen.start()
 		expect(
 			transport.sent.filter(
@@ -639,10 +640,10 @@ describe('BrowserCodegen', () => {
 		const transport = createCDPTestTransport()
 		const client = createCDPClient({ transport })
 		await client.connect()
-		let attempts = 0
+		const attempts = new BrowserFixtureValue(0)
 		transport.onSend('Page.enable', (message) => {
-			attempts += 1
-			if (attempts === 1) transport.fail(message.id, 'installation failed')
+			attempts.value += 1
+			if (attempts.value === 1) transport.fail(message.id, 'installation failed')
 			else transport.reply(message.id, {})
 		})
 		replyOk(transport, 'Runtime.removeBinding')

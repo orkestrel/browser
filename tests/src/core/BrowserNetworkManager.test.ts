@@ -5,6 +5,7 @@ import { isBrowserError } from '@src/core'
 import { createRecorder, waitForCondition } from '@orkestrel/test'
 import {
 	BROWSER_BASE64_REFUSALS,
+	BrowserFixtureValue,
 	createConnectedCDPClient,
 	ignoreAsyncCall,
 	replyOk,
@@ -146,18 +147,20 @@ describe('BrowserNetworkManager', () => {
 	it('decodes plain, base64, text, and JSON response bodies', async () => {
 		const { client, transport } = await createConnectedCDPClient()
 		replyOk(transport, 'Network.enable')
-		let body = { body: 'hello', base64Encoded: false }
-		transport.onSend('Network.getResponseBody', (message) => transport.reply(message.id, body))
+		const body = new BrowserFixtureValue({ body: 'hello', base64Encoded: false })
+		transport.onSend('Network.getResponseBody', (message) =>
+			transport.reply(message.id, body.value),
+		)
 		const page = new BrowserPage(client, 'target-1', 'session-1')
 
 		expect(await page.network.text('one')).toBe('hello')
-		body = { body: 'eyJvayI6dHJ1ZX0=', base64Encoded: true }
+		body.value = { body: 'eyJvayI6dHJ1ZX0=', base64Encoded: true }
 		expect(await page.network.json('two')).toEqual({ ok: true })
-		body = { body: 'not-json', base64Encoded: false }
+		body.value = { body: 'not-json', base64Encoded: false }
 		await expect(page.network.json('three')).rejects.toSatisfy(isBrowserError)
-		body = { body: '', base64Encoded: true }
+		body.value = { body: '', base64Encoded: true }
 		expect(await page.network.body('empty')).toEqual(new Uint8Array())
-		body = { body: 'caf\u00e9 \u{1f600}', base64Encoded: false }
+		body.value = { body: 'caf\u00e9 \u{1f600}', base64Encoded: false }
 		expect(await page.network.text('unicode')).toBe('caf\u00e9 \u{1f600}')
 		await client.close()
 	})

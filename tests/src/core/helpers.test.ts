@@ -1,3 +1,4 @@
+import type { BrowserReadResult } from '@src/core'
 import {
 	BROWSER_READ_WIDTH,
 	BROWSER_TOOL_LIMIT,
@@ -851,17 +852,19 @@ describe('extractBrowserSlice', () => {
 
 	it('concatenates successive slices back into the text, each within the limit', () => {
 		const source = ['a'.repeat(7), 'b'.repeat(2), 'c'.repeat(11), '', 'd'.repeat(3)].join('\n')
-		const parts: string[] = []
-		let offset = 0
-		while (offset < source.length) {
+		const slices: BrowserReadResult[] = []
+		while (true) {
+			const previous = slices.at(-1)
+			const offset = previous === undefined ? 0 : previous.offset + previous.text.length
+			if (offset >= source.length) break
 			const slice = extractBrowserSlice(source, offset, 5)
 			expect(slice.text.length).toBeGreaterThan(0)
 			expect(slice.text.length).toBeLessThanOrEqual(5)
 			expect(slice.total).toBe(source.length)
-			parts.push(slice.text)
-			offset += slice.text.length
+			slices.push(slice)
 		}
 
+		const parts = slices.map((slice) => slice.text)
 		expect(parts.join('')).toBe(source)
 		expect(parts).toEqual(['aaaaa', 'aa\n', 'bb\n', 'ccccc', 'ccccc', 'c\n\n', 'ddd'])
 	})

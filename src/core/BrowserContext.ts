@@ -1,3 +1,4 @@
+import type { Result } from '@orkestrel/contract'
 import type {
 	BrowserContextDisposal,
 	BrowserContextEventMap,
@@ -157,10 +158,10 @@ export class BrowserContext implements BrowserContextInterface {
 	}
 
 	async sync(targets: readonly CDPTarget[]): Promise<void> {
-		let active = this.#syncing.pending
-		while (active !== undefined) {
+		while (true) {
+			const active = this.#syncing.pending
+			if (active === undefined) break
 			await active
-			active = this.#syncing.pending
 		}
 		if (this.#shutdown !== undefined)
 			throw new BrowserError('CLOSED', 'Browser context is closed', { subject: 'context' })
@@ -200,51 +201,67 @@ export class BrowserContext implements BrowserContextInterface {
 		}
 
 		const targetId = result['targetId']
-		let page: BrowserPage | undefined
 		const published = await this.#acquire(targetId)
 		if (published === undefined) return await this.#join(targetId, options)
 
 		try {
-			const viewport = options?.viewport ?? this.#viewport
-			page = await this.#attach(
-				targetId,
-				options?.url ?? 'about:blank',
-				viewport,
-				published.promise,
-				options,
-			)
-
-			if (options?.url !== undefined && options.url !== 'about:blank') {
-				await page.navigate(options.url, {
-					...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
-				})
+			const attached = await this.#createAttachment(targetId, published.promise, options)
+			if (!attached.success) {
+				const error = attached.error
+				// A target another path already holds stays open; the creation joins that path's page.
+				if (instanceOf(BrowserError)(error) && error.code === 'TARGET_HELD') {
+					this.#unreserve(targetId, published)
+					const retry = await this.#acquire(targetId)
+					if (retry === undefined) return await this.#join(targetId, options)
+					this.#unreserve(targetId, retry)
+					throw error
+				}
+				await this.#closeTarget(targetId)
+				throw error
 			}
-			if (this.#shutdown !== undefined) {
-				throw new BrowserError('CLOSED', 'Browser context closed during page creation', {
-					subject: 'context',
-				})
-			}
-
-			if (!this.#publish(page)) throw this.#refuse(targetId)
-			published.resolve()
-			return page
-		} catch (error) {
-			if (page !== undefined) {
+			const page = attached.value
+			try {
+				if (options?.url !== undefined && options.url !== 'about:blank') {
+					await page.navigate(options.url, {
+						...(options.timeout !== undefined ? { timeout: options.timeout } : {}),
+					})
+				}
+				if (this.#shutdown !== undefined) {
+					throw new BrowserError('CLOSED', 'Browser context closed during page creation', {
+						subject: 'context',
+					})
+				}
+				if (!this.#publish(page)) throw this.#refuse(targetId)
+				published.resolve()
+				return page
+			} catch (error) {
 				await page.close()
 				throw error
 			}
-			// A target another path already holds stays open; the creation joins that path's page.
-			if (instanceOf(BrowserError)(error) && error.code === 'TARGET_HELD') {
-				this.#unreserve(targetId, published)
-				const retry = await this.#acquire(targetId)
-				if (retry === undefined) return await this.#join(targetId, options)
-				this.#unreserve(targetId, retry)
-				throw error
-			}
-			await this.#closeTarget(targetId)
-			throw error
 		} finally {
 			this.#unreserve(targetId, published)
+		}
+	}
+
+	async #createAttachment(
+		targetId: string,
+		ready: Promise<void>,
+		options?: BrowserPageOptions,
+	): Promise<Result<BrowserPage>> {
+		try {
+			const viewport = options?.viewport ?? this.#viewport
+			return {
+				success: true,
+				value: await this.#attach(
+					targetId,
+					options?.url ?? 'about:blank',
+					viewport,
+					ready,
+					options,
+				),
+			}
+		} catch (error) {
+			return { success: false, error }
 		}
 	}
 
@@ -286,14 +303,51 @@ export class BrowserContext implements BrowserContextInterface {
 		ready: Promise<void>,
 		options?: BrowserPageOptions,
 	): Promise<BrowserPage> {
-		let sessionId: string | undefined
-		let page: BrowserPage | undefined
-
+		const sessionId = await this.#openSession(targetId)
+		const page = await this.#constructPage(sessionId, targetId, url, ready, options)
 		try {
-			sessionId = await this.#openSession(targetId)
+			this.#observe(page)
+			await this.#configurePage(page)
+			await this.#emulate?.(page)
+			if (viewport !== undefined) await this.#applyViewport(page, viewport)
+			return page
+		} catch (error) {
+			await page.destroy().catch(() => undefined)
+			throw error
+		}
+	}
+
+	async #reattach(
+		targetId: string,
+		url: string,
+		viewport: BrowserViewport | undefined,
+		ready: Promise<void>,
+	): Promise<BrowserPage> {
+		const sessionId = await this.#openSession(targetId)
+		const page = await this.#constructPage(sessionId, targetId, url, ready)
+		try {
+			this.#observe(page)
+			await this.#configurePage(page)
+			await this.#emulate?.(page)
+			if (viewport !== undefined) await this.#tryViewport(page, viewport)
+			return page
+		} catch (error) {
+			await page.destroy().catch(() => undefined)
+			throw error
+		}
+	}
+
+	async #constructPage(
+		sessionId: string,
+		targetId: string,
+		url: string,
+		ready: Promise<void>,
+		options?: BrowserPageOptions,
+	): Promise<BrowserPage> {
+		try {
 			await this.#enableSession(sessionId)
 			const frameId = await this.#mainFrame(sessionId)
-			page = new BrowserPage(
+			return new BrowserPage(
 				this.#client,
 				targetId,
 				sessionId,
@@ -306,54 +360,8 @@ export class BrowserContext implements BrowserContextInterface {
 				this.#allocator ?? this.#nextReference.bind(this),
 				ready,
 			)
-			this.#observe(page)
-			await this.#configurePage(page)
-			await this.#emulate?.(page)
-			if (viewport !== undefined) await this.#applyViewport(page, viewport)
-
-			return page
 		} catch (error) {
-			if (page !== undefined) await page.destroy().catch(() => undefined)
-			else if (sessionId !== undefined) await this.#detachSession(sessionId)
-			throw error
-		}
-	}
-
-	async #reattach(
-		targetId: string,
-		url: string,
-		viewport: BrowserViewport | undefined,
-		ready: Promise<void>,
-	): Promise<BrowserPage> {
-		let sessionId: string | undefined
-		let page: BrowserPage | undefined
-
-		try {
-			sessionId = await this.#openSession(targetId)
-			await this.#enableSession(sessionId)
-			const frameId = await this.#mainFrame(sessionId)
-			page = new BrowserPage(
-				this.#client,
-				targetId,
-				sessionId,
-				this.#writer,
-				url,
-				frameId,
-				this.#id,
-				undefined,
-				undefined,
-				this.#allocator ?? this.#nextReference.bind(this),
-				ready,
-			)
-			this.#observe(page)
-			await this.#configurePage(page)
-			await this.#emulate?.(page)
-			if (viewport !== undefined) await this.#tryViewport(page, viewport)
-
-			return page
-		} catch (error) {
-			if (page !== undefined) await page.destroy().catch(() => undefined)
-			else if (sessionId !== undefined) await this.#detachSession(sessionId)
+			await this.#detachSession(sessionId)
 			throw error
 		}
 	}
@@ -378,7 +386,7 @@ export class BrowserContext implements BrowserContextInterface {
 	async #closeResources(): Promise<void> {
 		try {
 			await this.#settle()
-			let failure = await settleBrowserTeardown(
+			const failure = await settleBrowserTeardown(
 				...[...this.#pages.values()].map((page) => () => page.close()),
 			)
 			this.#pages.clear()
@@ -390,7 +398,7 @@ export class BrowserContext implements BrowserContextInterface {
 					this.#disposal = { confirmed: true }
 				} catch (error) {
 					this.#disposal = { confirmed: false, error }
-					failure ??= error
+					if ((failure ?? error) !== undefined) throw failure ?? error
 				}
 			}
 			if (failure !== undefined) throw failure
@@ -410,12 +418,11 @@ export class BrowserContext implements BrowserContextInterface {
 	// over a reservation another path installed while it waited. Undefined when the context holds
 	// a page for the target.
 	async #acquire(target: string): Promise<PromiseWithResolvers<void> | undefined> {
-		for (
-			let current = this.#publishing.get(target);
-			current !== undefined;
-			current = this.#publishing.get(target)
-		)
+		while (true) {
+			const current = this.#publishing.get(target)
+			if (current === undefined) break
 			await Promise.allSettled([current])
+		}
 		return this.#pages.has(target) ? undefined : this.#reserve(target)
 	}
 

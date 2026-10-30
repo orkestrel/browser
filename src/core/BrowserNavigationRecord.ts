@@ -3,11 +3,14 @@ import type {
 	BrowserDestination,
 	BrowserNavigationEventMap,
 	BrowserNavigationReason,
+	BrowserNavigationStep,
+	BrowserNavigationSelection,
 	BrowserNavigationRecordInterface,
 	BrowserSettlementOptions,
 	BrowserSettlementResult,
 } from './types.js'
 import type { EmitterInterface } from '@orkestrel/emitter'
+import { BrowserNavigationScan } from './BrowserNavigationScan.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { BrowserError } from './errors.js'
 import { validateBrowserTimeout } from './helpers.js'
@@ -38,24 +41,7 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 	readonly #lifetime: AbortSignal
 	// Every step accepted since the record opened, in arrival order, so a settlement that learns its
 	// destinations after the input selects among the steps that preceded it.
-	readonly #log: Array<
-		| {
-				readonly event: 'request'
-				readonly frame: string
-				readonly url: string
-				readonly loader: string | undefined
-				readonly reason: BrowserNavigationReason | undefined
-		  }
-		| {
-				readonly event: 'commit'
-				readonly frame: string
-				readonly url: string
-				readonly loader: string | undefined
-				readonly same: boolean
-		  }
-		| { readonly event: 'load'; readonly frame: string; readonly loader: string | undefined }
-		| { readonly event: 'detach'; readonly frame: string; readonly swapped: boolean }
-	> = []
+	readonly #log: BrowserNavigationStep[] = []
 	readonly #waits = new Map<
 		symbol,
 		{
@@ -177,13 +163,12 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 	// The record's frame and every ancestor the page names, and the main frame, which is every
 	// frame's ancestor.
 	#collectAncestors(): Set<string> {
-		const frames = new Set<string>([this.#main])
-		let current: string | undefined = this.#frame
-		while (current !== undefined && !frames.has(current)) {
-			frames.add(current)
-			current = this.#parent(current)
+		const frames = new Set<string>([this.#main, this.#frame])
+		for (const current of frames) {
+			if (current === this.#main) continue
+			const parent = this.#parent(current)
+			if (parent !== undefined) frames.add(parent)
 		}
-		frames.add(this.#frame)
 		return frames
 	}
 
@@ -193,17 +178,17 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 		destinations: readonly BrowserDestination[],
 	): readonly [frames: ReadonlySet<string>, any: boolean] {
 		const frames = this.#collectAncestors()
-		let any = false
-		for (const { frame, relationship } of destinations) {
+		const any = Iterator.from(destinations).reduce((unknown, { frame, relationship }) => {
 			if (relationship === 'top') frames.add(this.#main)
 			else if (relationship === 'self') frames.add(frame)
 			else if (frame === this.#main) frames.add(this.#main)
 			else {
 				const parent = this.#parent(frame)
-				if (parent === undefined) any = true
+				if (parent === undefined) return true
 				else frames.add(parent)
 			}
-		}
+			return unknown
+		}, false)
 		return [frames, any]
 	}
 
@@ -216,58 +201,11 @@ export class BrowserNavigationRecord implements BrowserNavigationRecordInterface
 	// later start in its frame before the commit; the commit that carries its loader, or the
 	// frame's first commit when either loader is unknown; and the load of the commit's loader, or a
 	// same-document commit. `done` reports a completed navigation or a selected frame that detached.
-	#select(
-		frames: ReadonlySet<string>,
-		any: boolean,
-	): { readonly done: boolean; readonly result: BrowserSettlementResult | undefined } {
-		let start:
-			| {
-					readonly frame: string
-					readonly url: string
-					readonly loader: string | undefined
-					readonly reason: BrowserNavigationReason | undefined
-			  }
-			| undefined
-		let commit: { readonly url: string; readonly loader: string | undefined } | undefined
-		for (const step of this.#log) {
-			if (step.event === 'request') {
-				if (
-					start === undefined
-						? any || frames.has(step.frame)
-						: step.frame === start.frame && commit === undefined
-				)
-					start = step
-				continue
-			}
-			if (start === undefined || step.frame !== start.frame) continue
-			if (step.event === 'detach') {
-				if (!step.swapped) return { done: true, result: this.#stage(start, commit, false) }
-				continue
-			}
-			if (step.event === 'commit') {
-				if (commit !== undefined) continue
-				if (step.same)
-					return { done: true, result: { url: step.url, stage: 'loaded', reason: start.reason } }
-				if (start.loader === undefined || step.loader === undefined || step.loader === start.loader)
-					commit = step
-				continue
-			}
-			if (commit !== undefined && step.loader === commit.loader)
-				return { done: true, result: this.#stage(start, commit, true) }
-		}
-		return { done: false, result: this.#stage(start, commit, false) }
-	}
-
-	#stage(
-		start:
-			| { readonly url: string; readonly reason: BrowserNavigationReason | undefined }
-			| undefined,
-		commit: { readonly url: string } | undefined,
-		loaded: boolean,
-	): BrowserSettlementResult | undefined {
-		if (start === undefined) return undefined
-		if (commit === undefined) return { url: start.url, stage: 'requested', reason: start.reason }
-		return { url: commit.url, stage: loaded ? 'loaded' : 'committed', reason: start.reason }
+	#select(frames: ReadonlySet<string>, any: boolean): BrowserNavigationSelection {
+		return new BrowserNavigationScan(this.#log, frames, any).reduce<BrowserNavigationSelection>(
+			(_previous, selection) => selection,
+			{ done: false, result: undefined },
+		)
 	}
 
 	#wake(): void {

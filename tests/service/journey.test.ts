@@ -2,7 +2,6 @@ import type { BrowserInterface } from '@src/server'
 import type {
 	BrowserAction,
 	BrowserContextInterface,
-	BrowserJourneyStoreInterface,
 	BrowserPageInterface,
 	BrowserToolSourceEventMap,
 	BrowserToolsetInterface,
@@ -15,7 +14,11 @@ import type {
 } from '../setupServer.js'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { BROWSER_LEGACY_JOURNEY_JSON } from '../setup.js'
+import {
+	BROWSER_LEGACY_JOURNEY_JSON,
+	BrowserFixtureValue,
+	createBrowserConcurrentJourneyStore,
+} from '../setup.js'
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest'
 import { isRecord, isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
@@ -85,20 +88,20 @@ import {
 
 describe('journey semantic replay', () => {
 	const cleanup = createTeardown()
-	let browser: BrowserInterface
-	let fixtures: FixtureServerInterface
-	let context: BrowserContextInterface
-	let page: BrowserPageInterface
-	let toolset: BrowserToolsetInterface
-	let transport: BrowserJourneyTransportRecorder
+	const browser = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+	const fixtures = new BrowserFixtureValue<FixtureServerInterface | undefined>(undefined)
+	const context = new BrowserFixtureValue<BrowserContextInterface | undefined>(undefined)
+	const page = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
+	const toolset = new BrowserFixtureValue<BrowserToolsetInterface | undefined>(undefined)
+	const transport = new BrowserFixtureValue<BrowserJourneyTransportRecorder | undefined>(undefined)
 
 	beforeAll(async () => {
-		fixtures = await createFixtureServer()
-		cleanup.add(() => fixtures.destroy())
+		fixtures.value = await createFixtureServer()
+		cleanup.add(() => fixtures.required.destroy())
 		const profile = createTempDirectory('journey-service-')
 		cleanup.add(() => profile.destroy())
 		const port = await reservePort()
-		browser = createBrowser({
+		browser.value = createBrowser({
 			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: profile.path,
@@ -106,26 +109,28 @@ describe('journey semantic replay', () => {
 			cdp: { port },
 			timeout: 20_000,
 		})
-		cleanup.add(() => browser.destroy())
-		await browser.connect()
+		cleanup.add(() => browser.required.destroy())
+		await browser.required.connect()
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		transport = new BrowserJourneyTransportRecorder(createWebSocketCDPTransport({ url: endpoint }))
-		const client = createCDPClient({ transport })
+		transport.value = new BrowserJourneyTransportRecorder(
+			createWebSocketCDPTransport({ url: endpoint }),
+		)
+		const client = createCDPClient({ transport: transport.required })
 		cleanup.add(() => client.close())
 		await client.connect()
-		context = new BrowserContext(client)
-		cleanup.add(() => context.destroy())
+		context.value = new BrowserContext(client)
+		cleanup.add(() => context.required.destroy())
 	})
 	beforeEach(async () => {
-		page = await context.create({ url: fixtures.url('/form') })
-		toolset = createBrowserToolset(page)
-		await toolset.start()
+		page.value = await context.required.create({ url: fixtures.required.url('/form') })
+		toolset.value = createBrowserToolset(page.required)
+		await toolset.required.start()
 	})
 	afterEach(async () => {
-		await toolset.destroy()
-		await page.close()
+		await toolset.required.destroy()
+		await page.required.close()
 	})
 	afterAll(async () => {
 		await cleanup.destroy()
@@ -144,12 +149,12 @@ describe('journey semantic replay', () => {
 				revision: 1,
 				journey: { format: 1, name: 'legacy-ready' },
 			})
-			await toolset.destroy()
-			toolset = createBrowserToolset(page, { journeys: { store } })
-			await toolset.start()
-			await page.evaluate(`document.body.innerHTML = '<p>Legacy ready</p>'`)
+			await toolset.required.destroy()
+			toolset.value = createBrowserToolset(page.required, { journeys: { store } })
+			await toolset.required.start()
+			await page.required.evaluate(`document.body.innerHTML = '<p>Legacy ready</p>'`)
 			const result = requireToolText(
-				await toolset.tools.execute({
+				await toolset.required.tools.execute({
 					id: 'legacy',
 					name: 'replay',
 					arguments: { journey: 'legacy-ready' },
@@ -162,49 +167,55 @@ describe('journey semantic replay', () => {
 		}
 	})
 	it('audit repair 2: journey listings budget and consume host notes before rendering', async () => {
-		await toolset.destroy()
-		let note = ''
+		await toolset.required.destroy()
+		const note = new BrowserFixtureValue('')
 		const store = createMemoryBrowserJourneyStore()
 		await store.set({
 			...createBrowserJourneyFixture([{ action: 'wait', arguments: { text: 'Ready' } }]),
 			description: 'Material '.repeat(1000),
 		})
-		toolset = createBrowserToolset(page, {
+		toolset.value = createBrowserToolset(page.required, {
 			journeys: { store },
 			notes: () => {
-				const result = note
-				note = ''
+				const result = note.value
+				note.value = ''
 				return result
 			},
 		})
-		await toolset.start()
-		note = 'Recovered the browser. ' + 'Details '.repeat(1000)
+		await toolset.required.start()
+		note.value = 'Recovered the browser. ' + 'Details '.repeat(1000)
 		const result = requireToolText(
-			await toolset.tools.execute({ id: 'listing', name: 'journeys', arguments: { from: 1 } }),
+			await toolset.required.tools.execute({
+				id: 'listing',
+				name: 'journeys',
+				arguments: { from: 1 },
+			}),
 		)
 		expect(result).toContain('Recovered the browser.')
 		expect(result.length).toBeLessThanOrEqual(4000)
 		expect(result).toMatch(/call journeys with from \d+ for more\]$/)
-		expect(await toolset.read()).not.toContain('Recovered the browser.')
+		expect(await toolset.required.read()).not.toContain('Recovered the browser.')
 	})
 	it('bounds the complete saved journey and exposes an exact line continuation', async () => {
-		await toolset.destroy()
-		toolset = createBrowserToolset(page, { journeys: { store: createMemoryBrowserJourneyStore() } })
-		await toolset.start()
-		await page.evaluate('document.body.innerHTML = "<button>Keep</button>"')
-		await toolset.tools.execute({
+		await toolset.required.destroy()
+		toolset.value = createBrowserToolset(page.required, {
+			journeys: { store: createMemoryBrowserJourneyStore() },
+		})
+		await toolset.required.start()
+		await page.required.evaluate('document.body.innerHTML = "<button>Keep</button>"')
+		await toolset.required.tools.execute({
 			id: 'record',
 			name: 'record',
 			arguments: { journey: 'long-description' },
 		})
-		const [button] = await page.elements.find({ role: 'button', name: 'Keep' })
-		await toolset.tools.execute({
+		const [button] = await page.required.elements.find({ role: 'button', name: 'Keep' })
+		await toolset.required.tools.execute({
 			id: 'click',
 			name: 'click',
 			arguments: { ref: requireValue(button).reference },
 		})
 		const saved = requireToolText(
-			await toolset.tools.execute({
+			await toolset.required.tools.execute({
 				id: 'save',
 				name: 'save',
 				arguments: {
@@ -216,12 +227,16 @@ describe('journey semantic replay', () => {
 		expect(saved).toMatch(/call journeys with from \d+ for more/)
 		const from = Number(requireValue(/call journeys with from (\d+) for more/.exec(saved))[1])
 		const continued = requireToolText(
-			await toolset.tools.execute({ id: 'continue', name: 'journeys', arguments: { from } }),
+			await toolset.required.tools.execute({
+				id: 'continue',
+				name: 'journeys',
+				arguments: { from },
+			}),
 		)
 		expect(continued).toContain(`\n${from}: `)
 		expect(continued.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 		const edited = requireToolText(
-			await toolset.tools.execute({
+			await toolset.required.tools.execute({
 				id: 'edit',
 				name: 'edit',
 				arguments: {
@@ -239,7 +254,7 @@ describe('journey semantic replay', () => {
 		expect(edited.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 		expect(edited).toMatch(/call journeys with from \d+ for more/)
 		const replay = requireToolText(
-			await toolset.tools.execute({
+			await toolset.required.tools.execute({
 				id: 'replay',
 				name: 'replay',
 				arguments: { journey: 'long-description' },
@@ -247,7 +262,7 @@ describe('journey semantic replay', () => {
 		)
 		expect(replay.length).toBeLessThanOrEqual(BROWSER_TOOL_LIMIT)
 		expect(replay).toContain('page ')
-		const failure = await toolset.tools.execute({
+		const failure = await toolset.required.tools.execute({
 			id: 'error',
 			name: 'journeys',
 			arguments: { from: 1, ['unknown'.repeat(1000)]: true },
@@ -258,13 +273,13 @@ describe('journey semantic replay', () => {
 
 	describe('claim 3: changed markup and duplicate refusal', () => {
 		it('replays by exact name after ids, classes, and order change, then refuses duplicates without input', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.record)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 			)
-			const recorder = createBrowserRecorder(toolset)
+			const recorder = createBrowserRecorder(toolset.required)
 			try {
 				await recorder.start()
-				const recorded = await toolset.follow('record', {
+				const recorded = await toolset.required.follow('record', {
 					action: 'click',
 					arguments: {},
 					target: { role: 'button', name: 'Delete' },
@@ -277,44 +292,46 @@ describe('journey semantic replay', () => {
 					name: 'Delete',
 					reference: requireValue(recorded.target).reference,
 				})
-				await page.evaluate(
+				await page.required.evaluate(
 					`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.changed)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 				)
-				const changed = await createBrowserReplay(toolset, { journey }).execute()
+				const changed = await createBrowserReplay(toolset.required, { journey }).execute()
 				expect(changed.outcome).toBe('complete')
-				expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([
-					{ id: 'k1', trusted: true },
-				])
-				await page.evaluate(
+				expect(
+					await page.required.evaluate('JSON.parse(document.body.dataset.journeyClicks)'),
+				).toEqual([{ id: 'k1', trusted: true }])
+				await page.required.evaluate(
 					`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.duplicate)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 				)
-				transport.clear()
-				const duplicate = await createBrowserReplay(toolset, { journey }).execute()
+				transport.required.clear()
+				const duplicate = await createBrowserReplay(toolset.required, { journey }).execute()
 				expect(duplicate.outcome).toBe('stopped')
 				expect(duplicate.steps[0]?.outcome).toBe('refused')
 				expect(duplicate.steps[0]?.result).toContain('2 elements carry')
 				expect(
-					transport.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
+					transport.required.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
 				).toEqual([])
-				expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([])
+				expect(
+					await page.required.evaluate('JSON.parse(document.body.dataset.journeyClicks)'),
+				).toEqual([])
 				await expect(
-					toolset.follow('s1', {
+					toolset.required.follow('s1', {
 						action: 'click',
 						arguments: {},
 						target: { role: 'button', name: 'Delete' },
 					}),
 				).rejects.toMatchObject({ code: 'JOURNEY_AMBIGUOUS' })
 				expect(
-					transport.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
+					transport.required.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
 				).toEqual([])
-				const controls = await page.elements.find({ css: '#k1' })
+				const controls = await page.required.elements.find({ css: '#k1' })
 				await controls[0]?.click()
-				expect(transport.sent.some((frame) => frame.includes('Input.dispatchMouseEvent'))).toBe(
-					true,
-				)
-				expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([
-					{ id: 'k1', trusted: true },
-				])
+				expect(
+					transport.required.sent.some((frame) => frame.includes('Input.dispatchMouseEvent')),
+				).toBe(true)
+				expect(
+					await page.required.evaluate('JSON.parse(document.body.dataset.journeyClicks)'),
+				).toEqual([{ id: 'k1', trusted: true }])
 			} finally {
 				await recorder.destroy()
 			}
@@ -323,53 +340,59 @@ describe('journey semantic replay', () => {
 
 	describe('claim 4: CSS evidence never resolves a target', () => {
 		it('refuses an absent semantic name even when CSS uniquely matches a different control', async () => {
-			await page.evaluate(
+			await page.required.evaluate(
 				`(() => { document.body.innerHTML = ${JSON.stringify(BROWSER_JOURNEY_TARGET_HTML.css)}; ${BROWSER_JOURNEY_TARGET_LOG} })()`,
 			)
-			expect(await page.elements.find({ css: '#cancel' })).toHaveLength(1)
+			expect(await page.required.elements.find({ css: '#cancel' })).toHaveLength(1)
 			const target = { role: 'button', name: 'Submit order', css: '#cancel', reference: 'e1' }
 			const journey = createBrowserJourneyFixture([{ action: 'click', arguments: {}, target }])
-			transport.clear()
+			transport.required.clear()
 			await expect(
-				toolset.follow('s1', { action: 'click', arguments: {}, target }),
+				toolset.required.follow('s1', { action: 'click', arguments: {}, target }),
 			).rejects.toMatchObject({
 				code: 'JOURNEY_TARGET',
 			})
-			const run = await createBrowserReplay(toolset, { journey }).execute()
+			const run = await createBrowserReplay(toolset.required, { journey }).execute()
 			expect(run.outcome).toBe('stopped')
 			expect(run.steps[0]?.result).toContain('no element carries')
-			expect(transport.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent'))).toEqual(
-				[],
-			)
-			expect(transport.sent.filter((frame) => frame.includes('DOM.querySelectorAll'))).toEqual([])
-			expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([])
-			await toolset.follow('s2', {
+			expect(
+				transport.required.sent.filter((frame) => frame.includes('Input.dispatchMouseEvent')),
+			).toEqual([])
+			expect(
+				transport.required.sent.filter((frame) => frame.includes('DOM.querySelectorAll')),
+			).toEqual([])
+			expect(
+				await page.required.evaluate('JSON.parse(document.body.dataset.journeyClicks)'),
+			).toEqual([])
+			await toolset.required.follow('s2', {
 				action: 'click',
 				arguments: {},
 				target: { role: 'button', name: 'Cancel' },
 			})
-			expect(transport.sent.some((frame) => frame.includes('Input.dispatchMouseEvent'))).toBe(true)
-			expect(await page.evaluate('JSON.parse(document.body.dataset.journeyClicks)')).toEqual([
-				{ id: 'cancel', trusted: true },
-			])
+			expect(
+				transport.required.sent.some((frame) => frame.includes('Input.dispatchMouseEvent')),
+			).toBe(true)
+			expect(
+				await page.required.evaluate('JSON.parse(document.body.dataset.journeyClicks)'),
+			).toEqual([{ id: 'cancel', trusted: true }])
 		})
 	})
 })
 
 describe('compiled module equality', () => {
 	const cleanup = createTeardown()
-	let fixtures: FixtureServerInterface
-	let context: BrowserContextInterface
-	let stage: BrowserJourneyStageInterface
-	let built: BrowserJourneyConnectionInterface
+	const fixtures = new BrowserFixtureValue<FixtureServerInterface | undefined>(undefined)
+	const context = new BrowserFixtureValue<BrowserContextInterface | undefined>(undefined)
+	const stage = new BrowserFixtureValue<BrowserJourneyStageInterface | undefined>(undefined)
+	const built = new BrowserFixtureValue<BrowserJourneyConnectionInterface | undefined>(undefined)
 
 	// The generated module imports the built package through the stage's link and runs over a page
 	// that package's own context opens, so the module's toolset and its page share one module
 	// instance; the replay runs from the workspace source over a page of a second connection to the
 	// same browser.
 	beforeAll(async () => {
-		fixtures = await createFixtureServer()
-		cleanup.add(() => fixtures.destroy())
+		fixtures.value = await createFixtureServer()
+		cleanup.add(() => fixtures.required.destroy())
 		const profile = createTempDirectory('journey-module-service-')
 		cleanup.add(() => profile.destroy())
 		const port = await reservePort()
@@ -389,15 +412,15 @@ describe('compiled module equality', () => {
 		const client = createCDPClient({ transport: createWebSocketCDPTransport({ url: endpoint }) })
 		cleanup.add(() => client.close())
 		await client.connect()
-		context = new BrowserContext(client)
-		cleanup.add(() => context.destroy())
-		stage = createBrowserJourneyStage()
-		cleanup.add(() => stage.destroy())
-		built = await stage.connect(endpoint)
-		cleanup.add(() => built.destroy())
+		context.value = new BrowserContext(client)
+		cleanup.add(() => context.required.destroy())
+		stage.value = createBrowserJourneyStage()
+		cleanup.add(() => stage.required.destroy())
+		built.value = await stage.required.connect(endpoint)
+		cleanup.add(() => built.required.destroy())
 	})
 	afterEach(async () => {
-		for (const page of [...context.pages(), ...built.context.pages()].reverse())
+		for (const page of [...context.required.pages(), ...built.required.context.pages()].reverse())
 			if (!page.closed) await page.close()
 	})
 	afterAll(async () => {
@@ -408,8 +431,8 @@ describe('compiled module equality', () => {
 		'runs the generated module of a $name to the page outcome and the receipts of its replay',
 		async (scenario) => {
 			const script = compileBrowserJourney(scenario.journey)
-			const plain = stage.load(`${scenario.journey.name}.js`, script.source)
-			const recorded = stage.load(
+			const plain = stage.required.load(`${scenario.journey.name}.js`, script.source)
+			const recorded = stage.required.load(
 				`${scenario.journey.name}.recorded.js`,
 				instrumentBrowserJourneyModule(script.source),
 			)
@@ -417,8 +440,8 @@ describe('compiled module equality', () => {
 			const failures: unknown[] = []
 			for (const module of [plain, recorded]) {
 				const page = await openBrowserJourneyPage(
-					built.context,
-					fixtures.url(scenario.route),
+					built.required.context,
+					fixtures.required.url(scenario.route),
 					scenario.markup,
 				)
 				failures.push(
@@ -427,11 +450,13 @@ describe('compiled module equality', () => {
 						(error: unknown) => error,
 					),
 				)
-				outcomes.push(await readBrowserJourneyOutcome(built.context.pages(), page, scenario.state))
+				outcomes.push(
+					await readBrowserJourneyOutcome(built.required.context.pages(), page, scenario.state),
+				)
 			}
 			const page = await openBrowserJourneyPage(
-				context,
-				fixtures.url(scenario.route),
+				context.required,
+				fixtures.required.url(scenario.route),
 				scenario.markup,
 			)
 			const toolset = createBrowserToolset(page)
@@ -441,7 +466,11 @@ describe('compiled module equality', () => {
 				{ journey: scenario.journey },
 				{ inputs: scenario.inputs },
 			).execute()
-			const replayed = await readBrowserJourneyOutcome(context.pages(), page, scenario.state)
+			const replayed = await readBrowserJourneyOutcome(
+				context.required.pages(),
+				page,
+				scenario.state,
+			)
 			await toolset.destroy()
 
 			expect({
@@ -461,15 +490,19 @@ describe('compiled module equality', () => {
 	it('refuses a generated module with a gap before its first step, leaving the click log empty as the replay does at preparation', async () => {
 		const scenario = BROWSER_JOURNEY_GAP_CASE
 		const script = compileBrowserJourney(scenario.journey)
-		const url = fixtures.url(scenario.route)
-		const module = stage.load(`${scenario.journey.name}.js`, script.source)
-		const page = await openBrowserJourneyPage(built.context, url, scenario.markup)
+		const url = fixtures.required.url(scenario.route)
+		const module = stage.required.load(`${scenario.journey.name}.js`, script.source)
+		const page = await openBrowserJourneyPage(built.required.context, url, scenario.markup)
 		const failure = await module.execute(page, scenario.inputs).then(
 			() => undefined,
 			(error: unknown) => error,
 		)
-		const executed = await readBrowserJourneyOutcome(built.context.pages(), page, scenario.state)
-		const fresh = await openBrowserJourneyPage(context, url, scenario.markup)
+		const executed = await readBrowserJourneyOutcome(
+			built.required.context.pages(),
+			page,
+			scenario.state,
+		)
+		const fresh = await openBrowserJourneyPage(context.required, url, scenario.markup)
 		const toolset = createBrowserToolset(fresh)
 		await toolset.start()
 		const refusal = await createBrowserReplay(
@@ -482,13 +515,13 @@ describe('compiled module equality', () => {
 				() => undefined,
 				(error: unknown) => error,
 			)
-		const refused = await readBrowserJourneyOutcome(context.pages(), fresh, scenario.state)
+		const refused = await readBrowserJourneyOutcome(context.required.pages(), fresh, scenario.state)
 		await toolset.destroy()
-		const control = stage.load(
+		const control = stage.required.load(
 			`${scenario.journey.name}.control.js`,
 			instrumentBrowserJourneyModule(script.source.replace(/^\t+throw .*\n/mu, '')),
 		)
-		const clicked = await openBrowserJourneyPage(built.context, url, scenario.markup)
+		const clicked = await openBrowserJourneyPage(built.required.context, url, scenario.markup)
 		await control.execute(clicked, scenario.inputs)
 
 		expect(control.receipts(), 'the step calls the module emits around its gap').toHaveLength(2)
@@ -500,7 +533,7 @@ describe('compiled module equality', () => {
 		})
 		expect(refusal).toMatchObject({ code: 'JOURNEY_GAP' })
 		expect(
-			await readBrowserJourneyOutcome(built.context.pages(), clicked, scenario.state),
+			await readBrowserJourneyOutcome(built.required.context.pages(), clicked, scenario.state),
 		).toStrictEqual([{ clicks: 'save:true submit:true', saved: 'yes' }])
 	})
 
@@ -508,16 +541,20 @@ describe('compiled module equality', () => {
 		'refuses a generated module given a $name before its first step, leaving the click log empty as the replay does at preparation',
 		async (scenario) => {
 			const script = compileBrowserJourney(scenario.journey)
-			const url = fixtures.url(scenario.route)
+			const url = fixtures.required.url(scenario.route)
 			const file = scenario.name.replaceAll(' ', '-')
-			const module = stage.load(`${file}.js`, script.source)
-			const page = await openBrowserJourneyPage(built.context, url, scenario.markup)
+			const module = stage.required.load(`${file}.js`, script.source)
+			const page = await openBrowserJourneyPage(built.required.context, url, scenario.markup)
 			const failure = await module.execute(page, scenario.inputs).then(
 				() => undefined,
 				(error: unknown) => error,
 			)
-			const executed = await readBrowserJourneyOutcome(built.context.pages(), page, scenario.state)
-			const fresh = await openBrowserJourneyPage(context, url, scenario.markup)
+			const executed = await readBrowserJourneyOutcome(
+				built.required.context.pages(),
+				page,
+				scenario.state,
+			)
+			const fresh = await openBrowserJourneyPage(context.required, url, scenario.markup)
 			const toolset = createBrowserToolset(fresh)
 			await toolset.start()
 			const refusal = await createBrowserReplay(
@@ -530,13 +567,17 @@ describe('compiled module equality', () => {
 					() => undefined,
 					(error: unknown) => error,
 				)
-			const refused = await readBrowserJourneyOutcome(context.pages(), fresh, scenario.state)
+			const refused = await readBrowserJourneyOutcome(
+				context.required.pages(),
+				fresh,
+				scenario.state,
+			)
 			await toolset.destroy()
-			const control = stage.load(
+			const control = stage.required.load(
 				`${file}.control.js`,
 				script.source.replace(/^\t(?:for|if) .*\n/gmu, ''),
 			)
-			const clicked = await openBrowserJourneyPage(built.context, url, scenario.markup)
+			const clicked = await openBrowserJourneyPage(built.required.context, url, scenario.markup)
 			const unchecked = await control.execute(clicked, scenario.inputs).then(
 				() => undefined,
 				(error: unknown) => error,
@@ -551,7 +592,7 @@ describe('compiled module equality', () => {
 				message: scenario.message,
 			})
 			expect(
-				await readBrowserJourneyOutcome(built.context.pages(), clicked, scenario.state),
+				await readBrowserJourneyOutcome(built.required.context.pages(), clicked, scenario.state),
 			).toStrictEqual([{ clicks: 'save:true', saved: 'yes' }])
 		},
 	)
@@ -579,8 +620,8 @@ describe('compiled module equality', () => {
 			'name-draft.ts',
 			'retitle-draft.ts',
 		])
-		expect(stage.check(sources)).toStrictEqual([])
-		expect(stage.check({ 'control.ts': misspelled })).toStrictEqual([
+		expect(stage.required.check(sources)).toStrictEqual([])
+		expect(stage.required.check({ 'control.ts': misspelled })).toStrictEqual([
 			expect.stringMatching(
 				/^control\.ts\(\d+,\d+\): error TS2339: Property 'nmae' does not exist/u,
 			),
@@ -592,13 +633,13 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 	const cleanup = createTeardown()
 	const pages: BrowserPageInterface[] = []
 	const toolsets: BrowserToolsetInterface[] = []
-	let fixtures: FixtureServerInterface
-	let context: BrowserContextInterface
-	let transport: BrowserJourneyTransportRecorder
+	const fixtures = new BrowserFixtureValue<FixtureServerInterface | undefined>(undefined)
+	const context = new BrowserFixtureValue<BrowserContextInterface | undefined>(undefined)
+	const transport = new BrowserFixtureValue<BrowserJourneyTransportRecorder | undefined>(undefined)
 
 	beforeAll(async () => {
-		fixtures = await createFixtureServer()
-		cleanup.add(() => fixtures.destroy())
+		fixtures.value = await createFixtureServer()
+		cleanup.add(() => fixtures.required.destroy())
 		const profile = createTempDirectory('journey-claims-service-')
 		cleanup.add(() => profile.destroy())
 		const port = await reservePort()
@@ -615,12 +656,14 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 		const version: unknown = await (await fetch(`http://127.0.0.1:${port}/json/version`)).json()
 		const endpoint = isRecord(version) ? version['webSocketDebuggerUrl'] : undefined
 		if (!isString(endpoint)) throw new Error('Chromium reported no debugger URL')
-		transport = new BrowserJourneyTransportRecorder(createWebSocketCDPTransport({ url: endpoint }))
-		const client = createCDPClient({ transport })
+		transport.value = new BrowserJourneyTransportRecorder(
+			createWebSocketCDPTransport({ url: endpoint }),
+		)
+		const client = createCDPClient({ transport: transport.required })
 		cleanup.add(() => client.close())
 		await client.connect()
-		context = new BrowserContext(client)
-		cleanup.add(() => context.destroy())
+		context.value = new BrowserContext(client)
+		cleanup.add(() => context.required.destroy())
 	})
 	afterEach(async () => {
 		for (const toolset of toolsets.splice(0)) await toolset.destroy()
@@ -632,13 +675,13 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 
 	describe('claim 6: a replay hold admits only its own actions', () => {
 		it('refuses a foreign click, dialog, and adopted page tool while read and wait pass, after an action admitted before the hold completes first', async () => {
-			const page = await context.create({ url: fixtures.url('/confirm') })
+			const page = await context.required.create({ url: fixtures.required.url('/confirm') })
 			pages.push(page)
 			const invoked = createRecorder<[]>()
 			const source = createToolManager()
 			source.add(createTool({ name: 'checkout', execute: invoked.handler }))
 			const toolset = createBrowserToolset(page, {
-				context,
+				context: context.required,
 				source: {
 					adopt: async () => source.tools(),
 					emitter: new Emitter<BrowserToolSourceEventMap>(),
@@ -736,7 +779,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 		})
 
 		it('releases the hold when an abort lands during a held input and runs no following action', async () => {
-			const page = await context.create({ url: fixtures.url('/confirm') })
+			const page = await context.required.create({ url: fixtures.required.url('/confirm') })
 			pages.push(page)
 			await page.evaluate(
 				`document.querySelector('main').insertAdjacentHTML('beforeend', ${JSON.stringify(BROWSER_JOURNEY_SLOW_HTML)})`,
@@ -747,13 +790,13 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			const released = createRecorder<[name: string]>()
 			toolset.emitter.on('release', released.handler)
 			const controller = new AbortController()
-			transport.clear()
+			transport.required.clear()
 			const running = createBrowserReplay(toolset, {
 				journey: BROWSER_JOURNEY_ABORT_JOURNEY,
 			}).execute({ signal: controller.signal })
 			await waitForCondition(
 				'the replay sent the release of its slow click',
-				() => transport.sent.some((frame) => frame.includes('"mouseReleased"')),
+				() => transport.required.sent.some((frame) => frame.includes('"mouseReleased"')),
 				{ budget: 10_000, interval: 5 },
 			)
 			controller.abort()
@@ -778,7 +821,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 	describe('claim 7: a wait that times out stops the run', () => {
 		it('records an exit check, replays it, and stops when dismissal leaves the toast', async () => {
 			const store = createMemoryBrowserJourneyStore()
-			const recordingPage = await context.create({ url: fixtures.url('/form') })
+			const recordingPage = await context.required.create({ url: fixtures.required.url('/form') })
 			pages.push(recordingPage)
 			const recording = createBrowserToolset(recordingPage, { journeys: { store } })
 			toolsets.push(recording)
@@ -828,7 +871,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			expect(saved).toContain('s3 wait "Saved to drafts", absent')
 			const journey = requireValue(await store.get('dismiss-toast')).journey
 			for (const removes of [true, false]) {
-				const fresh = await context.create({ url: fixtures.url('/form') })
+				const fresh = await context.required.create({ url: fixtures.required.url('/form') })
 				pages.push(fresh)
 				await fresh.evaluate(
 					`document.body.innerHTML = ${JSON.stringify(`<p id="toast">Saved to drafts</p><button${removes ? ' onclick="document.getElementById(\'toast\').remove()"' : ''}>Dismiss</button>`)}`,
@@ -851,7 +894,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			}
 		})
 		it('stops at a wait whose text never appears with outcome timeout and the direct receipt, and sends no following input', async () => {
-			const page = await context.create({ url: fixtures.url('/form') })
+			const page = await context.required.create({ url: fixtures.required.url('/form') })
 			pages.push(page)
 			const toolset = createBrowserToolset(page)
 			toolsets.push(toolset)
@@ -868,7 +911,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				}).execute(),
 			])
 			const direct = requireToolText(directResult)
-			const control = await context.create({ url: fixtures.url('/form') })
+			const control = await context.required.create({ url: fixtures.required.url('/form') })
 			pages.push(control)
 			const controlled = createBrowserToolset(control)
 			toolsets.push(controlled)
@@ -902,13 +945,13 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				const root = createTempDirectory('journey-runs-service-')
 				cleanup.add(() => root.destroy())
 				const runs = createFileBrowserRunStore({ root: root.path })
-				const page = await context.create({ url: fixtures.url('/form') })
+				const page = await context.required.create({ url: fixtures.required.url('/form') })
 				pages.push(page)
 				await page.evaluate(BROWSER_JOURNEY_EVENT_COUNTER)
 				const toolset = createBrowserToolset(page)
 				toolsets.push(toolset)
 				await toolset.start()
-				transport.clear()
+				transport.required.clear()
 				const refusal = await createBrowserReplay(
 					toolset,
 					{ journey: scenario.journey },
@@ -922,7 +965,9 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 
 				expect(refusal).toMatchObject({ code: scenario.code })
 				expect(await page.evaluate('document.body.dataset.events')).toBe('0')
-				expect(transport.sent.filter((frame) => frame.includes('Input.dispatch'))).toEqual([])
+				expect(transport.required.sent.filter((frame) => frame.includes('Input.dispatch'))).toEqual(
+					[],
+				)
 				expect(await runs.list(scenario.journey.name)).toEqual({
 					entries: [],
 					truncated: false,
@@ -936,7 +981,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			const root = createTempDirectory('journey-runs-service-')
 			cleanup.add(() => root.destroy())
 			const runs = createFileBrowserRunStore({ root: root.path })
-			const page = await context.create({ url: fixtures.url('/form') })
+			const page = await context.required.create({ url: fixtures.required.url('/form') })
 			pages.push(page)
 			await page.evaluate(BROWSER_JOURNEY_EVENT_COUNTER)
 			const toolset = createBrowserToolset(page)
@@ -955,7 +1000,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 
 		it('refuses a press in the DOM placement before any event, and keeps the executed prefix of a live refusal at s3', async () => {
 			requireDocumentBundle()
-			const page = await context.create({ url: fixtures.url('/document') })
+			const page = await context.required.create({ url: fixtures.required.url('/document') })
 			pages.push(page)
 			await requireDocumentToolset(page)
 			await page.evaluate(BROWSER_JOURNEY_EVENT_COUNTER)
@@ -1013,23 +1058,9 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			cleanup.add(() => root.destroy())
 			const files = createFileBrowserJourneyStore({ root: root.path })
 			const writer = createFileBrowserJourneyStore({ root: root.path })
-			let concurrent = false
-			const store: BrowserJourneyStoreInterface = {
-				get: async (name, options) => {
-					const read = await files.get(name, options)
-					// A second store over the same root saves the journey between this read and the
-					// edit's write.
-					if (read !== undefined && concurrent)
-						await writer.set(read.journey, {
-							...(read.revision === undefined ? {} : { revision: read.revision }),
-						})
-					return read
-				},
-				set: files.set.bind(files),
-				delete: files.delete.bind(files),
-				list: files.list.bind(files),
-			}
-			const page = await context.create({ url: fixtures.url('/form') })
+			const concurrent = new BrowserFixtureValue(false)
+			const store = createBrowserConcurrentJourneyStore(files, writer, concurrent)
+			const page = await context.required.create({ url: fixtures.required.url('/form') })
 			pages.push(page)
 			const toolset = createBrowserToolset(page, {
 				journeys: { store, runs: createFileBrowserRunStore({ root: root.path }) },
@@ -1103,7 +1134,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				}),
 			)
 			const added: unknown = JSON.parse(requireValue(root.read('save-delivery/journey.json')))
-			concurrent = true
+			concurrent.value = true
 			const stale = await toolset.tools.execute({
 				id: 'stale',
 				name: 'edit',
@@ -1114,7 +1145,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			})
 			const kept = await writer.get('save-delivery')
 			const listing = [
-				`save-delivery "Save the delivery draft" starts at ${fixtures.url('/form')}`,
+				`save-delivery "Save the delivery draft" starts at ${fixtures.required.url('/form')}`,
 				's1 click button "Save draft"',
 				's2 type "Grace" into textbox "Name"',
 			].join('\n')
@@ -1170,8 +1201,8 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 			cleanup.add(() => root.destroy())
 			const store = createFileBrowserJourneyStore({ root: root.path })
 			const page = await openBrowserJourneyPage(
-				context,
-				fixtures.url('/form'),
+				context.required,
+				fixtures.required.url('/form'),
 				BROWSER_JOURNEY_PASSWORD_HTML,
 			)
 			pages.push(page)
@@ -1256,7 +1287,7 @@ describe('journey replay coordination, preparation, tools, and secrecy', () => {
 				compileBrowserJourney(journey, { language: 'typescript' }).source,
 			]
 			const listing = [
-				`sign-in "Sign in with the password" starts at ${fixtures.url('/form')} (parameters: password (secret))`,
+				`sign-in "Sign in with the password" starts at ${fixtures.required.url('/form')} (parameters: password (secret))`,
 				's1 type (secret) as password into textbox "Password"',
 				's2 click button "Sign in"',
 			].join('\n')
@@ -1312,15 +1343,15 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 	const pages: BrowserPageInterface[] = []
 	const toolsets: BrowserToolsetInterface[] = []
 	const contexts: BrowserContextInterface[] = []
-	let fixtures: FixtureServerInterface
-	let browser: BrowserInterface
+	const fixtures = new BrowserFixtureValue<FixtureServerInterface | undefined>(undefined)
+	const browser = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
 
 	beforeAll(async () => {
-		fixtures = await createFixtureServer()
-		cleanup.add(() => fixtures.destroy())
+		fixtures.value = await createFixtureServer()
+		cleanup.add(() => fixtures.required.destroy())
 		const profile = createTempDirectory('journey-equality-service-')
 		cleanup.add(() => profile.destroy())
-		browser = createBrowser({
+		browser.value = createBrowser({
 			executable: requireSystemBrowser().executable,
 			headless: true,
 			profile: profile.path,
@@ -1328,8 +1359,8 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 			cdp: { port: await reservePort() },
 			timeout: 20_000,
 		})
-		cleanup.add(() => browser.destroy())
-		await browser.connect()
+		cleanup.add(() => browser.required.destroy())
+		await browser.required.connect()
 	})
 	afterEach(async () => {
 		for (const toolset of toolsets.splice(0)) await toolset.destroy()
@@ -1343,15 +1374,17 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 	it.each(BROWSER_JOURNEY_SERVICE_CASES)(
 		'replays $name to the outcome, stage, reason, and receipt of a direct tools.execute on a second fresh page',
 		async (scenario) => {
-			const journey = createBrowserJourneyServiceJourney(scenario, (path) => fixtures.url(path))
+			const journey = createBrowserJourneyServiceJourney(scenario, (path) =>
+				fixtures.required.url(path),
+			)
 			const step = requireValue(journey.steps[0])
-			const replayed = await browser.create({ url: fixtures.url(scenario.route) })
+			const replayed = await browser.required.create({ url: fixtures.required.url(scenario.route) })
 			pages.push(replayed)
 			const replaying = createBrowserToolset(replayed)
 			toolsets.push(replaying)
 			await replaying.start()
 			const run = await createBrowserReplay(replaying, { journey }).execute()
-			const page = await browser.create({ url: fixtures.url(scenario.route) })
+			const page = await browser.required.create({ url: fixtures.required.url(scenario.route) })
 			pages.push(page)
 			const toolset = createBrowserToolset(page)
 			toolsets.push(toolset)
@@ -1391,13 +1424,15 @@ describe('claim 5: a one-step replay agrees with a direct call for every native 
 	it.each(BROWSER_JOURNEY_SEQUENCE_CASES)(
 		'replays the $name step by step to the outcome, stage, reason, and receipt of direct tools.execute calls in a second fresh context',
 		async (scenario) => {
-			const journey = createBrowserJourneySequenceJourney(scenario, (path) => fixtures.url(path))
+			const journey = createBrowserJourneySequenceJourney(scenario, (path) =>
+				fixtures.required.url(path),
+			)
 			const opened: Array<{ page: BrowserPageInterface; toolset: BrowserToolsetInterface }> = []
-			for (let index = 0; index < 2; index += 1) {
-				const context = await browser.isolate()
+			while (opened.length < 2) {
+				const context = await browser.required.isolate()
 				contexts.push(context)
-				const page = await context.create({ url: fixtures.url(scenario.route) })
-				for (const tab of scenario.tabs) await context.create({ url: fixtures.url(tab) })
+				const page = await context.create({ url: fixtures.required.url(scenario.route) })
+				for (const tab of scenario.tabs) await context.create({ url: fixtures.required.url(tab) })
 				const toolset = createBrowserToolset(page, { context })
 				toolsets.push(toolset)
 				await toolset.start()

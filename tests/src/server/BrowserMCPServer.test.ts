@@ -10,7 +10,7 @@ import { Writable } from 'node:stream'
 import { createServer } from 'node:http'
 import { basename, dirname, join } from 'node:path'
 import { isMainThread } from 'node:worker_threads'
-import { isRecord, isString, parseJSON } from '@orkestrel/contract'
+import { attempt, isRecord, isString, parseJSON } from '@orkestrel/contract'
 import {
 	bindClient,
 	createDuplexClientTransport,
@@ -29,10 +29,15 @@ import {
 } from '@orkestrel/test'
 import { createLoopback, createScratch, readErrorCode } from '@orkestrel/test/server'
 import { afterAll, beforeAll, describe, expect, it } from 'vitest'
-import { createBrowserJourneyFixture, replyOk, buildBrowserReferenceTree } from '../../setup.js'
+import {
+	BrowserFixtureValue,
+	createBrowserJourneyFixture,
+	replyOk,
+	buildBrowserReferenceTree,
+} from '../../setup.js'
 import { BrowseLauncher, requireSystemBrowser } from '../../setupService.js'
 import {
-	BROWSER_JOURNEY_EMPTY_LISTING,
+	BROWSER_JOURNEY_EMPTY_LIST,
 	BROWSER_JOURNEY_READONLY_REFUSAL,
 	BROWSER_TOOL_COPY,
 	createBrowserToolset,
@@ -65,50 +70,52 @@ const PROFILE_PATTERN = /^[1-9]\d*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 
 describe('holders H3 journey admission', () => {
 	const launcher = new BrowseLauncher()
-	let fixture: ReturnType<typeof createBrowseFixture>
-	let first: string
-	let second: string
-	let id = 1
+	const fixture = new BrowserFixtureValue<ReturnType<typeof createBrowseFixture> | undefined>(
+		undefined,
+	)
+	const first = new BrowserFixtureValue<string | undefined>(undefined)
+	const second = new BrowserFixtureValue<string | undefined>(undefined)
+	const id = new BrowserFixtureValue(1)
 	beforeAll(async () => {
-		fixture = createBrowseFixture({
+		fixture.value = createBrowseFixture({
 			browser: { executable: requireSystemBrowser().executable },
 			pool: { contexts: 1, size: 3, launch: launcher.launch },
 		})
-		await fixture.server.start()
+		await fixture.required.server.start()
 		const a = parseJSON(
-			(await fixture.pair.call(id++, 'acquire', { purpose: 'first replay' })).text,
+			(await fixture.required.pair.call(id.value++, 'acquire', { purpose: 'first replay' })).text,
 		)
 		const b = parseJSON(
-			(await fixture.pair.call(id++, 'acquire', { purpose: 'second replay' })).text,
+			(await fixture.required.pair.call(id.value++, 'acquire', { purpose: 'second replay' })).text,
 		)
 		if (!isRecord(a) || !isString(a['holder']) || !isRecord(b) || !isString(b['holder']))
 			throw new Error('Missing holders')
-		first = a['holder']
-		second = b['holder']
+		first.value = a['holder']
+		second.value = b['holder']
 	}, 20000)
-	afterAll(() => fixture.teardown.destroy())
+	afterAll(() => fixture.required.teardown.destroy())
 
 	it('refuses forget across holders while concurrent replays persist distinct runs', async () => {
 		const starting = Promise.withResolvers<void>()
 		const entered = Promise.withResolvers<void>()
 		const firstRelease = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		let requests = 0
+		const requests = new BrowserFixtureValue(0)
 		const pages = await createLoopback(
 			createServer(async (_request, response) => {
-				requests += 1
-				if (requests === 1) starting.resolve()
-				if (requests === 2) entered.resolve()
-				await (requests === 1 ? firstRelease.promise : release.promise)
+				requests.value += 1
+				if (requests.value === 1) starting.resolve()
+				if (requests.value === 2) entered.resolve()
+				await (requests.value === 1 ? firstRelease.promise : release.promise)
 				response.end('<!doctype html><title>Ready</title><body>Ready</body>')
 			}),
 		)
-		const store = createFileBrowserJourneyStore({ root: fixture.root })
+		const store = createFileBrowserJourneyStore({ root: fixture.required.root })
 		await store.set(
 			createBrowserJourneyFixture([{ action: 'navigate', arguments: { url: pages.url } }]),
 		)
-		const a = fixture.pair.call(id++, 'execute', {
-			holder: first,
+		const a = fixture.required.pair.call(id.value++, 'execute', {
+			holder: first.required,
 			name: 'replay',
 			arguments: { journey: 'check-ready' },
 		})
@@ -118,8 +125,8 @@ describe('holders H3 journey admission', () => {
 				throw new Error(JSON.stringify(result))
 			}),
 		])
-		const b = fixture.pair.call(id++, 'execute', {
-			holder: second,
+		const b = fixture.required.pair.call(id.value++, 'execute', {
+			holder: second.required,
 			name: 'replay',
 			arguments: { journey: 'check-ready' },
 		})
@@ -130,28 +137,30 @@ describe('holders H3 journey admission', () => {
 					throw new Error(JSON.stringify(result))
 				}),
 			])
-			const refused = await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })
+			const refused = await fixture.required.pair.call(id.value++, 'forget', {
+				journey: 'check-ready',
+			})
 			expect(refused.error).toBe(true)
 			expect(refused.text).toContain('STORE_LOCKED')
-			const directories = readdirSync(join(fixture.root, 'check-ready', 'runs'))
+			const directories = readdirSync(join(fixture.required.root, 'check-ready', 'runs'))
 			expect(directories).toHaveLength(2)
 			expect(new Set(directories).size).toBe(2)
 			firstRelease.resolve()
 			expect((await a).error).toBe(false)
-			expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).text).toContain(
-				'STORE_LOCKED',
-			)
+			expect(
+				(await fixture.required.pair.call(id.value++, 'forget', { journey: 'check-ready' })).text,
+			).toContain('STORE_LOCKED')
 			release.resolve()
 			for (const result of await Promise.all([a, b])) {
 				expect(result.error).toBe(false)
 				expect(result.text).toContain('Replayed check-ready: 1 of 1 steps.')
 			}
-			const runs = createFileBrowserRunStore({ root: fixture.root })
+			const runs = createFileBrowserRunStore({ root: fixture.required.root })
 			for (const directory of directories)
 				expect((await runs.get('check-ready', directory))?.outcome).toBe('complete')
-			expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).error).toBe(
-				false,
-			)
+			expect(
+				(await fixture.required.pair.call(id.value++, 'forget', { journey: 'check-ready' })).error,
+			).toBe(false)
 		} finally {
 			release.resolve()
 			firstRelease.resolve()
@@ -171,38 +180,43 @@ describe('holders H3 journey admission', () => {
 					response.end('<!doctype html><body>Ready</body>')
 				}),
 			)
-			const store = createFileBrowserJourneyStore({ root: fixture.root })
+			const store = createFileBrowserJourneyStore({ root: fixture.required.root })
 			await store.set(
 				createBrowserJourneyFixture([{ action: 'navigate', arguments: { url: pages.url } }]),
 			)
-			const request = id++
+			const request = id.value++
 			const settled = Promise.withResolvers<void>()
 			const observer = new BrowserPromiseObserver(/at BrowserMCPServer\.#forward/, settled.resolve)
-			fixture.pair.send({
+			fixture.required.pair.send({
 				jsonrpc: '2.0',
 				id: request,
 				method: 'tools/call',
 				params: {
 					name: 'execute',
-					arguments: { holder: first, name: 'replay', arguments: { journey: 'check-ready' } },
+					arguments: {
+						holder: first.required,
+						name: 'replay',
+						arguments: { journey: 'check-ready' },
+					},
 				},
 			})
 			try {
 				await entered.promise
 				if (loss) process.kill(requireValue(launcher.browsers[1]?.pid), 'SIGKILL')
 				else
-					fixture.pair.send({
+					fixture.required.pair.send({
 						jsonrpc: '2.0',
 						method: 'notifications/cancelled',
 						params: { requestId: request },
 					})
-				if (loss) await fixture.pair.answer(request)
+				if (loss) await fixture.required.pair.answer(request)
 				// MCP suppresses a cancelled reply; observe the real dispatch promise's settlement.
 				await settled.promise
 				expect(observer.resolved).toBeDefined()
-				expect((await fixture.pair.call(id++, 'forget', { journey: 'check-ready' })).error).toBe(
-					false,
-				)
+				const forgotten = await fixture.required.pair.call(id.value++, 'forget', {
+					journey: 'check-ready',
+				})
+				expect(forgotten.error).toBe(false)
 			} finally {
 				observer.destroy()
 				release.resolve()
@@ -217,12 +231,12 @@ describe('holders H3 journey admission', () => {
 		)
 		const entered = Promise.withResolvers<void>()
 		const release = Promise.withResolvers<void>()
-		let locked: Promise<void> | undefined
+		const locked = new BrowserFixtureValue<Promise<void> | undefined>(undefined)
 		try {
-			for (const holder of [first, second]) {
+			for (const holder of [first.required, second.required]) {
 				expect(
 					(
-						await fixture.pair.call(id++, 'execute', {
+						await fixture.required.pair.call(id.value++, 'execute', {
 							holder,
 							name: 'record',
 							arguments: { journey: 'same-recording' },
@@ -231,7 +245,7 @@ describe('holders H3 journey admission', () => {
 				).toBe(false)
 				expect(
 					(
-						await fixture.pair.call(id++, 'execute', {
+						await fixture.required.pair.call(id.value++, 'execute', {
 							holder,
 							name: 'navigate',
 							arguments: { url: pages.url },
@@ -240,46 +254,46 @@ describe('holders H3 journey admission', () => {
 				).toBe(false)
 			}
 
-			locked = holdBrowserStoreLock(
-				join(fixture.root, 'same-recording', 'journey.lock'),
+			locked.value = holdBrowserStoreLock(
+				join(fixture.required.root, 'same-recording', 'journey.lock'),
 				async () => {
 					entered.resolve()
 					await release.promise
 				},
 			)
 			await entered.promise
-			const refused = await fixture.pair.call(id++, 'execute', {
-				holder: first,
+			const refused = await fixture.required.pair.call(id.value++, 'execute', {
+				holder: first.required,
 				name: 'save',
 				arguments: { description: 'First recording' },
 			})
 			expect(refused.error).toBe(true)
 			expect(refused.text).toContain('is locked')
 			release.resolve()
-			await locked
+			await locked.value
 			expect(
 				(
-					await fixture.pair.call(id++, 'execute', {
-						holder: first,
+					await fixture.required.pair.call(id.value++, 'execute', {
+						holder: first.required,
 						name: 'save',
 						arguments: { description: 'First recording' },
 					})
 				).error,
 			).toBe(false)
-			const stale = await fixture.pair.call(id++, 'execute', {
-				holder: second,
+			const stale = await fixture.required.pair.call(id.value++, 'execute', {
+				holder: second.required,
 				name: 'save',
 				arguments: { description: 'Second recording' },
 			})
 			expect(stale.error).toBe(true)
 			expect(stale.text).toContain('A journey named "same-recording" is saved')
-			expect(
-				(await createFileBrowserJourneyStore({ root: fixture.root }).get('same-recording'))?.journey
-					.description,
-			).toBe('First recording')
+			const saved = await createFileBrowserJourneyStore({ root: fixture.required.root }).get(
+				'same-recording',
+			)
+			expect(saved?.journey.description).toBe('First recording')
 		} finally {
 			release.resolve()
-			await locked
+			await locked.value
 			await pages.destroy()
 		}
 	})
@@ -329,7 +343,7 @@ describe('holders H2', () => {
 			},
 		)
 		await fixture.server.start()
-		let acquisition: Promise<unknown> | undefined
+		const acquisition = new BrowserFixtureValue<Promise<unknown> | undefined>(undefined)
 		const entered = Promise.withResolvers<void>()
 		const hook = createHook({
 			init: (_id, category, _trigger, resource: unknown) => {
@@ -339,7 +353,7 @@ describe('holders H2', () => {
 				)
 					return
 				hook.disable()
-				if (resource instanceof Promise) acquisition = resource
+				if (resource instanceof Promise) acquisition.value = resource
 				entered.resolve()
 			},
 		}).enable()
@@ -358,7 +372,7 @@ describe('holders H2', () => {
 				params: { name: 'acquire', arguments: { purpose: 'aborted grant' } },
 			})
 			await entered.promise
-			await expect(requireValue(acquisition)).rejects.toMatchObject({ name: 'AbortError' })
+			await expect(requireValue(acquisition.value)).rejects.toMatchObject({ name: 'AbortError' })
 			expect(fixture.launcher.browsers[1]?.destroyed).toBe(true)
 		} finally {
 			hook.disable()
@@ -370,7 +384,7 @@ describe('holders H2', () => {
 	it('detaches the acquisition signal before returning a serving holder', async () => {
 		const fixture = createBrowseFixture({ pool: { contexts: 1, size: 2 } })
 		await fixture.server.start()
-		let acquisition: Promise<unknown> | undefined
+		const acquisition = new BrowserFixtureValue<Promise<unknown> | undefined>(undefined)
 		const entered = Promise.withResolvers<void>()
 		const hook = createHook({
 			init: (_id, category, _trigger, resource: unknown) => {
@@ -380,7 +394,7 @@ describe('holders H2', () => {
 				)
 					return
 				hook.disable()
-				if (resource instanceof Promise) acquisition = resource
+				if (resource instanceof Promise) acquisition.value = resource
 				entered.resolve()
 			},
 		}).enable()
@@ -393,7 +407,7 @@ describe('holders H2', () => {
 			})
 			// Observe the returned catalog before MCP removes the live request's cancellation handle.
 			await entered.promise
-			const catalog = await requireValue(acquisition).then((value: unknown) => {
+			const catalog = await requireValue(acquisition.value).then((value: unknown) => {
 				fixture.pair.send({
 					jsonrpc: '2.0',
 					method: 'notifications/cancelled',
@@ -422,7 +436,7 @@ describe('holders H2', () => {
 	it('aborts a holder call during refill and serves its next call', async () => {
 		const fixture = createBrowseFixture({ pool: { contexts: 1, size: 2 } })
 		const waiting = Promise.withResolvers<void>()
-		let execution: Promise<unknown> | undefined
+		const execution = new BrowserFixtureValue<Promise<unknown> | undefined>(undefined)
 		const hook = createHook({
 			init: (_id, category, _trigger, resource: unknown) => {
 				if (
@@ -431,7 +445,7 @@ describe('holders H2', () => {
 				)
 					return
 				hook.disable()
-				if (resource instanceof Promise) execution = resource
+				if (resource instanceof Promise) execution.value = resource
 			},
 		})
 		try {
@@ -468,7 +482,7 @@ describe('holders H2', () => {
 					method: 'notifications/cancelled',
 					params: { requestId: 3 },
 				})
-				await expect(requireValue(execution)).rejects.toMatchObject({ name: 'AbortError' })
+				await expect(requireValue(execution.value)).rejects.toMatchObject({ name: 'AbortError' })
 			} finally {
 				grant.destroy()
 			}
@@ -494,7 +508,7 @@ describe('holders H2', () => {
 			createCDPTestServer(),
 		])
 		const browsers = peers.map((peer) => createBrowser({ cdp: { endpoint: peer.endpoint } }))
-		let launched = 0
+		const launched = new BrowserFixtureValue(0)
 		for (const peer of peers) {
 			for (const method of [
 				'Browser.getVersion',
@@ -529,7 +543,7 @@ describe('holders H2', () => {
 			)
 		}
 		const fixture = createBrowseFixture({
-			pool: { contexts: 1, size: 3, launch: () => requireValue(browsers[launched++]) },
+			pool: { contexts: 1, size: 3, launch: () => requireValue(browsers[launched.value++]) },
 		})
 		try {
 			await fixture.server.start()
@@ -755,10 +769,10 @@ describe('holders H2', () => {
 			if (!isRecord(acquired)) throw new Error('Missing holder')
 			const holder = acquired['holder']
 			expect((await fixture.pair.call(3, 'destroy', { holder })).error).toBe(false)
-			let id = 4
+			const id = new BrowserFixtureValue(4)
 			for (const value of ['absent', holder, 'shared']) {
 				for (const name of ['execute', 'tools']) {
-					const result = await fixture.pair.call(id++, name, {
+					const result = await fixture.pair.call(id.value++, name, {
 						holder: value,
 						name: 'read',
 						arguments: { from: 1, search: 'cart' },
@@ -767,9 +781,11 @@ describe('holders H2', () => {
 					expect(result.text).toContain('SERVER_HOLDER')
 				}
 			}
-			expect((await fixture.pair.call(id++, 'destroy', { holder: 'absent' })).error).toBe(true)
-			expect((await fixture.pair.call(id++, 'destroy', {})).error).toBe(true)
-			expect((await fixture.pair.call(id++, 'destroy', { holder })).error).toBe(false)
+			expect((await fixture.pair.call(id.value++, 'destroy', { holder: 'absent' })).error).toBe(
+				true,
+			)
+			expect((await fixture.pair.call(id.value++, 'destroy', {})).error).toBe(true)
+			expect((await fixture.pair.call(id.value++, 'destroy', { holder })).error).toBe(false)
 			expect(
 				fixture.launcher.browsers[0]?.fixture?.transport.sent.some(
 					(message) => message.method === 'Accessibility.getFullAXTree',
@@ -802,10 +818,10 @@ describe('holders H2', () => {
 				() => committed.resolved !== undefined,
 			)
 			expect(fixture.pair.answered).not.toContain(2)
-			let id = 3
+			const id = new BrowserFixtureValue(3)
 			const acquired = await retryUntil(
 				'cancelled holder disposal settled',
-				() => fixture.pair.call(id++, 'acquire', { purpose: 'replacement' }),
+				() => fixture.pair.call(id.value++, 'acquire', { purpose: 'replacement' }),
 				(result) => !result.text.includes('SERVER_BUSY'),
 			)
 			expect(acquired.error).toBe(false)
@@ -1159,10 +1175,10 @@ describe('eager U7', () => {
 	})
 
 	it('refuses a recorded loss in the version continuation before hold', async () => {
-		let pinged = false
+		const pinged = new BrowserFixtureValue(false)
 		const fixture = createBrowseFixture(undefined, {
 			version: () => {
-				pinged = true
+				pinged.value = true
 			},
 		})
 		const commit = new BrowserPromiseObserver(/at Pool\.acquire/, () =>
@@ -1173,7 +1189,7 @@ describe('eager U7', () => {
 				code: 'SERVER_UNAVAILABLE',
 				message: 'The browser process exited.',
 			})
-			expect(pinged).toBe(true)
+			expect(pinged.value).toBe(true)
 			expect(commit.resolved).toContain('#commit')
 			expect(await fixture.pair.initialize()).toMatchObject({
 				message: 'SERVER_UNAVAILABLE: The browser process exited.',
@@ -1215,15 +1231,15 @@ describe('eager U7', () => {
 		try {
 			await fixture.server.start()
 			await fixture.pair.call(2, 'read', { from: 1, search: 'cart' })
-			let delivered: boolean | undefined
+			const delivered = new BrowserFixtureValue<boolean | undefined>(undefined)
 			const result = new BrowserPromiseObserver(/at BrowserToolset\.#performManaged/, () => {
-				delivered = fixture.pair.answered.includes(3)
+				delivered.value = fixture.pair.answered.includes(3)
 				fixture.launcher.browsers[0]?.kill()
 			})
 			try {
 				const clicked = await fixture.pair.call(3, 'click', { ref: 'e4' })
 				expect(result.resolved).toContain('BrowserToolset.#performManaged')
-				expect(delivered).toBe(false)
+				expect(delivered.value).toBe(false)
 				expect(clicked.error).toBe(false)
 				expect(clicked.text).toContain('Clicked button "Place order" [ref=e4]')
 				await waitForCondition(
@@ -1839,16 +1855,16 @@ describe('eager U6', () => {
 
 	it('destroys during a hand-out ping without refilling', async () => {
 		const version = Promise.withResolvers<void>()
-		let pinged = false
+		const pinged = new BrowserFixtureValue(false)
 		const fixture = createBrowseFixture(undefined, {
 			version: () => {
-				pinged = true
+				pinged.value = true
 				return version.promise
 			},
 		})
 		const starting = fixture.server.start()
 		try {
-			await waitForCondition('hand-out ping', () => pinged)
+			await waitForCondition('hand-out ping', () => pinged.value)
 			await fixture.server.destroy()
 			await starting
 			expect(fixture.launcher.browsers).toHaveLength(1)
@@ -1996,22 +2012,24 @@ describe('eager U6', () => {
 			windowsHide: true,
 		})
 		const owner = requireValue(holder.pid, 'probe owner')
-		let code: string | undefined
-		try {
-			await waitForEvent<[Buffer]>((listener) => {
-				holder.stdout?.once('data', listener)
-				return () => holder.stdout?.off('data', listener)
-			}, 'probe holds its current directory')
-			try {
-				await rm(directory, { recursive: true, force: true, maxRetries: 5 })
-			} catch (error) {
-				code = readErrorCode(error)
-			}
-		} finally {
-			holder.kill()
-			await waitForProcessExit(owner)
-			probe.destroy()
-		}
+		const ready = waitForEvent<[Buffer]>((listener) => {
+			holder.stdout?.once('data', listener)
+			return () => holder.stdout?.off('data', listener)
+		}, 'probe holds its current directory')
+		const code = await ready
+			.then(async () => {
+				try {
+					await rm(directory, { recursive: true, force: true, maxRetries: 5 })
+					return undefined
+				} catch (error) {
+					return readErrorCode(error)
+				}
+			})
+			.finally(async () => {
+				holder.kill()
+				await waitForProcessExit(owner)
+				probe.destroy()
+			})
 		context.skip(
 			code === undefined,
 			'NOT-EVIDENCED: the host permits removal of a live child current directory',
@@ -2065,10 +2083,10 @@ describe('eager U6', () => {
 	}, 15000)
 	it('cancels a per-call ping without losing the held browser or answering the request', async () => {
 		const held = Promise.withResolvers<void>()
-		let calls = 0
+		const calls = new BrowserFixtureValue(0)
 		const fixture = createBrowseFixture(undefined, {
 			version: (call) => {
-				calls = call
+				calls.value = call
 				if (call === 2) return held.promise
 			},
 		})
@@ -2080,7 +2098,7 @@ describe('eager U6', () => {
 				method: 'tools/call',
 				params: { name: 'read', arguments: { from: 1, search: 'cart' } },
 			})
-			await waitForCondition('held per-call ping', () => calls === 2)
+			await waitForCondition('held per-call ping', () => calls.value === 2)
 			fixture.pair.send({
 				jsonrpc: '2.0',
 				method: 'notifications/cancelled',
@@ -2209,12 +2227,8 @@ describe('eager U6', () => {
 		const profiles = fixture.scratch.ensure('browsers/.profiles')
 		chmodSync(profiles, 0o300)
 		try {
-			let refusal: string | undefined
-			try {
-				readdirSync(profiles)
-			} catch (error) {
-				refusal = readErrorCode(error)
-			}
+			const reading = attempt(() => readdirSync(profiles))
+			const refusal = reading.success ? undefined : readErrorCode(reading.error)
 			expect([undefined, 'EACCES']).toContain(refusal)
 			const enforced = refusal === 'EACCES'
 			if (enforced) mkdirSync(join(profiles, 'mode-probe'))
@@ -2469,7 +2483,7 @@ describe('BrowserMCPServer', () => {
 				error: true,
 			})
 			expect(await pair.call(4, 'journeys', { from: 1, search: 'every journey' })).toStrictEqual({
-				text: BROWSER_JOURNEY_EMPTY_LISTING,
+				text: BROWSER_JOURNEY_EMPTY_LIST,
 				error: false,
 			})
 			const transport = requireValue(
@@ -2748,41 +2762,45 @@ describe('BrowserMCPServer', () => {
 			const teardown = createTeardown()
 			teardown.add(() => scratch.destroy())
 			teardown.add(() => server.destroy())
-			let admission: BrowserPromiseObserver | undefined
-			let dispatcher: BrowserPromiseObserver | undefined
+			const admission = new BrowserFixtureValue<BrowserPromiseObserver | undefined>(undefined)
+			const dispatcher = new BrowserFixtureValue<BrowserPromiseObserver | undefined>(undefined)
 			try {
 				await server.start()
 				await pair.initialize()
-				admission = new BrowserPromiseObserver(
+				admission.value = new BrowserPromiseObserver(
 					/at BrowserMCPServer\.#race[^\n]+\n\s+at BrowserMCPServer\.#serve/u,
 				)
-				let destroying: Promise<void> | undefined
+				const destroying = new BrowserFixtureValue<Promise<void> | undefined>(undefined)
 				// Promise initialization precedes the async body, pinning closing before admission.
-				dispatcher = new BrowserPromiseObserver(/at BrowserMCPServer\.#forward/u, undefined, () => {
-					destroying = server.destroy()
-				})
+				dispatcher.value = new BrowserPromiseObserver(
+					/at BrowserMCPServer\.#forward/u,
+					undefined,
+					() => {
+						destroying.value = server.destroy()
+					},
+				)
 				pair.send({
 					jsonrpc: '2.0',
 					id: 2,
 					method: 'tools/call',
 					params: { name: 'read', arguments: { from: 1, search: 'the cart' } },
 				})
-				await waitForCondition('destroy to begin', () => destroying !== undefined, {
+				await waitForCondition('destroy to begin', () => destroying.value !== undefined, {
 					budget: 3000,
 					interval: 10,
 				})
-				await destroying
+				await destroying.value
 				await waitForCondition(
 					'rejected dispatcher settled',
-					() => dispatcher?.resolved !== undefined,
+					() => dispatcher.value?.resolved !== undefined,
 				)
-				expect(admission.created).toBeUndefined()
+				expect(admission.required.created).toBeUndefined()
 				expect(launcher.browsers).toHaveLength(1)
 				expect(readdirSync(join(root, '.profiles'))).toEqual([])
 				expect(pair.answered).not.toContain(2)
 			} finally {
-				admission?.destroy()
-				dispatcher?.destroy()
+				admission.value?.destroy()
+				dispatcher.value?.destroy()
 				await teardown.destroy()
 			}
 		})
@@ -2840,7 +2858,7 @@ describe('C1 context ownership', () => {
 
 	it('keeps a FIFO recovery waiter off a co-held browser retiring after refused disposal', async () => {
 		const fixture = createBrowseFixture({ pool: { size: 2, contexts: 2 } })
-		let waiting: BrowserPromiseObserver | undefined
+		const waiting = new BrowserFixtureValue<BrowserPromiseObserver | undefined>(undefined)
 		try {
 			await fixture.server.start()
 			await waitForCondition(
@@ -2860,7 +2878,7 @@ describe('C1 context ownership', () => {
 				() => fixture.launcher.browsers.length === 3,
 			)
 			const entered = Promise.withResolvers<void>()
-			waiting = new BrowserPromiseObserver(/at Pool\.acquire/, undefined, entered.resolve)
+			waiting.value = new BrowserPromiseObserver(/at Pool\.acquire/, undefined, entered.resolve)
 			const recovery = fixture.pair.call(5, 'read', { from: 1, search: 'cart' })
 			await entered.promise
 			b.script('Target.disposeBrowserContext', (message, transport) =>
@@ -2872,7 +2890,7 @@ describe('C1 context ownership', () => {
 			expect((await recovery).error).toBe(false)
 			expect(b.destroys).toBe(1)
 		} finally {
-			waiting?.destroy()
+			waiting.value?.destroy()
 			fixture.launcher.release()
 			await fixture.teardown.destroy().catch(() => undefined)
 		}
@@ -2983,8 +3001,8 @@ describe('C1 context ownership', () => {
 	it('keeps admission occupied until uncertain browser retirement settles', async () => {
 		const fixture = createBrowseFixture()
 		const pending = Promise.withResolvers<CDPSentMessage>()
-		let transport: CDPTestTransportInterface | undefined
-		let request: CDPSentMessage | undefined
+		const transport = new BrowserFixtureValue<CDPTestTransportInterface | undefined>(undefined)
+		const request = new BrowserFixtureValue<CDPSentMessage | undefined>(undefined)
 		try {
 			await fixture.server.start()
 			const acquired = parseJSON(
@@ -2992,23 +3010,23 @@ describe('C1 context ownership', () => {
 			)
 			if (!isRecord(acquired)) throw new Error('Missing holder')
 			const browser = requireValue(fixture.launcher.browsers[0])
-			transport = requireValue(browser.fixture?.transport)
+			transport.value = requireValue(browser.fixture?.transport)
 			browser.script('Target.disposeBrowserContext', (message, peer) => {
 				if (message.params?.['browserContextId'] === 'context-2')
 					peer.fail(message.id, 'uncertain disposal')
 				else pending.resolve(message)
 			})
 			const ending = fixture.pair.call(3, 'destroy', { holder: acquired['holder'] })
-			request = await pending.promise
+			request.value = await pending.promise
 			expect(
 				(await fixture.pair.call(4, 'acquire', { purpose: 'retirement pending' })).text,
 			).toContain('SERVER_BUSY')
 			expect(fixture.pair.answered).not.toContain(3)
-			transport.reply(request.id, {})
+			transport.required.reply(request.required.id, {})
 			expect(await ending).toEqual({ error: false, text: 'Holder destroyed.' })
 			expect(browser.destroys).toBe(1)
 		} finally {
-			if (request !== undefined) transport?.reply(request.id, {})
+			if (request.value !== undefined) transport.value?.reply(request.value.id, {})
 			await fixture.teardown.destroy().catch(() => undefined)
 		}
 	})

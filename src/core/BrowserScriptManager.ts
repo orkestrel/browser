@@ -78,23 +78,23 @@ export class BrowserScriptManager implements BrowserScriptManagerInterface {
 			await this.#frame.subscribe('Runtime.bindingCalled', this.#bindingHandler)
 			this.#subscribed = true
 		}
-		let added = false
 		try {
 			await this.#frame.send('Runtime.addBinding', { name })
-			added = true
-			const id = await this.add(compileBrowserBindingSource(name))
-			const entry = this.#scripts.get(id)
-			if (entry === undefined) {
-				throw new BrowserError('PROTOCOL', 'Browser binding script registration was lost', {
-					name,
-				})
-			}
-			this.#scripts.set(id, { source: entry.source, binding: name })
-			this.#bindings.set(name, handler)
-		} catch (error) {
-			if (added) {
+			try {
+				const id = await this.add(compileBrowserBindingSource(name))
+				const entry = this.#scripts.get(id)
+				if (entry === undefined) {
+					throw new BrowserError('PROTOCOL', 'Browser binding script registration was lost', {
+						name,
+					})
+				}
+				this.#scripts.set(id, { source: entry.source, binding: name })
+				this.#bindings.set(name, handler)
+			} catch (error) {
 				await this.#frame.send('Runtime.removeBinding', { name }).catch(() => undefined)
+				throw error
 			}
+		} catch (error) {
 			if (!subscribed && this.#bindings.size === 0) {
 				await this.#frame
 					.unsubscribe('Runtime.bindingCalled', this.#bindingHandler)

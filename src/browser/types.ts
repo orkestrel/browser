@@ -2,11 +2,61 @@ import type {
 	BrowserElementInterface,
 	BrowserElementManagerInterface,
 	BrowserViewInterface,
+	BrowserOutlineNode,
 	CDPTransportEventMap,
 } from '@src/core'
 import type { EmitterErrorHandler, EmitterHooks } from '@orkestrel/emitter'
 
 // === Browser document
+
+/** Supplies the document subtree, row sinks, and traversal operations for an outline. */
+export interface BrowserDOMOutlineInput {
+	readonly root: Element | ShadowRoot
+	readonly rows: BrowserOutlineNode[]
+	readonly muted: boolean
+	readonly positions: WeakMap<Node, string>
+	readonly watch: (document: Document) => void
+	readonly walk: (root: Element | ShadowRoot, rows: BrowserOutlineNode[], muted: boolean) => void
+	readonly text: (rows: BrowserOutlineNode[], text: string, parent?: Node) => void
+	readonly row: (
+		element: Element,
+		role: string,
+		view: Window & typeof globalThis,
+		id: string,
+	) => BrowserOutlineNode
+}
+
+/** Captures the rows of one document subtree. */
+export interface BrowserDOMOutlineInterface {
+	/** Appends the captured rows through the supplied outline operations. */
+	capture(): void
+}
+
+/** Reads the next ancestor, ending at the platform's null boundary. */
+export type BrowserAncestorReader<T> = (node: T) => T | null
+
+/** Pairs the current live and inert nodes during sibling traversal. */
+export interface BrowserCaptureSibling {
+	readonly child: Node
+	readonly mirror: Node
+	readonly element: Element | null
+	readonly counterpart: Element | null
+}
+
+/** Retains the sibling pointers read before a capture prunes its copy. */
+export interface BrowserCaptureCursor {
+	readonly child: Node | null
+	readonly mirror: Node | null
+	readonly element: Element | null
+	readonly counterpart: Element | null
+}
+
+/** Carries rendered lines, fragments, or a container retained by a capture. */
+export interface BrowserCaptureValue {
+	readonly fragments?: readonly Node[]
+	readonly lines?: readonly string[]
+	readonly container?: boolean
+}
 
 /**
  * Configures a view that drives one browser document.

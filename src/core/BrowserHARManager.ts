@@ -218,14 +218,10 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 		const pending = this.#pending.get(id)
 		if (pending === undefined) return
 		this.#pending.delete(id)
-		let body: Uint8Array | undefined
-		if (this.#options?.content === true && pending.response !== undefined) {
-			try {
-				body = await this.#network.body(id)
-			} catch {
-				// Some redirects, cached resources, and protocol errors have no retrievable body.
-			}
-		}
+		const body =
+			this.#options?.content === true && pending.response !== undefined
+				? await this.#readBody(id)
+				: undefined
 		this.#entries.push(
 			buildBrowserHAREntry(pending, Math.max(0, Date.now() - pending.started), body),
 		)
@@ -238,5 +234,13 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 				if (this.#failure === undefined) this.#failure = error
 			})
 			.finally(() => this.#tasks.delete(task))
+	}
+
+	async #readBody(id: string): Promise<Uint8Array | undefined> {
+		try {
+			return await this.#network.body(id)
+		} catch {
+			return undefined
+		}
 	}
 }

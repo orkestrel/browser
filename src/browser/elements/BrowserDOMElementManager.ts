@@ -24,23 +24,17 @@ import {
 	describeBrowserRefusal,
 } from '@src/core'
 import { BrowserDOMElement } from './BrowserDOMElement.js'
+import { BrowserDOMOutline } from '../BrowserDOMOutline.js'
+import { BrowserAncestors } from '../BrowserAncestors.js'
 import { BrowserDOMWait } from '../BrowserDOMWait.js'
-import {
-	BROWSER_CONTENT_NAMED_ROLES,
-	BROWSER_DOCUMENT_TIMEOUT_MS,
-	BROWSER_TYPED_INPUTS,
-} from '../constants.js'
+import { BROWSER_DOCUMENT_TIMEOUT_MS, BROWSER_TYPED_INPUTS } from '../constants.js'
 import {
 	collectBrowserRoots,
 	computeBrowserName,
 	computeBrowserRole,
 	listenBrowserNavigation,
-	matchesBrowserHidden,
-	matchesBrowserInvisible,
 	matchesBrowserOmitted,
-	readBrowserBlock,
 	readBrowserStates,
-	skipBrowserSubtree,
 } from '../helpers.js'
 
 /**
@@ -224,128 +218,17 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		return collectBrowserRoots(this.#root(this.#input.document(), within))
 	}
 
-	// Appends the rows of one flat-tree subtree, descending into shadow roots, slots, and frames.
 	#walk(root: Element | ShadowRoot, rows: BrowserOutlineNode[], muted: boolean): void {
-		const document = root.ownerDocument
-		const view = document.defaultView
-		if (view === null) return
-		if (root instanceof view.Element && matchesBrowserHidden(root)) return
-		this.#watch(document)
-		const walker = document.createTreeWalker(
+		new BrowserDOMOutline({
 			root,
-			NodeFilter.SHOW_ELEMENT | NodeFilter.SHOW_TEXT,
-			(node) =>
-				node instanceof view.Element && matchesBrowserHidden(node)
-					? NodeFilter.FILTER_REJECT
-					: NodeFilter.FILTER_ACCEPT,
-		)
-		let text = ''
-		let block: Node | undefined
-		let silenced: Element | undefined
-		let node: Node | null = root instanceof view.Element ? root : walker.nextNode()
-		while (node !== null) {
-			if (silenced !== undefined && !silenced.contains(node)) silenced = undefined
-			const quiet = muted || silenced !== undefined
-			if (!(node instanceof view.Element)) {
-				const parent = node.parentElement
-				const data = node.textContent ?? ''
-				const blank = data.trim() === ''
-				// Whitespace between two texts of one block separates them, so it joins the pending text
-				// and normalization collapses it; elsewhere it contributes nothing.
-				if (
-					!quiet &&
-					(!blank || text !== '') &&
-					(parent === null || !matchesBrowserInvisible(parent))
-				) {
-					const container = readBrowserBlock(parent, root)
-					if (!blank) {
-						if (block !== undefined && block !== container) text = this.#flush(rows, text, block)
-						text += data
-						block = container
-					} else if (container === block) text += data
-				}
-				node = walker.nextNode()
-				continue
-			}
-			const invisible = matchesBrowserInvisible(node)
-			// A rendered break separates the texts of its block the way whitespace does; the walker never
-			// reaches a hidden one.
-			if (node.localName === 'br') {
-				if (!quiet && text !== '') text += '\n'
-				node = walker.nextNode()
-				continue
-			}
-			if (node instanceof view.HTMLIFrameElement) {
-				text = this.#flush(rows, text, block)
-				const child = node.contentDocument
-				if (invisible) {
-					node = skipBrowserSubtree(walker)
-					continue
-				}
-				if (child === null) {
-					this.#text(
-						rows,
-						`iframe ${JSON.stringify(computeBrowserName(node))} (cross-origin, not readable)`,
-					)
-				} else {
-					this.#walk(child.documentElement, rows, quiet)
-				}
-				node = skipBrowserSubtree(walker)
-				continue
-			}
-			if (node instanceof view.HTMLSlotElement) {
-				text = this.#flush(rows, text, block)
-				for (const assigned of node.assignedNodes({ flatten: true })) {
-					if (assigned instanceof view.Element) this.#walk(assigned, rows, quiet)
-					else if (!quiet) this.#flush(rows, assigned.textContent ?? '')
-				}
-				node = skipBrowserSubtree(walker)
-				continue
-			}
-			const tool = node.localName === 'form' ? (node.getAttribute('toolname') ?? '') : ''
-			const role = tool === '' ? computeBrowserRole(node) : 'form'
-			if (
-				!invisible &&
-				role !== undefined &&
-				(BROWSER_INTERACTIVE_ROLES.has(role) ||
-					[
-						'heading',
-						'image',
-						'img',
-						'listitem',
-						'row',
-						'cell',
-						'gridcell',
-						'columnheader',
-						'rowheader',
-					].includes(role) ||
-					tool !== '')
-			) {
-				text = this.#flush(rows, text, block)
-				const row = this.#row(node, role, view, String(rows.length))
-				rows.push(row)
-				this.#positions.set(node, row.id)
-				if (
-					silenced === undefined &&
-					BROWSER_CONTENT_NAMED_ROLES.has(role) &&
-					!['row', 'cell', 'gridcell', 'columnheader', 'rowheader'].includes(role)
-				)
-					silenced = node
-				if (node.localName === 'textarea') {
-					node = skipBrowserSubtree(walker)
-					continue
-				}
-			}
-			const shadow = node.shadowRoot
-			if (shadow !== null) {
-				text = this.#flush(rows, text, block)
-				this.#walk(shadow, rows, muted || silenced !== undefined)
-				node = skipBrowserSubtree(walker)
-				continue
-			}
-			node = walker.nextNode()
-		}
-		this.#flush(rows, text, block)
+			rows,
+			muted,
+			positions: this.#positions,
+			watch: this.#watch.bind(this),
+			walk: this.#walk.bind(this),
+			text: this.#text.bind(this),
+			row: this.#row.bind(this),
+		}).capture()
 	}
 
 	// Subscribes one time to a walked document's navigation events.
@@ -376,12 +259,6 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	#epoch(document: WeakRef<Document>): number {
 		const target = document.deref()
 		return target === undefined ? -1 : this.#input.navigation() + (this.#epochs.get(target) ?? 0)
-	}
-
-	// Emits the pending text as one row and returns the emptied buffer.
-	#flush(rows: BrowserOutlineNode[], text: string, parent?: Node): string {
-		if (normalizeBrowserName(text) !== '') this.#text(rows, text, parent)
-		return ''
 	}
 
 	#text(rows: BrowserOutlineNode[], text: string, parent?: Node): void {
@@ -425,17 +302,20 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 		const focused =
 			(root instanceof view.Document || root instanceof view.ShadowRoot) &&
 			root.activeElement === element
-		let value: string | undefined
-		if (element instanceof view.HTMLSelectElement)
-			value = Array.from(element.selectedOptions, (option) => option.label).join(', ')
-		else if (element instanceof view.HTMLTextAreaElement) value = element.value
-		else if (input?.type === 'password') value = '•'.repeat(input.value.length)
-		else if (
-			input !== undefined &&
-			input.type !== 'password' &&
-			(BROWSER_TYPED_INPUTS.has(input.type) || input.type === 'range')
-		)
-			value = input.value
+		const value =
+			element instanceof view.HTMLSelectElement
+				? Array.from(element.selectedOptions, (option) => option.label).join(', ')
+				: element instanceof view.HTMLTextAreaElement
+					? element.value
+					: input?.type === 'password'
+						? '•'.repeat(input.value.length)
+						: input === undefined
+							? undefined
+							: input.type === 'password'
+								? undefined
+								: BROWSER_TYPED_INPUTS.has(input.type) || input.type === 'range'
+									? input.value
+									: undefined
 		return {
 			id: reference ?? id,
 			parent: this.#parent(element.parentNode),
@@ -466,10 +346,9 @@ export class BrowserDOMElementManager implements BrowserElementManagerInterface<
 	}
 
 	#parent(node: Node | null): string | undefined {
-		while (node !== null) {
-			const id = this.#positions.get(node)
+		for (const current of new BrowserAncestors(node, (entry) => entry.parentNode)) {
+			const id = this.#positions.get(current)
 			if (id !== undefined) return id
-			node = node.parentNode
 		}
 		return undefined
 	}

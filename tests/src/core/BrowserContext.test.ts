@@ -12,6 +12,7 @@ import {
 	waitForDelay,
 } from '@orkestrel/test'
 import {
+	BrowserFixtureValue,
 	createConnectedCDPClient,
 	createReferenceSequence,
 	createTarget,
@@ -102,14 +103,14 @@ describe('BrowserContext', () => {
 				emulation: { locale: 'de-DE' },
 				on: { page: pages.handler },
 			})
-			let resolved = false
+			const resolved = new BrowserFixtureValue(false)
 			const creating = context.create().then((page) => {
-				resolved = true
+				resolved.value = true
 				return page
 			})
 			try {
 				await waitForCondition('emulation is awaiting its response', () => emulations.count === 1)
-				expect(resolved).toBe(false)
+				expect(resolved.value).toBe(false)
 				expect(pages.count).toBe(0)
 				expect(requireValue(emulations.calls[0]?.[0]).params).toEqual({ locale: 'de-DE' })
 				transport.reply(requireValue(emulations.calls[0]?.[0]).id, {})
@@ -443,10 +444,12 @@ describe('BrowserContext', () => {
 				'tab-2': 'session-2',
 			})
 			scriptBrowserElements(transport)
-			let created = 0
+			const created = new BrowserFixtureValue(0)
 			transport.onSend('Target.createTarget', (message) => {
-				created += 1
-				transport.reply(message.id, { targetId: created === 1 ? 'opener' : `tab-${created}` })
+				created.value += 1
+				transport.reply(message.id, {
+					targetId: created.value === 1 ? 'opener' : `tab-${created.value}`,
+				})
 			})
 			const context = new BrowserContext(client, { id: 'ctx-1' })
 			const sibling = new BrowserContext(client, { id: 'ctx-2' })
@@ -894,10 +897,10 @@ describe('BrowserContext', () => {
 		it('enables discovery again on the next connection of the same client', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptCDPAttach(transport)
-			let created = 0
+			const created = new BrowserFixtureValue(0)
 			transport.onSend('Target.createTarget', (message) => {
-				created += 1
-				transport.reply(message.id, { targetId: `tab-${created}` })
+				created.value += 1
+				transport.reply(message.id, { targetId: `tab-${created.value}` })
 			})
 			replyOk(transport, 'Target.detachFromTarget')
 			try {
@@ -976,10 +979,10 @@ describe('BrowserContext', () => {
 		it('publishes a popup reported before its opener existed once, after the opener publishes', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			scriptCDPAttach(transport, 'session-1', { popup: 'popup-session' })
-			let created = 0
+			const created = new BrowserFixtureValue(0)
 			transport.onSend('Target.createTarget', (message) => {
-				created += 1
-				transport.reply(message.id, { targetId: created === 1 ? 'first' : 'opener' })
+				created.value += 1
+				transport.reply(message.id, { targetId: created.value === 1 ? 'first' : 'opener' })
 			})
 			const context = new BrowserContext(client)
 			try {
@@ -1353,7 +1356,7 @@ describe('BrowserContext', () => {
 			const { client, transport } = await createConnectedCDPClient()
 			const held: CDPSentMessage[] = []
 			const emulations: CDPSentMessage[] = []
-			let attaches = 0
+			const attaches = new BrowserFixtureValue(0)
 			transport.onSend('Emulation.setTimezoneOverride', (message) => {
 				if (message.sessionId === 'session-b') emulations.push(message)
 				else transport.reply(message.id, {})
@@ -1361,8 +1364,8 @@ describe('BrowserContext', () => {
 			scriptCDPAttach(transport, 'session-1', { b: 'session-b', c: 'session-c' }, (message) => {
 				if (message.method !== 'Target.attachToTarget' || message.params?.['targetId'] !== 'b')
 					return false
-				attaches += 1
-				if (attaches !== 2) return false
+				attaches.value += 1
+				if (attaches.value !== 2) return false
 				held.push(message)
 				return true
 			})
@@ -1483,17 +1486,17 @@ describe('BrowserContext', () => {
 		it('navigates a joined page back to about:blank when the creation requested it and the page left it', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			const creations: CDPSentMessage[] = []
-			let location = 'about:blank'
+			const location = new BrowserFixtureValue('about:blank')
 			scriptCDPAttach(transport, 'session-1', { t: 'sync-session' })
 			transport.onSend('Target.createTarget', (message) => creations.push(message))
 			transport.onSend('Page.navigate', (message) => {
 				const url = message.params?.['url']
-				if (isString(url)) location = url
+				if (isString(url)) location.value = url
 				transport.reply(message.id, {})
 				transport.event('Page.loadEventFired', {}, message.sessionId)
 			})
 			transport.onSend('Runtime.evaluate', (message) =>
-				transport.reply(message.id, { result: { value: location } }),
+				transport.reply(message.id, { result: { value: location.value } }),
 			)
 			const context = new BrowserContext(client)
 			const pages = createRecorder<[page: BrowserPageInterface]>()
@@ -1518,7 +1521,7 @@ describe('BrowserContext', () => {
 					['https://example.com/elsewhere', 'sync-session'],
 					['about:blank', 'sync-session'],
 				])
-				expect(location).toBe('about:blank')
+				expect(location.value).toBe('about:blank')
 			} finally {
 				await client.close()
 			}
@@ -1632,10 +1635,10 @@ describe('BrowserContext', () => {
 		it('publishes no page a sync attached when it closed before publication, and the waiting creation rejects', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			const viewports: CDPSentMessage[] = []
-			let attaches = 0
+			const attaches = new BrowserFixtureValue(0)
 			transport.onSend('Target.attachToTarget', (message) => {
-				attaches += 1
-				if (attaches === 2) transport.fail(message.id, 'No target with given id found')
+				attaches.value += 1
+				if (attaches.value === 2) transport.fail(message.id, 'No target with given id found')
 			})
 			transport.onSend('Emulation.setDeviceMetricsOverride', (message) => {
 				if (message.sessionId === 'sync-session') viewports.push(message)

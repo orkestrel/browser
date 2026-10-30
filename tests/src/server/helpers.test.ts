@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from '../../setup.js'
 /**
  * src/server/helpers.ts tests.
  *
@@ -46,7 +47,7 @@ import { BrowserError, isBrowserError } from '@src/core'
 import { createCDPTestServer, readExitedProcessId } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
-let server: CDPTestServerInterface | undefined
+const server = new BrowserFixtureValue<CDPTestServerInterface | undefined>(undefined)
 
 describe('parseBrowserViewport', () => {
 	it('parses positive integer dimensions', () => {
@@ -233,8 +234,8 @@ describe('parseBrowserLockEntry', () => {
 })
 const scratches: ScratchInterface[] = []
 afterEach(async () => {
-	await server?.close()
-	server = undefined
+	await server.value?.close()
+	server.value = undefined
 	for (const scratch of scratches.splice(0)) scratch.destroy()
 })
 
@@ -583,10 +584,10 @@ describe('readBrowserEndpoint', () => {
 
 describe('fetchCDPTargets', () => {
 	it('returns normalized targets from /json/list', async () => {
-		server = await createCDPTestServer()
-		server.list([{ id: 't1', type: 'page', title: 'Home', url: 'https://example.com' }])
+		server.value = await createCDPTestServer()
+		server.required.list([{ id: 't1', type: 'page', title: 'Home', url: 'https://example.com' }])
 
-		const result = await fetchCDPTargets(server.port, 2000)
+		const result = await fetchCDPTargets(server.required.port, 2000)
 
 		expect(result).toEqual({
 			success: true,
@@ -603,10 +604,10 @@ describe('fetchCDPTargets', () => {
 	})
 
 	it('accepts targets with empty title/url', async () => {
-		server = await createCDPTestServer()
-		server.list([{ id: 't2', type: 'page', title: '', url: '' }])
+		server.value = await createCDPTestServer()
+		server.required.list([{ id: 't2', type: 'page', title: '', url: '' }])
 
-		const result = await fetchCDPTargets(server.port, 2000)
+		const result = await fetchCDPTargets(server.required.port, 2000)
 
 		expect(result).toEqual({
 			success: true,
@@ -615,20 +616,20 @@ describe('fetchCDPTargets', () => {
 	})
 
 	it('skips targets missing required string fields instead of substituting sentinels', async () => {
-		server = await createCDPTestServer()
-		server.list([
+		server.value = await createCDPTestServer()
+		server.required.list([
 			{ id: 'missing-title', type: 'page', url: 'https://example.com' },
 			{ id: 'missing-url', type: 'page', title: 'Example' },
 		])
 
-		expect(await fetchCDPTargets(server.port, 2000)).toEqual({ success: true, value: [] })
+		expect(await fetchCDPTargets(server.required.port, 2000)).toEqual({ success: true, value: [] })
 	})
 
 	it('honors an explicit host', async () => {
-		server = await createCDPTestServer()
-		server.list([{ id: 't3', type: 'page', title: '', url: '' }])
+		server.value = await createCDPTestServer()
+		server.required.list([{ id: 't3', type: 'page', title: '', url: '' }])
 
-		const result = await fetchCDPTargets(server.port, 2000, '127.0.0.1')
+		const result = await fetchCDPTargets(server.required.port, 2000, '127.0.0.1')
 
 		expect(result).toEqual({
 			success: true,

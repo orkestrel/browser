@@ -6,11 +6,11 @@ import type {
 	BrowserPageElementInterface,
 	BrowserPoint,
 	BrowserQuad,
-	BrowserReadingInterface,
+	BrowserContentInterface,
 	BrowserScreenshotOptions,
 	BrowserScreenshotResult,
 } from '../types.js'
-import { BrowserReading } from '../BrowserReading.js'
+import { BrowserContent } from '../BrowserContent.js'
 import { BrowserError, isBrowserError } from '../errors.js'
 import { BROWSER_ELEMENT_REFUSALS, BROWSER_RESULT_LIMIT } from '../constants.js'
 import {
@@ -123,7 +123,7 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		}
 	}
 
-	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+	async read(options?: BrowserCallOptions): Promise<BrowserContentInterface> {
 		const epoch = this.#epoch()
 		const capture = await this.#call(
 			`function() {
@@ -142,7 +142,7 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 				),
 				{ reference: this.reference, reason: 'UNKNOWN' },
 			)
-		return new BrowserReading({
+		return new BrowserContent({
 			url: requireBrowserString(capture['url'], 'Element URL'),
 			title: requireBrowserString(capture['title'], 'Element title'),
 			html: requireBrowserString(capture['html'], 'Element HTML'),
@@ -356,9 +356,10 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		target?: number,
 	): Promise<unknown> {
 		const resolved = await this.#resolve(options)
-		let hit: { readonly object: string; readonly context: number } | undefined
+		const resources = [resolved]
 		try {
-			if (target !== undefined) hit = await this.#resolve(options, target)
+			const hit = target === undefined ? undefined : await this.#resolve(options, target)
+			if (hit !== undefined) resources.push(hit)
 			const result = await this.#input.client.send(
 				'Runtime.callFunctionOn',
 				{
@@ -378,8 +379,7 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		} catch (error) {
 			this.#failure(options, error)
 		} finally {
-			await this.#release(resolved.object)
-			if (hit !== undefined) await this.#release(hit.object)
+			for (const resource of resources) await this.#release(resource.object)
 		}
 	}
 
@@ -465,13 +465,18 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 		await this.#call(
 			`async function() {
 		await (${compileActionabilityFunction({ visible: true, enabled: true, stable: true })}).call(this)
-		let previous
-		for (;;) {
-			await new Promise((resolve) => requestAnimationFrame(resolve))
-			const current = [window.scrollX, window.scrollY]
-			if (previous && current.every((value, index) => value === previous[index])) return true
-			previous = current
-		}
+		return new (class {
+			#previous
+
+			async wait() {
+				for (;;) {
+					await new Promise((resolve) => requestAnimationFrame(resolve))
+					const current = [window.scrollX, window.scrollY]
+					if (this.#previous && current.every((value, index) => value === this.#previous[index])) return true
+					this.#previous = current
+				}
+			}
+		})().wait()
 	}`,
 			options,
 		)
@@ -527,21 +532,21 @@ export class BrowserPageElement implements BrowserPageElementInterface {
 			)
 			const node =
 				isRecord(described) && isRecord(described['node']) ? described['node'] : undefined
-			let name = isString(node?.['nodeName']) ? node['nodeName'].toLowerCase() : 'element'
+			const parts = [isString(node?.['nodeName']) ? node['nodeName'].toLowerCase() : 'element']
 			const attributes = node?.['attributes']
 			if (isArray(attributes)) {
 				const id = attributes[attributes.indexOf('id') + 1]
 				const classes = attributes[attributes.indexOf('class') + 1]
-				if (attributes.includes('id') && isString(id) && id !== '') name += `#${id}`
+				if (attributes.includes('id') && isString(id) && id !== '') parts.push(`#${id}`)
 				else if (attributes.includes('class') && isString(classes) && classes.trim() !== '')
-					name += `.${classes.trim().split(/\s+/).join('.')}`
+					parts.push(`.${classes.trim().split(/\s+/).join('.')}`)
 			}
 			throw new BrowserError(
 				'ELEMENT',
 				describeBrowserRefusal(
 					{ subject: `Element ${renderBrowserElement(this)}` },
 					'OCCLUDED',
-					`is covered by ${name}`,
+					`is covered by ${parts.join('')}`,
 				),
 				{ reference: this.reference, reason: 'OCCLUDED' },
 			)

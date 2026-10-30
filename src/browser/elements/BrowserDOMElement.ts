@@ -1,15 +1,16 @@
 import type { BrowserEpochFunction } from '@src/core'
 import type { BrowserElementInterface } from '@src/core'
-import type { BrowserCallOptions, BrowserReadingInterface } from '@src/core'
+import type { BrowserCallOptions, BrowserContentInterface } from '@src/core'
 import type { BrowserDOMElementInterface } from '../types.js'
 import { isString } from '@orkestrel/contract'
 import {
 	BrowserError,
-	createBrowserReading,
+	createBrowserContent,
 	describeBrowserRefusal,
 	renderBrowserElement,
 } from '@src/core'
 import { BROWSER_TYPED_INPUTS } from '../constants.js'
+import { BrowserDOMSubmission } from '../BrowserDOMSubmission.js'
 import {
 	computeBrowserName,
 	matchesBrowserActivation,
@@ -192,9 +193,9 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 		if (node instanceof view.HTMLElement || node instanceof view.SVGElement) node.focus()
 	}
 
-	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+	async read(options?: BrowserCallOptions): Promise<BrowserContentInterface> {
 		const [node] = this.#current(options)
-		return createBrowserReading({ ...readBrowserCapture(node), navigation: this.#input.navigation })
+		return createBrowserContent({ ...readBrowserCapture(node), navigation: this.#input.navigation })
 	}
 
 	async submit(options?: BrowserCallOptions): Promise<void> {
@@ -238,21 +239,15 @@ export class BrowserDOMElement implements BrowserDOMElementInterface {
 				{ reference: this.reference, reason: 'UNTRUSTED' },
 			)
 		}
-		let submitted = false
+		const submission = new BrowserDOMSubmission()
 		const release = new AbortController()
-		owner.addEventListener(
-			'submit',
-			() => {
-				submitted = true
-			},
-			{ signal: release.signal },
-		)
+		owner.addEventListener('submit', submission, { signal: release.signal })
 		try {
 			owner.requestSubmit(submitter ?? null)
 		} finally {
 			release.abort()
 		}
-		if (submitted) return
+		if (submission.submitted) return
 		const invalid = Array.from(owner.elements).find(
 			(control) => control.localName !== 'fieldset' && control.matches(':invalid'),
 		)

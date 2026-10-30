@@ -1,35 +1,19 @@
-import type { JSONValue } from '@orkestrel/contract'
 import type { EmitterInterface } from '@orkestrel/emitter'
 import type {
-	BrowserAction,
-	BrowserJourney,
 	BrowserCallOptions,
-	BrowserConsoleMessage,
-	BrowserHoldInterface,
 	BrowserJourneyRevision,
-	BrowserJourneyStep,
-	BrowserPageError,
 	BrowserReplayEventMap,
 	BrowserReplayInterface,
 	BrowserReplayOptions,
 	BrowserRun,
-	BrowserRunOutcome,
-	BrowserRunSlot,
-	BrowserRunStep,
 	BrowserToolsetInterface,
-	BrowserViewEventMap,
 } from './types.js'
 import { isString } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
-import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_FORMAT_VERSION } from './constants.js'
-import { BrowserError, isBrowserError, isBrowserStepError } from './errors.js'
-import {
-	deriveBrowserJourneyTrigger,
-	generateBrowserRunId,
-	resolveBrowserJourneyBinding,
-	validateBrowserJourney,
-} from './helpers.js'
-import { isBrowserJourneyBinding, isBrowserSecretBinding } from './validators.js'
+import { BROWSER_JOURNEY_ACTIONS } from './constants.js'
+import { BrowserError, isBrowserError } from './errors.js'
+import { validateBrowserJourney } from './helpers.js'
+import { BrowserReplayExecution } from './BrowserReplayExecution.js'
 /**
  * Prepares and replays a journey under a toolset hold, retaining its executed prefix.
  * @example
@@ -63,128 +47,16 @@ export class BrowserReplay implements BrowserReplayInterface {
 	async execute(options?: BrowserCallOptions): Promise<BrowserRun> {
 		const inputs = this.#prepare()
 		const revision = structuredClone(this.#revision)
-		const journey = revision.journey
 		if (this.#toolset.emitter.destroyed)
 			throw new BrowserError('CLOSED', 'The browser session ended', { subject: 'toolset' })
-		const started = performance.now()
-		const secret = Object.values(journey.parameters).some((parameter) => parameter.secret === true)
-		const visible = Object.fromEntries(
-			Object.entries(inputs).filter(([name]) => journey.parameters[name]?.secret !== true),
-		)
-		const steps: BrowserRunStep[] = []
-		const output: string[] = []
-		const cleanup: Array<() => void> = []
-		const observed = new Set<EmitterInterface<BrowserViewEventMap>>()
-		let hold: BrowserHoldInterface | undefined
-		let slot: BrowserRunSlot = { id: generateBrowserRunId() }
-		let outcome: BrowserRunOutcome = 'complete'
-		let fault: string | undefined
-		let run: BrowserRun
-		try {
-			hold = await this.#toolset.hold(journey.name, options)
-			options?.signal?.throwIfAborted()
-			if (this.#options?.runs !== undefined)
-				slot = await this.#options.runs.create(journey.name, options)
-			if (!secret) {
-				this.#observe(output, cleanup, observed)
-				const select = this.#observe.bind(this, output, cleanup, observed)
-				this.#toolset.emitter.on('select', select)
-				cleanup.push(() => this.#toolset.emitter.off('select', select))
-			}
-			if (
-				journey.start !== undefined &&
-				journey.start !== this.#toolset.redact(this.#toolset.view.url)
-			) {
-				const navigation = await this.#toolset.execute(
-					{ id: 'start', name: 'navigate', arguments: { url: journey.start } },
-					{ caller: hold.token, signal: options?.signal ?? new AbortController().signal },
-				)
-				if (
-					!navigation.result.success ||
-					navigation.action?.outcome !== 'done' ||
-					navigation.action.stage === 'requested' ||
-					navigation.action.stage === 'committed'
-				) {
-					const reason = navigation.result.success
-						? (navigation.action?.receipt ?? String(navigation.result.value))
-						: navigation.result.error
-					throw new BrowserError(
-						'NAVIGATION',
-						this.#toolset.redact(
-							`its start page ${journey.start} did not load: ${reason.replace(/\.+$/, '')}.`,
-						),
-					)
-				}
-			}
-			for (const [index, step] of journey.steps.entries()) {
-				options?.signal?.throwIfAborted()
-				const previous = steps.at(-1)
-				let recorded = await this.#executeStep(
-					step,
-					inputs,
-					hold.token,
-					previous?.outcome === 'interrupted',
-					journey.parameters,
-					options,
-				)
-				steps.push(recorded)
-				try {
-					if (!secret && !options?.signal?.aborted && recorded.outcome !== 'interrupted') {
-						const capture = await this.#capture(slot, step.id, options)
-						if (capture !== undefined) {
-							recorded = { ...recorded, capture }
-							steps[steps.length - 1] = recorded
-						}
-					}
-				} finally {
-					this.#emitter.emit('step', structuredClone(recorded))
-				}
-				const result = recorded
-				if (options?.signal?.aborted) {
-					outcome = 'aborted'
-					break
-				}
-				if (
-					result.outcome !== 'done' ||
-					result.stage === 'requested' ||
-					result.stage === 'committed'
-				) {
-					if (
-						result.outcome === 'interrupted' &&
-						journey.steps[index + 1]?.action === 'dialog' &&
-						result.stage !== 'requested' &&
-						result.stage !== 'committed'
-					)
-						continue
-					outcome = 'stopped'
-					break
-				}
-			}
-		} catch (error) {
-			outcome = options?.signal?.aborted ? 'aborted' : 'stopped'
-			if (!options?.signal?.aborted) fault = error instanceof Error ? error.message : String(error)
-		} finally {
-			hold?.destroy()
-			for (const release of cleanup) release()
-			run = {
-				format: BROWSER_JOURNEY_FORMAT_VERSION,
-				id: slot.id,
-				journey,
-				...(revision.revision === undefined ? {} : { revision: revision.revision }),
-				inputs: visible,
-				steps,
-				outcome,
-				...(secret || !this.#toolset.view.trusted ? {} : { output }),
-				elapsed: performance.now() - started,
-				...(fault === undefined ? {} : { fault }),
-			}
-			try {
-				await this.#write(run)
-			} catch (error) {
-				run = { ...run, fault: error instanceof Error ? error.message : String(error) }
-			}
-		}
-		return run
+		return await new BrowserReplayExecution(
+			this.#toolset,
+			revision,
+			inputs,
+			this.#emitter,
+			this.#options,
+			options,
+		).result
 	}
 
 	#prepare(): Readonly<Record<string, string>> {
@@ -265,124 +137,5 @@ export class BrowserReplay implements BrowserReplayInterface {
 			}
 		}
 		return inputs
-	}
-
-	async #executeStep(
-		step: BrowserJourneyStep,
-		inputs: Readonly<Record<string, string>>,
-		caller: string,
-		interrupted: boolean,
-		parameters: BrowserJourney['parameters'],
-		options?: BrowserCallOptions,
-	): Promise<BrowserRunStep> {
-		const started = performance.now()
-		const args: Record<string, JSONValue> = {}
-		const native = BROWSER_JOURNEY_ACTIONS.some((name) => name === step.action)
-		for (const [key, value] of Object.entries(step.arguments)) {
-			args[key] =
-				native && isBrowserJourneyBinding(value) && !isString(value)
-					? resolveBrowserJourneyBinding(value, inputs)
-					: value
-		}
-		const secret = isBrowserSecretBinding(step, parameters)
-		let action: BrowserAction | undefined
-		let refusal: string | undefined
-		try {
-			if (step.action === 'dialog' && !interrupted)
-				throw new BrowserError('JOURNEY_DIALOG', `Step ${step.id} answers no interrupted action.`)
-			action = await this.#toolset.follow(
-				step.id,
-				{
-					action: step.action,
-					arguments: args,
-					...(step.target === undefined
-						? {}
-						: {
-								target: {
-									role: step.target.role,
-									name: resolveBrowserJourneyBinding(step.target.name, inputs),
-								},
-							}),
-					...(step.tab === undefined ? {} : { tab: step.tab }),
-				},
-				{ ...options, caller, secret },
-			)
-		} catch (error) {
-			refusal = error instanceof Error ? error.message : String(error)
-			if (isBrowserStepError(error)) action = error.action
-		}
-		const recorded: Record<string, JSONValue> = { ...(action?.arguments ?? args) }
-		if (secret) delete recorded['text']
-		return {
-			id: step.id,
-			action: step.action,
-			trigger: deriveBrowserJourneyTrigger(step, inputs),
-			arguments: recorded,
-			outcome: action?.outcome ?? 'refused',
-			...(action?.stage === undefined ? {} : { stage: action.stage }),
-			...(action?.reason === undefined ? {} : { reason: action.reason }),
-			result: action?.receipt ?? refusal ?? '',
-			elapsed: action?.elapsed ?? performance.now() - started,
-		}
-	}
-
-	#observe(
-		output: string[],
-		cleanup: Array<() => void>,
-		observed: Set<EmitterInterface<BrowserViewEventMap>>,
-	): void {
-		const view = this.#toolset.view
-		const emitter = view.emitter
-		if (!view.trusted || emitter === undefined || observed.has(emitter)) return
-		observed.add(emitter)
-		const console = this.#collectConsole.bind(this, output)
-		const error = this.#collectError.bind(this, output)
-		emitter.on('console', console)
-		emitter.on('error', error)
-		cleanup.push(() => {
-			emitter.off('console', console)
-			emitter.off('error', error)
-		})
-	}
-
-	#collectConsole(output: string[], message: BrowserConsoleMessage): void {
-		output.push(message.text)
-	}
-
-	#collectError(output: string[], error: BrowserPageError): void {
-		output.push(error.message)
-	}
-
-	async #capture(
-		slot: BrowserRunSlot,
-		id: string,
-		options?: BrowserCallOptions,
-	): Promise<string | undefined> {
-		const view = this.#toolset.view
-		const runs = this.#options?.runs
-		if (runs === undefined || !view.trusted || view.screenshot === undefined) return undefined
-		const screenshot = await view.screenshot()
-		return runs.capture(slot, `${id}.png`, screenshot.bytes, {
-			...(options?.signal === undefined ? {} : { signal: options.signal }),
-		})
-	}
-
-	async #write(run: BrowserRun): Promise<void> {
-		if (this.#options?.runs === undefined) return
-		const signal = AbortSignal.timeout(1_000)
-		const deadline = Promise.withResolvers<void>()
-		const abort = deadline.reject.bind(
-			undefined,
-			new BrowserError('STORE_FILE', 'Writing the run timed out'),
-		)
-		signal.addEventListener('abort', abort, { once: true })
-		try {
-			await Promise.race([
-				this.#options.runs.set(structuredClone(run), { signal }),
-				deadline.promise,
-			])
-		} finally {
-			signal.removeEventListener('abort', abort)
-		}
 	}
 }

@@ -29,13 +29,15 @@ export class MemoryBrowserRunStore implements BrowserRunStoreInterface {
 		options?.signal?.throwIfAborted()
 		validateBrowserJourneyName(name)
 		const slots = this.#slots.get(name) ?? new Set<string>()
-		let id = generateBrowserRunId()
-		while (slots.has(id) || this.#runs.get(name)?.has(id)) id = generateBrowserRunId()
-		slots.add(id)
-		this.#slots.set(name, slots)
-		const slot = { id }
-		this.#opened.set(slot, name)
-		return slot
+		while (true) {
+			const id = generateBrowserRunId()
+			if (slots.has(id) || this.#runs.get(name)?.has(id)) continue
+			slots.add(id)
+			this.#slots.set(name, slots)
+			const slot = { id }
+			this.#opened.set(slot, name)
+			return slot
+		}
 	}
 
 	async get(

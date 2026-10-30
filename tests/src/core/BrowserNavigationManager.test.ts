@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest'
 import { isBrowserError } from '@src/core'
 import { waitForDelay } from '@orkestrel/test'
 import {
+	BrowserFixtureValue,
 	RecordingCDPClient,
 	createConnectedCDPClient,
 	emitBrowserNavigation,
@@ -63,15 +64,15 @@ describe('BrowserNavigationManager', () => {
 
 	it('navigates backward and forward through history entries', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		let index = 1
+		const index = new BrowserFixtureValue(1)
 		transport.onSend('Page.getNavigationHistory', (message) => {
 			transport.reply(message.id, {
-				currentIndex: index,
+				currentIndex: index.value,
 				entries: [{ id: 1 }, { id: 2 }, { id: 3 }],
 			})
 		})
 		transport.onSend('Page.navigateToHistoryEntry', (message) => {
-			index = message.params?.['entryId'] === 1 ? 0 : 2
+			index.value = message.params?.['entryId'] === 1 ? 0 : 2
 			transport.reply(message.id, {})
 			transport.event('Page.loadEventFired', {}, 'session-1')
 		})
@@ -93,10 +94,10 @@ describe('BrowserNavigationManager', () => {
 
 	it('supports commit and same-document completion without waiting for load', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		let same = false
+		const same = new BrowserFixtureValue(false)
 		transport.onSend('Page.navigate', (message) => {
-			transport.reply(message.id, same ? {} : { loaderId: 'loader-1' })
-			if (same) {
+			transport.reply(message.id, same.value ? {} : { loaderId: 'loader-1' })
+			if (same.value) {
 				transport.event(
 					'Page.navigatedWithinDocument',
 					{ frameId: 'frame-1', url: 'https://example.com/#next' },
@@ -110,16 +111,16 @@ describe('BrowserNavigationManager', () => {
 				)
 			}
 		})
-		let url = 'https://example.com/'
+		const url = new BrowserFixtureValue('https://example.com/')
 		transport.onSend('Runtime.evaluate', (message) => {
-			transport.reply(message.id, { result: { value: url } })
+			transport.reply(message.id, { result: { value: url.value } })
 		})
-		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, url, 'frame-1')
+		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, url.value, 'frame-1')
 
-		const committed = await page.navigate(url, { condition: 'commit' })
-		same = true
-		url = 'https://example.com/#next'
-		const within = await page.navigate(url)
+		const committed = await page.navigate(url.value, { condition: 'commit' })
+		same.value = true
+		url.value = 'https://example.com/#next'
+		const within = await page.navigate(url.value)
 
 		expect(committed.same).toBe(false)
 		expect(within.same).toBe(true)
@@ -237,9 +238,9 @@ describe('BrowserNavigationManager', () => {
 			{ frame: { id: 'frame-1', url: 'https://example.com/', loaderId: 'loader-2' } },
 			'session-1',
 		)
-		let settled = false
+		const settled = new BrowserFixtureValue(false)
 		const idling = page.navigation.idle().then(() => {
-			settled = true
+			settled.value = true
 		})
 
 		transport.event(
@@ -253,7 +254,7 @@ describe('BrowserNavigationManager', () => {
 			'session-1',
 		)
 		await waitForDelay(20)
-		expect(settled).toBe(false)
+		expect(settled.value).toBe(false)
 
 		transport.event(
 			'Page.lifecycleEvent',
@@ -261,7 +262,7 @@ describe('BrowserNavigationManager', () => {
 			'session-1',
 		)
 		await idling
-		expect(settled).toBe(true)
+		expect(settled.value).toBe(true)
 	})
 
 	it('completes navigate with the idle condition on the loader the reply names', async () => {
@@ -280,16 +281,16 @@ describe('BrowserNavigationManager', () => {
 			'https://example.com/',
 		)
 		const page = new BrowserPage(client, 'target-1', 'session-1', undefined, undefined, 'frame-1')
-		let settled = false
+		const settled = new BrowserFixtureValue(false)
 		const navigating = page
 			.navigate('https://example.com/', { condition: 'idle' })
 			.then((result) => {
-				settled = true
+				settled.value = true
 				return result
 			})
 
 		await waitForDelay(20)
-		expect(settled).toBe(false)
+		expect(settled.value).toBe(false)
 		transport.event(
 			'Page.lifecycleEvent',
 			{ frameId: 'frame-1', loaderId: 'loader-5', name: 'networkIdle', timestamp: 2 },

@@ -6,7 +6,7 @@ import type { BrowserLine, BrowserOutlineNode } from '@src/core'
 import { GuideCommand } from '@orkestrel/guide/server'
 import { readInventory } from '@orkestrel/test/server'
 import { createVitest } from 'vitest/node'
-import { stripTypeScriptTypes } from 'node:module'
+import { createRequire, stripTypeScriptTypes } from 'node:module'
 
 /** Every fence language this package's guides are allowed to use. */
 const FENCE_LANGUAGES = Object.freeze(['ts'])
@@ -48,7 +48,11 @@ const INTERNAL: readonly string[] = Object.freeze([
 	'class BrowserPermissionManager',
 	'class BrowserScriptManager',
 	'class BrowserStorageManager',
-	'class BrowserTracing',
+	'class BrowserTrace',
+	'class BrowserTraceCapture',
+	'class BrowserErrorContext',
+	'class BrowserPopupArrivals',
+	'class BrowserJourneyRecord',
 	'class BrowserCoverage',
 	'class BrowserPerformance',
 	'class BrowserProfiler',
@@ -322,7 +326,7 @@ await new GuideCommand({
 	it('compiles the distinct wrapper and isolate option contracts and rejects its negative control', async () => {
 		const { spawnSync } = await import('node:child_process')
 		const { writeFileSync } = await import('node:fs')
-		const { resolve, join } = await import('node:path')
+		const { dirname, resolve, join } = await import('node:path')
 		const { createScratch } = await import('@orkestrel/test/server')
 		const scratch = createScratch()
 		const target = join(scratch.path, 'options.ts')
@@ -343,7 +347,10 @@ void [wrapper, origins, isolated, creation, identity]
 				const result = spawnSync(
 					process.execPath,
 					[
-						resolve('node_modules/typescript/lib/tsc.js'),
+						join(
+							dirname(createRequire(import.meta.url).resolve('typescript/package.json')),
+							'bin/tsc',
+						),
 						'--ignoreConfig',
 						'--noEmit',
 						'--strict',
@@ -357,7 +364,7 @@ void [wrapper, origins, isolated, creation, identity]
 					{ encoding: 'utf8', windowsHide: true, timeout: 20000 },
 				)
 				expect(result.error).toBeUndefined()
-				expect(result.status, result.stdout + result.stderr).toBe(control ? 2 : 0)
+				expect(result.status, result.stdout + result.stderr).toBe(control ? 1 : 0)
 				if (control)
 					expect(result.stdout).toContain("Type 'true' is not assignable to type 'false'")
 			}
@@ -534,8 +541,8 @@ void [wrapper, origins, isolated, creation, identity]
 				(fence) =>
 					fence.title === 'BrowserJourneyStoreInterface' ||
 					fence.title === 'BrowserRunStoreInterface' ||
-					(fence.title === 'BrowserReadingInterface' &&
-						fence.code.includes('createBrowserReading')),
+					(fence.title === 'BrowserContentInterface' &&
+						fence.code.includes('createBrowserContent')),
 			)
 		expect(fences).toHaveLength(3)
 		for (const fence of fences) {
@@ -763,8 +770,8 @@ void [wrapper, origins, isolated, creation, identity]
 	})
 
 	it('executes the retained whole-page reading helpers', async () => {
-		const { createBrowserReading, collectBrowserWords } = await import('@src/core')
-		const reading = createBrowserReading({
+		const { createBrowserContent, collectBrowserWords } = await import('@src/core')
+		const reading = createBrowserContent({
 			url: 'https://example.test/',
 			title: '',
 			html: '<nav>Menu</nav><main><p>Blue kettle</p></main>',
@@ -1085,14 +1092,17 @@ void [wrapper, origins, isolated, creation, identity]
 	})
 	it('recaptures a continuation and keeps unchanged references stable', async () => {
 		const { createBrowserToolset, BROWSER_TOOL_LIMIT } = await import('@src/core')
-		const { createBrowserElementFixture, BROWSER_ELEMENT_AX_FIXTURE } = await import('./setup.js')
-		let changed = false
+		const { createBrowserElementFixture, BROWSER_ELEMENT_AX_FIXTURE, BrowserFixtureValue } =
+			await import('./setup.js')
+		const changed = new BrowserFixtureValue(false)
 		const fixture = await createBrowserElementFixture({
 			local: true,
 			accessibility: (message) =>
 				fixture.transport.reply(message.id, {
 					nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) =>
-						node.nodeId === 'email' && changed ? { ...node, name: { value: 'Buyer email' } } : node,
+						node.nodeId === 'email' && changed.value
+							? { ...node, name: { value: 'Buyer email' } }
+							: node,
 					),
 				}),
 		})
@@ -1105,7 +1115,7 @@ void [wrapper, origins, isolated, creation, identity]
 			const next = await toolset.read({ from })
 			expect(next).toContain('\n2: ')
 			expect(await toolset.read({ from })).toBe(next)
-			changed = true
+			changed.value = true
 			const fresh = await toolset.read({ from })
 			expect(fresh).toContain('The page changed since the last view; line numbers might differ.')
 			expect(fresh).toContain('\n2: ')
@@ -1412,7 +1422,7 @@ void [wrapper, origins, isolated, creation, identity]
 
 		it('quotes the journey refusals the constants hold', async () => {
 			const {
-				BROWSER_JOURNEY_EMPTY_LISTING,
+				BROWSER_JOURNEY_EMPTY_LIST,
 				BROWSER_JOURNEY_IDLE_REFUSAL,
 				BROWSER_JOURNEY_READONLY_REFUSAL,
 				BROWSER_JOURNEY_RECORDING_REFUSAL,
@@ -1423,7 +1433,7 @@ void [wrapper, origins, isolated, creation, identity]
 				BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL,
 			} = await import('@src/core')
 			for (const quoted of [
-				BROWSER_JOURNEY_EMPTY_LISTING,
+				BROWSER_JOURNEY_EMPTY_LIST,
 				BROWSER_JOURNEY_IDLE_REFUSAL,
 				BROWSER_JOURNEY_READONLY_REFUSAL,
 				BROWSER_JOURNEY_RECORDING_REFUSAL,

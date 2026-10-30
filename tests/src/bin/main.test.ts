@@ -6,13 +6,14 @@ import { createMCPClient } from '@orkestrel/mcp'
 import { createStdioClientTransport } from '@orkestrel/mcp/server'
 import { createTeardown, requireValue, waitForCondition } from '@orkestrel/test'
 import { createScratch } from '@orkestrel/test/server'
-import { describe, expect, it } from 'vitest'
+import { beforeAll, describe, expect, it } from 'vitest'
 import {
 	BROWSE_VOCABULARY,
 	BROWSE_SOURCE_ENTRY,
 	BrowseChild,
 	COOPERATIVE_SIGTERM,
 	readProfiles,
+	requireBrowserBuild,
 	waitForProcessExit,
 } from '../../setupServer.js'
 import { findSystemBrowsers, parseBrowserProfileRecord, probeProcess } from '@src/server'
@@ -32,6 +33,8 @@ const INITIALIZE = {
 const LIST = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} }
 
 describe('bin entry', () => {
+	beforeAll(() => requireBrowserBuild(ROOT, BUILT_ENTRY))
+
 	it('C1 validates BROWSE_CONTEXTS in the source entry like BROWSE_POOL', async () => {
 		const scratch = createScratch()
 		const entry = scratch.write('browse.ts', BROWSE_SOURCE_ENTRY)

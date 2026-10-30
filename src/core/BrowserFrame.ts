@@ -2,14 +2,14 @@ import type {
 	BrowserEpochFunction,
 	BrowserFrameInterface,
 	BrowserHandleInterface,
-	BrowserReadingInterface,
+	BrowserContentInterface,
 	BrowserCallOptions,
 	BrowserSessionFunction,
 	CDPHandler,
 	CDPClientInterface,
 } from './types.js'
 import { BrowserHandle } from './BrowserHandle.js'
-import { BrowserReading } from './BrowserReading.js'
+import { BrowserContent } from './BrowserContent.js'
 import { BROWSER_FRAME_WORLD_NAME, BROWSER_RESULT_LIMIT } from './constants.js'
 import { compileGuardedEvaluateExpression, compileReadFunction } from './compilers.js'
 import { readBrowserWorld, readEvaluationResult, requireBrowserString } from './helpers.js'
@@ -93,7 +93,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 		return requireBrowserString(result, 'Document title')
 	}
 
-	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+	async read(options?: BrowserCallOptions): Promise<BrowserContentInterface> {
 		this.#assert()
 		// The epoch is sampled before the capture is issued, so a navigation that lands while the
 		// evaluation is in flight leaves the reading stale rather than current.
@@ -131,7 +131,7 @@ export class BrowserFrame implements BrowserFrameInterface {
 			if (isString(this.#url)) this.#url = capture['url']
 			else this.#url.set(capture['url'])
 		}
-		return new BrowserReading({
+		return new BrowserContent({
 			url: capture['url'],
 			title: capture['title'],
 			html: capture['html'],

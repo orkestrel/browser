@@ -7,6 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest'
+import { BrowserFixtureValue } from '../../setup.js'
 import { BrowserFileChooser } from '../../../src/core/BrowserFileChooser.js'
 import { createAttachedPage, readCDPParams, replyOk } from '../../setup.js'
 
@@ -74,16 +75,16 @@ describe('BrowserFileChooser', () => {
 
 	it('stays unhandled when its frame fails, so it can be decided again', async () => {
 		const { page, transport } = await createAttachedPage()
-		let attempts = 0
+		const attempts = new BrowserFixtureValue(0)
 		transport.onSend('DOM.setFileInputFiles', (message) => {
-			attempts += 1
-			if (attempts === 1) transport.fail(message.id, 'input detached')
+			attempts.value += 1
+			if (attempts.value === 1) transport.fail(message.id, 'input detached')
 			else transport.reply(message.id, {})
 		})
 		const chooser = new BrowserFileChooser(page, 1, true)
 
 		await expect(chooser.upload(['one.txt'])).rejects.toThrow('input detached')
 		await expect(chooser.dismiss()).resolves.toBeUndefined()
-		expect(attempts).toBe(2)
+		expect(attempts.value).toBe(2)
 	})
 })

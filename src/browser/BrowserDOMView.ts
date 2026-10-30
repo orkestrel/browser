@@ -2,14 +2,14 @@ import type {
 	BrowserCallOptions,
 	BrowserWaitOptions,
 	BrowserElementManagerInterface,
-	BrowserReadingInterface,
+	BrowserContentInterface,
 } from '@src/core'
 import type {
 	BrowserDOMElementInterface,
 	BrowserDOMViewInterface,
 	BrowserDOMViewOptions,
 } from './types.js'
-import { BrowserError, createBrowserReading, validateBrowserTimeout } from '@src/core'
+import { BrowserError, createBrowserContent, validateBrowserTimeout } from '@src/core'
 import { BrowserDOMElementManager } from './elements/BrowserDOMElementManager.js'
 import { BROWSER_DOCUMENT_TIMEOUT_MS } from './constants.js'
 import { BrowserDOMWait } from './BrowserDOMWait.js'
@@ -97,10 +97,10 @@ export class BrowserDOMView implements BrowserDOMViewInterface {
 		return this.#current().title
 	}
 
-	async read(options?: BrowserCallOptions): Promise<BrowserReadingInterface> {
+	async read(options?: BrowserCallOptions): Promise<BrowserContentInterface> {
 		this.#release.signal.throwIfAborted()
 		options?.signal?.throwIfAborted()
-		return createBrowserReading({
+		return createBrowserContent({
 			...readBrowserCapture(this.#current().documentElement),
 			navigation: this.#navigation.bind(this),
 		})

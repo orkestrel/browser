@@ -1,6 +1,11 @@
+import { BrowserPopupArrivals } from './BrowserPopupArrivals.js'
 import type {
 	CDPHandler,
 	BrowserCaptureResult,
+	BrowserOutlineOptions,
+	BrowserToolObservation,
+	BrowserToolSettlement,
+	BrowserToolHandler,
 	BrowserAction,
 	BrowserFollowOptions,
 	BrowserHoldInterface,
@@ -262,15 +267,11 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	readonly #projections = new WeakMap<BrowserViewInterface, string>()
 	readonly #descriptions = new Map<string, Pick<BrowserElementInterface, 'role' | 'name'>>()
 	#tail: Promise<void> = Promise.resolve()
-	#pending: Promise<void> | undefined
+	readonly #pending = new Set<Promise<void>>()
 	// Numbers each action, so the observer it installs answers only its own read and removal.
 	#sequence = 0
 	#navigating: BrowserPageInterface | undefined
-	// The popups announced while an action holds a popup record, with their openers; the action
-	// moves the view itself, and the rest follow when it ends.
-	#arrivals:
-		| ReadonlyArray<readonly [opener: BrowserPageInterface, popup: BrowserPageInterface]>
-		| undefined
+	readonly #arrivals = new Set<BrowserPopupArrivals>()
 	#generation = 0
 	#started = false
 	#starting: Promise<void> | undefined
@@ -440,36 +441,14 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		])
 		const started = performance.now()
 		const acting = !BROWSER_OBSERVATION_TOOL_NAMES.includes(call.name)
-		let result: ToolResult
-		let fault: unknown
-		try {
-			if (acting) {
-				const secret = call.name === 'type' && call.arguments['secret'] === true
-				this.#actions.set(signal, {
-					action: call.name,
-					start: this.redact(this.#cursor.url),
-					arguments: cloneJSONRecord(
-						Object.fromEntries(
-							Object.entries(call.arguments).filter(([key]) => !secret || key !== 'text'),
-						),
-					),
-					...(secret ? { secret: true } : {}),
-				})
-			}
-			const value = await this.#execute(call.name, entry.clause, entry.handler, call.arguments, {
-				...context,
-				signal,
-			})
-			result = { id: call.id, name: call.name, success: true, value }
-		} catch (error) {
-			fault = error
-			result = {
-				id: call.id,
-				name: call.name,
-				success: false,
-				error: isError(error) ? error.message : String(error),
-			}
-		}
+		const { result, fault } = await this.#perform(
+			call,
+			entry.clause,
+			entry.handler,
+			acting,
+			signal,
+			context,
+		)
 		const state = this.#actions.get(signal)
 		this.#actions.delete(signal)
 		const action: BrowserAction | undefined =
@@ -488,6 +467,46 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			result,
 			...(action === undefined ? {} : { action }),
 			...(result.success ? {} : { fault }),
+		}
+	}
+
+	async #perform(
+		call: ToolCall,
+		clause: string,
+		handler: BrowserToolHandler,
+		acting: boolean,
+		signal: AbortSignal,
+		context?: ToolContext,
+	): Promise<BrowserToolsetResult> {
+		try {
+			if (acting) {
+				const secret = call.name === 'type' && call.arguments['secret'] === true
+				this.#actions.set(signal, {
+					action: call.name,
+					start: this.redact(this.#cursor.url),
+					arguments: cloneJSONRecord(
+						Object.fromEntries(
+							Object.entries(call.arguments).filter(([key]) => !secret || key !== 'text'),
+						),
+					),
+					...(secret ? { secret: true } : {}),
+				})
+			}
+			const value = await this.#execute(call.name, clause, handler, call.arguments, {
+				...context,
+				signal,
+			})
+			return { result: { id: call.id, name: call.name, success: true, value } }
+		} catch (error) {
+			return {
+				fault: error,
+				result: {
+					id: call.id,
+					name: call.name,
+					success: false,
+					error: isError(error) ? error.message : String(error),
+				},
+			}
 		}
 	}
 
@@ -530,13 +549,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			signal: options?.signal ?? new AbortController().signal,
 			...(options?.caller === undefined ? {} : { caller: options.caller }),
 		}
-		let args: Readonly<Record<string, unknown>> = step.arguments
-		if ((step.action === 'click' || step.action === 'type') && step.target !== undefined)
-			args = { ...args, ref: await this.#resolveTarget(id, step.target, options) }
-		if (step.action === 'type' && options?.secret === true) args = { ...args, secret: true }
-		// Without a context the manager refuses `switch` itself, as it refuses any unadvertised step.
-		if (step.action === 'switch' && step.tab !== undefined && this.#context !== undefined)
-			args = { ...args, tab: await this.#resolveTab(id, step.tab, options) }
+		const target =
+			(step.action === 'click' || step.action === 'type') && step.target !== undefined
+				? { ...step.arguments, ref: await this.#resolveTarget(id, step.target, options) }
+				: step.arguments
+		const secret =
+			step.action === 'type' && options?.secret === true ? { ...target, secret: true } : target
+		const args =
+			step.action === 'switch' && step.tab !== undefined && this.#context !== undefined
+				? { ...secret, tab: await this.#resolveTab(id, step.tab, options) }
+				: secret
 		const performed = await this.execute({ id, name: step.action, arguments: args }, context)
 		const action = performed.action
 		if (action === undefined)
@@ -635,7 +657,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	#holdable(): void {
 		const dialog = this.#page === undefined ? undefined : this.#dialogs.get(this.#page)
-		if (dialog !== undefined || this.#pending !== undefined)
+		if (dialog !== undefined || this.#pending.size > 0)
 			throw new BrowserError(
 				'TOOLSET_DIALOG',
 				dialog === undefined
@@ -766,13 +788,12 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 	// Redacts before splitting or clipping, which could otherwise retain only part of a secret.
 	#boundReceipt(message: string, secret: unknown, clause?: string): string {
-		if (isString(secret) && secret.length > 0) {
-			message = message
-				.replaceAll(JSON.stringify(secret), '[redacted]')
-				.replaceAll(secret, '[redacted]')
-		}
-		message = redactBrowserText(message, [...this.#secrets])
-		return clause === undefined ? message : boundBrowserText(message, this.#limit, clause)
+		const masked =
+			isString(secret) && secret.length > 0
+				? message.replaceAll(JSON.stringify(secret), '[redacted]').replaceAll(secret, '[redacted]')
+				: message
+		const redacted = redactBrowserText(masked, [...this.#secrets])
+		return clause === undefined ? redacted : boundBrowserText(redacted, this.#limit, clause)
 	}
 
 	async read(options?: BrowserToolsetReadOptions): Promise<string> {
@@ -790,37 +811,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			const view = this.#cursor
 			const deadline = performance.now() + (options?.timeout ?? BROWSER_TOOL_CAPTURE_MS)
-			let outline: BrowserOutline | undefined
-			for (let attempt = 0; attempt < 2; attempt += 1) {
-				try {
-					outline = await this.#bounded(
-						view.elements.outline({
-							...options,
-							timeout: Math.max(0, deadline - performance.now()),
-							signal,
-							limit: Number.MAX_SAFE_INTEGER,
-							secrets: [...this.#secrets],
-						}),
-						deadline,
-						'',
-						signal,
-					)
-					if (outline === undefined)
-						return boundBrowserText(BROWSER_TOOL_DEADLINE_NOTE, limit, BROWSER_TOOL_CUT_FOOTER)
-					break
-				} catch (error) {
-					if (
-						signal.aborted ||
-						!(isBrowserError(error) && error.code === 'ELEMENT') ||
-						error.context?.['reason'] !== 'GONE'
-					)
-						throw error
-					if (attempt === 1)
-						return boundBrowserText(BROWSER_TOOL_CHANGED_NOTE, limit, BROWSER_TOOL_CUT_FOOTER)
-				}
-			}
-			if (outline === undefined)
-				throw new BrowserError('TOOLSET_CAPTURE', 'The page could not be captured; call read.')
+			const outline = await this.#readOutline(view, deadline, signal, options)
+			if (isString(outline)) return boundBrowserText(outline, limit, BROWSER_TOOL_CUT_FOOTER)
 			const projection = outline.lines.map(renderBrowserLine).join('\n')
 			const previous = this.#projections.get(view)
 			const tabs =
@@ -852,6 +844,41 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		} finally {
 			capture.abort(new BrowserError('TOOLSET_SETTLED', 'the read settled'))
 		}
+	}
+
+	async #readOutline(
+		view: BrowserViewInterface,
+		deadline: number,
+		signal: AbortSignal,
+		options?: BrowserToolsetReadOptions,
+	): Promise<BrowserOutline | string> {
+		for (const retry of [false, true]) {
+			try {
+				const outline = await this.#bounded(
+					view.elements.outline({
+						...options,
+						timeout: Math.max(0, deadline - performance.now()),
+						signal,
+						limit: Number.MAX_SAFE_INTEGER,
+						secrets: [...this.#secrets],
+					}),
+					deadline,
+					'',
+					signal,
+				)
+				if (outline === undefined) return BROWSER_TOOL_DEADLINE_NOTE
+				return outline
+			} catch (error) {
+				if (
+					signal.aborted ||
+					!(isBrowserError(error) && error.code === 'ELEMENT') ||
+					error.context?.['reason'] !== 'GONE'
+				)
+					throw error
+				if (retry) return BROWSER_TOOL_CHANGED_NOTE
+			}
+		}
+		throw new BrowserError('TOOLSET_CAPTURE', 'The page could not be captured; call read.')
 	}
 
 	async #read(
@@ -888,25 +915,26 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	): Promise<readonly [string, string]> {
 		const turn = await this.#acquire(context.signal)
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
-		let record: BrowserNavigationRecordInterface | undefined
-		let popups: BrowserPopupRecordInterface | undefined
+		const cleanup: Array<() => void> = []
 		try {
 			const element = this.#element(args['ref'], context.signal)
 			const action = BROWSER_TYPED_ROLES.has(element.role)
 				? `Clicked ${renderBrowserElement(element)}; call type with ${element.reference} to enter text`
 				: `Clicked ${renderBrowserElement(element)}`
 			const page = this.#page
-			if (page !== undefined) {
-				const frame = this.#resolveFrame(page, element.reference)
+			const frame = page === undefined ? undefined : this.#resolveFrame(page, element.reference)
+			if (page !== undefined && frame !== undefined)
 				await this.#observe(
 					await this.#locate(page, frame, context.signal),
 					frame,
 					observation,
 					context.signal,
 				)
-				record = page.navigation.record(frame)
-				popups = this.#recordPopups(page)
-			}
+			const record =
+				page === undefined || frame === undefined
+					? undefined
+					: this.#recordAction(page, frame, cleanup)
+			const popups = page === undefined ? undefined : this.#preparePopups(page, cleanup)
 			return [
 				await this.#settle(
 					element.click({ signal: context.signal }),
@@ -920,9 +948,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				'',
 			]
 		} finally {
-			record?.destroy()
-			popups?.destroy()
-			this.#flushArrivals()
+			for (const close of cleanup) close()
 			try {
 				await this.#unobserve(observation, context.signal)
 			} finally {
@@ -952,8 +978,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 
 		const turn = await this.#acquire(context.signal)
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
-		let record: BrowserNavigationRecordInterface | undefined
-		let popups: BrowserPopupRecordInterface | undefined
+		const cleanup: Array<() => void> = []
 		try {
 			const element = this.#element(args['ref'], context.signal)
 			// The role the latest capture recorded decides, so a control that takes no text is
@@ -981,18 +1006,20 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			// The observer and the record precede the edit, because the inserted text or the chosen
 			// option can run a handler that submits the form.
 			const page = this.#page
-			if (page !== undefined) {
-				const frame = this.#resolveFrame(page, element.reference)
-				if (submit === true)
-					await this.#observe(
-						await this.#locate(page, frame, context.signal),
-						frame,
-						observation,
-						context.signal,
-					)
-				record = page.navigation.record(frame)
-				if (submit === true) popups = this.#recordPopups(page)
-			}
+			const frame = page === undefined ? undefined : this.#resolveFrame(page, element.reference)
+			if (page !== undefined && frame !== undefined && submit === true)
+				await this.#observe(
+					await this.#locate(page, frame, context.signal),
+					frame,
+					observation,
+					context.signal,
+				)
+			const record =
+				page === undefined || frame === undefined
+					? undefined
+					: this.#recordAction(page, frame, cleanup)
+			const popups =
+				page === undefined || submit !== true ? undefined : this.#preparePopups(page, cleanup)
 			// A combobox or listbox role names a select element or a text input with suggestions;
 			// the receipt names the path taken, and a dialog mid-edit names the path attempted.
 			const choosing = element.role === 'combobox' || element.role === 'listbox'
@@ -1050,9 +1077,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				'',
 			]
 		} finally {
-			record?.destroy()
-			popups?.destroy()
-			this.#flushArrivals()
+			for (const close of cleanup) close()
 			try {
 				await this.#unobserve(observation, context.signal)
 			} finally {
@@ -1068,16 +1093,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const key = normalizeBrowserKey(readBrowserToolString(args, 'key'))
 		const turn = await this.#acquire(context.signal)
 		const observation = { token: (this.#sequence += 1), frames: new Set<BrowserFrameInterface>() }
-		let record: BrowserNavigationRecordInterface | undefined
-		let popups: BrowserPopupRecordInterface | undefined
+		const cleanup: Array<() => void> = []
 		try {
 			const page = this.#paged()
 			// The focused document receives the keys, so every document one census lists is observed,
 			// and only the main frame's must install.
 			const frames = await this.#race(page.frames(), '', context.signal)
 			await this.#observe(frames, page.id, observation, context.signal)
-			record = page.navigation.record(page.id)
-			if (key === 'Enter') popups = this.#recordPopups(page)
+			const record = page.navigation.record(page.id)
+			cleanup.push(record.destroy.bind(record))
+			const popups = key === 'Enter' ? this.#preparePopups(page, cleanup) : undefined
 			// The keyboard takes no signal and sends each release without one, so the signal is
 			// checked before the first key goes down.
 			context.signal.throwIfAborted()
@@ -1097,9 +1122,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				'',
 			]
 		} finally {
-			record?.destroy()
-			popups?.destroy()
-			this.#flushArrivals()
+			for (const close of cleanup) close()
 			try {
 				await this.#unobserve(observation, context.signal)
 			} finally {
@@ -1399,9 +1422,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		try {
 			await this.#race(previous, '', signal, !answer)
 			if (holding) this.#holdable()
-			const pending = this.#pending
-			if (!answer && pending !== undefined) await this.#race(pending, '', signal, !answer)
-			if (!answer && this.#pending === pending) this.#pending = undefined
+			if (!answer && this.#pending.size > 0)
+				await this.#race(Promise.all(this.#pending), '', signal, !answer)
 			const action = this.#actions.get(signal)
 			if (action !== undefined)
 				this.#actions.set(signal, { ...action, start: this.redact(this.#cursor.url) })
@@ -1429,18 +1451,13 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// popup record waits within the same bound for the popups its reports name, and the view moves to
 	// the first open one before the capture, so the receipt carries the popup's view and the move.
 	// `focus` adds the focused referenced row of the captured view to the status.
-	async #settle(
+	async #beginSettlement(
 		command: Promise<void>,
 		action: string,
 		signal: AbortSignal,
-		trusted: boolean,
 		record?: BrowserNavigationRecordInterface,
-		popups?: BrowserPopupRecordInterface,
-		observation?: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
-		enter?: { readonly explicit: boolean; readonly action: string },
-		focus = false,
-	): Promise<string> {
-		let deadline: number | undefined
+		observation?: BrowserToolObservation,
+	): Promise<BrowserToolSettlement> {
 		try {
 			// A wait that ends without a start leaves the command to decide the race.
 			const started = record?.wait({ signal }).then(
@@ -1453,14 +1470,40 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				action,
 				command,
 			)
-			deadline = performance.now() + BROWSER_TOOL_TIMEOUT_MS
+			return { first, deadline: performance.now() + BROWSER_TOOL_TIMEOUT_MS }
+		} catch (error) {
+			record?.destroy()
+			if (observation !== undefined) await this.#unobserve(observation, signal)
+			throw error
+		}
+	}
+
+	async #settle(
+		command: Promise<void>,
+		action: string,
+		signal: AbortSignal,
+		trusted: boolean,
+		record?: BrowserNavigationRecordInterface,
+		popups?: BrowserPopupRecordInterface,
+		observation?: { readonly token: number; readonly frames: Set<BrowserFrameInterface> },
+		enter?: { readonly explicit: boolean; readonly action: string },
+		focus = false,
+	): Promise<string> {
+		const { first, deadline } = await this.#beginSettlement(
+			command,
+			action,
+			signal,
+			record,
+			observation,
+		)
+		try {
 			const bound = deadline - BROWSER_TOOL_CAPTURE_MS
 			if (first) this.#parkInput(command)
 			const submissions =
 				first || observation === undefined
 					? { destinations: [], prevented: false, submitted: undefined, implicit: false }
 					: await this.#readSubmissions(observation, action, signal, bound)
-			let settled =
+			const navigation =
 				record === undefined
 					? undefined
 					: await this.#race(
@@ -1486,13 +1529,15 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			if (popup !== undefined) await this.#followPopup(popup, action, signal, bound)
 			// Without a surviving destination and a navigation, the observer names what became of the
 			// submission: a listener handled it, or no form received the Enter the action asked for.
-			const unmoved = settled === undefined && submissions.destinations.length === 0
+			const unmoved = navigation === undefined && submissions.destinations.length === 0
 			const changed =
 				unmoved && submissions.prevented && observation !== undefined
 					? await this.#waitSubmission(observation, record, action, signal, bound)
 					: false
-			if (changed && record !== undefined)
-				settled = await record.settle({ timeout: Math.max(0, bound - performance.now()), signal })
+			const settled =
+				changed && record !== undefined
+					? await record.settle({ timeout: Math.max(0, bound - performance.now()), signal })
+					: navigation
 			if (settled !== undefined)
 				this.#actions.set(signal, {
 					...this.#actions.get(signal),
@@ -1538,20 +1583,32 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		}
 	}
 
-	// Opens the popup record of an action into `page`; until the action ends, a popup the page
-	// announces waits for the action, which moves the view itself.
-	#recordPopups(page: BrowserPageInterface): BrowserPopupRecordInterface {
+	#recordAction(
+		page: BrowserPageInterface,
+		frame: string,
+		cleanup: Array<() => void>,
+	): BrowserNavigationRecordInterface {
+		const record = page.navigation.record(frame)
+		cleanup.push(record.destroy.bind(record))
+		return record
+	}
+
+	#preparePopups(
+		page: BrowserPageInterface,
+		cleanup: Array<() => void>,
+	): BrowserPopupRecordInterface {
 		const popups = page.popups.record()
-		this.#arrivals = []
+		const arrivals = new BrowserPopupArrivals()
+		this.#arrivals.add(arrivals)
+		cleanup.push(popups.destroy.bind(popups), this.#flush.bind(this, arrivals))
 		return popups
 	}
 
 	// Hands the popups announced during the action to the popup handler once the action ends, which
 	// moves the view to none the action already moved it past.
-	#flushArrivals(): void {
-		const arrivals = this.#arrivals ?? []
-		this.#arrivals = undefined
-		for (const [opener, popup] of arrivals) this.#handlePopup(opener, popup)
+	#flush(arrivals: BrowserPopupArrivals): void {
+		this.#arrivals.delete(arrivals)
+		for (const [opener, popup] of arrivals.entries) this.#handlePopup(opener, popup)
 	}
 
 	// Moves the view to a popup the action opened and records it as the action's tab; a title the
@@ -1599,9 +1656,9 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			() => undefined,
 			() => undefined,
 		)
-		this.#pending = pending
+		this.#pending.add(pending)
 		void pending.then(() => {
-			if (this.#pending === pending) this.#pending = undefined
+			this.#pending.delete(pending)
 		})
 	}
 
@@ -1902,12 +1959,10 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		action: string,
 		signal?: AbortSignal,
 	): Promise<T | undefined> {
-		let timer: ReturnType<typeof setTimeout> | undefined
-		const lapse = new Promise<undefined>((resolve) => {
-			timer = setTimeout(resolve, Math.max(0, deadline - performance.now()), undefined)
-		})
+		const lapse = Promise.withResolvers<undefined>()
+		const timer = setTimeout(lapse.resolve, Math.max(0, deadline - performance.now()), undefined)
 		try {
-			return await this.#race(Promise.race([step, lapse]), action, signal)
+			return await this.#race(Promise.race([step, lapse.promise]), action, signal)
 		} finally {
 			clearTimeout(timer)
 		}
@@ -1935,29 +1990,19 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			limit: Number.MAX_SAFE_INTEGER,
 			secrets: [...this.#secrets],
 		}
-		let tabs: readonly BrowserTab[] = []
 		try {
-			tabs = (await this.#bounded(this.#list(options.signal, true), deadline, action, signal)) ?? []
-			const outline = await this.#bounded(this.#cursor.elements.outline(options), deadline, action)
-			return outline === undefined
-				? { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
-				: { outline, focus: outline.focus, tabs }
-		} catch (error) {
-			if (signal.aborted || (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT')) {
-				throw error
-			}
-			if (
-				!(isBrowserError(error) && error.code === 'ELEMENT') ||
-				error.context?.['reason'] !== 'GONE'
-			) {
-				return {
-					note: `(The view could not be read: ${isError(error) ? error.message : String(error)}; call read.)`,
-					focus: undefined,
-					tabs,
-				}
-			}
-			// A navigation replaced the document mid-capture; the outline waits for the replacing
-			// document's readiness before it reads once more, inside the same deadline.
+			const listing = await this.#bounded(
+				this.#list(options.signal, true),
+				deadline,
+				action,
+				signal,
+			).then(
+				(tabs) => ({ tabs: tabs ?? [] }),
+				(error: unknown) => ({ error }),
+			)
+			if ('error' in listing)
+				return await this.#captureFailure(listing.error, [], options, deadline, action, signal)
+			const tabs = listing.tabs
 			try {
 				const outline = await this.#bounded(
 					this.#cursor.elements.outline(options),
@@ -1967,23 +2012,56 @@ export class BrowserToolset implements BrowserToolsetInterface {
 				return outline === undefined
 					? { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
 					: { outline, focus: outline.focus, tabs }
-			} catch (retry) {
-				if (signal.aborted || (isBrowserError(retry) && retry.code === 'TOOLSET_RECEIPT')) {
-					throw retry
-				}
-				return { note: BROWSER_TOOL_CHANGED_NOTE, focus: undefined, tabs: [] }
+			} catch (error) {
+				return await this.#captureFailure(error, tabs, options, deadline, action, signal)
 			}
 		} finally {
 			receipt.abort(new BrowserError('TOOLSET_SETTLED', 'the receipt settled'))
 		}
 	}
 
+	async #captureFailure(
+		error: unknown,
+		tabs: readonly BrowserTab[],
+		options: BrowserOutlineOptions,
+		deadline: number,
+		action: string,
+		signal: AbortSignal,
+	): Promise<BrowserCaptureResult> {
+		if (signal.aborted || (isBrowserError(error) && error.code === 'TOOLSET_RECEIPT')) {
+			throw error
+		}
+		if (
+			!(isBrowserError(error) && error.code === 'ELEMENT') ||
+			error.context?.['reason'] !== 'GONE'
+		) {
+			return {
+				note: `(The view could not be read: ${isError(error) ? error.message : String(error)}; call read.)`,
+				focus: undefined,
+				tabs,
+			}
+		}
+		// A navigation replaced the document mid-capture; the outline waits for the replacing
+		// document's readiness before it reads once more, inside the same deadline.
+		try {
+			const outline = await this.#bounded(this.#cursor.elements.outline(options), deadline, action)
+			return outline === undefined
+				? { note: BROWSER_TOOL_DEADLINE_NOTE, focus: undefined, tabs: [] }
+				: { outline, focus: outline.focus, tabs }
+		} catch (retry) {
+			if (signal.aborted || (isBrowserError(retry) && retry.code === 'TOOLSET_RECEIPT')) {
+				throw retry
+			}
+			return { note: BROWSER_TOOL_CHANGED_NOTE, focus: undefined, tabs: [] }
+		}
+	}
+
 	#window(captured: BrowserCaptureResult, receipt: string, text?: string): string {
-		receipt = this.#boundReceipt(receipt, undefined)
+		const bounded = this.#boundReceipt(receipt, undefined)
 		const outline = captured.outline
 		if (outline === undefined)
 			return this.#boundReceipt(
-				receipt + '\n\n' + (captured.note ?? BROWSER_TOOL_CHANGED_NOTE),
+				bounded + '\n\n' + (captured.note ?? BROWSER_TOOL_CHANGED_NOTE),
 				undefined,
 				BROWSER_TOOL_CUT_FOOTER,
 			)
@@ -1999,7 +2077,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 			changed: false,
 			note: this.#boundReceipt(this.#peek(), undefined),
 		}
-		const result = renderBrowserReceiptWindow(passage, receipt, this.#limit)
+		const result = renderBrowserReceiptWindow(passage, bounded, this.#limit)
 		this.#projections.set(this.#cursor, outline.lines.map(renderBrowserLine).join('\n'))
 		this.#remember(result, this.#cursor)
 		this.#notes.length = 0
@@ -2092,6 +2170,16 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		await this.#adopt()
 	}
 
+	async #adoptSource(
+		source: BrowserToolSourceInterface,
+	): Promise<readonly ToolInterface[] | undefined> {
+		try {
+			return await source.adopt()
+		} catch {
+			return undefined
+		}
+	}
+
 	// Re-checks the lifecycle, the generation, and the source after every synchronous emission,
 	// because a manager or toolset listener can re-enter.
 	async #adopt(): Promise<void> {
@@ -2099,14 +2187,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		if (source === undefined || this.#destroying !== undefined || !this.#started) return
 		this.#generation += 1
 		const generation = this.#generation
-		let adopted: readonly ToolInterface[]
-		try {
-			adopted = await source.adopt()
-		} catch {
-			// A source whose page closed refuses to project; the page tools of its last projection
-			// stay until the next change or move replaces them.
-			return
-		}
+		const adopted = await this.#adoptSource(source)
+		if (adopted === undefined) return
 		if (!this.#current(generation, source)) return
 		const census = source.tools?.()
 		const reasons = new Map<string, BrowserToolsetReason>()
@@ -2289,8 +2371,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	// record waits for that action, and once the view moved to it, its opener is no longer the view.
 	#handlePopup(opener: BrowserPageInterface, popup: BrowserPageInterface): void {
 		if (opener !== this.#page || popup.closed) return
-		if (this.#arrivals !== undefined) {
-			this.#arrivals = [...this.#arrivals, [opener, popup]]
+		if (this.#arrivals.size > 0) {
+			for (const arrivals of this.#arrivals) arrivals.admit(opener, popup)
 			return
 		}
 		void this.#select(popup, `The view moved to a new tab: ${popup.url}.`)

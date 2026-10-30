@@ -1,5 +1,6 @@
+import type { BrowserElementFixture } from '../../../setup.js'
+import { BrowserFixtureValue, replyBrowserNavigationRetry } from '../../../setup.js'
 import type { BrowserFrameInterface } from '@src/core'
-import type { CDPSentMessage } from '../../../setup.js'
 import { BrowserPage } from '../../../../src/core/BrowserPage.js'
 import { scanBrowserLines } from '@src/core'
 import { renderBrowserLine } from '@src/core'
@@ -26,7 +27,7 @@ describe('element manager', () => {
 	it.each(['name', 'href', 'role', 'missing href'])(
 		'stable links: allocates a fresh reference for a changed %s',
 		async (changed) => {
-			let navigated = false
+			const navigated = new BrowserFixtureValue(false)
 			const fixture = await createBrowserElementFixture({
 				local: true,
 				accessibility: (message) =>
@@ -34,12 +35,12 @@ describe('element manager', () => {
 						message.id,
 						buildBrowserReferenceTree([
 							{
-								role: navigated && changed === 'role' ? 'button' : 'link',
-								name: navigated && changed === 'name' ? 'Pay' : 'Checkout',
+								role: navigated.value && changed === 'role' ? 'button' : 'link',
+								name: navigated.value && changed === 'name' ? 'Pay' : 'Checkout',
 								href:
-									navigated && changed === 'missing href'
+									navigated.value && changed === 'missing href'
 										? undefined
-										: navigated && changed === 'href'
+										: navigated.value && changed === 'href'
 											? 'https://example.test/other'
 											: 'https://example.test/checkout',
 							},
@@ -48,7 +49,7 @@ describe('element manager', () => {
 			})
 			try {
 				const before = requireValue((await fixture.page.elements.find({}))[0]).reference
-				navigated = true
+				navigated.value = true
 				emitBrowserNavigation(
 					fixture.transport,
 					'session-main',
@@ -133,14 +134,14 @@ describe('element manager', () => {
 	it.each(['previous', 'current'])(
 		'stable links: refuses duplicate identities in the %s document',
 		async (duplicate) => {
-			let navigated = false
+			const navigated = new BrowserFixtureValue(false)
 			const fixture = await createBrowserElementFixture({
 				local: true,
 				accessibility: (message) =>
 					fixture.transport.reply(
 						message.id,
 						buildBrowserReferenceTree(
-							Array.from({ length: navigated === (duplicate === 'current') ? 2 : 1 }, () => ({
+							Array.from({ length: navigated.value === (duplicate === 'current') ? 2 : 1 }, () => ({
 								role: 'link',
 								name: 'Checkout',
 								href: 'https://example.test/checkout',
@@ -150,7 +151,7 @@ describe('element manager', () => {
 			})
 			try {
 				const before = await fixture.page.elements.find({ role: 'link' })
-				navigated = true
+				navigated.value = true
 				emitBrowserNavigation(
 					fixture.transport,
 					'session-main',
@@ -170,44 +171,19 @@ describe('element manager', () => {
 	it.each(['query', 'describe', 'accessibility', 'document'])(
 		'resumes a wait after navigation interrupts %s',
 		async (method) => {
-			let attempts = 0
+			const attempts = new BrowserFixtureValue(0)
+			const current = new BrowserFixtureValue<BrowserElementFixture | undefined>(undefined)
 			const fixture = await createBrowserElementFixture({
 				local: true,
-				[method]: (message: CDPSentMessage) => {
-					attempts += 1
-					if (attempts === 1) {
-						fixture.transport.event(
-							'Page.frameNavigated',
-							{
-								frame: { id: 'main', url: fixture.page.url, loaderId: 'next' },
-							},
-							'session-main',
-						)
-						fixture.transport.event(
-							'Page.lifecycleEvent',
-							{
-								frameId: 'main',
-								loaderId: 'next',
-								name: 'DOMContentLoaded',
-							},
-							'session-main',
-						)
-						if (method === 'document') fixture.transport.reply(message.id, {})
-						else fixture.transport.fail(message.id, 'Could not find node with given id')
-					} else if (method === 'accessibility') fixture.transport.reply(message.id, { nodes: [] })
-					else if (method === 'describe')
-						fixture.transport.reply(message.id, { node: { backendNodeId: 7 } })
-					else if (method === 'document')
-						fixture.transport.reply(message.id, { root: { nodeId: 2 } })
-					else fixture.transport.reply(message.id, { nodeIds: [50] })
-				},
+				[method]: replyBrowserNavigationRetry.bind(undefined, current, attempts, method),
 			})
+			current.value = fixture
 			const { page, client } = fixture
 			try {
 				await expect(
 					page.elements.wait({ css: '#destination' }, { timeout: 500 }),
 				).resolves.toHaveLength(1)
-				expect(attempts).toBeGreaterThanOrEqual(2)
+				expect(attempts.value).toBeGreaterThanOrEqual(2)
 			} finally {
 				await client.close()
 			}
@@ -215,12 +191,12 @@ describe('element manager', () => {
 	)
 
 	it('rethrows a persistent protocol failure after the navigation retry', async () => {
-		let attempts = 0
+		const attempts = new BrowserFixtureValue(0)
 		const fixture = await createBrowserElementFixture({
 			local: true,
 			query: (message) => {
-				attempts += 1
-				if (attempts === 1) {
+				attempts.value += 1
+				if (attempts.value === 1) {
 					fixture.transport.event(
 						'Page.frameNavigated',
 						{ frame: { id: 'main', url: fixture.page.url, loaderId: 'next' } },
@@ -241,19 +217,20 @@ describe('element manager', () => {
 				code: 'REMOTE',
 				message: 'Selector is invalid',
 			})
-			expect(attempts).toBe(2)
+			expect(attempts.value).toBe(2)
 		} finally {
 			await client.close()
 		}
 	})
 
 	it('parks an absent wait on DOM readiness after context loss without a navigation step', async () => {
-		let captures = 0
+		const captures = new BrowserFixtureValue(0)
 		const fixture = await createBrowserElementFixture({
 			local: true,
 			accessibility: (message) => {
-				captures += 1
-				if (captures === 1) fixture.transport.fail(message.id, 'Execution context was destroyed')
+				captures.value += 1
+				if (captures.value === 1)
+					fixture.transport.fail(message.id, 'Execution context was destroyed')
 				else fixture.transport.reply(message.id, { nodes: [] })
 			},
 		})
@@ -262,13 +239,13 @@ describe('element manager', () => {
 				{ name: 'spinner' },
 				{ absent: true, timeout: 500 },
 			)
-			await waitForCondition('the context was lost', () => captures > 0)
+			await waitForCondition('the context was lost', () => captures.value > 0)
 			const concurrent = fixture.page.elements.wait(
 				{ name: 'spinner' },
 				{ absent: true, timeout: 500 },
 			)
 			await waitForDelay(20)
-			const beforeReady = captures
+			const beforeReady = captures.value
 			fixture.transport.event(
 				'Page.lifecycleEvent',
 				{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
@@ -277,7 +254,7 @@ describe('element manager', () => {
 			await expect(pending).resolves.toEqual([])
 			await expect(concurrent).resolves.toEqual([])
 			expect(beforeReady).toBe(1)
-			expect(captures).toBe(3)
+			expect(captures.value).toBe(3)
 		} finally {
 			await fixture.client.close()
 		}
@@ -400,10 +377,10 @@ describe('element manager', () => {
 	})
 
 	it('catches a child navigation invalidating a completed child capture or preserving its old references', async () => {
-		let navigate = false
+		const navigate = new BrowserFixtureValue(false)
 		const fixture = await createBrowserElementFixture({
 			title: (message) => {
-				if (navigate)
+				if (navigate.value)
 					fixture.transport.event(
 						'Page.frameNavigated',
 						{ frame: { id: 'child', url: 'https://example.test/next' } },
@@ -414,7 +391,7 @@ describe('element manager', () => {
 		})
 		try {
 			await fixture.page.elements.outline()
-			navigate = true
+			navigate.value = true
 			await expect(fixture.page.elements.outline()).rejects.toMatchObject({
 				context: { reason: 'GONE' },
 			})
@@ -426,7 +403,7 @@ describe('element manager', () => {
 	})
 
 	it('catches stale getters reading a reused backend under a new reference', async () => {
-		let changed = false
+		const changed = new BrowserFixtureValue(false)
 		const fixture = await createBrowserElementFixture({
 			accessibility: (message) =>
 				fixture.transport.reply(
@@ -435,7 +412,7 @@ describe('element manager', () => {
 						? BROWSER_ELEMENT_CHILD_FIXTURE
 						: {
 								nodes: BROWSER_ELEMENT_AX_FIXTURE.nodes.map((node) =>
-									node.nodeId === 'link' && changed
+									node.nodeId === 'link' && changed.value
 										? { ...node, role: { value: 'button' }, name: { value: 'Replacement' } }
 										: node,
 								),
@@ -445,7 +422,7 @@ describe('element manager', () => {
 		try {
 			await fixture.page.elements.outline()
 			const old = requireValue(fixture.page.elements.element('e1'))
-			changed = true
+			changed.value = true
 			fixture.transport.event(
 				'Page.frameNavigated',
 				{
@@ -464,11 +441,11 @@ describe('element manager', () => {
 
 	it('catches concurrent CSS finds invalidating each other frontend node ids', async () => {
 		const queries: number[] = []
-		let documents = 0
+		const documents = new BrowserFixtureValue(0)
 		const fixture = await createBrowserElementFixture({
 			document: (message) => {
-				documents += 1
-				fixture.transport.reply(message.id, { root: { nodeId: documents } })
+				documents.value += 1
+				fixture.transport.reply(message.id, { root: { nodeId: documents.value } })
 			},
 			query: (message) => {
 				queries.push(message.id)
@@ -479,7 +456,7 @@ describe('element manager', () => {
 			const second = fixture.page.elements.find({ css: '.second' })
 			await waitForCondition('first CSS query', () => queries.length > 0)
 			await waitForDelay(20)
-			expect(documents).toBe(1)
+			expect(documents.value).toBe(1)
 			fixture.transport.reply(requireValue(queries[0]), { nodeIds: [50] })
 			await first
 			await waitForCondition('second CSS query', () => queries.length === 2)
@@ -523,12 +500,12 @@ describe('element manager', () => {
 		}
 	})
 	it('catches failing to re-run find after a mutation wakes an element wait', async () => {
-		let arrived = false
-		let observer: number | undefined
+		const arrived = new BrowserFixtureValue(false)
+		const observer = new BrowserFixtureValue<number | undefined>(undefined)
 		const fixture = await createBrowserElementFixture({
 			evaluation: (message) => {
 				if (String(message.params?.['expression']).includes('new MutationObserver'))
-					observer = message.id
+					observer.value = message.id
 				else fixture.transport.reply(message.id, { result: { value: false } })
 			},
 			accessibility: (message) =>
@@ -537,7 +514,9 @@ describe('element manager', () => {
 					message.params?.['frameId'] === 'child'
 						? {
 								nodes: BROWSER_ELEMENT_CHILD_FIXTURE.nodes.map((node) =>
-									node.nodeId === 'save' && arrived ? { ...node, name: { value: 'Later' } } : node,
+									node.nodeId === 'save' && arrived.value
+										? { ...node, name: { value: 'Later' } }
+										: node,
 								),
 							}
 						: BROWSER_ELEMENT_AX_FIXTURE,
@@ -555,14 +534,14 @@ describe('element manager', () => {
 						(message) => message.method === 'Accessibility.getFullAXTree',
 					).length === 2,
 			)
-			arrived = true
+			arrived.value = true
 			const observerIndex = fixture.transport.sent.findIndex((message) =>
 				String(message.params?.['expression']).includes('new MutationObserver'),
 			)
 			const captureIndex = fixture.transport.sent.findIndex(
 				(message) => message.method === 'Accessibility.getFullAXTree',
 			)
-			fixture.transport.reply(requireValue(observer), { result: { value: true } })
+			fixture.transport.reply(requireValue(observer.value), { result: { value: true } })
 			expect((await pending).map((element) => [element.reference, element.name])).toEqual([
 				['e6', 'Later'],
 			])
@@ -911,10 +890,10 @@ describe('element manager', () => {
 		const { client, transport } = await createConnectedCDPClient()
 		scriptCDPAttach(transport, 'session-1', { second: 'session-2' })
 		scriptBrowserElements(transport)
-		let created = 0
+		const created = new BrowserFixtureValue(0)
 		transport.onSend('Target.createTarget', (message) => {
-			created += 1
-			transport.reply(message.id, { targetId: created === 1 ? 'first' : 'second' })
+			created.value += 1
+			transport.reply(message.id, { targetId: created.value === 1 ? 'first' : 'second' })
 		})
 		const context = new BrowserContext(client)
 		try {

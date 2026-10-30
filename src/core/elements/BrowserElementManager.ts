@@ -123,26 +123,35 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		await this.#input.ready(options)
 		const epoch = this.#generation(this.#input.page.id)
 		const rows = this.#within(await this.#capture(options), query.within)
-		let matches = filterBrowserOutline(rows, query)
-		if (query.css !== undefined) {
-			const session = this.#input.session
-			const previous = this.#queries.get(session) ?? Promise.resolve([])
-			const pending = previous.catch(() => []).then(this.#css.bind(this, query, epoch, options))
-			this.#queries.set(session, pending)
-			try {
-				const selected = await pending
-				const keys = new Set(selected.map((node) => `${node.session}:${node.backend}`))
-				if (query.role === undefined && query.name === undefined) matches = selected
-				else matches = matches.filter((node) => keys.has(`${node.session}:${node.backend}`))
-			} finally {
-				if (this.#queries.get(session) === pending) this.#queries.delete(session)
-			}
-		}
+		const filtered = filterBrowserOutline(rows, query)
+		const matches =
+			query.css === undefined ? filtered : await this.#selectCss(query, epoch, filtered, options)
 		this.#assertCapture(this.#input.page.id, epoch)
 		return matches.flatMap((node) => {
 			const entry = this.#records.get(`${node.session}:${node.backend}`)
 			return entry === undefined ? [] : [entry.element]
 		})
+	}
+
+	async #selectCss(
+		query: BrowserElementQuery,
+		epoch: number,
+		matches: readonly BrowserOutlineNode[],
+		options?: BrowserCallOptions,
+	): Promise<readonly BrowserOutlineNode[]> {
+		const session = this.#input.session
+		const previous = this.#queries.get(session) ?? Promise.resolve([])
+		const pending = previous.catch(() => []).then(this.#css.bind(this, query, epoch, options))
+		this.#queries.set(session, pending)
+		try {
+			const selected = await pending
+			const keys = new Set(selected.map((node) => `${node.session}:${node.backend}`))
+			return query.role === undefined && query.name === undefined
+				? selected
+				: matches.filter((node) => keys.has(`${node.session}:${node.backend}`))
+		} finally {
+			if (this.#queries.get(session) === pending) this.#queries.delete(session)
+		}
 	}
 
 	async #css(
@@ -155,13 +164,15 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		this.#assertCapture(frame, epoch)
 		const scope = query.within === undefined ? undefined : this.#record(query.within)
 		if (scope !== undefined && scope.node.frame !== frame) return []
-		let document = await this.#input.client.send('DOM.getDocument', {}, { session, ...options })
-		if (scope !== undefined)
-			document = await this.#input.client.send(
-				'DOM.pushNodesByBackendIdsToFrontend',
-				{ backendNodeIds: [scope.node.backend] },
-				{ session, ...options },
-			)
+		const captured = await this.#input.client.send('DOM.getDocument', {}, { session, ...options })
+		const document =
+			scope === undefined
+				? captured
+				: await this.#input.client.send(
+						'DOM.pushNodesByBackendIdsToFrontend',
+						{ backendNodeIds: [scope.node.backend] },
+						{ session, ...options },
+					)
 		const root =
 			isRecord(document) && isRecord(document['root'])
 				? document['root']['nodeId']
@@ -237,14 +248,29 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		while (true) {
 			signal.throwIfAborted()
 			const key = `__browserQueryWait${++this.#sequence}`
-			let session: string | undefined
-			let context: number | undefined
+			const cleanup: Array<() => Promise<unknown>> = []
 			const changes = this.#changes
 			try {
 				await this.#input.ready({ timeout: this.#remaining(end), signal })
 				const frame = this.#scopeFrame(query.within)
-				session = await this.#input.resolve(frame)
-				context = await this.#input.world(frame, session, { timeout: this.#remaining(end), signal })
+				const session = await this.#input.resolve(frame)
+				const context = await this.#input.world(frame, session, {
+					timeout: this.#remaining(end),
+					signal,
+				})
+				cleanup.push(() =>
+					this.#input.client
+						.send(
+							'Runtime.evaluate',
+							{
+								expression: `globalThis[${JSON.stringify(key)}]?.()`,
+								contextId: context,
+								returnByValue: true,
+							},
+							{ session, timeout: 1000 },
+						)
+						.catch(() => undefined),
+				)
 				const remaining = this.#remaining(end)
 				const call = { timeout: remaining, signal }
 				// Arm before capturing so mutations during find are retained by the pending promise.
@@ -282,18 +308,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				const remaining = this.#remaining(end)
 				if (this.#changes === changes) await this.#input.recover({ signal, timeout: remaining })
 			} finally {
-				if (context !== undefined && session !== undefined)
-					await this.#input.client
-						.send(
-							'Runtime.evaluate',
-							{
-								expression: `globalThis[${JSON.stringify(key)}]?.()`,
-								contextId: context,
-								returnByValue: true,
-							},
-							{ session, timeout: 1000 },
-						)
-						.catch(() => undefined)
+				for (const close of cleanup) await close()
 			}
 		}
 	}
@@ -543,10 +558,9 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 		options?: BrowserCallOptions,
 	): Promise<BrowserPoint> {
 		const offsets: BrowserPoint[] = []
-		const visited = new Set<string>()
-		let current = frame
-		while (current !== this.#input.page.id && !visited.has(current)) {
-			visited.add(current)
+		const visited = new Set([frame])
+		for (const current of visited) {
+			if (current === this.#input.page.id) break
 			const owner = this.#owners.get(current)
 			if (owner === undefined)
 				throw new BrowserError('ELEMENT', describeBrowserRefusal({ subject: 'frame' }, 'GONE'), {
@@ -565,7 +579,7 @@ export class BrowserElementManager implements BrowserElementManagerInterface<Bro
 				const quad = readBrowserQuad({ quads: [content] })
 				offsets.push({ x: quad.points[0], y: quad.points[1] })
 			}
-			current = owner.frame
+			visited.add(owner.frame)
 		}
 		return composeBrowserPoint(point, offsets)
 	}

@@ -17,7 +17,7 @@ import type { ToolContext, ToolInterface } from '@orkestrel/tool'
 import { attempt, isArray, isBoolean, isError, isRecord, isString } from '@orkestrel/contract'
 import { createTool } from '@orkestrel/tool'
 import {
-	BROWSER_JOURNEY_EMPTY_LISTING,
+	BROWSER_JOURNEY_EMPTY_LIST,
 	BROWSER_JOURNEY_IDLE_REFUSAL,
 	BROWSER_JOURNEY_SAVE_SAVED_REFUSAL,
 	BROWSER_JOURNEY_NAME_PATTERN,
@@ -33,6 +33,8 @@ import {
 	BROWSER_TOOL_CUT_FOOTER,
 	BROWSER_TOOL_LIMIT,
 } from './constants.js'
+import { BrowserJourneyPages } from './BrowserJourneyPages.js'
+import { BrowserJourneyRecord } from './BrowserJourneyRecord.js'
 import { BrowserError, isBrowserError } from './errors.js'
 import { parseBrowserToolInteger } from './parsers.js'
 import { createBrowserRecorder, createBrowserReplay } from './factories.js'
@@ -91,11 +93,9 @@ export class BrowserJourneyToolset {
 	readonly #limit: number
 	readonly #lifetime = new AbortController()
 	readonly #tools: readonly ToolInterface[]
-	#recorder: BrowserRecorderInterface | undefined
-	#recording: string | undefined
+	#session: BrowserJourneyRecord | undefined
 	#saved: string | undefined
-	#replaying: string | undefined
-	#replay: Promise<void> | undefined
+	readonly #replays = new Map<string, Promise<string>>()
 	#destroying: Promise<void> | undefined
 
 	constructor(
@@ -137,11 +137,12 @@ export class BrowserJourneyToolset {
 	}
 
 	get recording(): string | undefined {
-		return this.#recording
+		return this.#session?.closed === false ? this.#session.name : undefined
 	}
 
 	get replaying(): string | undefined {
-		return this.#replaying
+		const [name] = this.#replays.keys()
+		return name
 	}
 
 	destroy(): Promise<void> {
@@ -241,10 +242,11 @@ export class BrowserJourneyToolset {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
 		this.#idleReplay()
 		const name = readBrowserToolString(args, 'journey')
-		if (this.#recording !== undefined) {
-			const count = this.#recorder?.steps().length ?? 0
+		const active = this.recording
+		if (active !== undefined) {
+			const count = this.#session?.recorder?.steps().length ?? 0
 			const refusal =
-				name !== this.#recording
+				name !== active
 					? BROWSER_JOURNEY_RECORDING_REFUSAL
 					: count === 0
 						? BROWSER_JOURNEY_RECORD_EMPTY_REFUSAL
@@ -252,7 +254,7 @@ export class BrowserJourneyToolset {
 			throw new BrowserError(
 				'JOURNEY_RECORDING',
 				refusal
-					.replace('{name}', this.#recording)
+					.replace('{name}', active)
 					.replace('{count}', String(count))
 					.replace('{steps}', count === 1 ? 'step' : 'steps'),
 			)
@@ -264,34 +266,32 @@ export class BrowserJourneyToolset {
 				{ subject: 'toolset', key: 'journey' },
 			)
 		}
-		this.#recording = name
-		let recorder: BrowserRecorderInterface | undefined
-		try {
-			if ((await this.#read(name, signal)) !== undefined) {
-				throw new BrowserError(
-					'JOURNEY_SAVED',
-					`Journey ${JSON.stringify(name)} is saved already; do not call record for it again. Call journeys to list it, edit to change it, or replay to run it, or answer the user.`,
-					{ name },
-				)
-			}
-			this.#idleReplay()
-			signal.throwIfAborted()
-			if (this.#destroying !== undefined) throw this.#ended()
-			recorder = createBrowserRecorder(this.#toolset)
-			await recorder.start()
-			signal.throwIfAborted()
-			if (this.#destroying !== undefined) throw this.#ended()
-			this.#recorder = recorder
-		} catch (error) {
-			this.#recording = undefined
-			await recorder?.destroy()
-			throw error
-		}
+		const capture = new BrowserJourneyRecord(
+			name,
+			this.#openRecorder.bind(this, name, signal),
+			signal,
+		)
+		this.#session = capture
+		await capture.start()
 		return this.#view(
 			signal,
 			`Recording ${name}; each action you take is a step; call save when it is done.`,
 			note,
 		)
+	}
+
+	async #openRecorder(name: string, signal: AbortSignal): Promise<BrowserRecorderInterface> {
+		if ((await this.#read(name, signal)) !== undefined) {
+			throw new BrowserError(
+				'JOURNEY_SAVED',
+				`Journey ${JSON.stringify(name)} is saved already; do not call record for it again. Call journeys to list it, edit to change it, or replay to run it, or answer the user.`,
+				{ name },
+			)
+		}
+		this.#idleReplay()
+		signal.throwIfAborted()
+		if (this.#destroying !== undefined) throw this.#ended()
+		return createBrowserRecorder(this.#toolset)
 	}
 
 	async #save(
@@ -301,8 +301,9 @@ export class BrowserJourneyToolset {
 	): Promise<string> {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
 		const description = readBrowserToolString(args, 'description')
-		const recorder = this.#recorder
-		const name = this.#recording
+		const capture = this.#session
+		const recorder = capture?.recorder
+		const name = this.recording
 		if (recorder === undefined || name === undefined)
 			throw new BrowserError(
 				'JOURNEY_RECORDING',
@@ -324,14 +325,28 @@ export class BrowserJourneyToolset {
 				)
 			throw snapshot.error
 		}
-		let saved: BrowserJourneyRevision
+		const saved = await this.#saveJourney(snapshot.value, name, signal)
+		this.#saved = name
+		await capture?.destroy()
+		const count = saved.journey.steps.length
+		return this.#savedWindow(
+			signal,
+			name,
+			`Saved ${name} with ${count} ${count === 1 ? 'step' : 'steps'}.`,
+			note,
+		)
+	}
+
+	async #saveJourney(
+		journey: BrowserJourney,
+		name: string,
+		signal: AbortSignal,
+	): Promise<BrowserJourneyRevision> {
 		try {
-			saved = await this.#store.set(
+			return await this.#store.set(
 				{
-					...snapshot.value,
-					...(snapshot.value.start === undefined
-						? {}
-						: { start: this.#toolset.redact(snapshot.value.start) }),
+					...journey,
+					...(journey.start === undefined ? {} : { start: this.#toolset.redact(journey.start) }),
 				},
 				{ exclusive: true, signal },
 			)
@@ -351,27 +366,12 @@ export class BrowserJourneyToolset {
 				{ name },
 			)
 		}
-		this.#saved = name
-		if (this.#recorder === recorder) {
-			this.#recorder = undefined
-			this.#recording = undefined
-		}
-		await recorder.destroy()
-		const count = saved.journey.steps.length
-		return this.#savedWindow(
-			signal,
-			name,
-			`Saved ${name} with ${count} ${count === 1 ? 'step' : 'steps'}.`,
-			note,
-		)
 	}
 
 	async #listing(signal: AbortSignal): Promise<readonly BrowserLine[]> {
 		const lines: BrowserLine[] = []
 		const faults = new Set<string>()
-		let offset = 0
-		for (;;) {
-			const page = await this.#store.list({ signal, offset })
+		for await (const page of new BrowserJourneyPages(this.#store, signal, true)) {
 			const listings = page.entries.map((entry) => renderBrowserJourney(entry.journey))
 			for (const fault of page.faults) {
 				if (faults.has(fault.name)) continue
@@ -382,9 +382,8 @@ export class BrowserJourneyToolset {
 				for (const text of this.#toolset.redact(listing).split(/\r\n|\n/))
 					lines.push(...wrapBrowserLine({ spans: [{ category: 'text', text }] }))
 			}
-			offset += page.entries.length
-			if (!page.truncated || page.entries.length === 0) return lines
 		}
+		return lines
 	}
 
 	async #savedWindow(
@@ -431,7 +430,7 @@ export class BrowserJourneyToolset {
 		validateBrowserLines(from, to, lines.length)
 		if (lines.length === 0)
 			return boundBrowserText(
-				[note, BROWSER_JOURNEY_EMPTY_LISTING].filter(Boolean).join('\n'),
+				[note, BROWSER_JOURNEY_EMPTY_LIST].filter(Boolean).join('\n'),
 				this.#limit,
 				BROWSER_TOOL_CUT_FOOTER,
 			)
@@ -453,45 +452,19 @@ export class BrowserJourneyToolset {
 		note: string,
 	): Promise<string> {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
-		let name: string
-		if (args['journey'] !== undefined) name = readBrowserToolString(args, 'journey')
-		else {
-			const entries: BrowserJourneyRevision[] = []
-			const faults: BrowserStoreFault[] = []
-			let offset = 0
-			for (;;) {
-				const page = await this.#store.list({ signal, offset })
-				entries.push(...page.entries)
-				faults.push(...page.faults)
-				offset += page.entries.length
-				if (!page.truncated) break
-			}
-			const only = entries[0]
-			if (only === undefined || entries.length !== 1 || faults.length !== 0)
-				throw new BrowserError(
-					'ARGUMENT',
-					only === undefined && faults.length === 0
-						? BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL
-						: BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL.replace(
-								'{names}',
-								entries.map((entry) => JSON.stringify(entry.journey.name)).join(', '),
-							),
-					{ subject: 'toolset', key: 'journey' },
-				)
-			name = only.journey.name
-		}
-		let requests = args['edits']
-		if (isString(requests)) {
-			const text = requests
-			const parsed = attempt<unknown>(() => JSON.parse(text))
-			if (!parsed.success)
-				throw new BrowserError(
-					'ARGUMENT',
-					`The edits parameter is not valid JSON: ${normalizeBrowserJourneyReason(parsed.error)}; pass an array or a JSON string of the array.`,
-					{ subject: 'toolset', key: 'edits' },
-				)
-			requests = parsed.value
-		}
+		const name =
+			args['journey'] !== undefined
+				? readBrowserToolString(args, 'journey')
+				: await this.#selectJourney(signal)
+		const given = args['edits']
+		const parsed = attempt<unknown>(() => (isString(given) ? JSON.parse(given) : given))
+		if (!parsed.success)
+			throw new BrowserError(
+				'ARGUMENT',
+				`The edits parameter is not valid JSON: ${normalizeBrowserJourneyReason(parsed.error)}; pass an array or a JSON string of the array.`,
+				{ subject: 'toolset', key: 'edits' },
+			)
+		const requests = parsed.value
 		if (!isArray(requests)) {
 			throw new BrowserError(
 				'ARGUMENT',
@@ -501,16 +474,46 @@ export class BrowserJourneyToolset {
 		}
 		const revision = await this.#find(name, signal)
 		const edits = requests.map((request, index) => this.#convert(request, index + 1))
-		let edited: BrowserJourney
-		try {
-			edited = editBrowserJourney(revision.journey, edits)
-		} catch (error) {
+		const edited = attempt(() => editBrowserJourney(revision.journey, edits))
+		if (!edited.success) {
+			const error = edited.error
 			if (!isBrowserError(error) || error.code !== 'JOURNEY_EDIT') throw error
 			throw new BrowserError(error.code, `${error.message}; call journeys.`, error.context)
 		}
-		let saved: BrowserJourneyRevision
+		const saved = await this.#saveEdit(edited.value, revision, name, signal)
+		return this.#savedWindow(signal, saved.journey.name, `Edited ${name}.`, note)
+	}
+
+	async #selectJourney(signal: AbortSignal): Promise<string> {
+		const entries: BrowserJourneyRevision[] = []
+		const faults: BrowserStoreFault[] = []
+		for await (const page of new BrowserJourneyPages(this.#store, signal, false)) {
+			entries.push(...page.entries)
+			faults.push(...page.faults)
+		}
+		const only = entries[0]
+		if (only === undefined || entries.length !== 1 || faults.length !== 0)
+			throw new BrowserError(
+				'ARGUMENT',
+				only === undefined && faults.length === 0
+					? BROWSER_JOURNEY_EDIT_EMPTY_REFUSAL
+					: BROWSER_JOURNEY_EDIT_CHOICE_REFUSAL.replace(
+							'{names}',
+							entries.map((entry) => JSON.stringify(entry.journey.name)).join(', '),
+						),
+				{ subject: 'toolset', key: 'journey' },
+			)
+		return only.journey.name
+	}
+
+	async #saveEdit(
+		edited: BrowserJourney,
+		revision: BrowserJourneyRevision,
+		name: string,
+		signal: AbortSignal,
+	): Promise<BrowserJourneyRevision> {
 		try {
-			saved = await this.#store.set(edited, {
+			return await this.#store.set(edited, {
 				...(revision.revision === undefined ? {} : { revision: revision.revision }),
 				signal,
 			})
@@ -531,14 +534,13 @@ export class BrowserJourneyToolset {
 				{ name },
 			)
 		}
-		return this.#savedWindow(signal, saved.journey.name, `Edited ${name}.`, note)
 	}
 
 	async #forget(args: Readonly<Record<string, unknown>>, signal: AbortSignal): Promise<string> {
 		if (this.#readonly) throw new BrowserError('JOURNEY_READONLY', BROWSER_JOURNEY_READONLY_REFUSAL)
 		this.#idleReplay()
 		const name = readBrowserToolString(args, 'journey')
-		if (this.#recording === name)
+		if (this.recording === name)
 			throw new BrowserError(
 				'JOURNEY_RECORDING',
 				`Journey ${JSON.stringify(name)} is recording; call save first, or record another name.`,
@@ -546,11 +548,17 @@ export class BrowserJourneyToolset {
 			)
 		await this.#find(name, signal)
 		this.#idleReplay()
-		let count: number
+		const count = await this.#removeJourney(name, signal)
+		if (this.#saved === name) this.#saved = undefined
+		return `Forgot ${name} and its ${count} ${count === 1 ? 'run' : 'runs'}; the name is free to record again.`
+	}
+
+	async #removeJourney(name: string, signal: AbortSignal): Promise<number> {
 		try {
 			// Remove runs first so a failed removal leaves the saved name available for a retry.
-			count = (await this.#runs?.clear(name, { signal })) ?? 0
+			const count = (await this.#runs?.clear(name, { signal })) ?? 0
 			await this.#store.delete(name, { signal })
+			return count
 		} catch (error) {
 			if (signal.aborted) throw error
 			const code = isBrowserError(error) ? error.code : 'STORE_FILE'
@@ -562,8 +570,6 @@ export class BrowserJourneyToolset {
 				{ name },
 			)
 		}
-		if (this.#saved === name) this.#saved = undefined
-		return `Forgot ${name} and its ${count} ${count === 1 ? 'run' : 'runs'}; the name is free to record again.`
 	}
 
 	async #replayJourney(
@@ -581,41 +587,54 @@ export class BrowserJourneyToolset {
 			})
 		}
 		for (const [key, value] of Object.entries(given)) if (isString(value)) inputs[key] = value
-		if (this.#recording !== undefined) {
+		const recording = this.recording
+		if (recording !== undefined) {
 			throw new BrowserError(
 				'JOURNEY_RECORDING',
-				`Journey ${this.#recording} is recording; call save before you replay another.`,
-				{ name: this.#recording },
+				`Journey ${recording} is recording; call save before you replay another.`,
+				{ name: recording },
 			)
 		}
 		this.#idleReplay()
-		// The replay claims the toolset before its first await, so a second `replay` is refused
-		// rather than queued behind it.
-		this.#replaying = name
-		const finished = Promise.withResolvers<void>()
-		this.#replay = finished.promise
+		// Publish the replay before suspension so another replay is refused while it runs.
+		const replay = this.#performReplay(name, inputs, signal, note)
+		this.#replays.set(name, replay)
 		try {
-			const revision = await this.#find(name, signal)
-			let run: BrowserRun
-			try {
-				run = await createBrowserReplay(this.#toolset, revision, {
-					inputs,
-					...(this.#runs === undefined ? {} : { runs: this.#runs }),
-				}).execute({ signal })
-			} catch (error) {
-				throw this.#prepared(error, revision.journey)
-			}
-			return signal.aborted
-				? boundBrowserText(
-						[note, this.#toolset.redact(renderBrowserRun(run))].filter(Boolean).join('\n'),
-						this.#limit,
-						BROWSER_TOOL_CUT_FOOTER,
-					)
-				: this.#view(signal, renderBrowserRun(run), note)
+			return await replay
 		} finally {
-			this.#replaying = undefined
-			this.#replay = undefined
-			finished.resolve()
+			this.#replays.delete(name)
+		}
+	}
+
+	async #performReplay(
+		name: string,
+		inputs: Readonly<Record<string, string>>,
+		signal: AbortSignal,
+		note: string,
+	): Promise<string> {
+		const revision = await this.#find(name, signal)
+		const run = await this.#runJourney(revision, inputs, signal)
+		return signal.aborted
+			? boundBrowserText(
+					[note, this.#toolset.redact(renderBrowserRun(run))].filter(Boolean).join('\n'),
+					this.#limit,
+					BROWSER_TOOL_CUT_FOOTER,
+				)
+			: this.#view(signal, renderBrowserRun(run), note)
+	}
+
+	async #runJourney(
+		revision: BrowserJourneyRevision,
+		inputs: Readonly<Record<string, string>>,
+		signal: AbortSignal,
+	): Promise<BrowserRun> {
+		try {
+			return await createBrowserReplay(this.#toolset, revision, {
+				inputs,
+				...(this.#runs === undefined ? {} : { runs: this.#runs }),
+			}).execute({ signal })
+		} catch (error) {
+			throw this.#prepared(error, revision.journey)
 		}
 	}
 
@@ -676,14 +695,7 @@ export class BrowserJourneyToolset {
 	// Converts a wire edit's `ref` to a target from the current view, then checks the edit's own
 	// shape, so the pure editor receives a typed batch.
 	#convert(request: unknown, index: number): BrowserJourneyEdit {
-		let edit = request
-		if (isRecord(request) && request['operation'] === 'add' && isRecord(request['step'])) {
-			const { ref, ...step } = request['step']
-			if (ref !== undefined) edit = { ...request, step: { ...step, target: this.#target(ref) } }
-		} else if (isRecord(request) && request['operation'] === 'update') {
-			const { ref, ...update } = request
-			if (ref !== undefined) edit = { ...update, target: this.#target(ref) }
-		}
+		const edit = this.#resolveEdit(request)
 		try {
 			validateBrowserJourneyEdit(edit)
 		} catch (error) {
@@ -695,6 +707,17 @@ export class BrowserJourneyToolset {
 			)
 		}
 		return edit
+	}
+
+	#resolveEdit(request: unknown): unknown {
+		if (isRecord(request) && request['operation'] === 'add' && isRecord(request['step'])) {
+			const { ref, ...step } = request['step']
+			if (ref !== undefined) return { ...request, step: { ...step, target: this.#target(ref) } }
+		} else if (isRecord(request) && request['operation'] === 'update') {
+			const { ref, ...update } = request
+			if (ref !== undefined) return { ...update, target: this.#target(ref) }
+		}
+		return request
 	}
 
 	#target(ref: unknown): BrowserJourneyTarget {
@@ -764,15 +787,13 @@ export class BrowserJourneyToolset {
 		this.#lifetime.abort(this.#ended())
 		for (const tool of this.#tools)
 			if (this.#toolset.tools.tool(tool.name) === tool) this.#toolset.tools.remove(tool.name)
-		const recorder = this.#recorder
-		this.#recorder = undefined
-		this.#recording = undefined
-		await recorder?.destroy()
-		await this.#replay
+		await this.#session?.destroy()
+		await Promise.allSettled(this.#replays.values())
 	}
 
 	#idleReplay(): void {
-		const active = this.#replaying ?? this.#toolset.held
+		const [name] = this.#replays.keys()
+		const active = name ?? this.#toolset.held
 		if (active !== undefined)
 			throw new BrowserError(
 				'TOOLSET_BUSY',

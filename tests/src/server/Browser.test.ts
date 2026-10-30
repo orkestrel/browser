@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from '../../setup.js'
 /**
  * Browser façade tests.
  *
@@ -37,24 +38,24 @@ import { ignoreCall, throwListenerError } from '../../setup.js'
 
 // === Test scaffolding
 
-let server: CDPTestServerInterface | undefined
+const server = new BrowserFixtureValue<CDPTestServerInterface | undefined>(undefined)
 
 describe('Browser eager U2', () => {
 	it('reports the endpoint and pings across attachment lifecycle states', async () => {
-		server = await createCDPTestServer()
-		server.script('Browser.getVersion', { product: 'Fixture/1.0' })
-		server.script('Browser.close', {})
-		const browser = createBrowser({ cdp: { endpoint: server.endpoint } })
+		server.value = await createCDPTestServer()
+		server.required.script('Browser.getVersion', { product: 'Fixture/1.0' })
+		server.required.script('Browser.close', {})
+		const browser = createBrowser({ cdp: { endpoint: server.required.endpoint } })
 		try {
 			expect(browser.endpoint).toBeUndefined()
 			await expect(browser.ping()).rejects.toThrow(
 				expect.objectContaining({ code: 'DISCONNECTED' }),
 			)
 			await browser.connect()
-			expect(browser.endpoint).toBe(server.endpoint)
+			expect(browser.endpoint).toBe(server.required.endpoint)
 			await expect(browser.ping()).resolves.toBeUndefined()
 			expect(
-				server.received.filter((request) => request.method === 'Browser.getVersion'),
+				server.required.received.filter((request) => request.method === 'Browser.getVersion'),
 			).toHaveLength(1)
 			expect(browser.status).toBe('connected')
 			await browser.disconnect()
@@ -65,7 +66,7 @@ describe('Browser eager U2', () => {
 			await browser.connect()
 			browser.adopt()
 			await browser.disconnect()
-			expect(browser.endpoint).toBe(server.endpoint)
+			expect(browser.endpoint).toBe(server.required.endpoint)
 			await expect(browser.ping()).rejects.toThrow(
 				expect.objectContaining({ code: 'DISCONNECTED' }),
 			)
@@ -77,10 +78,10 @@ describe('Browser eager U2', () => {
 	})
 
 	it('uses the command deadline and honors ping cancellation', async () => {
-		server = await createCDPTestServer()
+		server.value = await createCDPTestServer()
 		// The same budget covers the local upgrade and target sync before the unanswered ping;
 		// allow a second for host scheduling while keeping the inherited-deadline proof bounded.
-		const browser = createBrowser({ cdp: { endpoint: server.endpoint }, timeout: 1000 })
+		const browser = createBrowser({ cdp: { endpoint: server.required.endpoint }, timeout: 1000 })
 		try {
 			await browser.connect()
 			await expect(browser.ping()).rejects.toMatchObject({ code: 'TIMEOUT' })
@@ -97,8 +98,8 @@ describe('Browser eager U2', () => {
 })
 
 afterEach(async () => {
-	await server?.close()
-	server = undefined
+	await server.value?.close()
+	server.value = undefined
 	// Safety net — SIGKILLs any fake browser process a failed/aborted test
 	// left running, in addition to each test's own explicit kills.
 	await destroyFakeBrowsers()
@@ -187,10 +188,10 @@ describe('Browser idle state', () => {
 	})
 
 	it('discover() finds a reachable in-process CDP endpoint', async () => {
-		server = await createCDPTestServer()
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		const result = await browser.discover()
-		expect(result.endpoint).toBe(server.endpoint)
+		expect(result.endpoint).toBe(server.required.endpoint)
 		expect(result.browser).toBe('Test/1.0')
 	})
 
@@ -293,9 +294,9 @@ describe('Browser abort handling', () => {
 
 describe('Browser connect() through CDP discovery', () => {
 	it('connects over CDP when the endpoint reports no targets', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		await browser.connect()
 
@@ -309,9 +310,9 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('connect() is no-op when already connected', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		await browser.connect()
 		expect(browser.status).toBe('connected')
@@ -322,9 +323,9 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('disconnect() detaches without closing the underlying connection state', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		await browser.connect()
 		expect(browser.status).toBe('connected')
@@ -341,21 +342,21 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('shares one connection attempt across concurrent callers', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		await Promise.all([browser.connect(), browser.connect()])
 
 		expect(browser.status).toBe('connected')
-		expect(server.sockets).toBe(1)
+		expect(server.required.sockets).toBe(1)
 		await browser.destroy()
 	})
 
 	it('final disconnect waits for a reconnect queued behind disconnect', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
 		const first = browser.disconnect()
@@ -369,9 +370,9 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('disconnect() called during connect waits and then detaches', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		const connecting = browser.connect()
 		const disconnecting = browser.disconnect()
@@ -383,10 +384,10 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('adopt() retains responsibility across disconnect and shuts down on destroy', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		server.script('Browser.close', {})
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		server.required.script('Browser.close', {})
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
 		browser.adopt()
@@ -399,7 +400,9 @@ describe('Browser connect() through CDP discovery', () => {
 		await browser.disconnect()
 		await browser.destroy()
 
-		expect(server.received.filter((message) => message.method === 'Browser.close')).toHaveLength(1)
+		expect(
+			server.required.received.filter((message) => message.method === 'Browser.close'),
+		).toHaveLength(1)
 		expect(browser.owned).toBeUndefined()
 	})
 
@@ -409,9 +412,9 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('destroy() cancels an in-flight connection without waiting for its full timeout', async () => {
-		server = await createCDPTestServer()
-		server.hang(true)
-		const browser = createBrowser({ cdp: { port: server.port }, timeout: 5000 })
+		server.value = await createCDPTestServer()
+		server.required.hang(true)
+		const browser = createBrowser({ cdp: { port: server.required.port }, timeout: 5000 })
 		const connecting = browser.connect().catch((error: unknown) => error)
 		const start = performance.now()
 
@@ -424,9 +427,9 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('can reconnect after disconnect', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		await browser.connect()
 		await browser.disconnect()
@@ -439,19 +442,21 @@ describe('Browser connect() through CDP discovery', () => {
 	})
 
 	it('disconnect() awaits the underlying socket close before resolving', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		await browser.connect()
-		expect(server.sockets).toBe(1)
+		expect(server.required.sockets).toBe(1)
 
 		await browser.disconnect()
 
-		await waitForCondition('the test server has no open sockets', () => server?.sockets === 0, {
-			budget: 500,
-		})
-		expect(server.sockets).toBe(0)
+		await waitForCondition(
+			'the test server has no open sockets',
+			() => server.value?.sockets === 0,
+			{ budget: 500 },
+		)
+		expect(server.required.sockets).toBe(0)
 
 		await browser.connect()
 		expect(browser.status).toBe('connected')
@@ -464,14 +469,14 @@ describe('Browser connect() through CDP discovery', () => {
 
 describe('Browser syncContexts()', () => {
 	it('syncs an existing page target into a context on connect', async () => {
-		server = await createCDPTestServer()
-		server.list([{ id: 'target-1', type: 'page', title: 'Existing', url: 'about:blank' }])
-		server.script('Target.attachToTarget', { sessionId: 'session-1' })
-		server.script('Page.enable', {})
-		server.script('Runtime.enable', {})
-		server.script('Target.detachFromTarget', {})
+		server.value = await createCDPTestServer()
+		server.required.list([{ id: 'target-1', type: 'page', title: 'Existing', url: 'about:blank' }])
+		server.required.script('Target.attachToTarget', { sessionId: 'session-1' })
+		server.required.script('Page.enable', {})
+		server.required.script('Runtime.enable', {})
+		server.required.script('Target.detachFromTarget', {})
 
-		const browser = createBrowser({ cdp: { port: server.port } })
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
 		expect(browser.contexts()).toHaveLength(1)
@@ -482,8 +487,8 @@ describe('Browser syncContexts()', () => {
 	})
 
 	it('syncs targets through an explicit endpoint without relying on separate host/port options', async () => {
-		server = await createCDPTestServer()
-		server.list([
+		server.value = await createCDPTestServer()
+		server.required.list([
 			{
 				id: 'endpoint-target',
 				type: 'page',
@@ -491,12 +496,12 @@ describe('Browser syncContexts()', () => {
 				url: 'https://example.com/endpoint',
 			},
 		])
-		server.script('Target.attachToTarget', { sessionId: 'endpoint-session' })
-		server.script('Page.enable', {})
-		server.script('Runtime.enable', {})
-		server.script('Target.detachFromTarget', {})
+		server.required.script('Target.attachToTarget', { sessionId: 'endpoint-session' })
+		server.required.script('Page.enable', {})
+		server.required.script('Runtime.enable', {})
+		server.required.script('Target.detachFromTarget', {})
 
-		const browser = createBrowser({ cdp: { endpoint: server.endpoint } })
+		const browser = createBrowser({ cdp: { endpoint: server.required.endpoint } })
 		await browser.connect()
 
 		expect(browser.context()?.page()?.url).toBe('https://example.com/endpoint')
@@ -505,10 +510,10 @@ describe('Browser syncContexts()', () => {
 	})
 
 	it('ignores non-page targets when syncing', async () => {
-		server = await createCDPTestServer()
-		server.list([{ id: 'worker-1', type: 'worker', title: '', url: '' }])
+		server.value = await createCDPTestServer()
+		server.required.list([{ id: 'worker-1', type: 'worker', title: '', url: '' }])
 
-		const browser = createBrowser({ cdp: { port: server.port } })
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
 		expect(browser.contexts()).toHaveLength(0)
@@ -521,51 +526,53 @@ describe('Browser syncContexts()', () => {
 
 describe('Browser create()', () => {
 	it('creates a page and emits the page event', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		server.script('Target.createTarget', { targetId: 'new-target' })
-		server.script('Target.attachToTarget', { sessionId: 'session-2' })
-		server.script('Page.enable', {})
-		server.script('Runtime.enable', {})
-		server.script('Target.detachFromTarget', {})
-		server.script('Target.closeTarget', {})
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		server.required.script('Target.createTarget', { targetId: 'new-target' })
+		server.required.script('Target.attachToTarget', { sessionId: 'session-2' })
+		server.required.script('Page.enable', {})
+		server.required.script('Runtime.enable', {})
+		server.required.script('Target.detachFromTarget', {})
+		server.required.script('Target.closeTarget', {})
 
-		const browser = createBrowser({ cdp: { port: server.port } })
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
-		let emitted: unknown
+		const emitted = new BrowserFixtureValue<unknown>(undefined)
 		browser.emitter.on('page', (page) => {
-			emitted = page
+			emitted.value = page
 		})
 
 		const page = await browser.create()
 
 		expect(page).toBeDefined()
-		expect(emitted).toBe(page)
+		expect(emitted.value).toBe(page)
 		expect(browser.contexts()).toHaveLength(1)
 
 		await browser.destroy()
 	})
 
 	it('sends viewport metrics when a viewport option is provided', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		server.script('Target.createTarget', { targetId: 'new-target' })
-		server.script('Target.attachToTarget', { sessionId: 'session-3' })
-		server.script('Page.enable', {})
-		server.script('Runtime.enable', {})
-		server.script('Emulation.setDeviceMetricsOverride', {})
-		server.script('Target.detachFromTarget', {})
-		server.script('Target.closeTarget', {})
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		server.required.script('Target.createTarget', { targetId: 'new-target' })
+		server.required.script('Target.attachToTarget', { sessionId: 'session-3' })
+		server.required.script('Page.enable', {})
+		server.required.script('Runtime.enable', {})
+		server.required.script('Emulation.setDeviceMetricsOverride', {})
+		server.required.script('Target.detachFromTarget', {})
+		server.required.script('Target.closeTarget', {})
 
 		const browser = createBrowser({
-			cdp: { port: server.port },
+			cdp: { port: server.required.port },
 			viewport: { width: 800, height: 600 },
 		})
 		await browser.connect()
 		await browser.create()
 
-		const metrics = server.received.find((m) => m.method === 'Emulation.setDeviceMetricsOverride')
+		const metrics = server.required.received.find(
+			(m) => m.method === 'Emulation.setDeviceMetricsOverride',
+		)
 		expect(metrics?.params?.['width']).toBe(800)
 		expect(metrics?.params?.['height']).toBe(600)
 
@@ -575,10 +582,10 @@ describe('Browser create()', () => {
 
 describe('Browser isolate()', () => {
 	it('C1 disposes a late context before browser teardown settles', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		server.script('Target.disposeBrowserContext', {})
-		const browser = createBrowser({ cdp: { endpoint: server.endpoint } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		server.required.script('Target.disposeBrowserContext', {})
+		const browser = createBrowser({ cdp: { endpoint: server.required.endpoint } })
 		await browser.connect()
 		const events = createRecorder<[BrowserContextInterface]>()
 		browser.emitter.on('context', events.handler)
@@ -587,21 +594,22 @@ describe('Browser isolate()', () => {
 			await waitForCondition(
 				'context creation reached CDP',
 				() =>
-					server?.received.some((message) => message.method === 'Target.createBrowserContext') ===
-					true,
+					server.value?.received.some(
+						(message) => message.method === 'Target.createBrowserContext',
+					) === true,
 			)
-			const request = server.received.find(
+			const request = server.required.received.find(
 				(message) => message.method === 'Target.createBrowserContext',
 			)
 			if (request === undefined) throw new Error('Missing creation')
 			const ending = browser.destroy()
-			server.reply(request.id, { browserContextId: 'late-context' })
+			server.required.reply(request.id, { browserContextId: 'late-context' })
 			expect(await creating).toMatchObject({ name: 'BrowserError', code: 'CLOSED' })
 			await ending
 			expect(events.count).toBe(0)
 			expect(browser.contexts()).toEqual([])
 			expect(
-				server.received
+				server.required.received
 					.filter((message) => message.method === 'Target.disposeBrowserContext')
 					.map((message) => message.params?.['browserContextId']),
 			).toEqual(['late-context'])
@@ -610,12 +618,12 @@ describe('Browser isolate()', () => {
 		}
 	})
 	it('creates and emits a configured incognito CDP context', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		server.script('Target.createBrowserContext', { browserContextId: 'context-1' })
-		server.script('Browser.setDownloadBehavior', {})
-		server.script('Target.disposeBrowserContext', {})
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		server.required.script('Target.createBrowserContext', { browserContextId: 'context-1' })
+		server.required.script('Browser.setDownloadBehavior', {})
+		server.required.script('Target.disposeBrowserContext', {})
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 		const contexts = createRecorder<[context: BrowserContextInterface]>()
 		browser.emitter.on('context', contexts.handler)
@@ -631,7 +639,8 @@ describe('Browser isolate()', () => {
 		expect(browser.contexts()).toContain(context)
 		expect(contexts.calls).toEqual([[context]])
 		expect(
-			server.received.find((message) => message.method === 'Target.createBrowserContext')?.params,
+			server.required.received.find((message) => message.method === 'Target.createBrowserContext')
+				?.params,
 		).toEqual({
 			disposeOnDetach: false,
 			proxyServer: 'http://proxy.test:8080',
@@ -639,7 +648,8 @@ describe('Browser isolate()', () => {
 			originsWithUniversalNetworkAccess: ['https://trusted.test'],
 		})
 		expect(
-			server.received.find((message) => message.method === 'Browser.setDownloadBehavior')?.params,
+			server.required.received.find((message) => message.method === 'Browser.setDownloadBehavior')
+				?.params,
 		).toEqual({
 			behavior: 'allowAndName',
 			browserContextId: 'context-1',
@@ -661,9 +671,9 @@ describe('Browser isolate()', () => {
 	})
 
 	it('rejects malformed context configuration before creating remote state', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
 		await expect(browser.isolate({ proxy: { server: '' } })).rejects.toThrow(
@@ -681,7 +691,7 @@ describe('Browser isolate()', () => {
 		)
 
 		expect(
-			server.received.some((message) => message.method === 'Target.createBrowserContext'),
+			server.required.received.some((message) => message.method === 'Target.createBrowserContext'),
 		).toBe(false)
 		await browser.destroy()
 	})
@@ -1096,9 +1106,9 @@ describe('Browser pid', () => {
 	})
 
 	it('is undefined for a CDP-attached connection', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 
 		await browser.connect()
 		expect(browser.pid).toBeUndefined()
@@ -1144,27 +1154,27 @@ describe('Browser pid', () => {
 
 describe('Browser destroy() ordering', () => {
 	it('emits destroy once and destroys the emitter last', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
-		let destroyCount = 0
+		const destroyCount = new BrowserFixtureValue(0)
 		browser.emitter.on('destroy', () => {
-			destroyCount++
+			destroyCount.value++
 		})
 
 		await browser.destroy()
 
-		expect(destroyCount).toBe(1)
+		expect(destroyCount.value).toBe(1)
 		expect(browser.emitter.destroyed).toBe(true)
 		expect(browser.status).not.toBe('connected')
 	})
 
 	it('destroy() after disconnect is idempotent', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 		await browser.disconnect()
 		await browser.destroy()
@@ -1258,10 +1268,13 @@ describe('Browser events', () => {
 	})
 
 	it('emits idle event on disconnect', async () => {
-		server = await createCDPTestServer()
-		server.list([])
+		server.value = await createCDPTestServer()
+		server.required.list([])
 		const idle = createRecorder<[]>()
-		const browser = createBrowser({ cdp: { port: server.port }, on: { idle: idle.handler } })
+		const browser = createBrowser({
+			cdp: { port: server.required.port },
+			on: { idle: idle.handler },
+		})
 		await new Promise((resolve) => queueMicrotask(() => resolve(undefined)))
 		const initialCount = idle.count
 
@@ -1309,17 +1322,17 @@ describe('Browser events', () => {
 
 describe('Browser external-disconnect detection', () => {
 	it('connected reads are side-effect-free while healthy', async () => {
-		server = await createCDPTestServer()
-		server.list([])
+		server.value = await createCDPTestServer()
+		server.required.list([])
 		const disconnect = createRecorder<[]>()
 		const browser = createBrowser({
-			cdp: { port: server.port },
+			cdp: { port: server.required.port },
 			on: { disconnect: disconnect.handler },
 		})
 		await browser.connect()
 
-		for (let i = 0; i < 20; i++) {
-			expect(browser.status).toBe('connected')
+		for (const current of Array.from({ length: 20 }, () => browser)) {
+			expect(current.status).toBe('connected')
 		}
 		expect(disconnect.count).toBe(0)
 		expect(browser.status).toBe('connected')
@@ -1329,7 +1342,7 @@ describe('Browser external-disconnect detection', () => {
 
 	it('transport close triggers exactly one disconnect without reading the status first', async () => {
 		const testServer = await createCDPTestServer()
-		server = testServer
+		server.value = testServer
 		testServer.list([])
 		const disconnect = createRecorder<[]>()
 		const browser = createBrowser({
@@ -1339,7 +1352,7 @@ describe('Browser external-disconnect detection', () => {
 		await browser.connect()
 
 		await testServer.close()
-		server = undefined
+		server.value = undefined
 		await waitForCondition(
 			'the browser reported one disconnect after the server closed',
 			() => disconnect.count === 1,
@@ -1511,55 +1524,57 @@ describe('Browser external-disconnect detection', () => {
 
 describe('Browser destroy()/close() matrix', () => {
 	it('destroy() on a CDP-attached browser sends no Target.closeTarget, and the server stays usable', async () => {
-		server = await createCDPTestServer()
-		server.list([{ id: 'target-1', type: 'page', title: 'Existing', url: 'about:blank' }])
-		server.script('Target.attachToTarget', { sessionId: 'session-1' })
-		server.script('Page.enable', {})
-		server.script('Runtime.enable', {})
-		server.script('Target.detachFromTarget', {})
+		server.value = await createCDPTestServer()
+		server.required.list([{ id: 'target-1', type: 'page', title: 'Existing', url: 'about:blank' }])
+		server.required.script('Target.attachToTarget', { sessionId: 'session-1' })
+		server.required.script('Page.enable', {})
+		server.required.script('Runtime.enable', {})
+		server.required.script('Target.detachFromTarget', {})
 
-		const browser = createBrowser({ cdp: { port: server.port } })
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 		expect(browser.contexts()).toHaveLength(1)
 
 		await browser.destroy()
 
-		const closeTargetCalls = server.received.filter((m) => m.method === 'Target.closeTarget')
+		const closeTargetCalls = server.required.received.filter(
+			(m) => m.method === 'Target.closeTarget',
+		)
 		expect(closeTargetCalls).toHaveLength(0)
 		// destroy() must NEVER send a remote Browser.close — it is a local
 		// detach/teardown only; Browser.close is sent EXCLUSIVELY by close().
-		expect(server.received.some((m) => m.method === 'Browser.close')).toBe(false)
+		expect(server.required.received.some((m) => m.method === 'Browser.close')).toBe(false)
 
 		// The server (standing in for "another client's shared browser") stays usable.
-		const other = createBrowser({ cdp: { port: server.port } })
+		const other = createBrowser({ cdp: { port: server.required.port } })
 		await other.connect()
 		expect(other.status).toBe('connected')
 		await other.destroy()
 	})
 
 	it('disconnect() on an attached session sends no Browser.close', async () => {
-		server = await createCDPTestServer()
-		server.list([])
+		server.value = await createCDPTestServer()
+		server.required.list([])
 
-		const browser = createBrowser({ cdp: { port: server.port } })
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 		await browser.disconnect()
 
-		expect(server.received.some((m) => m.method === 'Browser.close')).toBe(false)
+		expect(server.required.received.some((m) => m.method === 'Browser.close')).toBe(false)
 		expect(browser.status).not.toBe('connected')
 	})
 
 	it('close() on an attached session sends Browser.close and cleans up locally', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		server.script('Browser.close', {})
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		server.required.script('Browser.close', {})
 
-		const browser = createBrowser({ cdp: { port: server.port } })
+		const browser = createBrowser({ cdp: { port: server.required.port } })
 		await browser.connect()
 
 		await browser.close()
 
-		const closeCalls = server.received.filter((m) => m.method === 'Browser.close')
+		const closeCalls = server.required.received.filter((m) => m.method === 'Browser.close')
 		expect(closeCalls).toHaveLength(1)
 		expect(browser.status).not.toBe('connected')
 		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CLOSED' }))
@@ -1621,18 +1636,21 @@ describe('Browser constructor engine seeding', () => {
 
 describe('Browser cdp.discover option', () => {
 	it('rejects with a coded error naming the occupied port and does not attach', async () => {
-		server = await createCDPTestServer()
-		server.list([])
+		server.value = await createCDPTestServer()
+		server.required.list([])
 
 		const browser = createBrowser({
-			cdp: { port: server.port, discover: false },
+			cdp: { port: server.required.port, discover: false },
 			timeout: 2000,
 		})
 
 		await expect(browser.connect()).rejects.toThrow(expect.objectContaining({ code: 'CONNECTION' }))
 		await expect(
-			createBrowser({ cdp: { port: server.port, discover: false }, timeout: 2000 }).connect(),
-		).rejects.toMatchObject({ context: { port: server.port } })
+			createBrowser({
+				cdp: { port: server.required.port, discover: false },
+				timeout: 2000,
+			}).connect(),
+		).rejects.toMatchObject({ context: { port: server.required.port } })
 		expect(browser.status).not.toBe('connected')
 		expect(browser.connection).toBeUndefined()
 	})
@@ -1800,12 +1818,12 @@ describe('Browser destroy() kill escalation', () => {
 
 describe('Browser host option', () => {
 	it('honors an explicit host for discovery and connection', async () => {
-		server = await createCDPTestServer()
-		server.list([])
-		const browser = createBrowser({ cdp: { port: server.port, host: '127.0.0.1' } })
+		server.value = await createCDPTestServer()
+		server.required.list([])
+		const browser = createBrowser({ cdp: { port: server.required.port, host: '127.0.0.1' } })
 
 		const discovery = await browser.discover()
-		expect(discovery.endpoint).toBe(server.endpoint)
+		expect(discovery.endpoint).toBe(server.required.endpoint)
 
 		await browser.connect()
 		expect(browser.status).toBe('connected')

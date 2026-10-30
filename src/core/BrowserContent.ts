@@ -2,8 +2,8 @@ import type {
 	BrowserEpochFunction,
 	BrowserReadOptions,
 	BrowserReadResult,
-	BrowserReadingInput,
-	BrowserReadingInterface,
+	BrowserContentInput,
+	BrowserContentInterface,
 } from './types.js'
 import type { HTMLInterface } from '@orkestrel/html'
 import { extractBrowserSlice } from './helpers.js'
@@ -16,9 +16,9 @@ import { htmlToMarkdown, renderMarkdown } from '@orkestrel/markdown'
  *
  * @example
  * ```ts
- * import { BrowserReading } from '@orkestrel/browser'
+ * import { BrowserContent } from '@orkestrel/browser'
  *
- * const reading = new BrowserReading({
+ * const reading = new BrowserContent({
  * 	url: 'https://example.com/',
  * 	title: 'Example',
  * 	html: '<nav>Menu</nav><main><p>Body</p></main>',
@@ -26,7 +26,7 @@ import { htmlToMarkdown, renderMarkdown } from '@orkestrel/markdown'
  * reading.markdown({ distill: true }) // { text: 'Body', offset: 0, total: 4 }
  * ```
  */
-export class BrowserReading implements BrowserReadingInterface {
+export class BrowserContent implements BrowserContentInterface {
 	readonly #url: string
 	readonly #title: string
 	readonly #html: HTMLInterface
@@ -37,7 +37,7 @@ export class BrowserReading implements BrowserReadingInterface {
 	readonly #texts: Map<boolean, string> = new Map()
 	#distilled: HTMLInterface | undefined
 
-	constructor(input: BrowserReadingInput) {
+	constructor(input: BrowserContentInput) {
 		this.#url = input.url
 		this.#title = input.title
 		this.#html = createHTML(input.html)
@@ -63,21 +63,19 @@ export class BrowserReading implements BrowserReadingInterface {
 
 	markdown(options?: BrowserReadOptions): BrowserReadResult {
 		const distill = options?.distill ?? false
-		let text = this.#markdowns.get(distill)
-		if (text === undefined) {
-			text = renderMarkdown(htmlToMarkdown(this.#source(distill).document))
-			this.#markdowns.set(distill, text)
-		}
+		const cached = this.#markdowns.get(distill)
+		if (cached !== undefined) return extractBrowserSlice(cached, options?.offset, options?.limit)
+		const text = renderMarkdown(htmlToMarkdown(this.#source(distill).document))
+		this.#markdowns.set(distill, text)
 		return extractBrowserSlice(text, options?.offset, options?.limit)
 	}
 
 	text(options?: BrowserReadOptions): BrowserReadResult {
 		const distill = options?.distill ?? false
-		let text = this.#texts.get(distill)
-		if (text === undefined) {
-			text = renderText(this.#source(distill).document)
-			this.#texts.set(distill, text)
-		}
+		const cached = this.#texts.get(distill)
+		if (cached !== undefined) return extractBrowserSlice(cached, options?.offset, options?.limit)
+		const text = renderText(this.#source(distill).document)
+		this.#texts.set(distill, text)
 		return extractBrowserSlice(text, options?.offset, options?.limit)
 	}
 

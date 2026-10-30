@@ -37,31 +37,44 @@ export function compileQueryWaitExpression(
 	predicate?: string,
 ): string {
 	return `new Promise((resolve) => {
-	let task
-	let timer
-	let observer
-	const events = new AbortController()
-	const finish = (value) => {
-		observer?.disconnect()
-		events.abort()
-		if (task !== undefined) clearTimeout(task)
-		clearTimeout(timer)
+	new (class {
+	#resolve
+	#events = new AbortController()
+	#task
+	#timer
+	#observer
+
+	constructor(resolve) {
+		this.#resolve = resolve
+		globalThis[${JSON.stringify(key)}] = this.#finish.bind(this, false)
+		this.#observer = new MutationObserver(this.#schedule.bind(this))
+		this.#observer.observe(document, { childList: true, attributes: true, characterData: true, subtree: true })
+		for (const name of ${JSON.stringify(BROWSER_WAIT_EVENTS)}) document.addEventListener(name, this.#schedule.bind(this), { capture: true, signal: this.#events.signal })
+		this.#timer = setTimeout(this.#finish.bind(this, false), ${JSON.stringify(deadline)})
+		${predicate === undefined ? '' : 'this.#check()'}
+	}
+
+	#finish(value) {
+		this.#observer?.disconnect()
+		this.#events.abort()
+		if (this.#task !== undefined) clearTimeout(this.#task)
+		clearTimeout(this.#timer)
 		delete globalThis[${JSON.stringify(key)}]
-		resolve(value)
+		this.#resolve(value)
 	}
-	const check = () => {
-		task = undefined
-		if (${predicate ?? 'true'}) finish(true)
+
+	#check() {
+		this.#task = undefined
+		if (${predicate ?? 'true'}) this.#finish(true)
 	}
-	globalThis[${JSON.stringify(key)}] = () => finish(false)
-	const schedule = () => {
-		if (task === undefined) task = setTimeout(check, 0)
+
+	#schedule() {
+		if (this.#task === undefined) {
+			const check = this.#check.bind(this)
+			this.#task = setTimeout(check, 0)
+		}
 	}
-	observer = new MutationObserver(schedule)
-	observer.observe(document, { childList: true, attributes: true, characterData: true, subtree: true })
-	for (const name of ${JSON.stringify(BROWSER_WAIT_EVENTS)}) document.addEventListener(name, schedule, { capture: true, signal: events.signal })
-	timer = setTimeout(() => finish(false), ${JSON.stringify(deadline)})
-	${predicate === undefined ? '' : 'check()'}
+})(resolve)
 })`
 }
 
@@ -290,23 +303,29 @@ export function compileBrowserBindingSource(name: string): string {
 	if (globalThis[key]) return
 	const send = globalThis[name]
 	if (typeof send !== 'function') throw new Error('Browser binding transport is unavailable')
-	const pending = new Map()
-	let sequence = 0
-	globalThis[key] = {
-		resolve(id, success, value) {
-			const entry = pending.get(id)
+	const binding = new (class {
+		#pending = new Map()
+		#sequence = 0
+		resolve = this.#resolve.bind(this)
+
+		#resolve(id, success, value) {
+			const entry = this.#pending.get(id)
 			if (!entry) return
-			pending.delete(id)
+			this.#pending.delete(id)
 			if (success) entry.resolve(value)
 			else entry.reject(new Error(String(value)))
-		},
-	}
-	globalThis[name] = (...args) => new Promise((resolve, reject) => {
-		sequence += 1
-		const id = String(sequence)
-		pending.set(id, { resolve, reject })
-		send(JSON.stringify({ id, name, args }))
-	})
+		}
+
+		call(...args) {
+			return new Promise((resolve, reject) => {
+				const id = String(++this.#sequence)
+				this.#pending.set(id, { resolve, reject })
+				send(JSON.stringify({ id, name, args }))
+			})
+		}
+	})()
+	globalThis[key] = binding
+	globalThis[name] = binding.call.bind(binding)
 })()`
 }
 
@@ -478,7 +497,7 @@ ${expression}
  * Compiles the in-page function that reads the document's URL, title, and rendered HTML.
  *
  * @remarks
- * The optional root defaults to `document.documentElement`. {@link BrowserReadingInput}
+ * The optional root defaults to `document.documentElement`. {@link BrowserContentInput}
  * defines its inert capture, lowering, redaction, and limits. A missing root yields empty HTML.
  * Call it inside {@link compileGuardedEvaluateExpression} to bound the final serialized result
  * under {@link BROWSER_RESULT_LIMIT}.
@@ -487,34 +506,85 @@ ${expression}
  */
 export function compileReadFunction(): string {
 	return `function(node = document.documentElement) {
-	const owner = node?.ownerDocument ?? document
-	if (!node) return { url: owner.URL, title: owner.title, html: '' }
-	const capture = { url: owner.URL, title: owner.title, html: '' }
-	const view = owner.defaultView
-	const rendered = view !== null && node.isConnected
-	const inert = owner.implementation.createHTMLDocument('')
-	let root = inert.importNode(node, true)
-	const pending = [{ live: node, twin: root, visited: false }]
-	if (rendered) {
-		let child = node
-		for (
-			let parent = node;
-			parent?.ownerDocument === owner;
-			parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
-		) {
-			const style = view.getComputedStyle(parent)
-			const outside =
-				parent !== node &&
-				(style.contentVisibility === 'hidden' ||
-					['canvas', 'video', 'audio'].includes(parent.localName) ||
-					parent instanceof view.HTMLInputElement ||
-					parent instanceof view.HTMLTextAreaElement ||
-					parent instanceof view.HTMLOptionElement ||
-					(parent.namespaceURI === 'http://www.w3.org/2000/svg' &&
-						parent.localName === 'switch' &&
-						child !== (Array.from(parent.children).find((candidate) => candidate.getClientRects().length > 0) ?? parent.firstElementChild)) ||
-					((parent instanceof view.HTMLSelectElement || parent instanceof view.HTMLOptGroupElement) &&
-						!(node instanceof view.HTMLOptionElement || node instanceof view.HTMLOptGroupElement)) ||
+	return new (class {
+		#root
+		#child
+		#parent
+		#element
+		#counterpart
+		#mirror
+		#omitted
+		#fragments
+		#lines
+		#container
+
+		capture(node) {
+			const owner = node?.ownerDocument ?? document
+			if (!node) return { url: owner.URL, title: owner.title, html: '' }
+			const capture = { url: owner.URL, title: owner.title, html: '' }
+			const view = owner.defaultView
+			const rendered = view !== null && node.isConnected
+			const inert = owner.implementation.createHTMLDocument('')
+			this.#root = inert.importNode(node, true)
+			const pending = [{ live: node, twin: this.#root, visited: false }]
+			if (rendered) {
+				this.#child = node
+				for (
+					this.#parent = node;
+					this.#parent?.ownerDocument === owner;
+					this.#parent = this.#parent.assignedSlot ?? this.#parent.parentElement ?? (this.#parent.parentNode instanceof view.ShadowRoot ? this.#parent.parentNode.host : null)
+				) {
+					const style = view.getComputedStyle(this.#parent)
+					const outside =
+						this.#parent !== node &&
+						(style.contentVisibility === 'hidden' ||
+							['canvas', 'video', 'audio'].includes(this.#parent.localName) ||
+							this.#parent instanceof view.HTMLInputElement ||
+							this.#parent instanceof view.HTMLTextAreaElement ||
+							this.#parent instanceof view.HTMLOptionElement ||
+							(this.#parent.namespaceURI === 'http://www.w3.org/2000/svg' &&
+								this.#parent.localName === 'switch' &&
+								this.#child !== (Array.from(this.#parent.children).find((candidate) => candidate.getClientRects().length > 0) ?? this.#parent.firstElementChild)) ||
+							((this.#parent instanceof view.HTMLSelectElement || this.#parent instanceof view.HTMLOptGroupElement) &&
+								!(node instanceof view.HTMLOptionElement || node instanceof view.HTMLOptGroupElement)) ||
+							[
+								'script',
+								'style',
+								'template',
+								'frame',
+								'frameset',
+								'iframe',
+								'object',
+								'embed',
+								'applet',
+								'noscript',
+								'meta',
+								'link',
+								'base',
+								'math',
+							].includes(this.#parent.localName) ||
+							(this.#parent.localName === 'details' &&
+								!this.#parent.hasAttribute('open') &&
+								this.#child !== this.#parent.querySelector(':scope > summary')))
+					const unassigned =
+						this.#child.parentElement?.shadowRoot !== null &&
+						this.#child.parentElement?.shadowRoot !== undefined &&
+						this.#child.assignedSlot === null
+					if (style.display === 'none' || outside || unassigned) {
+						this.#root = undefined
+						pending.length = 0
+						break
+					}
+					this.#child = this.#parent
+				}
+			}
+			while (pending.length > 0) {
+				const entry = pending.pop()
+				if (entry === undefined) continue
+				const { live, twin, visited } = entry
+				const tag = live.localName
+				const input = tag === 'input' ? (live.getAttribute('type')?.toLowerCase() ?? 'text') : ''
+				if (
 					[
 						'script',
 						'style',
@@ -530,282 +600,246 @@ export function compileReadFunction(): string {
 						'link',
 						'base',
 						'math',
-					].includes(parent.localName) ||
-					(parent.localName === 'details' &&
-						!parent.hasAttribute('open') &&
-						child !== parent.querySelector(':scope > summary')))
-			const unassigned =
-				child.parentElement?.shadowRoot !== null &&
-				child.parentElement?.shadowRoot !== undefined &&
-				child.assignedSlot === null
-			if (style.display === 'none' || outside || unassigned) {
-				root = undefined
-				pending.length = 0
-				break
-			}
-			child = parent
-		}
-	}
-	while (pending.length > 0) {
-		const entry = pending.pop()
-		if (entry === undefined) continue
-		const { live, twin, visited } = entry
-		const tag = live.localName
-		const input = tag === 'input' ? (live.getAttribute('type')?.toLowerCase() ?? 'text') : ''
-		if (
-			[
-				'script',
-				'style',
-				'template',
-				'frame',
-				'frameset',
-				'iframe',
-				'object',
-				'embed',
-				'applet',
-				'noscript',
-				'meta',
-				'link',
-				'base',
-				'math',
-			].includes(tag) ||
-			(tag === 'input' && ['password', 'hidden'].includes(input))
-		) {
-			twin.remove()
-			if (twin === root) root = undefined
-			continue
-		}
-		const style = entry.style ?? (rendered ? view.getComputedStyle(live) : undefined)
-		const invisible = style?.visibility === 'hidden' || style?.visibility === 'collapse'
-		if (style?.display === 'none' || (invisible && !live.hasChildNodes())) {
-			twin.remove()
-			if (twin === root) root = undefined
-			continue
-		}
-		if (!visited) {
-			pending.push({ live, twin, style, visited: true })
-			if (rendered) {
-				twin.removeAttribute('hidden')
-				twin.removeAttribute('aria-hidden')
-			}
-			if (
-				rendered &&
-				(live instanceof view.HTMLAnchorElement || live instanceof view.HTMLAreaElement) &&
-				live.hasAttribute('href')
-			)
-				twin.setAttribute('href', live.href)
-			if (style?.contentVisibility === 'hidden' || ['canvas', 'video', 'audio'].includes(tag)) {
-				twin.replaceChildren()
-				continue
-			}
-			if (
-				rendered &&
-				(live instanceof view.HTMLInputElement ||
-					live instanceof view.HTMLTextAreaElement ||
+					].includes(tag) ||
+					(tag === 'input' && ['password', 'hidden'].includes(input))
+				) {
+					twin.remove()
+					if (twin === this.#root) this.#root = undefined
+					continue
+				}
+				const style = entry.style ?? (rendered ? view.getComputedStyle(live) : undefined)
+				const invisible = style?.visibility === 'hidden' || style?.visibility === 'collapse'
+				if (style?.display === 'none' || (invisible && !live.hasChildNodes())) {
+					twin.remove()
+					if (twin === this.#root) this.#root = undefined
+					continue
+				}
+				if (!visited) {
+					pending.push({ live, twin, style, visited: true })
+					if (rendered) {
+						twin.removeAttribute('hidden')
+						twin.removeAttribute('aria-hidden')
+					}
+					if (
+						rendered &&
+						(live instanceof view.HTMLAnchorElement || live instanceof view.HTMLAreaElement) &&
+						live.hasAttribute('href')
+					)
+						twin.setAttribute('href', live.href)
+					if (style?.contentVisibility === 'hidden' || ['canvas', 'video', 'audio'].includes(tag)) {
+						twin.replaceChildren()
+						continue
+					}
+					if (
+						rendered &&
+						(live instanceof view.HTMLInputElement ||
+							live instanceof view.HTMLTextAreaElement ||
+							live instanceof view.HTMLSelectElement ||
+							live instanceof view.HTMLOptionElement ||
+							live instanceof view.HTMLOptGroupElement)
+					)
+						continue
+					const summary =
+						tag === 'details' && !live.hasAttribute('open')
+							? live.querySelector(':scope > summary')
+							: undefined
+
+					// Native layout selects the switch branch after its conditional processing tests.
+					const conditional = tag === 'switch' && live.namespaceURI === 'http://www.w3.org/2000/svg'
+					const branch = rendered && conditional
+						? (Array.from(live.children).find((candidate) => candidate.getClientRects().length > 0) ?? live.firstElementChild)
+						: undefined
+					// Save sibling pointers before pruning invalidates the copied this.#child collections.
+					this.#element = live.lastElementChild
+					this.#counterpart = twin.lastElementChild
+					this.#child = live.lastChild
+					this.#mirror = twin.lastChild
+					while (this.#child !== null && this.#mirror !== null) {
+						const previous = this.#child.previousSibling
+						const previousMirror = this.#mirror.previousSibling
+						const previousElement = this.#element?.previousElementSibling ?? null
+						const previousCounterpart = this.#counterpart?.previousElementSibling ?? null
+						this.#omitted = rendered && ((summary !== undefined && this.#child !== summary) || (conditional && this.#child !== branch))
+						if (rendered && live.shadowRoot !== null) {
+							const slot =
+								this.#child instanceof view.Element || this.#child instanceof view.Text ? this.#child.assignedSlot : null
+							if (slot === null) this.#omitted = true
+							else {
+								for (
+									this.#parent = slot;
+									this.#parent !== null && this.#parent !== live;
+									this.#parent = this.#parent.assignedSlot ?? this.#parent.parentElement ?? (this.#parent.parentNode instanceof view.ShadowRoot ? this.#parent.parentNode.host : null)
+								) {
+									if (view.getComputedStyle(this.#parent).display === 'none') this.#omitted = true
+								}
+							}
+						}
+						if (this.#omitted || (this.#child.nodeType === 3 && invisible)) this.#mirror.parentNode?.removeChild(this.#mirror)
+						else if (this.#child.nodeType === 1) {
+							// Element sibling pointers retain their type across windowless owner realms.
+							if (this.#element !== null && this.#counterpart !== null)
+								pending.push({ live: this.#element, twin: this.#counterpart, visited: false })
+						}
+						if (this.#child.nodeType === 1) {
+							this.#element = previousElement
+							this.#counterpart = previousCounterpart
+						}
+						this.#child = previous
+						this.#mirror = previousMirror
+					}
+					continue
+				}
+				if (!rendered || style?.contentVisibility === 'hidden') continue
+				if (
+					['div', 'summary', 'details'].includes(tag) &&
+					!style?.display.startsWith('inline') &&
+					style?.display !== 'contents' &&
+					twin.hasChildNodes()
+				) {
+					twin.prepend(inert.createElement('br'))
+					twin.append(inert.createElement('br'))
+				}
+				this.#fragments = undefined
+				this.#lines = undefined
+				this.#container = false
+				if (live instanceof view.HTMLInputElement) {
+					this.#lines = []
+					if (['text', 'email', 'search', 'tel', 'url', 'number'].includes(live.type)) {
+						if (live.type !== 'number' || !live.validity.badInput) {
+							const placeholder = view.getComputedStyle(live, '::placeholder')
+							this.#lines = [
+								live.value ||
+									(live.matches(':placeholder-shown') &&
+									placeholder.visibility === 'visible' &&
+									placeholder.opacity !== '0' &&
+									placeholder.color !== 'rgba(0, 0, 0, 0)'
+										? live.placeholder
+										: ''),
+							]
+						}
+					} else if (['submit', 'reset', 'button'].includes(live.type)) this.#lines = [live.value]
+					else if (live.type === 'file' && live.files?.length === 1)
+						this.#lines = Array.from(live.files ?? [], (file) => file.name)
+					else if (live.type === 'image' && live.getAttribute('aria-hidden') !== 'true')
+						this.#lines = [live.getAttribute('aria-label')?.trim() || live.alt]
+				} else if (live instanceof view.HTMLTextAreaElement) {
+					const placeholder = view.getComputedStyle(live, '::placeholder')
+					const value =
+						live.value ||
+						(live.matches(':placeholder-shown') &&
+						placeholder.visibility === 'visible' &&
+						placeholder.opacity !== '0' &&
+						placeholder.color !== 'rgba(0, 0, 0, 0)'
+							? live.placeholder
+							: '')
+					this.#lines = value.split(/\\r?\\n/)
+				} else if (
 					live instanceof view.HTMLSelectElement ||
 					live instanceof view.HTMLOptionElement ||
-					live instanceof view.HTMLOptGroupElement)
-			)
-				continue
-			const summary =
-				tag === 'details' && !live.hasAttribute('open')
-					? live.querySelector(':scope > summary')
-					: undefined
-
-			// Native layout selects the switch branch after its conditional processing tests.
-			const conditional = tag === 'switch' && live.namespaceURI === 'http://www.w3.org/2000/svg'
-			const branch = rendered && conditional
-				? (Array.from(live.children).find((candidate) => candidate.getClientRects().length > 0) ?? live.firstElementChild)
-				: undefined
-			// Save sibling pointers before pruning invalidates the copied child collections.
-			let element = live.lastElementChild
-			let counterpart = twin.lastElementChild
-			let child = live.lastChild
-			let mirror = twin.lastChild
-			while (child !== null && mirror !== null) {
-				const previous = child.previousSibling
-				const previousMirror = mirror.previousSibling
-				const previousElement = element?.previousElementSibling ?? null
-				const previousCounterpart = counterpart?.previousElementSibling ?? null
-				let omitted = rendered && ((summary !== undefined && child !== summary) || (conditional && child !== branch))
-				if (rendered && live.shadowRoot !== null) {
-					const slot =
-						child instanceof view.Element || child instanceof view.Text ? child.assignedSlot : null
-					if (slot === null) omitted = true
-					else {
-						for (
-							let parent = slot;
-							parent !== null && parent !== live;
-							parent = parent.assignedSlot ?? parent.parentElement ?? (parent.parentNode instanceof view.ShadowRoot ? parent.parentNode.host : null)
-						) {
-							if (view.getComputedStyle(parent).display === 'none') omitted = true
+					live instanceof view.HTMLOptGroupElement
+				) {
+					this.#lines = []
+					const select = live instanceof view.HTMLSelectElement ? live : live.closest('select')
+					if (select !== null) {
+						if (!select.multiple && select.size <= 1) {
+							const option = select.selectedOptions[0]
+							if (option !== undefined && (live === select || live === option || live.contains(option)))
+								this.#lines.push(option.label)
+						} else {
+							const box = select.getBoundingClientRect()
+							const top = box.top + select.clientTop
+							const bottom = top + select.clientHeight
+							const rows =
+								live === select
+									? select.querySelectorAll('option,optgroup')
+									: [live, ...live.querySelectorAll('option')]
+							for (const row of rows) {
+								const rowStyle = view.getComputedStyle(row)
+								const groupStyle =
+									row.parentElement instanceof view.HTMLOptGroupElement
+										? view.getComputedStyle(row.parentElement)
+										: undefined
+								if (
+									rowStyle.display === 'none' ||
+									rowStyle.visibility !== 'visible' ||
+									groupStyle?.display === 'none'
+								)
+									continue
+								const rect = row.getBoundingClientRect()
+								// The group box includes its options; its caption ends where the first row starts.
+								const end =
+									row instanceof view.HTMLOptGroupElement
+										? (Array.from(row.querySelectorAll('option'))
+												.find((option) => option.getClientRects().length > 0)
+												?.getBoundingClientRect().top ?? rect.bottom)
+										: rect.bottom
+								if (
+									end > top &&
+									rect.top < bottom &&
+									rect.right > box.left + select.clientLeft &&
+									rect.left < box.left + select.clientLeft + select.clientWidth &&
+									(row instanceof view.HTMLOptionElement || row instanceof view.HTMLOptGroupElement)
+								)
+									this.#lines.push(row.label)
+							}
+						}
+					}
+				} else if (tag === 'svg') {
+					if (twin.parentElement?.closest('svg, foreignObject')?.localName === 'svg') continue
+					this.#lines = []
+					this.#fragments = []
+					for (const content of twin.querySelectorAll('text, foreignObject')) {
+						if (content.parentElement?.closest('svg, foreignObject')?.localName === 'foreignObject') continue
+						if (content.localName === 'text' && content.parentElement?.closest('text')?.closest('svg') === content.closest('svg')) continue
+						if (content.localName === 'foreignObject') this.#fragments.push(...content.childNodes)
+						else if (content.textContent) this.#fragments.push(inert.createTextNode(content.textContent))
+					}
+					if (this.#fragments.length === 0) this.#fragments = undefined
+					if (!invisible && this.#fragments === undefined && live.getAttribute('aria-hidden') !== 'true')
+						this.#lines.push(
+							live.getAttribute('aria-label')?.trim() ||
+								live.querySelector(':scope > title')?.textContent ||
+								'',
+						)
+				} else if (['form', 'dialog', 'button'].includes(tag)) {
+					this.#container = true
+					if (live instanceof view.HTMLButtonElement && !invisible && live.innerText.trim() === '') {
+						const name = live.getAttribute('aria-label')?.trim()
+						if (name) {
+							this.#lines = [name]
+							this.#container = false
 						}
 					}
 				}
-				if (omitted || (child.nodeType === 3 && invisible)) mirror.parentNode?.removeChild(mirror)
-				else if (child.nodeType === 1) {
-					// Element sibling pointers retain their type across windowless owner realms.
-					if (element !== null && counterpart !== null)
-						pending.push({ live: element, twin: counterpart, visited: false })
-				}
-				if (child.nodeType === 1) {
-					element = previousElement
-					counterpart = previousCounterpart
-				}
-				child = previous
-				mirror = previousMirror
-			}
-			continue
-		}
-		if (!rendered || style?.contentVisibility === 'hidden') continue
-		if (
-			['div', 'summary', 'details'].includes(tag) &&
-			!style?.display.startsWith('inline') &&
-			style?.display !== 'contents' &&
-			twin.hasChildNodes()
-		) {
-			twin.prepend(inert.createElement('br'))
-			twin.append(inert.createElement('br'))
-		}
-		let fragments
-		let lines
-		let container = false
-		if (live instanceof view.HTMLInputElement) {
-			lines = []
-			if (['text', 'email', 'search', 'tel', 'url', 'number'].includes(live.type)) {
-				if (live.type !== 'number' || !live.validity.badInput) {
-					const placeholder = view.getComputedStyle(live, '::placeholder')
-					lines = [
-						live.value ||
-							(live.matches(':placeholder-shown') &&
-							placeholder.visibility === 'visible' &&
-							placeholder.opacity !== '0' &&
-							placeholder.color !== 'rgba(0, 0, 0, 0)'
-								? live.placeholder
-								: ''),
-					]
-				}
-			} else if (['submit', 'reset', 'button'].includes(live.type)) lines = [live.value]
-			else if (live.type === 'file' && live.files?.length === 1)
-				lines = Array.from(live.files ?? [], (file) => file.name)
-			else if (live.type === 'image' && live.getAttribute('aria-hidden') !== 'true')
-				lines = [live.getAttribute('aria-label')?.trim() || live.alt]
-		} else if (live instanceof view.HTMLTextAreaElement) {
-			const placeholder = view.getComputedStyle(live, '::placeholder')
-			const value =
-				live.value ||
-				(live.matches(':placeholder-shown') &&
-				placeholder.visibility === 'visible' &&
-				placeholder.opacity !== '0' &&
-				placeholder.color !== 'rgba(0, 0, 0, 0)'
-					? live.placeholder
-					: '')
-			lines = value.split(/\\r?\\n/)
-		} else if (
-			live instanceof view.HTMLSelectElement ||
-			live instanceof view.HTMLOptionElement ||
-			live instanceof view.HTMLOptGroupElement
-		) {
-			lines = []
-			const select = live instanceof view.HTMLSelectElement ? live : live.closest('select')
-			if (select !== null) {
-				if (!select.multiple && select.size <= 1) {
-					const option = select.selectedOptions[0]
-					if (option !== undefined && (live === select || live === option || live.contains(option)))
-						lines.push(option.label)
-				} else {
-					const box = select.getBoundingClientRect()
-					const top = box.top + select.clientTop
-					const bottom = top + select.clientHeight
-					const rows =
-						live === select
-							? select.querySelectorAll('option,optgroup')
-							: [live, ...live.querySelectorAll('option')]
-					for (const row of rows) {
-						const rowStyle = view.getComputedStyle(row)
-						const groupStyle =
-							row.parentElement instanceof view.HTMLOptGroupElement
-								? view.getComputedStyle(row.parentElement)
-								: undefined
-						if (
-							rowStyle.display === 'none' ||
-							rowStyle.visibility !== 'visible' ||
-							groupStyle?.display === 'none'
-						)
-							continue
-						const rect = row.getBoundingClientRect()
-						// The group box includes its options; its caption ends where the first row starts.
-						const end =
-							row instanceof view.HTMLOptGroupElement
-								? (Array.from(row.querySelectorAll('option'))
-										.find((option) => option.getClientRects().length > 0)
-										?.getBoundingClientRect().top ?? rect.bottom)
-								: rect.bottom
-						if (
-							end > top &&
-							rect.top < bottom &&
-							rect.right > box.left + select.clientLeft &&
-							rect.left < box.left + select.clientLeft + select.clientWidth &&
-							(row instanceof view.HTMLOptionElement || row instanceof view.HTMLOptGroupElement)
-						)
-							lines.push(row.label)
+				if (this.#lines === undefined && !this.#container) continue
+				if (invisible && !this.#container && tag !== 'svg') this.#lines = []
+				const block = !style?.display.startsWith('inline') && style?.display !== 'contents'
+				const carrier = inert.createElement(block ? 'div' : 'span')
+				if (this.#container) carrier.append(...twin.childNodes)
+				else if (this.#fragments !== undefined) {
+					for (const fragment of this.#fragments) {
+						carrier.append(fragment, inert.createElement('br'))
 					}
+				} else
+					for (const [index, line] of (this.#lines ?? []).entries()) {
+						if (index > 0) carrier.append(inert.createElement('br'))
+						carrier.append(inert.createTextNode(line))
+					}
+				if (carrier.hasChildNodes()) {
+					carrier.prepend(inert.createElement('br'))
+					carrier.append(inert.createElement('br'))
 				}
+				twin.replaceWith(carrier)
+				if (twin === this.#root) this.#root = carrier
 			}
-		} else if (tag === 'svg') {
-			if (twin.parentElement?.closest('svg, foreignObject')?.localName === 'svg') continue
-			lines = []
-			fragments = []
-			for (const content of twin.querySelectorAll('text, foreignObject')) {
-				if (content.parentElement?.closest('svg, foreignObject')?.localName === 'foreignObject') continue
-				if (content.localName === 'text' && content.parentElement?.closest('text')?.closest('svg') === content.closest('svg')) continue
-				if (content.localName === 'foreignObject') fragments.push(...content.childNodes)
-				else if (content.textContent) fragments.push(inert.createTextNode(content.textContent))
-			}
-			if (fragments.length === 0) fragments = undefined
-			if (!invisible && fragments === undefined && live.getAttribute('aria-hidden') !== 'true')
-				lines.push(
-					live.getAttribute('aria-label')?.trim() ||
-						live.querySelector(':scope > title')?.textContent ||
-						'',
-				)
-		} else if (['form', 'dialog', 'button'].includes(tag)) {
-			container = true
-			if (live instanceof view.HTMLButtonElement && !invisible && live.innerText.trim() === '') {
-				const name = live.getAttribute('aria-label')?.trim()
-				if (name) {
-					lines = [name]
-					container = false
-				}
-			}
+			// Guard a copy that has fallen out of step with the live tree.
+			for (const input of this.#root?.querySelectorAll('input[type="password" i],input[type="hidden" i]') ??
+				[])
+				input.remove()
+			capture.html = this.#root?.outerHTML ?? ''
+			return capture
 		}
-		if (lines === undefined && !container) continue
-		if (invisible && !container && tag !== 'svg') lines = []
-		const block = !style?.display.startsWith('inline') && style?.display !== 'contents'
-		const carrier = inert.createElement(block ? 'div' : 'span')
-		if (container) carrier.append(...twin.childNodes)
-		else if (fragments !== undefined) {
-			for (const fragment of fragments) {
-				carrier.append(fragment, inert.createElement('br'))
-			}
-		} else
-			for (const [index, line] of (lines ?? []).entries()) {
-				if (index > 0) carrier.append(inert.createElement('br'))
-				carrier.append(inert.createTextNode(line))
-			}
-		if (carrier.hasChildNodes()) {
-			carrier.prepend(inert.createElement('br'))
-			carrier.append(inert.createElement('br'))
-		}
-		twin.replaceWith(carrier)
-		if (twin === root) root = carrier
-	}
-	// Guard a copy that has fallen out of step with the live tree.
-	for (const input of root?.querySelectorAll('input[type="password" i],input[type="hidden" i]') ??
-		[])
-		input.remove()
-	capture.html = root?.outerHTML ?? ''
-	return capture
+	})().capture(node)
 }`
 }
 
@@ -1014,32 +1048,37 @@ export function compileActionabilityFunction(options: BrowserActionabilityOption
 	return `async function() {
 	if (!(this instanceof Element) || !this.isConnected) throw new Error('Element is detached')
 	this.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' })
-	const visible = () => {
+	if (${JSON.stringify(options.visible === true)}) {
 		const style = getComputedStyle(this)
 		const rect = this.getBoundingClientRect()
-		return ${VISIBILITY_SOURCE}
+		if (!(${VISIBILITY_SOURCE})) throw new Error('Element is not visible')
 	}
-	if (${JSON.stringify(options.visible === true)} && !visible()) throw new Error('Element is not visible')
 	if (${JSON.stringify(options.enabled === true)} && this.matches(':disabled')) throw new Error('Element is disabled')
 	if (${JSON.stringify(options.editable === true)} && (this.matches('[readonly]') || (!this.isContentEditable && !('value' in this)))) throw new Error('Element is not editable')
-	let previous
-	for (let index = 0; index < ${options.stable === true ? BROWSER_STABLE_FRAME_COUNT : 0}; index += 1) {
-		await new Promise((resolve) => requestAnimationFrame(resolve))
-		const rect = this.getBoundingClientRect()
-		const current = [rect.x, rect.y, rect.width, rect.height]
-		if (${JSON.stringify(options.stable === true)} && previous && current.some((value, part) => value !== previous[part])) {
-			index = 0
+	return new (class {
+		#previous
+		#index = 0
+
+		async wait(element) {
+			while (this.#index < ${options.stable === true ? BROWSER_STABLE_FRAME_COUNT : 0}) {
+				await new Promise((resolve) => requestAnimationFrame(resolve))
+				const rect = element.getBoundingClientRect()
+				const current = [rect.x, rect.y, rect.width, rect.height]
+				if (${JSON.stringify(options.stable === true)} && this.#previous && current.some((value, part) => value !== this.#previous[part])) this.#index = 0
+				this.#previous = current
+				this.#index += 1
+			}
+
+			if (${JSON.stringify(options.events === true)}) {
+				const rect = element.getBoundingClientRect()
+				const position = ${JSON.stringify(options.position)}
+				const x = rect.x + (position?.x ?? rect.width / 2)
+				const y = rect.y + (position?.y ?? rect.height / 2)
+				const target = element.ownerDocument.elementFromPoint(x, y)
+				if (target !== element && !element.contains(target)) throw new Error('Element does not receive pointer events')
+			}
+			return true
 		}
-		previous = current
-	}
-	if (${JSON.stringify(options.events === true)}) {
-		const rect = this.getBoundingClientRect()
-		const position = ${JSON.stringify(options.position)}
-		const x = rect.x + (position?.x ?? rect.width / 2)
-		const y = rect.y + (position?.y ?? rect.height / 2)
-		const target = this.ownerDocument.elementFromPoint(x, y)
-		if (target !== this && !this.contains(target)) throw new Error('Element does not receive pointer events')
-	}
-	return true
+	})().wait(this)
 }`
 }

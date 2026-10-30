@@ -1,25 +1,25 @@
 import { describe, it, expect, beforeEach } from 'vitest'
 import { createCDPClient, isBrowserError } from '@src/core'
-import type { CDPClientInterface } from '@src/core'
 
 import { getEventListeners } from 'node:events'
-import { createRecorder, waitForCondition, waitForDelay } from '@orkestrel/test'
-import { createCDPTestTransport, replyOk } from '../../setup.js'
-import type { CDPTestTransportInterface } from '../../setup.js'
+import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
+import { BrowserFixtureValue, createCDPTestTransport, replyOk } from '../../setup.js'
+import type { ConnectedCDPFixture } from '../../setup.js'
 
 // === CDPClient
 
 describe('CDPClient', () => {
-	let transport: CDPTestTransportInterface
-	let client: CDPClientInterface
+	const fixture = new BrowserFixtureValue<ConnectedCDPFixture | undefined>(undefined)
 
 	beforeEach(() => {
-		transport = createCDPTestTransport()
-		client = createCDPClient({ transport })
+		const transport = createCDPTestTransport()
+		const client = createCDPClient({ transport })
+		fixture.value = { client, transport }
 	})
 
 	describe('connect()', () => {
 		it('starts the transport and marks connected', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			expect(client.connected).toBe(false)
 			await client.connect()
 			expect(client.connected).toBe(true)
@@ -27,6 +27,7 @@ describe('CDPClient', () => {
 		})
 
 		it('is idempotent when already connected', async () => {
+			const { client } = requireValue(fixture.value)
 			await client.connect()
 			await client.connect()
 			expect(client.connected).toBe(true)
@@ -35,6 +36,7 @@ describe('CDPClient', () => {
 
 	describe('send()', () => {
 		it('rejects only the detached session pending commands and preserves other sessions and root', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const controller = new AbortController()
 			const detached = createRecorder<[unknown]>()
@@ -77,6 +79,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects a child session command when its detach arrives on the parent session', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const detached = createRecorder<[unknown]>()
 			const parent = createRecorder<[unknown]>()
@@ -110,6 +113,7 @@ describe('CDPClient', () => {
 		})
 
 		it('resolves with the scripted result', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			replyOk(transport, 'Target.getTargets', { targetInfos: [] })
 
@@ -120,6 +124,7 @@ describe('CDPClient', () => {
 		})
 
 		it('sends params and sessionId on the frame', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			replyOk(transport, 'Page.navigate', { frameId: 'f1' })
 
@@ -130,6 +135,7 @@ describe('CDPClient', () => {
 		})
 
 		it('assigns increasing ids across calls', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			replyOk(transport, 'A')
 			replyOk(transport, 'B')
@@ -142,6 +148,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects when the response carries an error', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			transport.onSend('Bad.method', (message) => transport.fail(message.id, 'boom'))
 
@@ -149,6 +156,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects with a BrowserError carrying method/code/message/data on a CDP error response', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			transport.onSend('Bad.method', (message) => {
 				transport.emitter.emit(
@@ -179,6 +187,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects immediately without leaking a pending timer when params are not serializable', async () => {
+			const { transport } = requireValue(fixture.value)
 			const timedClient = createCDPClient({ transport, timeout: 20 })
 			await timedClient.connect()
 			const circular: Record<string, unknown> = {}
@@ -196,10 +205,12 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects when not connected', async () => {
+			const { client } = requireValue(fixture.value)
 			await expect(client.send('Target.getTargets')).rejects.toThrow('not connected')
 		})
 
 		it('rejects with a coded BrowserError when not connected', async () => {
+			const { client } = requireValue(fixture.value)
 			const thrown: unknown = await client
 				.send('Target.getTargets')
 				.catch((caught: unknown) => caught)
@@ -215,6 +226,7 @@ describe('CDPClient', () => {
 		})
 
 		it('times out a pending request', async () => {
+			const { transport } = requireValue(fixture.value)
 			const timedClient = createCDPClient({ transport, timeout: 20 })
 			await timedClient.connect()
 
@@ -222,6 +234,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects a timed-out request with a coded BrowserError carrying method/timeout', async () => {
+			const { transport } = requireValue(fixture.value)
 			const timedClient = createCDPClient({ transport, timeout: 20 })
 			await timedClient.connect()
 
@@ -243,6 +256,7 @@ describe('CDPClient', () => {
 		})
 
 		it('uses a per-call timeout that overrides the client-wide default', async () => {
+			const { transport } = requireValue(fixture.value)
 			const longClient = createCDPClient({ transport, timeout: 10_000 })
 			await longClient.connect()
 
@@ -265,6 +279,7 @@ describe('CDPClient', () => {
 
 	describe('send() with a signal', () => {
 		it('rejects with the signal reason before sending when already aborted', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const reason = new Error('cancelled early')
 			const controller = new AbortController()
@@ -277,6 +292,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects with the reason on a later abort, clears the timer, and ignores a late reply', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			const { createHook } = await import('node:async_hooks')
 			await client.connect()
 			const reason = new Error('cancelled late')
@@ -285,11 +301,11 @@ describe('CDPClient', () => {
 			const fired = createRecorder<[number]>()
 			const destroyed = createRecorder<[number]>()
 			const errors = createRecorder<[unknown]>()
-			let recording = true
+			const recording = new BrowserFixtureValue(true)
 			// Record only timers created by this synchronous send, excluding unrelated host timers.
 			const hook = createHook({
 				init(id, category) {
-					if (recording && category === 'Timeout') timers.add(id)
+					if (recording.value && category === 'Timeout') timers.add(id)
 				},
 				before(id) {
 					if (timers.has(id)) fired.handler(id)
@@ -305,7 +321,7 @@ describe('CDPClient', () => {
 					signal: controller.signal,
 					timeout: 20,
 				})
-				recording = false
+				recording.value = false
 				const caught = sent.catch((thrown: unknown) => thrown)
 				const id = transport.sent[0]?.id
 				expect(id).toBeDefined()
@@ -330,6 +346,7 @@ describe('CDPClient', () => {
 		})
 
 		it('releases the abort listener when the request settles by reply, so a reused signal holds none', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const controller = new AbortController()
 			expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0)
@@ -353,6 +370,7 @@ describe('CDPClient', () => {
 
 	describe('test transport fail()', () => {
 		it('writes a numeric code into the BrowserError context', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const pending = client.send('Missing.method').catch((thrown: unknown) => thrown)
 			await waitForDelay(0)
@@ -368,6 +386,7 @@ describe('CDPClient', () => {
 
 	describe('subscribe() / unsubscribe()', () => {
 		it('fires a global handler for a matching event', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 
@@ -379,6 +398,7 @@ describe('CDPClient', () => {
 		})
 
 		it('stops firing after unsubscribe', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 
@@ -390,6 +410,7 @@ describe('CDPClient', () => {
 		})
 
 		it('routes session-scoped events only to matching-session subscribers', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const sessionRecorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 			const otherRecorder = createRecorder<[Readonly<Record<string, unknown>>]>()
@@ -404,6 +425,7 @@ describe('CDPClient', () => {
 		})
 
 		it('still fires global handlers for session-scoped events', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const globalRecorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 
@@ -414,6 +436,7 @@ describe('CDPClient', () => {
 		})
 
 		it('unsubscribes a session-scoped handler independently', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 
@@ -425,6 +448,7 @@ describe('CDPClient', () => {
 		})
 
 		it('does not fire a handler subscribed re-entrantly during dispatch for the in-flight event', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const lateRecorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 
@@ -440,6 +464,7 @@ describe('CDPClient', () => {
 		})
 
 		it('isolates a throwing handler so sibling handlers still receive the event', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 			client.subscribe('Page.loadEventFired', () => {
@@ -454,6 +479,7 @@ describe('CDPClient', () => {
 
 	describe('reconnect()', () => {
 		it('closes and re-establishes the transport', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			await client.reconnect()
 			expect(client.connected).toBe(true)
@@ -461,6 +487,7 @@ describe('CDPClient', () => {
 		})
 
 		it('keeps subscriptions registered across close()/reconnect()', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 			client.subscribe('Page.loadEventFired', recorder.handler)
@@ -472,6 +499,7 @@ describe('CDPClient', () => {
 		})
 
 		it('keeps a session-scoped subscription registered across close()/reconnect()', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const recorder = createRecorder<[Readonly<Record<string, unknown>>]>()
 			client.subscribe('Runtime.bindingCalled', recorder.handler, 'session-a')
@@ -485,6 +513,7 @@ describe('CDPClient', () => {
 
 	describe('message framing', () => {
 		it('ignores a response frame with an unknown/expired id without throwing', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 
 			expect(() => transport.reply(9999, { ok: true })).not.toThrow()
@@ -496,6 +525,7 @@ describe('CDPClient', () => {
 		})
 
 		it('ignores a non-JSON text frame per the framing contract', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 
 			expect(() => transport.emitter.emit('message', 'not json {')).not.toThrow()
@@ -509,6 +539,7 @@ describe('CDPClient', () => {
 
 	describe('close()', () => {
 		it('rejects all pending requests', async () => {
+			const { client } = requireValue(fixture.value)
 			await client.connect()
 			const pending = client.send('Never.replies')
 
@@ -519,6 +550,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects pending requests with a coded BrowserError on close', async () => {
+			const { client } = requireValue(fixture.value)
 			await client.connect()
 			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
 
@@ -532,16 +564,19 @@ describe('CDPClient', () => {
 		})
 
 		it('is idempotent when not connected', async () => {
+			const { client } = requireValue(fixture.value)
 			await expect(client.close()).resolves.toBeUndefined()
 		})
 
 		it('marks disconnected when the transport emits close', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			transport.closeRemote()
 			expect(client.connected).toBe(false)
 		})
 
 		it('rejects pending requests with a coded BrowserError when the transport emits close', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
 
@@ -552,6 +587,7 @@ describe('CDPClient', () => {
 		})
 
 		it('rejects pending requests and closes the transport after a transport error', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			await client.connect()
 			const pending = client.send('Never.replies').catch((caught: unknown) => caught)
 
@@ -566,6 +602,7 @@ describe('CDPClient', () => {
 		})
 
 		it('closes the transport and rejects the in-flight connect() when close() races connect()', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			const close = createRecorder<[]>()
 			const drop = createRecorder<[]>()
 			client.emitter.on('close', close.handler)
@@ -590,6 +627,7 @@ describe('CDPClient', () => {
 
 	describe('emitter', () => {
 		it('reports connect and close, and never drop, around an explicit teardown', async () => {
+			const { client } = requireValue(fixture.value)
 			const connect = createRecorder<[]>()
 			const close = createRecorder<[]>()
 			const drop = createRecorder<[]>()
@@ -607,6 +645,7 @@ describe('CDPClient', () => {
 		})
 
 		it('reports drop when the transport ends without a close request', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			const drop = createRecorder<[]>()
 			const close = createRecorder<[]>()
 			client.emitter.on('drop', drop.handler)
@@ -620,6 +659,7 @@ describe('CDPClient', () => {
 		})
 
 		it('reports the transport fault and gives pending requests JSON context', async () => {
+			const { client, transport } = requireValue(fixture.value)
 			const errors = createRecorder<[error: unknown]>()
 			client.emitter.on('error', errors.handler)
 			await client.connect()
@@ -640,6 +680,7 @@ describe('CDPClient', () => {
 		})
 
 		it('wires the listeners supplied at construction', async () => {
+			const { transport } = requireValue(fixture.value)
 			const connect = createRecorder<[]>()
 			const wired = createCDPClient({ transport, on: { connect: connect.handler } })
 

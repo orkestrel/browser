@@ -28,7 +28,6 @@ import { BrowserError, isBrowserError } from '@src/core'
 import {
 	BROWSER_CDP_PROTOCOL,
 	BROWSER_CDP_LIST_PATH,
-	BROWSER_DEVTOOLS_PATTERN,
 	BROWSER_ENV_PATH_KEYS,
 	BROWSER_EXECUTABLE_PATHS,
 	BROWSER_EXECUTABLE_NAMES,
@@ -48,6 +47,7 @@ import {
 	BROWSER_SERVER_UNRESOLVED,
 	BROWSER_SERVER_UNAVAILABLE,
 } from './constants.js'
+import { BrowserEndpoint } from './BrowserEndpoint.js'
 
 /**
  * Parses positive integer viewport dimensions in WIDTHxHEIGHT form.
@@ -487,41 +487,7 @@ export function launchBrowserProcess(
  * @throws When the stream closes without the line, or the signal aborts first
  */
 export function readBrowserEndpoint(stream: Readable, signal: AbortSignal): Promise<string> {
-	const read = Promise.withResolvers<string>()
-	let pending = ''
-	let found = false
-
-	if (signal.aborted) read.reject(signal.reason)
-	signal.addEventListener('abort', () => read.reject(signal.reason), { once: true })
-	stream.on('error', read.reject)
-	stream.setEncoding('utf8')
-	stream.on('data', (chunk) => {
-		if (found || !isString(chunk)) return
-		const lines = (pending + chunk).split(/\r\n|\n/)
-		pending = lines.pop() ?? ''
-		for (const line of lines) {
-			const endpoint = BROWSER_DEVTOOLS_PATTERN.exec(line)?.[1]
-			if (endpoint === undefined) continue
-			found = true
-			pending = ''
-			read.resolve(endpoint)
-			return
-		}
-	})
-	stream.on('close', () => {
-		const endpoint = found ? undefined : BROWSER_DEVTOOLS_PATTERN.exec(pending)?.[1]
-		if (endpoint !== undefined) read.resolve(endpoint)
-		else {
-			read.reject(
-				new BrowserError(
-					'CONNECTION',
-					'Browser closed its standard error before reporting a CDP endpoint',
-				),
-			)
-		}
-	})
-
-	return read.promise
+	return new BrowserEndpoint(stream, signal).endpoint
 }
 
 /**

@@ -3,47 +3,55 @@ import type { BrowserInterface } from '@src/server'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { BrowserError, describeBrowserRefusal, isBrowserError } from '@src/core'
 import { requireValue, waitForCondition } from '@orkestrel/test'
-import { createBrowserElementFixture } from '../../../setup.js'
+import { BrowserFixtureValue, createBrowserElementFixture } from '../../../setup.js'
 import { readFileSync } from 'node:fs'
 import { createBrowser } from '@src/server'
 import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../../../setupService.js'
 
 describe('real Chromium pointer settling', () => {
-	let browser: BrowserInterface
-	let page: BrowserPageInterface
+	const browser = new BrowserFixtureValue<BrowserInterface | undefined>(undefined)
+	const page = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
 
 	beforeEach(async () => {
-		browser = createBrowser({
+		browser.value = createBrowser({
 			executable: requireSystemBrowser().executable,
 			headless: true,
 			args: [...SERVICE_BROWSER_ARGS],
 		})
-		await browser.connect()
-		page = await browser.create()
-		await page.evaluate(
+		await browser.required.connect()
+		page.value = await browser.required.create()
+		await page.required.evaluate(
 			`(document.write(${JSON.stringify(readFileSync(new URL('../../../fixtures/smooth-scroll.html', import.meta.url), 'utf8'))}), document.close())`,
 		)
 	})
 
 	afterEach(async () => {
-		await browser?.destroy()
+		await browser.value?.destroy()
 	})
 
 	it('lands a scrolling click and the immediately following distant click', async () => {
 		const start = requireValue(
-			(await page.elements.find({ role: 'link', name: 'Scroll to top' }))[0],
+			(await page.required.elements.find({ role: 'link', name: 'Scroll to top' }))[0],
 		)
-		const finish = requireValue((await page.elements.find({ role: 'button', name: 'Finish' }))[0])
+		const finish = requireValue(
+			(await page.required.elements.find({ role: 'button', name: 'Finish' }))[0],
+		)
 		await start.click()
 		await finish.click()
-		expect(await page.evaluate("document.getElementById('start').dataset.clicked")).toBe('true')
-		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBe('true')
-		expect(await page.evaluate("document.getElementById('finish').dataset.scroll")).toBe('0')
+		expect(await page.required.evaluate("document.getElementById('start').dataset.clicked")).toBe(
+			'true',
+		)
+		expect(await page.required.evaluate("document.getElementById('finish').dataset.clicked")).toBe(
+			'true',
+		)
+		expect(await page.required.evaluate("document.getElementById('finish').dataset.scroll")).toBe(
+			'0',
+		)
 	})
 
 	it('codes a real protocol location refusal as OCCLUDED', async () => {
 		const element = requireValue(
-			(await page.elements.find({ role: 'button', name: 'Outside the viewport' }))[0],
+			(await page.required.elements.find({ role: 'button', name: 'Outside the viewport' }))[0],
 		)
 		await expect(element.click()).rejects.toMatchObject({
 			code: 'ELEMENT',
@@ -53,20 +61,26 @@ describe('real Chromium pointer settling', () => {
 	})
 
 	it('bounds a continuously scrolling document by the existing call timeout', async () => {
-		const element = requireValue((await page.elements.find({ role: 'button', name: 'Finish' }))[0])
-		await page.evaluate(
+		const element = requireValue(
+			(await page.required.elements.find({ role: 'button', name: 'Finish' }))[0],
+		)
+		await page.required.evaluate(
 			"requestAnimationFrame(function move() { window.scrollTo({ top: window.scrollY === 0 ? 500 : 0, behavior: 'instant' }); requestAnimationFrame(move) })",
 		)
 		await expect(element.click({ timeout: 100 })).rejects.toMatchObject({
 			code: 'TIMEOUT',
 			context: { timeout: 100 },
 		})
-		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBeUndefined()
+		expect(
+			await page.required.evaluate("document.getElementById('finish').dataset.clicked"),
+		).toBeUndefined()
 	})
 
 	it('aborts a scroll settle through the existing call signal', async () => {
-		const element = requireValue((await page.elements.find({ role: 'button', name: 'Finish' }))[0])
-		await page.evaluate(
+		const element = requireValue(
+			(await page.required.elements.find({ role: 'button', name: 'Finish' }))[0],
+		)
+		await page.required.evaluate(
 			"requestAnimationFrame(function move() { window.scrollTo({ top: window.scrollY === 0 ? 500 : 0, behavior: 'instant' }); document.body.dataset.frames = String(Number(document.body.dataset.frames ?? 0) + 1); requestAnimationFrame(move) })",
 		)
 		const controller = new AbortController()
@@ -74,11 +88,13 @@ describe('real Chromium pointer settling', () => {
 		const clicking = element.click({ signal: controller.signal }).catch((error: unknown) => error)
 		await waitForCondition(
 			'scroll frames during the pending click',
-			async () => Number(await page.evaluate('document.body.dataset.frames')) >= 10,
+			async () => Number(await page.required.evaluate('document.body.dataset.frames')) >= 10,
 		)
 		controller.abort(reason)
 		expect(await clicking).toBe(reason)
-		expect(await page.evaluate("document.getElementById('finish').dataset.clicked")).toBeUndefined()
+		expect(
+			await page.required.evaluate("document.getElementById('finish').dataset.clicked"),
+		).toBeUndefined()
 	})
 })
 
@@ -498,16 +514,15 @@ describe('trusted element actions', () => {
 			[`Error: Element is not visible${stack}`, 'actionability'],
 			[`Error: Element is not editable${stack}`, 'text'],
 		] as const) {
-			const fixture = await createBrowserElementFixture(
+			const fixture =
 				answer === 'actionability'
-					? { actionability: description }
-					: {
+					? await createBrowserElementFixture({ actionability: description })
+					: await createBrowserElementFixture({
 							text: (message) =>
 								fixture.transport.reply(message.id, {
 									exceptionDetails: { exception: { description } },
 								}),
-						},
-			)
+						})
 			try {
 				await fixture.page.elements.outline()
 				const refused = await requireValue(fixture.page.elements.element('e2'))

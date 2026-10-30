@@ -1,3 +1,4 @@
+import { BrowserFixtureValue } from '../../setup.js'
 import type {
 	BrowserConsoleMessage,
 	BrowserDialogInterface,
@@ -68,13 +69,13 @@ import {
 
 describe('BrowserPage', () => {
 	it('catches poisoning a loaderless readiness seed with the first caller signal', async () => {
-		let evaluation: number | undefined
-		let attempts = 0
+		const evaluation = new BrowserFixtureValue<number | undefined>(undefined)
+		const attempts = new BrowserFixtureValue(0)
 		const fixture = await createBrowserElementFixture({
 			loaderless: true,
 			readiness: (message) => {
-				evaluation = message.id
-				attempts += 1
+				evaluation.value = message.id
+				attempts.value += 1
 			},
 		})
 		const controller = new AbortController()
@@ -82,34 +83,34 @@ describe('BrowserPage', () => {
 		try {
 			const first = fixture.page.elements.outline({ signal: controller.signal, timeout: 500 })
 			const rejected = first.catch((error: unknown) => error)
-			await waitForCondition('pending readiness seed', () => evaluation !== undefined)
-			const seed = requireValue(evaluation)
+			await waitForCondition('pending readiness seed', () => evaluation.value !== undefined)
+			const seed = requireValue(evaluation.value)
 			controller.abort(reason)
 			expect(await rejected).toBe(reason)
 			const second = fixture.page.elements.outline({ timeout: 200 })
 			const outcome = second.catch((error: unknown) => error)
 			fixture.transport.reply(seed, { result: { value: 'complete' } })
 			expect(await outcome).toHaveProperty('listed', 6)
-			expect(attempts).toBe(1)
+			expect(attempts.value).toBe(1)
 		} finally {
 			await fixture.client.close()
 		}
 	})
 
 	it('catches retaining a rejected readiness seed instead of retrying', async () => {
-		let attempts = 0
+		const attempts = new BrowserFixtureValue(0)
 		const fixture = await createBrowserElementFixture({
 			loaderless: true,
 			readiness: (message) => {
-				attempts += 1
-				if (attempts === 1) fixture.transport.fail(message.id, 'Readiness unavailable')
+				attempts.value += 1
+				if (attempts.value === 1) fixture.transport.fail(message.id, 'Readiness unavailable')
 				else fixture.transport.reply(message.id, { result: { value: 'complete' } })
 			},
 		})
 		try {
 			await expect(fixture.page.elements.outline()).rejects.toThrow('Readiness unavailable')
 			await expect(fixture.page.elements.outline()).resolves.toHaveProperty('listed', 6)
-			expect(attempts).toBe(2)
+			expect(attempts.value).toBe(2)
 		} finally {
 			await fixture.client.close()
 		}
@@ -328,11 +329,11 @@ describe('BrowserPage', () => {
 	it.each(['Execution context was destroyed', 'Cannot find context with specified id'])(
 		'catches failing to re-arm after %s or re-arming before DOMContentLoaded',
 		async (failure) => {
-			let attempts = 0
+			const attempts = new BrowserFixtureValue(0)
 			const fixture = await createBrowserElementFixture({
 				evaluation: (message) => {
-					attempts += 1
-					if (attempts === 1) {
+					attempts.value += 1
+					if (attempts.value === 1) {
 						fixture.transport.event('Runtime.executionContextsCleared', {}, 'session-main')
 						fixture.transport.fail(message.id, failure)
 					} else fixture.transport.reply(message.id, { result: { value: true } })
@@ -342,16 +343,16 @@ describe('BrowserPage', () => {
 				const pending = fixture.page
 					.wait('ready', { timeout: 500 })
 					.catch((error: unknown) => error)
-				await waitForCondition('first text evaluation', () => attempts === 1)
+				await waitForCondition('first text evaluation', () => attempts.value === 1)
 				await waitForDelay(20)
-				expect(attempts).toBe(1)
+				expect(attempts.value).toBe(1)
 				fixture.transport.event(
 					'Page.lifecycleEvent',
 					{ frameId: 'main', loaderId: 'loader-main', name: 'DOMContentLoaded' },
 					'session-main',
 				)
 				expect(await pending).toBeUndefined()
-				expect(attempts).toBe(2)
+				expect(attempts.value).toBe(2)
 				expect(
 					fixture.transport.sent.filter((message) => message.method === 'Page.createIsolatedWorld'),
 				).toHaveLength(2)
@@ -1773,13 +1774,13 @@ describe('BrowserPage', () => {
 		it('settles page close when the close reply precedes a detach that interrupts registry disable', async () => {
 			const { client, transport } = await createConnectedCDPClient()
 			const page = new BrowserPage(client, 'target-1', 'session-1')
-			let disabling = false
-			let settled = false
+			const disabling = new BrowserFixtureValue(false)
+			const settled = new BrowserFixtureValue(false)
 			replyOk(transport, 'WebMCP.enable')
 			replyOk(transport, 'Target.closeTarget')
 			replyOk(transport, 'Browser.getVersion')
 			transport.onSend('WebMCP.disable', () => {
-				disabling = true
+				disabling.value = true
 				transport.event('Target.detachedFromTarget', {
 					sessionId: 'session-1',
 					targetId: 'target-1',
@@ -1789,11 +1790,11 @@ describe('BrowserPage', () => {
 			try {
 				expect(await page.registry.start()).toBe(true)
 				const closing = page.close().then(() => {
-					settled = true
+					settled.value = true
 				})
-				await waitForCondition('registry disable was sent before the detach', () => disabling)
+				await waitForCondition('registry disable was sent before the detach', () => disabling.value)
 				await expect(client.send('Browser.getVersion')).resolves.toEqual({})
-				await waitForCondition('page close settles after session detach', () => settled, {
+				await waitForCondition('page close settles after session detach', () => settled.value, {
 					budget: 1000,
 				})
 				await closing
@@ -1807,29 +1808,31 @@ describe('BrowserPage', () => {
 			const { client, transport } = await createConnectedCDPClient()
 			const page = new BrowserPage(client, 'target-1', 'session-1')
 			const registry = page.registry
-			let destroyed = false
-			let settled = false
+			const destroyed = new BrowserFixtureValue(false)
+			const settled = new BrowserFixtureValue(false)
 			replyOk(transport, 'WebMCP.enable')
 			transport.onSend('Target.closeTarget', (message) => {
-				destroyed = true
+				destroyed.value = true
 				transport.event('Target.detachedFromTarget', { sessionId: 'session-1' })
 				transport.event('Target.targetDestroyed', { targetId: 'target-1' })
 				transport.reply(message.id, { success: true })
 			})
 			// A crashed renderer cannot reply; the browser rejects a gone session without it.
 			transport.onSend('WebMCP.disable', (message) => {
-				if (destroyed) transport.fail(message.id, 'Session with given id not found.')
+				if (destroyed.value) transport.fail(message.id, 'Session with given id not found.')
 			})
 			try {
 				expect(await registry.start()).toBe(true)
 				transport.event('Inspector.targetCrashed', {}, 'session-1')
 				const closing = page.close().then(() => {
-					settled = true
+					settled.value = true
 				})
 				expect(page.closed).toBe(true)
-				await waitForCondition('the crashed page close settles', () => settled, { budget: 1000 })
+				await waitForCondition('the crashed page close settles', () => settled.value, {
+					budget: 1000,
+				})
 				await closing
-				expect(destroyed).toBe(true)
+				expect(destroyed.value).toBe(true)
 				expect(registry.emitter.destroyed).toBe(true)
 				expect(page.emitter.destroyed).toBe(true)
 				expect(transport.sent.map((message) => message.method)).toEqual([
@@ -2096,10 +2099,10 @@ describe('BrowserPage events', () => {
 
 	it('allows a dialog response to be retried after protocol failure', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		let attempts = 0
+		const attempts = new BrowserFixtureValue(0)
 		transport.onSend('Page.handleJavaScriptDialog', (message) => {
-			attempts += 1
-			if (attempts === 1) transport.fail(message.id, 'dialog failed')
+			attempts.value += 1
+			if (attempts.value === 1) transport.fail(message.id, 'dialog failed')
 			else transport.reply(message.id, {})
 		})
 		const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -2114,7 +2117,7 @@ describe('BrowserPage events', () => {
 
 		await expect(dialog?.accept()).rejects.toThrow('dialog failed')
 		await expect(dialog?.dismiss()).resolves.toBeUndefined()
-		expect(attempts).toBe(2)
+		expect(attempts.value).toBe(2)
 	})
 
 	it('emits file choosers that set selected paths by backend node id', async () => {
@@ -2140,10 +2143,10 @@ describe('BrowserPage events', () => {
 
 	it('allows a file chooser response to be retried after protocol failure', async () => {
 		const { client, transport } = await createConnectedCDPClient()
-		let attempts = 0
+		const attempts = new BrowserFixtureValue(0)
 		transport.onSend('DOM.setFileInputFiles', (message) => {
-			attempts += 1
-			if (attempts === 1) transport.fail(message.id, 'chooser failed')
+			attempts.value += 1
+			if (attempts.value === 1) transport.fail(message.id, 'chooser failed')
 			else transport.reply(message.id, {})
 		})
 		const page = new BrowserPage(client, 'target-1', 'session-1')
@@ -2158,7 +2161,7 @@ describe('BrowserPage events', () => {
 
 		await expect(chooser?.upload(['one.txt'])).rejects.toThrow('chooser failed')
 		await expect(chooser?.dismiss()).resolves.toBeUndefined()
-		expect(attempts).toBe(2)
+		expect(attempts.value).toBe(2)
 	})
 
 	it('decodes console calls and uncaught page errors', async () => {
@@ -2512,7 +2515,7 @@ describe('BrowserPage events', () => {
 		replyOk(transport, 'Page.setInterceptFileChooserDialog')
 		replyOk(transport, 'Network.enable')
 		replyOk(transport, 'Target.setDiscoverTargets')
-		let sequence = 0
+		const sequence = new BrowserFixtureValue(0)
 		const page = new BrowserPage(
 			client,
 			'target-1',
@@ -2523,7 +2526,7 @@ describe('BrowserPage events', () => {
 			undefined,
 			undefined,
 			undefined,
-			() => `e${++sequence}`,
+			() => `e${++sequence.value}`,
 		)
 		const popups = createRecorder<[page: BrowserPageInterface]>()
 		page.emitter.on('popup', popups.handler)

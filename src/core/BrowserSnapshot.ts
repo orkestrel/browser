@@ -35,12 +35,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 	}
 
 	*descendants(node: BrowserNode): Generator<BrowserNode, void, unknown> {
-		let first = true
-		for (const descendant of this.depth({ root: node })) {
-			if (first) {
-				first = false
-				continue
-			}
+		for (const descendant of this.depth({ root: node }).drop(1)) {
 			yield descendant
 		}
 	}
@@ -80,16 +75,14 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 	ancestors(node: BrowserNode): readonly BrowserNode[] {
 		const ancestors: BrowserNode[] = []
 		const visited = new Set<string>()
-		let current = node
 
 		while (true) {
-			const parent = this.parent(current)
+			const parent = this.parent(ancestors.at(-1) ?? node)
 			if (parent === undefined) break
 			const identity = this.#identity(parent)
 			if (visited.has(identity)) break
 			visited.add(identity)
 			ancestors.push(parent)
-			current = parent
 		}
 		return ancestors
 	}
@@ -163,18 +156,27 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 				segments.push(`${current.name.toLowerCase()}:${current.index}`)
 				continue
 			}
-			let ordinal = 1
-			if (current.parent !== undefined) {
-				const owner = this.document(current)
-				for (const sibling of owner?.nodes ?? []) {
-					if (sibling.index >= current.index) break
-					if (sibling.parent === current.parent && sibling.name === current.name) ordinal += 1
-				}
-			}
+			const ordinal =
+				current.parent === undefined
+					? 1
+					: this.#preceding(current).reduce(
+							(count, sibling) =>
+								sibling.parent === current.parent && sibling.name === current.name
+									? count + 1
+									: count,
+							1,
+						)
 			segments.push(`${current.name.toLowerCase()}:${ordinal}`)
 		}
 
 		return `frame(${JSON.stringify(document.frame)}) > ${segments.join(' > ')}`
+	}
+
+	*#preceding(node: BrowserNode): Generator<BrowserNode, void, unknown> {
+		for (const sibling of this.document(node)?.nodes ?? []) {
+			if (sibling.index >= node.index) return
+			yield sibling
+		}
 	}
 
 	#roots(): readonly BrowserNode[] {
@@ -211,7 +213,9 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 				yield node
 
 				const children = this.children(node)
-				for (let index = children.length - 1; index >= 0; index -= 1) {
+				const last = children.length - 1
+				for (const offset of Array.prototype.keys.call({ length: last + 1 })) {
+					const index = last - offset
 					const child = children[index]
 					if (child !== undefined) stack.push(child)
 				}
@@ -224,10 +228,7 @@ export class BrowserSnapshot implements BrowserSnapshotInterface {
 		const visited = new Set<string>()
 		for (const seed of root === undefined ? this.#roots() : [root]) {
 			const queue: BrowserNode[] = [seed]
-			let cursor = 0
-			while (cursor < queue.length) {
-				const node = queue[cursor]
-				cursor += 1
+			for (const node of queue) {
 				if (node === undefined) continue
 				const identity = this.#identity(node)
 				if (visited.has(identity)) continue

@@ -9,17 +9,22 @@ import { BrowserContext, createCDPClient } from '@src/core'
 import { createBrowser, createWebSocketCDPTransport } from '@src/server'
 import { createTempDirectory, reservePort } from '../setupServer.js'
 import { requireSystemBrowser, SERVICE_BROWSER_ARGS } from '../setupService.js'
-import { BROWSER_CODEGEN_FIXTURE, BROWSER_CODEGEN_ORACLE, projectCodegenOracle } from '../setup.js'
+import {
+	BrowserFixtureValue,
+	BROWSER_CODEGEN_FIXTURE,
+	BROWSER_CODEGEN_ORACLE,
+	projectCodegenOracle,
+} from '../setup.js'
 
 describe('claim 12: page recorder against the fixture event log', () => {
 	const cleanup = createTeardown()
 	const inbound = createRecorder<[string]>()
-	let server: LoopbackInterface
-	let context: BrowserContextInterface
-	let page: BrowserPageInterface
+	const server = new BrowserFixtureValue<LoopbackInterface | undefined>(undefined)
+	const context = new BrowserFixtureValue<BrowserContextInterface | undefined>(undefined)
+	const page = new BrowserFixtureValue<BrowserPageInterface | undefined>(undefined)
 
 	beforeAll(async () => {
-		server = await createLoopback(
+		server.value = await createLoopback(
 			createServer((request, response) => {
 				response.writeHead(200, { 'content-type': 'text/html' })
 				const path = new URL(request.url ?? '/', 'http://127.0.0.1').pathname
@@ -31,11 +36,14 @@ describe('claim 12: page recorder against the fixture event log', () => {
 				} else if (path === '/sink') response.end('<body>Submitted</body>')
 				else
 					response.end(
-						BROWSER_CODEGEN_FIXTURE.replace('REMOTE_URL', `http://localhost:${server.port}/remote`),
+						BROWSER_CODEGEN_FIXTURE.replace(
+							'REMOTE_URL',
+							`http://localhost:${server.required.port}/remote`,
+						),
 					)
 			}),
 		)
-		cleanup.add(() => server.destroy())
+		cleanup.add(() => server.required.destroy())
 		const profile = createTempDirectory('codegen-service-')
 		cleanup.add(() => profile.destroy())
 		const port = await reservePort()
@@ -57,55 +65,55 @@ describe('claim 12: page recorder against the fixture event log', () => {
 		const client = createCDPClient({ transport })
 		cleanup.add(() => client.close())
 		await client.connect()
-		context = new BrowserContext(client)
-		cleanup.add(() => context.destroy())
+		context.value = new BrowserContext(client)
+		cleanup.add(() => context.required.destroy())
 	})
 	beforeEach(async () => {
-		page = await context.create({ url: `http://127.0.0.1:${server.port}/` })
+		page.value = await context.required.create({ url: `http://127.0.0.1:${server.required.port}/` })
 		inbound.clear()
 	})
 	afterEach(async () => {
-		await page.close()
+		await page.required.close()
 	})
 	afterAll(async () => {
 		await cleanup.destroy()
 	})
 
 	it('projects trusted edits, Enter, selects, both frame kinds, dialog answers, and password markers', async () => {
-		const recorder = page.recorder
+		const recorder = page.required.recorder
 		await recorder.start()
-		await requireValue((await page.elements.find({ css: '#add' }))[0]).click()
-		await requireValue((await page.elements.find({ css: '#title' }))[0]).click()
-		await page.keyboard.type('Pasta night')
-		await page.keyboard.press('Enter')
-		await page.evaluate("document.querySelector('#search').focus()")
-		await page.keyboard.press('Enter')
+		await requireValue((await page.required.elements.find({ css: '#add' }))[0]).click()
+		await requireValue((await page.required.elements.find({ css: '#title' }))[0]).click()
+		await page.required.keyboard.type('Pasta night')
+		await page.required.keyboard.press('Enter')
+		await page.required.evaluate("document.querySelector('#search').focus()")
+		await page.required.keyboard.press('Enter')
 		await waitForCondition('the search submission commits in the sink frame', async () =>
-			(await page.frames()).some(
+			(await page.required.frames()).some(
 				(frame) =>
 					frame.name === 'sink' &&
-					frame.url === 'http://127.0.0.1:' + server.port + '/sink?search=kettle',
+					frame.url === 'http://127.0.0.1:' + server.required.port + '/sink?search=kettle',
 			),
 		)
-		await page.evaluate("document.querySelector('#speed').focus()")
-		await page.keyboard.press('ArrowDown')
-		await page.keyboard.down('Control')
+		await page.required.evaluate("document.querySelector('#speed').focus()")
+		await page.required.keyboard.press('ArrowDown')
+		await page.required.keyboard.down('Control')
 		try {
-			await requireValue((await page.elements.find({ css: '#olives' }))[0]).click()
+			await requireValue((await page.required.elements.find({ css: '#olives' }))[0]).click()
 		} finally {
-			await page.keyboard.up('Control')
+			await page.required.keyboard.up('Control')
 		}
-		const frames = await page.frames()
+		const frames = await page.required.frames()
 		expect(frames.some((frame) => frame.url.endsWith('/child'))).toBe(true)
 		expect(frames.some((frame) => frame.url.endsWith('/remote'))).toBe(true)
 		await requireValue(
-			(await page.elements.find({ role: 'button', name: 'Accept terms', exact: true }))[0],
+			(await page.required.elements.find({ role: 'button', name: 'Accept terms', exact: true }))[0],
 		).click()
 		await requireValue(
-			(await page.elements.find({ role: 'button', name: 'Pay now', exact: true }))[0],
+			(await page.required.elements.find({ role: 'button', name: 'Pay now', exact: true }))[0],
 		).click()
 		await waitForCondition('both child clicks reach the independent log', async () => {
-			const log = await page.evaluate('JSON.parse(document.body.dataset.codegenLog)')
+			const log = await page.required.evaluate('JSON.parse(document.body.dataset.codegenLog)')
 			return (
 				isArray(log) &&
 				log.filter(
@@ -114,18 +122,18 @@ describe('claim 12: page recorder against the fixture event log', () => {
 			)
 		})
 		const dialogs = createRecorder<[unknown]>()
-		await page.subscribe('Page.javascriptDialogOpening', dialogs.handler)
-		const click = requireValue((await page.elements.find({ css: '#discard' }))[0]).click()
+		await page.required.subscribe('Page.javascriptDialogOpening', dialogs.handler)
+		const click = requireValue((await page.required.elements.find({ css: '#discard' }))[0]).click()
 		await waitForCondition('the native confirmation opens', () => dialogs.count === 1)
-		await page.send('Page.handleJavaScriptDialog', { accept: true })
+		await page.required.send('Page.handleJavaScriptDialog', { accept: true })
 		await click
-		await requireValue((await page.elements.find({ css: '#password' }))[0]).click()
-		await page.keyboard.type('teal-Heron-42')
-		await page.keyboard.press('Tab')
-		await page.evaluate("document.querySelector('#size').focus()")
-		await page.keyboard.press('ArrowDown')
+		await requireValue((await page.required.elements.find({ css: '#password' }))[0]).click()
+		await page.required.keyboard.type('teal-Heron-42')
+		await page.required.keyboard.press('Tab')
+		await page.required.evaluate("document.querySelector('#size').focus()")
+		await page.required.keyboard.press('ArrowDown')
 		const steps = await recorder.stop()
-		const log = await page.evaluate('JSON.parse(document.body.dataset.codegenLog)')
+		const log = await page.required.evaluate('JSON.parse(document.body.dataset.codegenLog)')
 		if (!isArray(log) || !log.every(isRecord)) throw new Error('The fixture log is malformed')
 		const projected = projectCodegenOracle(log)
 		expect(steps.map(({ id: _id, ...step }) => step)).toEqual(projected)
@@ -160,20 +168,20 @@ describe('claim 12: page recorder against the fixture event log', () => {
 	})
 
 	it('closes edits at submission, focus departure, navigation, and stop, including contenteditable', async () => {
-		const recorder = page.recorder
+		const recorder = page.required.recorder
 		await recorder.start()
-		await page.evaluate("document.querySelector('#title').focus()")
-		await page.keyboard.insert('first')
-		await page.keyboard.press('Enter')
-		await page.keyboard.insert(' second')
-		await page.keyboard.press('Tab')
-		await page.evaluate("document.querySelector('#title').focus()")
-		await page.keyboard.insert(' third')
-		await page.evaluate("location.hash = 'edited'")
-		await page.keyboard.insert(' fourth')
-		await page.evaluate("document.querySelector('#editor').focus()")
-		await page.keyboard.press('Control+a')
-		await page.keyboard.insert('Notes text')
+		await page.required.evaluate("document.querySelector('#title').focus()")
+		await page.required.keyboard.insert('first')
+		await page.required.keyboard.press('Enter')
+		await page.required.keyboard.insert(' second')
+		await page.required.keyboard.press('Tab')
+		await page.required.evaluate("document.querySelector('#title').focus()")
+		await page.required.keyboard.insert(' third')
+		await page.required.evaluate("location.hash = 'edited'")
+		await page.required.keyboard.insert(' fourth')
+		await page.required.evaluate("document.querySelector('#editor').focus()")
+		await page.required.keyboard.press('Control+a')
+		await page.required.keyboard.insert('Notes text')
 		const steps = await recorder.stop()
 		expect(steps.map((step) => step.arguments)).toEqual([
 			{ text: 'first', submit: true },
@@ -184,7 +192,7 @@ describe('claim 12: page recorder against the fixture event log', () => {
 		])
 		expect(steps.every((step) => step.action === 'type')).toBe(true)
 		expect(steps.at(-1)?.target).toEqual({ role: 'textbox', name: 'Notes' })
-		await page.keyboard.insert(' after stop')
+		await page.required.keyboard.insert(' after stop')
 		expect(recorder.steps()).toEqual(steps)
 	})
 })

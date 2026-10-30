@@ -6,27 +6,20 @@
  * through the writer itself.
  */
 
-import type { ScratchInterface } from '@orkestrel/test/server'
 import { describe, expect, it, afterEach } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createScratch } from '@orkestrel/test/server'
+import { createTeardown } from '@orkestrel/test'
 import { FileBrowserWriter } from '@src/server'
 
-const scratches: ScratchInterface[] = []
-afterEach(() => {
-	for (const scratch of scratches.splice(0)) scratch.destroy()
-})
-
-function createWriterScratch(): ScratchInterface {
-	const scratch = createScratch({ prefix: 'orkestrel-browser-writer-' })
-	scratches.push(scratch)
-	return scratch
-}
+const teardown = createTeardown()
+afterEach(() => teardown.destroy())
 
 describe('FileBrowserWriter', () => {
 	it('writes the exact bytes to an existing directory', async () => {
-		const scratch = createWriterScratch()
+		const scratch = createScratch({ prefix: 'orkestrel-browser-writer-' })
+		teardown.add(() => scratch.destroy())
 		const writer = new FileBrowserWriter()
 		const target = join(scratch.path, 'hero.png')
 
@@ -36,7 +29,8 @@ describe('FileBrowserWriter', () => {
 	})
 
 	it('creates every missing parent directory of the target path', async () => {
-		const scratch = createWriterScratch()
+		const scratch = createScratch({ prefix: 'orkestrel-browser-writer-' })
+		teardown.add(() => scratch.destroy())
 		const writer = new FileBrowserWriter()
 		const target = join(scratch.path, 'shots', 'nested', 'hero.png')
 
@@ -46,7 +40,8 @@ describe('FileBrowserWriter', () => {
 	})
 
 	it('replaces the previous content of an existing file', async () => {
-		const scratch = createWriterScratch()
+		const scratch = createScratch({ prefix: 'orkestrel-browser-writer-' })
+		teardown.add(() => scratch.destroy())
 		const writer = new FileBrowserWriter()
 		const target = join(scratch.path, 'hero.png')
 
@@ -57,7 +52,8 @@ describe('FileBrowserWriter', () => {
 	})
 
 	it('writes an empty payload as an empty file', async () => {
-		const scratch = createWriterScratch()
+		const scratch = createScratch({ prefix: 'orkestrel-browser-writer-' })
+		teardown.add(() => scratch.destroy())
 		const writer = new FileBrowserWriter()
 		const target = join(scratch.path, 'empty.bin')
 
@@ -67,7 +63,8 @@ describe('FileBrowserWriter', () => {
 	})
 
 	it('rejects when the target path names an existing directory', async () => {
-		const scratch = createWriterScratch()
+		const scratch = createScratch({ prefix: 'orkestrel-browser-writer-' })
+		teardown.add(() => scratch.destroy())
 		const writer = new FileBrowserWriter()
 		const target = scratch.ensure('occupied')
 

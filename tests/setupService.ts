@@ -20,6 +20,7 @@ import type {
 	SystemBrowser,
 	SystemBrowserOptions,
 } from '@src/server'
+
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import type { MCPClientInterface } from '@orkestrel/mcp'
 import { BROWSER_TOOL_CHANGED_NOTE, BROWSER_TOOL_DEADLINE_NOTE, createCDPClient } from '@src/core'
@@ -42,6 +43,10 @@ import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import { BrowseChild, SOURCE_HOOK } from './setupServer.js'
 export { reservePort } from './setupServer.js'
+
+/** Reads the document fixture through the published toolset in the browse session. */
+export const SERVICE_DOCUMENT_READ =
+	"documentToolset.tools.execute({ id: 'reading', name: 'read', arguments: { from: 1, search: 'the gift options' } })"
 
 /** Serves worker scripts and a page for worker startup proofs.
  * @param request - The fixture HTTP request
@@ -600,23 +605,15 @@ export function scanServiceSkips(source: string, reasons: readonly string[]): re
 	const findings: string[] = []
 	for (const match of source.matchAll(/([A-Za-z_$][\w$]*)\s*\.\s*(skip|skipIf|runIf)\b/g)) {
 		const [declaration, receiver, member] = match
-		let cursor = match.index + declaration.length
-		while (/\s/.test(source.charAt(cursor))) cursor += 1
+		const end = match.index + declaration.length
+		const cursor = end + (source.slice(end).match(/^\s*/u)?.[0].length ?? 0)
 		if (receiver !== 'context' || member !== 'skip' || source.charAt(cursor) !== '(') {
 			findings.push(source.slice(match.index).split('\n', 1)[0] ?? declaration)
 			continue
 		}
-		const parts: string[] = ['']
-		let depth = 0
-		for (cursor += 1; cursor < source.length; cursor += 1) {
-			const character = source.charAt(cursor)
-			if (character === ')' && depth === 0) break
-			if (character === '(' || character === '[' || character === '{') depth += 1
-			if (character === ')' || character === ']' || character === '}') depth -= 1
-			if (character === ',' && depth === 0) parts.push('')
-			else parts[parts.length - 1] += character
-		}
-		const [condition, reason, ...rest] = parts.map((part) => part.trim())
+		const [condition, reason, ...rest] = new BrowserServiceSkip(source.slice(cursor + 1))
+			.map((part) => part.trim())
+			.toArray()
 		const subject = /^!\s*([A-Za-z_$][\w$]*)(?:\.[A-Za-z_$][\w$]*)*(?:\(.*\))?$/s.exec(
 			condition ?? '',
 		)?.[1]
@@ -1026,3 +1023,55 @@ export const SERVICE_LINE_VIEW_REPLIES = Object.freeze({
 			'Element link "Cedar Tea Tray" [ref=e7] takes no text; to type, use searchbox "Search products" [ref=e4].',
 	},
 })
+
+/** Yields the comma-separated arguments of a service skip declaration. */
+export class BrowserServiceSkip extends Iterator<string> {
+	readonly #source: string
+	#cursor = 0
+	#depth = 0
+	#ended = false
+
+	constructor(source: string) {
+		super()
+		this.#source = source
+	}
+
+	next(): IteratorResult<string> {
+		if (this.#ended) return { done: true, value: undefined }
+		const parts: string[] = []
+		while (this.#cursor < this.#source.length) {
+			const character = this.#source.charAt(this.#cursor++)
+			if (character === ')' && this.#depth === 0) {
+				this.#ended = true
+				return { done: false, value: parts.join('') }
+			}
+			if (character === '(' || character === '[' || character === '{') this.#depth += 1
+			if (character === ')' || character === ']' || character === '}') this.#depth -= 1
+			if (character === ',' && this.#depth === 0) return { done: false, value: parts.join('') }
+			parts.push(character)
+		}
+		this.#ended = true
+		return { done: false, value: parts.join('') }
+	}
+}
+
+/** Describes the evaluation boundary used by a document-readiness proof. */
+export interface BrowserDocumentProbe {
+	evaluate(expression: string): Promise<unknown>
+}
+
+/** Records readiness reads and supplies readiness after the pending responses. */
+export function createDocumentReadinessProbe(read: string[]): BrowserDocumentProbe {
+	return {
+		evaluate: (expression) => {
+			read.push(expression)
+			if (expression === 'document.body.dataset.failed') return Promise.resolve(undefined)
+			return Promise.resolve(read.length < 3 ? undefined : 'yes')
+		},
+	}
+}
+
+/** Supplies a fixed document-readiness result. */
+export function createDocumentFailureProbe(value: unknown): BrowserDocumentProbe {
+	return { evaluate: () => Promise.resolve(value) }
+}
