@@ -94,7 +94,7 @@ The core supplies the entities a browser session and an agent use. Its host-spec
 
 #### Context and page
 
-| API                                 | Kind      | Summary                                                                                                                                                                             |
+| Name                                | Kind      | Summary                                                                                                                                                                             |
 | ----------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BrowserContext`                    | class     | Owns pages and shared state inside one Chromium browser context.                                                                                                                    |
 | `BrowserTransition`                 | class     | Runs one asynchronous transition at a time, shared by every caller that joins it.                                                                                                   |
@@ -471,7 +471,7 @@ validateBrowserViewport({ width: 1280, height: 720 })
 
 #### Elements and readings
 
-| API                                   | Kind      | Summary                                                                                                                                                                                                                           |
+| Name                                  | Kind      | Summary                                                                                                                                                                                                                           |
 | ------------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BrowserContent`                      | class     | Represents one captured document, parsed one time and projected to Markdown or plain text in bounded slices.                                                                                                                      |
 | `BrowserSnapshot`                     | class     | Represents a navigable, serializable browser DOM snapshot.                                                                                                                                                                        |
@@ -680,7 +680,7 @@ compileSubmitReleaseExpression(1)
 
 #### Toolset
 
-| API                              | Kind      | Summary                                                                                                                                                                                                                                                      |
+| Name                             | Kind      | Summary                                                                                                                                                                                                                                                      |
 | -------------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | `BrowserToolset`                 | class     | Publishes the browser vocabulary as `@orkestrel/tool` tools over one view and adopts the view's own tools beside them.                                                                                                                                       |
 | `createBrowserToolset`           | function  | Creates a toolset over a caller-owned view, enabling page tools when the view is a page.                                                                                                                                                                     |
@@ -823,7 +823,7 @@ const waitQuery = compileQueryWaitExpression(5_000, 'wait-2')
 
 #### Journeys and stores
 
-| API                                    | Kind      | Summary                                                                                                                                                                                   |
+| Name                                   | Kind      | Summary                                                                                                                                                                                   |
 | -------------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BrowserRecorder`                      | class     | Records semantic steps from completed toolset actions and omits refused or timed-out actions.                                                                                             |
 | `BrowserReplay`                        | class     | Prepares and replays a journey under a toolset hold, retaining its executed prefix.                                                                                                       |
@@ -1025,7 +1025,7 @@ compileBrowserJourney(journey, { language: 'typescript' }) // { source, gaps: []
 
 These entities own state for one traversal, edit, or replay. Construct a fresh entity for each operation. The existing capture, rendering, and replay entry points construct them for callers.
 
-| API                               | Kind      | Summary                                                                                 |
+| Name                              | Kind      | Summary                                                                                 |
 | --------------------------------- | --------- | --------------------------------------------------------------------------------------- |
 | `BrowserLineWrap`                 | class     | Wraps one semantic line while retaining its continuation and reference boundaries.      |
 | `BrowserOutlineRows`              | class     | Projects outline nodes into wrapped lines while retaining listing totals and focus.     |
@@ -1087,7 +1087,7 @@ isBrowserSnapshotTables({ strings: [], documents: [] }) // true
 
 #### Errors
 
-| API                      | Kind     | Summary                                                                                       |
+| Name                     | Kind     | Summary                                                                                       |
 | ------------------------ | -------- | --------------------------------------------------------------------------------------------- |
 | `BrowserError`           | class    | Reports a browser failure with a typed code and optional JSON context.                        |
 | `BrowserStepError`       | class    | Reports an incomplete journey step with its action and the code `STEP`.                       |
@@ -1182,7 +1182,7 @@ if (isBrowserError(error)) error.code // 'ARGUMENT'
 
 #### Protocol layer
 
-| API                                      | Kind      | Summary                                                                                                                                                                                                                                                          |
+| Name                                     | Kind      | Summary                                                                                                                                                                                                                                                          |
 | ---------------------------------------- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `CDPClient`                              | class     | Provides a lightweight Chrome DevTools Protocol client over a `CDPTransportInterface`.                                                                                                                                                                           |
 | `createCDPClient`                        | function  | Creates a `CDPClientInterface` bound to the given `CDPTransportInterface`.                                                                                                                                                                                       |
@@ -1351,7 +1351,7 @@ await browser.destroy()
 
 #### Context and page
 
-| API                               | Kind      | Summary                                                                                                                                                                                                                       |
+| Name                              | Kind      | Summary                                                                                                                                                                                                                       |
 | --------------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `Browser`                         | class     | Discovers, launches, connects to, and owns Chromium-family browser sessions.                                                                                                                                                  |
 | `FileBrowserWriter`               | class     | Persists captured browser bytes to the filesystem through `node:fs/promises`.                                                                                                                                                 |
@@ -1423,7 +1423,7 @@ await browser.destroy()
 
 ##### Launch and holder state
 
-| API                            | Kind      | Summary                                                                                  |
+| Name                           | Kind      | Summary                                                                                  |
 | ------------------------------ | --------- | ---------------------------------------------------------------------------------------- |
 | `BrowserProcessDrainInterface` | interface | Exposes whether a process remainder disappeared before its deadline.                     |
 | `BrowserServerSlot`            | interface | Pairs a pooled browser with its profile directory.                                       |
@@ -1435,8 +1435,8 @@ await browser.destroy()
 
 ##### Discover and launch
 
-| API | Kind | Summary |
-| --- | ---- | ------- |
+| Name | Kind | Summary |
+| ---- | ---- | ------- |
 
 The following fence composes system-browser discovery, a launch, and the endpoint read that replaces HTTP readiness polling.
 
@@ -1495,7 +1495,7 @@ await removeBrowserProfile(profile)
 
 #### Toolset
 
-| API                         | Kind      | Summary                                                                                                                                                                   |
+| Name                        | Kind      | Summary                                                                                                                                                                   |
 | --------------------------- | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BrowserMCPServer`          | class     | Implements `BrowserMCPServerInterface`: serves the browser vocabulary and the journey tools over the Model Context Protocol on stdio, and warms Chromium at server start. |
 | `createBrowserMCPServer`    | function  | Creates the browse server, which serves the browser vocabulary and the journey tools over the Model Context Protocol on stdio and warms Chromium at server start.         |
@@ -1507,7 +1507,7 @@ await removeBrowserProfile(profile)
 
 #### Journeys and stores
 
-| API                              | Kind      | Summary                                                                                                                                             |
+| Name                             | Kind      | Summary                                                                                                                                             |
 | -------------------------------- | --------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `FileBrowserJourneyStore`        | class     | Persists journeys with exclusive writes and revision counters retained across deletion.                                                             |
 | `FileBrowserRunStore`            | class     | Persists runs and captures only in directories allocated by this instance.                                                                          |
@@ -1528,7 +1528,7 @@ await removeBrowserProfile(profile)
 
 #### Protocol layer
 
-| API                            | Kind      | Summary                                                                                                                                           |
+| Name                           | Kind      | Summary                                                                                                                                           |
 | ------------------------------ | --------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `WebSocketCDPTransport`        | class     | Provides a raw CDP text transport backed by `@orkestrel/websocket`.                                                                               |
 | `createWebSocketCDPTransport`  | function  | Creates a Node `WebSocket`-backed `CDPTransportInterface` for the given CDP debugger URL.                                                         |
@@ -1562,7 +1562,7 @@ The browser face supplies an untrusted DOM view. Drive a same-origin child docum
 
 #### Elements and readings
 
-| API                           | Kind      | Summary                                                                                                                                                                                                                                                                                                                                                     |
+| Name                          | Kind      | Summary                                                                                                                                                                                                                                                                                                                                                     |
 | ----------------------------- | --------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `BrowserDOMView`              | class     | Reads and drives a DOM document from a realm that can reach it, without trusted input.                                                                                                                                                                                                                                                                      |
 | `BrowserDOMWait`              | class     | Parks one condition on DOM mutations and finished transitions and animations until it holds, with one deadline and coalesced wake tasks.                                                                                                                                                                                                                    |
@@ -1604,7 +1604,7 @@ The browser face supplies an untrusted DOM view. Drive a same-origin child docum
 
 ##### Capture state
 
-| API                          | Kind      | Summary                                                                            |
+| Name                         | Kind      | Summary                                                                            |
 | ---------------------------- | --------- | ---------------------------------------------------------------------------------- |
 | `BrowserAncestors`           | class     | Traverses ancestors lazily while retaining the previously yielded node.            |
 | `BrowserCaptureSiblings`     | class     | Traverses paired live and inert siblings while preserving pointers across pruning. |
@@ -1684,7 +1684,7 @@ if (isBrowserDocument(document)) {
 
 #### Protocol layer
 
-| API                         | Kind      | Summary                                                                  |
+| Name                        | Kind      | Summary                                                                  |
 | --------------------------- | --------- | ------------------------------------------------------------------------ |
 | `SocketCDPTransport`        | class     | Provides a raw CDP text transport over the browser's native `WebSocket`. |
 | `createSocketCDPTransport`  | function  | Creates a CDP transport over the browser's native `WebSocket`.           |
