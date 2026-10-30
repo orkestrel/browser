@@ -17,6 +17,24 @@ import { BROWSER_RUN_FIXTURE } from '../../../setup.js'
 import { BrowserLockObserver, observeBrowserFilesystem } from '../../../setupServer.js'
 
 describe('FileBrowserStore', () => {
+	it('preserves a lock when the host cannot inspect its holder', async () => {
+		const scratch = createScratch()
+		try {
+			const files = new FileBrowserStore({ root: scratch.path })
+			const lock = scratch.ensure('journey.lock')
+			const name = formatBrowserLockEntry(
+				Number.MAX_SAFE_INTEGER,
+				'11111111-1111-4111-8111-111111111111',
+			)
+			writeFileSync(join(lock, name), '')
+			await expect(files.lock(lock, async () => 'acquired')).rejects.toMatchObject({
+				code: 'STORE_LOCKED',
+			})
+			expect(await readdir(lock)).toEqual([name])
+		} finally {
+			scratch.destroy()
+		}
+	})
 	it('preserves committed results when an empty lock removal races another writer', async () => {
 		const scratch = createScratch()
 		try {

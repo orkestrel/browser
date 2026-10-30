@@ -184,7 +184,7 @@ describe('createProbeBridge', () => {
 			{ pure: true, untrusted: false, consequential: false },
 			{ pure: false, untrusted: true, consequential: true },
 		])
-		expect((await bridge.adopt({ debugging: true })).map((tool) => tool.name)).toEqual([
+		expect((await bridge.adopt({ debug: true })).map((tool) => tool.name)).toEqual([
 			'inspect',
 			'lookup',
 			'quote',

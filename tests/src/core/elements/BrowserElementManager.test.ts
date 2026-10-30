@@ -6,7 +6,13 @@ import { scanBrowserLines } from '@src/core'
 import { renderBrowserLine } from '@src/core'
 import { describe, expect, it } from 'vitest'
 import { BrowserContext } from '@src/core'
-import { createRecorder, requireValue, waitForCondition, waitForDelay } from '@orkestrel/test'
+import {
+	createRecorder,
+	requireValue,
+	TIMER_LEAD,
+	waitForCondition,
+	waitForDelay,
+} from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
 	BROWSER_ELEMENT_CHILD_FIXTURE,
@@ -18,7 +24,6 @@ import {
 	createConnectedCDPClient,
 	scriptBrowserElements,
 	scriptCDPAttach,
-	TIMER_LEAD,
 	buildBrowserReferenceTree,
 	emitBrowserNavigation,
 } from '../../../setup.js'

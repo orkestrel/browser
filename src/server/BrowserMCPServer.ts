@@ -14,6 +14,7 @@ import type {
 	BrowserServerHolder,
 	BrowserServerLease,
 } from './types.js'
+import { inspectProcess } from '@orkestrel/process/server'
 import { randomUUID } from 'node:crypto'
 import { addAbortListener } from 'node:events'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
@@ -66,7 +67,6 @@ import {
 	formatBrowserLockEntry,
 	parseBrowserLockEntry,
 	parseBrowserProfileRecord,
-	probeProcess,
 } from './helpers.js'
 
 /**
@@ -330,7 +330,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				const record = parseBrowserProfileRecord(
 					await readFile(join(folder, BROWSER_SERVER_RECORD), 'utf8'),
 				)
-				if (record === undefined || probeProcess(record.pid)) continue
+				if (record === undefined || inspectProcess(record.pid) !== false) continue
 			} catch (error) {
 				if (!isError(error) || !('code' in error) || error.code !== 'ENOENT') continue
 			}
@@ -1210,7 +1210,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			for (const entry of await readdir(profiles)) {
 				if (this.#closing !== undefined) return
 				const pid = parseBrowserLockEntry(entry)
-				if (pid === undefined || pid === process.pid || probeProcess(pid)) continue
+				if (pid === undefined || pid === process.pid || inspectProcess(pid) !== false) continue
 				const folder = join(profiles, entry)
 				this.#folders.add(folder)
 				try {
@@ -1218,7 +1218,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 						await readFile(join(folder, BROWSER_SERVER_RECORD), 'utf8'),
 					)
 					if (record === undefined) continue
-					if (probeProcess(record.pid)) {
+					if (inspectProcess(record.pid) !== false) {
 						const transport = createWebSocketCDPTransport({ url: record.endpoint })
 						const client = createCDPClient({ transport })
 						try {
@@ -1233,7 +1233,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 							await transport.close()
 							await client.close()
 						}
-						if (probeProcess(record.pid)) continue
+						if (inspectProcess(record.pid) !== false) continue
 					}
 				} catch (error) {
 					if (!isError(error) || !('code' in error) || error.code !== 'ENOENT') continue

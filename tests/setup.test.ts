@@ -11,7 +11,6 @@ import {
 	readProperty,
 	requireValue,
 	waitForCondition,
-	waitForDelay,
 } from '@orkestrel/test'
 import {
 	BROWSER_ELEMENT_AX_FIXTURE,
@@ -65,9 +64,7 @@ import {
 	createBrowserJourneyMalformedInputs,
 	instrumentBrowserJourneyModule,
 	requireBrowserJourneyElement,
-	TIMER_LEAD,
 } from './setup.js'
-import { alignLoopClock } from './setupServer.js'
 
 describe('element protocol and compiler fixtures', () => {
 	it('records run writes while retaining the memory store validation and persistence', async () => {
@@ -1221,30 +1218,6 @@ describe('image constants', () => {
 		expect(Array.from(atob(JPEG_BASE64), (character) => character.charCodeAt(0))).toStrictEqual([
 			255, 216, 255, 224,
 		])
-	})
-})
-
-// === Timer lead
-
-describe('TIMER_LEAD', () => {
-	it('bounds real timer lead after a measured loop-clock alignment', async () => {
-		const spans: number[] = []
-		const control = performance.now()
-		await waitForDelay(25)
-		expect(performance.now() - control).toBeGreaterThanOrEqual(25 - TIMER_LEAD)
-		while (spans.length < 5) {
-			const aligning = performance.now()
-			alignLoopClock(0.9)
-			expect(performance.now() - aligning).toBeGreaterThanOrEqual(0.9)
-			const started = performance.now()
-			const delayed = waitForDelay(10)
-			alignLoopClock()
-			await delayed
-			const span = performance.now() - started
-			spans.push(span)
-			if (span < 10) break
-		}
-		for (const span of spans) expect(span).toBeGreaterThanOrEqual(10 - TIMER_LEAD)
 	})
 })
 

@@ -1965,6 +1965,37 @@ describe('eager U6', () => {
 		}
 	})
 
+	it('keeps profile owners and browser records whose host status is unknown', async () => {
+		const fixture = createBrowseFixture()
+		const peer = await createCDPTestServer()
+		peer.script('Browser.close', {})
+		const owner = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(Number.MAX_SAFE_INTEGER, '11111111-1111-4111-8111-111111111111')}`,
+		)
+		const browser = fixture.scratch.ensure(
+			`browsers/.profiles/${formatBrowserLockEntry(readExitedProcessId(), '22222222-2222-4222-8222-222222222222')}`,
+		)
+		writeFileSync(
+			join(browser, BROWSER_SERVER_RECORD),
+			JSON.stringify({
+				pid: Number.MAX_SAFE_INTEGER,
+				endpoint: peer.endpoint.replace('/cdp', '/devtools/browser/unknown'),
+			}),
+		)
+		try {
+			await fixture.server.start()
+			await waitForCondition('close request for the unknown browser', () =>
+				peer.received.some((message) => message.method === 'Browser.close'),
+			)
+			await fixture.server.destroy()
+			expect(existsSync(owner)).toBe(true)
+			expect(existsSync(browser)).toBe(true)
+		} finally {
+			await fixture.teardown.destroy()
+			await peer.close()
+		}
+	})
+
 	it('keeps unreadable and non-loopback records', async () => {
 		const fixture = createBrowseFixture()
 		const peer = await createCDPTestServer()

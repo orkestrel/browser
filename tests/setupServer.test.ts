@@ -122,7 +122,6 @@ import {
 } from '@orkestrel/test'
 import { createScratch, isRunning } from '@orkestrel/test/server'
 import {
-	alignLoopClock,
 	requireBrowserBuild,
 	BrowseChild,
 	BROWSE_SOURCE_ENTRY,
@@ -160,7 +159,6 @@ import {
 	readChromiumProcesses,
 	readExitedProcessId,
 	readFixtureProcessId,
-	readLoopClock,
 	readProfiles,
 	readServerPort,
 	readWebSocketFrames,
@@ -414,36 +412,6 @@ describe('BrowserLauncher eager U2', () => {
 afterAll(async () => {
 	await destroyFakeBrowsers()
 	await destroyTempDirectories()
-})
-
-// === Loop clock
-
-describe('readLoopClock', () => {
-	it('advances in whole milliseconds by the time performance.now() measures between readings', () => {
-		const opened = performance.now()
-		const before = readLoopClock()
-		const inner = performance.now()
-		alignLoopClock(5)
-		const outer = performance.now()
-		const after = readLoopClock()
-		const closed = performance.now()
-		expect(Number.isInteger(before)).toBe(true)
-		expect(Number.isInteger(after)).toBe(true)
-		// Each reading truncates by under 1 ms and a coarse clock trails by under 1 ms more.
-		expect(after - before).toBeGreaterThan(outer - inner - 2)
-		expect(after - before).toBeLessThan(closed - opened + 2)
-	})
-})
-
-describe('alignLoopClock', () => {
-	it('returns after the loop clock ticks and the offset elapses on performance.now()', () => {
-		const before = readLoopClock()
-		const opened = performance.now()
-		alignLoopClock(0.5)
-		const closed = performance.now()
-		expect(readLoopClock()).toBeGreaterThan(before)
-		expect(closed - opened).toBeGreaterThanOrEqual(0.5)
-	})
 })
 
 // === Ports

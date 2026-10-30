@@ -20,7 +20,7 @@ import { tmpdir } from 'node:os'
 import { PassThrough } from 'node:stream'
 import { join, dirname, delimiter } from 'node:path'
 import { requireValue } from '@orkestrel/test'
-import { createScratch, readErrorCode } from '@orkestrel/test/server'
+import { createScratch } from '@orkestrel/test/server'
 import {
 	createBrowserProfile,
 	findSystemBrowsers,
@@ -34,7 +34,6 @@ import {
 	fetchCDPTargets,
 	formatBrowserLockEntry,
 	parseBrowserLockEntry,
-	probeProcess,
 	parseBrowserProfileRecord,
 	parseBrowserViewport,
 	describeBrowserServerLoss,
@@ -44,7 +43,7 @@ import {
 	BROWSER_SERVER_UNRESOLVED,
 } from '@src/server'
 import { BrowserError, isBrowserError } from '@src/core'
-import { createCDPTestServer, readExitedProcessId } from '../../setupServer.js'
+import { createCDPTestServer } from '../../setupServer.js'
 import type { CDPTestServerInterface } from '../../setupServer.js'
 
 const server = new BrowserFixtureValue<CDPTestServerInterface | undefined>(undefined)
@@ -83,22 +82,6 @@ describe('parseBrowserViewport', () => {
 })
 
 describe('eager U4 profile and loss helpers', () => {
-	it('treats a runtime-proven EPERM process as present', (context) => {
-		// Init and the Windows system process are candidates only; signal zero decides applicability.
-		const denied = [1, 4].find((pid) => {
-			try {
-				process.kill(pid, 0)
-				return false
-			} catch (error) {
-				return readErrorCode(error) === 'EPERM'
-			}
-		})
-		context.skip(
-			denied === undefined,
-			'NOT-EVIDENCED: signal zero on pid 1 and pid 4 produced no EPERM',
-		)
-		expect(probeProcess(requireValue(denied, 'runtime EPERM pid'))).toBe(true)
-	})
 	it('keeps recovery guidance on unresolved outcomes alone', () => {
 		const crash = describeBrowserServerLoss(BROWSER_SERVER_CRASH, new Error('Browser exited'))
 		expect(crash).toContain('Lost the page')
@@ -115,11 +98,6 @@ describe('eager U4 profile and loss helpers', () => {
 			),
 		).toBe('SERVER_UNAVAILABLE: No Chromium browser found.')
 	})
-	it('distinguishes the live process from an exited child', async () => {
-		expect(probeProcess(process.pid)).toBe(true)
-		expect(probeProcess(await readExitedProcessId())).toBe(false)
-	})
-
 	it('round-trips a profile and refuses malformed or remote records', () => {
 		const record = { pid: process.pid, endpoint: 'ws://127.0.0.1:9222/devtools/browser/session' }
 		expect(parseBrowserProfileRecord(JSON.stringify(record))).toEqual(record)

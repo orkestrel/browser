@@ -1,3 +1,4 @@
+import { inspectProcess } from '@orkestrel/process/server'
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath, pathToFileURL } from 'node:url'
@@ -16,7 +17,7 @@ import {
 	requireBrowserBuild,
 	waitForProcessExit,
 } from '../../setupServer.js'
-import { findSystemBrowsers, parseBrowserProfileRecord, probeProcess } from '@src/server'
+import { findSystemBrowsers, parseBrowserProfileRecord } from '@src/server'
 
 const ROOT = fileURLToPath(new URL('../../../', import.meta.url))
 const BUILT_ENTRY = resolve(ROOT, 'dist/bin/main.js')
@@ -85,7 +86,7 @@ describe('bin entry', () => {
 					).pid,
 				)
 			expect(pids.length).toBeGreaterThan(0)
-			expect(pids.every(probeProcess)).toBe(true)
+			expect(pids.every((pid) => inspectProcess(pid) !== false)).toBe(true)
 			child.close()
 			child.end()
 			const ending = await child.ending
@@ -103,7 +104,7 @@ describe('bin entry', () => {
 			expect(readProfiles(profiles)).toEqual([])
 		} finally {
 			await child.destroy()
-			for (const pid of pids) if (probeProcess(pid)) process.kill(pid, 'SIGKILL')
+			for (const pid of pids) if (inspectProcess(pid) !== false) process.kill(pid, 'SIGKILL')
 			for (const pid of pids) await waitForProcessExit(pid)
 			scratch.destroy()
 		}

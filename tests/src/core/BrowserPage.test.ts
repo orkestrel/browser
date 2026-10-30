@@ -29,6 +29,7 @@ import {
 	captureError,
 	createRecorder,
 	requireValue,
+	TIMER_LEAD,
 	waitForCondition,
 	waitForDelay,
 	waitForEvent,
@@ -62,7 +63,6 @@ import {
 	PNG_BASE64,
 	BROWSER_BASE64_REFUSALS,
 	throwListenerError,
-	TIMER_LEAD,
 } from '../../setup.js'
 
 // === BrowserPage

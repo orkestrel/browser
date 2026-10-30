@@ -1,4 +1,5 @@
 import type { BrowserPageInterface } from '@src/core'
+import { inspectProcess } from '@orkestrel/process/server'
 import {
 	existsSync,
 	readdirSync,
@@ -35,7 +36,6 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest'
 import {
 	createBrowserMCPServer,
 	createBrowser,
-	probeProcess,
 	parseBrowserProfileRecord,
 	formatBrowserLockEntry,
 	createWebSocketCDPTransport,
@@ -350,7 +350,7 @@ describe('contexts C2 built browse on one browser', () => {
 			})
 			expect(sibling, 'destroy keeps the sibling context alive').not.toContain('SERVER_CRASH')
 			expect(
-				probeProcess(observer.pid),
+				inspectProcess(observer.pid) !== false,
 				`destroy retains the sibling browser; ${server.required.transport.evidence ?? ''}`,
 			).toBe(true)
 			const retained = readContextFolders(observer.profile)
@@ -704,7 +704,7 @@ describe('holders H3 built browse', () => {
 		).finally(() => owner.client.close())
 		await callHolderServer(server.required.client, 'destroy', { holder: first.required })
 		expect(existsSync(dirname(download))).toBe(false)
-		expect(probeProcess(owner.pid)).toBe(true)
+		expect(inspectProcess(owner.pid) !== false).toBe(true)
 		expect(existsSync(owner.profile)).toBe(true)
 		first.value = await acquireHolder(server.required.client, 'clean replacement')
 		expect(
@@ -832,7 +832,7 @@ describe('holders H3 built browse', () => {
 		await server.required.client.disconnect()
 		expect(server.required.transport.evidence ?? '').toBe('')
 		for (const { profile, record } of records) {
-			expect(probeProcess(record.pid)).toBe(false)
+			expect(inspectProcess(record.pid) !== false).toBe(false)
 			expect(existsSync(profile)).toBe(false)
 		}
 	})
@@ -901,7 +901,7 @@ describe('holders H3 built cleanup refusal', () => {
 			expect(await child.ending).toEqual({ code: 1, signal: null })
 			expect(child.stderr).toContain('SERVER_TEARDOWN')
 			expect(child.stderr).toContain('The browse server teardown failed')
-			for (const pid of pids) expect(probeProcess(pid)).toBe(false)
+			for (const pid of pids) expect(inspectProcess(pid) !== false).toBe(false)
 			for (const other of folders) expect(existsSync(other)).toBe(other === folder)
 		} finally {
 			const exited = once(locker, 'exit')
@@ -909,7 +909,7 @@ describe('holders H3 built cleanup refusal', () => {
 			await exited
 			await child.destroy()
 			for (const pid of pids) {
-				if (!probeProcess(pid)) continue
+				if (inspectProcess(pid) === false) continue
 				process.kill(pid, 'SIGKILL')
 				await waitForProcessExit(pid)
 			}
@@ -1070,18 +1070,18 @@ describe('eager U8 built browse', () => {
 							'built browser record',
 						)
 						pids.push(record.pid)
-						expect(probeProcess(record.pid)).toBe(true)
+						expect(inspectProcess(record.pid) !== false).toBe(true)
 					}
 					endBrowseChild(child, ending)
 					expect(await child.ending).toEqual({ code: 0, signal: null })
 					expect(child.stderr).toBe('')
 					expect(child.lines).toHaveLength(3)
 					expect(readdirSync(profiles)).toEqual([])
-					for (const pid of pids) expect(probeProcess(pid)).toBe(false)
+					for (const pid of pids) expect(inspectProcess(pid) !== false).toBe(false)
 				} finally {
 					await child.destroy()
 					for (const pid of pids) {
-						if (!probeProcess(pid)) continue
+						if (inspectProcess(pid) === false) continue
 						process.kill(pid, 'SIGKILL')
 						await waitForProcessExit(pid)
 					}
@@ -1402,7 +1402,7 @@ describe('eager U7 real browse', () => {
 			expect(answer.error).toBe(false)
 			expect(answer.text).toContain('SERVER_CRASH:')
 			await waitForProcessExit(pid)
-			expect(probeProcess(pid)).toBe(false)
+			expect(inspectProcess(pid) !== false).toBe(false)
 			await waitForCondition(
 				'replacement after ping deadline',
 				() => launcher.browsers.length === 3,
@@ -1441,7 +1441,7 @@ describe('eager U7 real browse', () => {
 		try {
 			await fixture.server.start()
 			const pid = requireValue(launcher.browsers[0]?.pid, 'stand-in pid')
-			expect(probeProcess(pid)).toBe(true)
+			expect(inspectProcess(pid) !== false).toBe(true)
 			const pending = fixture.pair.call(2, 'read', { from: 1 })
 			const exited = waitForCondition(
 				'withheld per-call ping',
@@ -1450,18 +1450,18 @@ describe('eager U7 real browse', () => {
 						.split(/\r\n|\n/)
 						.filter((method) => method === 'Browser.getVersion').length === 2,
 			).then(() =>
-				waitForCondition('forced stand-in exit', () => !probeProcess(pid), {
+				waitForCondition('forced stand-in exit', () => inspectProcess(pid) === false, {
 					budget: timeout * 1.5,
 				}),
 			)
 			const [answer] = await Promise.all([pending, exited])
-			expect(probeProcess(pid)).toBe(false)
+			expect(inspectProcess(pid) !== false).toBe(false)
 			expect(answer.error).toBe(false)
 			expect(answer.text).toContain('SERVER_CRASH:')
 			expect(answer.text).toContain('about:blank')
 			const successor = requireValue(launcher.browsers[1]?.pid, 'successor pid')
 			expect(successor).not.toBe(pid)
-			expect(probeProcess(successor)).toBe(true)
+			expect(inspectProcess(successor) !== false).toBe(true)
 			const next = await fixture.pair.call(3, 'read', { from: 1 })
 			expect(next.error).toBe(false)
 			expect(next.text).not.toContain('SERVER_CRASH:')
@@ -1503,7 +1503,7 @@ describe('eager U6 real browse', () => {
 			)
 			orphan.value = record.pid
 			expect(
-				probeProcess(record.pid),
+				inspectProcess(record.pid) !== false,
 				`browser ${record.pid} before killing server ${child.pid}; executable ${executable}`,
 			).toBe(true)
 			child.kill('SIGKILL')
@@ -1511,7 +1511,7 @@ describe('eager U6 real browse', () => {
 			// spawnBrowserProcess (src/server/helpers.ts:431) detaches only off Windows.
 			if (process.platform === 'win32') await waitForProcessExit(record.pid)
 			expect(
-				probeProcess(record.pid),
+				inspectProcess(record.pid) !== false,
 				`browser ${record.pid} after killing server ${child.pid}; executable ${executable}`,
 			).toBe(process.platform !== 'win32')
 			await server.start()
@@ -1523,7 +1523,7 @@ describe('eager U6 real browse', () => {
 		} finally {
 			await server.destroy()
 			await child.destroy()
-			if (orphan.value !== undefined && probeProcess(orphan.required)) {
+			if (orphan.value !== undefined && inspectProcess(orphan.required) !== false) {
 				process.kill(orphan.required, 'SIGKILL')
 				await waitForProcessExit(orphan.required)
 			}
@@ -1557,7 +1557,7 @@ describe('eager U6 real browse', () => {
 				join('server', '.profiles', formatBrowserLockEntry(readExitedProcessId(), randomUUID())),
 			)
 			writeFileSync(join(folder, 'browse.json'), JSON.stringify({ pid, endpoint }))
-			expect(probeProcess(pid)).toBe(true)
+			expect(inspectProcess(pid) !== false).toBe(true)
 			// The detached sweep can spend an attach deadline and a close deadline before exit grace.
 			// Browser reports its process exit through the coded error event, even after transport loss.
 			const exited = waitForEvent<[]>(
@@ -1576,7 +1576,7 @@ describe('eager U6 real browse', () => {
 				{ budget: 2 * BROWSER_DEFAULT_TIMEOUT_MS + BROWSER_KILL_GRACE_MS },
 			)
 			await Promise.all([server.start(), exited])
-			expect(probeProcess(pid)).toBe(false)
+			expect(inspectProcess(pid) !== false).toBe(false)
 			await server.destroy()
 			expect(existsSync(folder)).toBe(false)
 		} finally {
@@ -1613,7 +1613,7 @@ describe('eager U6 real browse', () => {
 				budget: 15000,
 			})
 			const pid = requireValue(launcher.connections[0]?.pid, 'lease pid')
-			expect(probeProcess(pid)).toBe(true)
+			expect(inspectProcess(pid) !== false).toBe(true)
 			await pair.initialize()
 			expect((await pair.call(2, 'navigate', { url: fixture.url('/form') })).error).toBe(false)
 			expect((await pair.call(3, 'read', { from: 1, search: 'button' })).error).toBe(false)
@@ -1643,7 +1643,7 @@ describe('eager U6 real browse', () => {
 			await server.destroy()
 			for (const connection of launcher.connections) {
 				await waitForProcessExit(requireValue(connection.pid, 'pid'))
-				expect(probeProcess(requireValue(connection.pid, 'pid'))).toBe(false)
+				expect(inspectProcess(requireValue(connection.pid, 'pid')) !== false).toBe(false)
 				const endpoint = new URL(requireValue(connection.endpoint, 'endpoint'))
 				await expect(fetch(`http://127.0.0.1:${endpoint.port}/json/version`)).rejects.toMatchObject(
 					{ cause: { code: 'ECONNREFUSED' } },

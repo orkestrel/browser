@@ -1,6 +1,7 @@
 import type { BrowserStoreOptions, BrowserStorePage, BrowserStoreFault } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
 import type { FileHandle } from 'node:fs/promises'
+import { inspectProcess } from '@orkestrel/process/server'
 import { realpathSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
 import { dirname, relative, resolve, sep } from 'node:path'
@@ -12,7 +13,7 @@ import {
 	validateBrowserStorePage,
 } from '@src/core'
 import { BROWSER_FILE_STORE_LIMIT, BROWSER_JOURNEY_LOCK_ATTEMPTS } from '../constants.js'
-import { formatBrowserLockEntry, parseBrowserLockEntry, probeProcess } from '../helpers.js'
+import { formatBrowserLockEntry, parseBrowserLockEntry } from '../helpers.js'
 
 /**
  * Shares confined filesystem operations between the journey and run stores.
@@ -260,7 +261,7 @@ export class FileBrowserStore {
 				const holder = entries[0]
 				if (holder !== undefined) {
 					const pid = parseBrowserLockEntry(holder)
-					if (pid === undefined || probeProcess(pid)) break
+					if (pid === undefined || inspectProcess(pid) !== false) break
 					if (!(await this.#unlinkLock(this.resolvePath(lock, holder)))) continue
 				}
 				await this.#removeLock(lock)

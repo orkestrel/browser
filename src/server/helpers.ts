@@ -75,22 +75,6 @@ export function parseBrowserViewport(value: string | undefined): BrowserViewport
 }
 
 /**
- * Probes whether a process has not been confirmed absent.
- * @param pid - Process identifier to probe with signal zero
- * @returns True if the host has not confirmed absence with ESRCH; false otherwise
- * @example
- * probeProcess(process.pid) // true
- */
-export function probeProcess(pid: number): boolean {
-	try {
-		process.kill(pid, 0)
-		return true
-	} catch (error) {
-		return !(isError(error) && 'code' in error && error.code === 'ESRCH')
-	}
-}
-
-/**
  * Parses a profile record naming a positive process identifier and a loopback DevTools endpoint.
  * @param text - JSON record read from a browse profile
  * @returns The record, or undefined when its shape or endpoint is refused
