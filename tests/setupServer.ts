@@ -1073,6 +1073,7 @@ export const FIXTURE_DOCUMENT_IMPORTS: Readonly<Record<string, string>> = Object
 	'@orkestrel/contract': '/node_modules/@orkestrel/contract/dist/src/core/index.js',
 	'@orkestrel/emitter': '/node_modules/@orkestrel/emitter/dist/src/core/index.js',
 	'@orkestrel/html': '/node_modules/@orkestrel/html/dist/src/core/index.js',
+	'@orkestrel/jsonrpc': '/node_modules/@orkestrel/jsonrpc/dist/src/core/index.js',
 	'@orkestrel/markdown': '/node_modules/@orkestrel/markdown/dist/src/core/index.js',
 	'@orkestrel/mcp/browser': '/node_modules/@orkestrel/mcp/dist/src/browser/index.js',
 	'@orkestrel/sse': '/node_modules/@orkestrel/sse/dist/src/core/index.js',
