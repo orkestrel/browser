@@ -27,6 +27,7 @@ const optimizeDeps = {
 		'@orkestrel/markdown',
 		'@orkestrel/mcp',
 		'@orkestrel/pool',
+		'@orkestrel/process',
 		'@orkestrel/router',
 		'@orkestrel/server',
 		'@orkestrel/tool',
