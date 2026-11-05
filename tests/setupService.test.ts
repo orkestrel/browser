@@ -339,7 +339,17 @@ describe('requireOutlineReference', () => {
 describe('requireToolText', () => {
 	it('returns the text of a successful tool result from the manager and from its JSON copy', async () => {
 		const tools = createToolManager()
-		tools.add(createTool({ name: 'echo', execute: (args) => String(args['text']) }))
+		tools.add(
+			createTool({
+				name: 'echo',
+				parameters: {
+					type: 'object',
+					properties: { text: { type: 'string' } },
+					required: ['text'],
+				},
+				execute: (args) => String(args['text']),
+			}),
+		)
 		const result = await tools.execute({ id: '1', name: 'echo', arguments: { text: 'ready' } })
 
 		expect(requireToolText(result)).toBe('ready')

@@ -202,6 +202,11 @@ describe('createProbeBridge', () => {
 		await registry.registry.registerTool({
 			name: 'lookup',
 			description: 'Looks up a car',
+			inputSchema: {
+				type: 'object',
+				properties: { make: { type: 'string' } },
+				required: ['make'],
+			},
 			execute: async (input) => ({ make: input['make'] }),
 		})
 		await registry.registry.registerTool({
