@@ -43,6 +43,7 @@ import {
 } from '@src/core'
 import {
 	BrowserFixtureValue,
+	BROWSER_NATIVE_REFUSALS,
 	createBrowserFixtureSource,
 	countBrowserFrontCalls,
 	BROWSER_SELECT_SECRET,
@@ -65,6 +66,21 @@ import {
 } from '../../setup.js'
 
 describe('BrowserToolset', () => {
+	it.each(BROWSER_NATIVE_REFUSALS)('keeps the $name parser refusal', async (refusal) => {
+		const fixture = await createBrowserElementFixture()
+		const toolset = createBrowserToolset(fixture.page)
+		try {
+			await toolset.start()
+			await expect(
+				requireValue(toolset.tools.tool(refusal.name)).execute(refusal.arguments, {
+					signal: new AbortController().signal,
+				}),
+			).rejects.toMatchObject({ code: refusal.code, message: refusal.message })
+		} finally {
+			await toolset.destroy()
+			await fixture.client.close()
+		}
+	})
 	it('selects an announced popup only after the held click replies and emits select once', async () => {
 		const withheld: CDPSentMessage[] = []
 		const fixture = await createBrowserElementFixture({
@@ -961,7 +977,17 @@ describe('BrowserToolset', () => {
 		it('refuses an adopted action under a hold, lets observations and its owner pass, and releases on destroy', async () => {
 			const invoked = createRecorder<[]>()
 			const source = createToolManager()
-			source.add(createTool({ name: 'checkout', execute: invoked.handler }))
+			source.add(
+				createTool({
+					name: 'checkout',
+					parameters: {
+						type: 'object',
+						properties: { search: { type: 'string' } },
+						required: ['search'],
+					},
+					execute: invoked.handler,
+				}),
+			)
 			const toolset = new BrowserToolset(createBrowserViewDouble(), {
 				source: {
 					adopt: async () => source.tools(),
@@ -1363,6 +1389,12 @@ describe('BrowserToolset', () => {
 					'Clicked button "Place order" [ref=e4]. A confirm dialog is open: "Delete the draft?"; call dialog.',
 				)
 				expect(toolset.tools.tool('dialog')?.name).toBe('dialog')
+				await expect(
+					requireValue(toolset.tools.tool('dialog')).execute({ accept: 'false' }, { signal }),
+				).rejects.toMatchObject({
+					code: 'ARGUMENT',
+					message: 'The accept parameter must be a boolean.',
+				})
 				const refusals = await toolset.tools.execute([
 					{ id: '1', name: 'read', arguments: { from: 1, search: 'cart' } },
 					{ id: '2', name: 'read', arguments: { from: 1, search: 'cart' } },
@@ -2732,7 +2764,11 @@ describe('BrowserToolset', () => {
 				const inputs = createRecorder<readonly [Readonly<Record<string, unknown>>]>()
 				const source = createBrowserFixtureSource(() =>
 					Promise.resolve([
-						createTool({ name: 'extra', execute: inputs.handler }),
+						createTool({
+							name: 'extra',
+							parameters: { type: 'object', properties: { query: { type: 'string' } } },
+							execute: inputs.handler,
+						}),
 						createTool({
 							name: 'maybe',
 							parameters: { type: 'object', properties: { purpose: { type: 'string' } } },
@@ -3635,6 +3671,15 @@ describe('BrowserToolset', () => {
 				// the text back would find only the first tab.
 				const toolset = createBrowserToolset(first, { context })
 				await toolset.start()
+				await expect(
+					requireValue(toolset.tools.tool('switch')).execute(
+						{ tab: false },
+						{ signal: new AbortController().signal },
+					),
+				).rejects.toMatchObject({
+					code: 'ARGUMENT',
+					message: 'The tab parameter must be a string.',
+				})
 				expect(await toolset.tabs()).toStrictEqual([
 					{ id: 't1', title: 'Cart', url: 'about:blank', current: true },
 					{ id: 't2', title: 'Orders', url: 'about:blank', current: false },

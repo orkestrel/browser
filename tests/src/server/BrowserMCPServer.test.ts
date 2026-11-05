@@ -68,6 +68,24 @@ import {
 
 const PROFILE_PATTERN = /^[1-9]\d*-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u
 
+describe('holder argument schemas', () => {
+	it('refuses missing holder arguments through the schema door', async () => {
+		const fixture = createBrowseFixture()
+		try {
+			await fixture.server.start()
+			for (const [index, name] of Object.keys(BROWSER_SERVER_COPY).entries()) {
+				const refused = await fixture.pair.call(index + 2, name, {})
+				expect(refused.error).toBe(true)
+				expect(refused.text).toContain(
+					`${name === 'acquire' ? 'purpose' : 'holder'}: missing; expected string`,
+				)
+			}
+		} finally {
+			await fixture.teardown.destroy()
+		}
+	})
+})
+
 describe('holders H3 journey admission', () => {
 	const launcher = new BrowseLauncher()
 	const fixture = new BrowserFixtureValue<ReturnType<typeof createBrowseFixture> | undefined>(
@@ -957,7 +975,7 @@ describe('holders H2', () => {
 					await fixture.pair.call(5, 'execute', {
 						holder,
 						name: 'search',
-						arguments: { holder: 'page-owned-value' },
+						arguments: { purpose: 'search the catalog', holder: 'page-owned-value' },
 					})
 				).error,
 			).toBe(false)
@@ -2671,7 +2689,10 @@ describe('BrowserMCPServer', () => {
 			const listed = await client.tools()
 			expect(listed.map((tool) => tool.name)).toStrictEqual([...BROWSE_VOCABULARY, 'search'])
 			expect(listed.at(-1)?.description).toBe('Search the catalog')
-			const searched = await client.call('search', { query: 'kettle' })
+			await expect(client.call('search', { query: 'kettle' })).rejects.toThrow(
+				'purpose: missing; expected string',
+			)
+			const searched = await client.call('search', { purpose: 'find a kettle', query: 'kettle' })
 			expect(searched).toMatchObject({ resultType: 'complete' })
 			expect(
 				transport.sent.find((message) => message.method === 'WebMCP.invokeTool')?.params,

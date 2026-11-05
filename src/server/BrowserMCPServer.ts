@@ -242,6 +242,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			this.#tools.add(
 				createTool({
 					...BROWSER_TOOL_COPY[name],
+					strict: false,
 					execute: this.#forward.bind(this, this.#shared, name),
 				}),
 			)

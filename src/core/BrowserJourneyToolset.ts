@@ -160,6 +160,7 @@ export class BrowserJourneyToolset {
 	): ToolInterface {
 		return createTool({
 			...BROWSER_TOOL_COPY[name],
+			strict: false,
 			execute: this.#execute.bind(this, name, handler),
 		})
 	}

@@ -1177,9 +1177,14 @@ void [wrapper, origins, isolated, creation, identity]
 			)
 			expect(fence.code).toContain('// <- ' + names.join(', '))
 			for (const [index, name] of ['look', 'plain', 'tabs'].entries()) {
-				const refused = await fixture.pair.call(3 + index, name, {})
-				expect(refused.error).toBe(true)
-				expect(refused.text).toContain(name)
+				const refused = await fixture.pair.request(3 + index, 'tools/call', {
+					name,
+					arguments: {},
+				})
+				expect(refused).toMatchObject({
+					code: -32602,
+					message: expect.stringContaining(`Unknown tool: "${name}"`),
+				})
 			}
 			const reading = await fixture.pair.call(6, 'read', { from: 1 })
 			expect(reading.error).toBe(false)

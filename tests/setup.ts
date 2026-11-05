@@ -3044,6 +3044,11 @@ export function createBrowserPendingToolsetFixture(
 	source.add(
 		createTool({
 			name: 'checkout',
+			parameters: {
+				type: 'object',
+				properties: { search: { type: 'string' } },
+				required: ['search'],
+			},
 			execute: () => {
 				invoked.handler()
 				return pending.promise
@@ -3059,6 +3064,85 @@ export function createBrowserPendingToolsetFixture(
 	})
 	return { toolset, view, pending, invoked }
 }
+
+/** Holds malformed arguments that each native tool must refuse through its own parser. */
+export const BROWSER_NATIVE_REFUSALS = Object.freeze([
+	{
+		name: 'read',
+		arguments: { from: '7a' },
+		message: 'Read requires an integer from, an optional integer to, and optional search text.',
+		code: 'ARGUMENT',
+	},
+	{
+		name: 'click',
+		arguments: { ref: null },
+		message: 'Reference null is not a reference such as e12; call read for fresh refs.',
+		code: 'ELEMENT',
+	},
+	{
+		name: 'type',
+		arguments: { ref: 'e1', text: false },
+		message: 'The text parameter must be a string.',
+		code: 'ARGUMENT',
+	},
+	{
+		name: 'press',
+		arguments: { key: false },
+		message: 'The key parameter must be a string.',
+		code: 'ARGUMENT',
+	},
+	{
+		name: 'navigate',
+		arguments: { url: false },
+		message: 'The url parameter must be a string.',
+		code: 'ARGUMENT',
+	},
+	{
+		name: 'wait',
+		arguments: { text: 'Saved', absent: 'false' },
+		message: 'The absent parameter must be a boolean.',
+		code: 'ARGUMENT',
+	},
+])
+
+/** Holds malformed arguments that each journey tool must refuse through its own parser. */
+export const BROWSER_JOURNEY_REFUSALS = Object.freeze([
+	{
+		name: 'record',
+		arguments: { journey: false },
+		message: 'The journey parameter must be a string.',
+	},
+	{
+		name: 'save',
+		arguments: { description: false },
+		message: 'The description parameter must be a string.',
+	},
+	{
+		name: 'journeys',
+		arguments: { from: '7a' },
+		message: 'Journeys requires an integer from, an optional integer to, and optional search text.',
+	},
+	{
+		name: 'edit',
+		arguments: { journey: 'check-ready', edits: null },
+		message: 'The edits parameter must be an array or a JSON string of the array.',
+	},
+	{
+		name: 'replay',
+		arguments: { journey: 'check-ready', inputs: { product: false } },
+		message: 'The inputs parameter must be an object of strings.',
+	},
+	{
+		name: 'forget',
+		arguments: { journey: false },
+		message: 'The journey parameter must be a string.',
+	},
+	{
+		name: 'capture',
+		arguments: { full: 'false' },
+		message: 'The full parameter must be true or false.',
+	},
+])
 
 /**
  * Scripts target discovery, the target attach, and the required domain-enable handshake.

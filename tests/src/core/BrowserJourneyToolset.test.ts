@@ -24,6 +24,7 @@ import {
 } from '@src/core'
 import {
 	BrowserFixtureValue,
+	BROWSER_JOURNEY_REFUSALS,
 	createBrowserFaultJourneyStore,
 	createBrowserObservedJourneyStore,
 	createBrowserStaleJourneyStore,
@@ -49,6 +50,21 @@ import {
 } from '../../setup.js'
 
 describe('BrowserJourneyToolset', () => {
+	it.each(BROWSER_JOURNEY_REFUSALS)('keeps the $name parser refusal', async (refusal) => {
+		const toolset = createBrowserToolset(createBrowserViewDouble(), {
+			journeys: { store: createMemoryBrowserJourneyStore() },
+		})
+		try {
+			await toolset.start()
+			await expect(
+				requireValue(toolset.tools.tool(refusal.name)).execute(refusal.arguments, {
+					signal: new AbortController().signal,
+				}),
+			).rejects.toMatchObject({ code: 'ARGUMENT', message: refusal.message })
+		} finally {
+			await toolset.destroy()
+		}
+	})
 	it('stable links: edits with a carried link and refuses a gone reference by its last name', async () => {
 		const navigated = new BrowserFixtureValue(false)
 		const fixture = await createBrowserElementFixture({
@@ -662,7 +678,7 @@ describe('BrowserJourneyToolset', () => {
 	it('forget refuses while a replay holds the toolset', async () => {
 		const store = createMemoryBrowserJourneyStore()
 		const saved = await store.set(
-			createBrowserJourneyFixture([{ action: 'checkout', arguments: {} }]),
+			createBrowserJourneyFixture([{ action: 'checkout', arguments: { search: 'cart' } }]),
 		)
 		const { toolset, pending } = createBrowserPendingToolsetFixture()
 		const journeys = new BrowserJourneyToolset(toolset, { store })
@@ -852,7 +868,11 @@ describe('BrowserJourneyToolset', () => {
 				arguments: { text: 'Never appears', timeout: 1 },
 			})
 			expect(waited.action?.outcome).toBe('timeout')
-			await toolset.tools.execute({ id: 'checkout', name: 'checkout', arguments: {} })
+			await toolset.tools.execute({
+				id: 'checkout',
+				name: 'checkout',
+				arguments: { search: 'cart' },
+			})
 			expect(
 				await toolset.tools.execute({
 					id: 'save',

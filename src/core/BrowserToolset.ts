@@ -620,6 +620,7 @@ export class BrowserToolset implements BrowserToolsetInterface {
 		const validated = this.#validate.bind(this, name, handler)
 		const tool = createTool({
 			...BROWSER_TOOL_COPY[name],
+			strict: false,
 			execute: this.#dispatch.bind(this, name, validated, clause),
 		})
 		this.#handlers.set(tool, { handler: validated, clause })
