@@ -192,7 +192,7 @@ export const BROWSER_MOUSE_BUTTON_MASKS: Readonly<Record<BrowserMouseButton, num
  */
 export const BROWSER_HAR_CREATOR = Object.freeze({
 	name: '@orkestrel/browser',
-	version: '0.0.31',
+	version: '0.0.32',
 })
 
 /** Names the attribute that tags temporary screenshot styles and masks. */
