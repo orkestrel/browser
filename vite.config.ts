@@ -34,6 +34,8 @@ const optimizeDeps = {
 		'@orkestrel/server',
 		'@orkestrel/tool',
 		'@orkestrel/websocket',
+		'@orkestrel/mcp/browser',
+		'@orkestrel/router/browser',
 	],
 }
 
