@@ -44,7 +44,7 @@ import {
 	BrowseChild,
 	FIFO_PATHS,
 	FIXTURE_LATE_TEXT,
-	PROCESS_TABLE,
+	PROCESS_ARGUMENTS_LISTED,
 	createFifo,
 	createFixtureServer,
 	destroyChromiumProcesses,
@@ -1171,7 +1171,7 @@ function requireBrowseExecutable(context: TestContext): string {
 // host without one has nothing to count, so the release gate fails there and every other run skips.
 // Only Linux exposes the table, so a case behind this gate also runs where `SIGTERM` is cooperative.
 function requireProcessTable(context: TestContext): void {
-	if (PROCESS_TABLE) return
+	if (PROCESS_ARGUMENTS_LISTED) return
 	const cause = 'this host exposes no /proc table to read a Chromium command line from'
 	if (RELEASE) throw new Error(`The release gate requires a process table, and ${cause}`)
 	context.skip(`No Chromium process to count: ${cause}`)

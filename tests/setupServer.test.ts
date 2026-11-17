@@ -132,7 +132,7 @@ import {
 	BrowserLockObserver,
 	observeBrowserFilesystem,
 	COOPERATIVE_SIGTERM,
-	PROCESS_TABLE,
+	PROCESS_ARGUMENTS_LISTED,
 	createBrowserJourneyStage,
 	createCDPTestServer,
 	createFakeBrowserProcess,
@@ -617,7 +617,7 @@ describe('readBundleImports', () => {
 // the same command-line shape a browser and its renderer leave, with a control outside the
 // directory that neither the listing nor the teardown may reach.
 describe('readChromiumProcesses', () => {
-	it.runIf(PROCESS_TABLE)(
+	it.runIf(PROCESS_ARGUMENTS_LISTED)(
 		'lists the processes whose profile sits in a directory, and destroyChromiumProcesses ends only those',
 		async () => {
 			const scratch = createTempDirectory()

@@ -2388,7 +2388,7 @@ export async function startBrowseChild(child: BrowseChild): Promise<string> {
  * Linux exposes a process's arguments at `/proc/PID/cmdline`. Windows and macOS expose no such
  * table, so a case that reads a Chromium command line gates on this reading.
  */
-export const PROCESS_TABLE = existsSync('/proc/self/cmdline')
+export const PROCESS_ARGUMENTS_LISTED = existsSync('/proc/self/cmdline')
 
 /**
  * Describes a running Chromium process found by the profile its command line names.
@@ -2415,10 +2415,10 @@ export interface ChromiumProcess {
  *
  * @param profiles - The directory the profiles sit in
  * @returns The processes, ordered by identifier
- * @throws Thrown when {@link PROCESS_TABLE} is false
+ * @throws Thrown when {@link PROCESS_ARGUMENTS_LISTED} is false
  */
 export function readChromiumProcesses(profiles: string): readonly ChromiumProcess[] {
-	if (!PROCESS_TABLE) throw new Error('This host exposes no /proc process table')
+	if (!PROCESS_ARGUMENTS_LISTED) throw new Error('This host exposes no /proc process table')
 	const directory = resolvePath(profiles)
 	const found: ChromiumProcess[] = []
 	for (const name of readdirSync('/proc')) {
