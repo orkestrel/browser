@@ -15,7 +15,7 @@ import type {
 import { BROWSER_HAR_CREATOR } from './constants.js'
 import { browserHARHeadersToRecord, buildBrowserHAREntry, validateBrowserHAR } from './helpers.js'
 import { BrowserError } from './errors.js'
-import { isJSONValue } from '@orkestrel/contract'
+import { isJSONValue, settle } from '@orkestrel/contract'
 
 /**
  * Records and replays HTTP archives over one page network manager.
@@ -237,10 +237,7 @@ export class BrowserHARManager implements BrowserHARManagerInterface {
 	}
 
 	async #readBody(id: string): Promise<Uint8Array | undefined> {
-		try {
-			return await this.#network.body(id)
-		} catch {
-			return undefined
-		}
+		const body = await settle(() => this.#network.body(id))
+		return body.success ? body.value : undefined
 	}
 }

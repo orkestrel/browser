@@ -1,6 +1,7 @@
 import type { BrowserStoreOptions, BrowserStorePage, BrowserStoreFault } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
 import type { FileHandle } from 'node:fs/promises'
+import { isCodedError, isSafeInteger, settle } from '@orkestrel/contract'
 import { inspectProcess } from '@orkestrel/process/server'
 import { realpathSync } from 'node:fs'
 import { lstat, mkdir, open, readFile, readdir, rename, rmdir, unlink } from 'node:fs/promises'
@@ -30,14 +31,14 @@ export class FileBrowserStore {
 
 	constructor(options: FileBrowserStoreOptions) {
 		this.#limit = options.limit ?? BROWSER_FILE_STORE_LIMIT
-		if (!Number.isSafeInteger(this.#limit) || this.#limit < 1)
+		if (!isSafeInteger(this.#limit) || this.#limit < 1)
 			throw new BrowserError('ARGUMENT', 'The listing cap must be a positive integer', {
 				subject: 'store',
 			})
 		try {
 			this.#root = realpathSync(options.root)
 		} catch (error) {
-			if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+			if (isCodedError(error) && error.code === 'ENOENT')
 				throw new BrowserError('STORE_PATH', `Missing root: ${options.root}`, {
 					path: options.root,
 				})
@@ -92,7 +93,7 @@ export class FileBrowserStore {
 						throw new BrowserError('STORE_PATH', `Not a directory: ${current}`)
 				} catch (error) {
 					options?.signal?.throwIfAborted()
-					if (error instanceof Error && 'code' in error && error.code === 'ENOENT')
+					if (isCodedError(error) && error.code === 'ENOENT')
 						return { path: current, exists: false }
 					throw this.translateError(current, error)
 				}
@@ -109,28 +110,21 @@ export class FileBrowserStore {
 		if (path === this.#root) throw new BrowserError('STORE_PATH', `Missing root: ${path}`)
 		await this.createDirectory(dirname(path), options)
 		options?.signal?.throwIfAborted()
-		try {
-			await mkdir(path)
-		} catch (error) {
-			if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST'))
-				throw this.translateError(path, error)
-		}
+		const made = await settle(() => mkdir(path))
+		if (!made.success && !(isCodedError(made.error) && made.error.code === 'EEXIST'))
+			throw this.translateError(path, made.error)
 		await this.check(path, options)
 	}
 
 	/** Reads an existing file without collapsing a fault to absence. @param path - File @param options - Cancellation options @returns Bytes as UTF-8, or absence */
 	async read(path: string, options?: BrowserStoreOptions): Promise<string | undefined> {
 		if (!(await this.check(path, options))) return undefined
-		try {
-			options?.signal?.throwIfAborted()
-			const value = await readFile(path, { encoding: 'utf8', signal: options?.signal })
-			options?.signal?.throwIfAborted()
-			return value
-		} catch (error) {
-			options?.signal?.throwIfAborted()
-			if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return undefined
-			throw this.translateError(path, error)
-		}
+		options?.signal?.throwIfAborted()
+		const read = await settle(() => readFile(path, { encoding: 'utf8', signal: options?.signal }))
+		options?.signal?.throwIfAborted()
+		if (read.success) return read.value
+		if (isCodedError(read.error) && read.error.code === 'ENOENT') return undefined
+		throw this.translateError(path, read.error)
 	}
 
 	/** Atomically replaces a file and cleans its owned temporary file on failure. @param path - Destination @param value - Bytes or UTF-8 @param options - Cancellation options */
@@ -191,8 +185,7 @@ export class FileBrowserStore {
 			// A file cannot replace a directory: hosts report EISDIR or EPERM.
 			const target = await lstat(path).catch(() => undefined)
 			if (
-				error instanceof Error &&
-				'code' in error &&
+				isCodedError(error) &&
 				(error.code === 'EISDIR' || error.code === 'EPERM') &&
 				target?.isDirectory()
 			)
@@ -206,14 +199,12 @@ export class FileBrowserStore {
 	/** Removes a checked file, accepting absence. @param path - File @param options - Cancellation options */
 	async remove(path: string, options?: BrowserStoreOptions): Promise<void> {
 		if (!(await this.check(path, options))) return
-		try {
-			options?.signal?.throwIfAborted()
-			await unlink(path)
-		} catch (error) {
-			options?.signal?.throwIfAborted()
-			if (!(error instanceof Error && 'code' in error && error.code === 'ENOENT'))
-				throw this.translateError(path, error)
-		}
+		options?.signal?.throwIfAborted()
+		const removed = await settle(() => unlink(path))
+		if (removed.success) return
+		options?.signal?.throwIfAborted()
+		if (!(isCodedError(removed.error) && removed.error.code === 'ENOENT'))
+			throw this.translateError(path, removed.error)
 	}
 
 	/**
@@ -250,11 +241,10 @@ export class FileBrowserStore {
 		for (const lock of Array.from({ length: BROWSER_JOURNEY_LOCK_ATTEMPTS }, () => path)) {
 			await this.check(lock, options)
 			options?.signal?.throwIfAborted()
-			try {
-				await mkdir(lock)
-			} catch (error) {
-				if (!(error instanceof Error && 'code' in error && error.code === 'EEXIST'))
-					throw this.translateError(lock, error)
+			const made = await settle(() => mkdir(lock))
+			if (!made.success) {
+				if (!(isCodedError(made.error) && made.error.code === 'EEXIST'))
+					throw this.translateError(lock, made.error)
 				const entries = await this.#readLock(lock, options)
 				if (entries === undefined) continue
 				if (entries.length > 1) break
@@ -275,7 +265,7 @@ export class FileBrowserStore {
 					cleanup.push(this.#unlinkLock.bind(this, entry))
 					await file.close()
 				} catch (error) {
-					if (error instanceof Error && 'code' in error && error.code === 'ENOENT') continue
+					if (isCodedError(error) && error.code === 'ENOENT') continue
 					throw this.translateError(entry, error)
 				}
 				// An empty directory can be replaced between mkdir and entry creation.
@@ -313,18 +303,10 @@ export class FileBrowserStore {
 		const names = await this.#readNames(path, options)
 		for (const name of names) {
 			options?.signal?.throwIfAborted()
-			try {
-				const entry = await reader(name)
-				if (entry === undefined) continue
-				entries.push(entry)
-				if (entries.length > offset + limit)
-					return {
-						entries: entries.filter((_entry, index) => index >= offset && index < offset + limit),
-						faults,
-						truncated: true,
-					}
-			} catch (error) {
+			const read = await settle(() => reader(name))
+			if (!read.success) {
 				options?.signal?.throwIfAborted()
+				const error = read.error
 				const reason = error instanceof BrowserError ? error.context?.['reason'] : undefined
 				faults.push({
 					name,
@@ -339,7 +321,17 @@ export class FileBrowserStore {
 										? 'Unknown file format'
 										: 'The stored entry is malformed or unreadable',
 				})
+				continue
 			}
+			const entry = read.value
+			if (entry === undefined) continue
+			entries.push(entry)
+			if (entries.length > offset + limit)
+				return {
+					entries: entries.filter((_entry, index) => index >= offset && index < offset + limit),
+					faults,
+					truncated: true,
+				}
 		}
 		return { entries: entries.filter((_entry, index) => index >= offset), faults, truncated: false }
 	}
@@ -373,22 +365,18 @@ export class FileBrowserStore {
 			this.validateId(id)
 			const path = this.resolvePath(parent, id)
 			await this.check(path, options)
-			try {
-				options?.signal?.throwIfAborted()
-				await mkdir(path)
-				options?.signal?.throwIfAborted()
-				return { id, path }
-			} catch (error) {
-				options?.signal?.throwIfAborted()
-				if (error instanceof Error && 'code' in error && error.code === 'EEXIST') continue
-				throw this.translateError(path, error)
-			}
+			options?.signal?.throwIfAborted()
+			const made = await settle(() => mkdir(path))
+			options?.signal?.throwIfAborted()
+			if (made.success) return { id, path }
+			if (isCodedError(made.error) && made.error.code === 'EEXIST') continue
+			throw this.translateError(path, made.error)
 		}
 	}
 
 	/** Translates filesystem and validation failures with their path. @param path - Failed path @param error - Cause @returns Coded error */
 	translateError(path: string, error: unknown): BrowserError {
-		const code = error instanceof Error && 'code' in error ? error.code : undefined
+		const code = isCodedError(error) ? error.code : undefined
 		return new BrowserError(
 			code === 'EACCES' || code === 'EPERM'
 				? 'STORE_ACCESS'
@@ -412,7 +400,7 @@ export class FileBrowserStore {
 			}
 			return entries.map((entry) => entry.name)
 		} catch (error) {
-			if (error instanceof Error && 'code' in error) {
+			if (isCodedError(error)) {
 				if (error.code === 'ENOENT') return undefined
 				if (error.code === 'ENOTDIR')
 					throw new BrowserError('STORE_LOCKED', `Journey is locked: ${path}`)
@@ -423,40 +411,33 @@ export class FileBrowserStore {
 
 	async #unlinkLock(path: string): Promise<boolean> {
 		await this.check(path)
-		try {
-			await unlink(path)
-			return true
-		} catch (error) {
-			if (
-				error instanceof Error &&
-				'code' in error &&
-				(error.code === 'ENOENT' || error.code === 'ENOTEMPTY')
-			)
-				return false
-			throw new BrowserError('STORE_ACCESS', `Cannot remove lock entry: ${path}`, {
-				path,
-			})
-		}
+		const removed = await settle(() => unlink(path))
+		if (removed.success) return true
+		if (
+			isCodedError(removed.error) &&
+			(removed.error.code === 'ENOENT' || removed.error.code === 'ENOTEMPTY')
+		)
+			return false
+		throw new BrowserError('STORE_ACCESS', `Cannot remove lock entry: ${path}`, {
+			path,
+		})
 	}
 
 	async #removeLock(path: string): Promise<void> {
 		await this.check(path)
-		try {
-			await rmdir(path)
-		} catch (error) {
-			if (error instanceof Error && 'code' in error) {
-				if (error.code === 'ENOTEMPTY') return
-				if (error.code === 'ENOENT' || error.code === 'EPERM') {
-					try {
-						if ((await lstat(path)).isDirectory()) return
-					} catch (cause) {
-						if (cause instanceof Error && 'code' in cause && cause.code === 'ENOENT') return
-					}
-				}
+		const removed = await settle(() => rmdir(path))
+		if (removed.success) return
+		if (isCodedError(removed.error)) {
+			if (removed.error.code === 'ENOTEMPTY') return
+			if (removed.error.code === 'ENOENT' || removed.error.code === 'EPERM') {
+				const status = await settle(() => lstat(path))
+				if (status.success) {
+					if (status.value.isDirectory()) return
+				} else if (isCodedError(status.error) && status.error.code === 'ENOENT') return
 			}
-			throw new BrowserError('STORE_ACCESS', `Cannot remove lock directory: ${path}`, {
-				path,
-			})
 		}
+		throw new BrowserError('STORE_ACCESS', `Cannot remove lock directory: ${path}`, {
+			path,
+		})
 	}
 }

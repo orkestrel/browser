@@ -2,7 +2,7 @@ import type { BrowserClockInterface, BrowserFrameInterface } from './types.js'
 import { BROWSER_DEFAULT_TIMEOUT_MS } from './constants.js'
 import { BrowserError } from './errors.js'
 import { settleBrowserTeardown } from './helpers.js'
-import { isFiniteNumber } from '@orkestrel/contract'
+import { isFiniteNumber, settle } from '@orkestrel/contract'
 
 /**
  * Controls the Chromium virtual-time budget for deterministic page timers.
@@ -102,17 +102,15 @@ export class BrowserClock implements BrowserClockInterface {
 	}
 
 	async #advanceBudget(ms: number, promise: Promise<void>): Promise<unknown> {
-		try {
+		const advanced = await settle(async () => {
 			await this.#frame.send('Emulation.setVirtualTimePolicy', {
 				policy: 'advance',
 				budget: ms,
 				maxVirtualTimeTaskStarvationCount: 10_000,
 			})
 			await promise
-			return undefined
-		} catch (error) {
-			return error
-		}
+		})
+		return advanced.success ? undefined : advanced.error
 	}
 
 	#assert(): void {

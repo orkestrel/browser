@@ -23,11 +23,13 @@ import { addAbortListener, once } from 'node:events'
 import {
 	attempt,
 	isArray,
+	isCodedError,
 	isError,
 	isInteger,
 	isRecord,
 	isString,
 	isJSONValue,
+	settle,
 } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import {
@@ -607,14 +609,10 @@ export class Browser implements BrowserInterface {
 	async #probePort(): Promise<boolean> {
 		const url = `${BROWSER_CDP_PROTOCOL}://${this.#cdpHost}:${this.#cdpPort}${BROWSER_CDP_VERSION_PATH}`
 
-		try {
-			const response = await fetch(url, {
-				signal: AbortSignal.timeout(BROWSER_PORT_PROBE_TIMEOUT_MS),
-			})
-			return response.ok
-		} catch {
-			return false
-		}
+		const response = await settle(() =>
+			fetch(url, { signal: AbortSignal.timeout(BROWSER_PORT_PROBE_TIMEOUT_MS) }),
+		)
+		return response.success && response.value.ok
 	}
 
 	async #connectCDP(endpoint: string): Promise<void> {
@@ -999,13 +997,10 @@ export class Browser implements BrowserInterface {
 			timeout: this.#timeout(),
 		})
 		const remote = new CDPClient({ transport, timeout: this.#timeout() })
-		try {
-			await remote.connect()
-			return remote
-		} catch {
-			await this.#closeClient(remote)
-			return undefined
-		}
+		const connected = await settle(() => remote.connect())
+		if (connected.success) return remote
+		await this.#closeClient(remote)
+		return undefined
 	}
 
 	async #closeContexts(): Promise<void> {
@@ -1128,8 +1123,7 @@ export class Browser implements BrowserInterface {
 			if (serving !== undefined) return globalThis.process.kill(serving, signal)
 			return process.kill(signal)
 		} catch (error) {
-			const code =
-				isError(error) && 'code' in error && isString(error.code) ? error.code : undefined
+			const code = isCodedError(error) ? error.code : undefined
 			if (code === 'ESRCH') return false
 			if (signal === 0) return code === 'EPERM' ? true : undefined
 			const target = serving ?? pid

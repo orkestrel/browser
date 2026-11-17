@@ -14,7 +14,15 @@ import type {
 	BrowserToolsetInterface,
 } from './types.js'
 import type { ToolContext, ToolInterface } from '@orkestrel/tool'
-import { attempt, isArray, isBoolean, isError, isRecord, isString } from '@orkestrel/contract'
+import {
+	attempt,
+	isArray,
+	isBoolean,
+	isError,
+	isRecord,
+	isSafeInteger,
+	isString,
+} from '@orkestrel/contract'
 import { createTool } from '@orkestrel/tool'
 import {
 	BROWSER_JOURNEY_EMPTY_LIST,
@@ -104,7 +112,7 @@ export class BrowserJourneyToolset {
 		notes?: () => string,
 	) {
 		const limit = options.limit ?? toolset.limit
-		if (!Number.isSafeInteger(limit) || limit < 1) {
+		if (!isSafeInteger(limit) || limit < 1) {
 			throw new BrowserError('ARGUMENT', 'The journeys limit must be a positive integer', {
 				subject: 'journey',
 				limit,

@@ -84,6 +84,7 @@ import {
 	isInteger,
 	isJSONValue,
 	isRecord,
+	isSafeInteger,
 	isString,
 	parseArray,
 	parseEnum,
@@ -499,11 +500,7 @@ export function scanBrowserLines(
  * @returns Nothing
  */
 export function validateBrowserLines(from: number, to?: number, total?: number): void {
-	if (
-		!Number.isSafeInteger(from) ||
-		from < 1 ||
-		(to !== undefined && (!Number.isSafeInteger(to) || to < 1))
-	)
+	if (!isSafeInteger(from) || from < 1 || (to !== undefined && (!isSafeInteger(to) || to < 1)))
 		throw new BrowserError(
 			'ARGUMENT',
 			'The from and to parameters must be positive safe integers.',
@@ -2936,7 +2933,7 @@ export function validateBrowserJourneyName(name: string): void {
  * validateBrowserStorePage(0, 10)
  */
 export function validateBrowserStorePage(offset: number, limit: number): void {
-	if (!Number.isSafeInteger(offset) || offset < 0 || !Number.isSafeInteger(limit) || limit < 1)
+	if (!isSafeInteger(offset) || offset < 0 || !isSafeInteger(limit) || limit < 1)
 		throw new BrowserError(
 			'ARGUMENT',
 			'Paging requires a nonnegative integer offset and a positive integer limit',
@@ -3304,7 +3301,7 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 		throw new BrowserError('JOURNEY_INVALID', 'Invariant 2 (ids): has no steps', {
 			field: 'steps',
 		})
-	if (!Number.isSafeInteger(value['next']) || !isFiniteNumber(value['next']) || value['next'] < 1)
+	if (!isSafeInteger(value['next']) || !isFiniteNumber(value['next']) || value['next'] < 1)
 		throw new BrowserError('JOURNEY_INVALID', 'Invariant 2 (ids): has an invalid next counter')
 	const ids = new Set<string>()
 	const steps: BrowserJourneyStep[] = []
@@ -3314,7 +3311,7 @@ export function validateBrowserJourney(value: unknown): asserts value is Browser
 			!('id' in step) ||
 			!isString(step.id) ||
 			!/^s[1-9]\d*$/.test(step.id) ||
-			!Number.isSafeInteger(Number(step.id.slice(1))) ||
+			!isSafeInteger(Number(step.id.slice(1))) ||
 			Number(step.id.slice(1)) >= value['next'] ||
 			ids.has(step.id)
 		)
@@ -3481,7 +3478,7 @@ export function validateBrowserRun(value: unknown): asserts value is BrowserRun 
 		value['elapsed'] < 0 ||
 		(value['revision'] !== undefined &&
 			(!isFiniteNumber(value['revision']) ||
-				!Number.isSafeInteger(value['revision']) ||
+				!isSafeInteger(value['revision']) ||
 				value['revision'] < 1)) ||
 		(value['fault'] !== undefined && !isString(value['fault'])) ||
 		(value['output'] !== undefined &&
@@ -3595,10 +3592,7 @@ export function buildBrowserJourney(
  * validateBrowserJourneyWriteOptions({ exclusive: true })
  */
 export function validateBrowserJourneyWriteOptions(options?: BrowserJourneyWriteOptions): void {
-	if (
-		options?.revision !== undefined &&
-		(!Number.isSafeInteger(options.revision) || options.revision < 1)
-	)
+	if (options?.revision !== undefined && (!isSafeInteger(options.revision) || options.revision < 1))
 		throw new BrowserError('ARGUMENT', 'A journey revision must be a positive safe integer')
 	if (options?.revision !== undefined && options.exclusive === true)
 		throw new BrowserError('ARGUMENT', 'A journey write cannot combine revision and exclusive')

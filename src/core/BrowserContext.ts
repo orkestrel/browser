@@ -28,7 +28,7 @@ import { BrowserStorageManager } from './BrowserStorageManager.js'
 import { BrowserError } from './errors.js'
 import { BROWSER_REFERENCE_PREFIX } from './constants.js'
 import { readBrowserFrames, settleBrowserTeardown, validateBrowserViewport } from './helpers.js'
-import { instanceOf, isRecord, isString } from '@orkestrel/contract'
+import { instanceOf, isRecord, isString, settle } from '@orkestrel/contract'
 import { Emitter, extractKeys } from '@orkestrel/emitter'
 
 // === BrowserContext
@@ -243,26 +243,20 @@ export class BrowserContext implements BrowserContextInterface {
 		}
 	}
 
-	async #createAttachment(
+	#createAttachment(
 		targetId: string,
 		ready: Promise<void>,
 		options?: BrowserPageOptions,
 	): Promise<Result<BrowserPage>> {
-		try {
-			const viewport = options?.viewport ?? this.#viewport
-			return {
-				success: true,
-				value: await this.#attach(
-					targetId,
-					options?.url ?? 'about:blank',
-					viewport,
-					ready,
-					options,
-				),
-			}
-		} catch (error) {
-			return { success: false, error }
-		}
+		return settle(() =>
+			this.#attach(
+				targetId,
+				options?.url ?? 'about:blank',
+				options?.viewport ?? this.#viewport,
+				ready,
+				options,
+			),
+		)
 	}
 
 	async #sync(targets: readonly CDPTarget[]): Promise<void> {

@@ -52,6 +52,7 @@ import {
 	isInteger,
 	isRecord,
 	isString,
+	settle,
 } from '@orkestrel/contract'
 import { Emitter } from '@orkestrel/emitter'
 import { BrowserHold } from './BrowserHold.js'
@@ -2174,11 +2175,8 @@ export class BrowserToolset implements BrowserToolsetInterface {
 	async #adoptSource(
 		source: BrowserToolSourceInterface,
 	): Promise<readonly ToolInterface[] | undefined> {
-		try {
-			return await source.adopt()
-		} catch {
-			return undefined
-		}
+		const adopted = await settle(() => source.adopt())
+		return adopted.success ? adopted.value : undefined
 	}
 
 	// Re-checks the lifecycle, the generation, and the source after every synchronous emission,

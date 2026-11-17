@@ -11,6 +11,7 @@ import {
 } from './helpers.js'
 import { BrowserError } from './errors.js'
 import type { Result } from '@orkestrel/contract'
+import { settle } from '@orkestrel/contract'
 
 /**
  * Collects JavaScript precise coverage and CSS rule usage for one page target.
@@ -118,11 +119,7 @@ export class BrowserCoverage implements BrowserCoverageInterface {
 		return readBrowserStyleCoverage(result.success ? result.value : undefined)
 	}
 
-	async #readCoverage(method: string): Promise<Result<unknown>> {
-		try {
-			return { success: true, value: await this.#frame.send(method) }
-		} catch (error) {
-			return { success: false, error }
-		}
+	#readCoverage(method: string): Promise<Result<unknown>> {
+		return settle(() => this.#frame.send(method))
 	}
 }

@@ -19,7 +19,7 @@ import type {
 	BrowserToolsetInterface,
 	BrowserViewEventMap,
 } from './types.js'
-import { isString } from '@orkestrel/contract'
+import { isString, settle } from '@orkestrel/contract'
 import { BROWSER_JOURNEY_ACTIONS, BROWSER_JOURNEY_FORMAT_VERSION } from './constants.js'
 import { BrowserError, isBrowserStepError } from './errors.js'
 import {
@@ -295,10 +295,10 @@ export class BrowserReplayExecution implements BrowserReplayExecutionInterface {
 		secret: boolean,
 		options?: BrowserCallOptions,
 	): Promise<Result<BrowserAction>> {
-		try {
+		return settle(() => {
 			if (step.action === 'dialog' && !interrupted)
 				throw new BrowserError('JOURNEY_DIALOG', `Step ${step.id} answers no interrupted action.`)
-			const action = await this.#toolset.follow(
+			return this.#toolset.follow(
 				step.id,
 				{
 					action: step.action,
@@ -315,10 +315,7 @@ export class BrowserReplayExecution implements BrowserReplayExecutionInterface {
 				},
 				{ ...options, caller, secret },
 			)
-			return { success: true, value: action }
-		} catch (error) {
-			return { success: false, error }
-		}
+		})
 	}
 
 	async #captureStep(
@@ -327,22 +324,19 @@ export class BrowserReplayExecution implements BrowserReplayExecutionInterface {
 		id: string,
 		options?: BrowserCallOptions,
 	): Promise<Result<BrowserRunStep>> {
-		try {
+		return settle(async () => {
 			if (!secret && !options?.signal?.aborted && recorded.outcome !== 'interrupted') {
 				const capture = await this.#capture(this.#slot, id, options)
-				if (capture !== undefined) return { success: true, value: { ...recorded, capture } }
+				if (capture !== undefined) return { ...recorded, capture }
 			}
-			return { success: true, value: recorded }
-		} catch (error) {
-			return { success: false, error }
-		}
+			return recorded
+		})
 	}
 
 	async #write(run: BrowserRun): Promise<BrowserRun> {
-		try {
-			return await this.#persist(run)
-		} catch (error) {
-			return { ...run, fault: error instanceof Error ? error.message : String(error) }
-		}
+		const persisted = await settle(() => this.#persist(run))
+		if (persisted.success) return persisted.value
+		const error = persisted.error
+		return { ...run, fault: error instanceof Error ? error.message : String(error) }
 	}
 }

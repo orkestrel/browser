@@ -29,6 +29,7 @@ import {
 	isFiniteNumber,
 	isInteger,
 	isRecord,
+	isSafeInteger,
 	isString,
 	parseInteger,
 	parseArray,
@@ -596,7 +597,7 @@ export function parseCodegenActionPayload(payload: unknown): BrowserCodegenGestu
 		control === undefined ||
 		!isInteger(index) ||
 		index < 0 ||
-		!Number.isSafeInteger(index) ||
+		!isSafeInteger(index) ||
 		!isBoolean(top) ||
 		!isBoolean(form)
 	)

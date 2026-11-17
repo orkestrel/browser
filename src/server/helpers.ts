@@ -19,6 +19,7 @@ import {
 	isError,
 	isNumber,
 	isRecord,
+	isSafeInteger,
 	isString,
 	parseInteger,
 	parseJSON,
@@ -65,8 +66,8 @@ export function parseBrowserViewport(value: string | undefined): BrowserViewport
 	if (
 		width === undefined ||
 		height === undefined ||
-		!Number.isSafeInteger(width) ||
-		!Number.isSafeInteger(height) ||
+		!isSafeInteger(width) ||
+		!isSafeInteger(height) ||
 		width <= 0 ||
 		height <= 0
 	)
@@ -86,8 +87,7 @@ export function parseBrowserProfileRecord(text: string): BrowserProfileRecord | 
 	if (!isRecord(record)) return undefined
 	const pid = record['pid']
 	const endpoint = record['endpoint']
-	if (!isNumber(pid) || !Number.isSafeInteger(pid) || pid <= 0 || !isString(endpoint))
-		return undefined
+	if (!isNumber(pid) || !isSafeInteger(pid) || pid <= 0 || !isString(endpoint)) return undefined
 	const match = /^ws:\/\/127\.0\.0\.1:([1-9]\d*)\/devtools\/browser\/[^/?#\s\\]+$/.exec(endpoint)
 	if (match === null || Number(match[1]) > 65535) return undefined
 	return { pid, endpoint }
@@ -140,7 +140,7 @@ export function parseBrowserLockEntry(name: string): number | undefined {
 		name,
 	)
 	const pid = Number(match?.[1])
-	return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined
+	return isSafeInteger(pid) && pid > 0 ? pid : undefined
 }
 
 // === Discovery helpers

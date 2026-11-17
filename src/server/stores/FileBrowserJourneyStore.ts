@@ -8,7 +8,7 @@ import type {
 	BrowserStorePage,
 } from '@src/core'
 import type { FileBrowserStoreOptions } from '../types.js'
-import { isRecord, parseJSON } from '@orkestrel/contract'
+import { isRecord, isSafeInteger, parseJSON } from '@orkestrel/contract'
 import {
 	BROWSER_JOURNEY_NAME_PATTERN,
 	BrowserError,
@@ -51,7 +51,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 			if (
 				!isRecord(value) ||
 				typeof value['revision'] !== 'number' ||
-				!Number.isSafeInteger(value['revision']) ||
+				!isSafeInteger(value['revision']) ||
 				value['revision'] < 1
 			)
 				throw new BrowserError('STORE_FILE', 'Malformed journey revision')
@@ -93,10 +93,10 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 					throw new BrowserError('JOURNEY_STALE', `Journey ${owned.name} changed since you read it`)
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
-				if (!Number.isSafeInteger(previous) || previous < 0 || source?.trim() === '')
+				if (!isSafeInteger(previous) || previous < 0 || source?.trim() === '')
 					throw new BrowserError('STORE_FILE', `Malformed revision: ${counter}`)
 				const revision = Math.max(previous, current?.revision ?? 0) + 1
-				if (!Number.isSafeInteger(revision))
+				if (!isSafeInteger(revision))
 					throw new BrowserError('STORE_FILE', `Exhausted revision: ${counter}`)
 				const saved = { journey: owned, revision }
 				await this.#files.write(path, JSON.stringify(saved), options)
@@ -125,7 +125,7 @@ export class FileBrowserJourneyStore implements BrowserJourneyStoreInterface {
 				const counter = this.#files.resolvePath(name, BROWSER_JOURNEY_REVISION_FILE)
 				const source = await this.#files.read(counter, options)
 				const previous = source === undefined ? 0 : Number(source)
-				if (!Number.isSafeInteger(previous) || previous < 0 || source?.trim() === '')
+				if (!isSafeInteger(previous) || previous < 0 || source?.trim() === '')
 					throw new BrowserError('STORE_FILE', `Malformed revision: ${counter}`)
 				// Preserve the committed revision even if a process exited before updating its counter.
 				await this.#files.write(counter, String(Math.max(previous, current.revision ?? 0)), options)

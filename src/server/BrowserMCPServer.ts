@@ -19,7 +19,7 @@ import { randomUUID } from 'node:crypto'
 import { addAbortListener } from 'node:events'
 import { mkdir, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
-import { isError, isInteger, isRecord, isString } from '@orkestrel/contract'
+import { isCodedError, isError, isInteger, isRecord, isString, settle } from '@orkestrel/contract'
 import { createMCPLegacy, createMCPServer, JSONRPC_SERVER_ERROR, MCPError } from '@orkestrel/mcp'
 import { createPool, isPoolError } from '@orkestrel/pool'
 import { createStdioServer } from '@orkestrel/mcp/server'
@@ -333,14 +333,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 				)
 				if (record === undefined || inspectProcess(record.pid) !== false) continue
 			} catch (error) {
-				if (!isError(error) || !('code' in error) || error.code !== 'ENOENT') continue
+				if (!(isCodedError(error) && error.code === 'ENOENT')) continue
 			}
-			try {
-				await rm(folder, { recursive: true, force: true, maxRetries: 5 })
-				this.#folders.delete(folder)
-			} catch (error) {
-				this.#faults.add(error)
-			}
+			const removed = await settle(() =>
+				rm(folder, { recursive: true, force: true, maxRetries: 5 }),
+			)
+			if (removed.success) this.#folders.delete(folder)
+			else this.#faults.add(removed.error)
 		}
 		if (this.#faults.size > 0)
 			throw new AggregateError([...this.#faults], 'The browse server teardown failed')
@@ -821,13 +820,10 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 	}
 
 	async #validate(slot: BrowserServerSlot): Promise<boolean> {
-		try {
-			await slot.browser.ping({ signal: this.#abort.signal })
-			return true
-		} catch (error) {
-			if (!this.#abort.signal.aborted) this.#lose(slot, error)
-			return false
-		}
+		const pinged = await settle(() => slot.browser.ping({ signal: this.#abort.signal }))
+		if (pinged.success) return true
+		if (!this.#abort.signal.aborted) this.#lose(slot, pinged.error)
+		return false
 	}
 
 	#lose(slot: BrowserServerSlot, cause: unknown): void {
@@ -966,14 +962,13 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			await generation.context.close().catch((error: unknown) => {
 				if (!this.#losses.has(slot) && slot.browser.status === 'connected') this.#fault(error)
 			})
-			try {
-				await rm(generation.directory, { recursive: true, force: true })
+			const removed = await settle(() => rm(generation.directory, { recursive: true, force: true }))
+			if (removed.success) {
 				this.#owned.get(slot)?.delete(generation)
 				return true
-			} catch (error) {
-				this.#fault(error)
-				return false
 			}
+			this.#fault(removed.error)
+			return false
 		})
 		this.#cleaning.set(generation, cleaning)
 		return cleaning
@@ -1077,7 +1072,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 			try {
 				process.kill(slot.browser.pid, 'SIGKILL')
 			} catch (error) {
-				if (!isError(error) || !('code' in error) || error.code !== 'ESRCH') this.#faults.add(error)
+				if (!(isCodedError(error) && error.code === 'ESRCH')) this.#faults.add(error)
 			}
 		}
 		try {
@@ -1237,7 +1232,7 @@ export class BrowserMCPServer implements BrowserMCPServerInterface {
 						if (inspectProcess(record.pid) !== false) continue
 					}
 				} catch (error) {
-					if (!isError(error) || !('code' in error) || error.code !== 'ENOENT') continue
+					if (!(isCodedError(error) && error.code === 'ENOENT')) continue
 				}
 				try {
 					await rm(folder, { recursive: true, force: true, maxRetries: 5 })

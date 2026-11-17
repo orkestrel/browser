@@ -5,7 +5,7 @@ import type {
 	BrowserJourneyParameter,
 	BrowserJourneyEditorInterface,
 } from './types.js'
-import { isString } from '@orkestrel/contract'
+import { isSafeInteger, isString } from '@orkestrel/contract'
 import { BrowserError, isBrowserError } from './errors.js'
 import { isBrowserJourneyValidationContext } from './validators.js'
 import {
@@ -49,7 +49,7 @@ export class BrowserJourneyEditor implements BrowserJourneyEditorInterface {
 				if (position < 0) throw new BrowserError('ARGUMENT', `names unknown anchor "${anchor}"`)
 				const step = { ...edit.step, id: `s${this.#next}` }
 				this.#next += 1
-				if (!Number.isSafeInteger(this.#next))
+				if (!isSafeInteger(this.#next))
 					throw new BrowserError('ARGUMENT', 'Invariant 2 (ids): has an invalid next counter')
 				for (const field of [...Object.keys(step.arguments), 'target.name'])
 					this.#origins.set(step.id + '.' + field, this.#index)
