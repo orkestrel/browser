@@ -103,7 +103,7 @@
 	},
 	"dependencies": {
 		"@orkestrel/codec": "^0.0.11",
-		"@orkestrel/contract": "^0.0.24",
+		"@orkestrel/contract": "^0.0.26",
 		"@orkestrel/emitter": "^0.0.17",
 		"@orkestrel/html": "^0.0.17",
 		"@orkestrel/markdown": "^0.0.22",
