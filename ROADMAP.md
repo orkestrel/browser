@@ -1,1 +1,3 @@
 Each item is a chunk that reaches green before the next. An item keeps its number for life: a closed item leaves this file and its number is never reused, so a commit message citing an item by number stays true.
+
+- **17.** Read the five process-table and FIFO cases of `tests/distribution.test.ts` on a Linux host. Four read a Chromium command line from a `/proc` process table and one parks a lock read on a FIFO at a filesystem path; the release gate requires both, and the Windows chains of 0.0.34 (2026-11-15) and 0.0.35 (2026-11-17) left all five unread, as their release commits state. Run `npm run test:distribution -- --mode release` on Linux against the next release and record the reading in its release commit. Owner: browser.
